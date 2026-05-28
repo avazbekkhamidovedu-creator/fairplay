@@ -195,6 +195,8 @@ urlpatterns = [
         path('render', comment.CommentContent.as_view(), name='comment_content'),
     ])),
 
+    path('seb/quit/', contests.SEBQuit.as_view(), name='seb_quit'),
+
     path('contests/', paged_list_view(contests.ContestList, 'contest_list')),
     path('contests.ics', contests.ContestICal.as_view(), name='contest_ical'),
     path('contests/<int:year>/<int:month>/', contests.ContestCalendar.as_view(), name='contest_calendar'),

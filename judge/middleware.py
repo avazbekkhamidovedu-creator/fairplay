@@ -9,11 +9,13 @@ from django.contrib.auth.models import User
 from django.contrib.sites.shortcuts import get_current_site
 from django.core.cache import cache
 from django.http import HttpResponse, HttpResponseRedirect
+from django.shortcuts import render
 from django.urls import Resolver404, resolve, reverse
 from django.utils.encoding import force_bytes
 from requests.exceptions import HTTPError
 
 from judge.models import MiscConfig
+from judge.utils.seb import request_matches_seb, seb_launch_context
 
 try:
     import uwsgi
@@ -80,6 +82,20 @@ class DMOJImpersonationMiddleware(object):
         return self.get_response(request)
 
 
+def _seb_block_exempt(path):
+    # Whitelist paths that must remain reachable for the SEB block page to function
+    # (logout, the .seb download itself, the quit landing, and static/media assets).
+    static_url = settings.STATIC_URL or '/static/'
+    media_url = getattr(settings, 'MEDIA_URL', '') or '/media/'
+    if path.startswith(static_url) or path.startswith(media_url):
+        return True
+    try:
+        exempt_paths = (reverse('auth_logout'), reverse('seb_quit'))
+    except Exception:
+        return False
+    return path in exempt_paths
+
+
 class ContestMiddleware(object):
     def __init__(self, get_response):
         self.get_response = get_response
@@ -93,6 +109,19 @@ class ContestMiddleware(object):
         else:
             request.in_contest = False
             request.participation = None
+
+        if request.in_contest:
+            contest = request.participation.contest
+            if contest.seb_required and not contest.user_bypasses_seb(request.user) \
+                    and not _seb_block_exempt(request.path) \
+                    and not request_matches_seb(
+                        request, contest.seb_allowed_bek(), contest.seb_allowed_config_keys()):
+                return render(request, 'contest/seb_required.html', {
+                    'contest': contest,
+                    'seb_launch': seb_launch_context(request, contest),
+                    'title': 'Safe Exam Browser required',
+                }, status=403)
+
         return self.get_response(request)
 
 

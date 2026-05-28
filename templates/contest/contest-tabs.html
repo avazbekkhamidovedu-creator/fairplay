@@ -29,7 +29,17 @@
     {% if request.user.is_authenticated %}
         {% if contest.started or is_editor or is_tester %}
             {% set in_contest = contest.is_in_contest(request.user) %}
-            {% if contest.ended %}
+            {% set seb_block_join = seb_required and not seb_user_bypasses and not seb_request_valid and not in_contest %}
+            {% if seb_block_join %}
+                <div class="contest-join-pseudotab unselectable" style="display:flex; gap:8px; align-items:center;">
+                    {% if seb_launch.sebs_url %}
+                        <a class="button" href="{{ seb_launch.sebs_url }}">{{ _('Launch in SEB') }}</a>
+                    {% endif %}
+                    {% if seb_launch.download_url %}
+                        <a class="button" href="{{ seb_launch.download_url }}">{{ _('Download .seb') }}</a>
+                    {% endif %}
+                </div>
+            {% elif contest.ended %}
                 {# Allow users to leave the virtual contest #}
                 {% if in_contest %}
                     <form action="{{ url('contest_leave', contest.key) }}" method="post"
