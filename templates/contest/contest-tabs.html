@@ -61,9 +61,13 @@
                     <form action="{{ url('contest_leave', contest.key) }}" method="post"
                           class="contest-join-pseudotab unselectable button">
                         {% csrf_token %}
-                        <input type="submit" value="
+                        <input type="submit"
+                               {% if contest.seb_required and not request.participation.spectate %}class="seb-submit-exit"{% endif %}
+                               value="
                             {%- if request.participation.spectate %}
                                 {{- _('Stop spectating') -}}
+                            {% elif contest.seb_required %}
+                                {{- _('Submit & Exit SEB') -}}
                             {% else %}
                                 {{- _('Leave contest') -}}
                             {% endif %}">

@@ -1,6 +1,8 @@
 import hashlib
 from urllib.parse import urlparse, urlunparse
 
+from django.urls import reverse
+
 # WSGI normalizes header names: X-SafeExamBrowser-RequestHash -> HTTP_X_SAFEEXAMBROWSER_REQUESTHASH
 BEK_HEADER = 'HTTP_X_SAFEEXAMBROWSER_REQUESTHASH'
 CFG_HEADER = 'HTTP_X_SAFEEXAMBROWSER_CONFIGKEYHASH'
@@ -47,7 +49,7 @@ def seb_launch_context(request, contest):
     download_url = None
     sebs_url = None
     if contest.seb_config_file:
-        download_url = request.build_absolute_uri(contest.seb_config_file.url)
+        download_url = request.build_absolute_uri(reverse('contest_seb_config', args=(contest.key,)))
         parsed = urlparse(download_url)
         sebs_scheme = 'sebs' if parsed.scheme == 'https' else 'seb'
         sebs_url = urlunparse((sebs_scheme, parsed.netloc, parsed.path,

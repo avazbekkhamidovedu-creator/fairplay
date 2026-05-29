@@ -214,6 +214,7 @@ urlpatterns = [
         path('/ranking/ajax', contests.contest_ranking_ajax, name='contest_ranking_ajax'),
         path('/join', contests.ContestJoin.as_view(), name='contest_join'),
         path('/leave', contests.ContestLeave.as_view(), name='contest_leave'),
+        path('/seb-config', contests.ContestSEBConfig.as_view(), name='contest_seb_config'),
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
 
         path('/rank/<str:problem>/',

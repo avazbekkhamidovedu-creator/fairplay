@@ -15,7 +15,7 @@ from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
 from django.db import IntegrityError
 from django.db.models import BooleanField, Case, Count, F, FloatField, IntegerField, Max, Min, Q, Sum, Value, When
 from django.db.models.expressions import CombinedExpression, Exists, OuterRef
-from django.http import Http404, HttpResponse, HttpResponseBadRequest, HttpResponseRedirect
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.template.defaultfilters import date as date_filter
 from django.urls import reverse
@@ -51,7 +51,7 @@ __all__ = ['ContestList', 'ContestDetail', 'ContestRanking', 'ContestJoin', 'Con
            'ContestClone', 'ContestStats', 'ContestMossView', 'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
-           'SEBQuit']
+           'ContestSEBConfig', 'SEBQuit']
 
 
 def _find_contest(request, key, private_check=True):
@@ -540,6 +540,8 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                                    _('You are not in contest "%s".') % contest.key, 404)
 
         profile.remove_contest()
+        if contest.seb_required:
+            return HttpResponseRedirect(contest.seb_quit_url or reverse('seb_quit'))
         return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
 
 
@@ -2228,6 +2230,19 @@ class ContestExportSubmissions(ContestMixin, PermissionRequiredMixin, BaseDetail
         filename = f'{self.object.key}-submissions.zip'
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+
+class ContestSEBConfig(LoginRequiredMixin, ContestMixin, BaseDetailView):
+    def get(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        if not self.object.seb_required or not self.object.seb_config_file:
+            raise Http404()
+        return FileResponse(
+            self.object.seb_config_file.open('rb'),
+            as_attachment=True,
+            filename=f'{self.object.key}.seb',
+            content_type='application/seb',
+        )
 
 
 class SEBQuit(TitleMixin, TemplateView):

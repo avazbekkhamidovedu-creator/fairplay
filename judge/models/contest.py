@@ -204,7 +204,8 @@ class Contest(models.Model):
         verbose_name=_('allowed SEB Config Key hashes'),
         blank=True,
         default='',
-        help_text=_('Optional. One 64-char hex hash per line. Used for newer SEB builds that expose the Config Key.'),
+        help_text=_('One 64-char hex hash per line. Required for macOS clients (and any newer build '
+                    'that sends only the Config Key).'),
     )
     seb_config_file = models.FileField(
         verbose_name=_('SEB config file (.seb)'),
@@ -254,6 +255,18 @@ class Contest(models.Model):
         else:
             if not isinstance(label, str):
                 raise ValidationError('Contest problem label script: script should return a string.')
+
+        if self.seb_required:
+            seb_errors = {}
+            if not self._parse_seb_keys(self.seb_browser_exam_keys):
+                seb_errors['seb_browser_exam_keys'] = _(
+                    'At least one Browser Exam Key hash is required when Safe Exam Browser is enabled.')
+            if not self._parse_seb_keys(self.seb_config_keys):
+                seb_errors['seb_config_keys'] = _(
+                    'At least one Config Key hash is required when Safe Exam Browser is enabled '
+                    '(the macOS SEB build only sends the Config Key).')
+            if seb_errors:
+                raise ValidationError(seb_errors)
 
     def is_in_contest(self, user):
         if user.is_authenticated:
