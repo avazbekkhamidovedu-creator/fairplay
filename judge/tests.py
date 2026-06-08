@@ -105,8 +105,8 @@ class ContestAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'name="name"', html=False)
         self.assertContains(response, 'name="start_time_0"', html=False)
         self.assertContains(response, 'name="end_time_0"', html=False)
-        self.assertContains(response, 'contestproblem_set-TOTAL_FORMS', html=False)
-        self.assertContains(response, 'contestproblem_set-0-problem', html=False)
+        self.assertContains(response, 'contest_problems-TOTAL_FORMS', html=False)
+        self.assertContains(response, 'contest_problems-0-problem', html=False)
         self.assertContains(response, 'name="creation_preset"', html=False)
         self.assertContains(response, 'id="embedded-advanced-toggle"', html=False)
         self.assertContains(response, 'name="embedded_advanced_mode"', html=False)
@@ -141,18 +141,19 @@ class ContestAdminCreationTestCase(CommonDataMixin, TestCase):
         data = self.contest_post_data()
         data.update({
             'creation_preset': 'default',
-            'contestproblem_set-TOTAL_FORMS': '2',
-            'contestproblem_set-INITIAL_FORMS': '0',
-            'contestproblem_set-MIN_NUM_FORMS': '0',
-            'contestproblem_set-MAX_NUM_FORMS': '1000',
-            'contestproblem_set-0-problem': problem_one.pk,
-            'contestproblem_set-0-points': '100',
-            'contestproblem_set-0-partial': 'on',
-            'contestproblem_set-0-order': '1',
-            'contestproblem_set-1-problem': problem_two.pk,
-            'contestproblem_set-1-points': '100',
-            'contestproblem_set-1-partial': 'on',
-            'contestproblem_set-1-order': '2',
+            'format_config': '',
+            'contest_problems-TOTAL_FORMS': '2',
+            'contest_problems-INITIAL_FORMS': '0',
+            'contest_problems-MIN_NUM_FORMS': '0',
+            'contest_problems-MAX_NUM_FORMS': '1000',
+            'contest_problems-0-problem': problem_one.pk,
+            'contest_problems-0-points': '100',
+            'contest_problems-0-partial': 'on',
+            'contest_problems-0-order': '1',
+            'contest_problems-1-problem': problem_two.pk,
+            'contest_problems-1-points': '100',
+            'contest_problems-1-partial': 'on',
+            'contest_problems-1-order': '2',
             '_save': 'Save',
         })
 
@@ -190,10 +191,10 @@ class ContestAdminCreationTestCase(CommonDataMixin, TestCase):
             'format_config': '',
             'access_code': 'contest-code',
             'allow_virtual_participation': 'on',
-            'contestproblem_set-TOTAL_FORMS': '0',
-            'contestproblem_set-INITIAL_FORMS': '0',
-            'contestproblem_set-MIN_NUM_FORMS': '0',
-            'contestproblem_set-MAX_NUM_FORMS': '1000',
+            'contest_problems-TOTAL_FORMS': '0',
+            'contest_problems-INITIAL_FORMS': '0',
+            'contest_problems-MIN_NUM_FORMS': '0',
+            'contest_problems-MAX_NUM_FORMS': '1000',
             '_save': 'Save',
         })
 
