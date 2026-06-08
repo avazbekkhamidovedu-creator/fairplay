@@ -187,8 +187,13 @@ class ContestAdminCreationTestCase(CommonDataMixin, TestCase):
             'scoreboard_visibility': Contest.SCOREBOARD_HIDDEN,
             'points_precision': 5,
             'format_name': 'default',
+            'format_config': '',
             'access_code': 'contest-code',
             'allow_virtual_participation': 'on',
+            'contestproblem_set-TOTAL_FORMS': '0',
+            'contestproblem_set-INITIAL_FORMS': '0',
+            'contestproblem_set-MIN_NUM_FORMS': '0',
+            'contestproblem_set-MAX_NUM_FORMS': '1000',
             '_save': 'Save',
         })
 

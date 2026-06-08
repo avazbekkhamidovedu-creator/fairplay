@@ -433,9 +433,9 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
     def get_inline_instances(self, request, obj=None):
         if obj is None and not self.is_advanced_add_mode(request, obj):
             return [
-                inline(self.model, self.admin_site)
-                for inline in self.inlines
-                if inline is ContestProblemInline
+                inline
+                for inline in super().get_inline_instances(request, obj)
+                if isinstance(inline, ContestProblemInline)
             ]
         return super().get_inline_instances(request, obj)
 
