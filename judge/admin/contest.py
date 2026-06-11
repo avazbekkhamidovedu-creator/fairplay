@@ -68,6 +68,7 @@ class ContestProblemInline(SortableInlineAdminMixin, admin.TabularInline):
     model = ContestProblem
     verbose_name = _('Problem')
     verbose_name_plural = _('Problems')
+    classes = ('basic-inline-group',)
     fields = ('problem', 'points', 'partial', 'is_pretested', 'max_submissions', 'output_prefix_override', 'order',
               'rejudge_column')
     readonly_fields = ('rejudge_column',)
@@ -431,7 +432,11 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
 
     def get_inline_instances(self, request, obj=None):
         if obj is None and not self.is_advanced_add_mode(request, obj):
-            return []
+            return [
+                inline
+                for inline in super().get_inline_instances(request, obj)
+                if isinstance(inline, ContestProblemInline)
+            ]
         return super().get_inline_instances(request, obj)
 
     def save_model(self, request, obj, form, change):
