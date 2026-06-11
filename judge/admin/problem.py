@@ -189,7 +189,14 @@ class SimpleProblemCreationForm(ProblemForm):
                 if not cleaned_data.get(field_name):
                     self.add_error(field_name, _('This field is required in advanced mode.'))
         else:
-            cleaned_data['code'] = cleaned_data.get('code') or getattr(self, 'generated_simple_code', '')
+            generated_code = cleaned_data.get('code') or ''
+            if not generated_code:
+                generate_simple_code = getattr(self, 'generate_simple_code', None)
+                if callable(generate_simple_code):
+                    generated_code = generate_simple_code(cleaned_data.get('name') or '')
+                else:
+                    generated_code = getattr(self, 'generated_simple_code', '')
+            cleaned_data['code'] = generated_code
             cleaned_data['is_public'] = False
             cleaned_data['is_manually_managed'] = False
             cleaned_data['date'] = None
@@ -566,6 +573,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             form.default_points = self.get_default_points()
             form.default_time_limit = self.get_default_time_limit()
             form.default_memory_limit = self.get_default_memory_limit()
+            form.generate_simple_code = self.generate_problem_code
             form.generated_simple_code = self.generate_problem_code(request.POST.get('name') or '')
             form.simple_preset_defaults = self.get_simple_preset_defaults(request)
         if 'authors' in form.base_fields:
