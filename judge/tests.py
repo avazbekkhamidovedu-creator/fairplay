@@ -1,3 +1,4 @@
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -22,6 +23,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
 
         self.assertContains(response, 'name="name"', html=False)
         self.assertContains(response, 'name="description"', html=False)
+        self.assertContains(response, 'name="markdown_upload"', html=False)
         self.assertContains(response, 'name="creation_preset"', html=False)
         self.assertContains(response, 'value="default"', html=False)
         self.assertContains(response, 'value="custom"', html=False)
@@ -81,6 +83,25 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem.time_limit, 2)
         self.assertEqual(problem.memory_limit, 131072)
         self.assertEqual(problem.points, 5)
+
+    def test_admin_add_page_can_fill_problem_from_markdown_upload(self):
+        markdown_upload = SimpleUploadedFile(
+            'sample.md',
+            b'# Uploaded Problem\n\nThis is the body.\n\nSecond paragraph.\n',
+            content_type='text/markdown',
+        )
+
+        response = self.client.post(reverse('admin:judge_problem_add'), data={
+            'markdown_upload': markdown_upload,
+            'creation_preset': 'default',
+            '_save': 'Save',
+        })
+
+        self.assertEqual(response.status_code, 302)
+
+        problem = Problem.objects.get(name='Uploaded Problem')
+        self.assertEqual(problem.description, 'This is the body.\n\nSecond paragraph.')
+        self.assertEqual(problem.code, 'uploadedproblem')
 
 
 class ContestAdminCreationTestCase(CommonDataMixin, TestCase):
