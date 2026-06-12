@@ -82,15 +82,17 @@ class DMOJImpersonationMiddleware(object):
         return self.get_response(request)
 
 
-def _seb_block_exempt(path):
+def _seb_block_exempt(path, contest):
     # Whitelist paths that must remain reachable for the SEB block page to function
     # (logout, the .seb download itself, the quit landing, and static/media assets).
-    static_url = settings.STATIC_URL or '/static/'
-    media_url = getattr(settings, 'MEDIA_URL', '') or '/media/'
-    if path.startswith(static_url) or path.startswith(media_url):
-        return True
+    # A root-ish prefix (e.g. MEDIA_URL = '/') would exempt every path and
+    # disable the lockdown entirely, so only honor real sub-path prefixes.
+    for prefix in (settings.STATIC_URL, getattr(settings, 'MEDIA_URL', '')):
+        if prefix and prefix != '/' and path.startswith(prefix):
+            return True
     try:
-        exempt_paths = (reverse('auth_logout'), reverse('seb_quit'))
+        exempt_paths = (reverse('auth_logout'), reverse('seb_quit'),
+                        reverse('contest_seb_config', args=(contest.key,)))
     except Exception:
         return False
     return path in exempt_paths
@@ -113,7 +115,7 @@ class ContestMiddleware(object):
         if request.in_contest:
             contest = request.participation.contest
             if contest.seb_required and not contest.user_bypasses_seb(request.user) \
-                    and not _seb_block_exempt(request.path) \
+                    and not _seb_block_exempt(request.path, contest) \
                     and not request_matches_seb(
                         request, contest.seb_allowed_bek(), contest.seb_allowed_config_keys()):
                 return render(request, 'contest/seb_required.html', {

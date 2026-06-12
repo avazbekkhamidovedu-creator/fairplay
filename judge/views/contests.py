@@ -550,8 +550,9 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
             return generic_message(request, _('No such contest'),
                                    _('You are not in contest "%s".') % contest.key, 404)
 
+        was_spectating = profile.current_contest.spectate
         profile.remove_contest()
-        if contest.seb_required:
+        if contest.seb_required and not was_spectating and not contest.user_bypasses_seb(request.user):
             return HttpResponseRedirect(contest.seb_quit_url or reverse('seb_quit'))
         return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
 

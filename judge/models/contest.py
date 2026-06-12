@@ -1,3 +1,5 @@
+import re
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
@@ -265,6 +267,11 @@ class Contest(models.Model):
                 seb_errors['seb_config_keys'] = _(
                     'At least one Config Key hash is required when Safe Exam Browser is enabled '
                     '(the macOS SEB build only sends the Config Key).')
+            for field in ('seb_browser_exam_keys', 'seb_config_keys'):
+                for key in self._parse_seb_keys(getattr(self, field)):
+                    if not re.fullmatch('[0-9a-f]{64}', key):
+                        seb_errors[field] = _('"%s" is not a 64-character hex hash.') % key
+                        break
             if seb_errors:
                 raise ValidationError(seb_errors)
 
