@@ -105,9 +105,18 @@ class ContestMiddleware(object):
     def __call__(self, request):
         profile = request.profile
         if profile:
+            previous = profile.current_contest
             profile.update_contest()
             request.participation = profile.current_contest
             request.in_contest = request.participation is not None
+            # If the participation just ended naturally in a SEB-locked exam,
+            # send the student to the quit URL so SEB terminates the session.
+            if previous is not None and request.participation is None \
+                    and previous.ended and not previous.spectate:
+                contest = previous.contest
+                if contest.seb_required and not contest.user_bypasses_seb(request.user) \
+                        and not _seb_block_exempt(request.path, contest):
+                    return HttpResponseRedirect(contest.seb_quit_url or reverse('seb_quit'))
         else:
             request.in_contest = False
             request.participation = None

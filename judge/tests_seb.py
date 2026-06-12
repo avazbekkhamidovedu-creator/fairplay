@@ -5,6 +5,7 @@ import tempfile
 from django.core.files.base import ContentFile
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from judge.models import ContestParticipation
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, create_user
@@ -205,6 +206,58 @@ class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
         response = self.client.post(reverse('contest_leave', args=('plain',)))
         self.assertRedirects(response, reverse('contest_view', args=('plain',)),
                              fetch_redirect_response=False)
+
+    # ------------------------------------------------------------------ #
+    # Natural contest end                                                  #
+    # ------------------------------------------------------------------ #
+
+    def end_contest(self, contest):
+        contest.end_time = timezone.now() - timezone.timedelta(minutes=1)
+        contest.save()
+
+    def test_natural_end_redirects_to_quit_page(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        response = self.client.get(reverse('home'))
+        self.assertRedirects(response, reverse('seb_quit'))
+        profile = self.users['seb_participant'].profile
+        profile.refresh_from_db()
+        self.assertIsNone(profile.current_contest)
+
+    def test_natural_end_redirects_to_custom_quit_url(self):
+        self.seb_contest.seb_quit_url = 'https://example.com/done'
+        self.seb_contest.save()
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        response = self.client.get(reverse('home'))
+        self.assertRedirects(response, 'https://example.com/done', fetch_redirect_response=False)
+
+    def test_natural_end_redirect_fires_only_once(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 302)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 200)
+
+    def test_natural_end_no_redirect_on_exempt_path(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        response = self.client.get(reverse('seb_quit'))
+        self.assertContains(response, 'Exam finished')
+
+    def test_natural_end_spectator_not_redirected(self):
+        self.enter_contest('seb_spectator', self.seb_contest, virtual=ContestParticipation.SPECTATE)
+        self.end_contest(self.seb_contest)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 200)
+
+    def test_natural_end_bypass_user_not_redirected(self):
+        self.enter_contest('seb_tester', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 200)
+
+    def test_natural_end_plain_contest_not_redirected(self):
+        self.enter_contest('seb_participant', self.plain_contest)
+        self.end_contest(self.plain_contest)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 200)
 
     # ------------------------------------------------------------------ #
     # .seb config download                                                #
