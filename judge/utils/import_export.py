@@ -50,11 +50,19 @@ def process_user_csv(csv_file, organization: Organization = None, target_class: 
         result.errors.append(_('Missing required columns: %s') % ', '.join(sorted(missing)))
         return result
 
+    seen_usernames = set()
     for row_idx, raw in enumerate(reader, start=1):
         row = {k.strip(): (v or '').strip() for k, v in raw.items()}
         username = row.get('username')
         if not username:
             continue
+
+        if username in seen_usernames:
+            result.skipped += 1
+            result.errors.append(_('Row %(row)d (%(username)s): duplicate username within this CSV; '
+                                   'row ignored.') % {'row': row_idx, 'username': username})
+            continue
+        seen_usernames.add(username)
 
         try:
             with transaction.atomic():

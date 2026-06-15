@@ -1,4 +1,5 @@
 import errno
+import logging
 import os
 from typing import Optional
 
@@ -7,10 +8,13 @@ from django.core.cache import cache
 from django.core.cache.utils import make_template_fragment_key
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
+from impersonate.signals import session_begin, session_end
 
 from .caching import finished_submission
 from .models import BlogPost, Comment, Contest, ContestProblem, ContestSubmission, EFFECTIVE_MATH_ENGINES, Judge, \
     Language, License, MiscConfig, Organization, Problem, Profile, Submission, WebAuthnCredential
+
+impersonate_logger = logging.getLogger('judge.impersonate')
 
 
 def get_pdf_path(basename: str) -> Optional[str]:
@@ -154,3 +158,24 @@ def misc_config_delete(sender, instance, **kwargs):
 def contest_submission_update(sender, instance, **kwargs):
     Submission.objects.filter(id=instance.submission_id).update(contest_object_id=instance.participation.contest_id)
     instance.participation.recompute_results()
+
+
+# Audit trail for impersonation; DB logging (ImpersonationLog) is disabled via
+# IMPERSONATE_DISABLE_LOGGING, so these log lines are the only record of who
+# acted as whom.
+@receiver(session_begin, dispatch_uid='judge.impersonate.session_begin')
+def impersonate_session_begin(sender, impersonator=None, impersonating=None, request=None, **kwargs):
+    impersonate_logger.info(
+        'Impersonation started: %s (id=%s) as %s (id=%s) from %s',
+        impersonator, getattr(impersonator, 'id', None),
+        impersonating, getattr(impersonating, 'id', None),
+        request.META.get('REMOTE_ADDR', 'unknown') if request else 'unknown')
+
+
+@receiver(session_end, dispatch_uid='judge.impersonate.session_end')
+def impersonate_session_end(sender, impersonator=None, impersonating=None, request=None, **kwargs):
+    impersonate_logger.info(
+        'Impersonation ended: %s (id=%s) as %s (id=%s) from %s',
+        impersonator, getattr(impersonator, 'id', None),
+        impersonating, getattr(impersonating, 'id', None),
+        request.META.get('REMOTE_ADDR', 'unknown') if request else 'unknown')
