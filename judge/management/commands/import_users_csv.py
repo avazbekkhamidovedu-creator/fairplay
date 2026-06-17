@@ -25,6 +25,12 @@ The default password for newly created users is `123456`, but this can be
 overridden with the `--password` flag.  See the argument parser below
 for more flags.
 
+The weak default is intentional: on first login, the pwned-password check
+(judge/utils/pwned.py + DMOJLoginMiddleware) forces the user to set a new
+password before they can use the site.  Note the residual risk that an
+account can be taken over by whoever logs into it first, so distribute
+credentials promptly and prefer importing shortly before first use.
+
 This implementation relies on the actual schema of the DMOJ `Profile` model,
 where membership is stored in the `organizations` many‑to‑many field and
 exposed on `Organization` via the `members` reverse relation【940562129592725†L198-L207】.

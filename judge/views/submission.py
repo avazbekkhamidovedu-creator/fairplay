@@ -258,9 +258,8 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
         if submission.user_id != request.profile.id and not request.user.has_perm('judge.change_submission'):
             return JsonResponse({'error': 'You may only get hints for your own submissions.'}, status=403)
 
-        # Gate 4: quota
-        remaining = ai_hints.get_remaining(request.profile.id)
-        if remaining <= 0:
+        # Gate 4: quota — atomically reserve a slot up front; refunded if the call fails
+        if not ai_hints.try_reserve(request.profile.id):
             return JsonResponse({'error': 'You have used all your AI hints for today. Try again tomorrow.'}, status=429)
 
         from judge.models.ai_hints import AIHintLog
@@ -282,13 +281,13 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
             log.model_name = result.model_name
             log.response_time_ms = result.response_time_ms
         except Exception as e:
+            ai_hints.refund(request.profile.id)
             log.success = False
             log.error_message = str(e)[:2000]
             log.save()
             return JsonResponse({'error': f'AI hint unavailable: {e}'}, status=503)
 
         log.save()
-        ai_hints._increment(request.profile.id)
         return JsonResponse({'hint': result.hint_text, 'remaining': ai_hints.get_remaining(request.profile.id)})
 
 
