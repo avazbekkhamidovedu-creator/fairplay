@@ -610,6 +610,10 @@ CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 WEBAUTHN_RP_ID = None
 
+# LLM access layer (judge.llm). Only 'azure' is implemented; this is the seam
+# for adding an OpenAI-style backend later without touching callers.
+LLM_PROVIDER = 'azure'
+
 # Azure OpenAI for AI hints
 AZURE_OPENAI_ENDPOINT = None       # e.g. 'https://myinstance.openai.azure.com/'
 AZURE_OPENAI_API_KEY = None
