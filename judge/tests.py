@@ -1,6 +1,7 @@
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 from judge.models import Contest, Language, Problem
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type
@@ -59,6 +60,9 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'name="solution-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'name="translations-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'name="templates-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'id="problem-markdown-import-input"', html=False)
+        self.assertContains(response, 'id="problem-markdown-import-status"', html=False)
+        self.assertContains(response, 'judge_problem_import_markdown', html=False)
 
     def test_admin_advanced_add_page_uses_original_problem_form(self):
         response = self.client.get('{}?advanced=1'.format(reverse('admin:judge_problem_add')))
@@ -117,6 +121,51 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem.time_limit, 2)
         self.assertEqual(problem.memory_limit, 131072)
         self.assertEqual(problem.points, 5)
+
+    def test_admin_markdown_import_accepts_markdown_file(self):
+        response = self.client.post(
+            reverse('admin:judge_problem_import_markdown'),
+            data={
+                'markdown_file': SimpleUploadedFile(
+                    'two-sum.md',
+                    b'# Two Sum\r\n\r\nKeep **original** markdown.\r\n',
+                    content_type='text/markdown',
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(
+            response.content.decode(),
+            {
+                'ok': True,
+                'message': 'Markdown uploaded successfully.',
+                'name': 'Two Sum',
+                'description': '# Two Sum\n\nKeep **original** markdown.\n',
+                'filename': 'two-sum.md',
+            },
+        )
+
+    def test_admin_markdown_import_rejects_non_markdown_file(self):
+        response = self.client.post(
+            reverse('admin:judge_problem_import_markdown'),
+            data={
+                'markdown_file': SimpleUploadedFile(
+                    'two-sum.pdf',
+                    b'%PDF-1.4',
+                    content_type='application/pdf',
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertJSONEqual(
+            response.content.decode(),
+            {
+                'ok': False,
+                'message': 'Only Markdown or text files are supported.',
+            },
+        )
 
 
 class ContestAdminCreationTestCase(CommonDataMixin, TestCase):
