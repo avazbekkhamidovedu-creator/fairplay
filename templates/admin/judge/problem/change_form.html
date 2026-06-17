@@ -2,6 +2,13 @@
 {% load i18n %}
 
 {% block extrastyle %}{{ block.super }}
+    {% if show_embedded_advanced_toggle or is_advanced_add %}
+        <style>
+            #content-main .markdown-image-upload {
+                display: none !important;
+            }
+        </style>
+    {% endif %}
     {% if show_embedded_advanced_toggle %}
         <style>
             #content-main .embedded-advanced-fields,
