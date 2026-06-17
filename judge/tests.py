@@ -27,6 +27,11 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'value="custom"', html=False)
         self.assertContains(response, 'id="embedded-advanced-toggle"', html=False)
         self.assertContains(response, 'name="embedded_advanced_mode"', html=False)
+        self.assertContains(response, 'name="languagelimit_set-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="problemclarification_set-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="solution_set-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="problemtranslation_set-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="problemtemplate_set-TOTAL_FORMS"', html=False)
 
     def test_admin_advanced_add_page_uses_original_problem_form(self):
         response = self.client.get('{}?advanced=1'.format(reverse('admin:judge_problem_add')))
