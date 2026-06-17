@@ -8,7 +8,8 @@ from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.forms import ModelForm
-from django.urls import reverse, reverse_lazy
+from django.http import JsonResponse
+from django.urls import path, reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.text import slugify
@@ -520,6 +521,60 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
 
     class Media:
         js = ('admin_class_filter.js', 'admin_problem_code_autofill.js')
+
+    def get_urls(self):
+        return [
+            path(
+                'import-markdown/',
+                self.admin_site.admin_view(self.import_markdown_view),
+                name='judge_problem_import_markdown',
+            ),
+        ] + super().get_urls()
+
+    def import_markdown_view(self, request):
+        if not request.user.has_perm('judge.edit_own_problem'):
+            raise PermissionDenied
+        if request.method != 'POST':
+            return JsonResponse({'ok': False, 'message': gettext('Only POST is allowed.')}, status=405)
+
+        uploaded_file = request.FILES.get('markdown_file')
+        if uploaded_file is None:
+            return JsonResponse({'ok': False, 'message': gettext('Please choose a Markdown file.')}, status=400)
+
+        filename = uploaded_file.name or ''
+        lowered = filename.lower()
+        if not lowered.endswith(('.md', '.markdown', '.mdown', '.txt')):
+            return JsonResponse(
+                {'ok': False, 'message': gettext('Only Markdown or text files are supported.')},
+                status=400,
+            )
+
+        raw_bytes = uploaded_file.read()
+        for encoding in ('utf-8-sig', 'utf-8', 'utf-16'):
+            try:
+                content = raw_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                content = None
+        if content is None:
+            return JsonResponse(
+                {'ok': False, 'message': gettext('Could not decode this file. Please use UTF-8 Markdown.')},
+                status=400,
+            )
+
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+        heading_match = re.search(r'^\s*#\s+(.+?)\s*$', content, re.MULTILINE)
+        suggested_name = heading_match.group(1).strip() if heading_match else ''
+        if not suggested_name and filename:
+            suggested_name = re.sub(r'\.[^.]+$', '', filename).replace('_', ' ').replace('-', ' ').strip()
+
+        return JsonResponse({
+            'ok': True,
+            'message': gettext('Markdown uploaded successfully.'),
+            'name': suggested_name,
+            'description': content,
+            'filename': filename,
+        })
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
         context['show_embedded_advanced_toggle'] = add and not self.is_advanced_add_mode(request, obj)
