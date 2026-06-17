@@ -22,10 +22,9 @@ IDE_PROBLEM_CODE = 'idepractice'
 IDE_RATE_LIMIT_COUNT = 5  # runs per window
 IDE_RATE_LIMIT_WINDOW = 1  # minutes
 
-# Resource limits for IDE (lower than problem limits)
-IDE_TIME_LIMIT = 2.0  # seconds
-IDE_MEMORY_LIMIT = 65536  # KB (64 MB)
-IDE_OUTPUT_LIMIT = 10240  # bytes (10 KB)
+# Time/memory limits are NOT set here: the judge takes them from the
+# `idepractice` problem's configuration, editable in the problem admin.
+IDE_OUTPUT_LIMIT = 10240  # bytes (10 KB) shown to the user; display truncation only
 
 _ansi_converter = Ansi2HTMLConverter(inline=True)
 

@@ -75,6 +75,14 @@ class SimpleProblemCreationForm(ProblemForm):
     CREATION_PRESET_CUSTOM = 'custom'
     advanced_required_fields = ('code', 'group', 'time_limit', 'memory_limit', 'points')
     advanced_required_m2m_fields = ('types', 'allowed_languages')
+    markdown_upload = forms.FileField(
+        label=_('Upload Markdown file (optional)'),
+        required=False,
+        help_text=_(
+            'Use the first level-1 heading as the problem name and the remaining content as the problem body.',
+        ),
+        widget=forms.ClearableFileInput(attrs={'accept': '.md,.markdown,text/markdown,text/plain'}),
+    )
 
     creation_preset = forms.ChoiceField(
         label=_('Creation preset'),
@@ -107,14 +115,65 @@ class SimpleProblemCreationForm(ProblemForm):
             'short_circuit', 'time_limit', 'memory_limit', 'allowed_languages', 'banned_users',
         ):
             self.fields[field_name].required = False
+        self.fields['name'].required = False
+        self.fields['description'].required = False
         self.fields['creation_preset'].choices = (
             (self.CREATION_PRESET_DEFAULT, _('Default')),
             (self.CREATION_PRESET_CUSTOM, _('Custom')),
         )
 
+    def parse_markdown_upload(self, markdown_upload):
+        try:
+            content = markdown_upload.read().decode('utf-8-sig')
+        finally:
+            markdown_upload.seek(0)
+
+        lines = content.splitlines()
+        title = ''
+        body_lines = []
+        title_index = None
+
+        for index, line in enumerate(lines):
+            match = re.match(r'^\s*#\s+(.+?)\s*$', line)
+            if match:
+                title = match.group(1).strip()
+                title_index = index
+                break
+
+        if not title:
+            raise forms.ValidationError(
+                _('The uploaded Markdown file must contain a level-1 heading like "# Problem Name".'),
+            )
+
+        for index, line in enumerate(lines):
+            if index != title_index:
+                body_lines.append(line)
+
+        body = '\n'.join(body_lines).strip()
+        return title, body
+
     def clean(self):
         cleaned_data = super().clean()
         advanced_mode = cleaned_data.get('embedded_advanced_mode')
+        markdown_upload = cleaned_data.get('markdown_upload')
+
+        if markdown_upload:
+            try:
+                uploaded_name, uploaded_description = self.parse_markdown_upload(markdown_upload)
+            except UnicodeDecodeError:
+                self.add_error('markdown_upload', _('The uploaded Markdown file must be UTF-8 encoded.'))
+            except forms.ValidationError as error:
+                self.add_error('markdown_upload', error)
+            else:
+                if not cleaned_data.get('name'):
+                    cleaned_data['name'] = uploaded_name
+                if not cleaned_data.get('description'):
+                    cleaned_data['description'] = uploaded_description
+
+        if not cleaned_data.get('name'):
+            self.add_error('name', _('This field is required.'))
+        if not cleaned_data.get('description'):
+            self.add_error('description', _('This field is required.'))
 
         if getattr(self, 'default_group', None) is None:
             raise forms.ValidationError(_('You must create at least one problem group before creating a problem.'))
@@ -131,7 +190,14 @@ class SimpleProblemCreationForm(ProblemForm):
                 if not cleaned_data.get(field_name):
                     self.add_error(field_name, _('This field is required in advanced mode.'))
         else:
-            cleaned_data['code'] = cleaned_data.get('code') or getattr(self, 'generated_simple_code', '')
+            generated_code = cleaned_data.get('code') or ''
+            if not generated_code:
+                generate_simple_code = getattr(self, 'generate_simple_code', None)
+                if callable(generate_simple_code):
+                    generated_code = generate_simple_code(cleaned_data.get('name') or '')
+                else:
+                    generated_code = getattr(self, 'generated_simple_code', '')
+            cleaned_data['code'] = generated_code
             cleaned_data['is_public'] = False
             cleaned_data['is_manually_managed'] = False
             cleaned_data['date'] = None
@@ -241,7 +307,7 @@ class ProblemTemplateInline(admin.StackedInline):
 class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     add_fieldsets = (
         (None, {
-            'fields': ('name', 'description', 'creation_preset'),
+            'fields': ('name', 'description', 'markdown_upload', 'creation_preset'),
         }),
         (_('Optional Basic'), {
             'classes': ('embedded-extended-fields',),
@@ -511,6 +577,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             form.default_points = self.get_default_points()
             form.default_time_limit = self.get_default_time_limit()
             form.default_memory_limit = self.get_default_memory_limit()
+            form.generate_simple_code = self.generate_problem_code
             form.generated_simple_code = self.generate_problem_code(request.POST.get('name') or '')
             form.simple_preset_defaults = self.get_simple_preset_defaults(request)
         if 'authors' in form.base_fields:
@@ -609,6 +676,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
 
         super(ProblemAdmin, self).save_model(request, obj, form, change)
         if (
+            change and
             form.changed_data and
             any(f in form.changed_data for f in ('is_public', 'organizations', 'classes', 'points', 'partial'))
         ):
