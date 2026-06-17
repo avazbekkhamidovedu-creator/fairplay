@@ -1,7 +1,7 @@
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
-from django.core.files.uploadedfile import SimpleUploadedFile
 
 from judge.models import Contest, Language, Problem
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type
