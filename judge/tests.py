@@ -17,6 +17,30 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.client = Client()
         self.client.force_login(self.users['superuser'])
 
+    def problem_inline_management_data(self):
+        return {
+            'templates-TOTAL_FORMS': '0',
+            'templates-INITIAL_FORMS': '0',
+            'templates-MIN_NUM_FORMS': '0',
+            'templates-MAX_NUM_FORMS': '1000',
+            'language_limits-TOTAL_FORMS': '0',
+            'language_limits-INITIAL_FORMS': '0',
+            'language_limits-MIN_NUM_FORMS': '0',
+            'language_limits-MAX_NUM_FORMS': '1000',
+            'problemclarification_set-TOTAL_FORMS': '0',
+            'problemclarification_set-INITIAL_FORMS': '0',
+            'problemclarification_set-MIN_NUM_FORMS': '0',
+            'problemclarification_set-MAX_NUM_FORMS': '1000',
+            'solution-TOTAL_FORMS': '0',
+            'solution-INITIAL_FORMS': '0',
+            'solution-MIN_NUM_FORMS': '0',
+            'solution-MAX_NUM_FORMS': '1',
+            'translations-TOTAL_FORMS': '0',
+            'translations-INITIAL_FORMS': '0',
+            'translations-MIN_NUM_FORMS': '0',
+            'translations-MAX_NUM_FORMS': '1000',
+        }
+
     def test_admin_add_page_uses_embedded_advanced_creation_form(self):
         response = self.client.get(reverse('admin:judge_problem_add'))
 
@@ -30,11 +54,11 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'Optional Basic', html=False)
         self.assertContains(response, 'name="organizations"', html=False)
         self.assertContains(response, 'name="allowed_languages"', html=False)
-        self.assertContains(response, 'name="languagelimit_set-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="language_limits-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'name="problemclarification_set-TOTAL_FORMS"', html=False)
-        self.assertContains(response, 'name="solution_set-TOTAL_FORMS"', html=False)
-        self.assertContains(response, 'name="problemtranslation_set-TOTAL_FORMS"', html=False)
-        self.assertContains(response, 'name="problemtemplate_set-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="solution-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="translations-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="templates-TOTAL_FORMS"', html=False)
 
     def test_admin_advanced_add_page_uses_original_problem_form(self):
         response = self.client.get('{}?advanced=1'.format(reverse('admin:judge_problem_add')))
@@ -45,12 +69,14 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertNotContains(response, 'name="creation_preset"', html=False)
 
     def test_admin_add_page_can_create_problem_with_automatic_defaults(self):
-        response = self.client.post(reverse('admin:judge_problem_add'), data={
+        data = {
             'name': 'Simple Problem',
             'description': 'Problem statement',
             'creation_preset': 'default',
             '_save': 'Save',
-        })
+        }
+        data.update(self.problem_inline_management_data())
+        response = self.client.post(reverse('admin:judge_problem_add'), data=data)
 
         self.assertEqual(response.status_code, 302)
 
@@ -68,7 +94,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         )
 
     def test_admin_embedded_advanced_mode_can_use_manual_settings(self):
-        response = self.client.post(reverse('admin:judge_problem_add'), data={
+        data = {
             'embedded_advanced_mode': '1',
             'creation_preset': 'custom',
             'code': 'manualcode',
@@ -81,7 +107,9 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             'memory_limit': 131072,
             'points': 5,
             '_save': 'Save',
-        })
+        }
+        data.update(self.problem_inline_management_data())
+        response = self.client.post(reverse('admin:judge_problem_add'), data=data)
 
         self.assertEqual(response.status_code, 302)
         problem = Problem.objects.get(code='manualcode')
