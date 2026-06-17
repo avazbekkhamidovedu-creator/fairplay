@@ -174,6 +174,7 @@ class LanguageLimitInline(admin.TabularInline):
     model = LanguageLimit
     fields = ('language', 'time_limit', 'memory_limit')
     form = LanguageLimitInlineForm
+    classes = ('embedded-advanced-fields',)
 
 
 class ProblemClarificationForm(ModelForm):
@@ -186,6 +187,7 @@ class ProblemClarificationInline(admin.StackedInline):
     fields = ('description',)
     form = ProblemClarificationForm
     extra = 0
+    classes = ('embedded-advanced-fields',)
 
 
 class ProblemSolutionForm(ModelForm):
@@ -205,6 +207,7 @@ class ProblemSolutionInline(admin.StackedInline):
     fields = ('is_public', 'publish_on', 'authors', 'content')
     form = ProblemSolutionForm
     extra = 0
+    classes = ('embedded-advanced-fields',)
 
 
 class ProblemTranslationForm(ModelForm):
@@ -217,6 +220,7 @@ class ProblemTranslationInline(admin.StackedInline):
     fields = ('language', 'name', 'description')
     form = ProblemTranslationForm
     extra = 0
+    classes = ('embedded-advanced-fields',)
 
     def has_permission_full_markup(self, request, obj=None):
         if not obj:
@@ -229,7 +233,8 @@ class ProblemTranslationInline(admin.StackedInline):
 class ProblemTemplateInline(admin.StackedInline):
     model = ProblemTemplate
     fields = ('language', 'code')
-    extra = 0
+    extra = 1
+    classes = ('embedded-extended-fields',)
 
 
 class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
@@ -237,11 +242,18 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         (None, {
             'fields': ('name', 'description', 'creation_preset'),
         }),
+        (_('Optional Basic'), {
+            'classes': ('embedded-extended-fields',),
+            'fields': (
+                'organizations', 'classes', 'allowed_languages',
+            ),
+            'description': _('Organizations (Courses), allowed languages, and starter templates.'),
+        }),
         (_('Advanced'), {
             'classes': ('embedded-advanced-fields',),
             'fields': (
                 'code', 'is_public', 'is_manually_managed', 'date', 'authors', 'curators', 'testers',
-                'organizations', 'classes', 'submission_source_visibility_mode', 'is_full_markup',
+                'submission_source_visibility_mode', 'is_full_markup',
                 'view_test_cases', 'view_tester', 'ai_hints_enabled', 'license',
             ),
         }),
@@ -260,10 +272,6 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         (_('Advanced Limits'), {
             'classes': ('embedded-advanced-fields',),
             'fields': ('time_limit', 'memory_limit'),
-        }),
-        (_('Advanced Language'), {
-            'classes': ('embedded-advanced-fields',),
-            'fields': ('allowed_languages',),
         }),
         (_('Advanced Justice'), {
             'classes': ('embedded-advanced-fields',),
@@ -294,8 +302,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     list_display = ['code', 'name', 'show_authors', 'points', 'is_public', 'show_public']
     ordering = ['code']
     search_fields = ('code', 'name', 'authors__user__username', 'curators__user__username')
-    inlines = [LanguageLimitInline, ProblemClarificationInline, ProblemSolutionInline,
-               ProblemTranslationInline, ProblemTemplateInline]
+    inlines = [ProblemTemplateInline, LanguageLimitInline, ProblemClarificationInline,
+               ProblemSolutionInline, ProblemTranslationInline]
     list_max_show_all = 1000
     actions_on_top = True
     actions_on_bottom = True

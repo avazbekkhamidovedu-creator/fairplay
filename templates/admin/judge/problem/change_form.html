@@ -12,7 +12,7 @@
     {% if show_embedded_advanced_toggle %}
         <style>
             #content-main .embedded-advanced-fields,
-            #content-main .inline-group {
+            #content-main .inline-group.embedded-advanced-inline {
                 max-height: 0;
                 overflow: hidden;
                 opacity: 0;
@@ -25,7 +25,7 @@
             }
 
             #content-main.advanced-expanded .embedded-advanced-fields,
-            #content-main.advanced-expanded .inline-group {
+            #content-main.advanced-expanded .inline-group.embedded-advanced-inline {
                 max-height: 2000px;
                 opacity: 1;
                 overflow: hidden;
@@ -58,6 +58,8 @@
                 var $contentMain = $('#content-main');
                 var $advancedButton = $('#embedded-advanced-toggle');
                 var $preset = $('#id_creation_preset');
+                var $problemTemplateInline = $('#templates-group');
+                $('.inline-group').has('.embedded-advanced-fields').addClass('embedded-advanced-inline');
                 var presetSyncingUi = false;
                 var suppressPresetCustom = false;
                 var watchedFields = [
@@ -325,12 +327,61 @@
                     }
                     var isCustomized = watchedFields.some(function (fieldName) {
                         return currentValue(fieldName) !== normalizedValue(fieldName);
-                    });
+                    }) || hasCustomizedInlineValues();
                     setPresetValue(isCustomized ? 'custom' : 'default');
                 }
 
+                function hasMeaningfulInlineValue(field) {
+                    if (!field || field.disabled || field.name.indexOf('__prefix__') !== -1) {
+                        return false;
+                    }
+                    if (field.type === 'hidden') {
+                        return false;
+                    }
+                    if (field.type === 'checkbox' || field.type === 'radio') {
+                        return field.checked;
+                    }
+                    if (field.tagName && field.tagName.toLowerCase() === 'select' && field.multiple) {
+                        var selectedValues = $(field).val() || [];
+                        return selectedValues.length > 0;
+                    }
+                    return String($(field).val() || '').trim() !== '';
+                }
+
+                function inlineGroupHasCustomizedValues(selector) {
+                    var $group = $(selector);
+                    if (!$group.length) {
+                        return false;
+                    }
+                    var hasDeleteRequest = $group.find('input[type="checkbox"][name$="-DELETE"]:checked').length > 0;
+                    if (hasDeleteRequest) {
+                        return true;
+                    }
+                    var hasFilledField = false;
+                    $group.find('.inline-related').not('.empty-form').find(':input').each(function () {
+                        if (hasMeaningfulInlineValue(this)) {
+                            hasFilledField = true;
+                            return false;
+                        }
+                    });
+                    return hasFilledField;
+                }
+
+                function hasCustomizedInlineValues() {
+                    return [
+                        '#templates-group',
+                        '#language_limits-group',
+                        '#problemclarification_set-group',
+                        '#solution-group',
+                        '#translations-group'
+                    ].some(inlineGroupHasCustomizedValues);
+                }
+
                 function schedulePresetRefresh() {
+                    updatePresetFromAdvancedFields();
                     window.setTimeout(updatePresetFromAdvancedFields, 0);
+                    window.requestAnimationFrame(updatePresetFromAdvancedFields);
+                    window.setTimeout(updatePresetFromAdvancedFields, 100);
                 }
 
                 $advancedButton.on('click', function () {
@@ -367,9 +418,11 @@
                     $contentMain.off('.embeddedPreset');
                     $contentMain.on(
                         'change.embeddedPreset input.embeddedPreset click.embeddedPreset',
-                        '.embedded-advanced-fields :input, .inline-group :input',
+                        '.embedded-advanced-fields :input, .embedded-extended-fields :input, .inline-group :input',
                         schedulePresetRefresh
                     );
+                    $(document).off('.embeddedPresetSelect2');
+                    $(document).on('select2:select.embeddedPresetSelect2 select2:unselect.embeddedPresetSelect2', schedulePresetRefresh);
                 }
 
                 var $presetRow = $('.form-row.field-creation_preset, .field-creation_preset').first();
@@ -378,6 +431,15 @@
                 }
                 if ($presetRow.length && $advancedButton.length) {
                     $('#embedded-advanced-toggle-container').insertAfter($presetRow);
+                }
+                var $optionalBasicSection = $('fieldset.module.aligned.embedded-extended-fields').first();
+                if ($optionalBasicSection.length && $problemTemplateInline.length) {
+                    var $templateAnchor = $('#problem-template-inline-anchor');
+                    if (!$templateAnchor.length) {
+                        $templateAnchor = $('<div id="problem-template-inline-anchor"></div>');
+                        $templateAnchor.insertAfter($optionalBasicSection);
+                    }
+                    $problemTemplateInline.appendTo($templateAnchor);
                 }
 
                 if ($preset.val() === 'default') {
