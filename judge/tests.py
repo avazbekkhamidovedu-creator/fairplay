@@ -62,7 +62,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'name="templates-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'id="problem-markdown-import-input"', html=False)
         self.assertContains(response, 'id="problem-markdown-import-status"', html=False)
-        self.assertContains(response, 'judge_problem_import_markdown', html=False)
+        self.assertContains(response, reverse('admin:judge_problem_import_markdown'), html=False)
 
     def test_admin_advanced_add_page_uses_original_problem_form(self):
         response = self.client.get('{}?advanced=1'.format(reverse('admin:judge_problem_add')))
