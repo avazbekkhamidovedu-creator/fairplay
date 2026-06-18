@@ -175,11 +175,13 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             content_type='text/markdown',
         )
 
-        response = self.client.post(reverse('admin:judge_problem_add'), data={
+        data = {
             'markdown_upload': markdown_upload,
             'creation_preset': 'default',
             '_save': 'Save',
-        })
+        }
+        data.update(self.problem_inline_management_data())
+        response = self.client.post(reverse('admin:judge_problem_add'), data=data)
 
         self.assertEqual(response.status_code, 302)
 
