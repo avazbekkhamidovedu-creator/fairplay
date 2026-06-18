@@ -73,6 +73,30 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'name="allowed_languages"', html=False)
         self.assertNotContains(response, 'name="creation_preset"', html=False)
 
+    def test_admin_change_page_uses_embedded_problem_layout_and_keeps_actions(self):
+        problem = Problem.objects.create(
+            code='p000123',
+            name='Existing Problem',
+            description='Problem statement',
+            group=create_problem_group(name='existing-group'),
+            time_limit=1,
+            memory_limit=262144,
+            points=100,
+        )
+
+        response = self.client.get(reverse('admin:judge_problem_change', args=[problem.pk]))
+
+        self.assertContains(response, 'id="embedded-advanced-toggle"', html=False)
+        self.assertContains(response, 'Optional Basic', html=False)
+        self.assertNotContains(response, 'name="creation_preset"', html=False)
+        self.assertNotContains(response, 'id="problem-markdown-import-input"', html=False)
+        self.assertNotContains(response, 'id="problem-markdown-import-status"', html=False)
+        self.assertContains(response, 'deletelink', html=False)
+        self.assertContains(response, 'View submissions', html=False)
+        self.assertContains(response, 'View problem votes', html=False)
+        self.assertContains(response, 'Edit test data', html=False)
+        self.assertContains(response, 'Clone problem', html=False)
+
     def test_admin_add_page_can_create_problem_with_automatic_defaults(self):
         data = {
             'name': 'Simple Problem',
