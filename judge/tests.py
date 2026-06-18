@@ -86,7 +86,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
 
         problem = Problem.objects.get(name='Simple Problem')
-        self.assertEqual(problem.code, 'simpleproblem')
+        self.assertRegex(problem.code, r'^p\d{6}$')
         self.assertFalse(problem.is_public)
         self.assertEqual(problem.time_limit, 1)
         self.assertEqual(problem.memory_limit, 262144)
@@ -185,7 +185,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
 
         problem = Problem.objects.get(name='Uploaded Problem')
         self.assertEqual(problem.description, 'This is the body.\n\nSecond paragraph.')
-        self.assertEqual(problem.code, 'uploadedproblem')
+        self.assertRegex(problem.code, r'^p\d{6}$')
 
 
 class ContestAdminCreationTestCase(CommonDataMixin, TestCase):

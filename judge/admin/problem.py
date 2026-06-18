@@ -12,7 +12,6 @@ from django.http import JsonResponse
 from django.urls import path, reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.html import format_html
-from django.utils.text import slugify
 from django.utils.translation import gettext, gettext_lazy as _, ngettext
 from reversion.admin import VersionAdmin
 
@@ -420,15 +419,13 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     def get_default_points(self):
         return max(100, settings.DMOJ_PROBLEM_MIN_PROBLEM_POINTS)
 
-    def generate_problem_code(self, name):
-        base = re.sub(r'[^a-z0-9]', '', slugify(name).lower())[:20] or 'problem'
-        code = base
-        suffix = 2
-        while Problem.objects.filter(code=code).exists():
-            suffix_str = str(suffix)
-            code = '{}{}'.format(base[:20 - len(suffix_str)], suffix_str)
-            suffix += 1
-        return code
+    def generate_problem_code(self, name=''):
+        max_codes = 1000000
+        for index in range(max_codes):
+            code = 'p{:06d}'.format(index)
+            if not Problem.objects.filter(code=code).exists():
+                return code
+        return 'clone{}'.format(str(int(timezone.now().timestamp()))[-6:])
 
     def get_simple_preset_defaults(self, request):
         default_group = self.get_default_group()
