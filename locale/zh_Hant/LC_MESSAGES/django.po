@@ -5065,6 +5065,150 @@ msgstr "全文搜尋"
 msgid "Hide solved problems"
 msgstr "隱藏已解開的題目"
 
+#: templates/problem/list.html
+msgid "Search by problem name, statement, etc."
+msgstr "搜尋題目名稱、題面等"
+
+#: templates/problem/list.html
+msgid "Show tags"
+msgstr "顯示標籤"
+
+#: templates/problem/list.html
+msgid "Hide tags"
+msgstr "隱藏標籤"
+
+#: templates/problem/list.html
+msgid "All problems"
+msgstr "全部題目"
+
+#: templates/problem/list.html
+msgid "Filters"
+msgstr "篩選"
+
+#: templates/problem/list.html
+msgid "All types"
+msgstr "全部題型"
+
+#: templates/problem/list.html
+msgid "Difficulty"
+msgstr "難度"
+
+#: templates/problem/list.html
+msgid "Coming soon"
+msgstr "敬請期待"
+
+#: templates/problem/list.html
+msgid "All difficulties"
+msgstr "全部難度"
+
+#: templates/problem/list.html
+msgid "Solved"
+msgstr "已解決"
+
+#: templates/problem/list.html
+msgid "Unsolved"
+msgstr "未解決"
+
+#: templates/problem/list.html
+msgid "Min"
+msgstr "最小"
+
+#: templates/problem/list.html
+msgid "Max"
+msgstr "最大"
+
+#: templates/problem/list.html
+msgid "Knowledge points"
+msgstr "知識點"
+
+#: templates/problem/list.html
+msgid "Click to choose knowledge points (multiple)"
+msgstr "點擊選擇知識點（可多選）"
+
+#: templates/problem/list.html
+msgid "Choose"
+msgstr "選擇"
+
+#: templates/problem/list.html
+msgid "Search..."
+msgstr "搜尋…"
+
+#: templates/problem/list.html
+msgid "No knowledge points yet."
+msgstr "暫無知識點。"
+
+#: templates/problem/list.html
+msgid "selected"
+msgstr "已選"
+
+#: templates/problem/list.html
+msgid "Clear"
+msgstr "清空"
+
+#: templates/problem/list.html
+msgid "Done"
+msgstr "完成"
+
+#: templates/problem/list.html
+msgid "Keyword"
+msgstr "關鍵詞"
+
+#: templates/problem/list.html
+msgid "Search statements"
+msgstr "搜尋題面"
+
+#: templates/problem/list.html
+msgid "Selected"
+msgstr "已選條件"
+
+#: templates/problem/list.html
+msgid "No filters applied"
+msgstr "未套用篩選"
+
+#: templates/problem/list.html
+msgid "Clear filters"
+msgstr "清除篩選"
+
+#: templates/problem/list.html
+msgid "results"
+msgstr "條結果"
+
+#: templates/problem/list.html
+msgid "Search"
+msgstr "搜尋"
+
+#: templates/problem/list.html
+msgid "Sort"
+msgstr "排序"
+
+#: templates/problem/list.html
+msgid "Sort by"
+msgstr "排序方式"
+
+#: templates/problem/list.html
+msgid "Random problem"
+msgstr "隨機題目"
+
+#: templates/problem/list.html
+msgid "No problems match your filters."
+msgstr "沒有符合篩選條件的題目。"
+
+#: templates/problem/list.html
+msgid "Showing %(start)s-%(end)s of %(total)s"
+msgstr "顯示第 %(start)s-%(end)s 條，共 %(total)s 條"
+
+#: judge/views/problem.py
+msgid "Problem code"
+msgstr "題號"
+
+#: judge/views/problem.py
+msgid "AC %"
+msgstr "通過率"
+
+#: judge/views/problem.py
+msgid "Date added"
+msgstr "新增日期"
+
 #: templates/problem/search-form.html:27
 msgid "Has editorial"
 msgstr "已有題解"
