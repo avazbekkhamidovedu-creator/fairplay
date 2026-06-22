@@ -348,6 +348,50 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             'fields': ('change_message',),
         }),
     )
+    change_embedded_fieldsets = (
+        (None, {
+            'fields': ('name', 'description'),
+        }),
+        (_('Optional Basic'), {
+            'classes': ('embedded-extended-fields',),
+            'fields': (
+                'organizations', 'classes', 'allowed_languages',
+            ),
+            'description': _('Organizations (Courses), allowed languages, and starter templates.'),
+        }),
+        (_('Advanced'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': (
+                'code', 'is_public', 'is_manually_managed', 'date', 'authors', 'curators', 'testers',
+                'submission_source_visibility_mode', 'is_full_markup',
+                'view_test_cases', 'view_tester', 'ai_hints_enabled', 'license',
+            ),
+        }),
+        (_('Advanced Social Media'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('og_image', 'summary'),
+        }),
+        (_('Advanced Taxonomy'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('types', 'group'),
+        }),
+        (_('Advanced Points'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': (('points', 'partial'), 'short_circuit'),
+        }),
+        (_('Advanced Limits'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('time_limit', 'memory_limit'),
+        }),
+        (_('Advanced Justice'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('banned_users',),
+        }),
+        (_('Advanced History'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('change_message',),
+        }),
+    )
     fieldsets = (
         (None, {
             'fields': (
@@ -493,6 +537,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     def get_fieldsets(self, request, obj=None):
         if obj is None and not self.is_advanced_add_mode(request, obj):
             return self.add_fieldsets
+        if obj is not None:
+            return self.change_embedded_fieldsets
         return super().get_fieldsets(request, obj)
 
     def get_readonly_fields(self, request, obj=None):
@@ -641,7 +687,10 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         })
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        use_embedded_problem_layout = not add or not self.is_advanced_add_mode(request, obj)
         context['show_embedded_advanced_toggle'] = add and not self.is_advanced_add_mode(request, obj)
+        context['show_problem_layout_toggle'] = use_embedded_problem_layout
+        context['use_embedded_problem_layout'] = use_embedded_problem_layout
         context['is_advanced_add'] = add and self.is_advanced_add_mode(request, obj)
         context['is_embedded_advanced_mode'] = add and not self.is_advanced_add_mode(request, obj) and (
             self.is_embedded_advanced_mode(request, obj)
