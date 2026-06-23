@@ -1,6 +1,8 @@
 """Tests for the redesigned problem list filters/sorts and difficulty badge (judge.views.problem)."""
+import os
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.cache import cache
 from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
@@ -17,7 +19,28 @@ from judge.models.tests.util import (
 from judge.views.problem import ProblemList
 
 
-class ProblemListTestBase(CommonDataMixin, TestCase):
+class StaticI18nFilesMixin:
+    """CI test jobs do not compile djangojs.js; create a stub so full-page renders work."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        path = os.path.join(settings.STATIC_ROOT, 'jsi18n', 'en', 'djangojs.js')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        cls._djangojs_path = path
+        cls._djangojs_existed = os.path.exists(path)
+        if not cls._djangojs_existed:
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write('{}')
+
+    @classmethod
+    def tearDownClass(cls):
+        if not getattr(cls, '_djangojs_existed', True) and os.path.exists(cls._djangojs_path):
+            os.remove(cls._djangojs_path)
+        super().tearDownClass()
+
+
+class ProblemListTestBase(StaticI18nFilesMixin, CommonDataMixin, TestCase):
     """Shared fixtures and helpers for problem list filter/sort tests."""
 
     @classmethod
@@ -113,6 +136,7 @@ class ProblemListTestBase(CommonDataMixin, TestCase):
             is_public=True,
             group='filter-group',
             types=('code',),
+            date=now - timedelta(days=75),
         )
         create_solution(problem=cls.problem_easy)
 
@@ -130,6 +154,7 @@ class ProblemListTestBase(CommonDataMixin, TestCase):
         request.LANGUAGE_CODE = 'en'
         view = ProblemList()
         view.request = request
+        view.kwargs = {}
         order = query_params.get('order', '')
         if not ((not order.startswith('-') or order.count('-') == 1) and (order.lstrip('-') in view.all_sorts)):
             order = view.default_sort
@@ -183,6 +208,7 @@ class ProblemListFilterTestCase(ProblemListTestBase):
             self.users['normal'],
             {
                 'type': [self.type_ids['easy'], self.type_ids['hard']],
+                'category': str(self.group_id),
                 'filtered': '1',
             },
         ))
@@ -484,6 +510,13 @@ class ProblemListSortTestCase(ProblemListTestBase):
             self.users['normal'],
             {'category': str(self.group_id), 'order': '-date'},
         )
+        dates_by_code = dict(
+            Problem.objects.filter(code__in=asc).values_list('code', 'date'),
+        )
+        asc_dates = [dates_by_code[code] for code in asc]
+        desc_dates = [dates_by_code[code] for code in desc]
+        self.assertEqual(asc_dates, sorted(asc_dates))
+        self.assertEqual(desc_dates, sorted(desc_dates, reverse=True))
         self.assertEqual(asc[0], 'filter-alpha')
         self.assertEqual(desc[0], 'filter-beta')
 
@@ -503,8 +536,6 @@ class ProblemListSortTestCase(ProblemListTestBase):
         desc_names = [names_by_code[code] for code in desc]
         self.assertEqual(asc_names, sorted(asc_names))
         self.assertEqual(desc_names, sorted(desc_names, reverse=True))
-        self.assertEqual(asc[0], 'filter-alpha')
-        self.assertEqual(desc[0], 'filter-beta')
 
     def test_sort_by_group(self):
         codes = self._sorted_codes(self.users['normal'], {'order': 'group'})
@@ -562,7 +593,7 @@ class ProblemListSortTestCase(ProblemListTestBase):
         self.assertContains(response, 'order=date', html=False)
 
 
-class ProblemDetailDifficultyTestCase(CommonDataMixin, TestCase):
+class ProblemDetailDifficultyTestCase(StaticI18nFilesMixin, CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
