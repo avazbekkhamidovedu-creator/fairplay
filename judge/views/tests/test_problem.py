@@ -388,6 +388,7 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         self.assertIn(cjk_problem.code, set(result.values_list('code', flat=True)))
 
     def test_problem_list_page_renders_filter_ui(self):
+        self.client.force_login(self.users['normal'])
         response = self.client.get(reverse('problem_list'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="filter-form"', html=False)
@@ -586,11 +587,10 @@ class ProblemListSortTestCase(ProblemListTestBase):
         self.assertEqual(codes, ['filter-easy', 'filter-hard', 'filter-beta'])
 
     def test_sort_links_are_exposed_in_context(self):
-        response = self.client.get(reverse('problem_list'))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'order=points', html=False)
-        self.assertContains(response, 'order=-ac_rate', html=False)
-        self.assertContains(response, 'order=date', html=False)
+        context = self._context(self.users['normal'], {})
+        for key in ('points', 'ac_rate', 'date', 'code', 'name'):
+            self.assertIn(key, context['sort_links'])
+            self.assertIn('order=', context['sort_links'][key])
 
 
 class ProblemDetailDifficultyTestCase(StaticI18nFilesMixin, CommonDataMixin, TestCase):
