@@ -124,6 +124,8 @@ class ProblemListTestBase(CommonDataMixin, TestCase):
     def _view(self, user, query_params):
         request = self.factory.get('/problems/', query_params)
         request.user = user
+        if getattr(user, 'is_authenticated', False):
+            request.profile = user.profile
         request.session = self.client.session
         request.LANGUAGE_CODE = 'en'
         view = ProblemList()
