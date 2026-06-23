@@ -46,6 +46,21 @@
                     }
                 }
 
+                // Reflect the selected difficulties inside the dropdown label.
+                function refreshDifficultyLabel() {
+                    var $label = $('#difficulty-multi-label');
+                    if (!$label.length) return;
+                    var names = [];
+                    $('#difficulty-multi-select .multi-select-menu input[type=checkbox]:checked').each(function () {
+                        names.push($(this).closest('.multi-select-option').find('span').text().trim());
+                    });
+                    if (names.length) {
+                        $label.text(names.join(', ')).removeClass('multi-select-label-empty');
+                    } else {
+                        $label.text($label.data('empty-label')).addClass('multi-select-label-empty');
+                    }
+                }
+
                 // Reflect the checked knowledge points as chips + count (applied on Search).
                 function refreshKnowledge() {
                     var $sel = $('#knowledge-selected');
@@ -94,6 +109,9 @@
 
                 // Problem-type dropdown: only update the label; filter applies on Search.
                 $('#type-multi-select .multi-select-menu input[type=checkbox]').change(refreshTypeLabel);
+
+                // Difficulty dropdown: only update the label; filter applies on Search.
+                $('#difficulty-multi-select .multi-select-menu input[type=checkbox]').change(refreshDifficultyLabel);
 
                 // Knowledge-point picker.
                 $('#toggle-knowledge-picker').click(function (e) {
@@ -176,6 +194,7 @@
 
                 // Sync live previews with the current (server-applied) selection.
                 refreshTypeLabel();
+                refreshDifficultyLabel();
                 refreshKnowledge();
             });
         </script>
@@ -325,14 +344,31 @@
                             </div>
                         </div>
 
-                        {# TODO: difficulty has no backend support yet; rendered as a disabled placeholder. #}
                         <div class="filter-group">
                             <span class="filter-group-label">{{ _('Difficulty') }}</span>
-                            <div class="multi-select disabled" title="{{ _('Coming soon') }}">
-                                <button type="button" class="multi-select-trigger" disabled>
-                                    <span class="multi-select-label-empty">{{ _('All difficulties') }}</span>
+                            <div class="multi-select" id="difficulty-multi-select">
+                                <button type="button" class="multi-select-trigger" aria-haspopup="listbox">
+                                    <span id="difficulty-multi-label" data-empty-label="{{ _('All difficulties') }}"
+                                          class="multi-select-text {% if not selected_difficulty_types %}multi-select-label-empty{% endif %}">
+                                        {% if selected_difficulty_types %}
+                                            {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}{{ user_trans(type.full_name) }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
+                                        {% else %}
+                                            {{ _('All difficulties') }}
+                                        {% endif %}
+                                    </span>
                                     <span class="multi-select-caret">&#9662;</span>
                                 </button>
+                                <div class="multi-select-menu" hidden role="listbox">
+                                    {% for type in difficulty_types %}
+                                        <label class="multi-select-option">
+                                            <input type="checkbox" name="type" value="{{ type.id }}"
+                                                   {% if type.id in selected_difficulty_types %}checked{% endif %}>
+                                            <span>{{ user_trans(type.full_name) }}</span>
+                                        </label>
+                                    {% else %}
+                                        <span class="multi-select-empty">{{ _('No difficulties yet.') }}</span>
+                                    {% endfor %}
+                                </div>
                             </div>
                         </div>
 
@@ -577,7 +613,13 @@
                                         <span class="tag-placeholder">&mdash;</span>
                                     {% endfor %}
                                 </td>
-                                <td class="col-diff"><span class="diff-placeholder">&mdash;</span></td>
+                                <td class="col-diff">
+                                    {% if problem.difficulty %}
+                                        <span class="difficulty-badge diff-{{ problem.difficulty }}">{{ problem.difficulty_label }}</span>
+                                    {% else %}
+                                        <span class="diff-placeholder">&mdash;</span>
+                                    {% endif %}
+                                </td>
                                 <td class="col-ac">
                                     <div class="ac-cell">
                                         <div class="ac-bar">

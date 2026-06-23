@@ -49,6 +49,32 @@ span.type-tag {
     white-space: nowrap;
 }
 
+/* Difficulty badge, shared by the problem list column and the problem detail sidebar. */
+.difficulty-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    line-height: 1.4;
+
+    &.diff-easy {
+        background: #dcfce7;
+        color: #15803d;
+    }
+
+    &.diff-medium {
+        background: #ffedd5;
+        color: #c2410c;
+    }
+
+    &.diff-hard {
+        background: #f3e8ff;
+        color: #7e22ce;
+    }
+}
+
 ul.problem-list {
     list-style: none;
     padding-left: 1em;
@@ -660,6 +686,13 @@ ul.problem-list {
             margin: 0;
             accent-color: var(--primary);
         }
+    }
+
+    .multi-select-empty {
+        display: block;
+        padding: 8px 12px;
+        font-size: 13px;
+        color: var(--text-muted);
     }
 }
 
