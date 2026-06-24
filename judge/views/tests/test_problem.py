@@ -1,8 +1,6 @@
 """Tests for the redesigned problem list filters/sorts and difficulty badge (judge.views.problem)."""
-import os
 from datetime import timedelta
 
-from django.conf import settings
 from django.core.cache import cache
 from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
@@ -19,28 +17,7 @@ from judge.models.tests.util import (
 from judge.views.problem import ProblemList
 
 
-class StaticI18nFilesMixin:
-    """CI test jobs do not compile djangojs.js; create a stub so full-page renders work."""
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        path = os.path.join(settings.STATIC_ROOT, 'jsi18n', 'en', 'djangojs.js')
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        cls._djangojs_path = path
-        cls._djangojs_existed = os.path.exists(path)
-        if not cls._djangojs_existed:
-            with open(path, 'w', encoding='utf-8') as fh:
-                fh.write('{}')
-
-    @classmethod
-    def tearDownClass(cls):
-        if not getattr(cls, '_djangojs_existed', True) and os.path.exists(cls._djangojs_path):
-            os.remove(cls._djangojs_path)
-        super().tearDownClass()
-
-
-class ProblemListTestBase(StaticI18nFilesMixin, CommonDataMixin, TestCase):
+class ProblemListTestBase(CommonDataMixin, TestCase):
     """Shared fixtures and helpers for problem list filter/sort tests."""
 
     @classmethod
@@ -593,7 +570,7 @@ class ProblemListSortTestCase(ProblemListTestBase):
             self.assertIn('order=', context['sort_links'][key])
 
 
-class ProblemDetailDifficultyTestCase(StaticI18nFilesMixin, CommonDataMixin, TestCase):
+class ProblemDetailDifficultyTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
