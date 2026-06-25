@@ -200,6 +200,10 @@ class Problem(models.Model):
     # as a knowledge point / tag in the redesigned problem list.
     FORMAT_TYPE_NAMES = ('code', 'fill_in_blank', 'multiple_choices')
 
+    # Problem types whose name marks the difficulty level, ordered from easiest to hardest.
+    # These are surfaced as a dedicated difficulty column/filter rather than as tags.
+    DIFFICULTY_TYPE_NAMES = ('easy', 'medium', 'hard')
+
     @cached_property
     def types_list(self):
         return list(map(user_gettext, map(attrgetter('full_name'), self.types.all())))
@@ -212,7 +216,27 @@ class Problem(models.Model):
     @cached_property
     def knowledge_types_list(self):
         return [user_gettext(t.full_name) for t in self.types.all()
-                if t.name not in Problem.FORMAT_TYPE_NAMES]
+                if t.name not in Problem.FORMAT_TYPE_NAMES
+                and t.name not in Problem.DIFFICULTY_TYPE_NAMES]
+
+    @cached_property
+    def difficulty(self):
+        # The difficulty type name (one of DIFFICULTY_TYPE_NAMES) attached to this problem, or None.
+        names = {t.name for t in self.types.all() if t.name in Problem.DIFFICULTY_TYPE_NAMES}
+        for name in Problem.DIFFICULTY_TYPE_NAMES:
+            if name in names:
+                return name
+        return None
+
+    @cached_property
+    def difficulty_label(self):
+        name = self.difficulty
+        if name is None:
+            return None
+        for t in self.types.all():
+            if t.name == name:
+                return user_gettext(t.full_name)
+        return None
 
     def languages_list(self):
         return self.allowed_languages.values_list('common_name', flat=True).distinct().order_by('common_name')

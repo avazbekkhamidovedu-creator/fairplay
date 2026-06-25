@@ -432,6 +432,58 @@ class SolutionTestCase(CommonDataMixin, TestCase):
         self._test_object_methods_with_users(self.unpublished_solution, data)
 
 
+class ProblemDifficultyPropertiesTestCase(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        create_problem_type(name='easy', full_name='Easy')
+        create_problem_type(name='medium', full_name='Medium')
+        create_problem_type(name='hard', full_name='Hard')
+        create_problem_type(name='code', full_name='Code')
+        create_problem_type(name='fill_in_blank', full_name='Fill in Blank')
+        create_problem_type(name='dp', full_name='Dynamic Programming')
+        create_problem_type(name='greedy', full_name='Greedy')
+
+        cls.easy_problem = create_problem(
+            code='diff-easy',
+            is_public=True,
+            types=('easy', 'code', 'dp'),
+        )
+        cls.hard_problem = create_problem(
+            code='diff-hard',
+            is_public=True,
+            types=('hard', 'code', 'dp'),
+        )
+        cls.untagged_difficulty = create_problem(
+            code='diff-none',
+            is_public=True,
+            types=('code', 'greedy'),
+        )
+        cls.multi_difficulty = create_problem(
+            code='diff-multi',
+            is_public=True,
+            types=('easy', 'hard', 'medium', 'code'),
+        )
+
+    def test_difficulty_returns_first_matching_level_in_order(self):
+        self.assertEqual(self.easy_problem.difficulty, 'easy')
+        self.assertEqual(self.hard_problem.difficulty, 'hard')
+        self.assertIsNone(self.untagged_difficulty.difficulty)
+        self.assertEqual(self.multi_difficulty.difficulty, 'easy')
+
+    def test_difficulty_label_uses_type_full_name(self):
+        self.assertEqual(self.easy_problem.difficulty_label, 'Easy')
+        self.assertEqual(self.hard_problem.difficulty_label, 'Hard')
+        self.assertIsNone(self.untagged_difficulty.difficulty_label)
+
+    def test_format_types_list_excludes_difficulty_and_knowledge(self):
+        self.assertEqual(self.easy_problem.format_types_list, ['Code'])
+
+    def test_knowledge_types_list_excludes_format_and_difficulty(self):
+        self.assertEqual(self.easy_problem.knowledge_types_list, ['Dynamic Programming'])
+        self.assertEqual(self.untagged_difficulty.knowledge_types_list, ['Greedy'])
+
+
 class DisallowedCharactersValidatorTestCase(SimpleTestCase):
     def test_valid(self):
         with self.settings(DMOJ_PROBLEM_STATEMENT_DISALLOWED_CHARACTERS={'“', '”', '‘', '’'}):

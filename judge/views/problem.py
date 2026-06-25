@@ -626,9 +626,18 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         if self.category is not None:
             queryset = queryset.filter(group__id=self.category)
         if self.selected_types:
-            # AND semantics: a problem must carry every selected type/knowledge point.
-            for type_id in self.selected_types:
+            # AND semantics across types/knowledge points: a problem must carry every selected one.
+            # Difficulty levels are an exception: selecting several difficulties means OR, since a
+            # problem only ever has a single difficulty.
+            difficulty_ids = set(
+                ProblemType.objects.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).values_list('id', flat=True),
+            )
+            selected_difficulty = [t for t in self.selected_types if t in difficulty_ids]
+            selected_other = [t for t in self.selected_types if t not in difficulty_ids]
+            for type_id in selected_other:
                 queryset = queryset.filter(types=type_id)
+            if selected_difficulty:
+                queryset = queryset.filter(types__in=selected_difficulty)
         if 'search' in self.request.GET:
             self.search_query = query = ' '.join(self.request.GET.getlist('search')).strip()
             if query:
@@ -676,12 +685,25 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             all_types = list(ProblemType.objects.all())
             context['problem_types'] = all_types
             format_types = [t for t in all_types if t.name in Problem.FORMAT_TYPE_NAMES]
-            knowledge_types = [t for t in all_types if t.name not in Problem.FORMAT_TYPE_NAMES]
+            difficulty_order = {name: i for i, name in enumerate(Problem.DIFFICULTY_TYPE_NAMES)}
+            difficulty_types = sorted(
+                (t for t in all_types if t.name in Problem.DIFFICULTY_TYPE_NAMES),
+                key=lambda t: difficulty_order.get(t.name, len(difficulty_order)),
+            )
+            knowledge_types = [
+                t for t in all_types
+                if t.name not in Problem.FORMAT_TYPE_NAMES and t.name not in Problem.DIFFICULTY_TYPE_NAMES
+            ]
             context['format_types'] = format_types
+            context['difficulty_types'] = difficulty_types
             context['knowledge_types'] = knowledge_types
             format_ids = {t.id for t in format_types}
+            difficulty_ids = {t.id for t in difficulty_types}
             context['selected_format_types'] = [i for i in self.selected_types if i in format_ids]
-            context['selected_knowledge_types'] = [i for i in self.selected_types if i not in format_ids]
+            context['selected_difficulty_types'] = [i for i in self.selected_types if i in difficulty_ids]
+            context['selected_knowledge_types'] = [
+                i for i in self.selected_types if i not in format_ids and i not in difficulty_ids
+            ]
         context['has_fts'] = settings.ENABLE_FTS
         context['search_query'] = self.search_query
         context['completed_problem_ids'] = self.get_completed_problems()
