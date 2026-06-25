@@ -25,7 +25,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = '5*9f5q57mqmlz2#f$x1h76&jxy#yortjl1v+l*6hd18$d*yx#0'
+# This well-known development value must be overridden in local_settings.py;
+# a check below refuses to start with DEBUG = False if it is left unchanged.
+_INSECURE_DEFAULT_SECRET_KEY = '5*9f5q57mqmlz2#f$x1h76&jxy#yortjl1v+l*6hd18$d*yx#0'
+SECRET_KEY = _INSECURE_DEFAULT_SECRET_KEY
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -538,7 +541,11 @@ EVENT_DAEMON_GET = 'ws://localhost:9996/'
 EVENT_DAEMON_POLL = '/channels/'
 EVENT_DAEMON_KEY = None
 EVENT_DAEMON_AMQP_EXCHANGE = 'dmoj-events'
-EVENT_DAEMON_SUBMISSION_KEY = '6Sdmkx^%pk@GsifDfXcwX*Y7LRF%RGT8vmFpSxFBT$fwS7trc8raWfN#CSfQuKApx&$B#Gh2L7p%W!Ww'
+# Well-known development value; override in local_settings.py when EVENT_DAEMON_USE is on
+# (enforced by a check below when DEBUG = False).
+_INSECURE_DEFAULT_SUBMISSION_KEY = \
+    '6Sdmkx^%pk@GsifDfXcwX*Y7LRF%RGT8vmFpSxFBT$fwS7trc8raWfN#CSfQuKApx&$B#Gh2L7p%W!Ww'
+EVENT_DAEMON_SUBMISSION_KEY = _INSECURE_DEFAULT_SUBMISSION_KEY
 
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
@@ -611,6 +618,7 @@ AZURE_OPENAI_ENDPOINT = None       # e.g. 'https://myinstance.openai.azure.com/'
 AZURE_OPENAI_API_KEY = None
 AZURE_OPENAI_API_VERSION = '2024-02-01'
 AZURE_OPENAI_DEPLOYMENT = None     # deployment/model name, e.g. 'gpt-4o'
+AZURE_OPENAI_TIMEOUT = 30          # seconds before an API call is abandoned
 DMOJ_AI_HINT_DAILY_LIMIT = 5      # max AI hint requests per user per day
 
 try:
@@ -621,6 +629,22 @@ except IOError:
 
 
 # Check settings are consistent
+# Refuse to run a production (DEBUG = False) site on the well-known development
+# secrets; they allow anyone to forge sessions, CSRF tokens, and event-daemon
+# messages. DEBUG = True deployments are left alone for troubleshooting.
+if not DEBUG:
+    from django.core.exceptions import ImproperlyConfigured
+
+    if SECRET_KEY == _INSECURE_DEFAULT_SECRET_KEY:
+        raise ImproperlyConfigured(
+            'SECRET_KEY is still the well-known development default; '
+            'set a unique value in local_settings.py before running with DEBUG = False.')
+    if EVENT_DAEMON_USE and EVENT_DAEMON_SUBMISSION_KEY == _INSECURE_DEFAULT_SUBMISSION_KEY:
+        raise ImproperlyConfigured(
+            'EVENT_DAEMON_SUBMISSION_KEY is still the well-known development default; '
+            'set a unique value in local_settings.py before enabling the event daemon '
+            'with DEBUG = False.')
+
 assert DMOJ_PROBLEM_MIN_USER_POINTS_VOTE >= DMOJ_PROBLEM_MIN_PROBLEM_POINTS
 
 # <= 1 minute expiry is unusable UX

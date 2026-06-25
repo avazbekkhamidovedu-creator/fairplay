@@ -18,6 +18,30 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.client = Client()
         self.client.force_login(self.users['superuser'])
 
+    def problem_inline_management_data(self):
+        return {
+            'templates-TOTAL_FORMS': '0',
+            'templates-INITIAL_FORMS': '0',
+            'templates-MIN_NUM_FORMS': '0',
+            'templates-MAX_NUM_FORMS': '1000',
+            'language_limits-TOTAL_FORMS': '0',
+            'language_limits-INITIAL_FORMS': '0',
+            'language_limits-MIN_NUM_FORMS': '0',
+            'language_limits-MAX_NUM_FORMS': '1000',
+            'problemclarification_set-TOTAL_FORMS': '0',
+            'problemclarification_set-INITIAL_FORMS': '0',
+            'problemclarification_set-MIN_NUM_FORMS': '0',
+            'problemclarification_set-MAX_NUM_FORMS': '1000',
+            'solution-TOTAL_FORMS': '0',
+            'solution-INITIAL_FORMS': '0',
+            'solution-MIN_NUM_FORMS': '0',
+            'solution-MAX_NUM_FORMS': '1',
+            'translations-TOTAL_FORMS': '0',
+            'translations-INITIAL_FORMS': '0',
+            'translations-MIN_NUM_FORMS': '0',
+            'translations-MAX_NUM_FORMS': '1000',
+        }
+
     def test_admin_add_page_uses_embedded_advanced_creation_form(self):
         response = self.client.get(reverse('admin:judge_problem_add'))
 
@@ -29,6 +53,17 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'value="custom"', html=False)
         self.assertContains(response, 'id="embedded-advanced-toggle"', html=False)
         self.assertContains(response, 'name="embedded_advanced_mode"', html=False)
+        self.assertContains(response, 'Optional Basic', html=False)
+        self.assertContains(response, 'name="organizations"', html=False)
+        self.assertContains(response, 'name="allowed_languages"', html=False)
+        self.assertContains(response, 'name="language_limits-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="problemclarification_set-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="solution-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="translations-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'name="templates-TOTAL_FORMS"', html=False)
+        self.assertContains(response, 'id="problem-markdown-import-input"', html=False)
+        self.assertContains(response, 'id="problem-markdown-import-status"', html=False)
+        self.assertContains(response, reverse('admin:judge_problem_import_markdown'), html=False)
 
     def test_admin_advanced_add_page_uses_original_problem_form(self):
         response = self.client.get('{}?advanced=1'.format(reverse('admin:judge_problem_add')))
@@ -38,18 +73,44 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'name="allowed_languages"', html=False)
         self.assertNotContains(response, 'name="creation_preset"', html=False)
 
+    def test_admin_change_page_uses_embedded_problem_layout_and_keeps_actions(self):
+        problem = Problem.objects.create(
+            code='p000123',
+            name='Existing Problem',
+            description='Problem statement',
+            group=create_problem_group(name='existing-group'),
+            time_limit=1,
+            memory_limit=262144,
+            points=100,
+        )
+
+        response = self.client.get(reverse('admin:judge_problem_change', args=[problem.pk]))
+
+        self.assertContains(response, 'id="embedded-advanced-toggle"', html=False)
+        self.assertContains(response, 'Optional Basic', html=False)
+        self.assertNotContains(response, 'name="creation_preset"', html=False)
+        self.assertNotContains(response, 'id="problem-markdown-import-input"', html=False)
+        self.assertNotContains(response, 'id="problem-markdown-import-status"', html=False)
+        self.assertContains(response, 'deletelink', html=False)
+        self.assertContains(response, 'View submissions', html=False)
+        self.assertContains(response, 'View problem votes', html=False)
+        self.assertContains(response, 'Edit test data', html=False)
+        self.assertContains(response, 'Clone problem', html=False)
+
     def test_admin_add_page_can_create_problem_with_automatic_defaults(self):
-        response = self.client.post(reverse('admin:judge_problem_add'), data={
+        data = {
             'name': 'Simple Problem',
             'description': 'Problem statement',
             'creation_preset': 'default',
             '_save': 'Save',
-        })
+        }
+        data.update(self.problem_inline_management_data())
+        response = self.client.post(reverse('admin:judge_problem_add'), data=data)
 
         self.assertEqual(response.status_code, 302)
 
         problem = Problem.objects.get(name='Simple Problem')
-        self.assertEqual(problem.code, 'simpleproblem')
+        self.assertRegex(problem.code, r'^p\d{6}$')
         self.assertFalse(problem.is_public)
         self.assertEqual(problem.time_limit, 1)
         self.assertEqual(problem.memory_limit, 262144)
@@ -62,7 +123,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         )
 
     def test_admin_embedded_advanced_mode_can_use_manual_settings(self):
-        response = self.client.post(reverse('admin:judge_problem_add'), data={
+        data = {
             'embedded_advanced_mode': '1',
             'creation_preset': 'custom',
             'code': 'manualcode',
@@ -75,7 +136,9 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             'memory_limit': 131072,
             'points': 5,
             '_save': 'Save',
-        })
+        }
+        data.update(self.problem_inline_management_data())
+        response = self.client.post(reverse('admin:judge_problem_add'), data=data)
 
         self.assertEqual(response.status_code, 302)
         problem = Problem.objects.get(code='manualcode')
@@ -84,6 +147,51 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem.memory_limit, 131072)
         self.assertEqual(problem.points, 5)
 
+    def test_admin_markdown_import_accepts_markdown_file(self):
+        response = self.client.post(
+            reverse('admin:judge_problem_import_markdown'),
+            data={
+                'markdown_file': SimpleUploadedFile(
+                    'two-sum.md',
+                    b'# Two Sum\r\n\r\nKeep **original** markdown.\r\n',
+                    content_type='text/markdown',
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(
+            response.content.decode(),
+            {
+                'ok': True,
+                'message': 'Markdown uploaded successfully.',
+                'name': 'Two Sum',
+                'description': '# Two Sum\n\nKeep **original** markdown.\n',
+                'filename': 'two-sum.md',
+            },
+        )
+
+    def test_admin_markdown_import_rejects_non_markdown_file(self):
+        response = self.client.post(
+            reverse('admin:judge_problem_import_markdown'),
+            data={
+                'markdown_file': SimpleUploadedFile(
+                    'two-sum.pdf',
+                    b'%PDF-1.4',
+                    content_type='application/pdf',
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertJSONEqual(
+            response.content.decode(),
+            {
+                'ok': False,
+                'message': 'Only Markdown or text files are supported.',
+            },
+        )
+
     def test_admin_add_page_can_fill_problem_from_markdown_upload(self):
         markdown_upload = SimpleUploadedFile(
             'sample.md',
@@ -91,17 +199,19 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             content_type='text/markdown',
         )
 
-        response = self.client.post(reverse('admin:judge_problem_add'), data={
+        data = {
             'markdown_upload': markdown_upload,
             'creation_preset': 'default',
             '_save': 'Save',
-        })
+        }
+        data.update(self.problem_inline_management_data())
+        response = self.client.post(reverse('admin:judge_problem_add'), data=data)
 
         self.assertEqual(response.status_code, 302)
 
         problem = Problem.objects.get(name='Uploaded Problem')
         self.assertEqual(problem.description, 'This is the body.\n\nSecond paragraph.')
-        self.assertEqual(problem.code, 'uploadedproblem')
+        self.assertRegex(problem.code, r'^p\d{6}$')
 
 
 class ContestAdminCreationTestCase(CommonDataMixin, TestCase):

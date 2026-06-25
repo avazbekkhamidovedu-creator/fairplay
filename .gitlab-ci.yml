@@ -98,8 +98,8 @@ test:
     # the test database.
     - for i in $(seq 1 60); do (echo > /dev/tcp/mysql/3306) 2>/dev/null && break; sleep 1; done
     - cp .ci.settings.py dmoj/local_settings.py
-    # Tests that render site templates (judge/tests_seb.py) inline the
-    # statici18n bundle, which must be generated into STATIC_ROOT first.
+    # Tests that render site templates inline the statici18n bundle, which
+    # must be generated into STATIC_ROOT first.
     - python manage.py compilejsi18n
   script:
     # XMLTestRunner (configured in .ci.settings.py) writes test-reports/TEST-*.xml.
