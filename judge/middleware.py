@@ -9,11 +9,13 @@ from django.contrib.auth.models import User
 from django.contrib.sites.shortcuts import get_current_site
 from django.core.cache import cache
 from django.http import HttpResponse, HttpResponseRedirect
+from django.shortcuts import render
 from django.urls import Resolver404, resolve, reverse
 from django.utils.encoding import force_bytes
 from requests.exceptions import HTTPError
 
 from judge.models import MiscConfig
+from judge.utils.seb import request_matches_seb, seb_launch_context
 
 try:
     import uwsgi
@@ -80,6 +82,22 @@ class DMOJImpersonationMiddleware(object):
         return self.get_response(request)
 
 
+def _seb_block_exempt(path, contest):
+    # Whitelist paths that must remain reachable for the SEB block page to function
+    # (logout, the .seb download itself, the quit landing, and static/media assets).
+    # A root-ish prefix (e.g. MEDIA_URL = '/') would exempt every path and
+    # disable the lockdown entirely, so only honor real sub-path prefixes.
+    for prefix in (settings.STATIC_URL, getattr(settings, 'MEDIA_URL', '')):
+        if prefix and prefix != '/' and path.startswith(prefix):
+            return True
+    try:
+        exempt_paths = (reverse('auth_logout'), reverse('seb_quit'),
+                        reverse('contest_seb_config', args=(contest.key,)))
+    except Exception:
+        return False
+    return path in exempt_paths
+
+
 class ContestMiddleware(object):
     def __init__(self, get_response):
         self.get_response = get_response
@@ -87,12 +105,34 @@ class ContestMiddleware(object):
     def __call__(self, request):
         profile = request.profile
         if profile:
+            previous = profile.current_contest
             profile.update_contest()
             request.participation = profile.current_contest
             request.in_contest = request.participation is not None
+            # If the participation just ended naturally in a SEB-locked exam,
+            # send the student to the quit URL so SEB terminates the session.
+            if previous is not None and request.participation is None \
+                    and previous.ended and not previous.spectate:
+                contest = previous.contest
+                if contest.seb_required and not contest.user_bypasses_seb(request.user) \
+                        and not _seb_block_exempt(request.path, contest):
+                    return HttpResponseRedirect(contest.seb_quit_url or reverse('seb_quit'))
         else:
             request.in_contest = False
             request.participation = None
+
+        if request.in_contest:
+            contest = request.participation.contest
+            if contest.seb_required and not contest.user_bypasses_seb(request.user) \
+                    and not _seb_block_exempt(request.path, contest) \
+                    and not request_matches_seb(
+                        request, contest.seb_allowed_bek(), contest.seb_allowed_config_keys()):
+                return render(request, 'contest/seb_required.html', {
+                    'contest': contest,
+                    'seb_launch': seb_launch_context(request, contest),
+                    'title': 'Safe Exam Browser required',
+                }, status=403)
+
         return self.get_response(request)
 
 

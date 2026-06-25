@@ -169,7 +169,7 @@ if (!Date.now) {
     };
 }
 
-function count_down(label) {
+function count_down(label, redirect_url) {
     var initial = parseInt(label.attr('data-secs'));
     var start = Date.now();
 
@@ -183,7 +183,10 @@ function count_down(label) {
         if (time <= 0) {
             clearInterval(timer);
             setTimeout(function() {
-                window.location.reload();
+                if (redirect_url)
+                    window.location.href = redirect_url;
+                else
+                    window.location.reload();
             }, 2000);
         }
         var d = Math.floor(time / 86400);

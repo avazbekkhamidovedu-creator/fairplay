@@ -5,6 +5,11 @@
                 {{ _('You cannot come back to a virtual participation. You will have to start a new one.')|htmltojs }});
         });
 
+        $('.seb-submit-exit').click(function () {
+            return confirm({{ _('Submit your work and exit Safe Exam Browser?')|htmltojs }} + '\n' +
+                {{ _('You might not be able to re-enter this contest.')|htmltojs }});
+        });
+
         $('.first-join').click(function () {
             return confirm({{ _('Are you sure you want to join?')|htmltojs }} + '\n' +
                 {{ _('Joining a contest starts your timer, after which it becomes unstoppable.')|htmltojs }});

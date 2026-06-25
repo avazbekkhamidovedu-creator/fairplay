@@ -1,3 +1,5 @@
+import re
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
@@ -188,6 +190,39 @@ class Contest(models.Model):
         default=True,
         help_text=_('Allow users to participate virtually after the contest ends.'),
     )
+    seb_required = models.BooleanField(
+        verbose_name=_('require Safe Exam Browser'),
+        default=False,
+        help_text=_('If enabled, non-staff participants can only access this contest from inside Safe Exam Browser.'),
+    )
+    seb_browser_exam_keys = models.TextField(
+        verbose_name=_('allowed SEB Browser Exam Key hashes'),
+        blank=True,
+        default='',
+        help_text=_('One 64-char hex hash per line. Copy from the SEB Configuration Tool — one per '
+                    'supported platform/version. Lines may include trailing comments after the hash.'),
+    )
+    seb_config_keys = models.TextField(
+        verbose_name=_('allowed SEB Config Key hashes'),
+        blank=True,
+        default='',
+        help_text=_('One 64-char hex hash per line. Required for macOS clients (and any newer build '
+                    'that sends only the Config Key).'),
+    )
+    seb_config_file = models.FileField(
+        verbose_name=_('SEB config file (.seb)'),
+        upload_to='seb_configs/',
+        blank=True,
+        null=True,
+        help_text=_('The .seb file students download or launch via sebs:// to enter this exam.'),
+    )
+    seb_quit_url = models.URLField(
+        verbose_name=_('SEB quit URL'),
+        blank=True,
+        default='',
+        help_text=_('Must match the Quit URL set inside the .seb file. Shown to students after final '
+                    'submission so SEB auto-closes. Leave blank to disable.'),
+    )
 
     @cached_property
     def format_class(self):
@@ -222,6 +257,23 @@ class Contest(models.Model):
         else:
             if not isinstance(label, str):
                 raise ValidationError('Contest problem label script: script should return a string.')
+
+        if self.seb_required:
+            seb_errors = {}
+            if not self._parse_seb_keys(self.seb_browser_exam_keys):
+                seb_errors['seb_browser_exam_keys'] = _(
+                    'At least one Browser Exam Key hash is required when Safe Exam Browser is enabled.')
+            if not self._parse_seb_keys(self.seb_config_keys):
+                seb_errors['seb_config_keys'] = _(
+                    'At least one Config Key hash is required when Safe Exam Browser is enabled '
+                    '(the macOS SEB build only sends the Config Key).')
+            for field in ('seb_browser_exam_keys', 'seb_config_keys'):
+                for key in self._parse_seb_keys(getattr(self, field)):
+                    if not re.fullmatch('[0-9a-f]{64}', key):
+                        seb_errors[field] = _('"%s" is not a 64-character hex hash.') % key
+                        break
+            if seb_errors:
+                raise ValidationError(seb_errors)
 
     def is_in_contest(self, user):
         if user.is_authenticated:
@@ -484,6 +536,33 @@ class Contest(models.Model):
             return False
         return self.organizations.filter(admins=user.profile).exists()
 
+    @staticmethod
+    def _parse_seb_keys(text):
+        out = []
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            token = line.split()[0].lower()
+            if token:
+                out.append(token)
+        return out
+
+    def seb_allowed_bek(self):
+        return self._parse_seb_keys(self.seb_browser_exam_keys)
+
+    def seb_allowed_config_keys(self):
+        return self._parse_seb_keys(self.seb_config_keys)
+
+    def user_bypasses_seb(self, user):
+        if not user.is_authenticated:
+            return False
+        if user.has_perm('judge.edit_all_contest'):
+            return True
+        pid = user.profile.id
+        return (pid in self.editor_ids or pid in self.tester_ids or
+                pid in self.spectator_ids or self.is_viewable_by_org_admin(user))
+
     @classmethod
     def get_visible_contests(cls, user):
         if not user.is_authenticated:
@@ -540,6 +619,7 @@ class Contest(models.Model):
             ('contest_problem_label', _('Edit contest problem label script')),
             ('lock_contest', _('Change lock status of contest')),
             ('override_performance_ceiling', _('Override performance ceiling of contest')),
+            ('contest_seb_requirement', _('Configure Safe Exam Browser requirement on contests')),
         )
         verbose_name = _('contest')
         verbose_name_plural = _('contests')

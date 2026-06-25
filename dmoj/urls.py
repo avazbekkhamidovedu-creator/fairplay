@@ -195,6 +195,8 @@ urlpatterns = [
         path('render', comment.CommentContent.as_view(), name='comment_content'),
     ])),
 
+    path('seb/quit/', contests.SEBQuit.as_view(), name='seb_quit'),
+
     path('contests/', paged_list_view(contests.ContestList, 'contest_list')),
     path('contests.ics', contests.ContestICal.as_view(), name='contest_ical'),
     path('contests/<int:year>/<int:month>/', contests.ContestCalendar.as_view(), name='contest_calendar'),
@@ -212,6 +214,7 @@ urlpatterns = [
         path('/ranking/ajax', contests.contest_ranking_ajax, name='contest_ranking_ajax'),
         path('/join', contests.ContestJoin.as_view(), name='contest_join'),
         path('/leave', contests.ContestLeave.as_view(), name='contest_leave'),
+        path('/seb-config', contests.ContestSEBConfig.as_view(), name='contest_seb_config'),
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
         path('/analytics', contest_analytics.ContestAnalytics.as_view(), name='contest_analytics'),
 

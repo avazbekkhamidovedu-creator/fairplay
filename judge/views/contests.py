@@ -15,7 +15,7 @@ from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
 from django.db import IntegrityError
 from django.db.models import BooleanField, Case, Count, F, FloatField, IntegerField, Max, Min, Q, Sum, Value, When
 from django.db.models.expressions import CombinedExpression, Exists, OuterRef
-from django.http import Http404, HttpResponse, HttpResponseBadRequest, HttpResponseRedirect, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.template.defaultfilters import date as date_filter
 from django.urls import reverse
@@ -42,6 +42,7 @@ from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data
 from judge.utils.ranker import ranker
+from judge.utils.seb import request_matches_seb, seb_launch_context
 from judge.utils.stats import get_bar_chart, get_pie_chart
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
@@ -49,7 +50,8 @@ from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleOb
 __all__ = ['ContestList', 'ContestDetail', 'ContestRanking', 'ContestJoin', 'ContestLeave', 'ContestCalendar',
            'ContestClone', 'ContestStats', 'ContestMossView', 'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
-           'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions']
+           'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
+           'ContestSEBConfig', 'SEBQuit']
 
 
 def _find_contest(request, key, private_check=True):
@@ -220,6 +222,18 @@ class ContestMixin(object):
         context['can_edit'] = self.can_edit
         context['is_org_admin'] = self.object.is_viewable_by_org_admin(self.request.user)
 
+        if self.object.seb_required:
+            context['seb_required'] = True
+            context['seb_user_bypasses'] = self.object.user_bypasses_seb(self.request.user)
+            context['seb_request_valid'] = request_matches_seb(
+                self.request, self.object.seb_allowed_bek(), self.object.seb_allowed_config_keys())
+            context['seb_launch'] = seb_launch_context(self.request, self.object)
+        else:
+            context['seb_required'] = False
+            context['seb_user_bypasses'] = True
+            context['seb_request_valid'] = True
+            context['seb_launch'] = None
+
         if not self.object.og_image or not self.object.summary:
             metadata = generate_opengraph('generated-meta-contest:%d' % self.object.id,
                                           self.object.description, 'contest')
@@ -380,6 +394,10 @@ class ContestAccessDenied(Exception):
     pass
 
 
+class ContestSEBRequired(Exception):
+    pass
+
+
 class ContestAccessCodeForm(forms.Form):
     access_code = forms.CharField(max_length=255)
 
@@ -391,17 +409,40 @@ class ContestAccessCodeForm(forms.Form):
 class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
+        try:
+            self._check_seb(request)
+        except ContestSEBRequired:
+            return self._seb_required_response(request)
         return self.ask_for_access_code()
 
     def post(self, request, *args, **kwargs):
         self.object = self.get_object()
         try:
             return self.join_contest(request)
+        except ContestSEBRequired:
+            return self._seb_required_response(request)
         except ContestAccessDenied:
             if request.POST.get('access_code'):
                 return self.ask_for_access_code(ContestAccessCodeForm(request.POST))
             else:
                 return HttpResponseRedirect(request.path)
+
+    def _check_seb(self, request):
+        contest = self.object
+        if not contest.seb_required:
+            return
+        if contest.user_bypasses_seb(request.user):
+            return
+        if not request_matches_seb(request, contest.seb_allowed_bek(), contest.seb_allowed_config_keys()):
+            raise ContestSEBRequired()
+
+    def _seb_required_response(self, request):
+        contest = self.object
+        return render(request, 'contest/seb_required.html', {
+            'contest': contest,
+            'seb_launch': seb_launch_context(request, contest),
+            'title': _('Safe Exam Browser required for "%s"') % contest.name,
+        }, status=403)
 
     def join_contest(self, request, access_code=None):
         contest = self.object
@@ -416,6 +457,8 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
             return generic_message(request, _('Banned from joining'),
                                    _('You have been declared persona non grata for this contest. '
                                      'You are permanently barred from joining this contest.'))
+
+        self._check_seb(request)
 
         requires_access_code = (not self.can_edit and contest.access_code and access_code != contest.access_code)
         if contest.ended:
@@ -507,7 +550,10 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
             return generic_message(request, _('No such contest'),
                                    _('You are not in contest "%s".') % contest.key, 404)
 
+        was_spectating = profile.current_contest.spectate
         profile.remove_contest()
+        if contest.seb_required and not was_spectating and not contest.user_bypasses_seb(request.user):
+            return HttpResponseRedirect(contest.seb_quit_url or reverse('seb_quit'))
         return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
 
 
@@ -2172,3 +2218,23 @@ class ContestExportSubmissions(ContestMixin, PermissionRequiredMixin, BaseDetail
         filename = f'{self.object.key}-submissions.zip'
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+
+class ContestSEBConfig(LoginRequiredMixin, ContestMixin, BaseDetailView):
+    def get(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        if not self.object.seb_required or not self.object.seb_config_file:
+            raise Http404()
+        return FileResponse(
+            self.object.seb_config_file.open('rb'),
+            as_attachment=True,
+            filename=f'{self.object.key}.seb',
+            content_type='application/seb',
+        )
+
+
+class SEBQuit(TitleMixin, TemplateView):
+    template_name = 'contest/seb_quit.html'
+
+    def get_title(self):
+        return _('Exam finished')

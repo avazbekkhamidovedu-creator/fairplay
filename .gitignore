@@ -24,6 +24,7 @@ node_modules
 .agents
 .codex
 *__pycache__
-
-.venv/
+.venv
+.test_static
 test_logs/
+dmoj/test_settings.py
