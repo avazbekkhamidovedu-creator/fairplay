@@ -22,8 +22,9 @@ def get_backend() -> Backend:
         if provider == 'azure':
             from judge.llm.azure import AzureBackend
             _backend = AzureBackend()
-        # Extension point: add an `elif provider == 'openai'` branch returning an
-        # OpenAIBackend here when an OpenAI-style provider is needed.
+        elif provider == 'runmodel':
+            from judge.llm.runmodel import RunmodelBackend
+            _backend = RunmodelBackend()
         else:
             raise ImproperlyConfigured(f'Unknown LLM_PROVIDER: {provider!r}')
     return _backend
