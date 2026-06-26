@@ -10,6 +10,15 @@ class abstractclassmethod(classmethod):
 
 
 class BaseContestFormat(metaclass=ABCMeta):
+    # Formats are referenced as classes in templates (e.g. {{ contest.format_class.has_hidden_results }}).
+    # A class is callable, so Django's template engine would try to instantiate it (which needs
+    # (contest, config)) and silently fall back to string_if_invalid. Opt out of that auto-call.
+    do_not_call_in_templates = True
+
+    # When True, this format hides results for problems flagged hidden until the contest is finalized
+    # (see ExamContestFormat and Submission.contest_results_hidden). Formats default to no hiding.
+    has_hidden_results = False
+
     @abstractmethod
     def __init__(self, contest, config):
         self.config = config

@@ -142,6 +142,12 @@ class Contest(models.Model):
                                                         'testcases. Commonly set during a contest, then unset '
                                                         'prior to rejudging user submissions when the contest ends.'),
                                             default=False)
+    results_finalized = models.BooleanField(verbose_name=_('results finalized'),
+                                            help_text=_('Set by the "Finalize results" action when an exam-style '
+                                                        'contest ends: it reveals hidden problem results to students '
+                                                        'and folds them into the scoreboard. Leave unset while the '
+                                                        'contest is running.'),
+                                            default=False)
     show_short_display = models.BooleanField(verbose_name=_('show short form settings display'),
                                              help_text=_('Whether to show a section containing contest settings '
                                                          'on the contest page or not.'),
@@ -736,6 +742,26 @@ class ContestProblem(models.Model):
                                           default=None, null=True, blank=True,
                                           validators=[MinValueOrNoneValidator(1, _('Why include a problem you '
                                                                                    "can't submit to?"))])
+    hide_results = models.BooleanField(verbose_name=_('hide results in contest'),
+                                       help_text=_("Whether to hide this problem's results from students until the "
+                                                   'contest is finalized. Leave unset to use the default for the '
+                                                   'question type (hidden for multiple-choice, shown for code). Only '
+                                                   'applies to exam-style contests.'),
+                                       default=None, null=True, blank=True)
+
+    @property
+    def results_hidden(self):
+        """Whether this problem's results are hidden during the contest (override, else type default)."""
+        if self.hide_results is not None:
+            return self.hide_results
+        from judge.question_types import get_grader
+        return get_grader(self.problem.submission_type).hide_results_in_contest
+
+    @property
+    def score_uses_latest(self):
+        """Whether scoring uses the latest (vs best) submission for this problem (type policy)."""
+        from judge.question_types import get_grader
+        return get_grader(self.problem.submission_type).contest_score_uses_latest
 
     class Meta:
         unique_together = ('problem', 'contest')
