@@ -370,6 +370,9 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         contest.is_visible = False
         contest.user_count = 0
         contest.locked_after = None
+        # A clone is a fresh, unrun contest: never carry over the finalize state, or its results would
+        # be revealed (and folded into the scoreboard) before it has even started.
+        contest.results_finalized = False
         contest.key = form.cleaned_data['key']
         with revisions.create_revision(atomic=True):
             contest.save()

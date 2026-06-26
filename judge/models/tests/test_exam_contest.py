@@ -1,14 +1,17 @@
 """Tests for the exam-style contest feature: per-problem result hiding, latest-vs-best scoring
 (``ExamContestFormat``), submission masking, and the end-of-contest finalize task."""
 from datetime import timedelta
+from unittest import mock
 
 from django.template import Context, Template
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from judge.models import Contest, ContestParticipation, ContestSubmission, Language, Submission
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
+from judge.tasks import finalize_contest_results, unfinalize_contest_results
 
 
 class ExamContestTestMixin(CommonDataMixin):
@@ -169,3 +172,76 @@ class DefaultFormatUnaffectedTest(CommonDataMixin, TestCase):
         self.participation.recompute_results()
         self.participation.refresh_from_db()
         self.assertEqual(self.participation.score, 100)
+
+
+class _NoProgress:
+    """Stub for judge.utils.celery.Progress so the task runs without a Celery result backend."""
+
+    def __init__(self, *args, **kwargs):
+        self.done = self.total = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FinalizeContestResultsTest(ExamContestTestMixin, TestCase):
+    def test_rejudges_only_latest_and_sets_flag(self):
+        self._add_contest_submission(self.code_cp, points=50, minutes=1)
+        latest_code = self._add_contest_submission(self.code_cp, points=100, minutes=2)
+        self._add_contest_submission(self.mcq_cp, points=100, minutes=1)
+        latest_mcq = self._add_contest_submission(self.mcq_cp, points=40, minutes=2)
+
+        with mock.patch('judge.tasks.contest.Progress', _NoProgress), \
+                mock.patch.object(Submission, 'judge', autospec=True) as mock_judge:
+            finalize_contest_results(self.contest.key)
+
+        rejudged_ids = {call.args[0].id for call in mock_judge.call_args_list}
+        self.assertEqual(rejudged_ids, {latest_code.id, latest_mcq.id})
+        for call in mock_judge.call_args_list:
+            self.assertTrue(call.kwargs.get('rejudge'))
+            self.assertTrue(call.kwargs.get('force_judge'))
+
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.results_finalized)
+        self.assertFalse(self.contest.run_pretests_only)
+
+
+class UnfinalizeContestResultsTest(ExamContestTestMixin, TestCase):
+    def test_clears_flag_and_rehides_scoreboard(self):
+        self._add_contest_submission(self.code_cp, points=100, minutes=2)
+        self._add_contest_submission(self.mcq_cp, points=40, minutes=2)
+
+        # Simulate a finalized contest: the MCQ (hidden) is folded into the scoreboard.
+        Contest.objects.filter(id=self.contest.id).update(results_finalized=True)
+        self.participation = ContestParticipation.objects.get(id=self.participation.id)
+        self.participation.recompute_results()
+        self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 140)
+
+        with mock.patch('judge.tasks.contest.Progress', _NoProgress):
+            unfinalize_contest_results(self.contest.key)
+
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.results_finalized)
+
+        # The hidden MCQ drops back out of the scoreboard total; only the code problem counts.
+        self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 100)
+        self.assertTrue((self.participation.format_data or {})[str(self.mcq_cp.id)].get('hidden'))
+
+
+class ContestCloneResetsFinalizeTest(ExamContestTestMixin, TestCase):
+    def test_clone_does_not_inherit_finalized(self):
+        Contest.objects.filter(id=self.contest.id).update(results_finalized=True)
+        self.client.force_login(self.users['superuser'])
+        resp = self.client.post(reverse('contest_clone', args=[self.contest.key]), {'key': 'examclone'})
+        self.assertEqual(resp.status_code, 302)
+
+        clone = Contest.objects.get(key='examclone')
+        self.assertFalse(clone.results_finalized)
+        # The source contest is untouched.
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.results_finalized)
