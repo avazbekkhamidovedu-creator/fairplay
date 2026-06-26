@@ -456,10 +456,10 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
     context_object_name = 'problems'
     template_name = 'problem/list.html'
     paginate_by = 50
-    sql_sort = frozenset(('points', 'ac_rate', 'user_count', 'code'))
+    sql_sort = frozenset(('points', 'ac_rate', 'user_count', 'code', 'date'))
     manual_sort = frozenset(('name', 'group', 'solved', 'type', 'editorial'))
     all_sorts = sql_sort | manual_sort
-    default_desc = frozenset(('points', 'ac_rate', 'user_count'))
+    default_desc = frozenset(('points', 'ac_rate', 'user_count', 'date'))
     default_sort = 'code'
 
     def get_paginator(self, queryset, per_page, orphans=0, allow_empty_first_page=True, **kwargs):
@@ -571,7 +571,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             return queryset
         return queryset.search(query, queryset.BOOLEAN).extra(order_by=['-relevance'])
 
-    def get_normal_queryset(self):
+    def get_visible_problems_filter(self):
         filter = Q(is_public=True)
         if not self.request.user.has_perm('judge.see_organization_problem'):
             org_filter = Q(is_organization_private=False)
@@ -589,6 +589,10 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 filter |= Problem.organization_filter_q(
                     Organization.admins.through.objects.filter(profile=self.profile).values('organization_id'),
                 )
+        return filter
+
+    def get_normal_queryset(self):
+        filter = self.get_visible_problems_filter()
         queryset = Problem.objects.filter(filter).select_related('group').defer('description', 'summary')
         if self.profile is not None and self.hide_solved:
             queryset = queryset.exclude(
@@ -598,6 +602,12 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                     case_points__gte=F('case_total'),
                 ).values_list('problem_id', flat=True),
             )
+        if self.profile is not None and self.problem_status:
+            completed = self.get_completed_problems()
+            if self.problem_status == 'solved':
+                queryset = queryset.filter(id__in=completed)
+            elif self.problem_status == 'unsolved':
+                queryset = queryset.exclude(id__in=completed)
         if self.show_types:
             queryset = queryset.prefetch_related('types')
         queryset = queryset.annotate(
@@ -616,26 +626,35 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         if self.category is not None:
             queryset = queryset.filter(group__id=self.category)
         if self.selected_types:
-            queryset = queryset.filter(types__in=self.selected_types)
+            # AND semantics: a problem must carry every selected type/knowledge point.
+            for type_id in self.selected_types:
+                queryset = queryset.filter(types=type_id)
         if 'search' in self.request.GET:
             self.search_query = query = ' '.join(self.request.GET.getlist('search')).strip()
             if query:
                 if settings.ENABLE_FTS and self.full_text:
                     queryset = self.apply_full_text(queryset, query)
                 else:
-                    queryset = queryset.filter(
+                    text_filter = (
                         Q(code__icontains=query)
                         | Q(name__icontains=query)
                         | Q(
                             translations__name__icontains=query,
                             translations__language=self.request.LANGUAGE_CODE,
-                        ),
+                        )
                     )
+                    if self.search_full:
+                        text_filter |= Q(description__icontains=query)
+                    queryset = queryset.filter(text_filter)
         self.prepoint_queryset = queryset
         if self.point_start is not None:
             queryset = queryset.filter(points__gte=self.point_start)
         if self.point_end is not None:
             queryset = queryset.filter(points__lte=self.point_end)
+        if self.ac_min is not None:
+            queryset = queryset.filter(ac_rate__gte=self.ac_min)
+        if self.ac_max is not None:
+            queryset = queryset.filter(ac_rate__lte=self.ac_max)
         return queryset.distinct()
 
     def get_queryset(self):
@@ -654,15 +673,67 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         context['categories'] = ProblemGroup.objects.all()
         if self.show_types:
             context['selected_types'] = self.selected_types
-            context['problem_types'] = ProblemType.objects.all()
+            all_types = list(ProblemType.objects.all())
+            context['problem_types'] = all_types
+            format_types = [t for t in all_types if t.name in Problem.FORMAT_TYPE_NAMES]
+            knowledge_types = [t for t in all_types if t.name not in Problem.FORMAT_TYPE_NAMES]
+            context['format_types'] = format_types
+            context['knowledge_types'] = knowledge_types
+            format_ids = {t.id for t in format_types}
+            context['selected_format_types'] = [i for i in self.selected_types if i in format_ids]
+            context['selected_knowledge_types'] = [i for i in self.selected_types if i not in format_ids]
         context['has_fts'] = settings.ENABLE_FTS
         context['search_query'] = self.search_query
         context['completed_problem_ids'] = self.get_completed_problems()
         context['attempted_problems'] = self.get_attempted_problems()
 
+        context['ac_min'] = self.ac_min if self.ac_min is not None else ''
+        context['ac_max'] = self.ac_max if self.ac_max is not None else ''
+        context['problem_status'] = self.problem_status
+        context['search_full'] = int(self.search_full)
+
         context.update(self.get_sort_paginate_context())
         if not self.in_contest:
             context.update(self.get_sort_context())
+
+            sort_labels = {
+                'code': _('Problem code'),
+                'name': _('Problem'),
+                'group': _('Category'),
+                'type': _('Problem type'),
+                'ac_rate': _('AC %'),
+                'points': _('Points'),
+                'date': _('Date added'),
+                'solved': _('Status'),
+                'user_count': _('Users'),
+                'editorial': _('Editorial'),
+            }
+            context['current_sort_label'] = sort_labels.get(self.order.lstrip('-'), '')
+            context['current_sort_desc'] = self.order.startswith('-')
+
+            # Per-group counts for the group tabs, over the user-visible problem set.
+            base_visible = Problem.objects.filter(self.get_visible_problems_filter())
+            group_counts = {
+                row['group']: row['count']
+                for row in base_visible.values('group').annotate(count=Count('pk', distinct=True))
+            }
+            context['group_counts'] = group_counts
+            context['total_problem_count'] = sum(group_counts.values())
+
+            # Per-type problem counts for the knowledge-point picker badges.
+            context['type_counts'] = {
+                row['types']: row['count']
+                for row in base_visible.values('types').annotate(count=Count('pk', distinct=True))
+                if row['types'] is not None
+            }
+
+            # Progress ring: solved vs total within the current filtered scope.
+            completed = set(context['completed_problem_ids'])
+            context['progress_total'] = context['page_obj'].paginator.count
+            context['progress_solved'] = (
+                self.object_list.filter(id__in=completed).count() if completed else 0
+            )
+
             context['hot_problems'] = hot_problems(timedelta(days=1), settings.DMOJ_PROBLEM_HOT_PROBLEM_COUNT)
             context['point_start'], context['point_end'], context['point_values'] = self.get_noui_slider_points()
         else:
@@ -714,8 +785,14 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
 
     def setup_problem_list(self, request):
         self.hide_solved = self.GET_with_session(request, 'hide_solved')
-        self.show_types = self.GET_with_session(request, 'show_types')
+        # The redesigned problem list always renders the problem type column/filter.
+        self.show_types = True
         self.full_text = self.GET_with_session(request, 'full_text')
+        # Search the statement by default; honor an explicit un-check once the form is submitted.
+        if 'filtered' in request.GET:
+            self.search_full = request.GET.get('search_full') == '1'
+        else:
+            self.search_full = True
         self.has_public_editorial = self.GET_with_session(request, 'has_public_editorial')
 
         self.search_query = None
@@ -736,6 +813,12 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
 
         self.point_start = safe_float_or_none(request.GET.get('point_start'))
         self.point_end = safe_float_or_none(request.GET.get('point_end'))
+
+        self.ac_min = safe_float_or_none(request.GET.get('ac_min'))
+        self.ac_max = safe_float_or_none(request.GET.get('ac_max'))
+        self.problem_status = request.GET.get('status') or ''
+        if self.problem_status not in ('solved', 'unsolved'):
+            self.problem_status = ''
 
     def get(self, request, *args, **kwargs):
         self.setup_problem_list(request)

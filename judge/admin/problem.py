@@ -8,10 +8,10 @@ from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.forms import ModelForm
-from django.urls import reverse, reverse_lazy
+from django.http import JsonResponse
+from django.urls import path, reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.html import format_html
-from django.utils.text import slugify
 from django.utils.translation import gettext, gettext_lazy as _, ngettext
 from reversion.admin import VersionAdmin
 
@@ -240,6 +240,7 @@ class LanguageLimitInline(admin.TabularInline):
     model = LanguageLimit
     fields = ('language', 'time_limit', 'memory_limit')
     form = LanguageLimitInlineForm
+    classes = ('embedded-advanced-fields',)
 
 
 class ProblemClarificationForm(ModelForm):
@@ -252,6 +253,7 @@ class ProblemClarificationInline(admin.StackedInline):
     fields = ('description',)
     form = ProblemClarificationForm
     extra = 0
+    classes = ('embedded-advanced-fields',)
 
 
 class ProblemSolutionForm(ModelForm):
@@ -271,6 +273,7 @@ class ProblemSolutionInline(admin.StackedInline):
     fields = ('is_public', 'publish_on', 'authors', 'content')
     form = ProblemSolutionForm
     extra = 0
+    classes = ('embedded-advanced-fields',)
 
 
 class ProblemTranslationForm(ModelForm):
@@ -283,6 +286,7 @@ class ProblemTranslationInline(admin.StackedInline):
     fields = ('language', 'name', 'description')
     form = ProblemTranslationForm
     extra = 0
+    classes = ('embedded-advanced-fields',)
 
     def has_permission_full_markup(self, request, obj=None):
         if not obj:
@@ -295,7 +299,8 @@ class ProblemTranslationInline(admin.StackedInline):
 class ProblemTemplateInline(admin.StackedInline):
     model = ProblemTemplate
     fields = ('language', 'code')
-    extra = 0
+    extra = 1
+    classes = ('embedded-extended-fields',)
 
 
 class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
@@ -303,11 +308,18 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         (None, {
             'fields': ('name', 'description', 'markdown_upload', 'creation_preset'),
         }),
+        (_('Optional Basic'), {
+            'classes': ('embedded-extended-fields',),
+            'fields': (
+                'organizations', 'classes', 'allowed_languages',
+            ),
+            'description': _('Organizations (Courses), allowed languages, and starter templates.'),
+        }),
         (_('Advanced'), {
             'classes': ('embedded-advanced-fields',),
             'fields': (
                 'code', 'is_public', 'is_manually_managed', 'date', 'authors', 'curators', 'testers',
-                'organizations', 'classes', 'submission_source_visibility_mode', 'is_full_markup',
+                'submission_source_visibility_mode', 'is_full_markup',
                 'view_test_cases', 'view_tester', 'ai_hints_enabled', 'license',
             ),
         }),
@@ -327,9 +339,49 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             'classes': ('embedded-advanced-fields',),
             'fields': ('time_limit', 'memory_limit'),
         }),
-        (_('Advanced Language'), {
+        (_('Advanced Justice'), {
             'classes': ('embedded-advanced-fields',),
-            'fields': ('allowed_languages',),
+            'fields': ('banned_users',),
+        }),
+        (_('Advanced History'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('change_message',),
+        }),
+    )
+    change_embedded_fieldsets = (
+        (None, {
+            'fields': ('name', 'description'),
+        }),
+        (_('Optional Basic'), {
+            'classes': ('embedded-extended-fields',),
+            'fields': (
+                'organizations', 'classes', 'allowed_languages',
+            ),
+            'description': _('Organizations (Courses), allowed languages, and starter templates.'),
+        }),
+        (_('Advanced'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': (
+                'code', 'is_public', 'is_manually_managed', 'date', 'authors', 'curators', 'testers',
+                'submission_source_visibility_mode', 'is_full_markup',
+                'view_test_cases', 'view_tester', 'ai_hints_enabled', 'license',
+            ),
+        }),
+        (_('Advanced Social Media'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('og_image', 'summary'),
+        }),
+        (_('Advanced Taxonomy'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('types', 'group'),
+        }),
+        (_('Advanced Points'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': (('points', 'partial'), 'short_circuit'),
+        }),
+        (_('Advanced Limits'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('time_limit', 'memory_limit'),
         }),
         (_('Advanced Justice'), {
             'classes': ('embedded-advanced-fields',),
@@ -360,8 +412,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     list_display = ['code', 'name', 'show_authors', 'points', 'is_public', 'show_public']
     ordering = ['code']
     search_fields = ('code', 'name', 'authors__user__username', 'curators__user__username')
-    inlines = [LanguageLimitInline, ProblemClarificationInline, ProblemSolutionInline,
-               ProblemTranslationInline, ProblemTemplateInline]
+    inlines = [ProblemTemplateInline, LanguageLimitInline, ProblemClarificationInline,
+               ProblemSolutionInline, ProblemTranslationInline]
     list_max_show_all = 1000
     actions_on_top = True
     actions_on_bottom = True
@@ -411,15 +463,13 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     def get_default_points(self):
         return max(100, settings.DMOJ_PROBLEM_MIN_PROBLEM_POINTS)
 
-    def generate_problem_code(self, name):
-        base = re.sub(r'[^a-z0-9]', '', slugify(name).lower())[:20] or 'problem'
-        code = base
-        suffix = 2
-        while Problem.objects.filter(code=code).exists():
-            suffix_str = str(suffix)
-            code = '{}{}'.format(base[:20 - len(suffix_str)], suffix_str)
-            suffix += 1
-        return code
+    def generate_problem_code(self, name=''):
+        max_codes = 1000000
+        for index in range(max_codes):
+            code = 'p{:06d}'.format(index)
+            if not Problem.objects.filter(code=code).exists():
+                return code
+        return 'clone{}'.format(str(int(timezone.now().timestamp()))[-6:])
 
     def get_simple_preset_defaults(self, request):
         default_group = self.get_default_group()
@@ -487,12 +537,9 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     def get_fieldsets(self, request, obj=None):
         if obj is None and not self.is_advanced_add_mode(request, obj):
             return self.add_fieldsets
+        if obj is not None:
+            return self.change_embedded_fieldsets
         return super().get_fieldsets(request, obj)
-
-    def get_inline_instances(self, request, obj=None):
-        if obj is None and not self.is_advanced_add_mode(request, obj):
-            return []
-        return super().get_inline_instances(request, obj)
 
     def get_readonly_fields(self, request, obj=None):
         fields = self.readonly_fields
@@ -585,8 +632,65 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     class Media:
         js = ('admin_class_filter.js', 'admin_problem_code_autofill.js')
 
+    def get_urls(self):
+        return [
+            path(
+                'import-markdown/',
+                self.admin_site.admin_view(self.import_markdown_view),
+                name='judge_problem_import_markdown',
+            ),
+        ] + super().get_urls()
+
+    def import_markdown_view(self, request):
+        if not request.user.has_perm('judge.edit_own_problem'):
+            raise PermissionDenied
+        if request.method != 'POST':
+            return JsonResponse({'ok': False, 'message': gettext('Only POST is allowed.')}, status=405)
+
+        uploaded_file = request.FILES.get('markdown_file')
+        if uploaded_file is None:
+            return JsonResponse({'ok': False, 'message': gettext('Please choose a Markdown file.')}, status=400)
+
+        filename = uploaded_file.name or ''
+        lowered = filename.lower()
+        if not lowered.endswith(('.md', '.markdown', '.mdown', '.txt')):
+            return JsonResponse(
+                {'ok': False, 'message': gettext('Only Markdown or text files are supported.')},
+                status=400,
+            )
+
+        raw_bytes = uploaded_file.read()
+        for encoding in ('utf-8-sig', 'utf-8', 'utf-16'):
+            try:
+                content = raw_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                content = None
+        if content is None:
+            return JsonResponse(
+                {'ok': False, 'message': gettext('Could not decode this file. Please use UTF-8 Markdown.')},
+                status=400,
+            )
+
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+        heading_match = re.search(r'^\s*#\s+(.+?)\s*$', content, re.MULTILINE)
+        suggested_name = heading_match.group(1).strip() if heading_match else ''
+        if not suggested_name and filename:
+            suggested_name = re.sub(r'\.[^.]+$', '', filename).replace('_', ' ').replace('-', ' ').strip()
+
+        return JsonResponse({
+            'ok': True,
+            'message': gettext('Markdown uploaded successfully.'),
+            'name': suggested_name,
+            'description': content,
+            'filename': filename,
+        })
+
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        use_embedded_problem_layout = not add or not self.is_advanced_add_mode(request, obj)
         context['show_embedded_advanced_toggle'] = add and not self.is_advanced_add_mode(request, obj)
+        context['show_problem_layout_toggle'] = use_embedded_problem_layout
+        context['use_embedded_problem_layout'] = use_embedded_problem_layout
         context['is_advanced_add'] = add and self.is_advanced_add_mode(request, obj)
         context['is_embedded_advanced_mode'] = add and not self.is_advanced_add_mode(request, obj) and (
             self.is_embedded_advanced_mode(request, obj)

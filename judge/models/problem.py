@@ -196,9 +196,23 @@ class Problem(models.Model):
         self._i18n_name = None
         self.__original_code = self.code
 
+    # Problem types whose name marks the answer format; everything else is treated
+    # as a knowledge point / tag in the redesigned problem list.
+    FORMAT_TYPE_NAMES = ('code', 'fill_in_blank', 'multiple_choices')
+
     @cached_property
     def types_list(self):
         return list(map(user_gettext, map(attrgetter('full_name'), self.types.all())))
+
+    @cached_property
+    def format_types_list(self):
+        return [user_gettext(t.full_name) for t in self.types.all()
+                if t.name in Problem.FORMAT_TYPE_NAMES]
+
+    @cached_property
+    def knowledge_types_list(self):
+        return [user_gettext(t.full_name) for t in self.types.all()
+                if t.name not in Problem.FORMAT_TYPE_NAMES]
 
     def languages_list(self):
         return self.allowed_languages.values_list('common_name', flat=True).distinct().order_by('common_name')
