@@ -31,7 +31,7 @@ class AzureBackend(Backend):
             )
         return self._client
 
-    def chat(self, messages, *, model=None, max_tokens=None) -> LLMResult:
+    def chat(self, messages, *, model=None, max_tokens=None, extra_payload=None) -> LLMResult:
         """Call Azure OpenAI and return an LLMResult. Raises on failure."""
         client = self._get_client()
         model = model or settings.AZURE_OPENAI_DEPLOYMENT
