@@ -33,7 +33,6 @@ CHECKERS = (
     ('identical', _('Byte identical')),
     ('linecount', _('Line-by-line')),
     ('llm', _('LLM')),
-    ('llm2', _('LLM2')),
 )
 
 
