@@ -80,7 +80,7 @@ class VLLMBackend(Backend):
             logger.debug('raw HTTP response received (%.2fs), JSON parsed OK',
                          _time.monotonic() - start)
         except Exception as e:
-            logger.error('API request failed after %.2fs: %s', _time.monotonic() - start, e)
+            logger.error('API request failed after %.2fs: %s', _time.monotonic() - start)
             raise LLMError(f'vLLM API request failed: {e}') from e
 
         elapsed_ms = int((_time.monotonic() - start) * 1000)
