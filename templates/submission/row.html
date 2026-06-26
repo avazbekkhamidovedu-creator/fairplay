@@ -1,7 +1,10 @@
 {% set can_view, can_edit = submission_layout(submission, profile_id, request.user, completed_problem_ids, editable_problem_ids, tester_problem_ids) %}
-<div class="sub-result {{ submission.result_class }}">
+{% set results_hidden = not submission.results_visible_to(request.user) %}
+<div class="sub-result {% if results_hidden %}submission-hidden{% else %}{{ submission.result_class }}{% endif %}">
     <div class="score">
-        {%- if submission.is_graded -%}
+        {%- if results_hidden -%}
+            <i class="fa fa-check" title="{{ _('Submitted') }}"></i>
+        {%- elif submission.is_graded -%}
             {%- if submission.status in ('IE', 'CE', 'AB') -%}
                 ---
             {%- else -%}
@@ -13,7 +16,11 @@
     </div>
 
     <div class="state">
-        <span title="{{ submission.long_status }}" class="status">{{ submission.short_status }}</span> |
+        {%- if results_hidden -%}
+            <span class="status">{{ _('Submitted') }}</span> |
+        {%- else -%}
+            <span title="{{ submission.long_status }}" class="status">{{ submission.short_status }}</span> |
+        {%- endif -%}
         <span class="language">{{ submission.language.short_display_name }}</span>
     </div>
 </div>
@@ -76,7 +83,7 @@
 </div>
 
 <div class="sub-usage">
-    {% if submission.status in ('QU', 'P', 'G', 'CE', 'IE', 'AB') %}
+    {% if results_hidden or submission.status in ('QU', 'P', 'G', 'CE', 'IE', 'AB') %}
         <div class="time">---</div>
         <div class="memory">---</div>
     {% else %}

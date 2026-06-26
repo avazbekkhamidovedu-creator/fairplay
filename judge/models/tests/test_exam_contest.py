@@ -106,3 +106,66 @@ class ExamScoringTest(ExamContestTestMixin, TestCase):
         self.assertEqual(self.participation.score, 140)
         self.assertFalse((self.participation.format_data or {})[str(self.mcq_cp.id)].get('hidden'))
         self.assertEqual((self.participation.format_data or {})[str(self.mcq_cp.id)]['points'], 40)
+
+
+class SubmissionMaskingTest(ExamContestTestMixin, TestCase):
+    def _mcq_submission(self):
+        return self._add_contest_submission(self.mcq_cp, points=100, minutes=1)
+
+    def test_owner_masked_editor_and_staff_not(self):
+        sub = self._mcq_submission()
+        self.assertTrue(sub.contest_results_hidden)
+        # Owner cannot see their own hidden result.
+        self.assertFalse(sub.results_visible_to(self.users['normal']))
+        # Contest editor (author) and a view-all-submission staffer can.
+        self.assertTrue(sub.results_visible_to(self.editor))
+        self.assertTrue(sub.results_visible_to(self.users['superuser']))
+        # Anonymous cannot.
+        self.assertFalse(sub.results_visible_to(self.users['anonymous']))
+
+    def test_code_problem_not_hidden(self):
+        sub = self._add_contest_submission(self.code_cp, points=100, minutes=1)
+        self.assertFalse(sub.contest_results_hidden)
+        self.assertTrue(sub.results_visible_to(self.users['normal']))
+
+    def test_revealed_after_finalize(self):
+        sub = self._mcq_submission()
+        Contest.objects.filter(id=self.contest.id).update(results_finalized=True)
+        sub = Submission.objects.get(id=sub.id)  # drop cached_property / reload contest_object
+        self.assertFalse(sub.contest_results_hidden)
+        self.assertTrue(sub.results_visible_to(self.users['normal']))
+
+
+class DefaultFormatUnaffectedTest(CommonDataMixin, TestCase):
+    """Backward compatibility: a default-format contest hides nothing and scores by best."""
+
+    @classmethod
+    def setUpTestData(self):
+        super().setUpTestData()
+        self.contest = create_contest(key='plain', format_name='default', problems=())
+        self.mcq_problem = create_problem(code='plainmcq', submission_type='M', points=100)
+        self.cp = create_contest_problem(contest=self.contest, problem=self.mcq_problem, points=100, order=1)
+        self.participation = create_contest_participation(contest=self.contest, user=self.users['normal'].profile)
+
+    def _add(self, points, minutes):
+        sub = Submission.objects.create(
+            user=self.participation.user, problem=self.mcq_problem,
+            language=Language.get_answer_language(), points=points,
+            case_points=points, case_total=100, result='AC' if points else 'WA', status='D',
+            contest_object=self.contest,
+        )
+        Submission.objects.filter(id=sub.id).update(date=timezone.now() + timedelta(minutes=minutes))
+        ContestSubmission.objects.create(
+            submission=sub, problem=self.cp, participation=self.participation, points=points)
+        return sub
+
+    def test_not_hidden_and_scored_by_best(self):
+        first = self._add(points=100, minutes=1)
+        self._add(points=40, minutes=2)
+        # Even an MCQ submission is not masked outside an exam-format contest.
+        self.assertFalse(first.contest_results_hidden)
+        self.assertTrue(first.results_visible_to(self.users['normal']))
+        # Default format counts the best (100), not the latest (40).
+        self.participation.recompute_results()
+        self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 100)

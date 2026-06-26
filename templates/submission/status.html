@@ -6,7 +6,7 @@
 {% endblock %}
 {% block js_media %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
-    {% if not submission.is_graded and last_msg %}
+    {% if not submission.is_graded and last_msg and submission.results_visible_to(request.user) %}
         <script type="text/javascript">
             $(function () {
                 var blocked = false, request = false, terminalReceived = false;
