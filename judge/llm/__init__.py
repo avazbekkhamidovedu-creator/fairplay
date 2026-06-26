@@ -22,9 +22,9 @@ def get_backend() -> Backend:
         if provider == 'azure':
             from judge.llm.azure import AzureBackend
             _backend = AzureBackend()
-        elif provider == 'runmodel':
-            from judge.llm.runmodel import RunmodelBackend
-            _backend = RunmodelBackend()
+        elif provider == 'vllm':
+            from judge.llm.vllm import VLLMBackend
+            _backend = VLLMBackend()
         else:
             raise ImproperlyConfigured(f'Unknown LLM_PROVIDER: {provider!r}')
     return _backend

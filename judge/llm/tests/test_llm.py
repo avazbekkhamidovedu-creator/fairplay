@@ -7,7 +7,7 @@ from django.test import SimpleTestCase, override_settings
 from judge import llm
 from judge.llm import LLMError, LLMResult
 from judge.llm.azure import AzureBackend
-from judge.llm.runmodel import RunmodelBackend
+from judge.llm.vllm import VLLMBackend
 
 AZURE_SETTINGS = {
     'LLM_PROVIDER': 'azure',
@@ -75,14 +75,14 @@ class AzureBackendTestCase(SimpleTestCase):
         self.assertFalse(AzureBackend().is_configured())
 
 
-RUNMODEL_SETTINGS = {
-    'LLM_PROVIDER': 'runmodel',
-    'RUNMODEL_API_BASE': 'http://192.168.1.100:8000',
-    'RUNMODEL_MODEL': 'qwen3.5-27B-FP8',
+VLLM_SETTINGS = {
+    'LLM_PROVIDER': 'vllm',
+    'VLLM_API_BASE': 'http://192.168.1.100:8000',
+    'VLLM_MODEL': 'qwen3.5-27B-FP8',
 }
 
 
-def _fake_runmodel_response(content='Hello.', prompt=10, completion=5, total=15, model='qwen3.5-27B-FP8'):
+def _fake_vllm_response(content='Hello.', prompt=10, completion=5, total=15, model='qwen3.5-27B-FP8'):
     return {
         'chat_id': 'new#14',
         'response': {
@@ -107,14 +107,21 @@ def _fake_runmodel_response(content='Hello.', prompt=10, completion=5, total=15,
     }
 
 
-@override_settings(**RUNMODEL_SETTINGS)
-class RunmodelBackendTestCase(SimpleTestCase):
-    @mock.patch('judge.llm.runmodel.requests.post')
-    def test_chat_returns_result(self, mock_post):
-        mock_post.return_value.json.return_value = _fake_runmodel_response('  Try DP.  ', model='qwen3.5-27B-FP8')
-        mock_post.return_value.raise_for_status.return_value = None
+def _mock_raw_response(body):
+    """Build a mock for openai's with_raw_response chain."""
+    raw = mock.MagicMock()
+    raw.http_response.json.return_value = body
+    return raw
 
-        backend = RunmodelBackend()
+
+@override_settings(**VLLM_SETTINGS)
+class VLLMBackendTestCase(SimpleTestCase):
+    @mock.patch('judge.llm.vllm.OpenAI')
+    def test_chat_returns_result(self, mock_openai):
+        raw = _mock_raw_response(_fake_vllm_response('  Try DP.  ', model='qwen3.5-27B-FP8'))
+        mock_openai.return_value.with_raw_response.chat.completions.create.return_value = raw
+
+        backend = VLLMBackend()
         result = backend.chat([{'role': 'user', 'content': 'hint'}])
 
         self.assertIsInstance(result, LLMResult)
@@ -122,41 +129,36 @@ class RunmodelBackendTestCase(SimpleTestCase):
         self.assertEqual(result.model_name, 'qwen3.5-27B-FP8')
         self.assertIsNotNone(result.response_time_ms)
 
-        _, kwargs = mock_post.call_args
-        self.assertIn('/v1/chat/completions', kwargs['url'])
-        self.assertEqual(kwargs['json']['model'], 'qwen3.5-27B-FP8')
-        self.assertEqual(kwargs['json']['messages'], [{'role': 'user', 'content': 'hint'}])
+    @mock.patch('judge.llm.vllm.OpenAI')
+    def test_chat_with_extra_payload(self, mock_openai):
+        raw = _mock_raw_response(_fake_vllm_response('OK'))
+        mock_openai.return_value.with_raw_response.chat.completions.create.return_value = raw
 
-    @mock.patch('judge.llm.runmodel.requests.post')
-    def test_chat_with_extra_payload(self, mock_post):
-        mock_post.return_value.json.return_value = _fake_runmodel_response('OK')
-        mock_post.return_value.raise_for_status.return_value = None
-
-        backend = RunmodelBackend()
+        backend = VLLMBackend()
         backend.chat(
             [{'role': 'user', 'content': 'hi'}],
             extra_payload={'chat_id': 'new#42'},
         )
 
-        _, kwargs = mock_post.call_args
-        self.assertEqual(kwargs['json']['chat_id'], 'new#42')
-        self.assertEqual(kwargs['json']['model'], 'qwen3.5-27B-FP8')
+        _, kwargs = mock_openai.return_value.with_raw_response.chat.completions.create.call_args
+        self.assertEqual(kwargs['extra_body']['chat_id'], 'new#42')
+        self.assertEqual(kwargs['model'], 'qwen3.5-27B-FP8')
 
-    @mock.patch('judge.llm.runmodel.requests.post')
-    def test_chat_empty_response_raises(self, mock_post):
-        mock_post.return_value.json.return_value = _fake_runmodel_response('   ')
-        mock_post.return_value.raise_for_status.return_value = None
+    @mock.patch('judge.llm.vllm.OpenAI')
+    def test_chat_empty_response_raises(self, mock_openai):
+        raw = _mock_raw_response(_fake_vllm_response('   '))
+        mock_openai.return_value.with_raw_response.chat.completions.create.return_value = raw
 
-        backend = RunmodelBackend()
+        backend = VLLMBackend()
         with self.assertRaises(LLMError):
             backend.chat([{'role': 'user', 'content': 'hi'}])
 
     def test_is_configured_true_with_base(self):
-        self.assertTrue(RunmodelBackend().is_configured())
+        self.assertTrue(VLLMBackend().is_configured())
 
-    @override_settings(RUNMODEL_API_BASE=None)
+    @override_settings(VLLM_API_BASE=None)
     def test_is_configured_false_without_base(self):
-        self.assertFalse(RunmodelBackend().is_configured())
+        self.assertFalse(VLLMBackend().is_configured())
 
 
 class BackendDispatchTestCase(SimpleTestCase):
@@ -168,9 +170,9 @@ class BackendDispatchTestCase(SimpleTestCase):
     def test_azure_provider_selected(self):
         self.assertIsInstance(llm.get_backend(), AzureBackend)
 
-    @override_settings(**RUNMODEL_SETTINGS)
-    def test_runmodel_provider_selected(self):
-        self.assertIsInstance(llm.get_backend(), RunmodelBackend)
+    @override_settings(**VLLM_SETTINGS)
+    def test_vllm_provider_selected(self):
+        self.assertIsInstance(llm.get_backend(), VLLMBackend)
 
     @override_settings(LLM_PROVIDER='bogus')
     def test_unknown_provider_raises(self):

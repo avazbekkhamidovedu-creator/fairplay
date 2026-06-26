@@ -610,7 +610,7 @@ CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 WEBAUTHN_RP_ID = None
 
-# LLM access layer (judge.llm). Supported: 'azure', 'runmodel'
+# LLM access layer (judge.llm). Supported: 'azure', 'vllm'
 LLM_PROVIDER = 'azure'
 
 # Azure OpenAI for AI hints
@@ -620,12 +620,12 @@ AZURE_OPENAI_API_VERSION = '2024-02-01'
 AZURE_OPENAI_DEPLOYMENT = None     # deployment/model name, e.g. 'gpt-4o'
 AZURE_OPENAI_TIMEOUT = 30          # seconds before an API call is abandoned
 
-# Runmodel (local/internal vLLM gateway with {chat_id, response} envelope)
-RUNMODEL_API_BASE = None           # e.g. 'http://192.168.1.100:8000'
-RUNMODEL_API_KEY = ''              # API key (often empty for local servers)
-RUNMODEL_MODEL = 'qwen3.5-27B-FP8'  # model name the server expects
-RUNMODEL_MAX_TOKENS = 4096
-RUNMODEL_TIMEOUT = 120             # seconds (local models can be slow)
+# vLLM gateway (local/internal server with {chat_id, response} envelope)
+VLLM_API_BASE = None               # e.g. 'http://192.168.1.100:8000'
+VLLM_API_KEY = ''                  # API key (often empty for local servers)
+VLLM_MODEL = 'qwen3.5-27B-FP8'    # model name the server expects
+VLLM_MAX_TOKENS = 4096
+VLLM_TIMEOUT = 120                 # seconds (local models can be slow)
 
 DMOJ_AI_HINT_DAILY_LIMIT = 5      # max AI hint requests per user per day
 
