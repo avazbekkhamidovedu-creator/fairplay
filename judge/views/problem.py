@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -279,28 +280,38 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['next_contest_problem'] = cp_qs.filter(order__gt=contest_problem.order).order_by('order').first()
             context['prev_contest_problem'] = cp_qs.filter(order__lt=contest_problem.order).order_by('-order').first()
 
+        context['submission_type'] = self.object.submission_type
         if self.request.user.is_authenticated:
-            form = ProblemSubmitForm(
-                initial={'language': self.request.profile.language},
-                instance=Submission(user=self.request.profile, problem=self.object),
-            )
-            if self.object.is_editable_by(self.request.user):
-                form.fields['judge'].choices = tuple(
-                    Judge.objects.filter(online=True, problems=self.object).values_list('name', 'name'),
+            from judge.question_types import get_grader
+            grader = get_grader(self.object.submission_type)
+            if grader.routes_to_bridge:
+                form = ProblemSubmitForm(
+                    initial={'language': self.request.profile.language},
+                    instance=Submission(user=self.request.profile, problem=self.object),
                 )
-            form.fields['language'].queryset = self.object.usable_languages.order_by('name', 'key').prefetch_related(
-                Prefetch('runtimeversion_set', RuntimeVersion.objects.order_by('priority')),
-            )
-            form.fields['source'].widget.theme = self.request.profile.resolved_ace_theme
-            # Set ACE mode to user's language only if it's in the allowed languages
-            # Otherwise use the first allowed language
-            usable_languages = form.fields['language'].queryset
-            if self.request.profile.language and self.request.profile.language in usable_languages:
-                form.fields['source'].widget.mode = self.request.profile.language.ace
-            elif usable_languages.exists():
-                form.fields['source'].widget.mode = usable_languages.first().ace
-            context['form'] = form
-            context['ACE_URL'] = settings.ACE_URL
+                if self.object.is_editable_by(self.request.user):
+                    form.fields['judge'].choices = tuple(
+                        Judge.objects.filter(online=True, problems=self.object).values_list('name', 'name'),
+                    )
+                form.fields['language'].queryset = self.object.usable_languages.order_by(
+                    'name', 'key').prefetch_related(
+                    Prefetch('runtimeversion_set', RuntimeVersion.objects.order_by('priority')),
+                )
+                form.fields['source'].widget.theme = self.request.profile.resolved_ace_theme
+                # Set ACE mode to user's language only if it's in the allowed languages
+                # Otherwise use the first allowed language
+                usable_languages = form.fields['language'].queryset
+                if self.request.profile.language and self.request.profile.language in usable_languages:
+                    form.fields['source'].widget.mode = self.request.profile.language.ace
+                elif usable_languages.exists():
+                    form.fields['source'].widget.mode = usable_languages.first().ace
+                context['form'] = form
+                context['ACE_URL'] = settings.ACE_URL
+            else:
+                # Non-code (e.g. MCQ): render the type-specific answer form inline, not the Ace editor.
+                # The inline form posts to the dedicated submit page (submit_url).
+                context['form'] = grader.build_form(self.object, self.request.profile)
+                context['submit_url'] = reverse('problem_submit', args=[self.object.code])
 
         return context
 
@@ -638,6 +649,8 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 queryset = queryset.filter(types=type_id)
             if selected_difficulty:
                 queryset = queryset.filter(types__in=selected_difficulty)
+        if self.selected_formats:
+            queryset = queryset.filter(submission_type__in=self.selected_formats)
         if 'search' in self.request.GET:
             self.search_query = query = ' '.join(self.request.GET.getlist('search')).strip()
             if query:
@@ -681,34 +694,43 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         context['category'] = self.category
         context['categories'] = ProblemGroup.objects.all()
         if self.show_types:
+            # Knowledge points come from the ProblemType taxonomy.
+            all_problem_types = list(ProblemType.objects.all())
+            context['problem_types'] = all_problem_types
             context['selected_types'] = self.selected_types
-            all_types = list(ProblemType.objects.all())
-            context['problem_types'] = all_types
-            format_types = [t for t in all_types if t.name in Problem.FORMAT_TYPE_NAMES]
+            # Difficulty is a dedicated dimension surfaced from the difficulty-named ProblemTypes,
+            # ordered easiest -> hardest.
             difficulty_order = {name: i for i, name in enumerate(Problem.DIFFICULTY_TYPE_NAMES)}
             difficulty_types = sorted(
-                (t for t in all_types if t.name in Problem.DIFFICULTY_TYPE_NAMES),
+                (t for t in all_problem_types if t.name in Problem.DIFFICULTY_TYPE_NAMES),
                 key=lambda t: difficulty_order.get(t.name, len(difficulty_order)),
             )
+            # Knowledge points are everything that is neither an answer-format nor a difficulty tag.
             knowledge_types = [
-                t for t in all_types
+                t for t in all_problem_types
                 if t.name not in Problem.FORMAT_TYPE_NAMES and t.name not in Problem.DIFFICULTY_TYPE_NAMES
             ]
-            context['format_types'] = format_types
             context['difficulty_types'] = difficulty_types
             context['knowledge_types'] = knowledge_types
-            format_ids = {t.id for t in format_types}
             difficulty_ids = {t.id for t in difficulty_types}
-            context['selected_format_types'] = [i for i in self.selected_types if i in format_ids]
+            format_type_ids = {t.id for t in all_problem_types if t.name in Problem.FORMAT_TYPE_NAMES}
             context['selected_difficulty_types'] = [i for i in self.selected_types if i in difficulty_ids]
             context['selected_knowledge_types'] = [
-                i for i in self.selected_types if i not in format_ids and i not in difficulty_ids
+                i for i in self.selected_types
+                if i not in difficulty_ids and i not in format_type_ids
             ]
+            # The answer format is driven by the authoritative submission_type discriminator;
+            # offer the question types the system actually supports end-to-end.
+            from judge.question_types import all_types
+            context['format_types'] = [{'code': t.submission_type, 'label': t.label} for t in all_types()]
+            context['selected_formats'] = self.selected_formats
         context['has_fts'] = settings.ENABLE_FTS
         context['search_query'] = self.search_query
         context['completed_problem_ids'] = self.get_completed_problems()
         context['attempted_problems'] = self.get_attempted_problems()
 
+        from judge.question_types import creatable_types
+        context['creatable_problem_types'] = creatable_types(self.request.user)
         context['ac_min'] = self.ac_min if self.ac_min is not None else ''
         context['ac_max'] = self.ac_max if self.ac_max is not None else ''
         context['problem_status'] = self.problem_status
@@ -820,6 +842,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         self.search_query = None
         self.category = None
         self.selected_types = []
+        self.selected_formats = []
 
         # This actually copies into the instance dictionary...
         self.all_sorts = set(self.all_sorts)
@@ -832,6 +855,10 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 self.selected_types = list(map(int, request.GET.getlist('type')))
             except ValueError:
                 pass
+        if 'format' in request.GET:
+            from judge.question_types import all_types
+            valid_formats = {t.submission_type for t in all_types()}
+            self.selected_formats = [c for c in request.GET.getlist('format') if c in valid_formats]
 
         self.point_start = safe_float_or_none(request.GET.get('point_start'))
         self.point_end = safe_float_or_none(request.GET.get('point_end'))
@@ -930,6 +957,17 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
     form_class = ProblemSubmitForm
 
     @cached_property
+    def grader(self):
+        from judge.question_types import get_grader
+        return get_grader(self.object.submission_type)
+
+    @cached_property
+    def is_code(self):
+        # Code submissions use the Ace/language form and the judge bridge; other question types
+        # render a type-specific form and are graded internally.
+        return self.grader.routes_to_bridge
+
+    @cached_property
     def contest_problem(self):
         if self.request.profile.current_contest is None:
             return None
@@ -974,9 +1012,26 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         return _('Submit to %s') % self.object.translated_name(self.request.LANGUAGE_CODE)
 
     def get_initial(self):
-        initial = {'language': self.default_language}
-        if self.old_submission is not None:
-            initial['source'] = self.old_submission.source.source
+        if self.is_code:
+            initial = {'language': self.default_language}
+            if self.old_submission is not None:
+                initial['source'] = self.old_submission.source.source
+            return initial
+        # Non-code: prefill the previous answer when resubmitting.
+        initial = {}
+        if self.old_submission is not None and self.object.submission_type == 'M':
+            try:
+                selected = json.loads(self.old_submission.source.source).get('selected', [])
+            except (ValueError, TypeError, ObjectDoesNotExist):
+                selected = []
+            try:
+                multiple = self.object.mcq_config.multiple_select
+            except ObjectDoesNotExist:
+                multiple = False
+            if multiple:
+                initial['options'] = [str(s) for s in selected]
+            elif selected:
+                initial['options'] = str(selected[0])
         return initial
 
     def get_form_kwargs(self):
@@ -993,6 +1048,11 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         return kwargs
 
     def get_form(self, form_class=None):
+        if not self.is_code:
+            data = self.request.POST if self.request.method in ('POST', 'PUT') else None
+            return self.grader.build_form(self.object, self.request.profile,
+                                          data=data, initial=self.get_initial())
+
         form = super().get_form(form_class)
 
         form.fields['language'].queryset = self.object.usable_languages.order_by('name', 'key').prefetch_related(
@@ -1009,7 +1069,8 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
     def get_success_url(self):
         return reverse('submission_status', args=(self.new_submission.id,))
 
-    def form_valid(self, form):
+    def _submission_blocked_response(self):
+        """Pre-submit guards shared by every question type. Returns a response if blocked."""
         if (
             not self.request.user.has_perm('judge.spam_submission')
             and Submission.objects.filter(user=self.request.profile, rejudged_date__isnull=True)
@@ -1021,6 +1082,50 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 format_html('<h1>{0}</h1>', _('You submitted too many submissions.')),
                 status=429,
             )
+        if not self.request.user.is_superuser and self.object.banned_users.filter(id=self.request.profile.id).exists():
+            return generic_message(
+                self.request,
+                _('Banned from submitting'),
+                _(
+                    'You have been declared persona non grata for this problem. '
+                    'You are permanently barred from submitting to this problem.',
+                ),
+            )
+        # Must check for zero and not None. None means infinite submissions remaining.
+        if self.remaining_submission_count == 0:
+            return generic_message(
+                self.request,
+                _('Too many submissions'),
+                _('You have exceeded the submission limit for this problem.'),
+            )
+        return None
+
+    def _attach_contest(self, submission):
+        contest_problem = self.contest_problem
+        if contest_problem is not None:
+            # Use the contest object from current_contest.contest because we already use it
+            # in profile.update_contest().
+            submission.contest_object = self.request.profile.current_contest.contest
+            if self.request.profile.current_contest.live:
+                submission.locked_after = submission.contest_object.locked_after
+            submission.save()
+            ContestSubmission(
+                submission=submission,
+                problem=contest_problem,
+                participation=self.request.profile.current_contest,
+            ).save()
+        else:
+            submission.save()
+
+    def form_valid(self, form):
+        blocked = self._submission_blocked_response()
+        if blocked is not None:
+            return blocked
+        if self.is_code:
+            return self._code_form_valid(form)
+        return self._noncode_form_valid(form)
+
+    def _code_form_valid(self, form):
         if not self.object.allowed_languages.filter(id=form.cleaned_data['language'].id).exists():
             raise PermissionDenied()
 
@@ -1038,42 +1143,9 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                     _('This problem only accepts submissions in: %s') % ', '.join(harness_language_names),
                 )
 
-        if not self.request.user.is_superuser and self.object.banned_users.filter(id=self.request.profile.id).exists():
-            return generic_message(
-                self.request,
-                _('Banned from submitting'),
-                _(
-                    'You have been declared persona non grata for this problem. '
-                    'You are permanently barred from submitting to this problem.',
-                ),
-            )
-        # Must check for zero and not None. None means infinite submissions remaining.
-        if self.remaining_submission_count == 0:
-            return generic_message(
-                self.request,
-                _('Too many submissions'),
-                _('You have exceeded the submission limit for this problem.'),
-            )
-
         with transaction.atomic():
             self.new_submission = form.save(commit=False)
-
-            contest_problem = self.contest_problem
-            if contest_problem is not None:
-                # Use the contest object from current_contest.contest because we already use it
-                # in profile.update_contest().
-                self.new_submission.contest_object = self.request.profile.current_contest.contest
-                if self.request.profile.current_contest.live:
-                    self.new_submission.locked_after = self.new_submission.contest_object.locked_after
-                self.new_submission.save()
-                ContestSubmission(
-                    submission=self.new_submission,
-                    problem=contest_problem,
-                    participation=self.request.profile.current_contest,
-                ).save()
-            else:
-                self.new_submission.save()
-
+            self._attach_contest(self.new_submission)
             source = SubmissionSource(submission=self.new_submission, source=form.cleaned_data['source'])
             source.save()
 
@@ -1083,14 +1155,30 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
         return super().form_valid(form)
 
+    def _noncode_form_valid(self, form):
+        with transaction.atomic():
+            self.new_submission = Submission(
+                user=self.request.profile, problem=self.object,
+                language=Language.get_answer_language(),
+            )
+            self._attach_contest(self.new_submission)
+            self.grader.store_answer(self.new_submission, form.cleaned_data)
+
+        # Routes to grade_internally() via Submission.judge() (non-code never hits the bridge).
+        self.new_submission.judge(force_judge=True)
+
+        return super().form_valid(form)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['langs'] = Language.objects.all()
-        context['no_judges'] = not context['form'].fields['language'].queryset
+        context['submission_type'] = self.object.submission_type
         context['submission_limit'] = self.contest_problem and self.contest_problem.max_submissions
         context['submissions_left'] = self.remaining_submission_count
-        context['ACE_URL'] = settings.ACE_URL
-        context['default_lang'] = self.default_language
+        if self.is_code:
+            context['langs'] = Language.objects.all()
+            context['no_judges'] = not context['form'].fields['language'].queryset
+            context['ACE_URL'] = settings.ACE_URL
+            context['default_lang'] = self.default_language
         return context
 
     def post(self, request, *args, **kwargs):

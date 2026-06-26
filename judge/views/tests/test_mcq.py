@@ -1,8 +1,12 @@
+import json
+from unittest import mock
+
 from django.test import TestCase
 from django.urls import reverse
 
-from judge.models import Class, Problem, ProblemMCQConfig, ProblemMCQOption
+from judge.models import Class, Problem, ProblemMCQConfig, ProblemMCQOption, Submission, SubmissionSource
 from judge.models.tests.util import CommonDataMixin, create_problem, create_user
+from judge.submission_grading import grade_internally
 
 
 def option_post_data(rows, multiple=False, shuffle=False, **problem_fields):
@@ -48,6 +52,29 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
                 user_permissions=('add_problem', 'create_private_problem'),
             ),
         })
+
+    def test_add_menu_reflects_permissions(self):
+        mcq_url = reverse('problem_mcq_create').encode()
+        code_url = reverse('admin:judge_problem_add').encode()
+
+        # create_private_problem -> MCQ in the menu, but not Code (admin add).
+        self.client.force_login(self.users['creator'])
+        content = self.client.get(reverse('problem_list')).content
+        self.assertIn(b'Add new problem', content)
+        self.assertIn(mcq_url, content)
+        self.assertNotIn(code_url, content)
+
+        # staff with add_problem -> Code as well.
+        self.client.force_login(self.users['staff_adder'])
+        content = self.client.get(reverse('problem_list')).content
+        self.assertIn(mcq_url, content)
+        self.assertIn(code_url, content)
+
+        # normal user -> no menu at all.
+        self.client.force_login(self.users['normal'])
+        content = self.client.get(reverse('problem_list')).content
+        self.assertNotIn(b'Add new problem', content)
+        self.assertNotIn(mcq_url, content)
 
     def test_create_requires_permission(self):
         self.client.force_login(self.users['normal'])
@@ -128,3 +155,61 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         # Editor -> 200, even though is_manually_managed is set (that guard must not apply).
         self.client.force_login(self.users['creator'])
         self.assertEqual(self.client.get(reverse('problem_mcq_edit', args=['editmcq'])).status_code, 200)
+
+
+class MCQSubmitViewTestCase(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(self):
+        super().setUpTestData()
+        self.problem = create_problem(code='quizsub', submission_type='M', points=10, is_public=True)
+        ProblemMCQConfig.objects.create(problem=self.problem, multiple_select=False)
+        self.opt_a = ProblemMCQOption.objects.create(problem=self.problem, order=0, text='wrong', is_correct=False)
+        self.opt_b = ProblemMCQOption.objects.create(problem=self.problem, order=1, text='right', is_correct=True)
+
+    def test_submit_correct_grades_internally(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.post(reverse('problem_submit', args=['quizsub']), {'options': str(self.opt_b.id)})
+        self.assertEqual(response.status_code, 302)
+
+        sub = Submission.objects.get(problem=self.problem, user=self.users['normal'].profile)
+        self.assertEqual(sub.status, 'D')
+        self.assertEqual(sub.result, 'AC')
+        self.assertEqual(sub.points, 10)
+        self.assertEqual(sub.language.key, 'ANSWER')
+        self.assertEqual(json.loads(sub.source.source)['selected'], [self.opt_b.id])
+
+    def test_submit_wrong(self):
+        self.client.force_login(self.users['normal'])
+        self.client.post(reverse('problem_submit', args=['quizsub']), {'options': str(self.opt_a.id)})
+        sub = Submission.objects.get(problem=self.problem, user=self.users['normal'].profile)
+        self.assertEqual(sub.result, 'WA')
+        self.assertEqual(sub.points, 0)
+
+    def test_submit_page_does_not_leak_answer_key(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_submit', args=['quizsub']))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b'is_correct', response.content)
+
+    def test_problem_page_shows_choices_not_code_editor(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_detail', args=['quizsub']))
+        self.assertEqual(response.status_code, 200)
+        # No Ace code editor on an MCQ problem page; the choices are shown instead.
+        self.assertNotIn(b'id_source', response.content)
+        self.assertIn(b'name="options"', response.content)
+
+    def test_rejudge_does_not_hit_bridge(self):
+        sub = Submission.objects.create(
+            user=self.users['normal'].profile, problem=self.problem,
+            language=Submission._meta.get_field('language').related_model.get_answer_language(),
+        )
+        SubmissionSource.objects.create(submission=sub, source=json.dumps({'selected': [self.opt_b.id]}))
+        grade_internally(sub)
+
+        with mock.patch('judge.models.submission.judge_submission') as bridge:
+            sub.judge(rejudge=True, force_judge=True)
+        bridge.assert_not_called()
+        sub.refresh_from_db()
+        self.assertEqual(sub.result, 'AC')
+        self.assertNotEqual(sub.result, 'IE')

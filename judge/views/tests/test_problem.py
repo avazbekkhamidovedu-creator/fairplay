@@ -6,7 +6,7 @@ from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Language, Problem, ProblemGroup, ProblemType, Submission
+from judge.models import Language, Problem, ProblemGroup, ProblemSubmissionType, ProblemType, Submission
 from judge.models.tests.util import (
     CommonDataMixin,
     create_problem,
@@ -14,6 +14,7 @@ from judge.models.tests.util import (
     create_problem_type,
     create_solution,
 )
+from judge.question_types import all_types
 from judge.views.problem import ProblemList
 
 
@@ -70,6 +71,9 @@ class ProblemListTestBase(CommonDataMixin, TestCase):
             is_public=True,
             group='filter-group',
             types=('medium', 'multiple_choices', 'greedy'),
+            # Answer format is the authoritative submission_type discriminator; every other
+            # fixture problem keeps the default CODE format.
+            submission_type=ProblemSubmissionType.MCQ,
             ac_rate=50,
             points=150,
             user_count=30,
@@ -212,10 +216,12 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         self.assertEqual(codes, {'filter-easy'})
 
     def test_format_type_filter(self):
+        # The answer format is filtered via the dedicated ?format param backed by submission_type,
+        # not via a ProblemType tag. Only the greedy fixture is an MCQ problem.
         codes = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
             {
-                'type': [self.type_ids['multiple_choices']],
+                'format': [ProblemSubmissionType.MCQ],
                 'filtered': '1',
             },
         ))
@@ -377,22 +383,33 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         context = self._context(self.users['normal'], {})
 
         difficulty_names = {t.name for t in context['difficulty_types']}
-        format_names = {t.name for t in context['format_types']}
         knowledge_names = {t.name for t in context['knowledge_types']}
+        # Format options come from the registered question types (submission_type), exposed as
+        # {'code', 'label'} dicts, not from the ProblemType taxonomy.
+        format_codes = {f['code'] for f in context['format_types']}
 
         self.assertEqual(difficulty_names, {'easy', 'medium', 'hard'})
-        self.assertEqual(format_names, {'code', 'fill_in_blank', 'multiple_choices'})
+        self.assertEqual(format_codes, {t.submission_type for t in all_types()})
         self.assertIn('dp', knowledge_names)
         self.assertIn('greedy', knowledge_names)
+        # Format- and difficulty-named ProblemTypes are not surfaced as knowledge points.
+        self.assertNotIn('code', knowledge_names)
+        self.assertNotIn('multiple_choices', knowledge_names)
+        self.assertNotIn('easy', knowledge_names)
 
     def test_problem_list_context_splits_selected_types(self):
         context = self._context(self.users['normal'], {
             'type': [self.type_ids['easy'], self.type_ids['greedy'], self.type_ids['code']],
+            'format': [ProblemSubmissionType.MCQ],
             'filtered': '1',
         })
         self.assertEqual(context['selected_difficulty_types'], [self.type_ids['easy']])
         self.assertIn(self.type_ids['greedy'], context['selected_knowledge_types'])
-        self.assertIn(self.type_ids['code'], context['selected_format_types'])
+        # Answer format is carried by submission_type, not the ProblemType taxonomy: a
+        # format-named ProblemType selected via ?type is not counted as a knowledge point...
+        self.assertNotIn(self.type_ids['code'], context['selected_knowledge_types'])
+        # ...and the active format selection comes from the dedicated ?format param.
+        self.assertEqual(context['selected_formats'], [ProblemSubmissionType.MCQ])
 
     def test_problem_list_context_exposes_group_and_type_counts(self):
         context = self._context(self.users['normal'], {})
