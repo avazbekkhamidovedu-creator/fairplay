@@ -128,7 +128,17 @@ class Submission(models.Model):
                         revisions.set_user(rejudge_user)
                     revisions.set_comment('Rejudged')
                     revisions.add_to_revision(self)
-            judge_submission(self, *args, rejudge=rejudge, **kwargs)
+
+            # Route by question type: code goes to the judge bridge; auto-graded types (e.g.
+            # multiple-choice) grade internally; manual types are left untouched. Importing here
+            # avoids a circular import between models and the question-type registry.
+            from judge.question_types import get_grader
+            grader = get_grader(self.problem.submission_type)
+            if grader.routes_to_bridge:
+                judge_submission(self, *args, rejudge=rejudge, **kwargs)
+            elif not grader.is_manual:
+                from judge.submission_grading import grade_internally
+                grade_internally(self)
 
     judge.alters_data = True
 

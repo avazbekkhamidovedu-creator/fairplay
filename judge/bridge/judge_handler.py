@@ -12,8 +12,8 @@ from django.utils import timezone
 
 from judge import event_poster as event
 from judge.bridge.base_handler import ZlibPacketHandler, proxy_list
-from judge.caching import finished_submission
 from judge.models import Judge, Language, LanguageLimit, Problem, RuntimeVersion, Submission, SubmissionTestCase
+from judge.submission_grading import finalize_submission
 
 logger = logging.getLogger('judge.bridge')
 json_log = logging.getLogger('judge.json.bridge')
@@ -409,20 +409,15 @@ class JudgeHandler(ZlibPacketHandler):
 
         points = round(points, 1)
         total = round(total, 1)
-        submission.case_points = points
-        submission.case_total = total
 
         problem = submission.problem
-        sub_points = round(points / total * problem.points if total > 0 else 0, 3)
-        if not problem.partial and sub_points != problem.points:
-            sub_points = 0
-
-        submission.status = 'D'
-        submission.time = time
-        submission.memory = memory
-        submission.points = sub_points
-        submission.result = status_codes[status]
-        submission.save()
+        # finalize_submission persists the scaled points and runs every downstream effect
+        # (user points, problem stats, contest standings, cache + websocket events) — the same
+        # tail shared with internally-graded (non-code) submissions.
+        sub_points = finalize_submission(
+            submission, case_points=points, case_total=total,
+            result=status_codes[status], time=time, memory=memory,
+        )
 
         json_log.info(self._make_json_log(
             packet, action='grading-end', time=time, memory=memory,
@@ -431,27 +426,6 @@ class JudgeHandler(ZlibPacketHandler):
             problem=problem.code, finish=True,
         ))
 
-        if problem.is_public and not problem.is_organization_private:
-            submission.user._updating_stats_only = True
-            submission.user.calculate_points()
-
-        problem._updating_stats_only = True
-        problem.update_stats()
-        submission.update_contest()
-
-        finished_submission(submission)
-
-        event.post('sub_%s' % submission.id_secret, {
-            'type': 'grading-end',
-            'time': time,
-            'memory': memory,
-            'points': float(points),
-            'total': float(problem.points),
-            'result': submission.result,
-        })
-        if hasattr(submission, 'contest'):
-            participation = submission.contest.participation
-            event.post('contest_%d' % participation.contest_id, {'type': 'update'})
         self._post_update_submission(submission.id, 'grading-end', done=True)
 
     def on_compile_error(self, packet):
