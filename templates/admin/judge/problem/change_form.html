@@ -2,6 +2,15 @@
 {% load i18n admin_modify %}
 
 {% block extrastyle %}{{ block.super }}
+    <style>
+        /* Keep the organization/class multiselects a stable, readable width
+           regardless of whether anything is selected or how long the names are. */
+        #content-main .field-organizations .select2-container,
+        #content-main .field-classes .select2-container {
+            width: 100% !important;
+            min-width: 320px;
+        }
+    </style>
     {% if show_embedded_advanced_toggle or is_advanced_add %}
         <style>
             #content-main .markdown-image-upload {

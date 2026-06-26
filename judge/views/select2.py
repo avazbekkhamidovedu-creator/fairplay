@@ -49,7 +49,13 @@ class UserSelect2View(Select2View):
 
 class OrganizationSelect2View(Select2View):
     def get_queryset(self):
-        return Organization.objects.filter(name__icontains=self.term)
+        queryset = Organization.objects.filter(name__icontains=self.term)
+        user = self.request.user
+        if not user.is_authenticated:
+            return queryset.none()
+        if user.has_perm('judge.edit_all_organization'):
+            return queryset
+        return queryset.filter(admins=user.profile)
 
 
 class ClassSelect2View(Select2View):
