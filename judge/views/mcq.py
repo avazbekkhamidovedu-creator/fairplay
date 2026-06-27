@@ -40,7 +40,8 @@ class ProblemMCQForm(forms.ModelForm):
         # falls back from django.jQuery to the global jQuery, so it works outside the admin too.
         js = ('admin_class_filter.js',)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
         super().__init__(*args, **kwargs)
         self.fields['organizations'].required = False
         self.fields['classes'].required = False
@@ -56,6 +57,17 @@ class ProblemMCQForm(forms.ModelForm):
                 raise forms.ValidationError(_('Selected classes must belong to selected organizations.'))
         elif classes and not organizations:
             raise forms.ValidationError(_('You must select organizations before selecting classes.'))
+
+        # Mirror admin ProblemAdmin.save_model: without change_public_visibility, a problem may
+        # only be made public if it is organization-private and the user can create private problems.
+        if cleaned_data.get('is_public') and self.user is not None \
+                and not self.user.has_perm('judge.change_public_visibility'):
+            org_private = bool(organizations or classes)
+            if not org_private:
+                self.add_error('is_public', _('You do not have permission to make a problem '
+                                              'public unless it is private to an organization.'))
+            elif not self.user.has_perm('judge.create_private_problem'):
+                self.add_error('is_public', _('You do not have permission to make this problem public.'))
         return cleaned_data
 
 
@@ -103,7 +115,7 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
         initial = None
         if creating and self.request.user.is_authenticated:
             initial = {'organizations': list(self.request.profile.organizations.all())}
-        problem_form = ProblemMCQForm(data, instance=problem, initial=initial)
+        problem_form = ProblemMCQForm(data, instance=problem, initial=initial, user=self.request.user)
         config_form = MCQConfigForm(data, instance=config)
         # On edit, start with no blank trailing row; the "Add choice" button adds rows on demand.
         OptionFormSet = make_option_formset(extra=4 if creating else 0)

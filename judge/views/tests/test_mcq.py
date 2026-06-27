@@ -51,6 +51,10 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
                 is_staff=True,
                 user_permissions=('add_problem', 'create_private_problem'),
             ),
+            'publisher': create_user(
+                username='publisher',
+                user_permissions=('create_private_problem', 'change_public_visibility', 'edit_own_problem'),
+            ),
         })
 
     def test_add_menu_reflects_permissions(self):
@@ -123,6 +127,37 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         problem = Problem.objects.get(name='Org quiz')
         self.assertTrue(problem.is_organization_private)
         self.assertIn(org, problem.organizations.all())
+
+    def test_create_public_non_org_rejected_without_permission(self):
+        # create_private_problem alone must not let a teacher publish a fully public problem;
+        # mirrors ProblemAdmin.save_model's change_public_visibility guard.
+        self.client.force_login(self.users['creator'])
+        data = option_post_data([('4', True), ('3', False)], name='Sneaky public', is_public=True)
+        response = self.client.post(reverse('problem_mcq_create'), data)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Problem.objects.filter(name='Sneaky public').exists())
+
+    def test_create_public_org_private_allowed_without_permission(self):
+        # The guard is not over-broad: an org-private problem may still be public.
+        org = self.organizations['open']
+        self.client.force_login(self.users['creator'])
+        data = option_post_data([('4', True), ('3', False)], name='Public org quiz', is_public=True)
+        data['organizations'] = [org.id]
+        response = self.client.post(reverse('problem_mcq_create'), data)
+        self.assertEqual(response.status_code, 302)
+
+        problem = Problem.objects.get(name='Public org quiz')
+        self.assertTrue(problem.is_public)
+        self.assertTrue(problem.is_organization_private)
+
+    def test_create_public_allowed_with_permission(self):
+        self.client.force_login(self.users['publisher'])
+        data = option_post_data([('4', True), ('3', False)], name='Truly public', is_public=True)
+        response = self.client.post(reverse('problem_mcq_create'), data)
+        self.assertEqual(response.status_code, 302)
+
+        problem = Problem.objects.get(name='Truly public')
+        self.assertTrue(problem.is_public)
 
     def test_create_rejects_class_without_organization(self):
         org = self.organizations['open']
