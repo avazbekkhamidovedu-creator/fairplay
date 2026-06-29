@@ -1,12 +1,12 @@
 import logging
-import time as _time
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
-from openai import AzureOpenAI
+
+from judge import llm
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ def refund(user_id: int) -> None:
 
 
 def is_configured() -> bool:
-    return bool(getattr(settings, 'AZURE_OPENAI_ENDPOINT', None))
+    return llm.is_configured()
 
 
 def build_user_message(submission) -> str:
@@ -147,54 +147,18 @@ def build_user_message(submission) -> str:
     return '\n'.join(lines)
 
 
-_client = None
-
-
-def _get_client() -> AzureOpenAI:
-    # The SDK's default timeout is 600s, which would pin a gunicorn worker for
-    # the whole request; cap it so a slow Azure endpoint fails fast instead.
-    global _client
-    if _client is None:
-        _client = AzureOpenAI(
-            azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
-            api_key=settings.AZURE_OPENAI_API_KEY,
-            api_version=getattr(settings, 'AZURE_OPENAI_API_VERSION', '2024-02-01'),
-            timeout=getattr(settings, 'AZURE_OPENAI_TIMEOUT', 30),
-            max_retries=1,
-        )
-    return _client
-
-
 def get_hint(submission) -> HintResult:
-    """Call Azure OpenAI and return a HintResult. Raises on failure."""
-    client = _get_client()
-    user_message = build_user_message(submission)
-
-    start = _time.monotonic()
-    response = client.chat.completions.create(
-        model=settings.AZURE_OPENAI_DEPLOYMENT,
-        messages=[
-            {'role': 'system', 'content': _SYSTEM_PROMPT},
-            {'role': 'user', 'content': user_message},
-        ],
-        max_completion_tokens=getattr(settings, 'AZURE_OPENAI_MAX_TOKENS', 2048),
-    )
-    elapsed_ms = int((_time.monotonic() - start) * 1000)
-
-    logger.debug('AI hint response: id=%s, model=%s, finish_reason=%s',
-                 response.id, response.model,
-                 response.choices[0].finish_reason if response.choices else 'N/A')
-
-    content = response.choices[0].message.content
-    if not content or not content.strip():
-        raise RuntimeError('AI service returned an empty response. Please try again.')
-
-    usage = response.usage
+    """Build the hint prompt, call the LLM, and return a HintResult. Raises on failure."""
+    messages = [
+        {'role': 'system', 'content': _SYSTEM_PROMPT},
+        {'role': 'user', 'content': build_user_message(submission)},
+    ]
+    result = llm.chat(messages, max_tokens=getattr(settings, 'AZURE_OPENAI_MAX_TOKENS', 2048))
     return HintResult(
-        hint_text=content.strip(),
-        prompt_tokens=usage.prompt_tokens if usage else None,
-        completion_tokens=usage.completion_tokens if usage else None,
-        total_tokens=usage.total_tokens if usage else None,
-        model_name=response.model or '',
-        response_time_ms=elapsed_ms,
+        hint_text=result.text,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        total_tokens=result.total_tokens,
+        model_name=result.model_name,
+        response_time_ms=result.response_time_ms,
     )
