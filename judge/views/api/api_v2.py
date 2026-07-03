@@ -613,6 +613,8 @@ class APISubmissionList(APIListView):
                 'points',
                 'result',
                 'contest_object__key',
+                'contest_object__format_name',
+                'contest_object__results_finalized',
                 'contest__points',
                 'contest__participation__virtual',
                 'contest__participation__real_start',
@@ -620,19 +622,20 @@ class APISubmissionList(APIListView):
         )
 
     def get_object_data(self, submission):
+        hidden = not submission.results_visible_to(self.request.user)
         return {
             'id': submission.id,
             'problem': submission.problem.code,
             'user': submission.user.user.username,
             'date': submission.date.isoformat(),
             'language': submission.language.key,
-            'time': submission.time,
-            'memory': submission.memory,
-            'points': submission.points,
-            'result': submission.result,
+            'time': None if hidden else submission.time,
+            'memory': None if hidden else submission.memory,
+            'points': None if hidden else submission.points,
+            'result': None if hidden else submission.result,
             'contest': None if not submission.contest_object else {
                 'key': submission.contest_object.key,
-                'points': submission.contest.points,
+                'points': None if hidden else submission.contest.points,
                 'virtual_participation_number': submission.contest.participation.virtual,
                 'time_since_start_of_participation': submission.date - submission.contest.participation.real_start,
             },
@@ -678,20 +681,21 @@ class APISubmissionDetail(APILoginRequiredMixin, APIDetailView):
                     'total': batch['total'],
                 })
 
+        hidden = not submission.results_visible_to(self.request.user)
         return {
             'id': submission.id,
             'problem': submission.problem.code,
             'user': submission.user.user.username,
             'date': submission.date.isoformat(),
-            'time': submission.time,
-            'memory': submission.memory,
-            'points': submission.points,
+            'time': None if hidden else submission.time,
+            'memory': None if hidden else submission.memory,
+            'points': None if hidden else submission.points,
             'language': submission.language.key,
             'status': submission.status,
-            'result': submission.result,
-            'case_points': submission.case_points,
-            'case_total': submission.case_total,
-            'cases': cases,
+            'result': None if hidden else submission.result,
+            'case_points': None if hidden else submission.case_points,
+            'case_total': None if hidden else submission.case_total,
+            'cases': [] if hidden else cases,
         }
 
 

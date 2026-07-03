@@ -70,7 +70,7 @@ class ContestProblemInline(SortableInlineAdminMixin, admin.TabularInline):
     verbose_name_plural = _('Problems')
     classes = ('basic-inline-group',)
     fields = ('problem', 'points', 'partial', 'is_pretested', 'max_submissions', 'output_prefix_override', 'order',
-              'rejudge_column')
+              'hide_results', 'rejudge_column')
     readonly_fields = ('rejudge_column',)
     form = ContestProblemInlineForm
 
@@ -554,8 +554,34 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         return [
             path('rate/all/', self.rate_all_view, name='judge_contest_rate_all'),
             path('<int:id>/rate/', self.rate_view, name='judge_contest_rate'),
+            path('<int:id>/finalize/', self.finalize_view, name='judge_contest_finalize'),
+            path('<int:id>/unfinalize/', self.unfinalize_view, name='judge_contest_unfinalize'),
             path('<int:contest_id>/judge/<int:problem_id>/', self.rejudge_view, name='judge_contest_rejudge'),
         ] + super(ContestAdmin, self).get_urls()
+
+    @method_decorator(require_POST)
+    def finalize_view(self, request, id):
+        contest = get_object_or_404(Contest, id=id)
+        if not self.has_change_permission(request, contest):
+            raise PermissionDenied()
+        from judge.tasks import finalize_contest_results
+        transaction.on_commit(finalize_contest_results.s(contest.key).delay)
+        self.message_user(request, _('Finalizing results for “%s”: hidden problem results will be revealed '
+                                     'and the latest submissions rejudged on the final configuration.')
+                          % contest.name)
+        return HttpResponseRedirect(reverse('admin:judge_contest_change', args=(id,)))
+
+    @method_decorator(require_POST)
+    def unfinalize_view(self, request, id):
+        contest = get_object_or_404(Contest, id=id)
+        if not self.has_change_permission(request, contest):
+            raise PermissionDenied()
+        from judge.tasks import unfinalize_contest_results
+        transaction.on_commit(unfinalize_contest_results.s(contest.key).delay)
+        self.message_user(request, _('Un-finalizing results for “%s”: hidden problem results will be masked '
+                                     'again and removed from the scoreboard until you finalize once more.')
+                          % contest.name)
+        return HttpResponseRedirect(reverse('admin:judge_contest_change', args=(id,)))
 
     @method_decorator(require_POST)
     def rejudge_view(self, request, contest_id, problem_id):

@@ -4,10 +4,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext as _
 from moss import MOSS
 
-from judge.models import Contest, ContestMoss, ContestParticipation, Submission
+from judge.models import Contest, ContestMoss, ContestParticipation, ContestSubmission, Submission
 from judge.utils.celery import Progress
 
-__all__ = ('rescore_contest', 'run_moss')
+__all__ = ('rescore_contest', 'finalize_contest_results', 'unfinalize_contest_results', 'run_moss')
 
 
 @shared_task(bind=True)
@@ -18,6 +18,67 @@ def rescore_contest(self, contest_key):
     rescored = 0
     with Progress(self, participations.count(), stage=_('Recalculating contest scores')) as p:
         for participation in participations.iterator():
+            participation.recompute_results()
+            rescored += 1
+            if rescored % 10 == 0:
+                p.done = rescored
+    return rescored
+
+
+@shared_task(bind=True)
+def finalize_contest_results(self, contest_key):
+    """End-of-contest finalize for exam-style contests.
+
+    Clears ``run_pretests_only`` and sets ``results_finalized`` (revealing hidden results and folding
+    them into the scoreboard), then rejudges **only the latest** submission per (participation, problem)
+    on the final config — code on full testcases via the bridge, internally-graded types (e.g. MCQ)
+    immediately, picking up any answer-key correction — and recomputes the standings. Re-runnable.
+    """
+    contest = Contest.objects.get(key=contest_key)
+    contest.run_pretests_only = False
+    contest.results_finalized = True
+    contest.save(update_fields=['run_pretests_only', 'results_finalized'])
+
+    # Latest submission per (participation, problem): ordered by date, last write wins.
+    latest = {}
+    for contest_submission in (ContestSubmission.objects
+                               .filter(participation__contest=contest)
+                               .select_related('submission')
+                               .order_by('submission__date', 'submission_id')):
+        latest[(contest_submission.participation_id, contest_submission.problem_id)] = contest_submission.submission
+
+    rejudged = 0
+    with Progress(self, len(latest), stage=_('Rejudging latest submissions')) as p:
+        for submission in latest.values():
+            submission.judge(rejudge=True, force_judge=True)
+            rejudged += 1
+            if rejudged % 10 == 0:
+                p.done = rejudged
+
+    # Recompute every participation so newly revealed problems fold into the totals (the latest code
+    # rejudges land asynchronously and recompute themselves again as they finish).
+    for participation in contest.users.iterator():
+        participation.recompute_results()
+
+    return rejudged
+
+
+@shared_task(bind=True)
+def unfinalize_contest_results(self, contest_key):
+    """Reverse a finalize: re-hide an exam-style contest's results until it is finalized again.
+
+    Clears ``results_finalized`` and recomputes every participation so the newly re-hidden problems
+    drop back out of the scoreboard totals. Display masking re-applies on its own (it reads
+    ``results_finalized`` live), but the stored scoreboard ``format_data`` must be recomputed here.
+    Submissions are left as graded — only the finalize state and standings are reverted. Re-runnable.
+    """
+    contest = Contest.objects.get(key=contest_key)
+    contest.results_finalized = False
+    contest.save(update_fields=['results_finalized'])
+
+    rescored = 0
+    with Progress(self, contest.users.count(), stage=_('Recalculating contest scores')) as p:
+        for participation in contest.users.iterator():
             participation.recompute_results()
             rescored += 1
             if rescored % 10 == 0:

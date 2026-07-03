@@ -219,6 +219,50 @@ class Submission(models.Model):
         except ObjectDoesNotExist:
             return None
 
+    @cached_property
+    def contest_results_hidden(self):
+        """Whether this submission's results are currently masked from ordinary viewers.
+
+        True only inside an exam-style contest (a format with ``has_hidden_results``) that has not been
+        finalized, for a problem flagged hidden (``ContestProblem.results_hidden``). Viewer-independent;
+        the per-viewer bypass lives in ``results_visible_to``. Checks are ordered to short-circuit
+        cheaply for the common (non-contest / non-exam) case.
+        """
+        if self.contest_object_id is None:
+            return False
+        contest = self.contest_object
+        # format_class is a class attribute lookup (no format instantiation / format_config needed).
+        if not contest.format_class.has_hidden_results or contest.results_finalized:
+            return False
+        contest_submission = self.contest_or_none
+        if contest_submission is None:
+            return False
+        return contest_submission.problem.results_hidden
+
+    def results_visible_to(self, user):
+        """Whether ``user`` may see this submission's verdict/score right now.
+
+        Everyone sees results unless they are masked (``contest_results_hidden``); when masked, only
+        contest editors / submission-viewers / staff see through — the owner does **not**.
+        """
+        if not self.contest_results_hidden:
+            return True
+        if not user.is_authenticated:
+            return False
+        if user.has_perm('judge.view_all_submission'):
+            return True
+        if self.problem.is_editable_by(user):
+            return True
+        profile = user.profile
+        contest = self.contest_object
+        if contest is not None and (
+            profile.id in contest.editor_ids or
+            contest.view_contest_submissions.filter(id=profile.id).exists() or
+            (contest.tester_see_submissions and profile.id in contest.tester_ids)
+        ):
+            return True
+        return False
+
     @classmethod
     def get_id_secret(cls, sub_id):
         return (hmac.new(utf8bytes(settings.EVENT_DAEMON_SUBMISSION_KEY), b'%d' % sub_id, hashlib.sha512)

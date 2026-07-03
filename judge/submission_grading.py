@@ -47,14 +47,18 @@ def finalize_submission(submission, *, case_points, case_total, result,
 
     finished_submission(submission)
 
-    event.post('sub_%s' % submission.id_secret, {
-        'type': 'grading-end',
-        'time': time,
-        'memory': memory,
-        'points': float(case_points),
-        'total': float(problem.points),
-        'result': submission.result,
-    })
+    if submission.contest_results_hidden:
+        # Exam-style contest, results masked: announce only that grading ended — never the verdict/score.
+        event.post('sub_%s' % submission.id_secret, {'type': 'grading-end'})
+    else:
+        event.post('sub_%s' % submission.id_secret, {
+            'type': 'grading-end',
+            'time': time,
+            'memory': memory,
+            'points': float(case_points),
+            'total': float(problem.points),
+            'result': submission.result,
+        })
     if hasattr(submission, 'contest'):
         participation = submission.contest.participation
         event.post('contest_%d' % participation.contest_id, {'type': 'update'})
