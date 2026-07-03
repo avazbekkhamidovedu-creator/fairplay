@@ -7,7 +7,7 @@ from django import forms
 from django.conf import settings
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import RegexValidator
 from django.db.models import Q
 from django.forms import BooleanField, CharField, ChoiceField, Form, ModelForm, MultipleChoiceField
@@ -161,6 +161,44 @@ class ProblemSubmitForm(ModelForm):
     class Meta:
         model = Submission
         fields = ['language']
+
+
+class MCQSubmitForm(Form):
+    """Student-facing multiple-choice answer form.
+
+    Choices are presented in this student's order (see ``ordered_options_for``) and posted back
+    as stable option ids, so per-student shuffling never affects answer identity. Only id/text
+    reach the template — never ``is_correct``.
+    """
+
+    def __init__(self, *args, problem=None, profile=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from judge.question_types.mcq import ordered_options_for
+
+        try:
+            config = problem.mcq_config
+        except ObjectDoesNotExist:
+            config = None
+        self.multiple = bool(config and config.multiple_select)
+
+        choices = [(str(o['id']), o['text']) for o in ordered_options_for(problem, profile)]
+        if self.multiple:
+            self.fields['options'] = MultipleChoiceField(
+                choices=choices, widget=forms.CheckboxSelectMultiple, label='', required=True)
+        else:
+            self.fields['options'] = ChoiceField(
+                choices=choices, widget=forms.RadioSelect, label='', required=True)
+
+    def clean(self):
+        cleaned = super().clean()
+        value = cleaned.get('options')
+        if self.multiple:
+            cleaned['selected'] = [int(v) for v in (value or [])]
+        elif value:
+            cleaned['selected'] = [int(value)]
+        else:
+            cleaned['selected'] = []
+        return cleaned
 
 
 class EditOrganizationForm(ModelForm):

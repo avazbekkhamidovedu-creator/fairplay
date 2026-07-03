@@ -159,6 +159,7 @@
                     var value = $(this).data('value');
                     if (field === 'category') $('#category-input').val('');
                     else if (field === 'type') $('input[name=type][value="' + value + '"]').prop('checked', false);
+                    else if (field === 'format') $('input[name=format][value="' + value + '"]').prop('checked', false);
                     else if (field === 'status') $('#status-filter').val('');
                     else if (field === 'ac') { $('input[name=ac_min]').val(''); $('input[name=ac_max]').val(''); }
                     else if (field === 'search') $('input[name=search]').val('');
@@ -238,6 +239,27 @@
 {% block title_row %}
     {% set tab = 'list' %}
     {% include "problem/problem-list-tabs.html" %}
+    {% if creatable_problem_types %}
+        <div class="add-problem-menu">
+            <a href="#" class="button add-problem-toggle" onclick="return false;">{{ _('Add new problem') }} &#9662;</a>
+            <ul class="add-problem-dropdown">
+                {% for type in creatable_problem_types %}
+                    <li><a href="{{ type.create_url() }}">{{ type.label }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+        <style>
+            .add-problem-menu { display: inline-block; position: relative; margin-left: 0.5em; }
+            .add-problem-menu .add-problem-dropdown {
+                display: none; position: absolute; z-index: 1000; list-style: none;
+                margin: 0; padding: 0.3em 0; min-width: 180px; background: #fff;
+                border: 1px solid #ccc; box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+            }
+            .add-problem-menu:hover .add-problem-dropdown { display: block; }
+            .add-problem-menu .add-problem-dropdown li a { display: block; padding: 0.4em 1em; white-space: nowrap; }
+            .add-problem-menu .add-problem-dropdown li a:hover { background: #f0f0f0; }
+        </style>
+    {% endif %}
 {% endblock %}
 
 {% block body %}
@@ -323,9 +345,9 @@
                             <div class="multi-select" id="type-multi-select">
                                 <button type="button" class="multi-select-trigger" aria-haspopup="listbox">
                                     <span id="type-multi-label" data-empty-label="{{ _('All types') }}"
-                                          class="multi-select-text {% if not selected_format_types %}multi-select-label-empty{% endif %}">
-                                        {% if selected_format_types %}
-                                            {% for type in format_types %}{% if type.id in selected_format_types %}{{ user_trans(type.full_name) }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
+                                          class="multi-select-text {% if not selected_formats %}multi-select-label-empty{% endif %}">
+                                        {% if selected_formats %}
+                                            {% for f in format_types %}{% if f.code in selected_formats %}{{ f.label }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
                                         {% else %}
                                             {{ _('All types') }}
                                         {% endif %}
@@ -333,11 +355,11 @@
                                     <span class="multi-select-caret">&#9662;</span>
                                 </button>
                                 <div class="multi-select-menu" hidden role="listbox">
-                                    {% for type in format_types %}
+                                    {% for f in format_types %}
                                         <label class="multi-select-option">
-                                            <input type="checkbox" name="type" value="{{ type.id }}"
-                                                   {% if type.id in selected_format_types %}checked{% endif %}>
-                                            <span>{{ user_trans(type.full_name) }}</span>
+                                            <input type="checkbox" name="format" value="{{ f.code }}"
+                                                   {% if f.code in selected_formats %}checked{% endif %}>
+                                            <span>{{ f.label }}</span>
                                         </label>
                                     {% endfor %}
                                 </div>
@@ -459,12 +481,15 @@
                 <div class="filter-row selected-row">
                     <span class="filter-label">{{ _('Selected') }}</span>
                     <div class="chip-list" id="active-chips">
-                        {% set has_chip = (category is not none) or selected_types or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text or hide_solved %}
+                        {% set has_chip = (category is not none) or selected_types or selected_formats or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text or hide_solved %}
                         {% if category is not none %}
                             {% for group in categories %}{% if group.id == category %}
                                 <span class="chip">{{ group.full_name }}<button type="button" data-field="category" aria-label="{{ _('Remove') }}">&times;</button></span>
                             {% endif %}{% endfor %}
                         {% endif %}
+                        {% for f in format_types %}{% if f.code in selected_formats %}
+                            <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
+                        {% endif %}{% endfor %}
                         {% for type in problem_types %}{% if type.id in selected_types %}
                             <span class="chip">{{ user_trans(type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}

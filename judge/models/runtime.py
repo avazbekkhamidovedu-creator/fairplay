@@ -92,6 +92,16 @@ class Language(models.Model):
         # We really need a default language, and this app is in Python 3
         return Language.objects.get_or_create(key='PY3', defaults={'name': 'Python 3'})[0]
 
+    @classmethod
+    def get_answer_language(cls):
+        # Sentinel, executor-less language assigned to non-code (internally graded) submissions
+        # such as multiple-choice. ace='' / pygments='text' render plaintext without crashing.
+        return Language.objects.get_or_create(
+            key='ANSWER',
+            defaults={'name': 'Answer', 'short_name': 'ANS', 'common_name': 'Answer',
+                      'ace': '', 'pygments': 'text', 'extension': 'txt'},
+        )[0]
+
     def get_absolute_url(self):
         return reverse('runtime_list') + '#' + self.key
 

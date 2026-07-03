@@ -61,7 +61,7 @@
 
 
 
-{% if form %}
+{% if form and submission_type == 'C' %}
 <script type="text/javascript" src="{{ ACE_URL }}/ace.js"></script>
 {{ form.media.js }}
 {% compress js %}
@@ -478,9 +478,13 @@
                 {% if num_open_tickets %}<span class="badge">{{ num_open_tickets }}</span>{% endif %}
             </a>
         </div>
-        <div><a href="{{ url('admin:judge_problem_change', problem.id) }}">{{ _('Edit problem') }}</a></div>
-        {% if not problem.is_manually_managed %}
-            <div><a href="{{ url('problem_data', problem.code) }}">{{ _('Edit test data') }}</a></div>
+        {% if problem.submission_type == 'M' %}
+            <div><a href="{{ url('problem_mcq_edit', problem.code) }}">{{ _('Edit question') }}</a></div>
+        {% else %}
+            <div><a href="{{ url('admin:judge_problem_change', problem.id) }}">{{ _('Edit problem') }}</a></div>
+            {% if not problem.is_manually_managed %}
+                <div><a href="{{ url('problem_data', problem.code) }}">{{ _('Edit test data') }}</a></div>
+            {% endif %}
         {% endif %}
     {% elif request.user.is_authenticated and has_tickets %}
         <hr>
@@ -643,7 +647,12 @@
 {% endblock %}
 
 {% block submission_area %}
-{% if form %}
+{% if form and submission_type == 'M' %}
+<div id="submission-area">
+    <h3>{{ _('Submit solution') }}</h3>
+    {% include "problem/submit/_mcq.html" %}
+</div>
+{% elif form %}
 <div id="submission-area">
     <h3>{{ _('Submit solution') }}</h3>
     {% if not no_judges %}

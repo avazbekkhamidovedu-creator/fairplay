@@ -19,8 +19,9 @@ from judge.models.profile import Class, Organization, Profile
 from judge.models.runtime import Language
 from judge.user_translations import gettext as user_gettext
 
-__all__ = ['ProblemGroup', 'ProblemType', 'Problem', 'ProblemTranslation', 'ProblemClarification', 'License',
-           'Solution', 'SubmissionSourceAccess', 'TranslatedProblemQuerySet', 'ProblemTemplate']
+__all__ = ['ProblemGroup', 'ProblemType', 'Problem', 'ProblemSubmissionType', 'ProblemTranslation',
+           'ProblemClarification', 'License', 'Solution', 'SubmissionSourceAccess', 'TranslatedProblemQuerySet',
+           'ProblemTemplate']
 
 
 def disallowed_characters_validator(text):
@@ -28,6 +29,25 @@ def disallowed_characters_validator(text):
     if common_disallowed_characters:
         raise ValidationError(_('Disallowed characters: %(value)s'),
                               params={'value': ''.join(common_disallowed_characters)})
+
+
+class ProblemSubmissionType:
+    """Discriminator for how a problem is answered and graded.
+
+    CODE submissions route to the judge bridge (today's behavior). All other types are graded
+    internally (auto or manual) without the judge server. Default is CODE for backward-compat.
+    """
+    CODE = 'C'
+    MCQ = 'M'
+    FILL_BLANK = 'B'
+    FILE = 'F'
+
+    CHOICES = (
+        (CODE, _('Code')),
+        (MCQ, _('Multiple choice')),
+        (FILL_BLANK, _('Fill in the blank')),
+        (FILE, _('File upload')),
+    )
 
 
 class ProblemType(models.Model):
@@ -155,6 +175,10 @@ class Problem(models.Model):
     is_public = models.BooleanField(verbose_name=_('publicly visible'), db_index=True, default=False)
     is_manually_managed = models.BooleanField(verbose_name=_('manually managed'), db_index=True, default=False,
                                               help_text=_('Whether judges should be allowed to manage data or not.'))
+    submission_type = models.CharField(verbose_name=_('submission type'), max_length=1, db_index=True,
+                                       default=ProblemSubmissionType.CODE, choices=ProblemSubmissionType.CHOICES,
+                                       help_text=_('How this problem is answered and graded. Code problems route to '
+                                                   'the judge; other types are graded internally.'))
     date = models.DateTimeField(verbose_name=_('date of publishing'), null=True, blank=True, db_index=True,
                                 help_text=_(
                                     "Doesn't have the magic ability to auto-publish due to backward compatibility."))
@@ -196,8 +220,9 @@ class Problem(models.Model):
         self._i18n_name = None
         self.__original_code = self.code
 
-    # Problem types whose name marks the answer format; everything else is treated
-    # as a knowledge point / tag in the redesigned problem list.
+    # Problem types whose name marks the answer format. With multi-type, the answer format is
+    # carried by the authoritative submission_type discriminator, not a ProblemType tag; these
+    # names are kept only to keep any legacy format-named rows out of the knowledge points.
     FORMAT_TYPE_NAMES = ('code', 'fill_in_blank', 'multiple_choices')
 
     # Problem types whose name marks the difficulty level, ordered from easiest to hardest.
@@ -210,11 +235,14 @@ class Problem(models.Model):
 
     @cached_property
     def format_types_list(self):
-        return [user_gettext(t.full_name) for t in self.types.all()
-                if t.name in Problem.FORMAT_TYPE_NAMES]
+        # The answer format is the authoritative submission_type, not a ProblemType tag.
+        label = dict(ProblemSubmissionType.CHOICES).get(self.submission_type)
+        return [label] if label else []
 
     @cached_property
     def knowledge_types_list(self):
+        # Format is carried by submission_type and difficulty is surfaced separately, so every
+        # remaining ProblemType row is a knowledge point.
         return [user_gettext(t.full_name) for t in self.types.all()
                 if t.name not in Problem.FORMAT_TYPE_NAMES
                 and t.name not in Problem.DIFFICULTY_TYPE_NAMES]
