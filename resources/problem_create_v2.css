@@ -202,6 +202,13 @@ fieldset.module .form-content { padding: 1rem; }
   border-radius: 3px;
   font-size: 13px;
 }
+.v2-left fieldset.module { width: 100%; box-sizing: border-box; }
+.v2-left .form-row .field input[type="text"],
+.v2-left .form-row .field input[type="number"],
+.v2-left .form-row .field select,
+.v2-left .form-row .field textarea,
+.v2-left .stem-block .rich-editor,
+.v2-left .options-list { max-width: none; width: 100%; }
 .form-row textarea { min-height: 120px; font-family: monospace; }
 .form-row .help { font-size: 12px; color: var(--muted); margin-top: 0.25rem; }
 .form-row .checkbox-list label { display: block; font-weight: normal; width: auto; }
@@ -415,19 +422,25 @@ fieldset.module .form-content { padding: 1rem; }
   cursor: pointer;
   font-weight: 500;
   font-size: 13px;
+  display: flex;
+  align-items: stretch;
 }
 .segment-group input { display: none; }
 .segment-group span {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0.45rem 1rem;
   border-right: 1px solid var(--admin-border);
   transition: background 0.15s, color 0.15s;
   user-select: none;
+  white-space: nowrap;
 }
 .segment-group label:last-child span { border-right: none; }
 .segment-group input:checked + span {
   background: var(--dmoj-green);
   color: #fff;
+  font-weight: 600;
 }
 .segment-group.sm span { padding: 0.35rem 0.75rem; font-size: 12px; }
 
@@ -514,6 +527,33 @@ fieldset.module .form-content { padding: 1rem; }
   min-width: 28px;
 }
 .rich-toolbar button:hover { background: #eee; border-color: #ccc; }
+.rich-toolbar button.active {
+  background: var(--dmoj-green);
+  border-color: var(--dmoj-green-dark);
+  color: #fff;
+}
+.rich-toolbar button.active.hl-btn span { background: rgba(255,255,255,0.35); color: inherit; }
+.rte-link-popover {
+  position: absolute;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.55rem;
+  background: #fff;
+  border: 1px solid var(--admin-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+}
+.rte-link-popover.hidden { display: none; }
+.rte-link-popover input[type="url"] {
+  width: 220px;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #aaa;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.rte-link-popover .btn { padding: 0.3rem 0.55rem; font-size: 12px; }
 .rich-editor-body {
   min-height: 200px;
   padding: 0.75rem 1rem;
@@ -571,6 +611,7 @@ fieldset.module .form-content { padding: 1rem; }
   border: 1px solid #e0e0e0;
   border-radius: 6px;
 }
+.option-row .option-top { width: 100%; }
 .option-row .option-marker {
   display: flex;
   align-items: center;

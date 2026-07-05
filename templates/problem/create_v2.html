@@ -139,7 +139,8 @@
           <div class="form-row">
             <label>Organizations</label>
             <div class="field">
-              <select id="f-org" multiple style="min-height:64px;">
+              <select id="f-org">
+                <option value="">— {{ _('None') }} —</option>
                 {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
               </select>
               <div class="help">留空则为公开题（需相应权限）；选择组织后为该组织私有</div>
@@ -149,7 +150,7 @@
             <label>Problem group <span class="req">*</span></label>
             <div class="field">
               <select id="f-group">
-                {% for g in groups %}<option value="{{ g.id }}">{{ g.full_name or g.name }}</option>{% endfor %}
+                {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
               </select>
             </div>
           </div>
@@ -245,7 +246,7 @@
                       <button type="button" data-cmd="code" title="代码">{ }</button>
                       <span class="sep"></span>
                       <button type="button" data-cmd="image" title="图片">🖼</button>
-                      <button type="button" data-cmd="link" title="链接">🔗</button>
+                      <button type="button" data-cmd="link" class="rte-link-btn" title="链接">🔗</button>
                       <button type="button" data-cmd="math" title="插入公式">Σ</button>
                       <button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;">▭</button>
                     </div>
@@ -376,18 +377,7 @@
         </div>
       </fieldset>
 
-      <!-- ④ 编程题：Creation preset -->
-      <fieldset class="module type-panel" data-for="programming" style="display:none;">
-        <h2>Creation preset</h2>
-        <div class="form-content">
-          <div class="form-row">
-            <label>Preset</label>
-            <div class="field"><select id="preset" style="max-width:200px;"><option selected>Default</option><option>Custom</option></select><div class="help">修改高级字段后自动变为 Custom</div></div>
-          </div>
-        </div>
-      </fieldset>
-
-      <!-- ⑤ Advanced 折叠 -->
+      <!-- ④ 编程题：Creation preset 已移入 Advanced -->
       <p style="margin:1rem 0;">
         <button type="button" class="btn" id="advanced-btn" onclick="toggleAdvanced()">Advanced</button>
         <span style="font-size:12px;color:var(--muted);margin-left:0.5rem;">高级设置（按题型展示对应字段）</span>
@@ -396,6 +386,7 @@
         <fieldset class="module">
           <h2>Advanced</h2>
           <div class="form-content">
+            <div class="form-row type-panel" data-for="programming"><label>Creation preset</label><div class="field"><select id="preset" style="max-width:200px;"><option selected>Default</option><option>Custom</option></select><div class="help">修改高级字段后自动变为 Custom</div></div></div>
             <div class="form-row"><label>Code</label><div class="field"><input type="text" id="f-code" value="" placeholder="保存时自动生成 p000000" readonly><div class="help">题目唯一代号，由后端自动生成</div></div></div>
             <div class="form-row"><label>Is public</label><div class="field"><input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}><div class="help">{% if can_change_public %}{{ _('Visible to everyone when no organization is selected') }}{% else %}{{ _('You cannot make problems public without organization scope') }}{% endif %}</div></div></div>
             <div class="form-row"><label>Is manually managed</label><div class="field"><input type="checkbox"><div class="help">勾选后无法使用 test_data 页面</div></div></div>
@@ -481,6 +472,11 @@
 
     <div id="save-toast" style="display:none;position:fixed;left:50%;bottom:2rem;transform:translateX(-50%);background:var(--dmoj-green);color:#fff;padding:0.6rem 1.2rem;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.2);z-index:300;font-size:14px;"></div>
     <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="onImgPicked(event)">
+    <div id="rte-link-popover" class="rte-link-popover hidden">
+      <input type="url" id="rte-link-url" placeholder="https://">
+      <button type="button" class="btn btn-primary" id="rte-link-apply">应用</button>
+      <button type="button" class="btn" id="rte-link-remove">移除</button>
+    </div>
   </main>
 
   <!-- problem_type 选择 / 新建弹窗（沿用 add.html） -->
@@ -495,19 +491,21 @@
         <div id="ptype-new-form" style="display:none;margin-top:0.75rem;padding-top:0.75rem;border-top:1px dashed var(--admin-border);">
           <div style="font-weight:600;font-size:13px;margin-bottom:0.5rem;">新建 problem_type</div>
           <div style="display:flex;flex-direction:column;gap:0.5rem;">
-            <label style="font-size:12px;">类别 ID（≤20）
-              <input type="text" id="nt-name" maxlength="20" placeholder="如 dp" style="width:100%;padding:0.4rem;margin-top:2px;border:1px solid #aaa;border-radius:4px;">
+            <label style="font-size:12px;">类别 ID / 名称（填一项即可，另一项默认同值）
+              <input type="text" id="nt-name" maxlength="100" placeholder="如 dp 或 Dynamic Programming" style="width:100%;padding:0.4rem;margin-top:2px;border:1px solid #aaa;border-radius:4px;">
             </label>
-            <label style="font-size:12px;">类别名称（≤100）
-              <input type="text" id="nt-full" maxlength="100" placeholder="如 Dynamic Programming / 动态规划" style="width:100%;padding:0.4rem;margin-top:2px;border:1px solid #aaa;border-radius:4px;">
-            </label>
-            <div>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
               <button type="button" class="btn btn-primary" onclick="createNewType()">添加</button>
+              <button type="button" class="btn" onclick="runAIProblemType(true)">🤖 AI 推荐</button>
               <button type="button" class="btn" onclick="toggleNewTypeForm(false)">取消</button>
             </div>
+            <div id="ptype-ai-result" style="font-size:12px;color:var(--muted);"></div>
           </div>
         </div>
-        <button type="button" class="btn-add-option" style="width:100%;margin-top:0.75rem;display:none;" id="ptype-new-btn" onclick="toggleNewTypeForm(true)">+ {{ _('New problem type') }}</button>
+        <button type="button" class="btn-add-option" style="width:100%;margin-top:0.75rem;" id="ptype-new-btn" onclick="toggleNewTypeForm(true)">+ {{ _('New problem type') }}</button>
+        <div style="margin-top:0.75rem;">
+          <button type="button" class="btn" style="width:100%;" onclick="runAIProblemType(false)">🤖 {{ _('AI suggest types from problem content') }}</button>
+        </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:0.5rem;padding:0.75rem 1.25rem;border-top:1px solid var(--admin-border);">
         <button type="button" class="btn" onclick="closeTypeModal()">取消</button>
@@ -519,6 +517,8 @@
   <script>
     const SAVE_URL = '{{ save_url }}';
     const AI_DIFFICULTY_URL = '{{ ai_difficulty_url }}';
+    const CREATE_PROBLEM_TYPE_URL = '{{ create_problem_type_url }}';
+    const AI_PROBLEM_TYPE_URL = '{{ ai_problem_type_url }}';
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
@@ -576,24 +576,76 @@
 
     /* ---------- problem_type 选择（来自数据库） ---------- */
     function allTypes() { return SERVER_PROBLEM_TYPES.slice(); }
+    function pushServerType(entry) {
+      if (!SERVER_PROBLEM_TYPES.some(t => t.name === entry.name)) SERVER_PROBLEM_TYPES.push(entry);
+    }
     function currentManualTags() {
       return [...document.querySelectorAll('#f-types .ptype-tag:not(.auto)')].map(t => t.childNodes[0].textContent.trim());
     }
-    function openTypeModal() { renderTypeOptions(); toggleNewTypeForm(false); document.getElementById('ptype-modal').classList.remove('hidden'); }
+    function openTypeModal() { renderTypeOptions(); toggleNewTypeForm(false); document.getElementById('ptype-ai-result').textContent = ''; document.getElementById('ptype-modal').classList.remove('hidden'); }
     function closeTypeModal() { document.getElementById('ptype-modal').classList.add('hidden'); }
     function renderTypeOptions() {
       const selected = new Set(currentManualTags());
       document.getElementById('ptype-options').innerHTML = allTypes().map(t => `
         <label style="display:flex;align-items:center;gap:0.5rem;font-size:13px;padding:0.35rem 0.5rem;border:1px solid var(--admin-border);border-radius:5px;cursor:pointer;">
-          <input type="checkbox" value="${t.full}" ${selected.has(t.full) ? 'checked' : ''}>
+          <input type="checkbox" value="${t.full}" data-name="${t.name}" ${selected.has(t.full) ? 'checked' : ''}>
           <span>${t.full} <span style="color:var(--muted);font-size:11px;">(${t.name})</span></span>
         </label>`).join('');
     }
     function toggleNewTypeForm(show) {
-      document.getElementById('ptype-new-form').style.display = 'none';
-      document.getElementById('ptype-new-btn').style.display = 'none';
+      document.getElementById('ptype-new-form').style.display = show ? 'block' : 'none';
+      document.getElementById('ptype-new-btn').style.display = show ? 'none' : 'block';
+      if (show) document.getElementById('nt-name').focus();
     }
-    function createNewType() { alert('{{ _("Creating new problem types is only available in admin.") }}'); }
+    function createNewType() {
+      const raw = document.getElementById('nt-name').value.trim();
+      if (!raw) { showToast('{{ _("Please enter a category ID or name.") }}', false); return; }
+      fetch(CREATE_PROBLEM_TYPE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify({ name: raw.length <= 20 ? raw : '', full_name: raw }),
+      }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+        if (!ok) { showToast(body.error || '{{ _("Failed to create problem type") }}', false); return; }
+        pushServerType(body.type);
+        renderTypeOptions();
+        const box = document.getElementById('f-types');
+        const el = document.createElement('span');
+        el.className = 'ptype-tag';
+        el.innerHTML = body.type.full + ' <span class="x" onclick="this.parentElement.remove()">×</span>';
+        box.insertBefore(el, box.querySelector('.ptype-add'));
+        document.getElementById('nt-name').value = '';
+        toggleNewTypeForm(false);
+        showToast('{{ _("Problem type created") }}', true);
+      }).catch(() => showToast('{{ _("Network error") }}', false));
+    }
+    function runAIProblemType(fillInput) {
+      const description = getMd('stem');
+      if (!description.trim()) { showToast('{{ _("Please enter problem content first.") }}', false); return; }
+      const target = fillInput ? document.getElementById('ptype-ai-result') : document.getElementById('ptype-options');
+      if (fillInput) target.textContent = '{{ _("Analyzing…") }}';
+      fetch(AI_PROBLEM_TYPE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify({ description }),
+      }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+        if (!ok) { showToast(body.error || '{{ _("AI suggestion failed") }}', false); if (fillInput) target.textContent = ''; return; }
+        const suggestions = body.suggestions || [];
+        if (fillInput) {
+          if (!suggestions.length) { target.textContent = '{{ _("No suggestion") }}'; return; }
+          const s = suggestions[0];
+          document.getElementById('nt-name').value = s.full || s.name;
+          target.innerHTML = suggestions.map(x => `<button type="button" class="btn" style="margin:0.2rem 0.3rem 0 0;padding:.2rem .5rem;font-size:11px;" onclick="document.getElementById('nt-name').value='${(x.full || x.name).replace(/'/g, "\\'")}'">${x.full || x.name}</button>`).join('');
+          return;
+        }
+        suggestions.forEach(s => pushServerType({ name: s.name, full: s.full || s.name }));
+        renderTypeOptions();
+        suggestions.forEach(s => {
+          const cb = [...document.querySelectorAll('#ptype-options input')].find(i => i.dataset.name === s.name || i.value === (s.full || s.name));
+          if (cb) cb.checked = true;
+        });
+        showToast('{{ _("AI suggestions applied — confirm selection") }}', true);
+      }).catch(() => showToast('{{ _("Network error") }}', false));
+    }
     function applyTypeSelection() {
       const chosen = [...document.querySelectorAll('#ptype-options input:checked')].map(i => i.value);
       const box = document.getElementById('f-types');
@@ -661,6 +713,8 @@
     }
 
     /* ---------- 编辑器（需求3：可复用 + Markdown 互转 + 公式）---------- */
+    let linkPopoverEditor = null;
+    let mdLinkTarget = null;
     function initEditors() {
       document.querySelectorAll('.rich-editor').forEach(editor => {
         if (editor.dataset.bound) return;
@@ -678,38 +732,204 @@
             renderPreview();
           });
         });
-        if (rich) rich.addEventListener('input', () => { ta.value = htmlToMd(rich.innerHTML); renderPreview(); });
+        if (rich) {
+          rich.addEventListener('input', () => { ta.value = htmlToMd(rich.innerHTML); renderPreview(); });
+          rich.addEventListener('keyup', () => updateToolbarState(editor));
+          rich.addEventListener('mouseup', () => updateToolbarState(editor));
+        }
         if (ta) ta.addEventListener('input', renderPreview);
         editor.querySelectorAll('.rich-toolbar button[data-cmd]').forEach(btn => {
-          btn.addEventListener('click', () => applyFormat(editor, btn.dataset.cmd));
+          btn.addEventListener('click', () => applyFormat(editor, btn.dataset.cmd, btn));
         });
         const headSel = editor.querySelector('.rte-heading');
         if (headSel) headSel.addEventListener('change', () => applyFormat(editor, headSel.value));
       });
     }
-    function applyFormat(editor, cmd) {
+    function selectionNode(area) {
+      const sel = window.getSelection();
+      if (!sel.rangeCount || !area) return null;
+      let n = sel.anchorNode;
+      if (!n) return null;
+      if (n.nodeType === 3) n = n.parentElement;
+      return area.contains(n) ? n : null;
+    }
+    function selectionInTag(area, tag) {
+      const n = selectionNode(area);
+      return n ? !!n.closest(tag) : false;
+    }
+    function unwrapTagFromSelection(area, tag) {
+      const n = selectionNode(area);
+      const el = n && n.closest(tag);
+      if (!el || !area.contains(el)) return;
+      const parent = el.parentNode;
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+    }
+    function updateToolbarState(editor) {
+      if (!editor || editor.classList.contains('mode-markdown')) return;
+      const area = editor.querySelector('.rich-editor-body');
+      if (!area || !selectionNode(area)) return;
+      editor.querySelectorAll('.rich-toolbar button[data-cmd]').forEach(btn => {
+        const cmd = btn.dataset.cmd;
+        let active = false;
+        switch (cmd) {
+          case 'bold': active = document.queryCommandState('bold'); break;
+          case 'italic': active = document.queryCommandState('italic'); break;
+          case 'highlight': active = selectionInTag(area, 'mark'); break;
+          case 'ul': active = document.queryCommandState('insertUnorderedList'); break;
+          case 'ol': active = document.queryCommandState('insertOrderedList'); break;
+          case 'quote': active = selectionInTag(area, 'blockquote'); break;
+          case 'code': active = selectionInTag(area, 'code'); break;
+          case 'link': active = selectionInTag(area, 'a'); break;
+        }
+        btn.classList.toggle('active', !!active);
+      });
+      const headSel = editor.querySelector('.rte-heading');
+      if (headSel) {
+        const block = selectionNode(area)?.closest('h1,h2,h3,p,blockquote');
+        if (block) {
+          const map = { H1: 'h1', H2: 'h2', H3: 'h3', P: 'p', BLOCKQUOTE: 'quote' };
+          headSel.value = map[block.tagName] || 'p';
+        }
+      }
+    }
+    document.addEventListener('selectionchange', () => {
+      const sel = window.getSelection();
+      if (!sel.rangeCount) return;
+      let n = sel.anchorNode;
+      if (!n) return;
+      if (n.nodeType === 3) n = n.parentElement;
+      const area = n.closest('.rich-editor-body');
+      if (area) updateToolbarState(area.closest('.rich-editor'));
+    });
+    function showLinkPopover(editor, btn) {
+      linkPopoverEditor = editor;
+      const pop = document.getElementById('rte-link-popover');
+      const area = editor.querySelector('.rich-editor-body');
+      area.focus();
+      const existing = selectionNode(area)?.closest('a');
+      document.getElementById('rte-link-url').value = existing ? (existing.getAttribute('href') || '') : 'https://';
+      const rect = btn.getBoundingClientRect();
+      pop.classList.remove('hidden');
+      pop.style.left = Math.max(8, rect.left) + 'px';
+      pop.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+      document.getElementById('rte-link-url').focus();
+    }
+    function hideLinkPopover() {
+      document.getElementById('rte-link-popover').classList.add('hidden');
+      linkPopoverEditor = null;
+      mdLinkTarget = null;
+    }
+    function applyLinkFromPopover() {
+      const url = document.getElementById('rte-link-url').value.trim();
+      if (mdLinkTarget) {
+        if (url) applyMarkdown(mdLinkTarget, 'link', url);
+        mdLinkTarget.focus();
+        mdLinkTarget.dispatchEvent(new Event('input'));
+        mdLinkTarget = null;
+        hideLinkPopover();
+        return;
+      }
+      if (!linkPopoverEditor) return;
+      const editor = linkPopoverEditor;
+      const area = editor.querySelector('.rich-editor-body');
+      area.focus();
+      if (!url) { hideLinkPopover(); return; }
+      if (selectionInTag(area, 'a')) {
+        const a = selectionNode(area).closest('a');
+        a.setAttribute('href', url);
+      } else {
+        document.execCommand('createLink', false, url);
+      }
+      hideLinkPopover();
+      area.dispatchEvent(new Event('input'));
+      updateToolbarState(editor);
+    }
+    function removeLinkFromPopover() {
+      if (!linkPopoverEditor) return;
+      const area = linkPopoverEditor.querySelector('.rich-editor-body');
+      area.focus();
+      if (selectionInTag(area, 'a')) unwrapTagFromSelection(area, 'a');
+      else document.execCommand('unlink');
+      hideLinkPopover();
+      area.dispatchEvent(new Event('input'));
+    }
+    (function initLinkPopover() {
+      document.getElementById('rte-link-apply').addEventListener('click', applyLinkFromPopover);
+      document.getElementById('rte-link-remove').addEventListener('click', removeLinkFromPopover);
+      document.getElementById('rte-link-url').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); applyLinkFromPopover(); }
+        if (e.key === 'Escape') hideLinkPopover();
+      });
+      document.addEventListener('click', (e) => {
+        const pop = document.getElementById('rte-link-popover');
+        if (pop.classList.contains('hidden')) return;
+        if (e.target.closest('#rte-link-popover') || e.target.closest('.rte-link-btn')) return;
+        hideLinkPopover();
+      });
+    })();
+    function applyFormat(editor, cmd, btn) {
       if (cmd === 'image') { pickImage(editor); return; }
+      if (cmd === 'link') {
+        if (editor.classList.contains('mode-markdown')) {
+          const ta = editor.querySelector('.rich-editor-markdown textarea');
+          showLinkPopoverMarkdown(ta, btn);
+          return;
+        }
+        showLinkPopover(editor, btn);
+        return;
+      }
       const isMd = editor.classList.contains('mode-markdown');
       if (isMd) { const ta = editor.querySelector('.rich-editor-markdown textarea'); applyMarkdown(ta, cmd); ta.focus(); ta.dispatchEvent(new Event('input')); return; }
       const area = editor.querySelector('.rich-editor-body');
       area.focus();
       switch (cmd) {
-        case 'bold': document.execCommand('bold'); break;
-        case 'italic': document.execCommand('italic'); break;
-        case 'highlight': document.execCommand('hiliteColor', false, '#fde68a'); break;
+        case 'bold':
+          document.execCommand('bold');
+          break;
+        case 'italic':
+          document.execCommand('italic');
+          break;
+        case 'highlight':
+          if (selectionInTag(area, 'mark')) unwrapTagFromSelection(area, 'mark');
+          else wrapInline('mark');
+          break;
         case 'heading': case 'h3': document.execCommand('formatBlock', false, 'h3'); break;
         case 'h1': document.execCommand('formatBlock', false, 'h1'); break;
         case 'h2': document.execCommand('formatBlock', false, 'h2'); break;
         case 'p': document.execCommand('formatBlock', false, 'p'); break;
-        case 'ul': document.execCommand('insertUnorderedList'); break;
-        case 'ol': document.execCommand('insertOrderedList'); break;
-        case 'quote': document.execCommand('formatBlock', false, 'blockquote'); break;
-        case 'code': wrapInline('code'); break;
-        case 'link': { const u = prompt('链接 URL'); if (u) document.execCommand('createLink', false, u); break; }
+        case 'ul':
+          if (document.queryCommandState('insertUnorderedList')) document.execCommand('insertUnorderedList');
+          else document.execCommand('insertUnorderedList');
+          break;
+        case 'ol':
+          if (document.queryCommandState('insertOrderedList')) document.execCommand('insertOrderedList');
+          else document.execCommand('insertOrderedList');
+          break;
+        case 'quote':
+          if (selectionInTag(area, 'blockquote')) document.execCommand('formatBlock', false, 'p');
+          else document.execCommand('formatBlock', false, 'blockquote');
+          break;
+        case 'code':
+          if (selectionInTag(area, 'code')) unwrapTagFromSelection(area, 'code');
+          else wrapInline('code');
+          break;
         case 'math': document.execCommand('insertText', false, '$x^2 + y^2 = z^2$'); break;
         case 'blank': document.execCommand('insertText', false, '{{blank}}'); break;
       }
       area.dispatchEvent(new Event('input'));
+      updateToolbarState(editor);
+    }
+    function showLinkPopoverMarkdown(ta, btn) {
+      mdLinkTarget = ta;
+      const pop = document.getElementById('rte-link-popover');
+      const rect = btn.getBoundingClientRect();
+      document.getElementById('rte-link-url').value = 'https://';
+      pop.classList.remove('hidden');
+      pop.style.left = Math.max(8, rect.left) + 'px';
+      pop.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+      document.getElementById('rte-link-url').focus();
+      linkPopoverEditor = null;
     }
     let pendingImgEditor = null;
     function pickImage(editor) { pendingImgEditor = editor; const input = document.getElementById('img-file'); input.value = ''; input.click(); }
@@ -737,7 +957,7 @@
       const range = sel.getRangeAt(0); const el = document.createElement(tag);
       el.appendChild(range.extractContents()); range.insertNode(el); sel.removeAllRanges();
     }
-    function applyMarkdown(ta, cmd) {
+    function applyMarkdown(ta, cmd, linkUrl) {
       const s = ta.selectionStart, e = ta.selectionEnd, sel = ta.value.slice(s, e);
       const wrap = (pre, post, ph) => { const txt = sel || ph; ta.value = ta.value.slice(0, s) + pre + txt + post + ta.value.slice(e); };
       const linePrefix = (pre) => { const ls = ta.value.lastIndexOf('\n', s - 1) + 1; ta.value = ta.value.slice(0, ls) + pre + ta.value.slice(ls); };
@@ -753,7 +973,7 @@
         case 'ul': linePrefix('- '); break;
         case 'ol': linePrefix('1. '); break;
         case 'math': wrap('$', '$', 'x^2'); break;
-        case 'link': { const u = prompt('链接 URL') || 'https://'; wrap('[', '](' + u + ')', '文字'); break; }
+        case 'link': { const u = linkUrl || 'https://'; wrap('[', '](' + u + ')', '文字'); break; }
         case 'blank': ta.value = ta.value.slice(0, s) + '{{blank}}' + ta.value.slice(e); break;
       }
     }
@@ -818,22 +1038,55 @@
       return restoreMath(s, math);
     }
 
-    /* ---------- 选项 ---------- */
+    /* ---------- 选项（富文本 / Markdown） ---------- */
+    function optionEditorTpl(name) {
+      return `<div class="rich-editor mode-rich compact" data-editor="${name}">
+        <div class="rich-editor-toolbar-row">
+          <div class="editor-mode-tabs">
+            <button type="button" class="mode-btn active" data-mode="rich">富文本</button>
+            <button type="button" class="mode-btn" data-mode="markdown">Markdown</button>
+          </div>
+          <div class="rich-toolbar">
+            <button type="button" data-cmd="bold" title="加粗"><b>B</b></button>
+            <button type="button" data-cmd="italic" title="斜体"><i>I</i></button>
+            <button type="button" data-cmd="highlight" class="hl-btn" title="高亮"><span>A</span></button>
+            <button type="button" data-cmd="code" title="代码">{ }</button>
+            <button type="button" data-cmd="math" title="公式">Σ</button>
+            <button type="button" data-cmd="image" title="图片">🖼</button>
+            <button type="button" data-cmd="link" class="rte-link-btn" title="链接">🔗</button>
+          </div>
+        </div>
+        <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="请输入选项内容（支持 $公式$）"></div></div>
+        <div class="rich-editor-markdown"><textarea placeholder="支持 Markdown 与 $公式$…"></textarea></div>
+      </div>`;
+    }
+    function getOptionText(row) {
+      const ed = row.querySelector('.rich-editor');
+      if (!ed) return row.querySelector('.option-input')?.value || '';
+      return getMd(ed.dataset.editor);
+    }
+    function setOptionText(row, value) {
+      const ed = row.querySelector('.rich-editor');
+      if (!ed) { const inp = row.querySelector('.option-input'); if (inp) inp.value = value || ''; return; }
+      ed.querySelector('.rich-editor-body').innerHTML = mdToHtml(value || '');
+      ed.querySelector('textarea').value = value || '';
+    }
     function addOption(value) {
       const isMulti = currentType === 'multiple';
+      const id = ++optionSeq;
+      const name = 'opt-' + id;
       const row = document.createElement('div');
       row.className = 'option-row';
       row.innerHTML = `
         <div class="option-marker"><input type="${isMulti ? 'checkbox' : 'radio'}" name="correct" onchange="renderPreview()"></div>
         <div>
-          <div class="option-top">
-            <span class="drag">⠿</span>
-            <input class="option-input" placeholder="请输入选项内容（支持 $公式$）" value="${value || ''}" oninput="renderPreview()">
-          </div>
-          <div style="font-size:11px;color:var(--muted);margin-top:0.3rem;padding-left:1.3rem;">勾选左侧圆点设为正确答案</div>
+          <div class="option-top">${optionEditorTpl(name)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:0.3rem;">勾选左侧圆点设为正确答案</div>
         </div>
         <div class="option-actions"><button type="button" class="btn-icon" title="删除" onclick="delOption(this)">×</button></div>`;
       document.getElementById('options').appendChild(row);
+      initEditors();
+      if (value) setOptionText(row, value);
       renderPreview();
     }
     function delOption(btn) {
@@ -1010,7 +1263,7 @@
     function renderOptsPreview(sel, multi) {
       let h = '<div class="pv-options">';
       document.querySelectorAll(sel + ' .option-row').forEach(op => {
-        const txt = mdToHtml(op.querySelector('.option-input').value) || '选项';
+        const txt = mdToHtml(getOptionText(op)) || '选项';
         const ok = op.querySelector('.option-marker input').checked;
         h += `<div class="pv-option"><span class="mk ${multi ? 'sq' : ''} ${ok ? 'on' : ''}"></span><span>${txt}</span></div>`;
       });
@@ -1043,7 +1296,7 @@
         action: 'save',
         type: currentType, typeLabel: TYPE_META[currentType].title,
         name: document.getElementById('f-name').value.trim(),
-        organizations: [...document.getElementById('f-org').selectedOptions].map(o => parseInt(o.value, 10)).filter(Boolean),
+        organizations: (() => { const v = document.getElementById('f-org').value; return v ? [parseInt(v, 10)] : []; })(),
         group_id: document.getElementById('f-group').value,
         points: document.getElementById('f-points').value,
         is_public: document.getElementById('f-public').checked,
@@ -1055,7 +1308,7 @@
       };
       if (currentType === 'single' || currentType === 'multiple') {
         data.multiple = currentType === 'multiple';
-        data.options = [...document.querySelectorAll('#options .option-row')].map(op => ({ text: op.querySelector('.option-input').value.trim(), correct: op.querySelector('.option-marker input').checked }));
+        data.options = [...document.querySelectorAll('#options .option-row')].map(op => ({ text: getOptionText(op).trim(), correct: op.querySelector('.option-marker input').checked }));
       } else if (currentType === 'truefalse') {
         data.tfAnswer = document.querySelector('input[name="tf"]:checked').value;
       } else if (currentType === 'short') {

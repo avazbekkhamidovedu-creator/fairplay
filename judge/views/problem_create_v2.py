@@ -16,6 +16,7 @@ The page talks to this view with a single JSON POST (the rich client collects ev
 submits ``application/json``); responses are JSON ``{ok, redirect}`` or ``{error}``.
 """
 import json
+import re
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.files.base import ContentFile
@@ -35,6 +36,11 @@ from judge.utils.problem_create import apply_simple_problem_defaults, default_pr
 
 # Types the redesigned page offers but the backend cannot grade/store yet.
 NOT_IMPLEMENTED_TYPES = {'blank', 'truefalse', 'short', 'compound', 'other'}
+
+
+def _problem_type_code(text):
+    code = re.sub(r'[^\w\-]+', '-', (text or '').strip().lower())[:20].strip('-')
+    return code or 'type'
 
 
 def _can_create_any(user):
@@ -70,8 +76,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
             'can_change_public': user.has_perm('judge.change_public_visibility'),
+            'default_group_id': default_problem_group().id,
             'save_url': reverse('problem_create_v2'),
             'ai_difficulty_url': reverse('problem_create_v2_ai_difficulty'),
+            'create_problem_type_url': reverse('problem_create_v2_problem_type'),
+            'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'problem_list_url': reverse('problem_list'),
         }
 
@@ -302,3 +311,105 @@ class ProblemCreateV2AIDifficultyView(LoginRequiredMixin, View):
         if len(compact) < 240:
             return 'medium'
         return 'hard'
+
+
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+class ProblemCreateV2ProblemTypeView(LoginRequiredMixin, View):
+    """Create a ProblemType from the add-problem page (code and/or display name)."""
+
+    def post(self, request, *args, **kwargs):
+        if not _can_create_any(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': _('Invalid request.')}, status=400)
+
+        name = (payload.get('name') or '').strip()
+        full_name = (payload.get('full_name') or '').strip()
+        if not name and not full_name:
+            return JsonResponse({'error': _('Please enter a category ID or name.')}, status=400)
+        if not name:
+            name = _problem_type_code(full_name)
+        if not full_name:
+            full_name = name
+        if len(name) > 20:
+            return JsonResponse({'error': _('Category ID must be at most 20 characters.')}, status=400)
+        if len(full_name) > 100:
+            return JsonResponse({'error': _('Category name must be at most 100 characters.')}, status=400)
+        if ProblemType.objects.filter(name=name).exists():
+            return JsonResponse({'error': _('This category ID already exists.')}, status=400)
+
+        ptype = ProblemType.objects.create(name=name, full_name=full_name)
+        return JsonResponse({'ok': True, 'type': {'name': ptype.name, 'full': ptype.full_name}})
+
+
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+class ProblemCreateV2AIProblemTypeView(LoginRequiredMixin, View):
+    """Suggest problem_type tags from problem text; uses LLM when configured."""
+
+    def post(self, request, *args, **kwargs):
+        if not _can_create_any(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': _('Invalid request.')}, status=400)
+
+        description = (payload.get('description') or '').strip()
+        if not description:
+            return JsonResponse({'error': _('Please enter problem content first.')}, status=400)
+
+        suggestions = self._suggest(description)
+        return JsonResponse({'suggestions': suggestions})
+
+    def _suggest(self, description):
+        from judge import llm
+
+        existing = list(ProblemType.objects.order_by('full_name', 'name').values('name', 'full_name'))
+        labels = [t['full_name'] or t['name'] for t in existing]
+
+        if llm.is_configured():
+            try:
+                messages = [
+                    {'role': 'system', 'content': (
+                        'You classify competitive-programming / educational problems. '
+                        'Reply with 1-3 short category labels from this list when possible, '
+                        'comma-separated. If none fit, suggest one new short label (≤20 chars). '
+                        'Existing labels: ' + ', '.join(labels[:80])
+                    )},
+                    {'role': 'user', 'content': description[:4000]},
+                ]
+                text = llm.chat(messages, max_tokens=64).text.strip()
+                picked = []
+                for part in text.replace('\n', ',').split(','):
+                    label = part.strip().strip('.')
+                    if not label:
+                        continue
+                    match = next((t for t in existing if label.lower() in (t['full_name'] or '').lower()
+                                  or label.lower() in t['name'].lower()), None)
+                    if match:
+                        picked.append({'name': match['name'], 'full': match['full_name'] or match['name'],
+                                       'existing': True})
+                    elif len(label) <= 100:
+                        code = label[:20].replace(' ', '-').lower()
+                        picked.append({'name': code, 'full': label, 'existing': False})
+                    if len(picked) >= 3:
+                        break
+                if picked:
+                    return picked
+            except Exception:
+                pass
+
+        compact = description.lower()
+        picked = []
+        for t in existing:
+            for token in (t['full_name'] or '', t['name']):
+                if token and token.lower() in compact:
+                    picked.append({'name': t['name'], 'full': t['full_name'] or t['name'], 'existing': True})
+                    break
+            if len(picked) >= 3:
+                break
+        if picked:
+            return picked
+        return [{'name': 'general', 'full': 'General', 'existing': False}]

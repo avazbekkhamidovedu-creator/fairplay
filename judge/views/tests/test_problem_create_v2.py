@@ -109,3 +109,38 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn(response.json()['level'], ('easy', 'medium', 'hard'))
+
+    def test_create_problem_type(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(
+            reverse('problem_create_v2_problem_type'),
+            data=json.dumps({'name': 'graph-theory'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['type']['name'], 'graph-theory')
+        self.assertEqual(body['type']['full'], 'graph-theory')
+
+    def test_create_problem_type_from_display_name_only(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(
+            reverse('problem_create_v2_problem_type'),
+            data=json.dumps({'full_name': 'Dynamic Programming'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['type']['full'], 'Dynamic Programming')
+
+    def test_ai_problem_type_endpoint(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(
+            reverse('problem_create_v2_ai_problem_type'),
+            data=json.dumps({'description': 'Find shortest path in a weighted graph using Dijkstra.'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['suggestions'])
