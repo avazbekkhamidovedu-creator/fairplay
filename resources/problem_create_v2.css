@@ -1000,7 +1000,13 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .rich-toolbar button.active { color: #fff !important; }
 .pcv2 .btn { color: var(--text) !important; }
 .pcv2 .btn-primary,
-.pcv2 .btn.default { color: #fff !important; }
+.pcv2 .btn.default {
+  background: var(--dmoj-green) !important;
+  border-color: var(--dmoj-green-dark) !important;
+  color: #fff !important;
+}
+.pcv2 .btn-primary:hover,
+.pcv2 .btn.default:hover { background: var(--dmoj-green-dark) !important; }
 .pcv2 .btn-secondary { color: #fff !important; }
 .pcv2 .btn-cancel { color: var(--danger) !important; }
 .pcv2 .btn-icon { color: var(--muted) !important; }
