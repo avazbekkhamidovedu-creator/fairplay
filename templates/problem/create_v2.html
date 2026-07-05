@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ _('Add problem') }} — DKUOJ</title>
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260706">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260706b">
 
   <!-- 需求3：数学公式真正可预览 -->
   <script>
@@ -225,34 +225,7 @@
               <!-- 题干 / 主题干 -->
               <div class="stem-block">
                 <label class="block-label" id="stem-label">Description <span class="req">*</span></label>
-                <div class="rich-editor mode-rich" data-editor="stem">
-                  <div class="rich-editor-toolbar-row">
-                    <div class="editor-mode-tabs">
-                      <button type="button" class="mode-btn active" data-mode="rich">富文本</button>
-                      <button type="button" class="mode-btn" data-mode="markdown">Markdown</button>
-                    </div>
-                    <div class="rich-toolbar">
-                      <select class="rte-heading" title="标题大小">
-                        <option value="p">正文</option><option value="h1">标题 H1</option><option value="h2">标题 H2</option><option value="h3">标题 H3</option>
-                      </select>
-                      <span class="sep"></span>
-                      <button type="button" data-cmd="bold" title="加粗"><b>B</b></button>
-                      <button type="button" data-cmd="italic" title="斜体"><i>I</i></button>
-                      <button type="button" data-cmd="highlight" class="hl-btn" title="高亮"><span>A</span></button>
-                      <span class="sep"></span>
-                      <button type="button" data-cmd="ul" title="无序列表">•</button>
-                      <button type="button" data-cmd="ol" title="有序列表">1.</button>
-                      <button type="button" data-cmd="quote" title="引用">&ldquo;</button>
-                      <button type="button" data-cmd="code" title="代码">{ }</button>
-                      <span class="sep"></span>
-                      <button type="button" data-cmd="image" title="图片">🖼</button>
-                      <button type="button" data-cmd="math" title="插入公式">Σ</button>
-                      <button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;">▭</button>
-                    </div>
-                  </div>
-                  <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="请输入题目内容，支持 $x^2$ 数学公式…"></div></div>
-                  <div class="rich-editor-markdown"><textarea placeholder="支持 Markdown 与 $公式$…"></textarea></div>
-                </div>
+                <div data-rich-mount="stem" data-toolbar="full" data-placeholder="请输入题目内容，支持 $x^2$ 数学公式…"></div>
               </div>
 
               <!-- 单选 / 多选 -->
@@ -274,23 +247,7 @@
               <!-- 简答题 -->
               <div class="type-panel" data-for="short" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">参考答案 <span class="req">*</span></label>
-                <div class="rich-editor mode-rich" data-editor="short">
-                  <div class="rich-editor-toolbar-row">
-                    <div class="editor-mode-tabs">
-                      <button type="button" class="mode-btn active" data-mode="rich">富文本</button>
-                      <button type="button" class="mode-btn" data-mode="markdown">Markdown</button>
-                    </div>
-                    <div class="rich-toolbar">
-                      <button type="button" data-cmd="bold"><b>B</b></button>
-                      <button type="button" data-cmd="italic"><i>I</i></button>
-                      <button type="button" data-cmd="code">{ }</button>
-                      <button type="button" data-cmd="math" title="插入公式">Σ</button>
-                      <button type="button" data-cmd="image" title="图片">🖼</button>
-                    </div>
-                  </div>
-                  <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="请输入参考答案…"></div></div>
-                  <div class="rich-editor-markdown"><textarea placeholder="支持 Markdown 语法…"></textarea></div>
-                </div>
+                <div data-rich-mount="short" data-toolbar="mini" data-placeholder="请输入参考答案…"></div>
               </div>
 
               <!-- 填空题 -->
@@ -328,23 +285,7 @@
                 <details class="explain-collapse">
                   <summary><span class="chev">▸</span> 解析 <span style="font-weight:normal;color:var(--muted);">（可选，默认折叠）</span></summary>
                   <div class="ec-body">
-                    <div class="rich-editor mode-rich" data-editor="explain">
-                      <div class="rich-editor-toolbar-row">
-                        <div class="editor-mode-tabs">
-                          <button type="button" class="mode-btn active" data-mode="rich">富文本</button>
-                          <button type="button" class="mode-btn" data-mode="markdown">Markdown</button>
-                        </div>
-                        <div class="rich-toolbar">
-                          <button type="button" data-cmd="bold"><b>B</b></button>
-                          <button type="button" data-cmd="italic"><i>I</i></button>
-                          <button type="button" data-cmd="code">{ }</button>
-                          <button type="button" data-cmd="math" title="插入公式">Σ</button>
-                          <button type="button" data-cmd="image" title="图片">🖼</button>
-                        </div>
-                      </div>
-                      <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="请输入答案解析…"></div></div>
-                      <div class="rich-editor-markdown"><textarea placeholder="支持 Markdown 语法…"></textarea></div>
-                    </div>
+                    <div data-rich-mount="explain" data-toolbar="mini" data-placeholder="请输入答案解析…"></div>
                   </div>
                 </details>
               </div>
@@ -706,9 +647,82 @@
       renderPreview();
     }
 
+    /* ==========================================================================
+       可复用富文本编辑器组件（RichEditor）
+       单一 markup 工厂 + 统一初始化/取值 API，页面内 5 处编辑器以及未来其它页面
+       都用同一个组件：
+         RichEditor.html(name, {toolbar, compact, placeholder})  -> 生成 markup
+         RichEditor.mount(root)                                   -> 展开 [data-rich-mount] 占位并绑定
+         RichEditor.init(root)                                    -> 绑定 root 下所有 .rich-editor（幂等）
+         RichEditor.getMarkdown(name) / getHtml(name) / setMarkdown(name, md)
+       ========================================================================== */
+    const RTE_BUTTONS = {
+      heading: '<select class="rte-heading" title="标题大小"><option value="p">正文</option><option value="h1">标题 H1</option><option value="h2">标题 H2</option><option value="h3">标题 H3</option></select>',
+      sep: '<span class="sep"></span>',
+      bold: '<button type="button" data-cmd="bold" title="加粗"><b>B</b></button>',
+      italic: '<button type="button" data-cmd="italic" title="斜体"><i>I</i></button>',
+      highlight: '<button type="button" data-cmd="highlight" class="hl-btn" title="高亮"><span>A</span></button>',
+      ul: '<button type="button" data-cmd="ul" title="无序列表">•</button>',
+      ol: '<button type="button" data-cmd="ol" title="有序列表">1.</button>',
+      quote: '<button type="button" data-cmd="quote" title="引用">&ldquo;</button>',
+      code: '<button type="button" data-cmd="code" title="代码">{ }</button>',
+      image: '<button type="button" data-cmd="image" title="图片">🖼</button>',
+      math: '<button type="button" data-cmd="math" title="插入公式">Σ</button>',
+      blank: '<button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;">▭</button>',
+    };
+    const RTE_TOOLBARS = {
+      full: ['heading', 'sep', 'bold', 'italic', 'highlight', 'sep', 'ul', 'ol', 'quote', 'code', 'sep', 'image', 'math', 'blank'],
+      option: ['bold', 'italic', 'highlight', 'code', 'math', 'image'],
+      mini: ['bold', 'italic', 'code', 'math', 'image'],
+    };
+    function richEditorTpl(name, opts) {
+      opts = opts || {};
+      const preset = RTE_TOOLBARS[opts.toolbar] || RTE_TOOLBARS.mini;
+      const buttons = preset.map(k => RTE_BUTTONS[k] || '').join('');
+      const placeholder = opts.placeholder || '请输入内容，支持 $公式$…';
+      const mdPlaceholder = opts.mdPlaceholder || '支持 Markdown 与 $公式$…';
+      const compact = opts.compact ? ' compact' : '';
+      return `<div class="rich-editor mode-rich${compact}" data-editor="${name}">
+        <div class="rich-editor-toolbar-row">
+          <div class="editor-mode-tabs">
+            <button type="button" class="mode-btn active" data-mode="rich">富文本</button>
+            <button type="button" class="mode-btn" data-mode="markdown">Markdown</button>
+          </div>
+          <div class="rich-toolbar">${buttons}</div>
+        </div>
+        <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="${placeholder}"></div></div>
+        <div class="rich-editor-markdown"><textarea placeholder="${mdPlaceholder}"></textarea></div>
+      </div>`;
+    }
+    function mountRichEditors(root) {
+      (root || document).querySelectorAll('[data-rich-mount]').forEach(m => {
+        const name = m.getAttribute('data-rich-mount');
+        m.outerHTML = richEditorTpl(name, {
+          toolbar: m.getAttribute('data-toolbar') || 'mini',
+          compact: m.hasAttribute('data-compact'),
+          placeholder: m.getAttribute('data-placeholder') || undefined,
+        });
+      });
+    }
+    window.RichEditor = {
+      html: richEditorTpl,
+      toolbars: RTE_TOOLBARS,
+      mount(root) { mountRichEditors(root); initEditors(root); },
+      init(root) { initEditors(root); },
+      getMarkdown(name) { return getMd(name); },
+      getHtml(name) { return editorHtml(name); },
+      setMarkdown(name, md) {
+        const ed = document.querySelector('.rich-editor[data-editor="' + name + '"]');
+        if (!ed) return;
+        const body = ed.querySelector('.rich-editor-body');
+        const ta = ed.querySelector('.rich-editor-markdown textarea');
+        if (body) body.innerHTML = mdToHtml(md || '');
+        if (ta) ta.value = md || '';
+      },
+    };
     /* ---------- 编辑器（需求3：可复用 + Markdown 互转 + 公式）---------- */
-    function initEditors() {
-      document.querySelectorAll('.rich-editor').forEach(editor => {
+    function initEditors(root) {
+      (root || document).querySelectorAll('.rich-editor').forEach(editor => {
         if (editor.dataset.bound) return;
         editor.dataset.bound = '1';
         const rich = editor.querySelector('.rich-editor-body');
@@ -944,24 +958,7 @@
 
     /* ---------- 选项（富文本 / Markdown） ---------- */
     function optionEditorTpl(name) {
-      return `<div class="rich-editor mode-rich compact" data-editor="${name}">
-        <div class="rich-editor-toolbar-row">
-          <div class="editor-mode-tabs">
-            <button type="button" class="mode-btn active" data-mode="rich">富文本</button>
-            <button type="button" class="mode-btn" data-mode="markdown">Markdown</button>
-          </div>
-          <div class="rich-toolbar">
-            <button type="button" data-cmd="bold" title="加粗"><b>B</b></button>
-            <button type="button" data-cmd="italic" title="斜体"><i>I</i></button>
-            <button type="button" data-cmd="highlight" class="hl-btn" title="高亮"><span>A</span></button>
-            <button type="button" data-cmd="code" title="代码">{ }</button>
-            <button type="button" data-cmd="math" title="公式">Σ</button>
-            <button type="button" data-cmd="image" title="图片">🖼</button>
-          </div>
-        </div>
-        <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="请输入选项内容（支持 $公式$）"></div></div>
-        <div class="rich-editor-markdown"><textarea placeholder="支持 Markdown 与 $公式$…"></textarea></div>
-      </div>`;
+      return richEditorTpl(name, { toolbar: 'option', compact: true, placeholder: '请输入选项内容（支持 $公式$）' });
     }
     function getOptionText(row) {
       const ed = row.querySelector('.rich-editor');
@@ -1059,14 +1056,7 @@
     function toggleSub(id) { document.querySelector(`.sub-q[data-id="${id}"]`).classList.toggle('collapsed'); }
     function renumberSubs() { document.querySelectorAll('#sub-list .sub-q').forEach((w, i) => w.querySelector('.sq-idx').textContent = (i + 1) + '.'); }
     function subEditorTpl(name, ph) {
-      return `<div class="rich-editor mode-rich compact" data-editor="${name}">
-        <div class="rich-editor-toolbar-row">
-          <div class="editor-mode-tabs"><button type="button" class="mode-btn active" data-mode="rich">富文本</button><button type="button" class="mode-btn" data-mode="markdown">Markdown</button></div>
-          <div class="rich-toolbar"><button type="button" data-cmd="bold"><b>B</b></button><button type="button" data-cmd="italic"><i>I</i></button><button type="button" data-cmd="code">{ }</button><button type="button" data-cmd="math" title="公式">Σ</button><button type="button" data-cmd="image" title="图片">🖼</button></div>
-        </div>
-        <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="${ph}"></div></div>
-        <div class="rich-editor-markdown"><textarea placeholder="支持 Markdown 与 $公式$…"></textarea></div>
-      </div>`;
+      return richEditorTpl(name, { toolbar: 'mini', compact: true, placeholder: ph });
     }
     function buildSubBody(wrap, type) {
       const body = wrap.querySelector('.sub-q-body'); const id = wrap.dataset.id;
@@ -1317,6 +1307,7 @@
       window.addEventListener('scroll', positionHandle, true); window.addEventListener('resize', positionHandle);
     })();
 
+    mountRichEditors();
     initEditors();
     setDifficulty(currentDifficulty);
     (function initDefaultType() {
