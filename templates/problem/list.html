@@ -239,13 +239,16 @@
 {% block title_row %}
     {% set tab = 'list' %}
     {% include "problem/problem-list-tabs.html" %}
-    {% if creatable_problem_types %}
+    {% if creatable_problem_types or perms.judge.add_contest %}
         <div class="add-problem-menu">
-            <a href="#" class="button add-problem-toggle" onclick="return false;">{{ _('Add new problem') }} &#9662;</a>
+            <a href="#" class="button add-problem-toggle" onclick="return false;">{{ _('Add new') }} &#9662;</a>
             <ul class="add-problem-dropdown">
-                {% for type in creatable_problem_types %}
-                    <li><a href="{{ type.create_url() }}">{{ type.label }}</a></li>
-                {% endfor %}
+                {% if creatable_problem_types %}
+                    <li><a href="{{ url('problem_create_v2') }}">{{ _('Add problem') }}</a></li>
+                {% endif %}
+                {% if perms.judge.add_contest %}
+                    <li><a href="{{ url('admin:judge_contest_add') }}">{{ _('Add contest') }}</a></li>
+                {% endif %}
             </ul>
         </div>
         <style>

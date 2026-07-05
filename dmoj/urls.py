@@ -14,6 +14,7 @@ from judge.sitemap import sitemaps
 from judge.views import TitledTemplateView, api, blog, comment, contest_analytics, contests, ide, language, license, \
     mailgun, mcq, organization, preview, problem, problem_manage, ranked_submission, register, stats, status, \
     submission, tasks, ticket, two_factor, user, widgets
+from judge.views.problem_create_v2 import ProblemCreateV2AIDifficultyView, ProblemCreateV2View
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView
@@ -104,6 +105,8 @@ urlpatterns = [
     path('problems/', problem.ProblemList.as_view(), name='problem_list'),
     path('problems/random/', problem.RandomProblem.as_view(), name='problem_random'),
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
+    path('problems/new/', ProblemCreateV2View.as_view(), name='problem_create_v2'),
+    path('problems/new/ai-difficulty/', ProblemCreateV2AIDifficultyView.as_view(), name='problem_create_v2_ai_difficulty'),
 
     path('problem/<str:problem>', include([
         path('', problem.ProblemDetail.as_view(), name='problem_detail'),
