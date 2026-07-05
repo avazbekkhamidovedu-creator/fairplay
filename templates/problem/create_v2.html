@@ -1,11 +1,14 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ _('Add problem') }} — DKUOJ</title>
+{% extends "base.html" %}
+
+{% block title %}{{ _('Add problem') }}{% endblock %}
+
+{# 用页面自带的面包屑 + 标题（.v2-top），隐藏 base 默认的标题行与分隔线 #}
+{% block title_row %}{% endblock %}
+{% block title_ruler %}{% endblock %}
+
+{% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260706b">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260706c">
 
   <!-- 需求3：数学公式真正可预览 -->
   <script>
@@ -19,9 +22,8 @@
 
   <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
   <style>
-    /* 需求2：去掉顶部黑框与侧边栏后，内容居中 */
-    html, body { height: 100%; }
-    .v2-main { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    /* 融入站点框架（继承 base.html）：不再锁 100vh，随页面滚动 */
+    .v2-main { display: block; }
     .v2-top { padding: 0.55rem 1.5rem 0.75rem; border-bottom: 1px solid var(--admin-border); background: #fff; flex-shrink: 0; }
     .v2-top .breadcrumb { margin: 0; }
     .v2-top h1 { margin: 0.15rem 0 0; }
@@ -72,26 +74,25 @@
     .pv-sub .pv-sub-t { font-weight: 600; margin-bottom: 0.35rem; }
     .pv-badge { display: inline-block; font-size: 11px; background: #f3e5f5; color: #7b1fa2; border-radius: 4px; padding: 0.05rem 0.4rem; font-weight: 600; }
 
-    /* LeetCode 式左右分栏：两栏各占满高度、独立滚动，中缝分割线到底 */
-    .v2-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; }
-    .v2-left { min-width: 0; overflow-y: auto; padding: 1.25rem 1.5rem 3rem; }
-    .v2-right { min-width: 0; overflow-y: auto; padding: 0 1.5rem 3rem; border-left: 1px solid var(--admin-border); background: #fcfcfc; }
+    /* 左右分栏：左侧随页面滚动，右侧预览 sticky 跟随视口 */
+    .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+    .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
+    .v2-right { min-width: 0; padding: 0 1.5rem 3rem; border-left: 1px solid var(--admin-border); background: #fcfcfc; position: sticky; top: 56px; align-self: start; max-height: calc(100vh - 56px); overflow-y: auto; }
     .v2-right .pv-head { position: sticky; top: 0; z-index: 2; background: #fcfcfc; margin: 0 -1.5rem 0.9rem; padding: 0.9rem 1.5rem 0.6rem; border-bottom: 1px solid var(--admin-border); }
     .pv-panel { border: none; background: transparent; padding: 0; }
     @media (max-width: 900px) {
-      .v2-main { height: auto; overflow: visible; }
       .v2-split { grid-template-columns: 1fr; }
-      .v2-left, .v2-right { overflow: visible; }
-      .v2-right { border-left: none; border-top: 1px solid var(--admin-border); }
+      .v2-right { position: static; max-height: none; overflow: visible; border-left: none; border-top: 1px solid var(--admin-border); }
     }
 
     /* 难度 AI 判断 */
     #diff-ai-box { margin-top: 0.5rem; }
     .diff-ai-result { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 12px; background: #ede7f6; color: #5e35b1; border: 1px solid #d1c4e9; border-radius: 14px; padding: 0.15rem 0.6rem; margin-left: 0.5rem; }
   </style>
-</head>
-<body>
-  <!-- 需求2：删除 site-nav（黑框）与 admin-sidebar（侧边栏） -->
+{% endblock %}
+
+{% block body %}
+  <div class="pcv2">
   <main class="v2-main" id="content-main">
     <div class="v2-top">
       <div class="breadcrumb"><a href="{{ problem_list_url }}">{{ _('Problems') }}</a> › {{ _('Add problem') }}</div>
@@ -395,6 +396,8 @@
         <button type="submit" class="btn" value="continue" name="action">Save and continue editing</button>
         <button type="submit" class="btn" value="another" name="action">Save and add another</button>
         <button type="button" class="btn type-panel" data-for="programming" style="display:none;">Upload Markdown</button>
+        <span style="flex:1;"></span>
+        <button type="button" class="btn btn-cancel" onclick="cancelEdit()">{{ _('Cancel') }}</button>
       </div>
 
       <p style="font-size:12px;color:#666;margin-top:1rem;">
@@ -451,6 +454,7 @@
 
   <script>
     const SAVE_URL = '{{ save_url }}';
+    const PROBLEM_LIST_URL = '{{ problem_list_url }}';
     const AI_DIFFICULTY_URL = '{{ ai_difficulty_url }}';
     const CREATE_PROBLEM_TYPE_URL = '{{ create_problem_type_url }}';
     const AI_PROBLEM_TYPE_URL = '{{ ai_problem_type_url }}';
@@ -475,6 +479,14 @@
     let draftSaved = false;
 
     const DIFF_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
+
+    /* 取消当前编辑：有内容时二次确认，然后返回题库 */
+    function cancelEdit() {
+      const hasContent = ((document.getElementById('f-name') || {}).value || '').trim()
+        || (getMd('stem') || '').trim();
+      if (hasContent && !confirm('{{ _("Discard this problem? Unsaved changes will be lost.") }}')) return;
+      window.location.href = PROBLEM_LIST_URL;
+    }
     let currentDifficulty = 'medium';
     function setDifficulty(level) {
       currentDifficulty = level;
@@ -1319,5 +1331,5 @@
       if (radio) { radio.checked = true; selectType(t); }
     })();
   </script>
-</body>
-</html>
+  </div>
+{% endblock %}

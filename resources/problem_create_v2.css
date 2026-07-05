@@ -14,10 +14,10 @@
   --success: #2d7a2d;
 }
 
-* { box-sizing: border-box; }
+/* 全部收敛到 .pcv2 作用域，避免污染站点顶栏/页脚等其它部分 */
+.pcv2, .pcv2 *, .pcv2 *::before, .pcv2 *::after { box-sizing: border-box; }
 
-body {
-  margin: 0;
+.pcv2 {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-size: 14px;
   color: var(--text);
@@ -25,8 +25,8 @@ body {
   line-height: 1.5;
 }
 
-a { color: #447e9b; text-decoration: none; }
-a:hover { text-decoration: underline; }
+.pcv2 a { color: #447e9b; text-decoration: none; }
+.pcv2 a:hover { text-decoration: underline; }
 
 /* Site navbar (前台) */
 .site-nav {
@@ -76,9 +76,9 @@ a:hover { text-decoration: underline; }
 }
 .breadcrumb a { color: var(--muted); }
 
-h1 { font-size: 1.5rem; margin: 0.5rem 0 1rem; font-weight: 400; }
-h2 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; }
-h3 { font-size: 1rem; margin: 0 0 0.5rem; }
+.pcv2 h1 { font-size: 1.5rem; margin: 0.5rem 0 1rem; font-weight: 400; }
+.pcv2 h2 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; }
+.pcv2 h3 { font-size: 1rem; margin: 0 0 0.5rem; }
 
 .note {
   background: #fffde7;
@@ -156,6 +156,8 @@ h3 { font-size: 1rem; margin: 0 0 0.5rem; }
 }
 .btn-primary:hover, .btn.default:hover { background: var(--dmoj-green-dark); }
 .btn-secondary { background: #79aec8; border-color: #609ab6; color: #fff; }
+.btn-cancel { color: var(--danger); border-color: #e0b4b1; }
+.btn-cancel:hover { background: #fdecea; }
 
 /* Forms */
 fieldset.module {
