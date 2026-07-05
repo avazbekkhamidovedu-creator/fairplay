@@ -652,6 +652,16 @@
     <h3>{{ _('Submit solution') }}</h3>
     {% include "problem/submit/_mcq.html" %}
 </div>
+{% elif form and submission_type == 'B' %}
+<div id="submission-area">
+    <h3>{{ _('Submit solution') }}</h3>
+    {% include "problem/submit/_fillblank.html" %}
+</div>
+{% elif form and submission_type == 'S' %}
+<div id="submission-area">
+    <h3>{{ _('Submit solution') }}</h3>
+    {% include "problem/submit/_shortanswer.html" %}
+</div>
 {% elif form %}
 <div id="submission-area">
     <h3>{{ _('Submit solution') }}</h3>

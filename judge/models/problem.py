@@ -40,12 +40,14 @@ class ProblemSubmissionType:
     CODE = 'C'
     MCQ = 'M'
     FILL_BLANK = 'B'
+    SHORT_ANSWER = 'S'
     FILE = 'F'
 
     CHOICES = (
         (CODE, _('Code')),
         (MCQ, _('Multiple choice')),
         (FILL_BLANK, _('Fill in the blank')),
+        (SHORT_ANSWER, _('Short answer')),
         (FILE, _('File upload')),
     )
 

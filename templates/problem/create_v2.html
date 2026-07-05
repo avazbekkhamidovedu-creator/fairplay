@@ -118,18 +118,18 @@
                   <input type="radio" name="qtype" value="single" {% if can_create_mcq %}checked{% endif %} onchange="selectType('single')"><span>{{ _('Single choice') }}</span></label>
                 <label class="type-pill" data-save="mcq" {% if not can_create_mcq %}style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="multiple" onchange="selectType('multiple')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('Multiple choice') }}</span></label>
-                <label class="type-pill" data-save="none" style="opacity:0.55;">
-                  <input type="radio" name="qtype" value="blank" onchange="selectType('blank')"><span>{{ _('Fill-in-blank') }}</span></label>
-                <label class="type-pill" data-save="none" style="opacity:0.55;">
-                  <input type="radio" name="qtype" value="truefalse" onchange="selectType('truefalse')"><span>{{ _('True/False') }}</span></label>
-                <label class="type-pill" data-save="none" style="opacity:0.55;">
-                  <input type="radio" name="qtype" value="short" onchange="selectType('short')"><span>{{ _('Short answer') }}</span></label>
+                <label class="type-pill" data-save="blank" {% if not can_create_mcq %}style="opacity:0.45;"{% endif %}>
+                  <input type="radio" name="qtype" value="blank" onchange="selectType('blank')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('Fill-in-blank') }}</span></label>
+                <label class="type-pill" data-save="truefalse" {% if not can_create_mcq %}style="opacity:0.45;"{% endif %}>
+                  <input type="radio" name="qtype" value="truefalse" onchange="selectType('truefalse')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('True/False') }}</span></label>
+                <label class="type-pill" data-save="short" {% if not can_create_mcq %}style="opacity:0.45;"{% endif %}>
+                  <input type="radio" name="qtype" value="short" onchange="selectType('short')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('Short answer') }}</span></label>
                 <label class="type-pill" data-save="none" style="opacity:0.55;">
                   <input type="radio" name="qtype" value="compound" onchange="selectType('compound')"><span>{{ _('Composite') }}</span></label>
                 <label class="type-pill" data-save="none" style="opacity:0.55;">
                   <input type="radio" name="qtype" value="other" onchange="selectType('other')"><span>{{ _('Other') }}</span></label>
               </div>
-              <div class="help">{{ _('Currently savable: programming (staff), single/multiple choice. Other types are under development.') }}</div>
+              <div class="help">{{ _('Currently savable: programming (staff), single/multiple choice, true/false, fill-in-blank, short answer. Composite and other types are under development.') }}</div>
             </div>
           </div>
           <div class="form-row">
@@ -246,7 +246,6 @@
                       <button type="button" data-cmd="code" title="代码">{ }</button>
                       <span class="sep"></span>
                       <button type="button" data-cmd="image" title="图片">🖼</button>
-                      <button type="button" data-cmd="link" class="rte-link-btn" title="链接">🔗</button>
                       <button type="button" data-cmd="math" title="插入公式">Σ</button>
                       <button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;">▭</button>
                     </div>
@@ -472,11 +471,6 @@
 
     <div id="save-toast" style="display:none;position:fixed;left:50%;bottom:2rem;transform:translateX(-50%);background:var(--dmoj-green);color:#fff;padding:0.6rem 1.2rem;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.2);z-index:300;font-size:14px;"></div>
     <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="onImgPicked(event)">
-    <div id="rte-link-popover" class="rte-link-popover hidden">
-      <input type="url" id="rte-link-url" placeholder="https://">
-      <button type="button" class="btn btn-primary" id="rte-link-apply">应用</button>
-      <button type="button" class="btn" id="rte-link-remove">移除</button>
-    </div>
   </main>
 
   <!-- problem_type 选择 / 新建弹窗（沿用 add.html） -->
@@ -713,8 +707,6 @@
     }
 
     /* ---------- 编辑器（需求3：可复用 + Markdown 互转 + 公式）---------- */
-    let linkPopoverEditor = null;
-    let mdLinkTarget = null;
     function initEditors() {
       document.querySelectorAll('.rich-editor').forEach(editor => {
         if (editor.dataset.bound) return;
@@ -780,7 +772,6 @@
           case 'ol': active = document.queryCommandState('insertOrderedList'); break;
           case 'quote': active = selectionInTag(area, 'blockquote'); break;
           case 'code': active = selectionInTag(area, 'code'); break;
-          case 'link': active = selectionInTag(area, 'a'); break;
         }
         btn.classList.toggle('active', !!active);
       });
@@ -802,83 +793,8 @@
       const area = n.closest('.rich-editor-body');
       if (area) updateToolbarState(area.closest('.rich-editor'));
     });
-    function showLinkPopover(editor, btn) {
-      linkPopoverEditor = editor;
-      const pop = document.getElementById('rte-link-popover');
-      const area = editor.querySelector('.rich-editor-body');
-      area.focus();
-      const existing = selectionNode(area)?.closest('a');
-      document.getElementById('rte-link-url').value = existing ? (existing.getAttribute('href') || '') : 'https://';
-      const rect = btn.getBoundingClientRect();
-      pop.classList.remove('hidden');
-      pop.style.left = Math.max(8, rect.left) + 'px';
-      pop.style.top = (rect.bottom + window.scrollY + 6) + 'px';
-      document.getElementById('rte-link-url').focus();
-    }
-    function hideLinkPopover() {
-      document.getElementById('rte-link-popover').classList.add('hidden');
-      linkPopoverEditor = null;
-      mdLinkTarget = null;
-    }
-    function applyLinkFromPopover() {
-      const url = document.getElementById('rte-link-url').value.trim();
-      if (mdLinkTarget) {
-        if (url) applyMarkdown(mdLinkTarget, 'link', url);
-        mdLinkTarget.focus();
-        mdLinkTarget.dispatchEvent(new Event('input'));
-        mdLinkTarget = null;
-        hideLinkPopover();
-        return;
-      }
-      if (!linkPopoverEditor) return;
-      const editor = linkPopoverEditor;
-      const area = editor.querySelector('.rich-editor-body');
-      area.focus();
-      if (!url) { hideLinkPopover(); return; }
-      if (selectionInTag(area, 'a')) {
-        const a = selectionNode(area).closest('a');
-        a.setAttribute('href', url);
-      } else {
-        document.execCommand('createLink', false, url);
-      }
-      hideLinkPopover();
-      area.dispatchEvent(new Event('input'));
-      updateToolbarState(editor);
-    }
-    function removeLinkFromPopover() {
-      if (!linkPopoverEditor) return;
-      const area = linkPopoverEditor.querySelector('.rich-editor-body');
-      area.focus();
-      if (selectionInTag(area, 'a')) unwrapTagFromSelection(area, 'a');
-      else document.execCommand('unlink');
-      hideLinkPopover();
-      area.dispatchEvent(new Event('input'));
-    }
-    (function initLinkPopover() {
-      document.getElementById('rte-link-apply').addEventListener('click', applyLinkFromPopover);
-      document.getElementById('rte-link-remove').addEventListener('click', removeLinkFromPopover);
-      document.getElementById('rte-link-url').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); applyLinkFromPopover(); }
-        if (e.key === 'Escape') hideLinkPopover();
-      });
-      document.addEventListener('click', (e) => {
-        const pop = document.getElementById('rte-link-popover');
-        if (pop.classList.contains('hidden')) return;
-        if (e.target.closest('#rte-link-popover') || e.target.closest('.rte-link-btn')) return;
-        hideLinkPopover();
-      });
-    })();
     function applyFormat(editor, cmd, btn) {
       if (cmd === 'image') { pickImage(editor); return; }
-      if (cmd === 'link') {
-        if (editor.classList.contains('mode-markdown')) {
-          const ta = editor.querySelector('.rich-editor-markdown textarea');
-          showLinkPopoverMarkdown(ta, btn);
-          return;
-        }
-        showLinkPopover(editor, btn);
-        return;
-      }
       const isMd = editor.classList.contains('mode-markdown');
       if (isMd) { const ta = editor.querySelector('.rich-editor-markdown textarea'); applyMarkdown(ta, cmd); ta.focus(); ta.dispatchEvent(new Event('input')); return; }
       const area = editor.querySelector('.rich-editor-body');
@@ -920,17 +836,6 @@
       area.dispatchEvent(new Event('input'));
       updateToolbarState(editor);
     }
-    function showLinkPopoverMarkdown(ta, btn) {
-      mdLinkTarget = ta;
-      const pop = document.getElementById('rte-link-popover');
-      const rect = btn.getBoundingClientRect();
-      document.getElementById('rte-link-url').value = 'https://';
-      pop.classList.remove('hidden');
-      pop.style.left = Math.max(8, rect.left) + 'px';
-      pop.style.top = (rect.bottom + window.scrollY + 6) + 'px';
-      document.getElementById('rte-link-url').focus();
-      linkPopoverEditor = null;
-    }
     let pendingImgEditor = null;
     function pickImage(editor) { pendingImgEditor = editor; const input = document.getElementById('img-file'); input.value = ''; input.click(); }
     function onImgPicked(e) {
@@ -957,7 +862,7 @@
       const range = sel.getRangeAt(0); const el = document.createElement(tag);
       el.appendChild(range.extractContents()); range.insertNode(el); sel.removeAllRanges();
     }
-    function applyMarkdown(ta, cmd, linkUrl) {
+    function applyMarkdown(ta, cmd) {
       const s = ta.selectionStart, e = ta.selectionEnd, sel = ta.value.slice(s, e);
       const wrap = (pre, post, ph) => { const txt = sel || ph; ta.value = ta.value.slice(0, s) + pre + txt + post + ta.value.slice(e); };
       const linePrefix = (pre) => { const ls = ta.value.lastIndexOf('\n', s - 1) + 1; ta.value = ta.value.slice(0, ls) + pre + ta.value.slice(ls); };
@@ -973,7 +878,6 @@
         case 'ul': linePrefix('- '); break;
         case 'ol': linePrefix('1. '); break;
         case 'math': wrap('$', '$', 'x^2'); break;
-        case 'link': { const u = linkUrl || 'https://'; wrap('[', '](' + u + ')', '文字'); break; }
         case 'blank': ta.value = ta.value.slice(0, s) + '{{blank}}' + ta.value.slice(e); break;
       }
     }
@@ -1053,7 +957,6 @@
             <button type="button" data-cmd="code" title="代码">{ }</button>
             <button type="button" data-cmd="math" title="公式">Σ</button>
             <button type="button" data-cmd="image" title="图片">🖼</button>
-            <button type="button" data-cmd="link" class="rte-link-btn" title="链接">🔗</button>
           </div>
         </div>
         <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="请输入选项内容（支持 $公式$）"></div></div>
@@ -1302,6 +1205,7 @@
         is_public: document.getElementById('f-public').checked,
         partial: document.getElementById('f-partial').checked,
         ai: document.getElementById('f-ai').checked,
+        rubric: (document.getElementById('f-rubric') || {}).value || '',
         difficulty: currentDifficulty,
         problemTypes: [...document.querySelectorAll('#f-types .ptype-tag')].map(t => t.childNodes[0].textContent.trim()),
         description: getMd('stem'), explanation: getMd('explain'),
@@ -1330,15 +1234,15 @@
       }
       return data;
     }
-    const UNSUPPORTED_TYPES = ['blank', 'truefalse', 'short', 'compound', 'other'];
+    const UNSUPPORTED_TYPES = ['compound', 'other'];
     function validate(d) {
       if (!d.name) return '{{ _("Please enter a problem name.") }}';
       if (UNSUPPORTED_TYPES.includes(d.type)) {
         return '{{ _("This question type is under development and cannot be saved yet.") }}';
       }
       if (d.type === 'programming' && !CAN_CREATE_CODE) return '{{ _("You do not have permission to create programming problems.") }}';
-      if ((d.type === 'single' || d.type === 'multiple') && !CAN_CREATE_MCQ) {
-        return '{{ _("You do not have permission to create multiple-choice problems.") }}';
+      if (['single', 'multiple', 'truefalse', 'blank', 'short'].includes(d.type) && !CAN_CREATE_MCQ) {
+        return '{{ _("You do not have permission to create this problem type.") }}';
       }
       if (!d.group_id) return '请选择 Problem group';
       if (!d.points || Number(d.points) < 0) return '请填写有效的 Points';

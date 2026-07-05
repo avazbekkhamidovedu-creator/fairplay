@@ -220,9 +220,14 @@ class GraderRegistryTestCase(TestCase):
         self.assertFalse(grader.routes_to_bridge)
         self.assertFalse(grader.is_manual)
 
+    def test_fill_blank_and_short_answer_registered(self):
+        for submission_type in ('B', 'S'):
+            grader = get_grader(submission_type)
+            self.assertFalse(grader.routes_to_bridge)
+            self.assertFalse(grader.is_manual)
+
     def test_unregistered_type_raises(self):
-        # Types exposed in the admin choices but without a grader (fill-in-blank, file upload)
-        # must fail clearly rather than with a bare KeyError.
-        for submission_type in ('B', 'F'):
-            with self.assertRaises(NotImplementedError):
-                get_grader(submission_type)
+        # File upload is exposed in the admin choices but has no grader yet; it must fail clearly
+        # rather than with a bare KeyError.
+        with self.assertRaises(NotImplementedError):
+            get_grader('F')

@@ -19,6 +19,15 @@ def generate_problem_code():
 
 
 def default_problem_group():
+    """The group new problems default to.
+
+    Prefer an explicit ``uncategorized`` group so front-end authoring lands there regardless of
+    how many other groups exist; fall back to the first group, creating ``uncategorized`` if the
+    table is empty.
+    """
+    group = ProblemGroup.objects.filter(name='uncategorized').first()
+    if group is not None:
+        return group
     group = ProblemGroup.objects.order_by('full_name', 'name').first()
     if group is None:
         group = ProblemGroup.objects.create(name='uncategorized', full_name='Uncategorized')

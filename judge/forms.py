@@ -201,6 +201,32 @@ class MCQSubmitForm(Form):
         return cleaned
 
 
+class FillBlankSubmitForm(Form):
+    """Student-facing fill-in-the-blank answer form: one text input per blank."""
+
+    def __init__(self, *args, problem=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.blank_count = problem.blank_answers.count() if problem is not None else 0
+        for index in range(self.blank_count):
+            self.fields['blank_%d' % index] = CharField(
+                label=_('Blank %d') % (index + 1), required=False, strip=True,
+                widget=forms.TextInput(attrs={'class': 'fill-blank-input'}))
+
+    def clean(self):
+        cleaned = super().clean()
+        cleaned['blanks'] = [cleaned.get('blank_%d' % i, '') or '' for i in range(self.blank_count)]
+        return cleaned
+
+
+class ShortAnswerSubmitForm(Form):
+    """Student-facing short-answer form: a single free-text response."""
+    answer = CharField(label='', required=True, strip=True,
+                       widget=forms.Textarea(attrs={'rows': 6, 'class': 'short-answer-input'}))
+
+    def __init__(self, *args, problem=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
 class EditOrganizationForm(ModelForm):
     class Meta:
         model = Organization

@@ -30,12 +30,14 @@ from django.utils.translation import gettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
 
-from judge.models import (Language, Organization, Problem, ProblemGroup, ProblemMCQConfig, ProblemMCQOption,
-                          ProblemSubmissionType, ProblemType)
+from judge.models import (Language, Organization, Problem, ProblemBlankAnswer, ProblemFillBlankConfig, ProblemGroup,
+                          ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
+                          ProblemType)
+from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
 
 # Types the redesigned page offers but the backend cannot grade/store yet.
-NOT_IMPLEMENTED_TYPES = {'blank', 'truefalse', 'short', 'compound', 'other'}
+NOT_IMPLEMENTED_TYPES = {'compound', 'other'}
 
 
 def _problem_type_code(text):
@@ -106,6 +108,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 problem = self._create_code(request, payload, name)
             elif qtype in ('single', 'multiple'):
                 problem = self._create_mcq(request, payload, name, multiple=(qtype == 'multiple'))
+            elif qtype == 'truefalse':
+                problem = self._create_truefalse(request, payload, name)
+            elif qtype == 'blank':
+                problem = self._create_fill_blank(request, payload, name)
+            elif qtype == 'short':
+                problem = self._create_short_answer(request, payload, name)
             else:
                 return JsonResponse({'error': _('Unknown question type.')}, status=400)
         except PermissionError as e:
@@ -264,6 +272,106 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 ProblemMCQOption.objects.create(
                     problem=problem, order=index,
                     text=(option.get('text') or '').strip(), is_correct=bool(option.get('correct')))
+        return problem
+
+    # ------------------------------------------------------------------ true / false
+    def _create_truefalse(self, request, payload, name):
+        """True/false is stored as a two-option single-choice MCQ (正确 / 错误)."""
+        user = request.user
+        if not user.has_perm('judge.create_private_problem'):
+            raise PermissionError(_('You do not have permission to create this problem type.'))
+        answer = (payload.get('tfAnswer') or 'true').strip().lower()
+        if answer not in ('true', 'false'):
+            raise ValueError(_('Please choose the correct answer.'))
+
+        with transaction.atomic():
+            problem = Problem(submission_type=ProblemSubmissionType.MCQ)
+            problem.name = name
+            problem.description = payload.get('description') or ''
+            problem.points = self._num(payload.get('points'), 1)
+            problem.partial = False
+            problem.group = self._resolve_group(payload)
+            apply_simple_problem_defaults(problem)
+            problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
+            problem.save()
+
+            problem.authors.add(request.profile)
+            self._attach_types(problem, payload)
+            self._attach_orgs(problem, payload)
+            problem.is_organization_private = problem.organizations.exists()
+            problem.save(update_fields=['is_organization_private'])
+
+            ProblemMCQConfig.objects.create(problem=problem, multiple_select=False, shuffle_options=False)
+            ProblemMCQOption.objects.create(problem=problem, order=0, text=_('True'), is_correct=(answer == 'true'))
+            ProblemMCQOption.objects.create(problem=problem, order=1, text=_('False'), is_correct=(answer == 'false'))
+        return problem
+
+    # ------------------------------------------------------------------ fill in the blank
+    def _create_fill_blank(self, request, payload, name):
+        user = request.user
+        if not user.has_perm('judge.create_private_problem'):
+            raise PermissionError(_('You do not have permission to create this problem type.'))
+        blanks = [b for b in (payload.get('blanks') or []) if (b or '').strip()]
+        if not blanks:
+            raise ValueError(_('Please provide at least one blank answer.'))
+        use_ai = bool(payload.get('ai'))
+
+        with transaction.atomic():
+            problem = Problem(submission_type=ProblemSubmissionType.FILL_BLANK)
+            problem.name = name
+            problem.description = payload.get('description') or ''
+            problem.points = self._num(payload.get('points'), 1)
+            problem.partial = bool(payload.get('partial'))
+            problem.group = self._resolve_group(payload)
+            apply_simple_problem_defaults(problem)
+            problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
+            problem.save()
+
+            problem.authors.add(request.profile)
+            self._attach_types(problem, payload)
+            self._attach_orgs(problem, payload)
+            problem.is_organization_private = problem.organizations.exists()
+            problem.save(update_fields=['is_organization_private'])
+
+            ProblemFillBlankConfig.objects.create(
+                problem=problem,
+                grading_mode=GRADE_AI if use_ai else GRADE_EXACT,
+                case_sensitive=bool(payload.get('caseSensitive')),
+                ai_rubric=(payload.get('rubric') or '').strip(),
+            )
+            for index, answers in enumerate(blanks):
+                ProblemBlankAnswer.objects.create(problem=problem, order=index, answers=answers.strip())
+        return problem
+
+    # ------------------------------------------------------------------ short answer
+    def _create_short_answer(self, request, payload, name):
+        user = request.user
+        if not user.has_perm('judge.create_private_problem'):
+            raise PermissionError(_('You do not have permission to create this problem type.'))
+
+        with transaction.atomic():
+            problem = Problem(submission_type=ProblemSubmissionType.SHORT_ANSWER)
+            problem.name = name
+            problem.description = payload.get('description') or ''
+            problem.points = self._num(payload.get('points'), 1)
+            # AI grading returns a 0-100 percentage, so partial credit must be on for it to count.
+            problem.partial = True
+            problem.group = self._resolve_group(payload)
+            apply_simple_problem_defaults(problem)
+            problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
+            problem.save()
+
+            problem.authors.add(request.profile)
+            self._attach_types(problem, payload)
+            self._attach_orgs(problem, payload)
+            problem.is_organization_private = problem.organizations.exists()
+            problem.save(update_fields=['is_organization_private'])
+
+            ProblemShortAnswerConfig.objects.create(
+                problem=problem,
+                reference_answer=(payload.get('shortAnswer') or '').strip(),
+                ai_rubric=(payload.get('rubric') or '').strip(),
+            )
         return problem
 
 
