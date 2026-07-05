@@ -191,7 +191,7 @@ fieldset.module .form-content { padding: 1rem; }
   font-weight: 600;
   font-size: 13px;
 }
-.form-row .field { flex: 1; }
+.form-row .field { flex: 1; min-width: 0; }
 .form-row input[type="text"],
 .form-row input[type="number"],
 .form-row input[type="datetime-local"],
@@ -986,3 +986,25 @@ fieldset.module .form-content { padding: 1rem; }
   .so-panel { width: 100%; }
   .so-table thead th:nth-child(4), .so-table tbody td:nth-child(4) { display: none; }
 }
+
+/* ==========================================================================
+   融入 base.html 后的兼容修正
+   站点 widgets.scss 有一条全局规则 `.button, button { color: white !important }`，
+   会把本页所有 <button>（工具栏图标、富文本/Markdown 标签、保存/添加/取消等）的
+   文字刷成白色导致看不清。这里按组件用同等 !important 重新指定文字色（背景/边框/
+   布局仍由我方类选择器胜出，无需重设）。
+   ========================================================================== */
+.pcv2 .editor-mode-tabs button { color: var(--muted) !important; }
+.pcv2 .editor-mode-tabs button.active { color: var(--text) !important; }
+.pcv2 .rich-toolbar button { color: #555 !important; }
+.pcv2 .rich-toolbar button.active { color: #fff !important; }
+.pcv2 .btn { color: var(--text) !important; }
+.pcv2 .btn-primary,
+.pcv2 .btn.default { color: #fff !important; }
+.pcv2 .btn-secondary { color: #fff !important; }
+.pcv2 .btn-cancel { color: var(--danger) !important; }
+.pcv2 .btn-icon { color: var(--muted) !important; }
+.pcv2 .btn-icon:hover { color: var(--danger) !important; }
+.pcv2 .btn-add-option { color: var(--dmoj-green-dark) !important; }
+.pcv2 .ptype-add { color: var(--dmoj-green) !important; }
+.pcv2 .ptype-add:hover { color: #fff !important; }
