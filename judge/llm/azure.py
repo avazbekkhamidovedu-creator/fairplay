@@ -49,11 +49,14 @@ class AzureBackend(Backend):
             raise LLMError(str(e)) from e
         elapsed_ms = int((_time.monotonic() - start) * 1000)
 
-        logger.debug('LLM response: id=%s, model=%s, finish_reason=%s',
-                     response.id, response.model,
-                     response.choices[0].finish_reason if response.choices else 'N/A')
+        if not response.choices:
+            raise LLMError('AI service returned no choices. Please try again.')
 
-        content = response.choices[0].message.content
+        choice = response.choices[0]
+        logger.debug('LLM response: id=%s, model=%s, finish_reason=%s',
+                     response.id, response.model, choice.finish_reason)
+
+        content = choice.message.content
         if not content or not content.strip():
             raise LLMError('AI service returned an empty response. Please try again.')
 

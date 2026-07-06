@@ -121,6 +121,16 @@ class AzureBackendTestCase(SimpleTestCase):
             _, kwargs = create.call_args
             self.assertNotIn('max_completion_tokens', kwargs)
 
+    def test_chat_empty_choices_raises(self):
+        backend = AzureBackend()
+        with mock.patch('judge.llm.azure.AzureOpenAI') as client_cls:
+            response = _fake_azure_response('ok')
+            response.choices = []
+            client_cls.return_value.chat.completions.create.return_value = response
+            with self.assertRaises(LLMError) as ctx:
+                backend.chat([{'role': 'user', 'content': 'hi'}])
+            self.assertIn('no choices', str(ctx.exception))
+
 
 # ---------------------------------------------------------------------------
 # LiteLLM backend tests
@@ -271,6 +281,18 @@ class LiteLLMBackendTestCase(SimpleTestCase):
             backend.chat([{'role': 'user', 'content': 'hi'}])
         _, client_kwargs = mock_openai_cls.call_args
         self.assertEqual(client_kwargs['base_url'], 'http://host:4000/v1')
+
+    @mock.patch('judge.llm.litellm.OpenAI')
+    def test_chat_empty_choices_raises(self, mock_openai_cls):
+        client = mock_openai_cls.return_value
+        response = _fake_litellm_response('ok')
+        response.choices = []
+        client.chat.completions.create.return_value = response
+
+        backend = LiteLLMBackend()
+        with self.assertRaises(LLMError) as ctx:
+            backend.chat([{'role': 'user', 'content': 'hi'}])
+        self.assertIn('no choices', str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------

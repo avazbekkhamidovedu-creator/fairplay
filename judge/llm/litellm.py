@@ -40,10 +40,11 @@ class LiteLLMBackend(Backend):
         )
 
     def chat(self, messages, *, model=None, max_tokens=None, **kwargs) -> LLMResult:
+        api_key = kwargs.pop('api_key', None)
+
         logger.debug('chat() called: messages=%d, model=%s, max_tokens=%s, kwargs=%s',
                      len(messages), model, max_tokens, kwargs)
 
-        api_key = kwargs.pop('api_key', None)
         client = self._build_client(api_key=api_key)
         model = model or getattr(settings, 'LITELLM_DEFAULT_MODEL', None)
 
@@ -61,11 +62,14 @@ class LiteLLMBackend(Backend):
 
         elapsed_ms = int((_time.monotonic() - start) * 1000)
 
-        logger.debug('LLM response: id=%s, model=%s, finish_reason=%s',
-                     response.id, response.model,
-                     response.choices[0].finish_reason if response.choices else 'N/A')
+        if not response.choices:
+            raise LLMError('AI service returned no choices. Please try again.')
 
-        content = response.choices[0].message.content
+        choice = response.choices[0]
+        logger.debug('LLM response: id=%s, model=%s, finish_reason=%s',
+                     response.id, response.model, choice.finish_reason)
+
+        content = choice.message.content
         if not content or not content.strip():
             raise LLMError('AI service returned an empty response. Please try again.')
 
