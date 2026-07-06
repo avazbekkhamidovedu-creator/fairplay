@@ -40,32 +40,26 @@
 </form>
 
 <style>
-    .inline-blank-input {
-        display: inline-block; min-width: 80px; width: 110px; margin: 0 4px;
-        padding: 2px 6px; border: none; border-bottom: 2px solid #44ad41;
-        background: #f4faf2; text-align: center; font-size: inherit; border-radius: 0;
+    .inline-blank-ph {
+        display: inline-block; min-width: 40px; padding: 0 10px; margin: 0 3px;
+        border-bottom: 2px solid #44ad41; text-align: center;
+        color: #44ad41; font-weight: 600; vertical-align: baseline;
     }
-    .inline-blank-input:focus { outline: none; background: #eaf6e8; }
 </style>
 <script>
-    /* 把题面里的 {{blank}} 占位符渲染成内联输入框，并与右侧提交表单字段双向同步。
-       仅当占位符数量与空的数量一致时内联，避免错位；此时隐藏右侧独立输入列表。 */
+    /* 把题面里的 {{blank}} 占位符渲染成带编号的占位（不可编辑，仅指示位置）。
+       学生仍在右侧「Blank N」输入框作答，编号一一对应。 */
     (function () {
         function init() {
-            var form = document.getElementById('problem_submit');
-            if (!form) return;
-            var realInputs = [].slice.call(form.querySelectorAll('.fill-blank-input'));
-            if (!realInputs.length) return;
             var desc = document.querySelector('.content-description');
             if (!desc) return;
             var re = /\{\{\s*blank\s*\}\}/g;
             var walker = document.createTreeWalker(desc, NodeFilter.SHOW_TEXT, null);
-            var nodes = [], total = 0, node;
+            var nodes = [], node;
             while ((node = walker.nextNode())) {
-                var matches = node.nodeValue.match(re);
-                if (matches) { nodes.push(node); total += matches.length; }
+                if (node.nodeValue.match(re)) nodes.push(node);
             }
-            if (total !== realInputs.length) return;
+            if (!nodes.length) return;
             var idx = 0;
             nodes.forEach(function (textNode) {
                 var frag = document.createDocumentFragment();
@@ -73,25 +67,16 @@
                 parts.forEach(function (part, i) {
                     if (part) frag.appendChild(document.createTextNode(part));
                     if (i < parts.length - 1) {
-                        var real = realInputs[idx];
-                        var box = document.createElement('input');
-                        box.type = 'text';
-                        box.className = 'inline-blank-input';
-                        box.setAttribute('autocomplete', 'off');
-                        box.setAttribute('aria-label', 'Blank ' + (idx + 1));
-                        box.value = real.value || '';
-                        (function (r, b) {
-                            b.addEventListener('input', function () { r.value = b.value; });
-                            r.addEventListener('input', function () { b.value = r.value; });
-                        })(real, box);
-                        frag.appendChild(box);
                         idx++;
+                        var ph = document.createElement('span');
+                        ph.className = 'inline-blank-ph';
+                        ph.textContent = '(' + idx + ')';
+                        ph.setAttribute('title', 'Blank ' + idx);
+                        frag.appendChild(ph);
                     }
                 });
                 textNode.parentNode.replaceChild(frag, textNode);
             });
-            var list = form.querySelector('.fill-blank-fields');
-            if (list) list.style.display = 'none';
         }
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
         else init();
