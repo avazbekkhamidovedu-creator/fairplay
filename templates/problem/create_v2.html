@@ -8,7 +8,7 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260706e">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260706f">
 
   <!-- 需求3：数学公式真正可预览 -->
   <script>
@@ -160,11 +160,11 @@
                 <label><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>Hard</span></label>
                 <label><input type="radio" name="difficulty" value="ai" onchange="setDifficulty('ai')"><span>🤖 AI 判断</span></label>
               </div>
-              <div id="diff-ai-box" style="display:none;">
-                <button type="button" class="btn" style="padding:.3rem .7rem;font-size:12px;" id="diff-ai-run" onclick="runAIDifficulty()">让 AI 判定难度</button>
+              <div id="diff-ai-box" style="display:none;margin-top:0.4rem;">
                 <span id="diff-ai-result"></span>
+                <a href="javascript:void(0)" id="diff-ai-rerun" onclick="runAIDifficulty()" style="display:none;font-size:12px;margin-left:0.5rem;">重新判定</a>
               </div>
-              <div class="help">设置难度后自动写入 problem_type 标签；选「AI 判断」将调用 AI 依据题面判定 Easy / Medium / Hard</div>
+              <div class="help">设置难度后自动写入 problem_type 标签；选「AI 判断」将立即调用 AI 依据题面判定 Easy / Medium / Hard</div>
             </div>
           </div>
           <div class="form-row">
@@ -172,8 +172,9 @@
             <div class="field">
               <div class="ptype-tags" id="f-types">
                 <button type="button" class="ptype-add" title="从已有类型中选择 / 新建" onclick="openTypeModal()">+</button>
+                <button type="button" class="ptype-ai" id="ptype-ai-btn" title="AI 根据题面推荐类型标签" onclick="runAIProblemTypeInline()">🤖 AI</button>
               </div>
-              <div class="help">题型与难度标签自动写入，可继续添加其它分类标签</div>
+              <div class="help">题型与难度标签自动写入，可继续添加其它分类标签；点「🤖 AI」按题面自动推荐</div>
             </div>
           </div>
 
@@ -433,9 +434,6 @@
           </div>
         </div>
         <button type="button" class="btn-add-option" style="width:100%;margin-top:0.75rem;" id="ptype-new-btn" onclick="toggleNewTypeForm(true)">+ {{ _('New problem type') }}</button>
-        <div style="margin-top:0.75rem;">
-          <button type="button" class="btn" style="width:100%;" onclick="runAIProblemType(false)">🤖 {{ _('AI suggest types from problem content') }}</button>
-        </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:0.5rem;padding:0.75rem 1.25rem;border-top:1px solid var(--admin-border);">
         <button type="button" class="btn" onclick="closeTypeModal()">取消</button>
@@ -487,7 +485,8 @@
         box.style.display = 'block';
         // 未判定前先移除难度标签，判定完成后再写入
         document.getElementById('f-types').querySelectorAll('.ptype-tag.auto-diff').forEach(t => t.remove());
-        document.getElementById('diff-ai-result').innerHTML = '';
+        // 选中「AI 判断」即直接调用，无需再点按钮
+        runAIDifficulty();
       } else {
         box.style.display = 'none';
         setDifficultyTag(DIFF_LABEL[level]);
@@ -495,22 +494,27 @@
     }
     // 调用后端 AI 判定难度（judge/llm；未配置时后端回退启发式）
     function runAIDifficulty() {
-      const run = document.getElementById('diff-ai-run');
       const res = document.getElementById('diff-ai-result');
+      const rerun = document.getElementById('diff-ai-rerun');
       const description = getMd('stem');
-      if (!description.trim()) { showToast('{{ _("Please enter problem content first.") }}', false); return; }
-      run.disabled = true; run.textContent = '{{ _("Analyzing…") }}'; res.innerHTML = '';
+      if (!description.trim()) {
+        res.innerHTML = '<span style="color:#c0392b;">{{ _("Please enter problem content first.") }}</span>';
+        if (rerun) rerun.style.display = 'inline';
+        return;
+      }
+      res.innerHTML = '🤖 {{ _("Analyzing…") }}';
+      if (rerun) rerun.style.display = 'none';
       fetch(AI_DIFFICULTY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
         body: JSON.stringify({ description }),
       }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
-        if (!ok) { showToast(body.error || '{{ _("AI difficulty failed") }}', false); return; }
+        if (!ok) { res.innerHTML = '<span style="color:#c0392b;">' + (body.error || '{{ _("AI difficulty failed") }}') + '</span>'; return; }
         currentDifficulty = body.level;
         setDifficultyTag(body.label);
         res.innerHTML = `<span class="diff-ai-result">🤖 {{ _("AI judged:") }} <b>${body.label}</b></span>`;
-      }).catch(() => showToast('{{ _("Network error") }}', false))
-        .finally(() => { run.disabled = false; run.textContent = '{{ _("Re-analyze") }}'; });
+      }).catch(() => { res.innerHTML = '<span style="color:#c0392b;">{{ _("Network error") }}</span>'; })
+        .finally(() => { if (rerun) rerun.style.display = 'inline'; });
     }
 
     /* ---------- problem_type 选择（来自数据库） ---------- */
@@ -584,6 +588,37 @@
         });
         showToast('{{ _("AI suggestions applied — confirm selection") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
+    }
+    /* 需求：AI 入口放在加号旁边，直接按题面推荐并写入标签（无需打开弹窗） */
+    function runAIProblemTypeInline() {
+      const description = getMd('stem');
+      if (!description.trim()) { showToast('{{ _("Please enter problem content first.") }}', false); return; }
+      const btn = document.getElementById('ptype-ai-btn');
+      const old = btn.textContent;
+      btn.disabled = true; btn.textContent = '…';
+      fetch(AI_PROBLEM_TYPE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify({ description }),
+      }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+        if (!ok) { showToast(body.error || '{{ _("AI suggestion failed") }}', false); return; }
+        const suggestions = body.suggestions || [];
+        if (!suggestions.length) { showToast('{{ _("No suggestion") }}', false); return; }
+        const box = document.getElementById('f-types');
+        const existing = new Set(currentManualTags());
+        suggestions.forEach(s => {
+          const full = s.full || s.name;
+          pushServerType({ name: s.name, full });
+          if (existing.has(full)) return;
+          const el = document.createElement('span');
+          el.className = 'ptype-tag';
+          el.innerHTML = full + ' <span class="x" onclick="this.parentElement.remove()">×</span>';
+          box.insertBefore(el, box.querySelector('.ptype-add'));
+          existing.add(full);
+        });
+        showToast('{{ _("AI suggestions applied") }}', true);
+      }).catch(() => showToast('{{ _("Network error") }}', false))
+        .finally(() => { btn.disabled = false; btn.textContent = old; });
     }
     function applyTypeSelection() {
       const chosen = [...document.querySelectorAll('#ptype-options input:checked')].map(i => i.value);
@@ -951,8 +986,7 @@
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/==(.+?)==/g, '<mark>$1</mark>')
         .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-        .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/\{\{blank\}\}/g, '<u>&nbsp;&nbsp;&nbsp;&nbsp;</u>');
+        .replace(/`([^`]+)`/g, '<code>$1</code>');
       s = s.replace(/(?:^|\n)((?:\d+\. .*(?:\n|$))+)/g, (m) => '\n<ol>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^\d+\. /, '') + '</li>').join('') + '</ol>\n');
       s = s.replace(/(?:^|\n)((?:- .*(?:\n|$))+)/g, (m) => '\n<ul>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^- /, '') + '</li>').join('') + '</ul>\n');
       s = s.replace(/\n/g, '<br>').replace(/<br>(<ul>|<\/ul>|<ol>|<\/ol>|<h1>|<h2>|<h3>|<pre>)/g, '$1');
@@ -1130,7 +1164,12 @@
     /* ---------- 预览 ---------- */
     function renderPreview() {
       const pv = document.getElementById('preview-body');
-      const stem = editorHtml('stem');
+      let stem = editorHtml('stem');
+      let blankCount = 0;
+      if (currentType === 'blank') {
+        // 把题面里的 {{blank}} 占位符渲染成内联填空框（按顺序编号）
+        stem = stem.replace(/\{\{\s*blank\s*\}\}/g, () => `<input class="pv-blankinput pv-blank-inline" disabled placeholder="${++blankCount}">`);
+      }
       let html = `<div class="pv-stem">${stem || '<span style="color:#bbb;">题目内容预览…</span>'}</div>`;
       if (currentType === 'single' || currentType === 'multiple') {
         html += renderOptsPreview('#options', currentType === 'multiple');
@@ -1142,7 +1181,8 @@
       } else if (currentType === 'short') {
         html += `<div class="pv-answerbox"></div><div class="pv-answerlabel">答案：</div>`;
       } else if (currentType === 'blank') {
-        html += `<input class="pv-blankinput" placeholder="请输入答案" disabled>`;
+        // 题面未插入 {{blank}} 时，退化为末尾单个填空框
+        if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="请输入答案" disabled>`;
         const ans = [...document.querySelectorAll('#blank-answers input[type="text"]')].map(i => i.value).filter(Boolean);
         html += `<div class="pv-answerlabel">答案：${ans.length ? ans.join(' / ') : '—'}</div>`;
       } else if (currentType === 'programming') {

@@ -48,6 +48,8 @@ def apply_simple_problem_defaults(problem):
     """
     if not problem.code:
         problem.code = generate_problem_code()
+    if problem.date is None:
+        problem.date = timezone.now()
     if problem.time_limit is None:
         problem.time_limit = min(max(1, settings.DMOJ_PROBLEM_MIN_TIME_LIMIT), settings.DMOJ_PROBLEM_MAX_TIME_LIMIT)
     if not problem.memory_limit:

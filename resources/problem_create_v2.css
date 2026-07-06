@@ -779,6 +779,14 @@ fieldset.module .form-content { padding: 1rem; }
   background: #fff; color: var(--dmoj-green); cursor: pointer; font-size: 14px; line-height: 1;
 }
 .ptype-add:hover { background: var(--dmoj-green); color: #fff; }
+.ptype-ai {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  height: 24px; padding: 0 0.55rem; border-radius: 14px;
+  border: 1px dashed var(--dmoj-green); background: #fff; color: var(--dmoj-green-dark);
+  cursor: pointer; font-size: 12px; line-height: 1;
+}
+.ptype-ai:hover { background: var(--dmoj-green); color: #fff; }
+.ptype-ai:disabled { opacity: 0.6; cursor: default; }
 
 /* ── 融合版：题面 + 预览 左右并排 ── */
 .content-split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
@@ -806,6 +814,12 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-answerbox { background: #f0f0f0; height: 38px; border-radius: 4px; margin-bottom: 0.6rem; }
 .pv-answerlabel { font-size: 13px; color: var(--text); }
 .pv-blankinput { width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 0.6rem; font-size: 13px; }
+.pv-blankinput.pv-blank-inline {
+  display: inline-block; width: 90px; margin: 0 4px 0 4px; padding: 2px 6px;
+  border: none; border-bottom: 1.5px solid var(--dmoj-green); border-radius: 0;
+  background: #f4faf2; text-align: center; vertical-align: baseline;
+}
+.pv-blankinput.pv-blank-inline::placeholder { color: var(--dmoj-green); font-weight: 600; }
 
 /* 难度（reference 配置） */
 .difficulty-bar { display: flex; gap: 0.35rem; }
@@ -1014,3 +1028,5 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .btn-add-option { color: var(--dmoj-green-dark) !important; }
 .pcv2 .ptype-add { color: var(--dmoj-green) !important; }
 .pcv2 .ptype-add:hover { color: #fff !important; }
+.pcv2 .ptype-ai { color: var(--dmoj-green-dark) !important; background: #fff !important; }
+.pcv2 .ptype-ai:hover { color: #fff !important; background: var(--dmoj-green) !important; }
