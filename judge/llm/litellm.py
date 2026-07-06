@@ -25,7 +25,7 @@ class LiteLLMBackend(Backend):
 
     def _build_client(self, api_key=None) -> OpenAI:
         api_base = settings.LITELLM_API_BASE.rstrip('/')
-        if not api_base.endswith('/v1'):
+        if 'v1' not in api_base.split('/'):
             api_base = api_base + '/v1'
 
         api_key = api_key or getattr(settings, 'LITELLM_API_KEY', '') or 'sk-no-key-required'
@@ -51,14 +51,12 @@ class LiteLLMBackend(Backend):
 
         start = _time.monotonic()
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_completion_tokens=max_tokens,
-                **kwargs,
-            )
+            api_kwargs = dict(model=model, messages=messages, **kwargs)
+            if max_tokens is not None:
+                api_kwargs['max_completion_tokens'] = max_tokens
+            response = client.chat.completions.create(**api_kwargs)
         except Exception as e:
-            logger.exception('Azure API request failed after %.2fs', _time.monotonic() - start)
+            logger.exception('LiteLLM API request failed after %.2fs', _time.monotonic() - start)
             raise LLMError(str(e)) from e
 
         elapsed_ms = int((_time.monotonic() - start) * 1000)

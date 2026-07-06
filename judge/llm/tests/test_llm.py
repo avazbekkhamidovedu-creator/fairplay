@@ -110,6 +110,17 @@ class AzureBackendTestCase(SimpleTestCase):
                 backend.chat([{'role': 'user', 'content': 'hi'}])
             self.assertIn('timed out', str(ctx.exception))
 
+    def test_chat_omits_max_completion_tokens_when_none(self):
+        backend = AzureBackend()
+        with override_settings(AZURE_OPENAI_MAX_TOKENS=None):
+            with mock.patch('judge.llm.azure.AzureOpenAI') as client_cls:
+                create = client_cls.return_value.chat.completions.create
+                create.return_value = _fake_azure_response('ok')
+                backend.chat([{'role': 'user', 'content': 'hi'}], max_tokens=None)
+
+            _, kwargs = create.call_args
+            self.assertNotIn('max_completion_tokens', kwargs)
+
 
 # ---------------------------------------------------------------------------
 # LiteLLM backend tests
@@ -225,6 +236,42 @@ class LiteLLMBackendTestCase(SimpleTestCase):
         _, kwargs = client.chat.completions.create.call_args
         self.assertEqual(kwargs['max_completion_tokens'], 512)
 
+    @mock.patch('judge.llm.litellm.OpenAI')
+    def test_chat_omits_max_completion_tokens_when_none(self, mock_openai_cls):
+        client = mock_openai_cls.return_value
+        client.chat.completions.create.return_value = _fake_litellm_response('ok')
+
+        backend = LiteLLMBackend()
+        backend.chat([{'role': 'user', 'content': 'hi'}], max_tokens=None)
+
+        _, kwargs = client.chat.completions.create.call_args
+        self.assertNotIn('max_completion_tokens', kwargs)
+
+    @mock.patch('judge.llm.litellm.OpenAI')
+    def test_api_base_v1_detection_adds_v1(self, mock_openai_cls):
+        with override_settings(LITELLM_API_BASE='http://host:4000'):
+            backend = LiteLLMBackend()
+            backend.chat([{'role': 'user', 'content': 'hi'}])
+        mock_openai_cls.assert_called_once()
+        _, client_kwargs = mock_openai_cls.call_args
+        self.assertEqual(client_kwargs['base_url'], 'http://host:4000/v1')
+
+    @mock.patch('judge.llm.litellm.OpenAI')
+    def test_api_base_v1_detection_already_has_v1(self, mock_openai_cls):
+        with override_settings(LITELLM_API_BASE='http://host:4000/v1'):
+            backend = LiteLLMBackend()
+            backend.chat([{'role': 'user', 'content': 'hi'}])
+        _, client_kwargs = mock_openai_cls.call_args
+        self.assertEqual(client_kwargs['base_url'], 'http://host:4000/v1')
+
+    @mock.patch('judge.llm.litellm.OpenAI')
+    def test_api_base_v1_detection_trailing_slash(self, mock_openai_cls):
+        with override_settings(LITELLM_API_BASE='http://host:4000/'):
+            backend = LiteLLMBackend()
+            backend.chat([{'role': 'user', 'content': 'hi'}])
+        _, client_kwargs = mock_openai_cls.call_args
+        self.assertEqual(client_kwargs['base_url'], 'http://host:4000/v1')
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -232,9 +279,7 @@ class LiteLLMBackendTestCase(SimpleTestCase):
 class ModuleLevelTestCase(SimpleTestCase):
     def setUp(self):
         llm._backend = None
-        llm._provider = None
         self.addCleanup(setattr, llm, '_backend', None)
-        self.addCleanup(setattr, llm, '_provider', None)
 
     @override_settings(**AZURE_SETTINGS)
     def test_is_configured_wraps_backend(self):
@@ -268,9 +313,7 @@ class ModuleLevelTestCase(SimpleTestCase):
 class ProfileEdgeCaseTestCase(SimpleTestCase):
     def setUp(self):
         llm._backend = None
-        llm._provider = None
         self.addCleanup(setattr, llm, '_backend', None)
-        self.addCleanup(setattr, llm, '_provider', None)
 
     @override_settings(LLM_PROVIDER='litellm')
     def test_resolve_without_any_profiles(self):
@@ -326,9 +369,7 @@ class ProfileEdgeCaseTestCase(SimpleTestCase):
 class ProfileResolutionTestCase(SimpleTestCase):
     def setUp(self):
         llm._backend = None
-        llm._provider = None
         self.addCleanup(setattr, llm, '_backend', None)
-        self.addCleanup(setattr, llm, '_provider', None)
 
     @override_settings(
         LLM_PROVIDER='litellm',
@@ -415,9 +456,7 @@ class ProfileResolutionTestCase(SimpleTestCase):
 class BackendDispatchTestCase(SimpleTestCase):
     def setUp(self):
         llm._backend = None
-        llm._provider = None
         self.addCleanup(setattr, llm, '_backend', None)
-        self.addCleanup(setattr, llm, '_provider', None)
 
     @override_settings(LLM_PROVIDER='azure')
     def test_azure_provider_selected(self):

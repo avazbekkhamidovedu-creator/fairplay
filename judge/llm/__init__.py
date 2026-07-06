@@ -13,15 +13,11 @@ from judge.llm.base import Backend, LLMError, LLMResult
 __all__ = ['Backend', 'LLMError', 'LLMResult', 'get_backend', 'chat', 'is_configured']
 
 _backend = None
-_provider = None
 
 
 def _get_provider() -> str:
     """Return the current LLM provider identifier in upper case."""
-    global _provider
-    if _provider is None:
-        _provider = getattr(settings, 'LLM_PROVIDER', 'azure').upper()
-    return _provider
+    return getattr(settings, 'LLM_PROVIDER', 'azure').upper()
 
 
 def _resolve_profile(name: str) -> dict:

@@ -40,12 +40,10 @@ class AzureBackend(Backend):
 
         start = _time.monotonic()
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_completion_tokens=max_tokens,
-                **kwargs,
-            )
+            api_kwargs = dict(model=model, messages=messages, **kwargs)
+            if max_tokens is not None:
+                api_kwargs['max_completion_tokens'] = max_tokens
+            response = client.chat.completions.create(**api_kwargs)
         except Exception as e:
             logger.exception('Azure API request failed after %.2fs', _time.monotonic() - start)
             raise LLMError(str(e)) from e
