@@ -108,7 +108,7 @@ class AzureBackendTestCase(SimpleTestCase):
             client_cls.return_value.chat.completions.create.side_effect = TimeoutError('timed out')
             with self.assertRaises(LLMError) as ctx:
                 backend.chat([{'role': 'user', 'content': 'hi'}])
-            self.assertIn('timed out', str(ctx.exception))
+            self.assertIn('TimeoutError', str(ctx.exception))
 
     def test_chat_omits_max_completion_tokens_when_none(self):
         backend = AzureBackend()
@@ -191,7 +191,7 @@ class LiteLLMBackendTestCase(SimpleTestCase):
         backend = LiteLLMBackend()
         with self.assertRaises(LLMError) as ctx:
             backend.chat([{'role': 'user', 'content': 'hi'}])
-        self.assertIn('refused', str(ctx.exception))
+        self.assertIn('ConnectionError', str(ctx.exception))
 
     @mock.patch('judge.llm.litellm.OpenAI')
     def test_chat_falls_back_to_default_model(self, mock_openai_cls):

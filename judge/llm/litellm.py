@@ -58,7 +58,7 @@ class LiteLLMBackend(Backend):
             response = client.chat.completions.create(**api_kwargs)
         except Exception as e:
             logger.exception('LiteLLM API request failed after %.2fs', _time.monotonic() - start)
-            raise LLMError(str(e)) from e
+            raise LLMError(f'API request failed: {type(e).__name__}') from e
 
         elapsed_ms = int((_time.monotonic() - start) * 1000)
 
