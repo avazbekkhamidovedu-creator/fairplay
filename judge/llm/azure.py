@@ -31,7 +31,7 @@ class AzureBackend(Backend):
             )
         return self._client
 
-    def chat(self, messages, *, model=None, max_tokens=None, extra_payload=None) -> LLMResult:
+    def chat(self, messages, *, model=None, max_tokens=None, **kwargs) -> LLMResult:
         """Call Azure OpenAI and return an LLMResult. Raises on failure."""
         client = self._get_client()
         model = model or settings.AZURE_OPENAI_DEPLOYMENT
@@ -39,11 +39,16 @@ class AzureBackend(Backend):
             max_tokens = getattr(settings, 'AZURE_OPENAI_MAX_TOKENS', 2048)
 
         start = _time.monotonic()
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_completion_tokens=max_tokens,
-        )
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_completion_tokens=max_tokens,
+                **kwargs,
+            )
+        except Exception as e:
+            logger.exception('Azure API request failed after %.2fs', _time.monotonic() - start)
+            raise LLMError(str(e)) from e
         elapsed_ms = int((_time.monotonic() - start) * 1000)
 
         logger.debug('LLM response: id=%s, model=%s, finish_reason=%s',
