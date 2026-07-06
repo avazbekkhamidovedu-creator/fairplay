@@ -43,17 +43,17 @@ def _resolve_profile(name: str) -> dict:
 
 def get_backend() -> Backend:
     """Return the configured LLM backend (cached for the process)."""
-    global _backend, _provider
+    global _backend
     if _backend is None:
-        _provider = getattr(settings, 'LLM_PROVIDER', 'azure').lower()
-        if _provider == 'azure':
+        provider = getattr(settings, 'LLM_PROVIDER', 'azure').lower()
+        if provider == 'azure':
             from judge.llm.azure import AzureBackend
             _backend = AzureBackend()
-        elif _provider == 'litellm':
+        elif provider == 'litellm':
             from judge.llm.litellm import LiteLLMBackend
             _backend = LiteLLMBackend()
         else:
-            raise ImproperlyConfigured(f'Unknown LLM_PROVIDER: {_provider!r}')
+            raise ImproperlyConfigured(f'Unknown LLM_PROVIDER: {provider!r}')
     return _backend
 
 
