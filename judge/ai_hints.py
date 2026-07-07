@@ -153,7 +153,7 @@ def get_hint(submission) -> HintResult:
         {'role': 'system', 'content': _SYSTEM_PROMPT},
         {'role': 'user', 'content': build_user_message(submission)},
     ]
-    result = llm.chat(messages, max_tokens=getattr(settings, 'AZURE_OPENAI_MAX_TOKENS', 2048))
+    result = llm.chat(messages, profile='hint')
     return HintResult(
         hint_text=result.text,
         prompt_tokens=result.prompt_tokens,

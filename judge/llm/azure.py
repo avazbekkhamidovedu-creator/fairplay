@@ -31,7 +31,7 @@ class AzureBackend(Backend):
             )
         return self._client
 
-    def chat(self, messages, *, model=None, max_tokens=None, extra_payload=None) -> LLMResult:
+    def chat(self, messages, *, model=None, max_tokens=None, **kwargs) -> LLMResult:
         """Call Azure OpenAI and return an LLMResult. Raises on failure."""
         client = self._get_client()
         model = model or settings.AZURE_OPENAI_DEPLOYMENT
@@ -39,18 +39,24 @@ class AzureBackend(Backend):
             max_tokens = getattr(settings, 'AZURE_OPENAI_MAX_TOKENS', 2048)
 
         start = _time.monotonic()
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_completion_tokens=max_tokens,
-        )
+        try:
+            api_kwargs = dict(model=model, messages=messages, **kwargs)
+            if max_tokens is not None:
+                api_kwargs['max_completion_tokens'] = max_tokens
+            response = client.chat.completions.create(**api_kwargs)
+        except Exception as e:
+            logger.exception('Azure API request failed after %.2fs', _time.monotonic() - start)
+            raise LLMError(f'API request failed: {type(e).__name__}') from e
         elapsed_ms = int((_time.monotonic() - start) * 1000)
 
-        logger.debug('LLM response: id=%s, model=%s, finish_reason=%s',
-                     response.id, response.model,
-                     response.choices[0].finish_reason if response.choices else 'N/A')
+        if not response.choices:
+            raise LLMError('AI service returned no choices. Please try again.')
 
-        content = response.choices[0].message.content
+        choice = response.choices[0]
+        logger.debug('LLM response: id=%s, model=%s, finish_reason=%s',
+                     response.id, response.model, choice.finish_reason)
+
+        content = choice.message.content
         if not content or not content.strip():
             raise LLMError('AI service returned an empty response. Please try again.')
 
