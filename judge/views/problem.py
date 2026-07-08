@@ -583,6 +583,16 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         return queryset.search(query, queryset.BOOLEAN).extra(order_by=['-relevance'])
 
     def get_visible_problems_filter(self):
+        user = self.request.user
+        # Users who may see private problems (or edit everything) get the full set on the front-end
+        # list too — mirroring Problem.get_visible_problems and the Django admin. Without this an
+        # admin who did not author a private problem could not find it here (nor filter by its
+        # group / type), even though it shows up in the admin site.
+        if user.is_authenticated and (
+            user.has_perm('judge.see_private_problem')
+            or (user.has_perm('judge.edit_own_problem') and user.has_perm('judge.edit_all_problem'))
+        ):
+            return Q()
         filter = Q(is_public=True)
         if not self.request.user.has_perm('judge.see_organization_problem'):
             org_filter = Q(is_organization_private=False)
@@ -601,6 +611,29 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                     Organization.admins.through.objects.filter(profile=self.profile).values('organization_id'),
                 )
         return filter
+
+    def get_format_options(self):
+        """Answer-format filter options as ``(code, label, Q)`` tuples.
+
+        MCQ is a single ``submission_type`` but authored as single / multiple / true-false, so it is
+        expanded here (via ``mcq_config``) into three distinct, filterable options.
+        """
+        from judge.models import ProblemSubmissionType
+        from judge.question_types import all_types
+        options = []
+        for t in all_types():
+            if t.submission_type == ProblemSubmissionType.MCQ:
+                options.append(('single', _('Single choice'),
+                                Q(submission_type=ProblemSubmissionType.MCQ,
+                                  mcq_config__is_true_false=False, mcq_config__multiple_select=False)))
+                options.append(('multiple', _('Multiple choice'),
+                                Q(submission_type=ProblemSubmissionType.MCQ,
+                                  mcq_config__is_true_false=False, mcq_config__multiple_select=True)))
+                options.append(('truefalse', _('True/False'),
+                                Q(submission_type=ProblemSubmissionType.MCQ, mcq_config__is_true_false=True)))
+            else:
+                options.append((t.submission_type, str(t.label), Q(submission_type=t.submission_type)))
+        return options
 
     def get_normal_queryset(self):
         filter = self.get_visible_problems_filter()
@@ -651,7 +684,13 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             if selected_difficulty:
                 queryset = queryset.filter(types__in=selected_difficulty)
         if self.selected_formats:
-            queryset = queryset.filter(submission_type__in=self.selected_formats)
+            qmap = {code: q for code, label, q in self.get_format_options()}
+            fmt_q = Q()
+            for code in self.selected_formats:
+                if code in qmap:
+                    fmt_q |= qmap[code]
+            if fmt_q:
+                queryset = queryset.filter(fmt_q)
         if 'search' in self.request.GET:
             self.search_query = query = ' '.join(self.request.GET.getlist('search')).strip()
             if query:
@@ -720,10 +759,11 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 i for i in self.selected_types
                 if i not in difficulty_ids and i not in format_type_ids
             ]
-            # The answer format is driven by the authoritative submission_type discriminator;
-            # offer the question types the system actually supports end-to-end.
-            from judge.question_types import all_types
-            context['format_types'] = [{'code': t.submission_type, 'label': t.label} for t in all_types()]
+            # The answer format is driven by the authoritative submission_type discriminator
+            # (MCQ expanded into single / multiple / true-false); offer the question types the
+            # system actually supports end-to-end.
+            context['format_types'] = [{'code': code, 'label': label}
+                                       for code, label, q in self.get_format_options()]
             context['selected_formats'] = self.selected_formats
         context['has_fts'] = settings.ENABLE_FTS
         context['search_query'] = self.search_query
@@ -857,8 +897,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             except ValueError:
                 pass
         if 'format' in request.GET:
-            from judge.question_types import all_types
-            valid_formats = {t.submission_type for t in all_types()}
+            valid_formats = {code for code, label, q in self.get_format_options()}
             self.selected_formats = [c for c in request.GET.getlist('format') if c in valid_formats]
 
         self.point_start = safe_float_or_none(request.GET.get('point_start'))

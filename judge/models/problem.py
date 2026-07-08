@@ -241,10 +241,13 @@ class Problem(models.Model):
         # True/false is stored as an MCQ, so surface it distinctly when the config flags it.
         if self.submission_type == ProblemSubmissionType.MCQ:
             try:
-                if self.mcq_config.is_true_false:
-                    return [_('True/False')]
+                config = self.mcq_config
             except ObjectDoesNotExist:
-                pass
+                config = None
+            if config is not None:
+                if config.is_true_false:
+                    return [_('True/False')]
+                return [_('Multiple choice') if config.multiple_select else _('Single choice')]
         label = dict(ProblemSubmissionType.CHOICES).get(self.submission_type)
         return [label] if label else []
 
