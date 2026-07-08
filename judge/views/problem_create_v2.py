@@ -26,6 +26,7 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils.decorators import method_decorator
+from django.utils.text import slugify
 from django.utils.translation import gettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
@@ -82,6 +83,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'save_url': reverse('problem_create_v2'),
             'ai_difficulty_url': reverse('problem_create_v2_ai_difficulty'),
             'create_problem_type_url': reverse('problem_create_v2_problem_type'),
+            'create_problem_group_url': reverse('problem_create_v2_problem_group'),
+            'create_organization_url': reverse('problem_create_v2_organization'),
+            'can_create_organization': user.has_perm('judge.create_private_problem'),
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'problem_list_url': reverse('problem_list'),
         }
@@ -455,6 +459,78 @@ class ProblemCreateV2ProblemTypeView(LoginRequiredMixin, View):
 
         ptype = ProblemType.objects.create(name=name, full_name=full_name)
         return JsonResponse({'ok': True, 'type': {'name': ptype.name, 'full': ptype.full_name}})
+
+
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+class ProblemCreateV2ProblemGroupView(LoginRequiredMixin, View):
+    """Create a ProblemGroup from the add-problem page (accepts a display name)."""
+
+    def post(self, request, *args, **kwargs):
+        if not _can_create_any(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': _('Invalid request.')}, status=400)
+
+        full_name = (payload.get('full_name') or '').strip()
+        name = (payload.get('name') or '').strip()
+        if not full_name and not name:
+            return JsonResponse({'error': _('Please enter a group name.')}, status=400)
+        if not full_name:
+            full_name = name
+        if not name:
+            name = _problem_type_code(full_name)
+        if len(name) > 20:
+            return JsonResponse({'error': _('Group ID must be at most 20 characters.')}, status=400)
+        if len(full_name) > 100:
+            return JsonResponse({'error': _('Group name must be at most 100 characters.')}, status=400)
+        if ProblemGroup.objects.filter(name=name).exists():
+            # Keep the code unique by suffixing a short number when it collides.
+            base = name[:16]
+            for i in range(2, 100):
+                candidate = '%s-%d' % (base, i)
+                if not ProblemGroup.objects.filter(name=candidate).exists():
+                    name = candidate
+                    break
+            else:
+                return JsonResponse({'error': _('This group already exists.')}, status=400)
+
+        group = ProblemGroup.objects.create(name=name, full_name=full_name)
+        return JsonResponse({'ok': True, 'group': {'id': group.id, 'full': group.full_name or group.name}})
+
+
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+class ProblemCreateV2OrganizationView(LoginRequiredMixin, View):
+    """Create an Organization from the add-problem page and add the current user as admin/member.
+
+    Only users who can create private (organization) problems may make new organizations here; the
+    creator is added both as an administrator and a member so it appears in their scoped list.
+    """
+
+    def post(self, request, *args, **kwargs):
+        if not request.user.has_perm('judge.create_private_problem'):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': _('Invalid request.')}, status=400)
+
+        name = (payload.get('name') or '').strip()
+        if not name:
+            return JsonResponse({'error': _('Please enter an organization name.')}, status=400)
+        if len(name) > 128:
+            return JsonResponse({'error': _('Organization name must be at most 128 characters.')}, status=400)
+
+        slug = slugify(name)[:128] or 'org'
+        short_name = name[:20]
+        with transaction.atomic():
+            org = Organization.objects.create(name=name, slug=slug, short_name=short_name, about='')
+            profile = request.profile
+            if profile:
+                org.admins.add(profile)
+                profile.organizations.add(org)
+        return JsonResponse({'ok': True, 'organization': {'id': org.id, 'name': org.name}})
 
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')

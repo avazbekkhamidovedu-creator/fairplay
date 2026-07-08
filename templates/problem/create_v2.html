@@ -11,7 +11,7 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260706f">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260708a">
 
   <!-- 需求3：数学公式真正可预览 -->
   <script>
@@ -78,15 +78,22 @@
     .pv-sub .pv-sub-t { font-weight: 600; margin-bottom: 0.35rem; }
     .pv-badge { display: inline-block; font-size: 11px; background: #f3e5f5; color: #7b1fa2; border-radius: 4px; padding: 0.05rem 0.4rem; font-weight: 600; }
 
-    /* 左右分栏：左侧随页面滚动，右侧预览 sticky 跟随视口 */
+    /* 左右分栏：左侧随页面滚动，右侧预览做成与左侧一致的卡片并 sticky 跟随视口 */
     .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
     .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
-    .v2-right { min-width: 0; padding: 0 1.5rem 3rem; border-left: 1px solid var(--admin-border); background: #fcfcfc; position: sticky; top: 56px; align-self: start; max-height: calc(100vh - 56px); overflow-y: auto; }
-    .v2-right .pv-head { position: sticky; top: 0; z-index: 2; background: #fcfcfc; margin: 0 -1.5rem 0.9rem; padding: 0.9rem 1.5rem 0.6rem; border-bottom: 1px solid var(--admin-border); }
-    .pv-panel { border: none; background: transparent; padding: 0; }
+    .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
+    /* 预览卡片：与左侧 fieldset.module 一致（白底 + 边框 + 灰色标题条） */
+    .pv-panel { border: 1px solid var(--admin-border); border-radius: 4px; background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); }
+    .v2-right .pv-head {
+      background: #f0f0f0; color: var(--text); margin: 0; padding: 0.6rem 1rem;
+      font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: normal;
+      border-bottom: 1px solid var(--admin-border); flex-shrink: 0;
+    }
+    #preview-body { padding: 1rem; overflow-y: auto; }
     @media (max-width: 900px) {
       .v2-split { grid-template-columns: 1fr; }
-      .v2-right { position: static; max-height: none; overflow: visible; border-left: none; border-top: 1px solid var(--admin-border); }
+      .v2-right { position: static; padding: 0 1.5rem 3rem; }
+      .pv-panel { max-height: none; }
     }
 
     /* 难度 AI 判断 */
@@ -114,7 +121,7 @@
             <div class="field">
               <div class="type-pills" id="type-pills">
                 <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create code problems') }}" style="opacity:0.45;"{% endif %}>
-                  <input type="radio" name="qtype" value="programming" onchange="selectType('programming')" {% if not can_create_code %}disabled{% endif %}><span>💻 {{ _('Programming') }}</span></label>
+                  <input type="radio" name="qtype" value="programming" onchange="selectType('programming')" {% if not can_create_code %}disabled{% endif %}><span>{{ _('Programming') }}</span></label>
                 <label class="type-pill" data-save="mcq">
                   <input type="radio" name="qtype" value="single" {% if can_create_mcq %}checked{% endif %} onchange="selectType('single')"><span>{{ _('Single choice') }}</span></label>
                 <label class="type-pill" data-save="mcq" {% if not can_create_mcq %}style="opacity:0.45;"{% endif %}>
@@ -139,29 +146,49 @@
           <div class="form-row">
             <label>Organizations</label>
             <div class="field">
-              <select id="f-org">
-                <option value="">— {{ _('None') }} —</option>
-                {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
-              </select>
+              <div class="select-with-add">
+                <select id="f-org">
+                  <option value="">— {{ _('None') }} —</option>
+                  {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
+                </select>
+                {% if can_create_organization %}
+                <button type="button" class="inline-add-btn" title="{{ _('Create organization') }}" onclick="toggleInlineAdd('org')">+ {{ _('New') }}</button>
+                {% endif %}
+              </div>
+              {% if can_create_organization %}
+              <div class="inline-add-box" id="org-add-box" style="display:none;">
+                <input type="text" id="org-add-name" placeholder="{{ _('Organization name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createOrg();}">
+                <button type="button" class="btn-mini btn-mini-primary" onclick="createOrg()">{{ _('Create') }}</button>
+                <button type="button" class="btn-mini" onclick="toggleInlineAdd('org')">{{ _('Cancel') }}</button>
+              </div>
+              {% endif %}
               <div class="help">留空则为公开题（需相应权限）；选择组织后为该组织私有</div>
             </div>
           </div>
           <div class="form-row">
             <label>Problem group <span class="req">*</span></label>
             <div class="field">
-              <select id="f-group">
-                {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
-              </select>
+              <div class="select-with-add">
+                <select id="f-group">
+                  {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
+                </select>
+                <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+ {{ _('New') }}</button>
+              </div>
+              <div class="inline-add-box" id="group-add-box" style="display:none;">
+                <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
+                <button type="button" class="btn-mini btn-mini-primary" onclick="createGroup()">{{ _('Create') }}</button>
+                <button type="button" class="btn-mini" onclick="toggleInlineAdd('group')">{{ _('Cancel') }}</button>
+              </div>
             </div>
           </div>
           <div class="form-row">
             <label>难度 <span class="req">*</span></label>
             <div class="field">
-              <div class="segment-group sm" id="difficulty">
-                <label><input type="radio" name="difficulty" value="easy" onchange="setDifficulty('easy')"><span>Easy</span></label>
-                <label><input type="radio" name="difficulty" value="medium" checked onchange="setDifficulty('medium')"><span>Medium</span></label>
-                <label><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>Hard</span></label>
-                <label><input type="radio" name="difficulty" value="ai" onchange="setDifficulty('ai')"><span>🤖 AI 判断</span></label>
+              <div class="type-pills" id="difficulty">
+                <label class="type-pill"><input type="radio" name="difficulty" value="easy" onchange="setDifficulty('easy')"><span>Easy</span></label>
+                <label class="type-pill"><input type="radio" name="difficulty" value="medium" checked onchange="setDifficulty('medium')"><span>Medium</span></label>
+                <label class="type-pill"><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>Hard</span></label>
+                <label class="type-pill"><input type="radio" name="difficulty" value="ai" onchange="setDifficulty('ai')"><span>{{ _('AI judge') }}</span></label>
               </div>
               <div id="diff-ai-box" style="display:none;margin-top:0.4rem;">
                 <span id="diff-ai-result"></span>
@@ -175,7 +202,7 @@
             <div class="field">
               <div class="ptype-tags" id="f-types">
                 <button type="button" class="ptype-add" title="从已有类型中选择 / 新建" onclick="openTypeModal()">+</button>
-                <button type="button" class="ptype-ai" id="ptype-ai-btn" title="AI 根据题面推荐类型标签" onclick="runAIProblemTypeInline()">🤖 AI</button>
+                <button type="button" class="ptype-ai" id="ptype-ai-btn" title="AI 根据题面推荐类型标签" onclick="runAIProblemTypeInline()">AI</button>
               </div>
               <div class="help">题型与难度标签自动写入，可继续添加其它分类标签；点「🤖 AI」按题面自动推荐</div>
             </div>
@@ -396,9 +423,6 @@
         <button type="button" class="btn btn-cancel" onclick="cancelEdit()">{{ _('Cancel') }}</button>
       </div>
 
-      <p style="font-size:12px;color:#666;margin-top:1rem;">
-        {{ _('Route:') }} <code>{{ save_url }}</code>
-      </p>
     </form>
 
     <aside class="v2-right">
@@ -450,6 +474,8 @@
     const PROBLEM_LIST_URL = '{{ problem_list_url }}';
     const AI_DIFFICULTY_URL = '{{ ai_difficulty_url }}';
     const CREATE_PROBLEM_TYPE_URL = '{{ create_problem_type_url }}';
+    const CREATE_PROBLEM_GROUP_URL = '{{ create_problem_group_url }}';
+    const CREATE_ORGANIZATION_URL = '{{ create_organization_url }}';
     const AI_PROBLEM_TYPE_URL = '{{ ai_problem_type_url }}';
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
@@ -562,6 +588,50 @@
         document.getElementById('nt-name').value = '';
         toggleNewTypeForm(false);
         showToast('{{ _("Problem type created") }}', true);
+      }).catch(() => showToast('{{ _("Network error") }}', false));
+    }
+    /* ---------- organization / problem_group 行内新建 ---------- */
+    function toggleInlineAdd(kind) {
+      const box = document.getElementById(kind + '-add-box');
+      if (!box) return;
+      const show = box.style.display === 'none' || !box.style.display;
+      box.style.display = show ? 'flex' : 'none';
+      if (show) { const inp = box.querySelector('input'); inp.value = ''; inp.focus(); }
+    }
+    function createGroup() {
+      const inp = document.getElementById('group-add-name');
+      const name = inp.value.trim();
+      if (!name) { showToast('{{ _("Please enter a group name.") }}', false); return; }
+      fetch(CREATE_PROBLEM_GROUP_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify({ full_name: name }),
+      }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+        if (!ok) { showToast(body.error || '{{ _("Failed to create group") }}', false); return; }
+        const sel = document.getElementById('f-group');
+        const opt = document.createElement('option');
+        opt.value = body.group.id; opt.textContent = body.group.full;
+        sel.appendChild(opt); sel.value = body.group.id;
+        toggleInlineAdd('group');
+        showToast('{{ _("Problem group created") }}', true);
+      }).catch(() => showToast('{{ _("Network error") }}', false));
+    }
+    function createOrg() {
+      const inp = document.getElementById('org-add-name');
+      const name = inp.value.trim();
+      if (!name) { showToast('{{ _("Please enter an organization name.") }}', false); return; }
+      fetch(CREATE_ORGANIZATION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify({ name }),
+      }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+        if (!ok) { showToast(body.error || '{{ _("Failed to create organization") }}', false); return; }
+        const sel = document.getElementById('f-org');
+        const opt = document.createElement('option');
+        opt.value = body.organization.id; opt.textContent = body.organization.name;
+        sel.appendChild(opt); sel.value = body.organization.id;
+        toggleInlineAdd('org');
+        showToast('{{ _("Organization created") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
     function runAIProblemType(fillInput) {
@@ -1189,8 +1259,7 @@
         const ans = [...document.querySelectorAll('#blank-answers input[type="text"]')].map(i => i.value).filter(Boolean);
         html += `<div class="pv-answerlabel">答案：${ans.length ? ans.join(' / ') : '—'}</div>`;
       } else if (currentType === 'programming') {
-        const tc = document.getElementById('tc-body').children.length;
-        html += `<div class="pv-answerlabel" style="color:var(--muted);">前台展示代码编辑器与提交按钮；已配置 <b>${tc}</b> 个测试点。</div>`;
+        /* 代码编辑器与提交按钮在做题页展示，此处不再赘述提示 */
       } else if (currentType === 'compound') {
         html += renderCompoundPreview();
       } else if (currentType === 'other') {

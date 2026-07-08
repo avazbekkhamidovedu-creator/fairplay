@@ -776,7 +776,8 @@ fieldset.module .form-content { padding: 1rem; }
 .ptype-tag .x:hover { opacity: 1; }
 .ptype-add {
   width: 24px; height: 24px; border-radius: 50%; border: 1px dashed var(--dmoj-green);
-  background: #fff; color: var(--dmoj-green); cursor: pointer; font-size: 14px; line-height: 1;
+  background: #fff; color: var(--dmoj-green); cursor: pointer; font-size: 15px;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0; line-height: 1;
 }
 .ptype-add:hover { background: var(--dmoj-green); color: #fff; }
 .ptype-ai {
@@ -787,6 +788,26 @@ fieldset.module .form-content { padding: 1rem; }
 }
 .ptype-ai:hover { background: var(--dmoj-green); color: #fff; }
 .ptype-ai:disabled { opacity: 0.6; cursor: default; }
+
+/* organization / problem_group 行内新建 */
+.select-with-add { display: flex; align-items: center; gap: 0.5rem; }
+.select-with-add select { flex: 1 1 auto; min-width: 0; }
+.inline-add-btn {
+  flex: 0 0 auto; white-space: nowrap;
+  border: 1px dashed var(--dmoj-green); background: #fff; color: var(--dmoj-green-dark);
+  border-radius: 14px; padding: 0.3rem 0.7rem; font-size: 12px; cursor: pointer; line-height: 1;
+}
+.inline-add-btn:hover { background: var(--dmoj-green); color: #fff; }
+.inline-add-box { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.45rem; }
+.inline-add-box input { flex: 1 1 auto; min-width: 0; }
+.btn-mini {
+  flex: 0 0 auto; white-space: nowrap; cursor: pointer; font-size: 12px; line-height: 1;
+  border: 1px solid var(--admin-border); background: #f1f1f1; color: var(--text);
+  border-radius: 4px; padding: 0.4rem 0.7rem;
+}
+.btn-mini:hover { background: #e6e6e6; }
+.btn-mini-primary { background: var(--dmoj-green); border-color: var(--dmoj-green); color: #fff; }
+.btn-mini-primary:hover { background: var(--dmoj-green-dark); }
 
 /* ── 融合版：题面 + 预览 左右并排 ── */
 .content-split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
@@ -1030,3 +1051,9 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .ptype-add:hover { color: #fff !important; }
 .pcv2 .ptype-ai { color: var(--dmoj-green-dark) !important; background: #fff !important; }
 .pcv2 .ptype-ai:hover { color: #fff !important; background: var(--dmoj-green) !important; }
+.pcv2 .inline-add-btn { color: var(--dmoj-green-dark) !important; background: #fff !important; }
+.pcv2 .inline-add-btn:hover { color: #fff !important; background: var(--dmoj-green) !important; }
+.pcv2 .btn-mini { color: var(--text) !important; background: #f1f1f1 !important; }
+.pcv2 .btn-mini:hover { color: var(--text) !important; background: #e6e6e6 !important; }
+.pcv2 .btn-mini-primary { color: #fff !important; background: var(--dmoj-green) !important; }
+.pcv2 .btn-mini-primary:hover { color: #fff !important; background: var(--dmoj-green-dark) !important; }

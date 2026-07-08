@@ -15,6 +15,7 @@ from judge.views import TitledTemplateView, api, blog, comment, contest_analytic
     mailgun, mcq, organization, preview, problem, problem_manage, ranked_submission, register, stats, status, \
     submission, tasks, ticket, two_factor, user, widgets
 from judge.views.problem_create_v2 import (ProblemCreateV2AIDifficultyView, ProblemCreateV2AIProblemTypeView,
+                                         ProblemCreateV2OrganizationView, ProblemCreateV2ProblemGroupView,
                                          ProblemCreateV2ProblemTypeView, ProblemCreateV2View)
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
@@ -109,6 +110,8 @@ urlpatterns = [
     path('problems/new/', ProblemCreateV2View.as_view(), name='problem_create_v2'),
     path('problems/new/ai-difficulty/', ProblemCreateV2AIDifficultyView.as_view(), name='problem_create_v2_ai_difficulty'),
     path('problems/new/problem-type/', ProblemCreateV2ProblemTypeView.as_view(), name='problem_create_v2_problem_type'),
+    path('problems/new/problem-group/', ProblemCreateV2ProblemGroupView.as_view(), name='problem_create_v2_problem_group'),
+    path('problems/new/organization/', ProblemCreateV2OrganizationView.as_view(), name='problem_create_v2_organization'),
     path('problems/new/ai-problem-type/', ProblemCreateV2AIProblemTypeView.as_view(), name='problem_create_v2_ai_problem_type'),
 
     path('problem/<str:problem>', include([
