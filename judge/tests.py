@@ -227,7 +227,11 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertEqual(payload['redirect_url'], reverse('admin:judge_problem_changelist'))
         self.assertEqual(len(payload['created']), 2)
         self.assertEqual(
-            list(Problem.objects.filter(name__in=['Two Sum', 'Three Sum']).order_by('name').values_list('name', flat=True)),
+            list(
+                Problem.objects.filter(name__in=['Two Sum', 'Three Sum'])
+                .order_by('name')
+                .values_list('name', flat=True)
+            ),
             ['Three Sum', 'Two Sum'],
         )
 

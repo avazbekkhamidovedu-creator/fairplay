@@ -757,7 +757,10 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
 
         uploaded_files = request.FILES.getlist('markdown_files')
         if not uploaded_files:
-            return JsonResponse({'ok': False, 'message': gettext('Please choose at least one Markdown file.')}, status=400)
+            return JsonResponse(
+                {'ok': False, 'message': gettext('Please choose at least one Markdown file.')},
+                status=400,
+            )
 
         created = []
         try:
