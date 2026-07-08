@@ -34,6 +34,9 @@ class ProblemMCQConfig(models.Model):
     multiple_select = models.BooleanField(
         verbose_name=_('allow multiple answers'), default=False,
         help_text=_('If set, students may select more than one choice (checkboxes); otherwise exactly one (radio).'))
+    is_true_false = models.BooleanField(
+        verbose_name=_('true/false question'), default=False,
+        help_text=_('Marks this MCQ as a true/false question so it is labelled accordingly.'))
     shuffle_options = models.BooleanField(
         verbose_name=_('shuffle options per student'), default=False,
         help_text=_('Present choices in a different, stable order for each student to deter copying.'))

@@ -239,30 +239,6 @@
 {% block title_row %}
     {% set tab = 'list' %}
     {% include "problem/problem-list-tabs.html" %}
-    {% if creatable_problem_types or perms.judge.add_contest %}
-        <div class="add-problem-menu">
-            <a href="#" class="button add-problem-toggle" onclick="return false;">{{ _('Add new') }} &#9662;</a>
-            <ul class="add-problem-dropdown">
-                {% if creatable_problem_types %}
-                    <li><a href="{{ url('problem_create_v2') }}">{{ _('Add problem') }}</a></li>
-                {% endif %}
-                {% if perms.judge.add_contest %}
-                    <li><a href="{{ url('admin:judge_contest_add') }}">{{ _('Add contest') }}</a></li>
-                {% endif %}
-            </ul>
-        </div>
-        <style>
-            .add-problem-menu { display: inline-block; position: relative; margin-left: 0.5em; }
-            .add-problem-menu .add-problem-dropdown {
-                display: none; position: absolute; z-index: 1000; list-style: none;
-                margin: 0; padding: 0.3em 0; min-width: 180px; background: #fff;
-                border: 1px solid #ccc; box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-            }
-            .add-problem-menu:hover .add-problem-dropdown { display: block; }
-            .add-problem-menu .add-problem-dropdown li a { display: block; padding: 0.4em 1em; white-space: nowrap; }
-            .add-problem-menu .add-problem-dropdown li a:hover { background: #f0f0f0; }
-        </style>
-    {% endif %}
 {% endblock %}
 
 {% block body %}

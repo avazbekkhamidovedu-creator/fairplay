@@ -5,4 +5,7 @@
         {{ make_tab('list', 'fa-list', url('problem_list'), _('List')) }}
         {{ make_tab('admin', 'fa-edit', url('admin:judge_problem_changelist'), _('Admin')) }}
     {% endif %}
+    {% if perms.judge.create_private_problem or perms.judge.add_problem %}
+        {{ make_tab('add', 'fa-plus', url('problem_create_v2'), _('Add problem')) }}
+    {% endif %}
 {% endblock %}

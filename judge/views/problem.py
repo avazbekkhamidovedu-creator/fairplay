@@ -604,7 +604,8 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
 
     def get_normal_queryset(self):
         filter = self.get_visible_problems_filter()
-        queryset = Problem.objects.filter(filter).select_related('group').defer('description', 'summary')
+        queryset = (Problem.objects.filter(filter).select_related('group', 'mcq_config')
+                    .defer('description', 'summary'))
         if self.profile is not None and self.hide_solved:
             queryset = queryset.exclude(
                 id__in=Submission.objects.filter(

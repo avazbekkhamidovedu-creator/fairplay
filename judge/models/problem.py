@@ -4,7 +4,7 @@ from operator import attrgetter
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import CASCADE, Exists, F, FilteredRelation, OuterRef, Q, SET_NULL
@@ -238,6 +238,13 @@ class Problem(models.Model):
     @cached_property
     def format_types_list(self):
         # The answer format is the authoritative submission_type, not a ProblemType tag.
+        # True/false is stored as an MCQ, so surface it distinctly when the config flags it.
+        if self.submission_type == ProblemSubmissionType.MCQ:
+            try:
+                if self.mcq_config.is_true_false:
+                    return [_('True/False')]
+            except ObjectDoesNotExist:
+                pass
         label = dict(ProblemSubmissionType.CHOICES).get(self.submission_type)
         return [label] if label else []
 

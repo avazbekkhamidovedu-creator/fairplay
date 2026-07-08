@@ -2,8 +2,11 @@
 
 {% block title %}{{ _('Add problem') }}{% endblock %}
 
-{# 用页面自带的面包屑 + 标题（.v2-top），隐藏 base 默认的标题行与分隔线 #}
-{% block title_row %}{% endblock %}
+{# 与题库列表一致：顶部显示 List / Admin / Add 选项卡（Add 高亮），内容在下方 #}
+{% block title_row %}
+  {% set tab = 'add' %}
+  {% include "problem/problem-list-tabs.html" %}
+{% endblock %}
 {% block title_ruler %}{% endblock %}
 
 {% block media %}
@@ -28,6 +31,7 @@
     .v2-top .breadcrumb { margin: 0; }
     .v2-top h1 { margin: 0.15rem 0 0; }
     .v2-top .note { margin: 0.55rem 0 0; }
+    .v2-type-hint { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
 
     /* 需求6：题面标签与预览标题同高，保证左右齐平 */
     .stem-block > .block-label,
@@ -95,12 +99,11 @@
   <div class="pcv2">
   <main class="v2-main" id="content-main">
     <div class="v2-top">
-      <div class="breadcrumb"><a href="{{ problem_list_url }}">{{ _('Problems') }}</a> › {{ _('Add problem') }}</div>
-      <h1>{{ _('Add problem') }} <span class="tag-type regular" id="type-badge">{{ _('Single choice') }}</span></h1>
+      <span class="v2-type-hint">{{ _('Current type:') }} <span class="tag-type regular" id="type-badge">{{ _('Single choice') }}</span></span>
     </div>
 
     <div class="v2-split">
-    <form id="add-problem-form" class="v2-left">
+    <form id="add-problem-form" class="v2-left" novalidate>
       <!-- ① 基本信息 -->
       <fieldset class="module">
         <h2>基本信息</h2>
@@ -1310,16 +1313,32 @@
       selectType(currentType);
     }
     function submitForm(action) {
-      const data = collectData();
-      data.action = action;
-      const err = validate(data);
-      if (err) { showToast(err, false); return; }
+      let data;
+      try {
+        data = collectData();
+        data.action = action;
+        const err = validate(data);
+        if (err) { showToast(err, false); return; }
+      } catch (ex) {
+        console.error('[add-problem] collectData/validate failed:', ex);
+        showToast('{{ _("Page error:") }} ' + ((ex && ex.message) || ex), false);
+        return;
+      }
       showToast('{{ _("Saving…") }}', true);
       fetch(SAVE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
         body: JSON.stringify(data),
-      }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+      }).then(r => r.text().then(txt => {
+        let body = null;
+        try { body = JSON.parse(txt); } catch (_) { /* non-JSON (e.g. 500 HTML page) */ }
+        return { ok: r.ok, status: r.status, body, txt };
+      })).then(({ ok, status, body, txt }) => {
+        if (!body) {
+          console.error('[add-problem] non-JSON response', status, txt);
+          showToast('{{ _("Save failed (server returned") }} ' + status + ')', false);
+          return;
+        }
         if (!ok) { showToast(body.error || '{{ _("Save failed") }}', false); return; }
         if (action === 'another') {
           showToast('{{ _("Saved") }} ' + body.code, true);
@@ -1328,7 +1347,7 @@
         }
         showToast('{{ _("Saved") }} ' + body.code, true);
         if (body.redirect) setTimeout(() => { location.href = body.redirect; }, 600);
-      }).catch(() => showToast('{{ _("Network error") }}', false));
+      }).catch((err) => { console.error('[add-problem] network/fetch error:', err); showToast('{{ _("Network error") }}', false); });
     }
     document.getElementById('add-problem-form').addEventListener('submit', function (e) {
       e.preventDefault();

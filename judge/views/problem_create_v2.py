@@ -207,8 +207,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return problem
 
     def _attach_languages(self, problem, payload):
-        keys = payload.get('languages') or []
-        qs = Language.objects.filter(key__in=keys) if keys else Language.objects.all()
+        # No selection (or an all-invalid selection) means "all languages allowed" so the problem
+        # is never left unsubmittable; DMOJ treats an empty allowed_languages set as no languages.
+        keys = [k for k in (payload.get('languages') or []) if k]
+        qs = Language.objects.filter(key__in=keys) if keys else Language.objects.none()
+        if not qs.exists():
+            qs = Language.objects.all()
         problem.allowed_languages.set(qs)
 
     def _save_testcases(self, problem, testcases):
@@ -301,7 +305,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
 
-            ProblemMCQConfig.objects.create(problem=problem, multiple_select=False, shuffle_options=False)
+            ProblemMCQConfig.objects.create(problem=problem, multiple_select=False, shuffle_options=False,
+                                            is_true_false=True)
             ProblemMCQOption.objects.create(problem=problem, order=0, text=_('True'), is_correct=(answer == 'true'))
             ProblemMCQOption.objects.create(problem=problem, order=1, text=_('False'), is_correct=(answer == 'false'))
         return problem
