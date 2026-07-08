@@ -479,6 +479,10 @@ fieldset.module .form-content { padding: 1rem; }
   color: var(--dmoj-green-dark);
   font-weight: 600;
 }
+/* 难度：保持在同一排以节省纵向空间 */
+#difficulty { flex-wrap: nowrap; }
+#difficulty .type-pill { flex: 0 0 auto; }
+#difficulty .type-pill span { white-space: nowrap; padding: 0.4rem 0.7rem; }
 
 /* Rich / Markdown editor */
 .rich-editor {

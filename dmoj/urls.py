@@ -108,6 +108,7 @@ urlpatterns = [
     path('problems/random/', problem.RandomProblem.as_view(), name='problem_random'),
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
     path('problems/new/', ProblemCreateV2View.as_view(), name='problem_create_v2'),
+    path('problems/edit/<str:problem>/', ProblemCreateV2View.as_view(), name='problem_edit_v2'),
     path('problems/new/ai-difficulty/', ProblemCreateV2AIDifficultyView.as_view(), name='problem_create_v2_ai_difficulty'),
     path('problems/new/problem-type/', ProblemCreateV2ProblemTypeView.as_view(), name='problem_create_v2_problem_type'),
     path('problems/new/problem-group/', ProblemCreateV2ProblemGroupView.as_view(), name='problem_create_v2_problem_group'),

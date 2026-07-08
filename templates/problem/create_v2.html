@@ -11,7 +11,7 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260708a">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260708b">
 
   <!-- 需求3：数学公式真正可预览 -->
   <script>
@@ -480,6 +480,8 @@
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
+    const EDIT_CODE = '{{ edit_code }}';
+    const EDIT_DATA = {{ edit_data_json|safe }};
     const SERVER_PROBLEM_TYPES = {{ problem_types_json|safe }};
 
     const TYPE_META = {
@@ -1386,6 +1388,7 @@
       try {
         data = collectData();
         data.action = action;
+        if (EDIT_CODE) data.edit_code = EDIT_CODE;
         const err = validate(data);
         if (err) { showToast(err, false); return; }
       } catch (ex) {
@@ -1409,13 +1412,9 @@
           return;
         }
         if (!ok) { showToast(body.error || '{{ _("Save failed") }}', false); return; }
-        if (action === 'another') {
-          showToast('{{ _("Saved") }} ' + body.code, true);
-          resetForm();
-          return;
-        }
         showToast('{{ _("Saved") }} ' + body.code, true);
         if (body.redirect) setTimeout(() => { location.href = body.redirect; }, 600);
+        else resetForm();
       }).catch((err) => { console.error('[add-problem] network/fetch error:', err); showToast('{{ _("Network error") }}', false); });
     }
     document.getElementById('add-problem-form').addEventListener('submit', function (e) {
@@ -1438,17 +1437,95 @@
       window.addEventListener('scroll', positionHandle, true); window.addEventListener('resize', positionHandle);
     })();
 
+    /* ---------- 编辑已有题目：把后端数据回填到表单 ---------- */
+    function loadEditData(d) {
+      const radio = document.querySelector(`input[name="qtype"][value="${d.type}"]`);
+      if (radio) radio.checked = true;
+      selectType(d.type);
+
+      document.getElementById('f-name').value = d.name || '';
+      if (d.organizations && d.organizations.length) {
+        const org = document.getElementById('f-org'); if (org) org.value = String(d.organizations[0]);
+      }
+      if (d.group_id) { const g = document.getElementById('f-group'); if (g) g.value = String(d.group_id); }
+      const pts = document.getElementById('f-points'); if (pts && d.points != null) pts.value = d.points;
+      const pub = document.getElementById('f-public'); if (pub && !pub.disabled) pub.checked = !!d.is_public;
+      const partial = document.getElementById('f-partial'); if (partial) partial.checked = !!d.partial;
+      const aiCb = document.getElementById('f-ai'); if (aiCb) aiCb.checked = !!d.ai;
+      const rub = document.getElementById('f-rubric'); if (rub) rub.value = d.rubric || '';
+
+      RichEditor.setMarkdown('stem', d.description || '');
+
+      if (d.difficulty) {
+        const dr = document.querySelector(`input[name="difficulty"][value="${d.difficulty}"]`);
+        if (dr) { dr.checked = true; setDifficulty(d.difficulty); }
+      }
+      (d.problemTypes || []).forEach(full => {
+        const box = document.getElementById('f-types');
+        const el = document.createElement('span');
+        el.className = 'ptype-tag';
+        el.innerHTML = full + ' <span class="x" onclick="this.parentElement.remove()">×</span>';
+        box.insertBefore(el, box.querySelector('.ptype-add'));
+      });
+
+      if (d.type === 'single' || d.type === 'multiple') {
+        const list = document.getElementById('options'); list.innerHTML = ''; optionSeq = 0;
+        (d.options || []).forEach(o => {
+          addOption(o.text || '');
+          const rows = list.querySelectorAll('.option-row');
+          rows[rows.length - 1].querySelector('.option-marker input').checked = !!o.correct;
+        });
+        refreshOptionMarkers();
+      } else if (d.type === 'truefalse') {
+        const tf = document.querySelector(`input[name="tf"][value="${d.tfAnswer || 'true'}"]`);
+        if (tf) tf.checked = true;
+      } else if (d.type === 'blank') {
+        const list = document.getElementById('blank-answers'); list.innerHTML = ''; blankSeq = 0;
+        (d.blanks || []).forEach(ans => {
+          addBlank();
+          const inputs = list.querySelectorAll('input[type="text"]');
+          inputs[inputs.length - 1].value = ans || '';
+        });
+        if (!(d.blanks || []).length) addBlank();
+      } else if (d.type === 'short') {
+        RichEditor.setMarkdown('short', d.shortAnswer || '');
+      } else if (d.type === 'programming') {
+        const tl = document.getElementById('f-time'); if (tl && d.time_limit != null) tl.value = d.time_limit;
+        const ml = document.getElementById('f-mem'); if (ml && d.memory_limit != null) ml.value = d.memory_limit;
+        (d.languages || []).forEach(k => {
+          const cb = document.querySelector(`#f-langs .lang-cb[value="${k}"]`);
+          if (cb) cb.checked = true;
+        });
+        const body = document.getElementById('tc-body'); body.innerHTML = ''; tcSeq = 0;
+        (d.testcases || []).forEach(tc => {
+          addTestCase();
+          const tr = body.lastElementChild;
+          tr.children[1].querySelector('textarea').value = tc.input || '';
+          tr.children[2].querySelector('textarea').value = tc.output || '';
+          if (tc.points != null) tr.children[3].querySelector('input').value = tc.points;
+          tr.children[4].querySelector('input').checked = !!tc.pretest;
+        });
+        if (!(d.testcases || []).length) addTestCase();
+      }
+      renderScoreConf();
+      renderPreview();
+    }
+
     mountRichEditors();
     initEditors();
     setDifficulty(currentDifficulty);
-    (function initDefaultType() {
-      let t = 'single';
-      if (!CAN_CREATE_MCQ && CAN_CREATE_CODE) t = 'programming';
-      else if (CAN_CREATE_MCQ && !CAN_CREATE_CODE) t = 'single';
-      else if (CAN_CREATE_MCQ && CAN_CREATE_CODE) t = 'single';
-      const radio = document.querySelector(`input[name="qtype"][value="${t}"]`);
-      if (radio) { radio.checked = true; selectType(t); }
-    })();
+    if (EDIT_DATA) {
+      loadEditData(EDIT_DATA);
+    } else {
+      (function initDefaultType() {
+        let t = 'single';
+        if (!CAN_CREATE_MCQ && CAN_CREATE_CODE) t = 'programming';
+        else if (CAN_CREATE_MCQ && !CAN_CREATE_CODE) t = 'single';
+        else if (CAN_CREATE_MCQ && CAN_CREATE_CODE) t = 'single';
+        const radio = document.querySelector(`input[name="qtype"][value="${t}"]`);
+        if (radio) { radio.checked = true; selectType(t); }
+      })();
+    }
   </script>
   </div>
 {% endblock %}

@@ -59,7 +59,19 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
     def get(self, request, *args, **kwargs):
         if not _can_create_any(request.user):
             raise Http404()
-        return render(request, self.template_name, self.get_context(request))
+        context = self.get_context(request)
+        edit_code = kwargs.get('problem')
+        if edit_code:
+            try:
+                problem = self._get_editable_problem(request, edit_code)
+            except PermissionError:
+                raise Http404()
+            if problem is None:
+                raise Http404()
+            context['title'] = _('Edit problem')
+            context['edit_code'] = problem.code
+            context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
+        return render(request, self.template_name, context)
 
     def get_context(self, request):
         user = request.user
@@ -88,6 +100,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'can_create_organization': user.has_perm('judge.create_private_problem'),
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'problem_list_url': reverse('problem_list'),
+            'edit_code': '',
+            'edit_data_json': 'null',
         }
 
     # ------------------------------------------------------------------ POST
@@ -107,17 +121,29 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             return JsonResponse({'error': _('This question type is under development and cannot be saved yet.')},
                                 status=400)
 
+        # When ``edit_code`` is present we update the existing problem in place (keeping its code/URL)
+        # instead of creating a new one; this powers "Save and continue editing".
+        existing = None
+        edit_code = (payload.get('edit_code') or '').strip()
+        if edit_code:
+            try:
+                existing = self._get_editable_problem(request, edit_code)
+            except PermissionError as e:
+                return JsonResponse({'error': str(e)}, status=403)
+            if existing is None:
+                return JsonResponse({'error': _('Problem not found.')}, status=404)
+
         try:
             if qtype == 'programming':
-                problem = self._create_code(request, payload, name)
+                problem = self._create_code(request, payload, name, problem=existing)
             elif qtype in ('single', 'multiple'):
-                problem = self._create_mcq(request, payload, name, multiple=(qtype == 'multiple'))
+                problem = self._create_mcq(request, payload, name, multiple=(qtype == 'multiple'), problem=existing)
             elif qtype == 'truefalse':
-                problem = self._create_truefalse(request, payload, name)
+                problem = self._create_truefalse(request, payload, name, problem=existing)
             elif qtype == 'blank':
-                problem = self._create_fill_blank(request, payload, name)
+                problem = self._create_fill_blank(request, payload, name, problem=existing)
             elif qtype == 'short':
-                problem = self._create_short_answer(request, payload, name)
+                problem = self._create_short_answer(request, payload, name, problem=existing)
             else:
                 return JsonResponse({'error': _('Unknown question type.')}, status=400)
         except PermissionError as e:
@@ -127,12 +153,115 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
         action = payload.get('action') or 'save'
         if action == 'another':
-            return JsonResponse({'ok': True, 'code': problem.code})
-        if action == 'continue' and request.user.is_staff:
-            redirect = reverse('admin:judge_problem_change', args=[problem.id])
+            # Land on a fresh add-problem page.
+            return JsonResponse({'ok': True, 'code': problem.code, 'redirect': reverse('problem_create_v2')})
+        if action == 'continue':
+            # Reopen this problem on the add page for further edits.
+            redirect = reverse('problem_edit_v2', args=[problem.code])
         else:
             redirect = reverse('problem_detail', args=[problem.code])
         return JsonResponse({'ok': True, 'code': problem.code, 'redirect': redirect})
+
+    # ------------------------------------------------------------------ edit support
+    def _get_editable_problem(self, request, code):
+        problem = Problem.objects.filter(code=code).first()
+        if problem is None:
+            return None
+        profile = request.profile
+        can_edit = problem.is_editable_by(request.user) or (
+            profile is not None and problem.authors.filter(id=profile.id).exists())
+        if not can_edit:
+            raise PermissionError(_('You do not have permission to edit this problem.'))
+        return problem
+
+    def _clear_type_children(self, problem):
+        """Remove every question-type-specific child before repopulating on edit (also handles a
+        type switch, e.g. single -> programming)."""
+        ProblemMCQOption.objects.filter(problem=problem).delete()
+        ProblemMCQConfig.objects.filter(problem=problem).delete()
+        ProblemBlankAnswer.objects.filter(problem=problem).delete()
+        ProblemFillBlankConfig.objects.filter(problem=problem).delete()
+        ProblemShortAnswerConfig.objects.filter(problem=problem).delete()
+        problem.cases.all().delete()
+
+    def _build_edit_data(self, problem):
+        """Serialize an existing problem into the shape the add-page JS expects (see collectData)."""
+        st = problem.submission_type
+        data = {
+            'name': problem.name,
+            'organizations': list(problem.organizations.values_list('id', flat=True)),
+            'group_id': problem.group_id,
+            'points': problem.points,
+            'is_public': problem.is_public,
+            'partial': problem.partial,
+            'description': problem.description or '',
+            'ai': False,
+            'rubric': '',
+        }
+
+        diff_labels = {'Easy': 'easy', 'Medium': 'medium', 'Hard': 'hard'}
+        type_tags, difficulty = [], ''
+        for full in problem.types.values_list('full_name', 'name'):
+            label = full[0] or full[1]
+            if label in diff_labels:
+                difficulty = diff_labels[label]
+            else:
+                type_tags.append(label)
+        data['problemTypes'] = type_tags
+        data['difficulty'] = difficulty or 'medium'
+
+        if st == ProblemSubmissionType.CODE:
+            data['type'] = 'programming'
+            data['time_limit'] = problem.time_limit
+            data['memory_limit'] = round((problem.memory_limit or 0) / 1024, 2)  # KB -> MB
+            data['languages'] = list(problem.allowed_languages.values_list('key', flat=True))
+            data['testcases'] = self._read_testcases(problem)
+        elif st == ProblemSubmissionType.MCQ:
+            config = getattr(problem, 'mcq_config', None)
+            options = list(problem.mcq_options.order_by('order').values('text', 'is_correct'))
+            if config is not None and config.is_true_false:
+                data['type'] = 'truefalse'
+                correct_true = next((o for o in options if o['is_correct']), None)
+                data['tfAnswer'] = 'true' if (correct_true and correct_true is options[0]) else 'false'
+            else:
+                data['type'] = 'multiple' if (config and config.multiple_select) else 'single'
+                data['multiple'] = bool(config and config.multiple_select)
+                data['options'] = [{'text': o['text'], 'correct': o['is_correct']} for o in options]
+        elif st == ProblemSubmissionType.FILL_BLANK:
+            data['type'] = 'blank'
+            config = getattr(problem, 'fill_blank_config', None)
+            data['ai'] = bool(config and config.grading_mode == GRADE_AI)
+            data['rubric'] = (config.ai_rubric if config else '') or ''
+            data['blanks'] = list(problem.blank_answers.order_by('order').values_list('answers', flat=True))
+        elif st == ProblemSubmissionType.SHORT_ANSWER:
+            data['type'] = 'short'
+            config = getattr(problem, 'short_answer_config', None)
+            data['shortAnswer'] = (config.reference_answer if config else '') or ''
+            data['rubric'] = (config.ai_rubric if config else '') or ''
+            data['ai'] = bool(config and (config.ai_rubric or '').strip())
+        else:
+            data['type'] = 'single'
+        return data
+
+    def _read_testcases(self, problem):
+        from judge.models import problem_data_storage
+        cases = []
+        for case in problem.cases.order_by('order'):
+            def _read(name):
+                if not name:
+                    return ''
+                try:
+                    with problem_data_storage.open('%s/%s' % (problem.code, name)) as fh:
+                        return fh.read().decode('utf-8', 'replace')
+                except Exception:
+                    return ''
+            cases.append({
+                'input': _read(case.input_file),
+                'output': _read(case.output_file),
+                'points': case.points,
+                'pretest': case.is_pretest,
+            })
+        return cases
 
     # ------------------------------------------------------------------ helpers
     def _num(self, value, default):
@@ -165,19 +294,18 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
     def _attach_types(self, problem, payload):
         names = [n for n in (payload.get('problemTypes') or []) if n]
-        if names:
-            for t in ProblemType.objects.filter(Q(full_name__in=names) | Q(name__in=names)):
-                problem.types.add(t)
-        if not problem.types.exists():
+        types = list(ProblemType.objects.filter(Q(full_name__in=names) | Q(name__in=names))) if names else []
+        if types:
+            problem.types.set(types)
+        elif not problem.types.exists():
             problem.types.add(default_problem_type())
 
     def _attach_orgs(self, problem, payload):
         ids = payload.get('organizations') or []
-        if ids:
-            problem.organizations.set(Organization.objects.filter(pk__in=ids))
+        problem.organizations.set(Organization.objects.filter(pk__in=ids))
 
     # ------------------------------------------------------------------ code problem
-    def _create_code(self, request, payload, name):
+    def _create_code(self, request, payload, name, problem=None):
         user = request.user
         if not (user.is_staff and user.has_perm('judge.add_problem')):
             raise PermissionError(_('You do not have permission to create code problems.'))
@@ -188,7 +316,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Please add at least one test case.'))
 
         with transaction.atomic():
-            problem = Problem(submission_type=ProblemSubmissionType.CODE)
+            if problem is None:
+                problem = Problem(submission_type=ProblemSubmissionType.CODE)
+            else:
+                problem.submission_type = ProblemSubmissionType.CODE
+                self._clear_type_children(problem)
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
@@ -243,7 +375,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
 
     # ------------------------------------------------------------------ mcq problem
-    def _create_mcq(self, request, payload, name, multiple):
+    def _create_mcq(self, request, payload, name, multiple, problem=None):
         user = request.user
         if not user.has_perm('judge.create_private_problem'):
             raise PermissionError(_('You do not have permission to create multiple-choice problems.'))
@@ -258,7 +390,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Single-answer questions must have exactly one correct choice.'))
 
         with transaction.atomic():
-            problem = Problem(submission_type=ProblemSubmissionType.MCQ)
+            if problem is None:
+                problem = Problem(submission_type=ProblemSubmissionType.MCQ)
+            else:
+                problem.submission_type = ProblemSubmissionType.MCQ
+                self._clear_type_children(problem)
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
@@ -283,7 +419,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return problem
 
     # ------------------------------------------------------------------ true / false
-    def _create_truefalse(self, request, payload, name):
+    def _create_truefalse(self, request, payload, name, problem=None):
         """True/false is stored as a two-option single-choice MCQ (正确 / 错误)."""
         user = request.user
         if not user.has_perm('judge.create_private_problem'):
@@ -293,7 +429,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Please choose the correct answer.'))
 
         with transaction.atomic():
-            problem = Problem(submission_type=ProblemSubmissionType.MCQ)
+            if problem is None:
+                problem = Problem(submission_type=ProblemSubmissionType.MCQ)
+            else:
+                problem.submission_type = ProblemSubmissionType.MCQ
+                self._clear_type_children(problem)
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
@@ -316,7 +456,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return problem
 
     # ------------------------------------------------------------------ fill in the blank
-    def _create_fill_blank(self, request, payload, name):
+    def _create_fill_blank(self, request, payload, name, problem=None):
         user = request.user
         if not user.has_perm('judge.create_private_problem'):
             raise PermissionError(_('You do not have permission to create this problem type.'))
@@ -326,7 +466,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         use_ai = bool(payload.get('ai'))
 
         with transaction.atomic():
-            problem = Problem(submission_type=ProblemSubmissionType.FILL_BLANK)
+            if problem is None:
+                problem = Problem(submission_type=ProblemSubmissionType.FILL_BLANK)
+            else:
+                problem.submission_type = ProblemSubmissionType.FILL_BLANK
+                self._clear_type_children(problem)
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
@@ -353,13 +497,17 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return problem
 
     # ------------------------------------------------------------------ short answer
-    def _create_short_answer(self, request, payload, name):
+    def _create_short_answer(self, request, payload, name, problem=None):
         user = request.user
         if not user.has_perm('judge.create_private_problem'):
             raise PermissionError(_('You do not have permission to create this problem type.'))
 
         with transaction.atomic():
-            problem = Problem(submission_type=ProblemSubmissionType.SHORT_ANSWER)
+            if problem is None:
+                problem = Problem(submission_type=ProblemSubmissionType.SHORT_ANSWER)
+            else:
+                problem.submission_type = ProblemSubmissionType.SHORT_ANSWER
+                self._clear_type_children(problem)
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
