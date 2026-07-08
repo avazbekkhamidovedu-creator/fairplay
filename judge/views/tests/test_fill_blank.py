@@ -162,6 +162,29 @@ class FillBlankAuthoringViewTestCase(CommonDataMixin, TestCase):
         create_problem(code='notfb', submission_type='M', authors=('creator',))
         self.assertEqual(self.client.get(reverse('problem_fillblank_edit', args=['notfb'])).status_code, 404)
 
+    def test_edit_clearing_answers_removes_blank(self):
+        # Regression: clearing an existing blank's answers must delete that ProblemBlank, not leave
+        # a stale row with the old accepted answers still affecting grading.
+        problem = create_problem(code='clearfb', submission_type='B', authors=('creator',))
+        ProblemFillBlankConfig.objects.create(problem=problem)
+        b0 = ProblemBlank.objects.create(problem=problem, order=0, answers='Paris')
+        b1 = ProblemBlank.objects.create(problem=problem, order=1, answers='1789')
+
+        self.client.force_login(self.users['creator'])
+        data = blank_post_data(
+            [('', 'Paris'), ('', '')], name=problem.name, initial_forms=2)
+        data['blanks-0-id'] = b0.id
+        data['blanks-1-id'] = b1.id
+        response = self.client.post(reverse('problem_fillblank_edit', args=['clearfb']), data)
+        self.assertEqual(response.status_code, 302)
+
+        # The emptied blank is gone; only the answered one survives, re-sequenced to order 0.
+        self.assertFalse(ProblemBlank.objects.filter(id=b1.id).exists())
+        remaining = list(problem.blanks.all())
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].id, b0.id)
+        self.assertEqual(remaining[0].order, 0)
+
 
 class FillBlankSubmitViewTestCase(CommonDataMixin, TestCase):
     @classmethod

@@ -76,16 +76,28 @@ class FillBlankConfigForm(forms.ModelForm):
         fields = ['case_sensitive', 'trim_whitespace']
 
 
-def make_blank_formset(extra):
-    return inlineformset_factory(
-        Problem, ProblemBlank,
-        fields=['label', 'answers', 'order'], extra=extra, can_delete=True,
-        widgets={
+class BlankForm(forms.ModelForm):
+    class Meta:
+        model = ProblemBlank
+        fields = ['label', 'answers', 'order']
+        widgets = {
             'order': forms.HiddenInput(attrs={'class': 'blank-order'}),
             'label': forms.TextInput(attrs={'class': 'blank-label'}),
             'answers': forms.Textarea(attrs={'rows': 2, 'class': 'blank-answers'}),
-        },
-    )
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Answers are optional at the field level so that clearing an existing blank's answers is a
+        # valid edit (it removes the blank in _save_blanks) rather than a required-field error, and
+        # so a trailing empty row can just be ignored. validate_blanks still enforces >= 1 non-empty
+        # blank overall.
+        self.fields['answers'].required = False
+
+
+def make_blank_formset(extra):
+    return inlineformset_factory(
+        Problem, ProblemBlank, form=BlankForm, extra=extra, can_delete=True)
 
 
 class ProblemFillBlankEditView(LoginRequiredMixin, View):
@@ -174,9 +186,16 @@ class ProblemFillBlankEditView(LoginRequiredMixin, View):
         formset.save(commit=False)
         for obj in formset.deleted_objects:
             obj.delete()
-        kept = [f for f in formset.forms
-                if f.cleaned_data and not f.cleaned_data.get('DELETE')
-                and (f.cleaned_data.get('answers') or '').strip()]
+
+        live_forms = [f for f in formset.forms if f.cleaned_data and not f.cleaned_data.get('DELETE')]
+        kept = [f for f in live_forms if (f.cleaned_data.get('answers') or '').strip()]
+        # An existing blank whose answers were cleared is treated as removed: delete it so a stale
+        # record with the old accepted answers can't linger and keep affecting grading. A brand-new
+        # empty row (no pk) is simply ignored.
+        for f in live_forms:
+            if f not in kept and f.instance.pk:
+                f.instance.delete()
+
         kept.sort(key=lambda f: f.cleaned_data.get('order') or 0)
         for index, f in enumerate(kept):
             blank = f.instance
