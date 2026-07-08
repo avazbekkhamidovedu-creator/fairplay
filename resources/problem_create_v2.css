@@ -479,10 +479,17 @@ fieldset.module .form-content { padding: 1rem; }
   color: var(--dmoj-green-dark);
   font-weight: 600;
 }
-/* 难度：保持在同一排以节省纵向空间 */
-#difficulty { flex-wrap: nowrap; }
-#difficulty .type-pill { flex: 0 0 auto; }
-#difficulty .type-pill span { white-space: nowrap; padding: 0.4rem 0.7rem; }
+/* 难度：紧凑地排在同一排（左对齐，药丸只占内容宽度，绝不撑满/均分） */
+#difficulty {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 0.4rem;
+  width: fit-content;
+  max-width: 100%;
+}
+#difficulty > label { flex: 0 0 auto; width: auto; border: none; margin: 0; }
+#difficulty .type-pill span { display: inline-block; white-space: nowrap; padding: 0.35rem 0.7rem; }
 
 /* Rich / Markdown editor */
 .rich-editor {
