@@ -62,8 +62,12 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'name="translations-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'name="templates-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'id="problem-markdown-import-input"', html=False)
+        self.assertContains(response, 'id="problem-markdown-batch-import-input"', html=False)
         self.assertContains(response, 'id="problem-markdown-import-status"', html=False)
         self.assertContains(response, reverse('admin:judge_problem_import_markdown'), html=False)
+        self.assertContains(response, reverse('admin:judge_problem_batch_create_markdown'), html=False)
+        self.assertContains(response, 'Upload Markdown', html=False)
+        self.assertContains(response, 'Batch Upload Markdown', html=False)
 
     def test_admin_advanced_add_page_uses_original_problem_form(self):
         response = self.client.get('{}?advanced=1'.format(reverse('admin:judge_problem_add')))
@@ -160,15 +164,20 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertJSONEqual(
-            response.content.decode(),
-            {
-                'ok': True,
-                'message': 'Markdown uploaded successfully.',
-                'name': 'Two Sum',
-                'description': '# Two Sum\n\nKeep **original** markdown.\n',
-                'filename': 'two-sum.md',
-            },
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['message'], 'Created 1 problem from Markdown.')
+        self.assertEqual(payload['redirect_url'], reverse('admin:judge_problem_changelist'))
+        self.assertEqual(len(payload['created']), 1)
+
+        problem = Problem.objects.get(name='Two Sum')
+        self.assertEqual(problem.description, 'Keep **original** markdown.')
+        self.assertEqual(payload['created'][0]['id'], problem.pk)
+        self.assertEqual(payload['created'][0]['code'], problem.code)
+        self.assertEqual(payload['created'][0]['name'], 'Two Sum')
+        self.assertEqual(
+            payload['created'][0]['edit_url'],
+            reverse('admin:judge_problem_change', args=[problem.pk]),
         )
 
     def test_admin_markdown_import_rejects_non_markdown_file(self):
@@ -191,6 +200,79 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
                 'message': 'Only Markdown or text files are supported.',
             },
         )
+
+    def test_admin_batch_markdown_create_creates_multiple_problems(self):
+        response = self.client.post(
+            reverse('admin:judge_problem_batch_create_markdown'),
+            data={
+                'markdown_files': [
+                    SimpleUploadedFile(
+                        'two-sum.md',
+                        b'# Two Sum\n\nFind two numbers.\n',
+                        content_type='text/markdown',
+                    ),
+                    SimpleUploadedFile(
+                        'three-sum.md',
+                        b'# Three Sum\n\nFind three numbers.\n',
+                        content_type='text/markdown',
+                    ),
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['message'], 'Created 2 problems from Markdown.')
+        self.assertEqual(payload['redirect_url'], reverse('admin:judge_problem_changelist'))
+        self.assertEqual(len(payload['created']), 2)
+        self.assertEqual(
+            list(Problem.objects.filter(name__in=['Two Sum', 'Three Sum']).order_by('name').values_list('name', flat=True)),
+            ['Three Sum', 'Two Sum'],
+        )
+
+        for problem in Problem.objects.filter(name__in=['Two Sum', 'Three Sum']):
+            self.assertEqual(problem.group.name, 'default-group')
+            self.assertEqual(problem.points, 100)
+            self.assertFalse(problem.is_public)
+            self.assertCountEqual(problem.types.values_list('name', flat=True), ['default-type'])
+            self.assertCountEqual(
+                problem.allowed_languages.values_list('id', flat=True),
+                Language.objects.values_list('id', flat=True),
+            )
+            self.assertCountEqual(
+                problem.authors.values_list('user__username', flat=True),
+                [self.users['superuser'].username],
+            )
+
+    def test_admin_batch_markdown_create_rolls_back_on_invalid_file(self):
+        response = self.client.post(
+            reverse('admin:judge_problem_batch_create_markdown'),
+            data={
+                'markdown_files': [
+                    SimpleUploadedFile(
+                        'valid.md',
+                        b'# Valid Problem\n\nBody.\n',
+                        content_type='text/markdown',
+                    ),
+                    SimpleUploadedFile(
+                        'invalid.pdf',
+                        b'%PDF-1.4',
+                        content_type='application/pdf',
+                    ),
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertJSONEqual(
+            response.content.decode(),
+            {
+                'ok': False,
+                'message': 'Only Markdown or text files are supported.',
+            },
+        )
+        self.assertFalse(Problem.objects.filter(name='Valid Problem').exists())
 
     def test_admin_add_page_can_fill_problem_from_markdown_upload(self):
         markdown_upload = SimpleUploadedFile(

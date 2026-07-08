@@ -23,6 +23,29 @@ from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, Ad
     AdminSelect2Widget, CheckboxSelectMultipleWithSelectAll
 
 
+MARKDOWN_UPLOAD_EXTENSIONS = ('.md', '.markdown', '.mdown', '.txt')
+
+
+def decode_markdown_upload(uploaded_file):
+    raw_bytes = uploaded_file.read()
+    try:
+        for encoding in ('utf-8-sig', 'utf-8', 'utf-16'):
+            try:
+                return raw_bytes.decode(encoding).replace('\r\n', '\n').replace('\r', '\n')
+            except UnicodeDecodeError:
+                continue
+    finally:
+        uploaded_file.seek(0)
+    raise UnicodeDecodeError('utf-8', b'', 0, 1, 'Could not decode uploaded Markdown file.')
+
+
+def validate_markdown_upload_filename(uploaded_file):
+    filename = (uploaded_file.name or '').strip()
+    if not filename.lower().endswith(MARKDOWN_UPLOAD_EXTENSIONS):
+        raise forms.ValidationError(_('Only Markdown or text files are supported.'))
+    return filename
+
+
 class ProblemForm(ModelForm):
     change_message = forms.CharField(max_length=256, label=_('Edit reason'), required=False)
 
@@ -122,11 +145,7 @@ class SimpleProblemCreationForm(ProblemForm):
         )
 
     def parse_markdown_upload(self, markdown_upload):
-        try:
-            content = markdown_upload.read().decode('utf-8-sig')
-        finally:
-            markdown_upload.seek(0)
-
+        content = decode_markdown_upload(markdown_upload)
         lines = content.splitlines()
         title = ''
         body_lines = []
@@ -640,6 +659,11 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 self.admin_site.admin_view(self.import_markdown_view),
                 name='judge_problem_import_markdown',
             ),
+            path(
+                'batch-create-markdown/',
+                self.admin_site.admin_view(self.batch_create_markdown_view),
+                name='judge_problem_batch_create_markdown',
+            ),
         ] + super().get_urls()
 
     def import_markdown_view(self, request):
@@ -652,39 +676,117 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         if uploaded_file is None:
             return JsonResponse({'ok': False, 'message': gettext('Please choose a Markdown file.')}, status=400)
 
-        filename = uploaded_file.name or ''
-        lowered = filename.lower()
-        if not lowered.endswith(('.md', '.markdown', '.mdown', '.txt')):
-            return JsonResponse(
-                {'ok': False, 'message': gettext('Only Markdown or text files are supported.')},
-                status=400,
-            )
-
-        raw_bytes = uploaded_file.read()
-        for encoding in ('utf-8-sig', 'utf-8', 'utf-16'):
-            try:
-                content = raw_bytes.decode(encoding)
-                break
-            except UnicodeDecodeError:
-                content = None
-        if content is None:
+        try:
+            with transaction.atomic():
+                problem = self.create_problem_from_markdown_upload(request, uploaded_file)
+        except UnicodeDecodeError:
             return JsonResponse(
                 {'ok': False, 'message': gettext('Could not decode this file. Please use UTF-8 Markdown.')},
                 status=400,
             )
-
-        content = content.replace('\r\n', '\n').replace('\r', '\n')
-        heading_match = re.search(r'^\s*#\s+(.+?)\s*$', content, re.MULTILINE)
-        suggested_name = heading_match.group(1).strip() if heading_match else ''
-        if not suggested_name and filename:
-            suggested_name = re.sub(r'\.[^.]+$', '', filename).replace('_', ' ').replace('-', ' ').strip()
+        except forms.ValidationError as error:
+            return JsonResponse({'ok': False, 'message': error.message}, status=400)
 
         return JsonResponse({
             'ok': True,
-            'message': gettext('Markdown uploaded successfully.'),
-            'name': suggested_name,
-            'description': content,
-            'filename': filename,
+            'message': gettext('Created 1 problem from Markdown.'),
+            'created': [{
+                'id': problem.pk,
+                'code': problem.code,
+                'name': problem.name,
+                'edit_url': reverse('admin:judge_problem_change', args=[problem.pk]),
+            }],
+            'redirect_url': reverse('admin:judge_problem_changelist'),
+        })
+
+    def create_problem_from_markdown_upload(self, request, uploaded_file):
+        validate_markdown_upload_filename(uploaded_file)
+        form = SimpleProblemCreationForm()
+        form.default_group = self.get_default_group()
+        form.default_type = self.get_default_type()
+        form.default_languages = self.get_default_languages()
+        form.default_points = self.get_default_points()
+        form.default_time_limit = self.get_default_time_limit()
+        form.default_memory_limit = self.get_default_memory_limit()
+        form.generate_simple_code = self.generate_problem_code
+
+        name, description = form.parse_markdown_upload(uploaded_file)
+
+        if form.default_group is None:
+            raise forms.ValidationError(_('You must create at least one problem group before creating a problem.'))
+        if form.default_type is None:
+            raise forms.ValidationError(_('You must create at least one problem type before creating a problem.'))
+        if not form.default_languages:
+            raise forms.ValidationError(_('You must configure at least one language before creating a problem.'))
+
+        problem = Problem(
+            code=self.generate_problem_code(name),
+            name=name,
+            description=description,
+            group=form.default_group,
+            time_limit=form.default_time_limit,
+            memory_limit=form.default_memory_limit,
+            points=form.default_points,
+            short_circuit=False,
+            partial=False,
+            is_public=False,
+            is_manually_managed=False,
+            date=None,
+            license=None,
+            og_image='',
+            summary='',
+            is_full_markup=False,
+            submission_source_visibility_mode=SubmissionSourceAccess.FOLLOW,
+            view_test_cases=False,
+            view_tester=False,
+            ai_hints_enabled=False,
+            is_organization_private=False,
+        )
+        problem.save()
+        problem.types.set([form.default_type])
+        problem.allowed_languages.set(form.default_languages)
+        if hasattr(request.user, 'profile'):
+            problem.authors.set([request.user.profile])
+        return problem
+
+    def batch_create_markdown_view(self, request):
+        if not request.user.has_perm('judge.edit_own_problem'):
+            raise PermissionDenied
+        if request.method != 'POST':
+            return JsonResponse({'ok': False, 'message': gettext('Only POST is allowed.')}, status=405)
+
+        uploaded_files = request.FILES.getlist('markdown_files')
+        if not uploaded_files:
+            return JsonResponse({'ok': False, 'message': gettext('Please choose at least one Markdown file.')}, status=400)
+
+        created = []
+        try:
+            with transaction.atomic():
+                for uploaded_file in uploaded_files:
+                    problem = self.create_problem_from_markdown_upload(request, uploaded_file)
+                    created.append({
+                        'id': problem.pk,
+                        'code': problem.code,
+                        'name': problem.name,
+                        'edit_url': reverse('admin:judge_problem_change', args=[problem.pk]),
+                    })
+        except UnicodeDecodeError:
+            return JsonResponse(
+                {'ok': False, 'message': gettext('Could not decode one of the files. Please use UTF-8 Markdown.')},
+                status=400,
+            )
+        except forms.ValidationError as error:
+            return JsonResponse({'ok': False, 'message': error.message}, status=400)
+
+        return JsonResponse({
+            'ok': True,
+            'message': ngettext(
+                'Created %d problem from Markdown.',
+                'Created %d problems from Markdown.',
+                len(created),
+            ) % len(created),
+            'created': created,
+            'redirect_url': reverse('admin:judge_problem_changelist'),
         })
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
