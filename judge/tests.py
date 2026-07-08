@@ -230,7 +230,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             list(
                 Problem.objects.filter(name__in=['Two Sum', 'Three Sum'])
                 .order_by('name')
-                .values_list('name', flat=True)
+                .values_list('name', flat=True),
             ),
             ['Three Sum', 'Two Sum'],
         )
