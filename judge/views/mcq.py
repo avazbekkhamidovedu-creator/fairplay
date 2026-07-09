@@ -317,7 +317,7 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
         return JsonResponse({
             'ok': True,
             'message': _(
-                'Created %(count)d multiple-choice problems from Excel.'
+                'Created %(count)d multiple-choice problems from Excel.',
             ) % {'count': len(created)},
             'created': created,
             'redirect_url': reverse('problem_list'),
