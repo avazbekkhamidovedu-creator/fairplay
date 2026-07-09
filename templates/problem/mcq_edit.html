@@ -29,6 +29,13 @@
                 return $('input[name="csrfmiddlewaretoken"]').first().val() || '';
             }
 
+            function setStatusText(message, isError) {
+                $status
+                    .text(message || '')
+                    .removeClass('is-success is-error')
+                    .addClass(message ? (isError ? 'is-error' : 'is-success') : '');
+            }
+
             function setStatusHtml(message, isError) {
                 $status
                     .html(message || '')
@@ -39,7 +46,7 @@
             async function uploadExcel(file) {
                 var formData = new FormData();
                 formData.append('excel_file', file);
-                setStatusHtml('{{ _("Creating multiple-choice problems from Excel...")|escapejs }}', false);
+                setStatusText('{{ _("Creating multiple-choice problems from Excel...")|escapejs }}', false);
                 try {
                     var response = await fetch(window.location.href, {
                         method: 'POST',
@@ -51,7 +58,7 @@
                     });
                     var data = await response.json();
                     if (!response.ok || !data.ok) {
-                        setStatusHtml(data.message || '{{ _("Upload failed.")|escapejs }}', true);
+                        setStatusText(data.message || '{{ _("Upload failed.")|escapejs }}', true);
                         return;
                     }
                     var links = (data.created || []).map(function (item) {
@@ -69,7 +76,7 @@
                         window.location.href = data.redirect_url || fallbackRedirectUrl;
                     }, 1200);
                 } catch (error) {
-                    setStatusHtml('{{ _("Upload failed.")|escapejs }}', true);
+                    setStatusText('{{ _("Upload failed.")|escapejs }}', true);
                 }
             }
 

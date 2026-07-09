@@ -315,7 +315,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             short_name='HORG',
             about='hidden',
         )
-        hidden_class = Class.objects.create(
+        Class.objects.create(
             organization=hidden_org,
             name='hidden-class',
             slug='hidden-class',

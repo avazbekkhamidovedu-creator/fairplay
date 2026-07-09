@@ -95,6 +95,38 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'Download Excel Template', html=False)
         self.assertContains(response, 'Upload Excel', html=False)
         self.assertContains(response, 'id="mcq-excel-input"', html=False)
+        self.assertContains(response, "function setStatusText(message, isError)", html=False)
+        self.assertContains(response, 'setStatusText(data.message || ', html=False)
+
+    def test_excel_actions_require_same_permission_as_create_page(self):
+        restricted_creator = create_user(
+            username='restricted_creator',
+            user_permissions=('edit_own_problem',),
+        )
+        self.client.force_login(restricted_creator)
+
+        create_url = reverse('problem_mcq_create')
+        self.assertEqual(self.client.get(create_url).status_code, 404)
+        self.assertEqual(self.client.get('{}?download_excel_template=1'.format(create_url)).status_code, 404)
+
+        workbook = build_xlsx_workbook([
+            ('Problems', [[
+                'name', 'description', 'points', 'partial', 'is_public',
+                'organizations', 'classes', 'multiple_select', 'shuffle_options',
+                'options', 'correct_options',
+            ]]),
+        ])
+        response = self.client.post(
+            create_url,
+            {
+                'excel_file': SimpleUploadedFile(
+                    'mcq.xlsx',
+                    workbook,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_create_flow(self):
         self.client.force_login(self.users['creator'])
