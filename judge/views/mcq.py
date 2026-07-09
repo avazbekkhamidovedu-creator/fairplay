@@ -240,10 +240,10 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
 
     def _mcq_reference_rows(self):
         org_names = ' | '.join(
-            self._visible_template_organizations().values_list('slug', flat=True)[:5]
+            self._visible_template_organizations().values_list('slug', flat=True)[:5],
         ) or 'org-slug'
         class_names = ' | '.join(
-            self._visible_template_classes().values_list('slug', flat=True)[:5]
+            self._visible_template_classes().values_list('slug', flat=True)[:5],
         ) or 'class-slug'
         return [
             ['field', 'required', 'how_to_fill', 'example'],

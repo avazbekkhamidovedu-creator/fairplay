@@ -309,11 +309,11 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             short_name='HORG',
             about='hidden',
         )
-        hidden_class = Class.objects.create(
-            organization=hidden_org,
-            name='hidden-class',
-            slug='hidden-class',
-        )
+        # hidden_class = Class.objects.create(
+        #     organization=hidden_org,
+        #     name='hidden-class',
+        #     slug='hidden-class',
+        # )
         visible_org = Organization.objects.create(
             name='Visible Org',
             slug='visible-org',
