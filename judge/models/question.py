@@ -50,6 +50,14 @@ class ProblemMCQConfig(models.Model):
 
 
 # --- Fill-in-the-blank ------------------------------------------------------
+GRADE_EXACT = 'exact'
+GRADE_AI = 'ai'
+GRADE_MODE_CHOICES = (
+    (GRADE_EXACT, _('Exact match')),
+    (GRADE_AI, _('AI grading')),
+)
+
+
 class ProblemBlank(models.Model):
     """A single blank in a fill-in-the-blank problem. The fill-blank analog of a ProblemMCQOption.
 
@@ -86,6 +94,14 @@ class ProblemFillBlankConfig(models.Model):
     trim_whitespace = models.BooleanField(
         verbose_name=_('trim surrounding whitespace'), default=True,
         help_text=_('If set, leading and trailing whitespace in the student answer is ignored.'))
+    grading_mode = models.CharField(
+        verbose_name=_('grading mode'), max_length=8, choices=GRADE_MODE_CHOICES, default=GRADE_EXACT,
+        help_text=_('Exact match compares each blank to its accepted answers; AI grading asks the '
+                    'configured model to score the response against the rubric (falls back to exact '
+                    'match when no model is configured).'))
+    ai_rubric = models.TextField(
+        verbose_name=_('AI rubric'), blank=True,
+        help_text=_('Grading guidance sent to the model (never shown to students).'))
 
     def __str__(self):
         return _('Fill-in-the-blank config for %s') % self.problem.code

@@ -174,6 +174,23 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         # "|"-joined alternatives are stored one-per-line for the newline-splitting grader.
         self.assertEqual(problem.blanks.first().answers.splitlines(), ['Paris', 'paris'])
 
+    def test_create_fill_blank_ai_mode(self):
+        # With ai=True the config records AI grading + rubric; grading itself falls back to exact
+        # when no LLM is configured (see judge/question_types/fill_blank.py).
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'blank', 'name': 'Essay blank', 'description': 'Define recursion: {{blank}}',
+            'points': 4, 'group_id': self.group.id, 'blanks': ['a function calling itself'],
+            'ai': True, 'rubric': 'accept any answer mentioning self-reference',
+        }
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        config = ProblemFillBlankConfig.objects.get(problem=problem)
+        self.assertEqual(config.grading_mode, 'ai')
+        self.assertEqual(config.ai_rubric, 'accept any answer mentioning self-reference')
+
     def test_create_short_answer(self):
         self.client.force_login(self.users['creator'])
         payload = {

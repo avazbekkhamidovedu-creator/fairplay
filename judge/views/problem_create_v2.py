@@ -34,6 +34,7 @@ from django.views.generic import View
 from judge.models import (Language, Organization, Problem, ProblemBlank, ProblemFillBlankConfig, ProblemGroup,
                           ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
                           ProblemType)
+from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
 
 # Types the redesigned page offers but the backend cannot grade/store yet.
@@ -232,6 +233,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['type'] = 'blank'
             config = getattr(problem, 'fill_blank_config', None)
             data['caseSensitive'] = bool(config and config.case_sensitive)
+            data['ai'] = bool(config and config.grading_mode == GRADE_AI)
+            data['rubric'] = (config.ai_rubric if config else '') or ''
             # ProblemBlank stores accepted answers one-per-line; the create page edits them as a
             # single "|"-joined string per blank, so translate back for the editor.
             data['blanks'] = ['|'.join(a.splitlines()) for a in
@@ -571,6 +574,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 problem=problem,
                 case_sensitive=bool(payload.get('caseSensitive')),
                 trim_whitespace=bool(payload.get('trimWhitespace', True)),
+                grading_mode=GRADE_AI if bool(payload.get('ai')) else GRADE_EXACT,
+                ai_rubric=(payload.get('rubric') or '').strip(),
             )
             # The create page enters accepted answers as a "|"-joined string per blank; ProblemBlank
             # stores them one-per-line (the grader splits on newlines).
