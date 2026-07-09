@@ -105,6 +105,7 @@ urlpatterns = [
     path('', include('social_django.urls')),
 
     path('problems/', problem.ProblemList.as_view(), name='problem_list'),
+    path('problems/delete/', problem.ProblemBulkDelete.as_view(), name='problem_bulk_delete'),
     path('problems/random/', problem.RandomProblem.as_view(), name='problem_random'),
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
     path('problems/new/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_create'),

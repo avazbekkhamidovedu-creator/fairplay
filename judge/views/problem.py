@@ -770,6 +770,21 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         context['completed_problem_ids'] = self.get_completed_problems()
         context['attempted_problems'] = self.get_attempted_problems()
 
+        # Editing/deleting controls: expose which problems on this page the current user may
+        # manage, so the list can render per-row edit/delete and bulk delete. Each id is
+        # re-checked server-side on delete, so this is purely for showing the right controls.
+        user = self.request.user
+        can_manage = user.is_authenticated and user.has_perm('judge.edit_own_problem')
+        editable_ids = set()
+        if can_manage and not self.in_contest:
+            page_problems = context.get('problems') or []
+            if user.has_perm('judge.edit_all_problem'):
+                editable_ids = {p.id for p in page_problems}
+            else:
+                editable_ids = {p.id for p in page_problems if p.is_editable_by(user)}
+        context['can_manage_problems'] = can_manage and not self.in_contest
+        context['editable_problem_ids'] = editable_ids
+
         from judge.question_types import creatable_types
         context['creatable_problem_types'] = creatable_types(self.request.user)
         context['ac_min'] = self.ac_min if self.ac_min is not None else ''
@@ -926,6 +941,40 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             else:
                 request.session.pop(key, None)
         return HttpResponseRedirect(request.get_full_path())
+
+
+class ProblemBulkDelete(LoginRequiredMixin, View):
+    """POST-only endpoint to delete one or more problems from the problem list.
+
+    The per-row delete submits a single ``codes`` value; the bulk toolbar submits several.
+    Every problem is re-checked with ``is_editable_by`` here, so a user can only ever delete
+    problems they are allowed to edit, regardless of what the form posted.
+    """
+
+    def post(self, request, *args, **kwargs):
+        redirect_to = request.POST.get('next') or reverse('problem_list')
+        codes = [c for c in request.POST.getlist('codes') if c]
+        if not codes:
+            messages.error(request, _('No problems selected.'))
+            return HttpResponseRedirect(redirect_to)
+
+        deleted = denied = 0
+        with transaction.atomic():
+            for problem in Problem.objects.filter(code__in=codes):
+                if problem.is_editable_by(request.user):
+                    problem.delete()
+                    deleted += 1
+                else:
+                    denied += 1
+
+        if deleted:
+            messages.success(request, _('Deleted %(count)d problem(s).') % {'count': deleted})
+        if denied:
+            messages.error(
+                request,
+                _('Skipped %(count)d problem(s) you are not allowed to delete.') % {'count': denied},
+            )
+        return HttpResponseRedirect(redirect_to)
 
 
 class LanguageTemplateAjax(View):
