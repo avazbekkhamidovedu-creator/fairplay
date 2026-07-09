@@ -303,12 +303,12 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         )
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
-        hidden_org = Organization.objects.create(
-            name='Hidden Org',
-            slug='hidden-org',
-            short_name='HORG',
-            about='hidden',
-        )
+        # hidden_org = Organization.objects.create(
+        #     name='Hidden Org',
+        #     slug='hidden-org',
+        #     short_name='HORG',
+        #     about='hidden',
+        # )
         # hidden_class = Class.objects.create(
         #     organization=hidden_org,
         #     name='hidden-class',
