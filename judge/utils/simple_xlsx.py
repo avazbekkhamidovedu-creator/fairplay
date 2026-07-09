@@ -7,6 +7,10 @@ from xml.sax.saxutils import escape
 MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 PKG_REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships'
+MAX_XLSX_UPLOAD_BYTES = 2 * 1024 * 1024
+MAX_XLSX_TOTAL_UNCOMPRESSED_BYTES = 8 * 1024 * 1024
+MAX_XLSX_XML_PART_BYTES = 4 * 1024 * 1024
+MAX_XLSX_COMPRESSION_RATIO = 100
 
 
 def _excel_column_name(index):
@@ -80,18 +84,18 @@ def build_xlsx_workbook(sheets):
             '<sheet name="{name}" sheetId="{idx}" r:id="rId{idx}"/>'.format(
                 name=escape(sheet_name),
                 idx=index,
-            )
+            ),
         )
         workbook_rels.append(
             '<Relationship Id="rId{idx}" '
             'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
-            'Target="worksheets/sheet{idx}.xml"/>'.format(idx=index)
+            'Target="worksheets/sheet{idx}.xml"/>'.format(idx=index),
         )
         content_type_overrides.append(
             '<Override PartName="/xl/worksheets/sheet{idx}.xml" '
             'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'.format(
                 idx=index,
-            )
+            ),
         )
 
     workbook_xml = (
@@ -159,9 +163,43 @@ def build_xlsx_workbook(sheets):
     return output.getvalue()
 
 
+def validate_xlsx_upload(file_obj):
+    size = getattr(file_obj, 'size', None)
+    if size is not None and size > MAX_XLSX_UPLOAD_BYTES:
+        raise ValueError('The Excel file is too large.')
+
+
+def _validate_archive_members(archive):
+    total_uncompressed_bytes = 0
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        total_uncompressed_bytes += info.file_size
+        if info.file_size > MAX_XLSX_XML_PART_BYTES:
+            raise ValueError('The Excel file is too large.')
+        if total_uncompressed_bytes > MAX_XLSX_TOTAL_UNCOMPRESSED_BYTES:
+            raise ValueError('The Excel file is too large.')
+        if info.compress_size == 0:
+            if info.file_size > 0:
+                raise ValueError('The Excel file is invalid.')
+            continue
+        if info.file_size / float(info.compress_size) > MAX_XLSX_COMPRESSION_RATIO:
+            raise ValueError('The Excel file is too large.')
+
+
+def _safe_archive_read(archive, name):
+    info = archive.getinfo(name)
+    if info.file_size > MAX_XLSX_XML_PART_BYTES:
+        raise ValueError('The Excel file is too large.')
+    payload = archive.read(name)
+    if len(payload) > MAX_XLSX_XML_PART_BYTES:
+        raise ValueError('The Excel file is too large.')
+    return payload
+
+
 def _load_shared_strings(archive):
     try:
-        payload = archive.read('xl/sharedStrings.xml')
+        payload = _safe_archive_read(archive, 'xl/sharedStrings.xml')
     except KeyError:
         return []
 
@@ -175,8 +213,8 @@ def _load_shared_strings(archive):
 
 
 def _find_first_sheet_path(archive):
-    workbook = ET.fromstring(archive.read('xl/workbook.xml'))
-    rels = ET.fromstring(archive.read('xl/_rels/workbook.xml.rels'))
+    workbook = ET.fromstring(_safe_archive_read(archive, 'xl/workbook.xml'))
+    rels = ET.fromstring(_safe_archive_read(archive, 'xl/_rels/workbook.xml.rels'))
     namespace = {'x': MAIN_NS, 'r': REL_NS, 'pr': PKG_REL_NS}
     first_sheet = workbook.find('x:sheets/x:sheet', namespace)
     if first_sheet is None:
@@ -216,10 +254,12 @@ def _cell_value(cell, shared_strings, namespace):
 
 
 def read_xlsx_rows(file_obj):
+    validate_xlsx_upload(file_obj)
     with zipfile.ZipFile(file_obj) as archive:
+        _validate_archive_members(archive)
         shared_strings = _load_shared_strings(archive)
         sheet_path = _find_first_sheet_path(archive)
-        sheet = ET.fromstring(archive.read(sheet_path))
+        sheet = ET.fromstring(_safe_archive_read(archive, sheet_path))
 
     namespace = {'x': MAIN_NS}
     rows = []

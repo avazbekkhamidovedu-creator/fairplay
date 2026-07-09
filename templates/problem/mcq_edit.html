@@ -23,6 +23,7 @@
             var rows = $('#mcq-option-rows');
             var totalForms = $('#id_options-TOTAL_FORMS');
             var $status = $('#mcq-import-status');
+            var fallbackRedirectUrl = "{{ url('problem_list')|escapejs }}";
 
             function getCsrfToken() {
                 return $('input[name="csrfmiddlewaretoken"]').first().val() || '';
@@ -65,7 +66,7 @@
                     summary += '<br>{{ _("Redirecting...")|escapejs }}';
                     setStatusHtml(summary, false);
                     window.setTimeout(function () {
-                        window.location.href = data.redirect_url || '{{ url('problem_list') }}';
+                        window.location.href = data.redirect_url || fallbackRedirectUrl;
                     }, 1200);
                 } catch (error) {
                     setStatusHtml('{{ _("Upload failed.")|escapejs }}', true);

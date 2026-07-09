@@ -277,7 +277,7 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
         except (ET.ParseError, KeyError):
             return JsonResponse({'ok': False, 'message': _('The Excel file is invalid.')}, status=400)
         except ValueError as error:
-            return JsonResponse({'ok': False, 'message': str(error)}, status=400)
+            return JsonResponse({'ok': False, 'message': _(str(error))}, status=400)
 
         if not rows:
             return JsonResponse({'ok': False, 'message': _('The Excel file is empty.')}, status=400)
@@ -359,7 +359,7 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
         multiple_select = self._parse_bool(values['multiple_select'])
         if not multiple_select and len(correct_indexes) > 1:
             raise forms.ValidationError(
-                _('Row %(row)d is single-answer but marks multiple correct options.') % {'row': row_number}
+                _('Row %(row)d is single-answer but marks multiple correct options.') % {'row': row_number},
             )
 
         organizations = self._resolve_organizations(values['organizations'])
@@ -370,14 +370,14 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
             org_ids = {org.pk for org in organizations}
             if any(item.organization_id not in org_ids for item in classes):
                 raise forms.ValidationError(
-                    _('Row %(row)d selects classes outside the chosen organizations.') % {'row': row_number}
+                    _('Row %(row)d selects classes outside the chosen organizations.') % {'row': row_number},
                 )
 
         is_public = self._parse_bool(values['is_public'])
         if is_public and not self.request.user.has_perm('judge.change_public_visibility'):
             if not organizations and not classes:
                 raise forms.ValidationError(
-                    _('Row %(row)d cannot make a problem public without organizations.') % {'row': row_number}
+                    _('Row %(row)d cannot make a problem public without organizations.') % {'row': row_number},
                 )
 
         with transaction.atomic():
@@ -400,7 +400,7 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
                 problem.authors.add(self.request.user.profile)
             problem.types.add(default_problem_type())
 
-            config = ProblemMCQConfig.objects.create(
+            ProblemMCQConfig.objects.create(
                 problem=problem,
                 multiple_select=multiple_select,
                 shuffle_options=self._parse_bool(values['shuffle_options']),

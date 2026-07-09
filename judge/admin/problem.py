@@ -863,13 +863,13 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
 
     def _excel_reference_rows(self):
         org_names = ' | '.join(
-            Organization.objects.order_by('name').values_list('slug', flat=True)[:5]
+            Organization.objects.order_by('name').values_list('slug', flat=True)[:5],
         ) or 'organization-slug'
         class_names = ' | '.join(
-            Class.objects.order_by('name').values_list('slug', flat=True)[:5]
+            Class.objects.order_by('name').values_list('slug', flat=True)[:5],
         ) or 'class-slug'
         language_keys = ' | '.join(
-            Language.objects.order_by('key').values_list('key', flat=True)[:8]
+            Language.objects.order_by('key').values_list('key', flat=True)[:8],
         ) or 'PY3'
         return [
             ['field', 'required', 'how_to_fill', 'example'],
@@ -1004,7 +1004,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         except (ET.ParseError, KeyError):
             return JsonResponse({'ok': False, 'message': gettext('The Excel file is invalid.')}, status=400)
         except ValueError as error:
-            return JsonResponse({'ok': False, 'message': str(error)}, status=400)
+            return JsonResponse({'ok': False, 'message': gettext(str(error))}, status=400)
         except forms.ValidationError as error:
             return JsonResponse({'ok': False, 'message': error.message}, status=400)
 
