@@ -385,11 +385,15 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         difficulty_names = {t.name for t in context['difficulty_types']}
         knowledge_names = {t.name for t in context['knowledge_types']}
         # Format options come from the registered question types (submission_type), exposed as
-        # {'code', 'label'} dicts, not from the ProblemType taxonomy.
+        # {'code', 'label'} dicts, not from the ProblemType taxonomy. MCQ is additionally broken
+        # down into single / multiple / true-false pseudo-codes on top of the whole-MCQ option.
         format_codes = {f['code'] for f in context['format_types']}
 
         self.assertEqual(difficulty_names, {'easy', 'medium', 'hard'})
-        self.assertEqual(format_codes, {t.submission_type for t in all_types()})
+        self.assertEqual(
+            format_codes,
+            {t.submission_type for t in all_types()} | {'single', 'multiple', 'truefalse'},
+        )
         self.assertIn('dp', knowledge_names)
         self.assertIn('greedy', knowledge_names)
         # Format- and difficulty-named ProblemTypes are not surfaced as knowledge points.

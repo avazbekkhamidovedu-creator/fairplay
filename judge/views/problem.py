@@ -623,6 +623,10 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         options = []
         for t in all_types():
             if t.submission_type == ProblemSubmissionType.MCQ:
+                # Whole-MCQ option: matches any MCQ, including legacy ones without an mcq_config row.
+                options.append((ProblemSubmissionType.MCQ, str(t.label),
+                                Q(submission_type=ProblemSubmissionType.MCQ)))
+                # Plus the finer single / multiple / true-false breakdown.
                 options.append(('single', _('Single choice'),
                                 Q(submission_type=ProblemSubmissionType.MCQ,
                                   mcq_config__is_true_false=False, mcq_config__multiple_select=False)))

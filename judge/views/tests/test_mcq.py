@@ -63,7 +63,7 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
 
         self.client.force_login(self.users['creator'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertIn(b'Add new', content)
+        self.assertIn(b'Add problem', content)
         self.assertIn(v2_url, content)
         self.assertNotIn(contest_url, content)
 
@@ -73,7 +73,7 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
 
         self.client.force_login(self.users['normal'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertNotIn(b'Add new', content)
+        self.assertNotIn(b'Add problem', content)
         self.assertNotIn(v2_url, content)
 
     def test_create_requires_permission(self):
