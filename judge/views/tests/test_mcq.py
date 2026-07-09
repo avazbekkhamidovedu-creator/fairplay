@@ -74,7 +74,7 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['normal'])
         content = self.client.get(reverse('problem_list')).content
         self.assertNotIn(b'Add new', content)
-        self.assertNotIn(mcq_url, content)
+        self.assertNotIn(v2_url, content)
 
     def test_create_requires_permission(self):
         self.client.force_login(self.users['normal'])

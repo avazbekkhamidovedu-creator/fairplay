@@ -8,7 +8,7 @@ from django.core.files.base import ContentFile
 from django.test import TestCase
 from django.urls import reverse
 
-from judge.models import (Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
+from judge.models import (Problem, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
                           ProblemShortAnswerConfig, ProblemTestCase, problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.utils.problem_create import default_problem_group
