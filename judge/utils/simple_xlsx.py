@@ -11,6 +11,7 @@ MAX_XLSX_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_XLSX_TOTAL_UNCOMPRESSED_BYTES = 8 * 1024 * 1024
 MAX_XLSX_XML_PART_BYTES = 4 * 1024 * 1024
 MAX_XLSX_COMPRESSION_RATIO = 100
+MAX_XLSX_COLUMNS = 16384
 
 
 def _excel_column_name(index):
@@ -232,9 +233,13 @@ def _find_first_sheet_path(archive):
 
 def _cell_column_index(cell_ref):
     letters = ''.join(ch for ch in cell_ref if ch.isalpha())
+    if not letters:
+        raise ValueError('The Excel file is invalid.')
     value = 0
     for ch in letters:
         value = value * 26 + (ord(ch.upper()) - 64)
+    if value > MAX_XLSX_COLUMNS:
+        raise ValueError('The Excel file is invalid.')
     return value - 1
 
 
