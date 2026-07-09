@@ -397,13 +397,14 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
                 raise forms.ValidationError(
                     _('Row %(row)d cannot make a problem public without organizations.') % {'row': row_number},
                 )
+        points = self._parse_float(values['points'], _('points'), row_number)
 
         with transaction.atomic():
             problem = Problem(
                 name=values['name'],
                 description=values['description'],
                 submission_type=ProblemSubmissionType.MCQ,
-                points=self._parse_float(values['points'], _('points'), row_number) or 10,
+                points=10 if points is None else points,
                 partial=self._parse_bool(values['partial']),
                 is_public=is_public,
             )
@@ -424,7 +425,8 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
                 shuffle_options=self._parse_bool(values['shuffle_options']),
             )
             problem.partial = self._parse_bool(values['partial'])
-            problem.points = self._parse_float(values['points'], _('points'), row_number) or problem.points
+            if points is not None:
+                problem.points = points
             problem.save(update_fields=['partial', 'points', 'is_public', 'is_organization_private'])
             for index, text in enumerate(option_texts):
                 ProblemMCQOption.objects.create(

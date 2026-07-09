@@ -262,6 +262,11 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
                     '', '', 'false', 'false',
                     '3 | 4 | 5', '2',
                 ],
+                [
+                    'Excel MCQ 3', 'Zero-point practice', '0', 'false', 'false',
+                    '', '', 'false', 'false',
+                    'A | B', '1',
+                ],
             ]),
         ])
         response = self.client.post(
@@ -277,9 +282,9 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertTrue(payload['ok'])
-        self.assertEqual(payload['message'], 'Created 2 multiple-choice problems from Excel.')
+        self.assertEqual(payload['message'], 'Created 3 multiple-choice problems from Excel.')
         self.assertEqual(payload['redirect_url'], reverse('problem_list'))
-        self.assertEqual(len(payload['created']), 2)
+        self.assertEqual(len(payload['created']), 3)
 
         problem1 = Problem.objects.get(name='Excel MCQ 1')
         self.assertEqual(problem1.submission_type, 'M')
@@ -297,6 +302,12 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem2.mcq_options.count(), 3)
         self.assertEqual(problem2.mcq_options.filter(is_correct=True).count(), 1)
         self.assertFalse(problem2.mcq_config.multiple_select)
+
+        problem3 = Problem.objects.get(name='Excel MCQ 3')
+        self.assertEqual(problem3.points, 0)
+        self.assertEqual(problem3.mcq_options.count(), 2)
+        self.assertEqual(problem3.mcq_options.filter(is_correct=True).count(), 1)
+        self.assertFalse(problem3.mcq_config.multiple_select)
 
     def test_mcq_excel_batch_create_rejects_organization_outside_visible_scope(self):
         hidden_org = Organization.objects.create(
