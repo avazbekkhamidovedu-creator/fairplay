@@ -465,6 +465,10 @@
                         .addClass(message ? (isError ? 'is-error' : 'is-success') : '');
                 }
 
+                function escapeHtml(value) {
+                    return $('<div>').text(value || '').html();
+                }
+
                 function getCsrfToken() {
                     return $('input[name="csrfmiddlewaretoken"]').first().val() || '';
                 }
@@ -473,12 +477,12 @@
                     var links = (data.created || []).map(function (item) {
                         var name = item.name || item.code || '';
                         if (!item.edit_url) {
-                            return $('<div>').text(name).html();
+                            return escapeHtml(name);
                         }
-                        return '<a href="' + $('<div>').text(item.edit_url).html() + '">' +
-                            $('<div>').text(name).html() + '</a>';
+                        return '<a href="' + escapeHtml(item.edit_url) + '">' +
+                            escapeHtml(name) + '</a>';
                     });
-                    var summary = data.message || '{{ _("Markdown uploaded successfully.")|escapejs }}';
+                    var summary = escapeHtml(data.message || '{{ _("Markdown uploaded successfully.")|escapejs }}');
                     if (links.length) {
                         summary += '<br>' + links.join('<br>');
                     }
