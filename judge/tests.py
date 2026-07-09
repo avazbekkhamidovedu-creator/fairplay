@@ -1,10 +1,13 @@
+import io
+
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestProblem, Language, Problem
+from judge.models import Class, Contest, ContestProblem, Language, Organization, Problem
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type
+from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 
 
 class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
@@ -63,11 +66,16 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'name="templates-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'id="problem-markdown-import-input"', html=False)
         self.assertContains(response, 'id="problem-markdown-batch-import-input"', html=False)
+        self.assertContains(response, 'id="problem-excel-import-input"', html=False)
         self.assertContains(response, 'id="problem-markdown-import-status"', html=False)
         self.assertContains(response, reverse('admin:judge_problem_import_markdown'), html=False)
         self.assertContains(response, reverse('admin:judge_problem_batch_create_markdown'), html=False)
+        self.assertContains(response, reverse('admin:judge_problem_batch_create_excel'), html=False)
+        self.assertContains(response, reverse('admin:judge_problem_download_excel_template'), html=False)
         self.assertContains(response, 'Upload Markdown', html=False)
         self.assertContains(response, 'Batch Upload Markdown', html=False)
+        self.assertContains(response, 'Upload Excel', html=False)
+        self.assertContains(response, 'Download Excel Template', html=False)
 
     def test_admin_advanced_add_page_uses_original_problem_form(self):
         response = self.client.get('{}?advanced=1'.format(reverse('admin:judge_problem_add')))
@@ -277,6 +285,105 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             },
         )
         self.assertFalse(Problem.objects.filter(name='Valid Problem').exists())
+
+    def test_admin_problem_excel_template_download(self):
+        response = self.client.get(reverse('admin:judge_problem_download_excel_template'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        self.assertIn('problem_batch_upload_template.xlsx', response['Content-Disposition'])
+
+        rows = read_xlsx_rows(io.BytesIO(response.content))
+        self.assertEqual(
+            rows[0],
+            ['name', 'description', 'organizations', 'classes', 'allowed_languages'],
+        )
+
+    def test_admin_excel_batch_create_creates_multiple_problems(self):
+        organization = Organization.objects.create(
+            name='Example Org',
+            slug='example-org',
+            short_name='EORG',
+            about='Org',
+        )
+        active_class = Class.objects.create(
+            organization=organization,
+            name='example-class',
+            slug='example-class',
+        )
+        active_class.admins.add(self.users['superuser'].profile)
+
+        workbook = build_xlsx_workbook([
+            ('Problems', [
+                ['name', 'description', 'organizations', 'classes', 'allowed_languages'],
+                ['Excel Problem 1', 'First body', 'example-org', 'example-class', 'PY3'],
+                ['Excel Problem 2', 'Second body', '', '', ''],
+            ]),
+        ])
+
+        response = self.client.post(
+            reverse('admin:judge_problem_batch_create_excel'),
+            data={
+                'excel_file': SimpleUploadedFile(
+                    'problems.xlsx',
+                    workbook,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['message'], 'Created 2 problems from Excel.')
+        self.assertEqual(payload['redirect_url'], reverse('admin:judge_problem_changelist'))
+        self.assertEqual(len(payload['created']), 2)
+
+        problem1 = Problem.objects.get(name='Excel Problem 1')
+        self.assertEqual(problem1.description, 'First body')
+        self.assertCountEqual(problem1.organizations.values_list('slug', flat=True), ['example-org'])
+        self.assertCountEqual(problem1.classes.values_list('slug', flat=True), ['example-class'])
+        self.assertCountEqual(problem1.allowed_languages.values_list('key', flat=True), ['PY3'])
+
+        problem2 = Problem.objects.get(name='Excel Problem 2')
+        self.assertEqual(problem2.description, 'Second body')
+        self.assertFalse(problem2.organizations.exists())
+        self.assertFalse(problem2.classes.exists())
+        self.assertCountEqual(
+            problem2.allowed_languages.values_list('id', flat=True),
+            Language.objects.values_list('id', flat=True),
+        )
+
+    def test_admin_excel_batch_create_rejects_missing_headers(self):
+        workbook = build_xlsx_workbook([
+            ('Problems', [
+                ['name', 'description'],
+                ['Only Name', 'Only Description'],
+            ]),
+        ])
+
+        response = self.client.post(
+            reverse('admin:judge_problem_batch_create_excel'),
+            data={
+                'excel_file': SimpleUploadedFile(
+                    'bad.xlsx',
+                    workbook,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertJSONEqual(
+            response.content.decode(),
+            {
+                'ok': False,
+                'message': 'Missing required columns: organizations, classes, allowed_languages.',
+            },
+        )
 
     def test_admin_add_page_can_fill_problem_from_markdown_upload(self):
         markdown_upload = SimpleUploadedFile(

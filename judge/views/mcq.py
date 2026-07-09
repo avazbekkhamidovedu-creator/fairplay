@@ -5,19 +5,25 @@ existing one. Permissions reuse the existing problem perms: ``judge.create_priva
 create, ``Problem.is_editable_by`` to edit. Code-centric required fields are auto-filled via
 ``apply_simple_problem_defaults`` so teachers only ever see the prompt, choices, and settings.
 """
+import re
+import zipfile
+from xml.etree import ElementTree as ET
+
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db import transaction
 from django.forms import inlineformset_factory
-from django.http import Http404
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext as _
 from django.views.generic import View
 
-from judge.models import Problem, ProblemMCQConfig, ProblemMCQOption, ProblemSubmissionType
+from judge.models import Class, Language, Organization, Problem, ProblemMCQConfig, ProblemMCQOption, \
+    ProblemSubmissionType
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type
+from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 from judge.widgets import HeavySelect2MultipleWidget, MartorWidget
 
 
@@ -91,6 +97,326 @@ def make_option_formset(extra):
 class ProblemMCQEditView(LoginRequiredMixin, View):
     template_name = 'problem/mcq_edit.html'
 
+    def _split_multi_value(self, value):
+        if value is None:
+            return []
+        return [item.strip() for item in re.split(r'[\n,;|]+', str(value)) if item.strip()]
+
+    def _resolve_tokens(self, queryset, tokens, label, resolvers):
+        resolved = []
+        seen = set()
+        for token in tokens:
+            matches = []
+            for resolver in resolvers:
+                matches.extend(resolver(queryset, token))
+            unique_matches = []
+            local_seen = set()
+            for match in matches:
+                if match.pk not in local_seen:
+                    unique_matches.append(match)
+                    local_seen.add(match.pk)
+            if not unique_matches:
+                raise forms.ValidationError(_('%(label)s "%(value)s" was not found.') % {
+                    'label': label,
+                    'value': token,
+                })
+            if len(unique_matches) > 1:
+                raise forms.ValidationError(_('%(label)s "%(value)s" matched multiple records.') % {
+                    'label': label,
+                    'value': token,
+                })
+            match = unique_matches[0]
+            if match.pk not in seen:
+                resolved.append(match)
+                seen.add(match.pk)
+        return resolved
+
+    def _resolve_organizations(self, raw_value):
+        tokens = self._split_multi_value(raw_value)
+        if not tokens:
+            return []
+        queryset = Organization.objects.all()
+        return self._resolve_tokens(
+            queryset,
+            tokens,
+            _('Organization'),
+            (
+                lambda qs, token: list(qs.filter(slug=token)),
+                lambda qs, token: list(qs.filter(short_name=token)),
+                lambda qs, token: list(qs.filter(name=token)),
+                lambda qs, token: list(qs.filter(pk=int(token))) if token.isdigit() else [],
+            ),
+        )
+
+    def _resolve_classes(self, raw_value):
+        tokens = self._split_multi_value(raw_value)
+        if not tokens:
+            return []
+        queryset = Class.get_visible_classes(self.request.user)
+        return self._resolve_tokens(
+            queryset,
+            tokens,
+            _('Class'),
+            (
+                lambda qs, token: list(qs.filter(slug=token)),
+                lambda qs, token: list(qs.filter(name=token)),
+                lambda qs, token: list(qs.filter(pk=int(token))) if token.isdigit() else [],
+            ),
+        )
+
+    def _parse_bool(self, value):
+        return str(value).strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+
+    def _parse_float(self, value, field_name, row_number):
+        raw = str(value).strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            raise forms.ValidationError(_('Row %(row)d has invalid %(field)s.') % {
+                'row': row_number,
+                'field': field_name,
+            })
+
+    def _resolve_languages(self, raw_value):
+        tokens = self._split_multi_value(raw_value)
+        if not tokens:
+            return []
+        queryset = Language.objects.all()
+        return self._resolve_tokens(
+            queryset,
+            tokens,
+            _('Language'),
+            (
+                lambda qs, token: list(qs.filter(key=token)),
+                lambda qs, token: list(qs.filter(short_name=token)),
+                lambda qs, token: list(qs.filter(common_name=token)),
+                lambda qs, token: list(qs.filter(name=token)),
+                lambda qs, token: list(qs.filter(pk=int(token))) if token.isdigit() else [],
+            ),
+        )
+
+    def _mcq_excel_headers(self):
+        return [
+            'name', 'description', 'points', 'partial', 'is_public',
+            'organizations', 'classes', 'multiple_select', 'shuffle_options',
+            'options', 'correct_options',
+        ]
+
+    def _mcq_template_rows(self):
+        org = Organization.objects.order_by('name').first()
+        klass = Class.objects.order_by('name').first()
+        return [
+            self._mcq_excel_headers(),
+            [
+                'Sample MCQ',
+                'What is 2 + 2?',
+                '5',
+                'false',
+                'false',
+                org.slug if org else '',
+                klass.slug if klass else '',
+                'false',
+                'false',
+                '3 | 4 | 5',
+                '2',
+            ],
+        ]
+
+    def _mcq_reference_rows(self):
+        org_names = ' | '.join(Organization.objects.order_by('name').values_list('slug', flat=True)[:5]) or 'org-slug'
+        class_names = ' | '.join(Class.objects.order_by('name').values_list('slug', flat=True)[:5]) or 'class-slug'
+        return [
+            ['field', 'required', 'how_to_fill', 'example'],
+            ['name', 'yes', 'Question name.', 'Binary Search Quiz'],
+            ['description', 'yes', 'Question prompt in markdown/plain text.', 'Which answer is correct?'],
+            ['points', 'no', 'Numeric points. Blank uses the default form value.', '10'],
+            ['partial', 'no', 'true/false. Usually useful for multiple-answer questions.', 'true'],
+            ['is_public', 'no', 'true/false.', 'false'],
+            [
+                'organizations', 'no',
+                'Separate multiple values with "|" or ",". Use organization slug/name/id.',
+                org_names,
+            ],
+            [
+                'classes', 'no',
+                'Separate multiple values with "|" or ",". Use visible class slug/name/id.',
+                class_names,
+            ],
+            ['multiple_select', 'no', 'true/false for allowing multiple correct answers.', 'true'],
+            ['shuffle_options', 'no', 'true/false for per-student shuffle.', 'false'],
+            ['options', 'yes', 'Separate choices with "|" or "," or new lines.', 'A | B | C'],
+            ['correct_options', 'yes', '1-based option indexes separated with "|" or ",".', '2 | 3'],
+        ]
+
+    def download_excel_template(self, request):
+        if not request.user.has_perm('judge.create_private_problem'):
+            raise Http404()
+        payload = build_xlsx_workbook([
+            ('Problems', self._mcq_template_rows()),
+            ('Reference', self._mcq_reference_rows()),
+        ])
+        response = HttpResponse(
+            payload,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = 'attachment; filename="mcq_batch_upload_template.xlsx"'
+        return response
+
+    def batch_create_excel(self, request):
+        if not request.user.has_perm('judge.create_private_problem'):
+            raise Http404()
+        uploaded_file = request.FILES.get('excel_file')
+        if uploaded_file is None:
+            return JsonResponse({'ok': False, 'message': _('Please choose an Excel file.')}, status=400)
+        try:
+            rows = read_xlsx_rows(uploaded_file)
+        except zipfile.BadZipFile:
+            return JsonResponse({'ok': False, 'message': _('The Excel file is invalid.')}, status=400)
+        except (ET.ParseError, KeyError):
+            return JsonResponse({'ok': False, 'message': _('The Excel file is invalid.')}, status=400)
+        except ValueError as error:
+            return JsonResponse({'ok': False, 'message': str(error)}, status=400)
+
+        if not rows:
+            return JsonResponse({'ok': False, 'message': _('The Excel file is empty.')}, status=400)
+
+        header_row = [str(cell).strip().lower() for cell in rows[0]]
+        required_headers = self._mcq_excel_headers()
+        missing_headers = [header for header in required_headers if header not in header_row]
+        if missing_headers:
+            return JsonResponse({
+                'ok': False,
+                'message': _('Missing required columns: %(columns)s.') % {'columns': ', '.join(missing_headers)},
+            }, status=400)
+        header_map = {header: header_row.index(header) for header in required_headers}
+
+        created = []
+        try:
+            with transaction.atomic():
+                for row_number, row in enumerate(rows[1:], start=2):
+                    problem = self._create_problem_from_excel_row(row, row_number, header_map)
+                    if problem is None:
+                        continue
+                    created.append({
+                        'id': problem.pk,
+                        'code': problem.code,
+                        'name': problem.name,
+                        'edit_url': reverse('problem_mcq_edit', args=[problem.code]),
+                    })
+        except forms.ValidationError as error:
+            return JsonResponse({'ok': False, 'message': error.message}, status=400)
+
+        if not created:
+            return JsonResponse(
+                {'ok': False, 'message': _('The Excel file does not contain any problem rows.')},
+                status=400,
+            )
+
+        return JsonResponse({
+            'ok': True,
+            'message': _(
+                'Created %(count)d multiple-choice problems from Excel.'
+            ) % {'count': len(created)},
+            'created': created,
+            'redirect_url': reverse('problem_list'),
+        })
+
+    def _create_problem_from_excel_row(self, row, row_number, header_map):
+        values = {}
+        for key, index in header_map.items():
+            values[key] = row[index].strip() if index < len(row) and row[index] is not None else ''
+        if not any(values.values()):
+            return None
+        if not values['name']:
+            raise forms.ValidationError(_('Row %(row)d is missing "name".') % {'row': row_number})
+        if not values['description']:
+            raise forms.ValidationError(_('Row %(row)d is missing "description".') % {'row': row_number})
+
+        option_texts = self._split_multi_value(values['options'])
+        if len(option_texts) < 2:
+            raise forms.ValidationError(_('Row %(row)d must contain at least two options.') % {'row': row_number})
+
+        correct_indexes = []
+        for token in self._split_multi_value(values['correct_options']):
+            if not token.isdigit():
+                raise forms.ValidationError(_('Row %(row)d has invalid correct option index "%(value)s".') % {
+                    'row': row_number,
+                    'value': token,
+                })
+            index = int(token)
+            if index < 1 or index > len(option_texts):
+                raise forms.ValidationError(_('Row %(row)d correct option index %(value)s is out of range.') % {
+                    'row': row_number,
+                    'value': index,
+                })
+            if index not in correct_indexes:
+                correct_indexes.append(index)
+        if not correct_indexes:
+            raise forms.ValidationError(_('Row %(row)d must mark at least one correct option.') % {'row': row_number})
+
+        multiple_select = self._parse_bool(values['multiple_select'])
+        if not multiple_select and len(correct_indexes) > 1:
+            raise forms.ValidationError(
+                _('Row %(row)d is single-answer but marks multiple correct options.') % {'row': row_number}
+            )
+
+        organizations = self._resolve_organizations(values['organizations'])
+        classes = self._resolve_classes(values['classes'])
+        if classes and not organizations:
+            raise forms.ValidationError(_('Row %(row)d selects classes without organizations.') % {'row': row_number})
+        if classes:
+            org_ids = {org.pk for org in organizations}
+            if any(item.organization_id not in org_ids for item in classes):
+                raise forms.ValidationError(
+                    _('Row %(row)d selects classes outside the chosen organizations.') % {'row': row_number}
+                )
+
+        is_public = self._parse_bool(values['is_public'])
+        if is_public and not self.request.user.has_perm('judge.change_public_visibility'):
+            if not organizations and not classes:
+                raise forms.ValidationError(
+                    _('Row %(row)d cannot make a problem public without organizations.') % {'row': row_number}
+                )
+
+        with transaction.atomic():
+            problem = Problem(
+                name=values['name'],
+                description=values['description'],
+                submission_type=ProblemSubmissionType.MCQ,
+                points=self._parse_float(values['points'], _('points'), row_number) or 10,
+                partial=self._parse_bool(values['partial']),
+                is_public=is_public,
+            )
+            apply_simple_problem_defaults(problem)
+            problem.save()
+            problem.organizations.set(organizations)
+            problem.classes.set(classes)
+            if organizations or classes:
+                problem.is_organization_private = True
+                problem.save(update_fields=['is_organization_private'])
+            if self.request.user.is_authenticated:
+                problem.authors.add(self.request.user.profile)
+            problem.types.add(default_problem_type())
+
+            config = ProblemMCQConfig.objects.create(
+                problem=problem,
+                multiple_select=multiple_select,
+                shuffle_options=self._parse_bool(values['shuffle_options']),
+            )
+            problem.partial = self._parse_bool(values['partial'])
+            problem.points = self._parse_float(values['points'], _('points'), row_number) or problem.points
+            problem.save(update_fields=['partial', 'points', 'is_public', 'is_organization_private'])
+            for index, text in enumerate(option_texts):
+                ProblemMCQOption.objects.create(
+                    problem=problem,
+                    order=index,
+                    text=text,
+                    is_correct=(index + 1) in correct_indexes,
+                )
+            return problem
+
     def get_problem(self):
         """Return the problem being edited, or None in create mode. Enforces permissions."""
         code = self.kwargs.get('problem')
@@ -123,11 +449,15 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
         return problem_form, config_form, formset
 
     def get(self, request, *args, **kwargs):
+        if self.kwargs.get('problem') is None and request.GET.get('download_excel_template') == '1':
+            return self.download_excel_template(request)
         problem = self.get_problem()
         problem_form, config_form, formset = self.build_forms(problem)
         return self.render(request, problem, problem_form, config_form, formset)
 
     def post(self, request, *args, **kwargs):
+        if self.kwargs.get('problem') is None and request.FILES.get('excel_file') is not None:
+            return self.batch_create_excel(request)
         problem = self.get_problem()
         creating = problem is None
         problem_form, config_form, formset = self.build_forms(problem, data=request.POST)

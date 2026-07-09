@@ -1,6 +1,8 @@
 import json
 import re
+import zipfile
 from operator import attrgetter
+from xml.etree import ElementTree as ET
 
 from django import forms
 from django.conf import settings
@@ -8,22 +10,24 @@ from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.forms import ModelForm
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.urls import path, reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.translation import gettext, gettext_lazy as _, ngettext
 from reversion.admin import VersionAdmin
 
-from judge.models import Class, Language, LanguageLimit, Problem, ProblemClarification, ProblemGroup, \
+from judge.models import Class, Language, LanguageLimit, Organization, Problem, ProblemClarification, ProblemGroup, \
     ProblemPointsVote, ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution, \
     SubmissionSourceAccess
+from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, AdminSelect2MultipleWidget, \
     AdminSelect2Widget, CheckboxSelectMultipleWithSelectAll
 
 
 MARKDOWN_UPLOAD_EXTENSIONS = ('.md', '.markdown', '.mdown', '.txt')
+EXCEL_UPLOAD_EXTENSIONS = ('.xlsx',)
 
 
 def decode_markdown_upload(uploaded_file):
@@ -43,6 +47,13 @@ def validate_markdown_upload_filename(uploaded_file):
     filename = (uploaded_file.name or '').strip()
     if not filename.lower().endswith(MARKDOWN_UPLOAD_EXTENSIONS):
         raise forms.ValidationError(_('Only Markdown or text files are supported.'))
+    return filename
+
+
+def validate_excel_upload_filename(uploaded_file):
+    filename = (uploaded_file.name or '').strip()
+    if not filename.lower().endswith(EXCEL_UPLOAD_EXTENSIONS):
+        raise forms.ValidationError(_('Only .xlsx Excel files are supported.'))
     return filename
 
 
@@ -664,7 +675,237 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 self.admin_site.admin_view(self.batch_create_markdown_view),
                 name='judge_problem_batch_create_markdown',
             ),
+            path(
+                'batch-create-excel/',
+                self.admin_site.admin_view(self.batch_create_excel_view),
+                name='judge_problem_batch_create_excel',
+            ),
+            path(
+                'download-excel-template/',
+                self.admin_site.admin_view(self.download_excel_template_view),
+                name='judge_problem_download_excel_template',
+            ),
         ] + super().get_urls()
+
+    def _serialize_created_problem(self, problem):
+        return {
+            'id': problem.pk,
+            'code': problem.code,
+            'name': problem.name,
+            'edit_url': reverse('admin:judge_problem_change', args=[problem.pk]),
+        }
+
+    def _split_excel_multi_value(self, value):
+        if value is None:
+            return []
+        parts = [item.strip() for item in re.split(r'[\n,;|]+', str(value)) if item.strip()]
+        return parts
+
+    def _resolve_excel_tokens(self, queryset, tokens, label, resolvers):
+        resolved = []
+        seen = set()
+        for token in tokens:
+            matches = []
+            for resolver in resolvers:
+                matches.extend(resolver(queryset, token))
+            unique_matches = []
+            for match in matches:
+                if match.pk not in {item.pk for item in unique_matches}:
+                    unique_matches.append(match)
+            if not unique_matches:
+                raise forms.ValidationError(_('%(label)s "%(value)s" was not found.') % {
+                    'label': label,
+                    'value': token,
+                })
+            if len(unique_matches) > 1:
+                raise forms.ValidationError(_('%(label)s "%(value)s" matched multiple records.') % {
+                    'label': label,
+                    'value': token,
+                })
+            match = unique_matches[0]
+            if match.pk not in seen:
+                resolved.append(match)
+                seen.add(match.pk)
+        return resolved
+
+    def _resolve_excel_organizations(self, request, raw_value):
+        tokens = self._split_excel_multi_value(raw_value)
+        if not tokens:
+            return []
+        if not request.user.has_perm('judge.create_private_problem'):
+            raise forms.ValidationError(_('You do not have permission to set organizations in Excel import.'))
+        queryset = Organization.objects.all()
+        return self._resolve_excel_tokens(
+            queryset,
+            tokens,
+            _('Organization'),
+            (
+                lambda qs, token: list(qs.filter(slug=token)),
+                lambda qs, token: list(qs.filter(short_name=token)),
+                lambda qs, token: list(qs.filter(name=token)),
+                lambda qs, token: list(qs.filter(pk=int(token))) if token.isdigit() else [],
+            ),
+        )
+
+    def _resolve_excel_classes(self, request, raw_value):
+        tokens = self._split_excel_multi_value(raw_value)
+        if not tokens:
+            return []
+        if not request.user.has_perm('judge.create_private_problem'):
+            raise forms.ValidationError(_('You do not have permission to set classes in Excel import.'))
+        queryset = Class.get_visible_classes(request.user)
+        return self._resolve_excel_tokens(
+            queryset,
+            tokens,
+            _('Class'),
+            (
+                lambda qs, token: list(qs.filter(slug=token)),
+                lambda qs, token: list(qs.filter(name=token)),
+                lambda qs, token: list(qs.filter(pk=int(token))) if token.isdigit() else [],
+            ),
+        )
+
+    def _resolve_excel_languages(self, raw_value):
+        tokens = self._split_excel_multi_value(raw_value)
+        if not tokens:
+            return self.get_default_languages()
+        queryset = Language.objects.all()
+        return self._resolve_excel_tokens(
+            queryset,
+            tokens,
+            _('Language'),
+            (
+                lambda qs, token: list(qs.filter(key=token)),
+                lambda qs, token: list(qs.filter(short_name=token)),
+                lambda qs, token: list(qs.filter(common_name=token)),
+                lambda qs, token: list(qs.filter(name=token)),
+                lambda qs, token: list(qs.filter(pk=int(token))) if token.isdigit() else [],
+            ),
+        )
+
+    def create_problem_with_basic_configuration(
+        self,
+        request,
+        name,
+        description,
+        organizations=None,
+        classes=None,
+        allowed_languages=None,
+    ):
+        default_group = self.get_default_group()
+        default_type = self.get_default_type()
+        default_languages = allowed_languages if allowed_languages is not None else self.get_default_languages()
+
+        if default_group is None:
+            raise forms.ValidationError(_('You must create at least one problem group before creating a problem.'))
+        if default_type is None:
+            raise forms.ValidationError(_('You must create at least one problem type before creating a problem.'))
+        if not default_languages:
+            raise forms.ValidationError(_('You must configure at least one language before creating a problem.'))
+        if classes and not organizations:
+            raise forms.ValidationError(_('You must select organizations before selecting classes.'))
+        if classes and any(item.organization_id not in {org.pk for org in organizations} for item in classes):
+            raise forms.ValidationError(_('Selected classes must belong to selected organizations.'))
+
+        problem = Problem(
+            code=self.generate_problem_code(name),
+            name=name,
+            description=description,
+            group=default_group,
+            time_limit=self.get_default_time_limit(),
+            memory_limit=self.get_default_memory_limit(),
+            points=self.get_default_points(),
+            short_circuit=False,
+            partial=False,
+            is_public=False,
+            is_manually_managed=False,
+            date=None,
+            license=None,
+            og_image='',
+            summary='',
+            is_full_markup=False,
+            submission_source_visibility_mode=SubmissionSourceAccess.FOLLOW,
+            view_test_cases=False,
+            view_tester=False,
+            ai_hints_enabled=False,
+            is_organization_private=bool(organizations or classes),
+        )
+        problem.save()
+        problem.types.set([default_type])
+        problem.allowed_languages.set(default_languages)
+        if organizations:
+            problem.organizations.set(organizations)
+        if classes:
+            problem.classes.set(classes)
+        if hasattr(request.user, 'profile'):
+            problem.authors.set([request.user.profile])
+        return problem
+
+    def _excel_headers(self):
+        return ['name', 'description', 'organizations', 'classes', 'allowed_languages']
+
+    def _excel_template_rows(self):
+        languages = self.get_default_languages()
+        language_sample = ' | '.join(lang.key for lang in languages[:2]) if languages else 'PY3'
+        org = Organization.objects.order_by('name').first()
+        visible_classes = Class.objects.order_by('name')
+        klass = visible_classes.first()
+        return [
+            self._excel_headers(),
+            [
+                'Sample Problem',
+                'Write the full problem statement here. You can use multiple lines.',
+                org.slug if org else '',
+                klass.slug if klass else '',
+                language_sample,
+            ],
+        ]
+
+    def _excel_reference_rows(self):
+        org_names = ' | '.join(
+            Organization.objects.order_by('name').values_list('slug', flat=True)[:5]
+        ) or 'organization-slug'
+        class_names = ' | '.join(
+            Class.objects.order_by('name').values_list('slug', flat=True)[:5]
+        ) or 'class-slug'
+        language_keys = ' | '.join(
+            Language.objects.order_by('key').values_list('key', flat=True)[:8]
+        ) or 'PY3'
+        return [
+            ['field', 'required', 'how_to_fill', 'example'],
+            ['name', 'yes', 'Problem title.', 'Two Sum'],
+            ['description', 'yes', 'Problem statement markdown/plain text.', '# Two Sum\n\nDescribe the task.'],
+            [
+                'organizations', 'no',
+                'Separate multiple values with "|" or ",". Use organization slug/name/id.',
+                org_names,
+            ],
+            [
+                'classes', 'no',
+                'Separate multiple values with "|" or ",". Use visible class slug/name/id.',
+                class_names,
+            ],
+            [
+                'allowed_languages', 'no',
+                'Separate multiple values with "|" or ",". Use language key/name/id.',
+                language_keys,
+            ],
+        ]
+
+    def download_excel_template_view(self, request):
+        if not request.user.has_perm('judge.edit_own_problem'):
+            raise PermissionDenied
+
+        payload = build_xlsx_workbook([
+            ('Problems', self._excel_template_rows()),
+            ('Reference', self._excel_reference_rows()),
+        ])
+        response = HttpResponse(
+            payload,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = 'attachment; filename="problem_batch_upload_template.xlsx"'
+        return response
 
     def import_markdown_view(self, request):
         if not request.user.has_perm('judge.edit_own_problem'):
@@ -690,12 +931,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return JsonResponse({
             'ok': True,
             'message': gettext('Created 1 problem from Markdown.'),
-            'created': [{
-                'id': problem.pk,
-                'code': problem.code,
-                'name': problem.name,
-                'edit_url': reverse('admin:judge_problem_change', args=[problem.pk]),
-            }],
+            'created': [self._serialize_created_problem(problem)],
             'redirect_url': reverse('admin:judge_problem_changelist'),
         })
 
@@ -719,35 +955,101 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         if not form.default_languages:
             raise forms.ValidationError(_('You must configure at least one language before creating a problem.'))
 
-        problem = Problem(
-            code=self.generate_problem_code(name),
-            name=name,
-            description=description,
-            group=form.default_group,
-            time_limit=form.default_time_limit,
-            memory_limit=form.default_memory_limit,
-            points=form.default_points,
-            short_circuit=False,
-            partial=False,
-            is_public=False,
-            is_manually_managed=False,
-            date=None,
-            license=None,
-            og_image='',
-            summary='',
-            is_full_markup=False,
-            submission_source_visibility_mode=SubmissionSourceAccess.FOLLOW,
-            view_test_cases=False,
-            view_tester=False,
-            ai_hints_enabled=False,
-            is_organization_private=False,
+        return self.create_problem_with_basic_configuration(
+            request,
+            name,
+            description,
+            allowed_languages=form.default_languages,
         )
-        problem.save()
-        problem.types.set([form.default_type])
-        problem.allowed_languages.set(form.default_languages)
-        if hasattr(request.user, 'profile'):
-            problem.authors.set([request.user.profile])
-        return problem
+
+    def create_problem_from_excel_row(self, request, header_map, row, row_number):
+        normalized = {}
+        for key, index in header_map.items():
+            normalized[key] = row[index].strip() if index < len(row) and row[index] is not None else ''
+
+        if not any(normalized.values()):
+            return None
+        if not normalized['name']:
+            raise forms.ValidationError(_('Row %(row)d is missing "name".') % {'row': row_number})
+        if not normalized['description']:
+            raise forms.ValidationError(_('Row %(row)d is missing "description".') % {'row': row_number})
+
+        organizations = self._resolve_excel_organizations(request, normalized['organizations'])
+        classes = self._resolve_excel_classes(request, normalized['classes'])
+        allowed_languages = self._resolve_excel_languages(normalized['allowed_languages'])
+        return self.create_problem_with_basic_configuration(
+            request,
+            normalized['name'],
+            normalized['description'],
+            organizations=organizations,
+            classes=classes,
+            allowed_languages=allowed_languages,
+        )
+
+    def batch_create_excel_view(self, request):
+        if not request.user.has_perm('judge.edit_own_problem'):
+            raise PermissionDenied
+        if request.method != 'POST':
+            return JsonResponse({'ok': False, 'message': gettext('Only POST is allowed.')}, status=405)
+
+        uploaded_file = request.FILES.get('excel_file')
+        if uploaded_file is None:
+            return JsonResponse({'ok': False, 'message': gettext('Please choose an Excel file.')}, status=400)
+
+        try:
+            validate_excel_upload_filename(uploaded_file)
+            rows = read_xlsx_rows(uploaded_file)
+        except zipfile.BadZipFile:
+            return JsonResponse({'ok': False, 'message': gettext('The Excel file is invalid.')}, status=400)
+        except (ET.ParseError, KeyError):
+            return JsonResponse({'ok': False, 'message': gettext('The Excel file is invalid.')}, status=400)
+        except ValueError as error:
+            return JsonResponse({'ok': False, 'message': str(error)}, status=400)
+        except forms.ValidationError as error:
+            return JsonResponse({'ok': False, 'message': error.message}, status=400)
+
+        if not rows:
+            return JsonResponse({'ok': False, 'message': gettext('The Excel file is empty.')}, status=400)
+
+        header_row = [str(cell).strip().lower() for cell in rows[0]]
+        required_headers = self._excel_headers()
+        missing_headers = [header for header in required_headers if header not in header_row]
+        if missing_headers:
+            return JsonResponse({
+                'ok': False,
+                'message': gettext('Missing required columns: %(columns)s.') % {
+                    'columns': ', '.join(missing_headers),
+                },
+            }, status=400)
+
+        header_map = {header: header_row.index(header) for header in required_headers}
+        created = []
+        try:
+            with transaction.atomic():
+                for row_number, row in enumerate(rows[1:], start=2):
+                    problem = self.create_problem_from_excel_row(request, header_map, row, row_number)
+                    if problem is None:
+                        continue
+                    created.append(self._serialize_created_problem(problem))
+        except forms.ValidationError as error:
+            return JsonResponse({'ok': False, 'message': error.message}, status=400)
+
+        if not created:
+            return JsonResponse({
+                'ok': False,
+                'message': gettext('The Excel file does not contain any problem rows.'),
+            }, status=400)
+
+        return JsonResponse({
+            'ok': True,
+            'message': ngettext(
+                'Created %d problem from Excel.',
+                'Created %d problems from Excel.',
+                len(created),
+            ) % len(created),
+            'created': created,
+            'redirect_url': reverse('admin:judge_problem_changelist'),
+        })
 
     def batch_create_markdown_view(self, request):
         if not request.user.has_perm('judge.edit_own_problem'):
@@ -767,12 +1069,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             with transaction.atomic():
                 for uploaded_file in uploaded_files:
                     problem = self.create_problem_from_markdown_upload(request, uploaded_file)
-                    created.append({
-                        'id': problem.pk,
-                        'code': problem.code,
-                        'name': problem.name,
-                        'edit_url': reverse('admin:judge_problem_change', args=[problem.pk]),
-                    })
+                    created.append(self._serialize_created_problem(problem))
         except UnicodeDecodeError:
             return JsonResponse(
                 {'ok': False, 'message': gettext('Could not decode one of the files. Please use UTF-8 Markdown.')},
