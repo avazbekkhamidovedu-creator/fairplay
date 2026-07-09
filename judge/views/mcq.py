@@ -135,7 +135,7 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
         tokens = self._split_multi_value(raw_value)
         if not tokens:
             return []
-        queryset = Organization.objects.all()
+        queryset = self._visible_template_organizations()
         return self._resolve_tokens(
             queryset,
             tokens,

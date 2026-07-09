@@ -734,7 +734,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             return []
         if not request.user.has_perm('judge.create_private_problem'):
             raise forms.ValidationError(_('You do not have permission to set organizations in Excel import.'))
-        queryset = Organization.objects.all()
+        queryset = self._visible_excel_organizations(request.user)
         return self._resolve_excel_tokens(
             queryset,
             tokens,

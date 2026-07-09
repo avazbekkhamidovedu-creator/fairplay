@@ -6,7 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from judge.models import Class, Contest, ContestProblem, Language, Organization, Problem
-from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type
+from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type, create_user
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 
 
@@ -303,30 +303,36 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         )
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
-        # hidden_org = Organization.objects.create(
-        #     name='Hidden Org',
-        #     slug='hidden-org',
-        #     short_name='HORG',
-        #     about='hidden',
-        # )
-        # hidden_class = Class.objects.create(
-        #     organization=hidden_org,
-        #     name='hidden-class',
-        #     slug='hidden-class',
-        # )
+        scoped_admin = create_user(
+            username='scoped_admin',
+            is_staff=True,
+            user_permissions=('edit_own_problem', 'create_private_problem'),
+        )
+        self.client.force_login(scoped_admin)
+        hidden_org = Organization.objects.create(
+            name='Hidden Org',
+            slug='hidden-org',
+            short_name='HORG',
+            about='hidden',
+        )
+        hidden_class = Class.objects.create(
+            organization=hidden_org,
+            name='hidden-class',
+            slug='hidden-class',
+        )
         visible_org = Organization.objects.create(
             name='Visible Org',
             slug='visible-org',
             short_name='VORG',
             about='visible',
         )
-        visible_org.admins.add(self.users['superuser'].profile)
+        visible_org.admins.add(scoped_admin.profile)
         visible_class = Class.objects.create(
             organization=visible_org,
             name='visible-class',
             slug='visible-class',
         )
-        visible_class.admins.add(self.users['superuser'].profile)
+        visible_class.admins.add(scoped_admin.profile)
 
         response = self.client.get(reverse('admin:judge_problem_download_excel_template'))
         rows = read_xlsx_rows(io.BytesIO(response.content))
@@ -336,6 +342,47 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertIn('visible-class', flattened)
         self.assertNotIn('hidden-org', flattened)
         self.assertNotIn('hidden-class', flattened)
+
+    def test_admin_excel_batch_create_rejects_organization_outside_visible_scope(self):
+        scoped_admin = create_user(
+            username='scoped_excel_admin',
+            is_staff=True,
+            user_permissions=('edit_own_problem', 'create_private_problem'),
+        )
+        self.client.force_login(scoped_admin)
+        hidden_org = Organization.objects.create(
+            name='Hidden Org',
+            slug='hidden-org',
+            short_name='HORG',
+            about='hidden',
+        )
+        workbook = build_xlsx_workbook([
+            ('Problems', [
+                ['name', 'description', 'organizations', 'classes', 'allowed_languages'],
+                ['Excel Problem', 'Body', hidden_org.slug, '', 'PY3'],
+            ]),
+        ])
+
+        response = self.client.post(
+            reverse('admin:judge_problem_batch_create_excel'),
+            data={
+                'excel_file': SimpleUploadedFile(
+                    'problems.xlsx',
+                    workbook,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertJSONEqual(
+            response.content.decode(),
+            {
+                'ok': False,
+                'message': 'Organization "hidden-org" was not found.',
+            },
+        )
+        self.assertFalse(Problem.objects.filter(name='Excel Problem').exists())
 
     def test_admin_excel_batch_create_creates_multiple_problems(self):
         organization = Organization.objects.create(
