@@ -31,10 +31,9 @@ from django.utils.translation import gettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
 
-from judge.models import (Language, Organization, Problem, ProblemBlankAnswer, ProblemFillBlankConfig, ProblemGroup,
+from judge.models import (Language, Organization, Problem, ProblemBlank, ProblemFillBlankConfig, ProblemGroup,
                           ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
                           ProblemType)
-from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
 
 # Types the redesigned page offers but the backend cannot grade/store yet.
@@ -181,7 +180,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         type switch, e.g. single -> programming)."""
         ProblemMCQOption.objects.filter(problem=problem).delete()
         ProblemMCQConfig.objects.filter(problem=problem).delete()
-        ProblemBlankAnswer.objects.filter(problem=problem).delete()
+        ProblemBlank.objects.filter(problem=problem).delete()
         ProblemFillBlankConfig.objects.filter(problem=problem).delete()
         ProblemShortAnswerConfig.objects.filter(problem=problem).delete()
         problem.cases.all().delete()
@@ -232,9 +231,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         elif st == ProblemSubmissionType.FILL_BLANK:
             data['type'] = 'blank'
             config = getattr(problem, 'fill_blank_config', None)
-            data['ai'] = bool(config and config.grading_mode == GRADE_AI)
-            data['rubric'] = (config.ai_rubric if config else '') or ''
-            data['blanks'] = list(problem.blank_answers.order_by('order').values_list('answers', flat=True))
+            data['caseSensitive'] = bool(config and config.case_sensitive)
+            # ProblemBlank stores accepted answers one-per-line; the create page edits them as a
+            # single "|"-joined string per blank, so translate back for the editor.
+            data['blanks'] = ['|'.join(a.splitlines()) for a in
+                              problem.blanks.order_by('order').values_list('answers', flat=True)]
         elif st == ProblemSubmissionType.SHORT_ANSWER:
             data['type'] = 'short'
             config = getattr(problem, 'short_answer_config', None)
@@ -544,7 +545,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         blanks = [b for b in (payload.get('blanks') or []) if (b or '').strip()]
         if not blanks:
             raise ValueError(_('Please provide at least one blank answer.'))
-        use_ai = bool(payload.get('ai'))
 
         with transaction.atomic():
             if problem is None:
@@ -569,12 +569,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
             ProblemFillBlankConfig.objects.create(
                 problem=problem,
-                grading_mode=GRADE_AI if use_ai else GRADE_EXACT,
                 case_sensitive=bool(payload.get('caseSensitive')),
-                ai_rubric=(payload.get('rubric') or '').strip(),
+                trim_whitespace=bool(payload.get('trimWhitespace', True)),
             )
+            # The create page enters accepted answers as a "|"-joined string per blank; ProblemBlank
+            # stores them one-per-line (the grader splits on newlines).
             for index, answers in enumerate(blanks):
-                ProblemBlankAnswer.objects.create(problem=problem, order=index, answers=answers.strip())
+                normalized = '\n'.join(part.strip() for part in answers.split('|') if part.strip())
+                ProblemBlank.objects.create(problem=problem, order=index, answers=normalized)
         return problem
 
     # ------------------------------------------------------------------ short answer

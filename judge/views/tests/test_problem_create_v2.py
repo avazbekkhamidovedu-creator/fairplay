@@ -8,10 +8,9 @@ from django.core.files.base import ContentFile
 from django.test import TestCase
 from django.urls import reverse
 
-from judge.models import (Problem, ProblemBlankAnswer, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
+from judge.models import (Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
                           ProblemShortAnswerConfig, ProblemTestCase, problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_user
-from judge.question_types.fill_blank import FillBlankQuestionType
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
 
@@ -163,16 +162,17 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['creator'])
         payload = {
             'type': 'blank', 'name': 'Capital', 'description': 'Capital of France is {{blank}}.',
-            'points': 3, 'group_id': self.group.id, 'blanks': ['Paris|paris'], 'ai': False,
+            'points': 3, 'group_id': self.group.id, 'blanks': ['Paris|paris'],
         }
         response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
                                     content_type='application/json')
         self.assertEqual(response.status_code, 200)
         problem = Problem.objects.get(code=response.json()['code'])
         self.assertEqual(problem.submission_type, 'B')
-        self.assertTrue(ProblemFillBlankConfig.objects.filter(problem=problem, grading_mode='exact').exists())
-        self.assertEqual(problem.blank_answers.count(), 1)
-        self.assertEqual(problem.blank_answers.first().accepted_list(), ['Paris', 'paris'])
+        self.assertTrue(ProblemFillBlankConfig.objects.filter(problem=problem, trim_whitespace=True).exists())
+        self.assertEqual(problem.blanks.count(), 1)
+        # "|"-joined alternatives are stored one-per-line for the newline-splitting grader.
+        self.assertEqual(problem.blanks.first().answers.splitlines(), ['Paris', 'paris'])
 
     def test_create_short_answer(self):
         self.client.force_login(self.users['creator'])
@@ -189,24 +189,21 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(config.reference_answer, 'SYN, SYN-ACK, ACK')
         self.assertEqual(config.ai_rubric, 'mention 3 steps')
 
-    def test_fill_blank_exact_grading(self):
+    def test_create_fill_blank_multiple(self):
+        # The create page writes one ProblemBlank per blank, "|"-joined alternatives split to lines.
+        # End-to-end grading is covered by judge/views/tests/test_fill_blank.py.
         self.client.force_login(self.users['creator'])
         payload = {
             'type': 'blank', 'name': 'Math', 'description': '1+1={{blank}}, 2+2={{blank}}',
-            'points': 2, 'group_id': self.group.id, 'blanks': ['2|two', '4|four'], 'ai': False,
+            'points': 2, 'group_id': self.group.id, 'blanks': ['2|two', '4|four'],
         }
         response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
                                     content_type='application/json')
         problem = Problem.objects.get(code=response.json()['code'])
-        grader = FillBlankQuestionType()
-        blanks = list(problem.blank_answers.order_by('order'))
-        config = problem.fill_blank_config
-        full = grader._grade_exact(config, blanks, ['two', '4'])
-        self.assertEqual(full.case_points, 2)
-        self.assertEqual(full.result, 'AC')
-        partial = grader._grade_exact(config, blanks, ['2', 'wrong'])
-        self.assertEqual(partial.case_points, 1)
-        self.assertEqual(partial.result, 'WA')
+        blanks = list(problem.blanks.order_by('order'))
+        self.assertEqual(len(blanks), 2)
+        self.assertEqual(blanks[0].answers.splitlines(), ['2', 'two'])
+        self.assertEqual(blanks[1].answers.splitlines(), ['4', 'four'])
 
     def test_ai_problem_type_endpoint(self):
         self.client.force_login(self.users['creator'])

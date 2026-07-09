@@ -202,19 +202,24 @@ class MCQSubmitForm(Form):
 
 
 class FillBlankSubmitForm(Form):
-    """Student-facing fill-in-the-blank answer form: one text input per blank."""
+    """Student-facing fill-in-the-blank answer form.
+
+    One text field per blank, named ``blank_<order>`` and labelled by the blank's label (or
+    ``Blank N``). ``clean`` collects the answers in blank order into ``cleaned['answers']``. The
+    accepted answers are never exposed to the template.
+    """
 
     def __init__(self, *args, problem=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.blank_count = problem.blank_answers.count() if problem is not None else 0
-        for index in range(self.blank_count):
-            self.fields['blank_%d' % index] = CharField(
-                label=_('Blank %d') % (index + 1), required=False, strip=True,
-                widget=forms.TextInput(attrs={'class': 'fill-blank-input'}))
+        self.blanks = list(problem.blanks.all())
+        for index, blank in enumerate(self.blanks):
+            self.fields['blank_%d' % blank.order] = CharField(
+                label=blank.label or (_('Blank %d') % (index + 1)),
+                max_length=1000, required=True, strip=False)
 
     def clean(self):
         cleaned = super().clean()
-        cleaned['blanks'] = [cleaned.get('blank_%d' % i, '') or '' for i in range(self.blank_count)]
+        cleaned['answers'] = [cleaned.get('blank_%d' % blank.order, '') or '' for blank in self.blanks]
         return cleaned
 
 

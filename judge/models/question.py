@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 
 from judge.models.problem import Problem
 
-__all__ = ['ProblemMCQOption', 'ProblemMCQConfig', 'ProblemFillBlankConfig', 'ProblemBlankAnswer',
+__all__ = ['ProblemMCQOption', 'ProblemMCQConfig', 'ProblemBlank', 'ProblemFillBlankConfig',
            'ProblemShortAnswerConfig']
 
 
@@ -50,55 +50,49 @@ class ProblemMCQConfig(models.Model):
 
 
 # --- Fill-in-the-blank ------------------------------------------------------
-GRADE_EXACT = 'exact'
-GRADE_AI = 'ai'
-GRADE_MODE_CHOICES = (
-    (GRADE_EXACT, _('Exact match')),
-    (GRADE_AI, _('AI grading')),
-)
+class ProblemBlank(models.Model):
+    """A single blank in a fill-in-the-blank problem. The fill-blank analog of a ProblemMCQOption.
 
-
-class ProblemFillBlankConfig(models.Model):
-    """Per-problem fill-in-the-blank settings (grading policy)."""
-    problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='fill_blank_config',
-                                   on_delete=CASCADE)
-    grading_mode = models.CharField(
-        verbose_name=_('grading mode'), max_length=8, choices=GRADE_MODE_CHOICES, default=GRADE_EXACT,
-        help_text=_('Exact match compares each blank to its accepted answers; AI grading asks the '
-                    'configured model to score the response against the rubric.'))
-    case_sensitive = models.BooleanField(
-        verbose_name=_('case sensitive'), default=False,
-        help_text=_('When exact-matching, require the same letter case.'))
-    ai_rubric = models.TextField(
-        verbose_name=_('AI rubric'), blank=True,
-        help_text=_('Grading guidance sent to the model (never shown to students).'))
-
-    def __str__(self):
-        return _('Fill-blank config for %s') % self.problem.code
-
-    class Meta:
-        verbose_name = _('fill-in-the-blank configuration')
-        verbose_name_plural = _('fill-in-the-blank configurations')
-
-
-class ProblemBlankAnswer(models.Model):
-    """One blank's accepted answers. ``answers`` holds ``|``-separated alternatives (author-only)."""
-    problem = models.ForeignKey(Problem, verbose_name=_('problem'), related_name='blank_answers', on_delete=CASCADE)
+    ``answers`` holds the accepted correct answers, one alternative per line; a student's answer is
+    correct if (after normalization per ProblemFillBlankConfig) it matches any line. The accepted
+    answers are author-only and must never be serialized into anything served to students.
+    """
+    problem = models.ForeignKey(Problem, verbose_name=_('problem'), related_name='blanks', on_delete=CASCADE)
     order = models.PositiveIntegerField(verbose_name=_('order'))
-    answers = models.TextField(verbose_name=_('accepted answers'),
-                               help_text=_('Alternatives separated by "|".'))
-
-    def accepted_list(self):
-        return [a.strip() for a in self.answers.split('|') if a.strip()]
+    answers = models.TextField(
+        verbose_name=_('accepted answers'),
+        help_text=_('One accepted answer per line; any of them counts as correct.'))
+    label = models.CharField(
+        verbose_name=_('label'), max_length=100, blank=True,
+        help_text=_('Optional label shown next to the input; defaults to "Blank N".'))
 
     def __str__(self):
-        return f'{self.problem.code} blank #{self.order}'
+        return f'{self.problem.code} #{self.order}'
 
     class Meta:
         ordering = ('order',)
         unique_together = ('problem', 'order')
-        verbose_name = _('fill-in-the-blank answer')
-        verbose_name_plural = _('fill-in-the-blank answers')
+        verbose_name = _('fill-in-the-blank blank')
+        verbose_name_plural = _('fill-in-the-blank blanks')
+
+
+class ProblemFillBlankConfig(models.Model):
+    """Per-problem fill-in-the-blank settings."""
+    problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='fill_blank_config',
+                                   on_delete=CASCADE)
+    case_sensitive = models.BooleanField(
+        verbose_name=_('case sensitive'), default=False,
+        help_text=_('If set, answers must match the exact letter case; otherwise case is ignored.'))
+    trim_whitespace = models.BooleanField(
+        verbose_name=_('trim surrounding whitespace'), default=True,
+        help_text=_('If set, leading and trailing whitespace in the student answer is ignored.'))
+
+    def __str__(self):
+        return _('Fill-in-the-blank config for %s') % self.problem.code
+
+    class Meta:
+        verbose_name = _('fill-in-the-blank configuration')
+        verbose_name_plural = _('fill-in-the-blank configurations')
 
 
 # --- Short answer -----------------------------------------------------------

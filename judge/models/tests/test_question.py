@@ -2,8 +2,8 @@ import json
 
 from django.test import TestCase
 
-from judge.models import ContestSubmission, Language, ProblemMCQConfig, ProblemMCQOption, Submission, \
-    SubmissionSource, SubmissionTestCase
+from judge.models import ContestSubmission, Language, ProblemBlank, ProblemFillBlankConfig, ProblemMCQConfig, \
+    ProblemMCQOption, Submission, SubmissionSource, SubmissionTestCase
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
 from judge.question_types import get_grader
@@ -120,6 +120,81 @@ class MCQGradingTestCase(CommonDataMixin, TestCase):
         # One correct, one wrong -> max(0, 1 - 1) = 0.
         sub = self._submit(problem, [opts[0].id, opts[2].id])
         self.assertEqual(sub.points, 0)
+
+
+class FillBlankGradingTestCase(CommonDataMixin, TestCase):
+    def _make_fb(self, code, blanks, case_sensitive=False, trim_whitespace=True, partial=False, points=10):
+        problem = create_problem(code=code, submission_type='B', points=points, partial=partial, is_public=True)
+        ProblemFillBlankConfig.objects.create(
+            problem=problem, case_sensitive=case_sensitive, trim_whitespace=trim_whitespace)
+        for i, answers in enumerate(blanks):
+            ProblemBlank.objects.create(problem=problem, order=i, answers=answers)
+        return problem
+
+    def _submit(self, problem, answers):
+        sub = Submission.objects.create(
+            user=self.users['normal'].profile, problem=problem,
+            language=Language.get_answer_language(),
+        )
+        SubmissionSource.objects.create(submission=sub, source=json.dumps({'answers': answers}))
+        grade_internally(sub)
+        sub.refresh_from_db()
+        return sub
+
+    def test_all_correct(self):
+        problem = self._make_fb('fbok', ['Paris', '1789'])
+        sub = self._submit(problem, ['Paris', '1789'])
+        self.assertEqual(sub.result, 'AC')
+        self.assertEqual(sub.points, 10)
+        self.assertEqual(sub.status, 'D')
+        # One summary testcase row per blank.
+        self.assertEqual(SubmissionTestCase.objects.filter(submission=sub).count(), 2)
+
+    def test_one_wrong_partial(self):
+        problem = self._make_fb('fbpart', ['Paris', '1789'], partial=True)
+        sub = self._submit(problem, ['Paris', 'nope'])
+        self.assertEqual(sub.result, 'WA')
+        self.assertEqual(sub.points, 5)
+
+    def test_one_wrong_non_partial_zero(self):
+        problem = self._make_fb('fbstrict', ['Paris', '1789'], partial=False)
+        sub = self._submit(problem, ['Paris', 'nope'])
+        self.assertEqual(sub.result, 'WA')
+        self.assertEqual(sub.points, 0)
+
+    def test_empty_answer_is_wrong(self):
+        problem = self._make_fb('fbempty', ['Paris'])
+        sub = self._submit(problem, [''])
+        self.assertEqual(sub.result, 'WA')
+        self.assertEqual(sub.points, 0)
+
+    def test_default_trim_and_case_insensitive(self):
+        problem = self._make_fb('fbnorm', ['Paris'])
+        sub = self._submit(problem, ['  paris '])
+        self.assertEqual(sub.result, 'AC')
+        self.assertEqual(sub.points, 10)
+
+    def test_case_sensitive_toggle(self):
+        problem = self._make_fb('fbcase', ['Paris'], case_sensitive=True)
+        self.assertEqual(self._submit(problem, ['paris']).result, 'WA')
+        self.assertEqual(self._submit(problem, ['Paris']).result, 'AC')
+
+    def test_trim_whitespace_off(self):
+        problem = self._make_fb('fbnotrim', ['paris'], trim_whitespace=False)
+        self.assertEqual(self._submit(problem, [' paris']).result, 'WA')
+        self.assertEqual(self._submit(problem, ['paris']).result, 'AC')
+
+    def test_alternative_answers_accepted(self):
+        problem = self._make_fb('fbalt', ['1789\nseventeen eighty-nine'])
+        self.assertEqual(self._submit(problem, ['1789']).result, 'AC')
+        self.assertEqual(self._submit(problem, ['seventeen eighty-nine']).result, 'AC')
+        self.assertEqual(self._submit(problem, ['1790']).result, 'WA')
+
+    def test_missing_answer_index_is_wrong(self):
+        # Fewer answers than blanks -> the unanswered blank is simply wrong, no IndexError.
+        problem = self._make_fb('fbshort', ['Paris', '1789'], partial=True)
+        sub = self._submit(problem, ['Paris'])
+        self.assertEqual(sub.points, 5)
 
 
 class MCQContestPartialTestCase(CommonDataMixin, TestCase):

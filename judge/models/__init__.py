@@ -12,7 +12,7 @@ from judge.models.problem import LanguageLimit, License, Problem, ProblemClarifi
 from judge.models.problem_data import CHECKERS, ProblemData, ProblemHarness, ProblemTestCase, problem_data_storage, \
     problem_directory_file
 from judge.models.profile import Class, Organization, OrganizationRequest, Profile, WebAuthnCredential
-from judge.models.question import ProblemBlankAnswer, ProblemFillBlankConfig, ProblemMCQConfig, ProblemMCQOption, \
+from judge.models.question import ProblemBlank, ProblemFillBlankConfig, ProblemMCQConfig, ProblemMCQOption, \
     ProblemShortAnswerConfig
 from judge.models.runtime import Judge, Language, RuntimeVersion
 from judge.models.submission import SUBMISSION_RESULT, Submission, SubmissionSource, SubmissionTestCase
