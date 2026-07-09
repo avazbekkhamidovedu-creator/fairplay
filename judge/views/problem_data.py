@@ -182,6 +182,14 @@ class ProblemSubmissionDiff(TitleMixin, ProblemMixin, DetailView):
 class ProblemDataView(TitleMixin, ProblemManagerMixin):
     template_name = 'problem/data.html'
 
+    def dispatch(self, request, *args, **kwargs):
+        response = super().dispatch(request, *args, **kwargs)
+        # Allow the create_v2 problem editor to embed this page in a same-origin iframe.
+        # The global middleware otherwise sends X-Frame-Options: DENY, blocking the frame.
+        if request.GET.get('embed'):
+            response['X-Frame-Options'] = 'SAMEORIGIN'
+        return response
+
     def get_title(self):
         return _('Editing data for {0}').format(self.object.name)
 
