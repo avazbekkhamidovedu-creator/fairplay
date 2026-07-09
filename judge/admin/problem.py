@@ -844,11 +844,23 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     def _excel_headers(self):
         return ['name', 'description', 'organizations', 'classes', 'allowed_languages']
 
-    def _excel_template_rows(self):
+    def _visible_excel_organizations(self, user):
+        if not user.is_authenticated or not user.has_perm('judge.create_private_problem'):
+            return Organization.objects.none()
+        if user.has_perm('judge.edit_all_organization'):
+            return Organization.objects.order_by('name')
+        return Organization.objects.filter(admins=user.profile).order_by('name')
+
+    def _visible_excel_classes(self, user):
+        if not user.is_authenticated or not user.has_perm('judge.create_private_problem'):
+            return Class.objects.none()
+        return Class.get_visible_classes(user).order_by('name')
+
+    def _excel_template_rows(self, request):
         languages = self.get_default_languages()
         language_sample = ' | '.join(lang.key for lang in languages[:2]) if languages else 'PY3'
-        org = Organization.objects.order_by('name').first()
-        visible_classes = Class.objects.order_by('name')
+        org = self._visible_excel_organizations(request.user).first()
+        visible_classes = self._visible_excel_classes(request.user)
         klass = visible_classes.first()
         return [
             self._excel_headers(),
@@ -861,12 +873,12 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ],
         ]
 
-    def _excel_reference_rows(self):
+    def _excel_reference_rows(self, request):
         org_names = ' | '.join(
-            Organization.objects.order_by('name').values_list('slug', flat=True)[:5],
+            self._visible_excel_organizations(request.user).values_list('slug', flat=True)[:5],
         ) or 'organization-slug'
         class_names = ' | '.join(
-            Class.objects.order_by('name').values_list('slug', flat=True)[:5],
+            self._visible_excel_classes(request.user).values_list('slug', flat=True)[:5],
         ) or 'class-slug'
         language_keys = ' | '.join(
             Language.objects.order_by('key').values_list('key', flat=True)[:8],
@@ -897,8 +909,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             raise PermissionDenied
 
         payload = build_xlsx_workbook([
-            ('Problems', self._excel_template_rows()),
-            ('Reference', self._excel_reference_rows()),
+            ('Problems', self._excel_template_rows(request)),
+            ('Reference', self._excel_reference_rows(request)),
         ])
         response = HttpResponse(
             payload,

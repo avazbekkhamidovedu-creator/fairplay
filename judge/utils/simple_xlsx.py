@@ -247,7 +247,10 @@ def _cell_value(cell, shared_strings, namespace):
     if cell_type == 's':
         if raw_value == '':
             return ''
-        return shared_strings[int(raw_value)]
+        try:
+            return shared_strings[int(raw_value)]
+        except (IndexError, ValueError):
+            raise ValueError('The Excel file is invalid.')
     if cell_type == 'b':
         return 'TRUE' if raw_value == '1' else 'FALSE'
     return raw_value or ''

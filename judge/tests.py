@@ -302,6 +302,41 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             ['name', 'description', 'organizations', 'classes', 'allowed_languages'],
         )
 
+    def test_admin_problem_excel_template_respects_visible_scope(self):
+        hidden_org = Organization.objects.create(
+            name='Hidden Org',
+            slug='hidden-org',
+            short_name='HORG',
+            about='hidden',
+        )
+        hidden_class = Class.objects.create(
+            organization=hidden_org,
+            name='hidden-class',
+            slug='hidden-class',
+        )
+        visible_org = Organization.objects.create(
+            name='Visible Org',
+            slug='visible-org',
+            short_name='VORG',
+            about='visible',
+        )
+        visible_org.admins.add(self.users['superuser'].profile)
+        visible_class = Class.objects.create(
+            organization=visible_org,
+            name='visible-class',
+            slug='visible-class',
+        )
+        visible_class.admins.add(self.users['superuser'].profile)
+
+        response = self.client.get(reverse('admin:judge_problem_download_excel_template'))
+        rows = read_xlsx_rows(io.BytesIO(response.content))
+        flattened = '\n'.join(' | '.join(row) for row in rows)
+
+        self.assertIn('visible-org', flattened)
+        self.assertIn('visible-class', flattened)
+        self.assertNotIn('hidden-org', flattened)
+        self.assertNotIn('hidden-class', flattened)
+
     def test_admin_excel_batch_create_creates_multiple_problems(self):
         organization = Organization.objects.create(
             name='Example Org',

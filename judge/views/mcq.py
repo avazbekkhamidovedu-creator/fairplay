@@ -204,9 +204,23 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
             'options', 'correct_options',
         ]
 
+    def _visible_template_organizations(self):
+        user = self.request.user
+        if not user.is_authenticated or not user.has_perm('judge.create_private_problem'):
+            return Organization.objects.none()
+        if user.has_perm('judge.edit_all_organization'):
+            return Organization.objects.order_by('name')
+        return Organization.objects.filter(admins=user.profile).order_by('name')
+
+    def _visible_template_classes(self):
+        user = self.request.user
+        if not user.is_authenticated or not user.has_perm('judge.create_private_problem'):
+            return Class.objects.none()
+        return Class.get_visible_classes(user).order_by('name')
+
     def _mcq_template_rows(self):
-        org = Organization.objects.order_by('name').first()
-        klass = Class.objects.order_by('name').first()
+        org = self._visible_template_organizations().first()
+        klass = self._visible_template_classes().first()
         return [
             self._mcq_excel_headers(),
             [
@@ -225,8 +239,12 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
         ]
 
     def _mcq_reference_rows(self):
-        org_names = ' | '.join(Organization.objects.order_by('name').values_list('slug', flat=True)[:5]) or 'org-slug'
-        class_names = ' | '.join(Class.objects.order_by('name').values_list('slug', flat=True)[:5]) or 'class-slug'
+        org_names = ' | '.join(
+            self._visible_template_organizations().values_list('slug', flat=True)[:5]
+        ) or 'org-slug'
+        class_names = ' | '.join(
+            self._visible_template_classes().values_list('slug', flat=True)[:5]
+        ) or 'class-slug'
         return [
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Question name.', 'Binary Search Quiz'],
