@@ -72,6 +72,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             context['edit_code'] = problem.code
             context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
             context['test_data_url'] = reverse('problem_data', args=[problem.code])
+            context['edit_detail_url'] = reverse('problem_detail', args=[problem.code])
         return render(request, self.template_name, context)
 
     def get_context(self, request):
@@ -101,9 +102,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'can_create_organization': user.has_perm('judge.create_private_problem'),
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'problem_list_url': reverse('problem_list'),
+            'problem_preview_url': reverse('problem_preview'),
+            'image_upload_url': reverse('martor_image_uploader'),
             'edit_code': '',
             'edit_data_json': 'null',
             'test_data_url': '',
+            'edit_detail_url': '',
         }
 
     # ------------------------------------------------------------------ POST

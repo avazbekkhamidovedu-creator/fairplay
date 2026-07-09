@@ -11,13 +11,16 @@
     <style>
         .problem-table th.col-select, .problem-table td.col-select { width: 32px; text-align: center; }
         .problem-table th.col-actions, .problem-table td.col-actions { white-space: nowrap; text-align: right; }
-        .row-action {
-            display: inline-block; margin-left: 8px; font-size: 13px; cursor: pointer;
-            background: none; border: none; padding: 0; color: var(--dmoj-green, #44ad41);
+        .problem-table td.col-actions .row-action {
+            display: inline-block; margin-left: 12px; font-size: 15px; cursor: pointer;
+            background: none; border: none; padding: 0; color: var(--primary) !important;
         }
-        .row-action:hover { text-decoration: underline; }
-        .row-action-danger { color: #d64545; }
-        .bulk-delete-btn:not(:disabled) { color: #d64545; border-color: #d64545; }
+        .problem-table td.col-actions .row-action:hover { opacity: 0.75; }
+        .problem-table td.col-actions .row-action.row-action-danger { color: #d64545 !important; }
+        /* Bulk-delete button: same pill shape as the sort button, greyed while empty. */
+        .toolbar .bulk-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .toolbar .bulk-delete-btn:not(:disabled):hover { border-color: #d64545; color: #d64545 !important; }
+        .toolbar .bulk-delete-btn .fa { color: inherit; }
         .btn-danger { background: #d64545; border-color: #d64545; color: #fff; }
         .btn-danger:hover { background: #c53030; border-color: #c53030; }
         .modal-overlay {
@@ -613,7 +616,7 @@
                         </div>
                     </div>
                     {% if can_manage_problems %}
-                        <button type="button" class="btn btn-outline btn-sm bulk-delete-btn" id="bulk-delete-btn" disabled>
+                        <button type="button" class="sort-btn bulk-delete-btn" id="bulk-delete-btn" disabled>
                             <i class="fa fa-trash"></i> {{ _('Delete selected') }} (<span id="bulk-count">0</span>)
                         </button>
                     {% endif %}
@@ -741,10 +744,12 @@
                                 {% if can_manage_problems %}
                                     <td class="col-actions">
                                         {% if problem.id in editable_problem_ids %}
-                                            <a class="row-action" href="{{ url('problem_edit_v2', problem.code) }}">{{ _('Edit') }}</a>
+                                            <a class="row-action" href="{{ url('problem_edit_v2', problem.code) }}"
+                                               title="{{ _('Edit') }}" aria-label="{{ _('Edit') }}"><i class="fa fa-pencil"></i></a>
                                             <button type="button" class="row-action row-action-danger js-del-one"
                                                     data-code="{{ problem.code }}"
-                                                    data-name="{{ problem.i18n_name or problem.name }}">{{ _('Delete') }}</button>
+                                                    data-name="{{ problem.i18n_name or problem.name }}"
+                                                    title="{{ _('Delete') }}" aria-label="{{ _('Delete') }}"><i class="fa fa-trash"></i></button>
                                         {% else %}
                                             <span class="tag-placeholder">&mdash;</span>
                                         {% endif %}

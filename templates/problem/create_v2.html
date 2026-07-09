@@ -13,11 +13,15 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260708c">
 
-  <!-- 需求3：数学公式真正可预览 -->
+  <!-- 数学公式：与全站做题页一致的分隔符（行内 ~...~ / \(...\)，块级 $$...$$ / \[...\]） -->
   <script>
     window.MathJax = {
-      tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] },
+      tex: {
+        inlineMath: [['~', '~'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      },
       svg: { fontCache: 'global' },
+      options: { enableMenu: false },
       startup: { typeset: false },
     };
   </script>
@@ -499,10 +503,13 @@
     const CREATE_PROBLEM_GROUP_URL = '{{ create_problem_group_url }}';
     const CREATE_ORGANIZATION_URL = '{{ create_organization_url }}';
     const AI_PROBLEM_TYPE_URL = '{{ ai_problem_type_url }}';
+    const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
+    const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
     const EDIT_CODE = '{{ edit_code }}';
+    const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
     const SERVER_PROBLEM_TYPES = {{ problem_types_json|safe }};
 
@@ -523,11 +530,16 @@
 
     const DIFF_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
-    /* 取消当前编辑：有内容时二次确认，然后返回题库 */
+    /* 取消：编辑模式=放弃本次修改并回到该题详情；新建模式=放弃这道新题。均不删除任何题目。 */
     function cancelEdit() {
+      if (EDIT_CODE) {
+        if (!confirm('{{ _("Discard your changes? Your edits will not be saved, but the problem itself is kept.") }}')) return;
+        window.location.href = EDIT_DETAIL_URL || PROBLEM_LIST_URL;
+        return;
+      }
       const hasContent = ((document.getElementById('f-name') || {}).value || '').trim()
         || (getMd('stem') || '').trim();
-      if (hasContent && !confirm('{{ _("Discard this problem? Unsaved changes will be lost.") }}')) return;
+      if (hasContent && !confirm('{{ _("Discard this new problem? Unsaved changes will be lost.") }}')) return;
       window.location.href = PROBLEM_LIST_URL;
     }
     let currentDifficulty = 'medium';
@@ -798,28 +810,28 @@
     const RTE_BUTTONS = {
       heading: '<select class="rte-heading" title="标题大小"><option value="p">正文</option><option value="h1">标题 H1</option><option value="h2">标题 H2</option><option value="h3">标题 H3</option></select>',
       sep: '<span class="sep"></span>',
-      bold: '<button type="button" data-cmd="bold" title="加粗"><b>B</b></button>',
-      italic: '<button type="button" data-cmd="italic" title="斜体"><i>I</i></button>',
-      highlight: '<button type="button" data-cmd="highlight" class="hl-btn" title="高亮"><span>A</span></button>',
-      ul: '<button type="button" data-cmd="ul" title="无序列表">•</button>',
-      ol: '<button type="button" data-cmd="ol" title="有序列表">1.</button>',
-      quote: '<button type="button" data-cmd="quote" title="引用">&ldquo;</button>',
-      code: '<button type="button" data-cmd="code" title="代码">{ }</button>',
-      image: '<button type="button" data-cmd="image" title="图片">🖼</button>',
-      math: '<button type="button" data-cmd="math" title="插入公式">Σ</button>',
-      blank: '<button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;">▭</button>',
+      bold: '<button type="button" data-cmd="bold" title="加粗"><i class="fa fa-bold"></i></button>',
+      italic: '<button type="button" data-cmd="italic" title="斜体"><i class="fa fa-italic"></i></button>',
+      highlight: '<button type="button" data-cmd="highlight" class="hl-btn" title="高亮"><i class="fa fa-paint-brush"></i></button>',
+      ul: '<button type="button" data-cmd="ul" title="无序列表"><i class="fa fa-list-ul"></i></button>',
+      ol: '<button type="button" data-cmd="ol" title="有序列表"><i class="fa fa-list-ol"></i></button>',
+      quote: '<button type="button" data-cmd="quote" title="引用"><i class="fa fa-quote-right"></i></button>',
+      code: '<button type="button" data-cmd="code" title="代码"><i class="fa fa-code"></i></button>',
+      alignLeft: '<button type="button" data-cmd="alignLeft" title="左对齐"><i class="fa fa-align-left"></i></button>',
+      alignCenter: '<button type="button" data-cmd="alignCenter" title="居中"><i class="fa fa-align-center"></i></button>',
+      alignRight: '<button type="button" data-cmd="alignRight" title="右对齐"><i class="fa fa-align-right"></i></button>',
+      image: '<button type="button" data-cmd="image" title="图片"><i class="fa fa-picture-o"></i></button>',
+      math: '<button type="button" data-cmd="math" title="插入公式"><i class="fa fa-superscript"></i></button>',
+      blank: '<button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;"><i class="fa fa-square-o"></i></button>',
     };
-    const RTE_TOOLBARS = {
-      full: ['heading', 'sep', 'bold', 'italic', 'highlight', 'sep', 'ul', 'ol', 'quote', 'code', 'sep', 'image', 'math', 'blank'],
-      option: ['bold', 'italic', 'highlight', 'code', 'math', 'image'],
-      mini: ['bold', 'italic', 'code', 'math', 'image'],
-    };
+    /* 单一工具栏：不再区分 简约/复杂，所有编辑器都用同一套。 */
+    const RTE_TOOLBAR = ['heading', 'sep', 'bold', 'italic', 'highlight', 'code', 'sep',
+      'ul', 'ol', 'quote', 'sep', 'alignLeft', 'alignCenter', 'alignRight', 'sep', 'image', 'math', 'blank'];
     function richEditorTpl(name, opts) {
       opts = opts || {};
-      const preset = RTE_TOOLBARS[opts.toolbar] || RTE_TOOLBARS.mini;
-      const buttons = preset.map(k => RTE_BUTTONS[k] || '').join('');
-      const placeholder = opts.placeholder || '请输入内容，支持 $公式$…';
-      const mdPlaceholder = opts.mdPlaceholder || '支持 Markdown 与 $公式$…';
+      const buttons = RTE_TOOLBAR.map(k => RTE_BUTTONS[k] || '').join('');
+      const placeholder = opts.placeholder || '请输入内容，支持 ~公式~…';
+      const mdPlaceholder = opts.mdPlaceholder || '支持 Markdown 与 ~公式~…';
       const compact = opts.compact ? ' compact' : '';
       return `<div class="rich-editor mode-rich${compact}" data-editor="${name}">
         <div class="rich-editor-toolbar-row">
@@ -845,7 +857,7 @@
     }
     window.RichEditor = {
       html: richEditorTpl,
-      toolbars: RTE_TOOLBARS,
+      toolbar: RTE_TOOLBAR,
       mount(root) { mountRichEditors(root); initEditors(root); },
       init(root) { initEditors(root); },
       getMarkdown(name) { return getMd(name); },
@@ -983,7 +995,10 @@
           if (selectionInTag(area, 'code')) unwrapTagFromSelection(area, 'code');
           else wrapInline('code');
           break;
-        case 'math': document.execCommand('insertText', false, '$x^2 + y^2 = z^2$'); break;
+        case 'alignLeft': document.execCommand('justifyLeft'); break;
+        case 'alignCenter': document.execCommand('justifyCenter'); break;
+        case 'alignRight': document.execCommand('justifyRight'); break;
+        case 'math': document.execCommand('insertText', false, '~a^2 + b^2 = c^2~'); break;
         case 'blank': document.execCommand('insertText', false, '{{blank}}'); break;
       }
       area.dispatchEvent(new Event('input'));
@@ -994,21 +1009,31 @@
     function onImgPicked(e) {
       const file = e.target.files && e.target.files[0];
       if (!file || !pendingImgEditor) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const url = reader.result, ed = pendingImgEditor;
-        if (ed.classList.contains('mode-markdown')) {
-          const ta = ed.querySelector('.rich-editor-markdown textarea');
-          const s = ta.selectionStart;
-          ta.value = ta.value.slice(0, s) + '![](' + url + ')' + ta.value.slice(ta.selectionEnd);
-          ta.dispatchEvent(new Event('input'));
-        } else {
-          const area = ed.querySelector('.rich-editor-body'); area.focus();
-          document.execCommand('insertImage', false, url); area.dispatchEvent(new Event('input'));
-        }
-        pendingImgEditor = null;
-      };
-      reader.readAsDataURL(file);
+      const ed = pendingImgEditor; pendingImgEditor = null;
+      // 上传到全站图片端点，得到真实 URL；不再用 data: base64（做题页会被 bleach 剥离）。
+      const fd = new FormData();
+      fd.append('markdown-image-upload', file);
+      fetch(IMAGE_UPLOAD_URL, { method: 'POST', headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd })
+        .then(r => r.json().then(body => ({ ok: r.ok, body })).catch(() => ({ ok: false, body: null })))
+        .then(({ ok, body }) => {
+          if (!ok || !body || body.status !== 200 || !body.link) {
+            alert('{{ _("Image upload failed. Make sure you are signed in with upload permission.") }}');
+            return;
+          }
+          insertImageUrl(ed, body.link);
+        })
+        .catch(() => alert('{{ _("Image upload failed.") }}'));
+    }
+    function insertImageUrl(ed, url) {
+      if (ed.classList.contains('mode-markdown')) {
+        const ta = ed.querySelector('.rich-editor-markdown textarea');
+        const s = ta.selectionStart;
+        ta.value = ta.value.slice(0, s) + '![](' + url + ')' + ta.value.slice(ta.selectionEnd);
+        ta.dispatchEvent(new Event('input'));
+      } else {
+        const area = ed.querySelector('.rich-editor-body'); area.focus();
+        document.execCommand('insertImage', false, url); area.dispatchEvent(new Event('input'));
+      }
     }
     function wrapInline(tag) {
       const sel = window.getSelection(); if (!sel.rangeCount) return;
@@ -1030,7 +1055,8 @@
         case 'h2': linePrefix('## '); break;
         case 'ul': linePrefix('- '); break;
         case 'ol': linePrefix('1. '); break;
-        case 'math': wrap('$', '$', 'x^2'); break;
+        case 'alignLeft': case 'alignCenter': case 'alignRight': break;
+        case 'math': wrap('~', '~', 'a^2+b^2=c^2'); break;
         case 'blank': ta.value = ta.value.slice(0, s) + '{{blank}}' + ta.value.slice(e); break;
       }
     }
@@ -1046,37 +1072,99 @@
       return ed.querySelector('.rich-editor-body').innerHTML || '';
     }
 
-    /* 需求3：Markdown 互转时保护 $公式$，避免被转义破坏 */
+    /* Markdown 互转：保护公式（~…~ / $$…$$ / \(…\) / \[…\]），与做题页分隔符一致 */
     function protectMath(str, store) {
       return (str || '')
         .replace(/\$\$([\s\S]+?)\$\$/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; })
-        .replace(/\$([^\$\n]+?)\$/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; });
+        .replace(/\\\[([\s\S]+?)\\\]/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; })
+        .replace(/\\\(([\s\S]+?)\\\)/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; })
+        .replace(/~([^~\n]+?)~/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; });
     }
     function restoreMath(str, store) { return str.replace(/\u0000M(\d+)\u0000/g, (m, i) => store[+i]); }
 
-    function htmlToMd(html) {
-      const math = [];
-      let s = protectMath(html || '', math);
-      s = s
-        .replace(/<img[^>]*src="([^"]*)"[^>]*>/gi, '![]($1)')
-        .replace(/<h1[^>]*>(.*?)<\/h1>/gi, '\n# $1\n')
-        .replace(/<h2[^>]*>(.*?)<\/h2>/gi, '\n## $1\n')
-        .replace(/<h3[^>]*>(.*?)<\/h3>/gi, '\n### $1\n')
-        .replace(/<li>(.*?)<\/li>/gi, '\n- $1')
-        .replace(/<\/(ul|ol)>/gi, '\n').replace(/<(ul|ol)>/gi, '')
-        .replace(/<div><br><\/div>/g, '\n').replace(/<div[^>]*>/g, '\n').replace(/<\/div>/g, '')
-        .replace(/<br\s*\/?>/g, '\n')
-        .replace(/<(b|strong)>(.*?)<\/\1>/gi, '**$2**')
-        .replace(/<(i|em)>(.*?)<\/\1>/gi, '*$2*')
-        .replace(/<mark[^>]*>(.*?)<\/mark>/gi, '==$1==')
-        .replace(/<code>(.*?)<\/code>/gi, '`$1`')
-        .replace(/<[^>]+>/g, '').replace(/\n{3,}/g, '\n\n').trim();
-      return restoreMath(s, math);
+    /* ---- HTML → Markdown：DOM 遍历，保留图片尺寸(style/width)与块级对齐(text-align) ---- */
+    function imgToMarkup(img) {
+      const src = img.getAttribute('src') || '';
+      const alt = img.getAttribute('alt') || '';
+      let w = img.style.width || img.getAttribute('width') || '';
+      let h = img.style.height || img.getAttribute('height') || '';
+      if (w && /^\d+$/.test(w)) w += 'px';
+      if (h && /^\d+$/.test(h)) h += 'px';
+      let style = '';
+      if (w) style += 'width:' + w + ';';
+      if (h) style += 'height:' + h + ';';
+      if (!style) return '![' + alt + '](' + src + ')';   // 无固定尺寸时用干净的 Markdown
+      return '<img src="' + src + '"' + (alt ? ' alt="' + alt + '"' : '') + ' style="' + style + '">';
     }
+    function serializeInline(node) {
+      let out = '';
+      node.childNodes.forEach(n => {
+        if (n.nodeType === 3) { out += n.nodeValue; return; }
+        if (n.nodeType !== 1) return;
+        const tag = n.tagName.toLowerCase();
+        switch (tag) {
+          case 'br': out += '\n'; break;
+          case 'b': case 'strong': out += '**' + serializeInline(n) + '**'; break;
+          case 'i': case 'em': out += '*' + serializeInline(n) + '*'; break;
+          case 'mark': out += '==' + serializeInline(n) + '=='; break;
+          case 'code': out += '`' + serializeInline(n) + '`'; break;
+          case 'a': out += '[' + serializeInline(n) + '](' + (n.getAttribute('href') || '') + ')'; break;
+          case 'img': out += imgToMarkup(n); break;
+          default: out += serializeInline(n);
+        }
+      });
+      return out;
+    }
+    function blockAlign(el) {
+      const a = el.style && el.style.textAlign;
+      return (a === 'center' || a === 'right' || a === 'left') ? a : '';
+    }
+    function serializeBlocks(nodes) {
+      let out = '';
+      nodes.forEach(n => {
+        if (n.nodeType === 3) { out += n.nodeValue; return; }
+        if (n.nodeType !== 1) return;
+        const tag = n.tagName.toLowerCase();
+        const align = blockAlign(n);
+        if (align && (tag === 'p' || tag === 'div' || /^h[1-6]$/.test(tag) || tag === 'blockquote')) {
+          // 对齐块保存为原始 HTML，服务端 bleach 允许 div + text-align，做题页得以保留
+          out += '\n<div style="text-align:' + align + '">' + n.innerHTML + '</div>\n\n';
+          return;
+        }
+        switch (tag) {
+          case 'h1': out += '\n# ' + serializeInline(n).trim() + '\n\n'; break;
+          case 'h2': out += '\n## ' + serializeInline(n).trim() + '\n\n'; break;
+          case 'h3': case 'h4': case 'h5': case 'h6': out += '\n### ' + serializeInline(n).trim() + '\n\n'; break;
+          case 'ul': case 'ol':
+            Array.prototype.forEach.call(n.children, (li, i) => {
+              if (li.tagName && li.tagName.toLowerCase() === 'li')
+                out += (tag === 'ol' ? (i + 1) + '. ' : '- ') + serializeInline(li).trim() + '\n';
+            });
+            out += '\n'; break;
+          case 'blockquote': out += '\n> ' + serializeInline(n).trim().replace(/\n/g, '\n> ') + '\n\n'; break;
+          case 'pre': out += '\n```\n' + (n.textContent || '').replace(/\n$/, '') + '\n```\n\n'; break;
+          case 'img': out += imgToMarkup(n) + '\n'; break;
+          case 'div': case 'p': { const inner = serializeInline(n).trim(); out += inner + '\n\n'; break; }
+          case 'br': out += '\n'; break;
+          default: out += serializeInline(n) + '\n';
+        }
+      });
+      return out;
+    }
+    function htmlToMd(html) {
+      const root = document.createElement('div');
+      root.innerHTML = html || '';
+      return serializeBlocks(Array.prototype.slice.call(root.childNodes)).replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    /* ---- Markdown → HTML：仅供编辑器渲染；公式保持字面量，原始 <img>/对齐块透传 ---- */
     function mdToHtml(md) {
       if (!md) return '';
-      const math = [], imgs = [];
-      let s = protectMath(md, math);
+      const raw = [], math = [], imgs = [];
+      let s = (md || '')
+        .replace(/<div style="text-align:[^"]*">[\s\S]*?<\/div>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; })
+        .replace(/<img\b[^>]*>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; });
+      s = protectMath(s, math);
       s = s.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (m, url) => { imgs.push('<img src="' + url + '" style="max-width:100%;border-radius:4px;">'); return '\u0000I' + (imgs.length - 1) + '\u0000'; })
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/```([\s\S]*?)```/g, (m, c) => '<pre>' + c.trim() + '</pre>')
@@ -1091,12 +1179,14 @@
       s = s.replace(/(?:^|\n)((?:- .*(?:\n|$))+)/g, (m) => '\n<ul>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^- /, '') + '</li>').join('') + '</ul>\n');
       s = s.replace(/\n/g, '<br>').replace(/<br>(<ul>|<\/ul>|<ol>|<\/ol>|<h1>|<h2>|<h3>|<pre>)/g, '$1');
       s = s.replace(/\u0000I(\d+)\u0000/g, (m, i) => imgs[+i]);
-      return restoreMath(s, math);
+      s = restoreMath(s, math);
+      s = s.replace(/\u0000R(\d+)\u0000/g, (m, i) => raw[+i]);
+      return s;
     }
 
     /* ---------- 选项（富文本 / Markdown） ---------- */
     function optionEditorTpl(name) {
-      return richEditorTpl(name, { toolbar: 'option', compact: true, placeholder: '请输入选项内容（支持 $公式$）' });
+      return richEditorTpl(name, { compact: true, placeholder: '请输入选项内容（支持 ~公式~）' });
     }
     function getOptionText(row) {
       const ed = row.querySelector('.rich-editor');
@@ -1361,7 +1451,7 @@
     function toggleSub(id) { document.querySelector(`.sub-q[data-id="${id}"]`).classList.toggle('collapsed'); }
     function renumberSubs() { document.querySelectorAll('#sub-list .sub-q').forEach((w, i) => w.querySelector('.sq-idx').textContent = (i + 1) + '.'); }
     function subEditorTpl(name, ph) {
-      return richEditorTpl(name, { toolbar: 'mini', compact: true, placeholder: ph });
+      return richEditorTpl(name, { compact: true, placeholder: ph });
     }
     function buildSubBody(wrap, type) {
       const body = wrap.querySelector('.sub-q-body'); const id = wrap.dataset.id;
@@ -1430,9 +1520,28 @@
     }
 
     /* ---------- 预览 ---------- */
+    /* 题面预览走服务端渲染端点，与真实做题页 100% 一致（同一 markdown+bleach 管线）。 */
+    let _stemMd = null, _stemHtml = '', _stemTimer = null;
+    function scheduleStemPreview() {
+      const md = getMd('stem');
+      if (md === _stemMd) return;
+      clearTimeout(_stemTimer);
+      _stemTimer = setTimeout(() => {
+        const body = new URLSearchParams(); body.set('content', md);
+        fetch(PROBLEM_PREVIEW_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-CSRFToken': CSRF_TOKEN },
+          body: body.toString(),
+        }).then(r => r.text()).then(htmlText => {
+          _stemMd = md; _stemHtml = htmlText || '';
+          renderPreview();
+        }).catch(() => {});
+      }, 350);
+    }
     function renderPreview() {
       const pv = document.getElementById('preview-body');
-      let stem = editorHtml('stem');
+      scheduleStemPreview();
+      let stem = _stemHtml;
       let blankCount = 0;
       if (currentType === 'blank') {
         // 把题面里的 {{blank}} 占位符渲染成内联填空框（按顺序编号）
