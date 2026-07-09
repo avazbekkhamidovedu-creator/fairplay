@@ -233,12 +233,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['type'] = 'blank'
             config = getattr(problem, 'fill_blank_config', None)
             data['caseSensitive'] = bool(config and config.case_sensitive)
+            data['trimWhitespace'] = bool(config.trim_whitespace) if config else True
             data['ai'] = bool(config and config.grading_mode == GRADE_AI)
             data['rubric'] = (config.ai_rubric if config else '') or ''
-            # ProblemBlank stores accepted answers one-per-line; the create page edits them as a
-            # single "|"-joined string per blank, so translate back for the editor.
-            data['blanks'] = ['|'.join(a.splitlines()) for a in
-                              problem.blanks.order_by('order').values_list('answers', flat=True)]
+            # ProblemBlank stores accepted answers one-per-line and the create page now edits them
+            # the same way (one accepted answer per line in a textarea), so pass them through as-is.
+            data['blanks'] = list(problem.blanks.order_by('order').values_list('answers', flat=True))
         elif st == ProblemSubmissionType.SHORT_ANSWER:
             data['type'] = 'short'
             config = getattr(problem, 'short_answer_config', None)
@@ -577,10 +577,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 grading_mode=GRADE_AI if bool(payload.get('ai')) else GRADE_EXACT,
                 ai_rubric=(payload.get('rubric') or '').strip(),
             )
-            # The create page enters accepted answers as a "|"-joined string per blank; ProblemBlank
-            # stores them one-per-line (the grader splits on newlines).
+            # The create page enters accepted answers one-per-line per blank; ProblemBlank stores
+            # them the same way (the grader splits on newlines).
             for index, answers in enumerate(blanks):
-                normalized = '\n'.join(part.strip() for part in answers.split('|') if part.strip())
+                normalized = '\n'.join(line.strip() for line in answers.splitlines() if line.strip())
                 ProblemBlank.objects.create(problem=problem, order=index, answers=normalized)
         return problem
 

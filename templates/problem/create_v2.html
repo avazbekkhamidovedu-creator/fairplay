@@ -281,9 +281,17 @@
 
               <!-- 填空题 -->
               <div class="type-panel" data-for="blank" style="display:none;">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">答案 <span class="req">*</span></label>
+                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">答案 <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">每个填空位可有多个可接受答案，每行写一个</span></label>
                 <div class="blank-answers" id="blank-answers"></div>
                 <button type="button" class="btn-add-option" onclick="addBlank()">+ 添加填空位答案</button>
+                <div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:0.6rem;font-size:13px;">
+                  <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer;">
+                    <input type="checkbox" id="f-blank-trim" checked oninput="renderPreview()"> 忽略首尾空格（trim）
+                  </label>
+                  <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer;">
+                    <input type="checkbox" id="f-blank-case" oninput="renderPreview()"> 区分大小写
+                  </label>
+                </div>
               </div>
 
               <!-- 编程题：题面提示 -->
@@ -1121,7 +1129,7 @@
       const row = document.createElement('div');
       row.className = 'blank-answer-row';
       row.innerHTML = `<span class="blank-label">第 ${n} 空</span>
-        <input type="text" placeholder="标准答案，多个用 | 分隔" oninput="renderPreview()">
+        <textarea class="blank-answer" rows="2" placeholder="标准答案（多个可接受答案时，每行写一个）" oninput="renderPreview()" style="flex:1;font-family:inherit;resize:vertical;"></textarea>
         <span class="inline-num blank-pts" style="display:none;"><input type="number" value="1" min="0" step="0.5" title="本空分值" oninput="renderPreview()"></span>
         <button type="button" class="btn-icon" onclick="this.closest('.blank-answer-row').remove();renderPreview();">×</button>`;
       document.getElementById('blank-answers').appendChild(row);
@@ -1430,8 +1438,9 @@
       } else if (currentType === 'blank') {
         // 题面未插入 {{blank}} 时，退化为末尾单个填空框
         if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="请输入答案" disabled>`;
-        const ans = [...document.querySelectorAll('#blank-answers input[type="text"]')].map(i => i.value).filter(Boolean);
-        html += `<div class="pv-answerlabel">答案：${ans.length ? ans.join(' / ') : '—'}</div>`;
+        const ans = [...document.querySelectorAll('#blank-answers .blank-answer')]
+          .map(t => t.value.split('\n').map(s => s.trim()).filter(Boolean).join(' / ')).filter(Boolean);
+        html += `<div class="pv-answerlabel">答案：${ans.length ? ans.join('；') : '—'}</div>`;
       } else if (currentType === 'programming') {
         /* 代码编辑器与提交按钮在做题页展示，此处不再赘述提示 */
       } else if (currentType === 'compound') {
@@ -1497,7 +1506,9 @@
       } else if (currentType === 'short') {
         data.shortAnswer = getMd('short');
       } else if (currentType === 'blank') {
-        data.blanks = [...document.querySelectorAll('#blank-answers input[type="text"]')].map(i => i.value.trim());
+        data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer')].map(t => t.value.trim());
+        data.trimWhitespace = (document.getElementById('f-blank-trim') || {}).checked !== false;
+        data.caseSensitive = !!(document.getElementById('f-blank-case') || {}).checked;
       } else if (currentType === 'compound') {
         data.subs = [...document.querySelectorAll('#sub-list .sub-q')].map(w => ({ type: w.dataset.type, score: w.querySelector('.sq-score input').value, stem: getMd('sub-stem-' + w.dataset.id) }));
       } else if (currentType === 'programming') {
@@ -1550,6 +1561,8 @@
       document.querySelectorAll('.rich-editor').forEach(ed => { const r = ed.querySelector('.rich-editor-body'); if (r) r.innerHTML = ''; const ta = ed.querySelector('textarea'); if (ta) ta.value = ''; });
       document.getElementById('options').innerHTML = '';
       document.getElementById('blank-answers').innerHTML = '';
+      { const t = document.getElementById('f-blank-trim'); if (t) t.checked = true;
+        const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
       document.getElementById('tc-body').innerHTML = '';
       document.getElementById('sub-list').innerHTML = '';
       optionSeq = blankSeq = tcSeq = subSeq = 0; draftSaved = false;
@@ -1655,10 +1668,12 @@
         const list = document.getElementById('blank-answers'); list.innerHTML = ''; blankSeq = 0;
         (d.blanks || []).forEach(ans => {
           addBlank();
-          const inputs = list.querySelectorAll('input[type="text"]');
-          inputs[inputs.length - 1].value = ans || '';
+          const areas = list.querySelectorAll('.blank-answer');
+          areas[areas.length - 1].value = ans || '';
         });
         if (!(d.blanks || []).length) addBlank();
+        const trimCb = document.getElementById('f-blank-trim'); if (trimCb) trimCb.checked = d.trimWhitespace !== false;
+        const caseCb = document.getElementById('f-blank-case'); if (caseCb) caseCb.checked = !!d.caseSensitive;
       } else if (d.type === 'short') {
         RichEditor.setMarkdown('short', d.shortAnswer || '');
       } else if (d.type === 'programming') {

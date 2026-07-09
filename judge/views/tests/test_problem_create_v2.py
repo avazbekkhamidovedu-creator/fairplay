@@ -162,16 +162,18 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['creator'])
         payload = {
             'type': 'blank', 'name': 'Capital', 'description': 'Capital of France is {{blank}}.',
-            'points': 3, 'group_id': self.group.id, 'blanks': ['Paris|paris'],
+            'points': 3, 'group_id': self.group.id, 'blanks': ['Paris\nparis'],
         }
         response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
                                     content_type='application/json')
         self.assertEqual(response.status_code, 200)
         problem = Problem.objects.get(code=response.json()['code'])
         self.assertEqual(problem.submission_type, 'B')
-        self.assertTrue(ProblemFillBlankConfig.objects.filter(problem=problem, trim_whitespace=True).exists())
+        # trim_whitespace defaults to True; case_sensitive defaults to False.
+        self.assertTrue(ProblemFillBlankConfig.objects.filter(
+            problem=problem, trim_whitespace=True, case_sensitive=False).exists())
         self.assertEqual(problem.blanks.count(), 1)
-        # "|"-joined alternatives are stored one-per-line for the newline-splitting grader.
+        # Each line is one accepted answer for the newline-splitting grader.
         self.assertEqual(problem.blanks.first().answers.splitlines(), ['Paris', 'paris'])
 
     def test_create_fill_blank_ai_mode(self):
@@ -207,12 +209,12 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(config.ai_rubric, 'mention 3 steps')
 
     def test_create_fill_blank_multiple(self):
-        # The create page writes one ProblemBlank per blank, "|"-joined alternatives split to lines.
+        # The create page writes one ProblemBlank per blank; alternatives are newline-separated.
         # End-to-end grading is covered by judge/views/tests/test_fill_blank.py.
         self.client.force_login(self.users['creator'])
         payload = {
             'type': 'blank', 'name': 'Math', 'description': '1+1={{blank}}, 2+2={{blank}}',
-            'points': 2, 'group_id': self.group.id, 'blanks': ['2|two', '4|four'],
+            'points': 2, 'group_id': self.group.id, 'blanks': ['2\ntwo', '4\nfour'],
         }
         response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
                                     content_type='application/json')

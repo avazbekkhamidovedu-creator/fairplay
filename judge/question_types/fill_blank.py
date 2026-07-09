@@ -64,7 +64,8 @@ class FillBlankQuestionType(QuestionType):
         return reverse('problem_fillblank_create')
 
     def edit_url(self, problem):
-        return reverse('problem_fillblank_edit', args=(problem.code,))
+        # Fill-in-the-blank problems are authored/edited through the unified create_v2 page.
+        return reverse('problem_edit_v2', args=(problem.code,))
 
     # --- student submission -------------------------------------------------
     def build_form(self, problem, profile, data=None, initial=None):
