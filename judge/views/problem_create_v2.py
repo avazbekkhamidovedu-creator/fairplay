@@ -71,6 +71,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             context['title'] = _('Edit problem')
             context['edit_code'] = problem.code
             context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
+            context['test_data_url'] = reverse('problem_data', args=[problem.code])
         return render(request, self.template_name, context)
 
     def get_context(self, request):
@@ -102,6 +103,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'problem_list_url': reverse('problem_list'),
             'edit_code': '',
             'edit_data_json': 'null',
+            'test_data_url': '',
         }
 
     # ------------------------------------------------------------------ POST
@@ -244,24 +246,72 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return data
 
     def _read_testcases(self, problem):
-        from judge.models import problem_data_storage
-        cases = []
-        for case in problem.cases.order_by('order'):
-            def _read(name):
-                if not name:
-                    return ''
+        from zipfile import BadZipfile, ZipFile
+
+        from judge.models import ProblemData, problem_data_storage
+
+        zip_file = None
+        zip_names = set()
+        try:
+            data = problem.data_files
+        except ProblemData.DoesNotExist:
+            data = None
+        if data and data.zipfile:
+            try:
+                zip_file = ZipFile(data.zipfile.path, 'r')
+                zip_names = set(zip_file.namelist())
+            except (BadZipfile, OSError, ValueError):
+                zip_file = None
+                zip_names = set()
+
+        def _read_loose(name):
+            if not name:
+                return ''
+            try:
+                with problem_data_storage.open('%s/%s' % (problem.code, name)) as fh:
+                    return fh.read().decode('utf-8', 'replace')
+            except Exception:
+                return ''
+
+        def _read_zip(name):
+            if not name or not zip_file:
+                return ''
+            candidates = [name]
+            if name not in zip_names:
+                candidates.extend(n for n in zip_names if n.endswith('/' + name))
+            for candidate in candidates:
+                if candidate not in zip_names:
+                    continue
                 try:
-                    with problem_data_storage.open('%s/%s' % (problem.code, name)) as fh:
-                        return fh.read().decode('utf-8', 'replace')
+                    return zip_file.read(candidate).decode('utf-8', 'replace')
                 except Exception:
                     return ''
-            cases.append({
-                'input': _read(case.input_file),
-                'output': _read(case.output_file),
-                'points': case.points,
-                'pretest': case.is_pretest,
-            })
-        return cases
+            return ''
+
+        def _read(name):
+            if not name:
+                return ''
+            loose_path = '%s/%s' % (problem.code, name)
+            if problem_data_storage.exists(loose_path):
+                return _read_loose(name)
+            return _read_zip(name)
+
+        try:
+            cases = []
+            for case in problem.cases.order_by('order'):
+                # create-v2 only edits Normal cases; Batch start/end belong on test_data.
+                if case.type in ('S', 'E'):
+                    continue
+                cases.append({
+                    'input': _read(case.input_file),
+                    'output': _read(case.output_file),
+                    'points': case.points,
+                    'pretest': case.is_pretest,
+                })
+            return cases
+        finally:
+            if zip_file is not None:
+                zip_file.close()
 
     # ------------------------------------------------------------------ helpers
     def _num(self, value, default):
@@ -351,9 +401,37 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             qs = Language.objects.all()
         problem.allowed_languages.set(qs)
 
+    def _clear_problem_data_files(self, problem):
+        """Drop leftover zip/archive and old loose case files before rewriting from create-v2."""
+        import os
+
+        from judge.models import ProblemData, problem_data_storage
+
+        try:
+            data = problem.data_files
+        except ProblemData.DoesNotExist:
+            data = None
+        if data and data.zipfile:
+            # ProblemData.save() deletes the previous file when zipfile changes.
+            data.zipfile = None
+            data.save()
+
+        root = getattr(problem_data_storage, 'location', None) or ''
+        problem_dir = os.path.join(root, problem.code) if root else ''
+        if problem_dir and os.path.isdir(problem_dir):
+            for name in os.listdir(problem_dir):
+                lower = name.lower()
+                if lower.endswith('.in') or lower.endswith('.out') or lower.endswith('.ans'):
+                    try:
+                        problem_data_storage.delete('%s/%s' % (problem.code, name))
+                    except Exception:
+                        pass
+
     def _save_testcases(self, problem, testcases):
         from judge.models import ProblemData, ProblemTestCase, problem_data_storage
         from judge.utils.problem_data import ProblemDataCompiler
+
+        self._clear_problem_data_files(problem)
 
         valid_files = []
         for order, tc in enumerate(testcases, start=1):
@@ -372,6 +450,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             )
 
         data, _created = ProblemData.objects.get_or_create(problem=problem)
+        if data.zipfile:
+            data.zipfile = None
+            data.save()
         ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
 
     # ------------------------------------------------------------------ mcq problem
