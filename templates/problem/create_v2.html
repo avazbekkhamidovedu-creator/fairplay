@@ -1047,7 +1047,7 @@
       switch (cmd) {
         case 'bold': wrap('**', '**', '加粗'); break;
         case 'italic': wrap('*', '*', '斜体'); break;
-        case 'highlight': wrap('==', '==', '高亮'); break;
+        case 'highlight': wrap('<mark>', '</mark>', '高亮'); break;
         case 'code': wrap('`', '`', 'code'); break;
         case 'quote': linePrefix('> '); break;
         case 'heading': case 'h3': linePrefix('### '); break;
@@ -1096,23 +1096,35 @@
       if (!style) return '![' + alt + '](' + src + ')';   // 无固定尺寸时用干净的 Markdown
       return '<img src="' + src + '"' + (alt ? ' alt="' + alt + '"' : '') + ' style="' + style + '">';
     }
+    /* 处理单个节点：含该节点自身标签/内联样式产生的 Markdown 标记（无论它是裸顶层元素还是子元素） */
+    function serializeNode(n) {
+      if (n.nodeType === 3) return n.nodeValue;
+      if (n.nodeType !== 1) return '';
+      const tag = n.tagName.toLowerCase();
+      if (tag === 'br') return '\n';
+      if (tag === 'img') return imgToMarkup(n);
+      if (tag === 'a') return '[' + serializeInline(n) + '](' + (n.getAttribute('href') || '') + ')';
+      if (tag === 'code') return '`' + serializeInline(n) + '`';
+      let inner = serializeInline(n);
+      if (!inner) return '';
+      const st = n.style || {};
+      const fw = String(st.fontWeight || '');
+      const isBold = tag === 'b' || tag === 'strong' || fw === 'bold' || fw === 'bolder' ||
+                     (/^\d+$/.test(fw) && parseInt(fw, 10) >= 600);
+      const isItalic = tag === 'i' || tag === 'em' || st.fontStyle === 'italic' || st.fontStyle === 'oblique';
+      const bg = String(st.backgroundColor || '');
+      const isMark = tag === 'mark' || (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)');
+      const deco = String(st.textDecoration || '') + ' ' + String(st.textDecorationLine || '');
+      const isUnder = tag === 'u' || deco.indexOf('underline') !== -1;
+      if (isMark) inner = '<mark>' + inner + '</mark>';
+      if (isUnder) inner = '<u>' + inner + '</u>';
+      if (isItalic && inner.trim()) inner = '*' + inner + '*';
+      if (isBold && inner.trim()) inner = '**' + inner + '**';
+      return inner;
+    }
     function serializeInline(node) {
       let out = '';
-      node.childNodes.forEach(n => {
-        if (n.nodeType === 3) { out += n.nodeValue; return; }
-        if (n.nodeType !== 1) return;
-        const tag = n.tagName.toLowerCase();
-        switch (tag) {
-          case 'br': out += '\n'; break;
-          case 'b': case 'strong': out += '**' + serializeInline(n) + '**'; break;
-          case 'i': case 'em': out += '*' + serializeInline(n) + '*'; break;
-          case 'mark': out += '==' + serializeInline(n) + '=='; break;
-          case 'code': out += '`' + serializeInline(n) + '`'; break;
-          case 'a': out += '[' + serializeInline(n) + '](' + (n.getAttribute('href') || '') + ')'; break;
-          case 'img': out += imgToMarkup(n); break;
-          default: out += serializeInline(n);
-        }
-      });
+      node.childNodes.forEach(n => { out += serializeNode(n); });
       return out;
     }
     function blockAlign(el) {
@@ -1146,7 +1158,7 @@
           case 'img': out += imgToMarkup(n) + '\n'; break;
           case 'div': case 'p': { const inner = serializeInline(n).trim(); out += inner + '\n\n'; break; }
           case 'br': out += '\n'; break;
-          default: out += serializeInline(n) + '\n';
+          default: out += serializeNode(n) + '\n';
         }
       });
       return out;
@@ -1163,7 +1175,8 @@
       const raw = [], math = [], imgs = [];
       let s = (md || '')
         .replace(/<div style="text-align:[^"]*">[\s\S]*?<\/div>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; })
-        .replace(/<img\b[^>]*>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; });
+        .replace(/<img\b[^>]*>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; })
+        .replace(/<\/?(?:mark|u)>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; });
       s = protectMath(s, math);
       s = s.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (m, url) => { imgs.push('<img src="' + url + '" style="max-width:100%;border-radius:4px;">'); return '\u0000I' + (imgs.length - 1) + '\u0000'; })
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
