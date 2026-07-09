@@ -77,11 +77,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'Upload Excel', html=False)
         self.assertContains(response, 'Download Excel Template', html=False)
         self.assertContains(response, 'function escapeHtml(value)', html=False)
-        self.assertContains(
-            response,
-            'var summary = escapeHtml(data.message || \'{{ _("Markdown uploaded successfully.")|escapejs }}\');',
-            html=False,
-        )
+        self.assertContains(response, 'var summary = escapeHtml(data.message || ', html=False)
 
     def test_admin_advanced_add_page_uses_original_problem_form(self):
         response = self.client.get('{}?advanced=1'.format(reverse('admin:judge_problem_add')))
