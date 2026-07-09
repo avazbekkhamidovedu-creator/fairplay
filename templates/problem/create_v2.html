@@ -34,6 +34,14 @@
     .v2-top .note { margin: 0.55rem 0 0; }
     .v2-type-hint { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
 
+    /* 隐藏添加题目页的所有使用提示（保留字段标签与必填标记） */
+    .help,
+    .form-content .note,
+    .blank-hints,
+    .draft-banner,
+    #opt-hint,
+    #tc-testdata-hint { display: none !important; }
+
     /* 需求6：题面标签与预览标题同高，保证左右齐平 */
     .stem-block > .block-label,
     .content-preview .pv-head { height: 20px; line-height: 20px; margin-bottom: 0.6rem !important; }
@@ -48,6 +56,16 @@
     .draft-banner { display: flex; align-items: center; gap: 0.5rem; background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 4px; padding: 0.5rem 0.75rem; font-size: 12px; margin-bottom: 0.6rem; }
     .draft-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: #f39c12; flex-shrink: 0; }
     .draft-banner.saved .dot { background: var(--dmoj-green); }
+
+    /* 测试用例：折叠 + 内嵌 test_data */
+    .tc-collapse { border: 1px solid var(--admin-border); border-radius: 6px; background: #fff; }
+    .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: 13px; list-style: none; user-select: none; }
+    .tc-collapse-summary::-webkit-details-marker { display: none; }
+    .tc-collapse-summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; color: var(--muted); transition: transform 0.15s; }
+    .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
+    .tc-embed-wrap { border-top: 1px solid var(--admin-border); }
+    .tc-embed-frame { display: block; width: 100%; height: 720px; border: 0; }
+    .tc-embed-placeholder { padding: 1rem 0.85rem; font-size: 13px; color: var(--muted); line-height: 1.6; }
 
     /* 需求4：复合题子题目 */
     .sub-q { border: 1px solid var(--admin-border); border-radius: 6px; margin-bottom: 0.75rem; overflow: hidden; background: #fff; }
@@ -325,31 +343,23 @@
         </div>
       </fieldset>
 
-      <!-- ③ 编程题：测试用例内联录入（需求8） -->
+      <!-- ③ 编程题：测试用例（默认折叠，展开后内嵌 test_data 精配） -->
       <fieldset class="module type-panel" data-for="programming" style="display:none;">
         <h2>测试用例</h2>
         <div class="form-content">
-          <div class="draft-banner" id="draft-banner">
-            <span class="dot"></span>
-            <span id="draft-text">{{ _('Test cases are saved together with the problem when you click Save.') }}</span>
-          </div>
-          <div class="note" style="margin-top:0;">
-            <strong>两种录入方式</strong>：① 逐条粘贴输入 / 期望输出（下表，适合小数据）；② 上传 zip 后<strong>立即解析填入表格</strong>（随题目一起保存为散文件）。超大包或 Batch / Checker / Generator 请用 test_data 精调。每条用例可单独配置分值以支持<strong>部分分</strong>。
-          </div>
-          <table class="tc-table">
-            <thead>
-              <tr><th style="width:2em;">#</th><th>输入 (stdin)</th><th>期望输出</th><th style="width:64px;">分值</th><th style="width:56px;">样例</th><th style="width:36px;"></th></tr>
-            </thead>
-            <tbody id="tc-body"></tbody>
-          </table>
-          <p style="margin:0.5rem 0 0;">
-            <a href="#" onclick="addTestCase();return false;">+ 添加测试点</a> ·
-            <a href="#" id="tc-zip-link" onclick="document.getElementById('tc-zip-input').click();return false;">上传测试数据 zip</a>
-            <input type="file" id="tc-zip-input" accept=".zip,application/zip" style="display:none;">
-            ·
-            <span id="tc-testdata-hint"></span>
-          </p>
-          <p id="tc-zip-status" style="margin:0.35rem 0 0;font-size:12px;color:var(--muted);"></p>
+          <details class="tc-collapse" id="tc-collapse">
+            <summary class="tc-collapse-summary">测试数据配置（点击展开）</summary>
+            <div class="tc-embed-wrap">
+              {% if test_data_url %}
+                <iframe id="tc-embed-frame" class="tc-embed-frame" data-src="{{ test_data_url }}?embed=1"
+                        title="{{ _('Test data') }}"></iframe>
+              {% else %}
+                <div class="tc-embed-placeholder">
+                  先填写并<strong>保存</strong>题目基本信息；保存后可在此上传测试数据 zip，并按<strong>文件名</strong>逐条配置用例（支持样例、分值、Checker、Generator、Batch、Harness）。
+                </div>
+              {% endif %}
+            </div>
+          </details>
         </div>
       </fieldset>
 
@@ -766,8 +776,11 @@
         else refreshOptionMarkers();
       }
       if (type === 'blank' && document.getElementById('blank-answers').children.length === 0) addBlank();
-      if (type === 'programming' && document.getElementById('tc-body').children.length === 0) { addTestCase(); addTestCase(); }
       if (type === 'compound' && document.getElementById('sub-list').children.length === 0) addSub('single');
+      if (type === 'programming') {
+        const f = document.getElementById('tc-embed-frame');
+        if (f && !f.getAttribute('src') && f.dataset.src) f.setAttribute('src', f.dataset.src);
+      }
 
       renderScoreConf();
       renderPreview();
@@ -1515,12 +1528,8 @@
         data.time_limit = document.getElementById('f-time').value;
         data.memory_limit = document.getElementById('f-mem').value;
         data.languages = [...document.querySelectorAll('#f-langs .lang-cb:checked')].map(c => c.value);
-        data.testcases = [...document.querySelectorAll('#tc-body tr')].map(tr => ({
-          input: tr.children[1].querySelector('textarea').value,
-          output: tr.children[2].querySelector('textarea').value,
-          points: tr.children[3].querySelector('input').value,
-          pretest: tr.children[4].querySelector('input').checked,
-        }));
+        // Test data is configured through the embedded test_data page after saving.
+        data.testcases = [];
       }
       return data;
     }
@@ -1547,7 +1556,6 @@
       if (d.type === 'short' && !d.shortAnswer) return '请填写参考答案';
       if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(b => b))) return '请至少填写一个填空答案';
       if (d.type === 'compound' && (!d.subs || !d.subs.length)) return '请至少添加一个子题目';
-      if (d.type === 'programming' && (!d.testcases || !d.testcases.length)) return '请至少添加一个测试点';
       return null;
     }
     function showToast(msg, ok) {
@@ -1563,7 +1571,7 @@
       document.getElementById('blank-answers').innerHTML = '';
       { const t = document.getElementById('f-blank-trim'); if (t) t.checked = true;
         const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
-      document.getElementById('tc-body').innerHTML = '';
+      { const tb = document.getElementById('tc-body'); if (tb) tb.innerHTML = ''; }
       document.getElementById('sub-list').innerHTML = '';
       optionSeq = blankSeq = tcSeq = subSeq = 0; draftSaved = false;
       selectType(currentType);
@@ -1683,16 +1691,7 @@
           const cb = document.querySelector(`#f-langs .lang-cb[value="${k}"]`);
           if (cb) cb.checked = true;
         });
-        const body = document.getElementById('tc-body'); body.innerHTML = ''; tcSeq = 0;
-        (d.testcases || []).forEach(tc => {
-          addTestCase();
-          const tr = body.lastElementChild;
-          tr.children[1].querySelector('textarea').value = tc.input || '';
-          tr.children[2].querySelector('textarea').value = tc.output || '';
-          if (tc.points != null) tr.children[3].querySelector('input').value = tc.points;
-          tr.children[4].querySelector('input').checked = !!tc.pretest;
-        });
-        if (!(d.testcases || []).length) addTestCase();
+        // Test data is edited through the embedded test_data iframe, not restored here.
       }
       renderScoreConf();
       renderPreview();

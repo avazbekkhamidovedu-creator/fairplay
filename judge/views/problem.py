@@ -466,7 +466,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
     title = gettext_lazy('Problems')
     context_object_name = 'problems'
     template_name = 'problem/list.html'
-    paginate_by = 50
+    paginate_by = 20
     sql_sort = frozenset(('points', 'ac_rate', 'user_count', 'code', 'date'))
     manual_sort = frozenset(('name', 'group', 'solved', 'type', 'editorial'))
     all_sorts = sql_sort | manual_sort

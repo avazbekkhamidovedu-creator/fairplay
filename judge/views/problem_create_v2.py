@@ -364,10 +364,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if not (user.is_staff and user.has_perm('judge.add_problem')):
             raise PermissionError(_('You do not have permission to create code problems.'))
 
+        # Test data is configured through the embedded test_data page after the problem exists,
+        # so inline cases are optional here (kept for backwards compatibility / API callers).
         testcases = payload.get('testcases') or []
         cleaned_cases = [tc for tc in testcases if (tc.get('input') or tc.get('output'))]
-        if not cleaned_cases:
-            raise ValueError(_('Please add at least one test case.'))
 
         with transaction.atomic():
             if problem is None:
@@ -393,7 +393,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
 
-            self._save_testcases(problem, cleaned_cases)
+            if cleaned_cases:
+                self._save_testcases(problem, cleaned_cases)
         return problem
 
     def _attach_languages(self, problem, payload):

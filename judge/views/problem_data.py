@@ -248,6 +248,11 @@ class ProblemDataView(TitleMixin, ProblemManagerMixin):
             lang['id']: lang['ace'] for lang in harness_languages
         }))
 
+        # Chrome-less rendering when embedded inside the create_v2 problem editor (iframe).
+        context['embed'] = embed = bool(self.request.GET.get('embed'))
+        context['layout'] = 'problem/data_embed_base.html' if embed else 'base.html'
+        context['problem_points'] = self.object.points
+
         return context
 
     def post(self, request, *args, **kwargs):
