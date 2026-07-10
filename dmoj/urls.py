@@ -11,9 +11,9 @@ from django.views.generic import RedirectView
 
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
-from judge.views import TitledTemplateView, api, blog, comment, contest_analytics, contests, ide, language, license, \
-    mailgun, mcq, organization, preview, problem, problem_manage, ranked_submission, register, stats, status, \
-    submission, tasks, ticket, two_factor, user, widgets
+from judge.views import TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, \
+    language, license, mailgun, mcq, organization, preview, problem, problem_manage, ranked_submission, register, \
+    stats, status, submission, tasks, ticket, two_factor, user, widgets
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView
@@ -104,6 +104,7 @@ urlpatterns = [
     path('problems/', problem.ProblemList.as_view(), name='problem_list'),
     path('problems/random/', problem.RandomProblem.as_view(), name='problem_random'),
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
+    path('problems/new/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_create'),
 
     path('problem/<str:problem>', include([
         path('', problem.ProblemDetail.as_view(), name='problem_detail'),
@@ -114,6 +115,7 @@ urlpatterns = [
         path('/submit', problem.ProblemSubmit.as_view(), name='problem_submit'),
         path('/resubmit/<int:submission>', problem.ProblemSubmit.as_view(), name='problem_submit'),
         path('/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_edit'),
+        path('/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_edit'),
 
         path('/rank/', paged_list_view(ranked_submission.RankedSubmissions, 'ranked_submissions')),
         path('/submissions/', paged_list_view(submission.ProblemSubmissions, 'chronological_submissions')),

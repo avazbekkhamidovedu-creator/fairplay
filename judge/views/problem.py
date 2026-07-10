@@ -1032,6 +1032,13 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 initial['options'] = [str(s) for s in selected]
             elif selected:
                 initial['options'] = str(selected[0])
+        elif self.old_submission is not None and self.object.submission_type == 'B':
+            try:
+                answers = json.loads(self.old_submission.source.source).get('answers', [])
+            except (ValueError, TypeError, ObjectDoesNotExist):
+                answers = []
+            for blank, answer in zip(self.object.blanks.all(), answers):
+                initial['blank_%d' % blank.order] = answer
         return initial
 
     def get_form_kwargs(self):

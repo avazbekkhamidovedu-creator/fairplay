@@ -134,6 +134,8 @@
 {% block body %}
     {% if submission_type == 'M' %}
         {% include "problem/submit/_mcq.html" %}
+    {% elif submission_type == 'B' %}
+        {% include "problem/submit/_fill_blank.html" %}
     {% else %}
         {% include "problem/submit/_code.html" %}
     {% endif %}
