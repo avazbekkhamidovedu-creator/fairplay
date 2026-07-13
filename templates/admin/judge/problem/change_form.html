@@ -454,8 +454,43 @@
                         .addClass(message ? (isError ? 'is-error' : 'is-success') : '');
                 }
 
+                function setImportStatusHtml(message, isError) {
+                    var $status = $('#problem-markdown-import-status');
+                    if (!$status.length) {
+                        return;
+                    }
+                    $status
+                        .html(message || '')
+                        .removeClass('is-success is-error')
+                        .addClass(message ? (isError ? 'is-error' : 'is-success') : '');
+                }
+
+                function escapeHtml(value) {
+                    return $('<div>').text(value || '').html();
+                }
+
                 function getCsrfToken() {
                     return $('input[name="csrfmiddlewaretoken"]').first().val() || '';
+                }
+
+                function handleMarkdownCreateSuccess(data) {
+                    var links = (data.created || []).map(function (item) {
+                        var name = item.name || item.code || '';
+                        if (!item.edit_url) {
+                            return escapeHtml(name);
+                        }
+                        return '<a href="' + escapeHtml(item.edit_url) + '">' +
+                            escapeHtml(name) + '</a>';
+                    });
+                    var summary = escapeHtml(data.message || '{{ _("Markdown uploaded successfully.")|escapejs }}');
+                    if (links.length) {
+                        summary += '<br>' + links.join('<br>');
+                    }
+                    summary += '<br>{{ _("Redirecting...")|escapejs }}';
+                    setImportStatusHtml(summary, false);
+                    window.setTimeout(function () {
+                        window.location.href = data.redirect_url || '/admin/judge/problem/';
+                    }, 1200);
                 }
 
                 async function importMarkdownFile(file) {
@@ -476,13 +511,60 @@
                             setImportStatus(data.message || '{{ _("Upload failed.")|escapejs }}', true);
                             return;
                         }
-                        if (($('#id_name').val() || '').trim() === '' && data.name) {
-                            forceTextboxValue($('#id_name'), data.name, {triggerEvents: true});
+                        handleMarkdownCreateSuccess(data);
+                    } catch (error) {
+                        setImportStatus('{{ _("Upload failed.")|escapejs }}', true);
+                    }
+                }
+
+                async function batchCreateMarkdownFiles(files) {
+                    var formData = new FormData();
+                    Array.prototype.forEach.call(files, function (file) {
+                        formData.append('markdown_files', file);
+                    });
+                    setImportStatus(
+                        '{{ _("Creating problems from Markdown files...")|escapejs }}',
+                        false
+                    );
+                    try {
+                        var response = await fetch('{% url "admin:judge_problem_batch_create_markdown" %}', {
+                            method: 'POST',
+                            headers: {
+                                'X-CSRFToken': getCsrfToken(),
+                                'X-Requested-With': 'XMLHttpRequest'
+                            },
+                            body: formData
+                        });
+                        var data = await response.json();
+                        if (!response.ok || !data.ok) {
+                            setImportStatus(data.message || '{{ _("Upload failed.")|escapejs }}', true);
+                            return;
                         }
-                        overwriteDescriptionField(data.description || '');
-                        setImportStatus(data.message || '{{ _("Markdown uploaded successfully.")|escapejs }}', false);
-                        setPresetValue('custom');
-                        schedulePresetRefresh();
+                        handleMarkdownCreateSuccess(data);
+                    } catch (error) {
+                        setImportStatus('{{ _("Upload failed.")|escapejs }}', true);
+                    }
+                }
+
+                async function uploadProblemExcel(file) {
+                    var formData = new FormData();
+                    formData.append('excel_file', file);
+                    setImportStatus('{{ _("Creating problems from Excel...")|escapejs }}', false);
+                    try {
+                        var response = await fetch('{% url "admin:judge_problem_batch_create_excel" %}', {
+                            method: 'POST',
+                            headers: {
+                                'X-CSRFToken': getCsrfToken(),
+                                'X-Requested-With': 'XMLHttpRequest'
+                            },
+                            body: formData
+                        });
+                        var data = await response.json();
+                        if (!response.ok || !data.ok) {
+                            setImportStatus(data.message || '{{ _("Upload failed.")|escapejs }}', true);
+                            return;
+                        }
+                        handleMarkdownCreateSuccess(data);
                     } catch (error) {
                         setImportStatus('{{ _("Upload failed.")|escapejs }}', true);
                     }
@@ -553,6 +635,28 @@
                     importMarkdownFile(file);
                     this.value = '';
                 });
+                $('#problem-markdown-batch-import-button').on('click', function () {
+                    $('#problem-markdown-batch-import-input').trigger('click');
+                });
+                $('#problem-markdown-batch-import-input').on('change', function () {
+                    var files = this.files;
+                    if (!files || !files.length) {
+                        return;
+                    }
+                    batchCreateMarkdownFiles(files);
+                    this.value = '';
+                });
+                $('#problem-excel-import-button').on('click', function () {
+                    $('#problem-excel-import-input').trigger('click');
+                });
+                $('#problem-excel-import-input').on('change', function () {
+                    var file = this.files && this.files[0];
+                    if (!file) {
+                        return;
+                    }
+                    uploadProblemExcel(file);
+                    this.value = '';
+                });
                 var $bottombar = $('#bottombar');
                 if ($bottombar.length && !$('#problem-markdown-import-button').length) {
                     var $continueButton = $bottombar.find('button[name="_continue"]').first();
@@ -567,10 +671,46 @@
                     if ($icons.length >= 3) {
                         $icons.eq(2).attr('class', 'fa fa-lg fa-upload');
                     }
+                    var $batchImportButton = $buttonTemplate.clone(false, false);
+                    $batchImportButton
+                        .attr('id', 'problem-markdown-batch-import-button')
+                        .attr('title', '{{ _("Batch Upload Markdown")|escapejs }}')
+                        .attr('name', '_batch_upload_markdown');
+                    $batchImportButton.find('span.text').text('{{ _("Batch Upload Markdown")|escapejs }}');
+                    var $batchIcons = $batchImportButton.find('i');
+                    if ($batchIcons.length >= 3) {
+                        $batchIcons.eq(2).attr('class', 'fa fa-lg fa-files-o');
+                    }
+                    var $excelImportButton = $buttonTemplate.clone(false, false);
+                    $excelImportButton
+                        .attr('id', 'problem-excel-import-button')
+                        .attr('title', '{{ _("Upload Excel")|escapejs }}')
+                        .attr('name', '_upload_excel');
+                    $excelImportButton.find('span.text').text('{{ _("Upload Excel")|escapejs }}');
+                    var $excelIcons = $excelImportButton.find('i');
+                    if ($excelIcons.length >= 3) {
+                        $excelIcons.eq(2).attr('class', 'fa fa-lg fa-table');
+                    }
+                    var $excelTemplateButton = $buttonTemplate.clone(false, false);
+                    $excelTemplateButton
+                        .attr('id', 'problem-excel-template-button')
+                        .attr('title', '{{ _("Download Excel Template")|escapejs }}')
+                        .attr('name', '_download_excel_template');
+                    $excelTemplateButton.find('span.text').text('{{ _("Download Excel Template")|escapejs }}');
+                    var $excelTemplateIcons = $excelTemplateButton.find('i');
+                    if ($excelTemplateIcons.length >= 3) {
+                        $excelTemplateIcons.eq(2).attr('class', 'fa fa-lg fa-download');
+                    }
                     if ($continueButton.length) {
                         $importButton.insertAfter($continueButton);
+                        $batchImportButton.insertAfter($importButton);
+                        $excelImportButton.insertAfter($batchImportButton);
+                        $excelTemplateButton.insertAfter($excelImportButton);
                     } else {
                         $bottombar.append($importButton);
+                        $bottombar.append($batchImportButton);
+                        $bottombar.append($excelImportButton);
+                        $bottombar.append($excelTemplateButton);
                     }
                     var $status = $('#problem-markdown-import-status');
                     if ($status.length) {
@@ -579,6 +719,18 @@
                     $importButton.on('click', function (event) {
                         event.preventDefault();
                         $('#problem-markdown-import-input').trigger('click');
+                    });
+                    $batchImportButton.on('click', function (event) {
+                        event.preventDefault();
+                        $('#problem-markdown-batch-import-input').trigger('click');
+                    });
+                    $excelImportButton.on('click', function (event) {
+                        event.preventDefault();
+                        $('#problem-excel-import-input').trigger('click');
+                    });
+                    $excelTemplateButton.on('click', function (event) {
+                        event.preventDefault();
+                        window.location.href = '{% url "admin:judge_problem_download_excel_template" %}';
                     });
                 }
 
@@ -675,6 +827,8 @@
     {% submit_row %}
     {% if show_embedded_advanced_toggle or is_advanced_add %}
         <input id="problem-markdown-import-input" type="file" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain" style="display: none;">
+        <input id="problem-markdown-batch-import-input" type="file" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain" multiple style="display: none;">
+        <input id="problem-excel-import-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display: none;">
         <span id="problem-markdown-import-status" class="problem-markdown-import-status" aria-live="polite" style="display: none;"></span>
     {% endif %}
 {% endblock %}
