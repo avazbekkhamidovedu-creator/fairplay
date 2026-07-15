@@ -1,14 +1,14 @@
 """Fill-in-the-blank question type: front-end authored, internally graded.
 
-A problem has one or more blanks, each with a set of accepted answers (one alternative per line).
-In the default (exact) grading mode a student's answer to a blank is correct if — after normalizing
-per ``ProblemFillBlankConfig`` (strip surrounding whitespace unless disabled; casefold unless
-case-sensitive) — it equals any of that blank's accepted answers; scoring is +1 per correct blank
-out of N, mirroring MCQ. When ``grading_mode == 'ai'`` the configured LLM scores the whole response
-0-100 against the accepted answers + rubric, falling back to exact matching if no model is
-configured or the call fails, so grading never blocks.
+In exact mode each blank is compared to its accepted-answers set (+1 per correct
+blank out of N). In AI mode the configured LLM scores every blank independently,
+applying the calibration pipeline (spline + strictness preset) and rounding each
+sub-score to 0.5 precision.  Per-blank feedback is stored so the status page can
+render a grading table.
 """
 import json
+import logging
+import time as _time
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.urls import reverse
@@ -17,6 +17,9 @@ from django.utils.translation import gettext_lazy as _
 from judge.models import ProblemSubmissionType
 from judge.question_types.base import GradingResult, QuestionType
 from judge.question_types.registry import register
+from judge.utils.calibration import calibrate
+
+logger = logging.getLogger(__name__)
 
 
 def _config(problem):
@@ -118,36 +121,147 @@ class FillBlankQuestionType(QuestionType):
         return GradingResult(case_points=case_points, case_total=case_total, result=result, cases=cases)
 
     def _grade_ai(self, problem, config, blanks, answers):
-        """Ask the configured LLM for an overall 0-100 score. Returns None to signal "fall back to
-        exact matching" (no model configured, or the call/parse failed)."""
+        """Ask the configured LLM to score every blank independently, apply
+        calibration per blank, and return a GradingResult with per-blank
+        SubmissionTestCase rows.  Returns ``None`` to signal "fall back to
+        exact matching" (no model configured, or call/parse failed)."""
         from judge import llm
-        if not llm.is_configured():
-            return None
-        try:
-            payload = {
-                'question': (problem.description or '')[:4000],
-                'rubric': (config.ai_rubric if config else '') or '',
-                'blanks': [
-                    {'index': index + 1,
-                     'accepted_answers': blank.answers.splitlines(),
-                     'student_answer': (answers[index] if index < len(answers) else '')[:1000]}
-                    for index, blank in enumerate(blanks)
-                ],
-            }
-            messages = [
-                {'role': 'system', 'content': (
-                    'You grade fill-in-the-blank answers. Given the question, an optional rubric, and '
-                    'for each blank its accepted answers and the student answer, reply with ONLY an '
-                    'integer 0-100 for the overall percentage of credit earned. No other text.'
-                )},
-                {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
-            ]
-            text = llm.chat(messages, max_tokens=16).text.strip()
-            score = max(0, min(100, int(''.join(ch for ch in text if ch.isdigit()) or '0')))
-        except Exception:
+
+        if not llm.is_configured() or not blanks:
             return None
 
-        result = 'AC' if score >= 100 else 'WA'
-        cases = [{'case': 1, 'status': result, 'points': score, 'total': 100,
-                  'feedback': _('Graded by AI.')}]
-        return GradingResult(case_points=score, case_total=100, result=result, cases=cases)
+        # Resolve sub-questions: auto-generate from blanks unless an explicit
+        # grading_table was saved.
+        grading_table = config.grading_table if config else None
+        if grading_table and isinstance(grading_table, list) and len(grading_table) == len(blanks):
+            sub_questions = grading_table
+        else:
+            pts_per_blank = float(problem.points) / len(blanks) if problem.points else 1.0
+            sub_questions = [
+                {'name': blank.label or f'Blank {i + 1}',
+                 'max_points': pts_per_blank,
+                 'strictness': 'normal'}
+                for i, blank in enumerate(blanks)
+            ]
+
+        messages = self._build_ai_messages(problem, config, blanks, answers, sub_questions)
+        try:
+            raw = self._call_llm(llm, messages)
+            parsed = json.loads(raw)
+        except Exception:
+            logger.exception('Fill-blank AI grading failed for submission')
+            return None
+
+        sub_scores = parsed.get('sub_scores', [])
+        if not isinstance(sub_scores, list) or not sub_scores:
+            return None
+
+        # Calibrate each sub-question
+        calibrated = []
+        for sq in sub_scores:
+            raw_score = float(sq.get('score', 0))
+            name = str(sq.get('name', ''))[:30]
+            match = next((q for q in sub_questions if q['name'] == name), None)
+            max_pts = match['max_points'] if match else 1.0
+            strictness = match['strictness'] if match else 'normal'
+
+            cal_score = calibrate(raw_score, max_pts, strictness)
+            calibrated.append({
+                'name': name,
+                'max_points': max_pts,
+                'score': cal_score,
+                'feedback': str(sq.get('feedback', ''))[:2000],
+            })
+
+        case_points = sum(item['score'] for item in calibrated)
+        case_total = sum(item['max_points'] for item in calibrated)
+        case_points = round(case_points * 2) / 2  # 0.5 precision
+
+        result = 'AC' if case_points >= case_total else 'WA'
+        cases = []
+        for i, item in enumerate(calibrated):
+            cases.append({
+                'case': i + 1,
+                'status': 'AC' if item['score'] >= item['max_points'] else 'WA',
+                'points': item['score'],
+                'total': item['max_points'],
+                'feedback': item['name'],
+                'extended_feedback': item.get('feedback', ''),
+            })
+
+        return GradingResult(case_points=case_points, case_total=case_total,
+                             result=result, cases=cases)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _build_ai_messages(problem, config, blanks, answers, sub_questions):
+        question = (problem.description or '')[:2000]
+        rubric = (config.ai_rubric if config else '') or ''
+
+        system = (
+            'You are a precise fill-in-the-blank grader.\n\n'
+            'Zero-Score Pre-Check — apply BEFORE normal scoring:\n'
+            '- BLANK or near-empty (fewer than 2 characters) → score 0.\n'
+            '- OFF-TOPIC: answer is completely unrelated to the blank → score 0.\n'
+            '- For all other answers, score normally.\n\n'
+            'For each blank, compare the student\'s answer to the accepted answers. '
+            'An answer that exactly matches any accepted answer gets full points. '
+            'Near-matches (minor typos, synonym-equivalent, different phrasing with '
+            'same meaning) deserve partial credit based on how close they are.\n\n'
+            'Score guide (as proportion of max points per blank):\n'
+            '- Very Low (bottom 30%): Wrong concept, unrelated.\n'
+            '- Low (30-50%): Partial understanding but off.\n'
+            '- Medium (50-80%): Close, minor issues.\n'
+            '- High (80-100%): Excellent match or exact equivalent.\n'
+            'Give full marks when the answer is essentially correct.\n\n'
+            'Output ONLY valid JSON:\n'
+            '{"sub_scores": [{"name": str, "score": float, "feedback": str}], '
+            '"total_score": float}'
+        )
+
+        blank_lines = []
+        for i, blank in enumerate(blanks):
+            accepted = ', '.join(blank.answers.splitlines())
+            student = answers[i] if i < len(answers) else ''
+            name = sub_questions[i]['name'] if i < len(sub_questions) else f'Blank {i + 1}'
+            max_pts = sub_questions[i]['max_points'] if i < len(sub_questions) else 1.0
+            blank_lines.append(
+                f'  - {name}: max {max_pts} pts, '
+                f'accepted=[{accepted}], student="{student[:500]}"'
+            )
+
+        user = (
+            f'Question: {question}\n'
+            f'Rubric: {rubric[:500]}\n'
+            f'Blanks:\n' + '\n'.join(blank_lines) + '\n\n'
+            f'Score each blank independently from 0 to its max points. Output JSON.'
+        )
+
+        return [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user},
+        ]
+
+    @staticmethod
+    def _call_llm(llm, messages):
+        """Send the prompt with retry on transient errors (429/5xx)."""
+        delays = [1, 5, 25]
+        for attempt in range(len(delays) + 1):
+            try:
+                result = llm.chat(messages, profile='grading')
+                text = result.text.strip()
+                if text.startswith('```'):
+                    lines = text.split('\n')
+                    text = '\n'.join(lines[1:]) if len(lines) > 1 else text
+                    if text.endswith('```'):
+                        text = text.rsplit('```', 1)[0]
+                return text.strip()
+            except Exception as exc:
+                logger.warning('LLM attempt %d failed: %s', attempt + 1, exc)
+                if attempt < len(delays):
+                    msg = str(exc).lower()
+                    if any(str(code) in msg for code in (429, 500, 502, 503, 504)):
+                        _time.sleep(delays[attempt])
+                        continue
+                return None
+        return None

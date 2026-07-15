@@ -263,6 +263,28 @@
                 <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.4rem;">
                   <input type="checkbox" checked> AI 打分后仍需教师复核
                 </label>
+                <!-- Grading Table -->
+                <div class="grading-table-section" style="margin-top:0.75rem;">
+                  <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
+                    <span style="font-weight:600;font-size:12px;">Grading Table</span>
+                    <button type="button" class="btn-mini btn-mini-primary" id="btn-ai-decompose"
+                            onclick="runAIDecompose()">AI 自动生成</button>
+                    <span id="decompose-status" style="font-size:11px;color:var(--muted);display:none;"></span>
+                  </div>
+                  <table class="grading-table" id="grading-table">
+                    <thead>
+                      <tr><th>子问题</th><th>分值</th><th>严格度</th><th></th></tr>
+                    </thead>
+                    <tbody id="grading-tbody">
+                      <tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">
+                        点击 <b>AI 自动生成</b> 让模型分析题面并拆分子问题，或点击下方按钮手动添加。
+                      </td></tr>
+                    </tbody>
+                  </table>
+                  <div style="margin-top:0.35rem;display:flex;gap:0.4rem;">
+                    <button type="button" class="btn-mini" onclick="addSubQuestion()">+ 添加子问题</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -503,6 +525,7 @@
     const CREATE_PROBLEM_GROUP_URL = '{{ create_problem_group_url }}';
     const CREATE_ORGANIZATION_URL = '{{ create_organization_url }}';
     const AI_PROBLEM_TYPE_URL = '{{ ai_problem_type_url }}';
+    const AI_DECOMPOSE_URL = '{{ ai_decompose_url }}';
     const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
     const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
@@ -1504,6 +1527,7 @@
       const partialConf = document.getElementById('partial-conf');
       const aiOn = document.getElementById('f-ai').checked;
       document.getElementById('ai-conf').style.display = aiOn ? 'block' : 'none';
+      if (aiOn) updateGradingTableState();
 
       const subEl = document.getElementById('partial-sub');
       if (currentType === 'programming') subEl.textContent = '按通过的测试点分值累加得分（在测试用例表逐点配置分值）';
@@ -1629,6 +1653,7 @@
         partial: document.getElementById('f-partial').checked,
         ai: document.getElementById('f-ai').checked,
         rubric: (document.getElementById('f-rubric') || {}).value || '',
+        gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
         problemTypes: [...document.querySelectorAll('#f-types .ptype-tag')].map(t => t.childNodes[0].textContent.trim()),
         description: getMd('stem'), explanation: getMd('explain'),
@@ -1695,6 +1720,7 @@
         const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
       { const tb = document.getElementById('tc-body'); if (tb) tb.innerHTML = ''; }
       document.getElementById('sub-list').innerHTML = '';
+      document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
       optionSeq = blankSeq = tcSeq = subSeq = 0; draftSaved = false;
       selectType(currentType);
     }
@@ -1768,6 +1794,8 @@
       const partial = document.getElementById('f-partial'); if (partial) partial.checked = !!d.partial;
       const aiCb = document.getElementById('f-ai'); if (aiCb) aiCb.checked = !!d.ai;
       const rub = document.getElementById('f-rubric'); if (rub) rub.value = d.rubric || '';
+      if (d.gradingTable && d.gradingTable.length) restoreGradingTable(d.gradingTable);
+      else renderScoreConf(); // triggers grading table init if AI is on
 
       RichEditor.setMarkdown('stem', d.description || '');
 
@@ -1833,6 +1861,109 @@
         const radio = document.querySelector(`input[name="qtype"][value="${t}"]`);
         if (radio) { radio.checked = true; selectType(t); }
       })();
+    }
+
+    // --- Grading Table ------------------------------------------------
+    let gtableSeq = 0;
+
+    function _gradingEmptyHTML() {
+      return '<tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">点击 <b>AI 自动生成</b> 让模型分析题面并拆分子问题，或点击下方按钮手动添加。</td></tr>';
+    }
+
+    function updateGradingTableState() {
+      const tbody = document.getElementById('grading-tbody');
+      const btn = document.getElementById('btn-ai-decompose');
+      const emptyRow = document.getElementById('grading-empty');
+      // Only count data rows, not the empty-state placeholder row.
+      const dataRows = tbody.querySelectorAll('tr:not(#grading-empty)');
+      const isEmpty = dataRows.length === 0;
+      btn.disabled = !isEmpty;
+      if (emptyRow) emptyRow.style.display = isEmpty ? '' : 'none';
+    }
+
+    function collectGradingTable() {
+      const rows = document.querySelectorAll('#grading-tbody tr:not(#grading-empty)');
+      const items = [];
+      rows.forEach(row => {
+        const nameEl = row.querySelector('.gt-name');
+        const ptsEl = row.querySelector('.gt-points');
+        const active = row.querySelector('.gt-strictness .active');
+        if (!nameEl) return;
+        const name = nameEl.value.trim();
+        if (!name) return;
+        items.push({
+          name: name,
+          max_points: parseFloat(ptsEl.value) || 1,
+          strictness: active ? active.dataset.level : 'normal',
+        });
+      });
+      return items.length ? items : null;
+    }
+
+    function addSubQuestion(item) {
+      item = item || { name: '', max_points: 1, strictness: 'normal' };
+      gtableSeq++;
+      const tr = document.createElement('tr');
+      const strictness = item.strictness || 'normal';
+      const levels = ['strict', 'normal', 'lenient'];
+      const labels = { strict: '严格', normal: '正常', lenient: '宽松' };
+      const pills = levels.map(l =>
+        `<button type="button" class="gt-pill ${l === strictness ? 'active' : ''}"
+                 data-level="${l}" onclick="setStrictness(this,'${l}')">${labels[l]}</button>`
+      ).join('');
+      tr.innerHTML =
+        `<td><input class="gt-name" value="${h(item.name)}" placeholder="子问题名称" style="width:100%;"></td>
+         <td><input class="gt-points" type="number" step="0.5" min="0.5" value="${item.max_points || 1}"
+                    style="width:70px;"></td>
+         <td class="gt-strictness">${pills}</td>
+         <td><button type="button" class="btn-del-row" onclick="removeSubQuestion(this)">×</button></td>`;
+      document.getElementById('grading-tbody').appendChild(tr);
+      updateGradingTableState();
+    }
+
+    function removeSubQuestion(btn) {
+      btn.closest('tr').remove();
+      updateGradingTableState();
+    }
+
+    function setStrictness(btn, level) {
+      btn.parentElement.querySelectorAll('.gt-pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    }
+
+    function restoreGradingTable(items) {
+      document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
+      gtableSeq = 0;
+      items.forEach(item => addSubQuestion(item));
+      updateGradingTableState();
+    }
+
+    function runAIDecompose() {
+      const desc = getMd('stem').trim();
+      const pts = Number(document.getElementById('f-points').value) || 1;
+      if (!desc) { showToast('请先填写题目内容', false); return; }
+      const status = document.getElementById('decompose-status');
+      const btn = document.getElementById('btn-ai-decompose');
+      status.style.display = 'inline'; status.textContent = '⟳ 分析中…';
+      btn.disabled = true;
+      fetch(AI_DECOMPOSE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify({ description: desc, total_points: pts }),
+      }).then(r => r.json()).then(data => {
+        status.style.display = 'none'; btn.disabled = false;
+        if (data.error) { showToast(data.error, false); return; }
+        if (!data.sub_questions || !data.sub_questions.length) {
+          showToast('AI 未识别到可拆分的子问题', false); return;
+        }
+        document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
+        gtableSeq = 0;
+        data.sub_questions.forEach(q => addSubQuestion(q));
+        showToast('已分析 ' + data.sub_questions.length + ' 个子问题', true);
+      }).catch(() => {
+        status.style.display = 'none'; btn.disabled = false;
+        showToast('AI 分析失败，请重试', false);
+      });
     }
   </script>
   </div>

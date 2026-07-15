@@ -49,6 +49,63 @@
             <br><br>
         {% endif %}
         {% set test_case_id = counter() %}
+
+        {# --- AI-graded submissions: render a clean grading table instead of raw test cases --- #}
+        {% if submission.problem.submission_type in ('B', 'S') and submission.test_cases.exists() %}
+            <table class="ai-grading-result">
+              <thead>
+                <tr>
+                  <th>{{ _('Sub-question') }}</th>
+                  <th>{{ _('Score') }}</th>
+                  <th>{{ _('Status') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tc in submission.test_cases.all() %}
+                <tr class="ai-grading-row {% if tc.extended_feedback %}toggle closed{% endif %}"
+                    {% if tc.id %}id="{{ tc.id }}"{% endif %}>
+                  <td>
+                    {% if tc.extended_feedback %}
+                      <i class="fa fa-chevron-right fa-fw"></i>
+                    {% endif %}
+                    <span class="ai-sq-name">{{ tc.feedback or _('Sub-question') }}</span>
+                  </td>
+                  <td class="ai-sq-score">
+                    <span class="case-{{ tc.status }}">{{ tc.points|floatformat(1) }}</span>
+                    / {{ tc.total|floatformat(1) }}
+                  </td>
+                  <td>
+                    <span class="ai-sq-status case-{{ tc.status }}">
+                      {% if tc.status == 'AC' %}{{ _('Correct') }}{% else %}{{ _('Partial') }}{% endif %}
+                    </span>
+                  </td>
+                </tr>
+                {% if tc.extended_feedback %}
+                <tr style="display:none" class="ai-grading-feedback toggled">
+                  <td colspan="3">
+                    <div class="ai-feedback-box">
+                      <strong>{{ _('Feedback') }}</strong>
+                      <p>{{ tc.extended_feedback|linebreaksbr }}</p>
+                    </div>
+                  </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+              </tbody>
+              <tfoot>
+                <tr class="ai-grading-total">
+                  <td><strong>{{ _('Total') }}</strong></td>
+                  <td><strong>{{ submission.case_points|floatformat(1) }} / {{ submission.case_total|floatformat(1) }}</strong></td>
+                  <td>
+                    <span class="case-{{ submission.result }}">
+                      {% if submission.result == 'AC' %}{{ _('All correct') }}{% else %}{{ _('Partial credit') }}{% endif %}
+                    </span>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+            <br>
+        {% else %}
         {% for batch in batches %}
             {% if batch.id %}
                 <b>{{ _('Batch #%(id)d', id=test_case_id()) }}</b>
@@ -136,6 +193,7 @@
         {% if batch.id %}</div>{% endif %}
             <br>
         {% endfor %}
+        {% endif %}{# end of ai-graded vs code test cases #}
         {% if submission.is_graded %}
             <br>
             {% if submission.result != "AB" %}

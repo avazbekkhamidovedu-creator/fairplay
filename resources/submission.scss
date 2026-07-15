@@ -348,3 +348,25 @@ label[for="language"], label[for="status"] {
         color: $color_primary50;
     }
 }
+
+/* --- AI Grading Result Table --- */
+.ai-grading-result {
+    width: 100%; border-collapse: collapse; margin-top: 0.5em;
+    border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden;
+}
+.ai-grading-result th {
+    text-align: left; padding: 8px 12px; background: #f8f8f8;
+    border-bottom: 2px solid #e0e0e0; font-size: 13px; color: #555;
+}
+.ai-grading-result td { padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 13px; }
+.ai-grading-row { transition: background 0.15s; }
+.ai-grading-row:hover { background: #fafafa; }
+.ai-grading-row.toggle { cursor: pointer; }
+.ai-sq-name { font-weight: 500; color: #333; }
+.ai-sq-score { font-family: monospace; }
+.ai-sq-status { font-size: 11px; padding: 2px 8px; border-radius: 3px; }
+.ai-grading-total td { background: #f5f5f5; font-size: 13px; border-top: 2px solid #e0e0e0; }
+.ai-feedback-box { padding: 10px 14px; background: #f0f8ff; border-left: 4px solid #4a90d9;
+    margin: 4px 0; border-radius: 0 4px 4px 0; }
+.ai-feedback-box strong { font-size: 12px; color: #4a90d9; }
+.ai-feedback-box p { margin: 6px 0 0; font-size: 13px; color: #333; line-height: 1.5; }

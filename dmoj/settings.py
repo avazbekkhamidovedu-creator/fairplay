@@ -636,7 +636,14 @@ LITELLM_TIMEOUT = 120              # seconds
 # The optional 'default' key serves as a base inherited by all profiles.
 AZURE_PROFILES = {}
 
-LITELLM_PROFILES = {}
+LITELLM_PROFILES = {
+    'grading': {
+        'model': 'GRADING@DKUOJ',
+        'temperature': 0,
+        'max_tokens': 2048,
+        'response_format': {'type': 'json_object'},
+    },
+}
 
 DMOJ_AI_HINT_DAILY_LIMIT = 5      # max AI hint requests per user per day
 
