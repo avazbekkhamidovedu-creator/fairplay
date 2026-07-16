@@ -66,9 +66,10 @@ class ShortAnswerQuestionType(QuestionType):
 
         score = self._grade_ai(problem, config, answer)
         if score is None:
-            cases = [{'case': 1, 'status': 'WA', 'points': 0, 'total': 100,
+            # AI unavailable/failed is an infrastructure issue, not a wrong student answer (WA).
+            cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': 100,
                       'feedback': _('Awaiting manual grading (AI grader unavailable).')}]
-            return GradingResult(case_points=0, case_total=100, result='WA', cases=cases)
+            return GradingResult(case_points=0, case_total=100, result='IR', cases=cases)
 
         result = 'AC' if score >= 100 else 'WA'
         cases = [{'case': 1, 'status': result, 'points': score, 'total': 100,
