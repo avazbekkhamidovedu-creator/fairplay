@@ -114,6 +114,16 @@
     if (ta) ta.value = md || '';
   }
 
+  function syncPaneHeight(editor) {
+    const rich = editor.querySelector('.rich-editor-body');
+    const ta = editor.querySelector('.rich-editor-markdown textarea');
+    if (!rich || !ta) return;
+    const floor = editor.classList.contains('compact') ? 80 : 200;
+    const h = Math.max(rich.offsetHeight || 0, ta.offsetHeight || 0, floor);
+    rich.style.minHeight = h + 'px';
+    ta.style.minHeight = h + 'px';
+  }
+
   function initEditors(root) {
     const scope = root || document;
     scope.querySelectorAll('.rich-editor').forEach(editor => {
@@ -124,11 +134,13 @@
       editor.querySelectorAll('.mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const md = btn.dataset.mode === 'markdown';
+          syncPaneHeight(editor);
           if (md) ta.value = htmlToMd(rich.innerHTML);
           else rich.innerHTML = mdToHtml(ta.value);
           editor.classList.toggle('mode-markdown', md);
           editor.classList.toggle('mode-rich', !md);
           editor.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+          syncPaneHeight(editor);
           notifyChange();
         });
       });
@@ -140,12 +152,16 @@
         rich.addEventListener('keyup', () => updateToolbarState(editor));
         rich.addEventListener('mouseup', () => updateToolbarState(editor));
       }
-      if (ta) ta.addEventListener('input', notifyChange);
+      if (ta) {
+        ta.addEventListener('input', notifyChange);
+        ta.addEventListener('mouseup', () => syncPaneHeight(editor));
+      }
       editor.querySelectorAll('.rich-toolbar button[data-cmd]').forEach(btn => {
         btn.addEventListener('click', () => applyFormat(editor, btn.dataset.cmd, btn));
       });
       const headSel = editor.querySelector('.rte-heading');
       if (headSel) headSel.addEventListener('change', () => applyFormat(editor, headSel.value));
+      syncPaneHeight(editor);
     });
   }
 
@@ -186,7 +202,7 @@
         case 'ul': active = document.queryCommandState('insertUnorderedList'); break;
         case 'ol': active = document.queryCommandState('insertOrderedList'); break;
         case 'quote': active = selectionInTag(area, 'blockquote'); break;
-        case 'code': active = selectionInTag(area, 'code'); break;
+          case 'code': active = selectionInTag(area, 'code') || selectionInTag(area, 'pre'); break;
       }
       btn.classList.toggle('active', !!active);
     });
@@ -246,8 +262,20 @@
         else document.execCommand('formatBlock', false, 'blockquote');
         break;
       case 'code':
-        if (selectionInTag(area, 'code')) unwrapTagFromSelection(area, 'code');
-        else wrapInline('code');
+        if (selectionInTag(area, 'pre')) {
+          unwrapTagFromSelection(area, 'pre');
+        } else if (selectionInTag(area, 'code') && !selectionInTag(area, 'pre')) {
+          unwrapTagFromSelection(area, 'code');
+        } else {
+          const sel = window.getSelection();
+          const text = (sel && sel.rangeCount) ? sel.toString() : '';
+          if (!text || text.indexOf('\n') !== -1) {
+            const body = (text || 'code').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            document.execCommand('insertHTML', false, '<pre><code>' + body + '</code></pre><p><br></p>');
+          } else {
+            wrapInline('code');
+          }
+        }
         break;
       case 'alignLeft': document.execCommand('justifyLeft'); break;
       case 'alignCenter': document.execCommand('justifyCenter'); break;
@@ -333,7 +361,10 @@
       case 'bold': wrap('**', '**', '加粗'); break;
       case 'italic': wrap('*', '*', '斜体'); break;
       case 'highlight': wrap('<mark>', '</mark>', '高亮'); break;
-      case 'code': wrap('`', '`', 'code'); break;
+      case 'code':
+        if (sel && sel.indexOf('\n') !== -1) wrap('```\n', '\n```', 'code');
+        else wrap('`', '`', 'code');
+        break;
       case 'quote': linePrefix('> '); break;
       case 'heading': case 'h3': linePrefix('### '); break;
       case 'h1': linePrefix('# '); break;
@@ -435,9 +466,12 @@
         case 'blockquote':
           out += '\n> ' + serializeInline(n).trim().replace(/\n/g, '\n> ') + '\n\n';
           break;
-        case 'pre':
-          out += '\n```\n' + (n.textContent || '').replace(/\n$/, '') + '\n```\n\n';
+        case 'pre': {
+          const codeEl = n.querySelector && n.querySelector('code');
+          const raw = (codeEl ? codeEl.textContent : n.textContent) || '';
+          out += '\n```\n' + raw.replace(/\n$/, '') + '\n```\n\n';
           break;
+        }
         case 'img': out += imgToMarkup(n) + '\n'; break;
         case 'div': case 'p': {
           const inner = serializeInline(n).trim();
@@ -457,9 +491,25 @@
     return serializeBlocks(Array.prototype.slice.call(root.childNodes)).replace(/\n{3,}/g, '\n\n').trim();
   }
 
+  function escapeHtmlText(t) {
+    return String(t)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function formatInlineMarkdown(s) {
+    return s
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/==(.+?)==/g, '<mark>$1</mark>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+  }
+
+  /* ---- Markdown → HTML：仅供编辑器渲染；公式保持字面量，原始 <img>/对齐块透传 ---- */
   function mdToHtml(md) {
     if (!md) return '';
-    const raw = [], math = [], imgs = [];
+    const raw = [], math = [], blocks = [], imgs = [];
     let s = (md || '')
       .replace(/<div style="text-align:[^"]*">[\s\S]*?<\/div>/gi, (m) => {
         raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000';
@@ -471,25 +521,40 @@
         raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000';
       });
     s = protectMath(s, math);
+
+    // Fenced code before escaping.
+    s = s.replace(/```([\s\S]*?)```/g, (m, c) => {
+      const body = escapeHtmlText(String(c).replace(/^\n/, '').replace(/\n$/, ''));
+      blocks.push('<pre><code>' + body + '</code></pre>');
+      return '\u0000B' + (blocks.length - 1) + '\u0000';
+    });
+
+    // Blockquotes before escaping `>` (otherwise they become literal arrows).
+    s = s.replace(/(^|\n)((?:>[ \t]?.*(?:\n|$))+)/g, (m, lead, block) => {
+      const inner = block.replace(/\n$/, '').split('\n').map(l => l.replace(/^>[ \t]?/, '')).join('\n');
+      const html = '<blockquote>' + formatInlineMarkdown(escapeHtmlText(inner)).replace(/\n/g, '<br>') + '</blockquote>';
+      blocks.push(html);
+      return lead + '\u0000B' + (blocks.length - 1) + '\u0000';
+    });
+
     s = s.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (m, url) => {
       imgs.push('<img src="' + url + '" style="max-width:100%;border-radius:4px;">');
       return '\u0000I' + (imgs.length - 1) + '\u0000';
     })
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/```([\s\S]*?)```/g, (m, c) => '<pre>' + c.trim() + '</pre>')
       .replace(/^### (.+)$/gm, '<h3>$1</h3>')
       .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/==(.+?)==/g, '<mark>$1</mark>')
-      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>');
-    s = s.replace(/(?:^|\n)((?:\d+\. .*(?:\n|$))+)/g, (m) =>
-      '\n<ol>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^\d+\. /, '') + '</li>').join('') + '</ol>\n');
-    s = s.replace(/(?:^|\n)((?:- .*(?:\n|$))+)/g, (m) =>
-      '\n<ul>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^- /, '') + '</li>').join('') + '</ul>\n');
-    s = s.replace(/\n/g, '<br>').replace(/<br>(<ul>|<\/ul>|<ol>|<\/ol>|<h1>|<h2>|<h3>|<pre>)/g, '$1');
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    s = formatInlineMarkdown(s);
+    s = s.replace(/(?:^|\n)((?:\d+\.[ \t].*(?:\n|$))+)/g, (m) =>
+      '\n<ol>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^\d+\.[ \t]/, '') + '</li>').join('') + '</ol>\n');
+    s = s.replace(/(?:^|\n)((?:[-*+][ \t].*(?:\n|$))+)/g, (m) =>
+      '\n<ul>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^[-*+][ \t]/, '') + '</li>').join('') + '</ul>\n');
+    s = s.replace(/\n/g, '<br>')
+      .replace(/<br>(<ul>|<\/ul>|<ol>|<\/ol>|<h1>|<h2>|<h3>|<pre>|<blockquote>|<\/blockquote>)/g, '$1')
+      .replace(/(<\/ul>|<\/ol>|<\/pre>|<\/blockquote>|<pre>|<blockquote>)<br>/g, '$1');
     s = s.replace(/\u0000I(\d+)\u0000/g, (m, i) => imgs[+i]);
+    s = s.replace(/\u0000B(\d+)\u0000/g, (m, i) => blocks[+i]);
     s = restoreMath(s, math);
     s = s.replace(/\u0000R(\d+)\u0000/g, (m, i) => raw[+i]);
     return s;

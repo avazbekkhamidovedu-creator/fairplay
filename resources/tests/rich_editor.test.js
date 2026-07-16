@@ -81,6 +81,33 @@ describe('RichEditor.htmlToMd / mdToHtml', () => {
     assert.match(html, /<ol>/);
     assert.match(html, /<li>a<\/li>/);
   });
+
+  it('converts blockquotes instead of escaping > to an arrow', () => {
+    const html = RichEditor.mdToHtml('> quoted text');
+    assert.match(html, /<blockquote>/);
+    assert.match(html, /quoted text/);
+    assert.doesNotMatch(html, /&gt;/);
+    const back = RichEditor.htmlToMd(html);
+    assert.match(back, /^>/m);
+  });
+
+  it('round-trips fenced code blocks into styled pre', () => {
+    const md = '```\nint x = 1;\n```';
+    const html = RichEditor.mdToHtml(md);
+    assert.match(html, /<pre><code>/);
+    assert.match(html, /int x = 1;/);
+    const back = RichEditor.htmlToMd(html);
+    assert.match(back, /```/);
+    assert.match(back, /int x = 1;/);
+  });
+
+  it('round-trips lists through html→md→html', () => {
+    const md = RichEditor.htmlToMd('<ul><li>a</li><li>b</li></ul>');
+    assert.match(md, /^- a$/m);
+    const html = RichEditor.mdToHtml(md);
+    assert.match(html, /<ul>/);
+    assert.match(html, /<li>a<\/li>/);
+  });
 });
 
 describe('RichEditor.html markup factory', () => {
