@@ -105,6 +105,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'problem_preview_url': reverse('problem_preview'),
             'problem_preview_batch_url': reverse('problem_preview_batch'),
             'image_upload_url': reverse('martor_image_uploader'),
+            'search_users_url': reverse('martor_search_user'),
             'edit_code': '',
             'edit_data_json': 'null',
             'test_data_url': '',
