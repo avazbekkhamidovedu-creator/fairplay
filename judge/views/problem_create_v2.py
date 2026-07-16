@@ -70,6 +70,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 raise Http404()
             context['title'] = _('Edit problem')
             context['edit_code'] = problem.code
+            context['edit_name'] = problem.name
             context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
             context['test_data_url'] = reverse('problem_data', args=[problem.code])
             context['edit_detail_url'] = reverse('problem_detail', args=[problem.code])
@@ -250,7 +251,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             config = getattr(problem, 'short_answer_config', None)
             data['shortAnswer'] = (config.reference_answer if config else '') or ''
             data['rubric'] = (config.ai_rubric if config else '') or ''
-            data['ai'] = bool(config and (config.ai_rubric or '').strip())
+            data['ai'] = True  # short answer always uses AI grading
             data['gradingTable'] = config.grading_table if config else None
         else:
             data['type'] = 'single'
@@ -853,7 +854,10 @@ class ProblemCreateV2AIProblemTypeView(LoginRequiredMixin, View):
 @method_decorator(ensure_csrf_cookie, name='dispatch')
 class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
     """Use the LLM to decompose a problem description into independent sub-questions
-    for a grading table.  Each sub-question should test a distinct, scorable concept."""
+    for a grading table.  Each sub-question should test a distinct, scorable concept.
+
+    Uses a dedicated lightweight model (profile ``decompose``) so grading throughput
+    is not affected."""
 
     def post(self, request, *args, **kwargs):
         if not _can_create_any(request.user):
@@ -868,14 +872,23 @@ class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
         if not description:
             return JsonResponse({'error': _('Please enter problem content first.')}, status=400)
 
-        sub_questions = self._decompose(description, float(total_points))
+        try:
+            sub_questions = self._decompose(description, float(total_points))
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception('AI decompose failed')
+            return JsonResponse({'error': _('The AI service is temporarily unavailable. '
+                                           'Please try again later.')}, status=503)
         return JsonResponse({'sub_questions': sub_questions})
 
     def _decompose(self, description, total_points):
         from judge import llm
+        import logging
+        _log = logging.getLogger(__name__)
 
         if not llm.is_configured():
-            return []
+            _log.warning('Decompose called but LLM is not configured')
+            raise RuntimeError('LLM not configured')
 
         try:
             messages = [
@@ -901,7 +914,7 @@ class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
                     f'Break this problem into 1-5 independent sub-questions.'
                 )},
             ]
-            text = llm.chat(messages, profile='grading', max_tokens=1024).text.strip()
+            text = llm.chat(messages, profile='decompose', max_tokens=1024).text.strip()
 
             # Strip markdown fences if present
             if text.startswith('```'):
@@ -914,8 +927,9 @@ class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
             items = parsed.get('sub_questions', [])
             if not isinstance(items, list) or not items:
                 return []
-            return [{'name': str(item.get('name', ''))[:30],
+            return [{'name': f'Part {i + 1}: {str(item.get("name", ""))[:30]}',
                      'max_points': float(item.get('max_points', 0))}
-                    for item in items if item.get('name')]
-        except Exception:
-            return []
+                    for i, item in enumerate(items) if item.get('name')]
+        except Exception as e:
+            _log.exception('Decomposition failed: %s', e)
+            raise RuntimeError('Decomposition failed') from e

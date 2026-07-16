@@ -636,22 +636,30 @@ LITELLM_TIMEOUT = 120              # seconds
 # The optional 'default' key serves as a base inherited by all profiles.
 AZURE_PROFILES = {}
 
-LITELLM_PROFILES = {
-    'grading': {
-        'model': 'GRADING@DKUOJ',
-        'temperature': 0,
-        'max_tokens': 2048,
-        'response_format': {'type': 'json_object'},
-    },
-}
+DMOJ_AI_HINT_DAILY_LIMIT = 5
 
-DMOJ_AI_HINT_DAILY_LIMIT = 5      # max AI hint requests per user per day
+LITELLM_PROFILES = {}
 
 try:
     with open(os.path.join(os.path.dirname(__file__), 'local_settings.py')) as f:
         exec(f.read(), globals())
 except IOError:
     pass
+
+# Ensure grading/decompose profiles exist (setdefault preserves
+# any values already set by local_settings.py).
+LITELLM_PROFILES.setdefault('grading', {
+    'model': 'GRADING@DKUOJ',
+    'temperature': 0,
+    'max_tokens': 2048,
+    'response_format': {'type': 'json_object'},
+})
+LITELLM_PROFILES.setdefault('decompose', {
+    'model': 'qwen3.6-27B-FP8',
+    'temperature': 0,
+    'max_tokens': 1024,
+    'response_format': {'type': 'json_object'},
+})
 
 
 # Check settings are consistent
