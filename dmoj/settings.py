@@ -65,6 +65,24 @@ DMOJ_CAMO_EXCLUDE = ()
 
 DMOJ_PROBLEM_DATA_ROOT = None
 
+# Submission file storage (S3-compatible primary, e.g. Garage; generic S3 API).
+# Empty endpoint URL => local FileSystemStorage under DMOJ_SUBMISSION_FILE_ROOT (dev/tests).
+DMOJ_S3_ENDPOINT_URL = ''
+DMOJ_S3_REGION = 'garage'
+DMOJ_S3_SUBMISSION_BUCKET = 'dkuoj-submissions'
+DMOJ_S3_ACCESS_KEY = ''
+DMOJ_S3_SECRET_KEY = ''
+DMOJ_SUBMISSION_FILE_ROOT = ''  # local fallback root when DMOJ_S3_ENDPOINT_URL is empty
+
+# Box SFTP backup mirror for submission files.
+DMOJ_BACKUP_MIRROR_ENABLED = False  # master switch: mirror task + Box read fallback
+DMOJ_BOX_SFTP_HOST = 'sftp.services.box.com'
+DMOJ_BOX_SFTP_PORT = 22
+DMOJ_BOX_SFTP_USER = ''
+DMOJ_BOX_SFTP_PASSWORD = ''
+DMOJ_BOX_SFTP_ROOT = 'DKUOJ-backup'
+DMOJ_BOX_KNOWN_HOSTS = ''  # path to a pinned known_hosts file for sftp.services.box.com
+
 DMOJ_PROBLEM_MIN_TIME_LIMIT = 0  # seconds
 DMOJ_PROBLEM_MAX_TIME_LIMIT = 60  # seconds
 DMOJ_PROBLEM_MIN_MEMORY_LIMIT = 0  # kilobytes
