@@ -316,7 +316,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         self.assertEqual(cases[0]['input'], '9 9\n')
         self.assertEqual(cases[0]['output'], '18\n')
 
-    def test_save_testcases_clears_zip_and_rewrites_loose(self):
+    def test_save_testcases_rebuilds_zip_for_classic_editor(self):
         problem = self._make_code_problem()
         buf = BytesIO()
         with zipfile.ZipFile(buf, 'w') as zf:
@@ -331,15 +331,40 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         problem.cases.all().delete()
         view._save_testcases(problem, [
             {'input': '2 3\n', 'output': '5\n', 'points': 10, 'pretest': True},
-        ])
+        ], checker='standard')
         data.refresh_from_db()
-        self.assertFalse(bool(data.zipfile))
+        self.assertTrue(bool(data.zipfile))
         with problem_data_storage.open('%s/01.in' % problem.code) as fh:
             self.assertEqual(fh.read().decode('utf-8'), '2 3\n')
         with problem_data_storage.open('%s/01.out' % problem.code) as fh:
             self.assertEqual(fh.read().decode('utf-8'), '5\n')
-        # init.yml must not reference an archive after create-v2 save
+        # create-v2 now rebuilds data.zip so classic test_data stays in sync
         yml_path = os.path.join(problem_data_storage.location, problem.code, 'init.yml')
         if os.path.exists(yml_path):
             with open(yml_path, 'r', encoding='utf-8') as fh:
-                self.assertNotIn('archive', fh.read())
+                self.assertIn('archive', fh.read())
+        case = problem.cases.get(order=1)
+        self.assertEqual(case.input_file, '01.in')
+        self.assertTrue(case.is_pretest)
+        data.refresh_from_db()
+        self.assertEqual(data.checker, 'standard')
+
+    def test_save_testcases_keeps_zip_filenames(self):
+        problem = self._make_code_problem()
+        view = ProblemCreateV2View()
+        problem.cases.all().delete()
+        view._save_testcases(problem, [
+            {
+                'input': '1\n', 'output': '2\n', 'points': 5, 'pretest': False,
+                'input_file': 'sample.in', 'output_file': 'sample.out',
+            },
+        ], checker='floats')
+        case = problem.cases.get(order=1)
+        self.assertEqual(case.input_file, 'sample.in')
+        self.assertEqual(case.output_file, 'sample.out')
+        data = problem.data_files
+        self.assertEqual(data.checker, 'floats')
+        self.assertTrue(bool(data.zipfile))
+        with zipfile.ZipFile(data.zipfile.path) as zf:
+            self.assertIn('sample.in', zf.namelist())
+            self.assertEqual(zf.read('sample.in').decode('utf-8'), '1\n')

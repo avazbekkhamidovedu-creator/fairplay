@@ -34,6 +34,7 @@ from django.views.generic import View
 from judge.models import (Language, Organization, Problem, ProblemBlank, ProblemFillBlankConfig, ProblemGroup,
                           ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
                           ProblemType)
+from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
 
@@ -110,6 +111,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'edit_data_json': 'null',
             'test_data_url': '',
             'edit_detail_url': '',
+            'checkers': [{'value': value, 'label': str(label)} for value, label in CHECKERS],
+            'checkers_json': json.dumps([
+                {'value': value, 'label': str(label)} for value, label in CHECKERS
+            ]),
         }
 
     # ------------------------------------------------------------------ POST
@@ -224,6 +229,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['memory_limit'] = round((problem.memory_limit or 0) / 1024, 2)  # KB -> MB
             data['languages'] = list(problem.allowed_languages.values_list('key', flat=True))
             data['testcases'] = self._read_testcases(problem)
+            try:
+                data['checker'] = problem.data_files.checker or ''
+            except Exception:
+                data['checker'] = ''
         elif st == ProblemSubmissionType.MCQ:
             config = getattr(problem, 'mcq_config', None)
             options = list(problem.mcq_options.order_by('order').values('text', 'is_correct'))
@@ -315,8 +324,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 cases.append({
                     'input': _read(case.input_file),
                     'output': _read(case.output_file),
+                    'input_file': case.input_file or '',
+                    'output_file': case.output_file or '',
                     'points': case.points,
                     'pretest': case.is_pretest,
+                    'checker': case.checker or '',
                 })
             return cases
         finally:
@@ -370,10 +382,15 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if not (user.is_staff and user.has_perm('judge.add_problem')):
             raise PermissionError(_('You do not have permission to create code problems.'))
 
-        # Test data is configured through the embedded test_data page after the problem exists,
-        # so inline cases are optional here (kept for backwards compatibility / API callers).
-        testcases = payload.get('testcases') or []
-        cleaned_cases = [tc for tc in testcases if (tc.get('input') or tc.get('output'))]
+        # Inline test cases on the create page: optional on create, always synced on edit when
+        # the payload includes ``testcases`` (empty list clears Normal cases written here).
+        testcases = payload.get('testcases') if 'testcases' in payload else None
+        cleaned_cases = None
+        if testcases is not None:
+            cleaned_cases = [
+                tc for tc in testcases
+                if (tc.get('input') or tc.get('output') or tc.get('input_file') or tc.get('output_file'))
+            ]
 
         with transaction.atomic():
             if problem is None:
@@ -399,8 +416,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
 
-            if cleaned_cases:
-                self._save_testcases(problem, cleaned_cases)
+            if cleaned_cases is not None:
+                if cleaned_cases or payload.get('edit_code'):
+                    self._save_testcases(
+                        problem, cleaned_cases,
+                        checker=(payload.get('checker') or ''),
+                    )
         return problem
 
     def _attach_languages(self, problem, payload):
@@ -438,16 +459,46 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     except Exception:
                         pass
 
-    def _save_testcases(self, problem, testcases):
+    def _save_testcases(self, problem, testcases, checker=''):
+        """Persist inline cases as loose files + a data.zip so the classic test_data page stays in sync.
+
+        Each case may carry optional ``input_file`` / ``output_file`` names (from a ZIP import).
+        Contents are always written from ``input`` / ``output``. A fresh ``data.zip`` is built from
+        those files so the old editor's ``valid_files`` (ZIP namelist) matches.
+        """
+        import io
+        import os
+        from zipfile import ZipFile, ZIP_DEFLATED
+
+        from django.core.files.base import ContentFile as DjangoContentFile
+
         from judge.models import ProblemData, ProblemTestCase, problem_data_storage
         from judge.utils.problem_data import ProblemDataCompiler
 
         self._clear_problem_data_files(problem)
+        problem.cases.filter(type='C').delete()
 
         valid_files = []
+        used_names = set()
+
+        def _unique_name(preferred, fallback):
+            name = (preferred or '').strip() or fallback
+            name = os.path.basename(name.replace('\\', '/')) or fallback
+            if name not in used_names:
+                used_names.add(name)
+                return name
+            stem, ext = os.path.splitext(name)
+            n = 2
+            while True:
+                candidate = '%s_%d%s' % (stem, n, ext)
+                if candidate not in used_names:
+                    used_names.add(candidate)
+                    return candidate
+                n += 1
+
         for order, tc in enumerate(testcases, start=1):
-            in_name = '%02d.in' % order
-            out_name = '%02d.out' % order
+            in_name = _unique_name(tc.get('input_file'), '%02d.in' % order)
+            out_name = _unique_name(tc.get('output_file'), '%02d.out' % order)
             problem_data_storage.save('%s/%s' % (problem.code, in_name),
                                       ContentFile((tc.get('input') or '').encode('utf-8')))
             problem_data_storage.save('%s/%s' % (problem.code, out_name),
@@ -458,12 +509,29 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 input_file=in_name, output_file=out_name,
                 points=int(self._num(tc.get('points'), 0)),
                 is_pretest=bool(tc.get('pretest')),
+                checker=(tc.get('checker') or '')[:10],
             )
 
         data, _created = ProblemData.objects.get_or_create(problem=problem)
-        if data.zipfile:
+        checker_value = (checker or '')[:10]
+        if checker_value and checker_value not in {c[0] for c in CHECKERS}:
+            checker_value = ''
+        data.checker = checker_value
+
+        # Rebuild a zip from the current loose files so classic test_data sees matching names.
+        if valid_files:
+            buf = io.BytesIO()
+            with ZipFile(buf, 'w', compression=ZIP_DEFLATED) as zf:
+                for name in valid_files:
+                    with problem_data_storage.open('%s/%s' % (problem.code, name)) as fh:
+                        zf.writestr(name, fh.read())
+            buf.seek(0)
+            # Assigning a new FileField value deletes the previous zip via ProblemData.save().
+            data.zipfile.save('data.zip', DjangoContentFile(buf.read()), save=False)
+        elif data.zipfile:
             data.zipfile = None
-            data.save()
+
+        data.save()
         ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
 
     # ------------------------------------------------------------------ mcq problem

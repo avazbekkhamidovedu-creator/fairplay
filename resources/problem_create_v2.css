@@ -973,3 +973,6 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .btn-mini:hover { color: var(--text) !important; background: #e6e6e6 !important; }
 .pcv2 .btn-mini-primary { color: #fff !important; background: var(--dmoj-green) !important; }
 .pcv2 .btn-mini-primary:hover { color: #fff !important; background: var(--dmoj-green-dark) !important; }
+.pcv2 .tc-file-btn { color: #0d47a1 !important; background: #eceff1 !important; }
+.pcv2 .tc-file-btn:hover { color: #0d47a1 !important; background: #bbdefb !important; }
+.pcv2 .tc-file-btn.manual { color: #263238 !important; }
