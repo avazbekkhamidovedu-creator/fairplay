@@ -76,9 +76,12 @@
 }
 .breadcrumb a { color: var(--muted); }
 
-.pcv2 h1 { font-size: 1.5rem; margin: 0.5rem 0 1rem; font-weight: 400; }
-.pcv2 h2 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; }
-.pcv2 h3 { font-size: 1rem; margin: 0 0 0.5rem; }
+/* Page chrome only — do not style editor/preview headings */
+.pcv2 .v2-top h1 { font-size: 1.5rem; margin: 0.5rem 0 1rem; font-weight: 400; }
+.pcv2 .form-section-header h2,
+.pcv2 .qtype-box .qtype-head h2,
+.pcv2 .so-head h2,
+.pcv2 .admin-sidebar h2 { font-size: 1.1rem; margin: 0; }
 
 .note {
   background: #fffde7;
@@ -900,12 +903,35 @@ fieldset.module .form-content { padding: 1rem; }
 .so-foot .so-pager button.active { background: var(--dmoj-green); color: #fff; border-color: var(--dmoj-green); }
 .so-foot .so-pager button:disabled { opacity: 0.4; cursor: default; }
 
-/* 预览区同步样式（服务端 HTML；编辑器样式见 rich_editor.css） */
+/* 预览区：与 content-description / 富文本投影一致（#→h3） */
 .content-preview img, .pv-stem img { max-width: 100%; }
-.pv-stem h1 { font-size: 1.6em; margin: 0.4em 0; }
-.pv-stem h2 { font-size: 1.3em; margin: 0.4em 0; }
-.pv-stem mark { background: #fde68a; padding: 0 2px; border-radius: 2px; }
-.pv-stem blockquote { margin: 0.4em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--dmoj-green); color: #555; background: #f6faf4; }
+.pv-stem h3 { font-size: 1.6em; margin: 0.5em 0 0.35em; font-weight: 700; }
+.pv-stem h4 {
+  font-size: 1.35em; margin: 0.5em 0 0.35em; font-weight: 600;
+  border-bottom: 1px solid rgba(0,0,0,0.08); padding-bottom: 0.25em;
+}
+.pv-stem h5 { font-size: 1.15em; margin: 0.45em 0 0.3em; font-weight: 600; }
+/* Override site .content-description mark { font-style: italic; font-weight: bold } —
+   toolbar highlight is background-only, not emphasis. */
+.pv-stem mark,
+.pv-stem.content-description mark {
+  background: #fde68a;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+  font-style: normal !important;
+  font-weight: inherit;
+}
+.pv-stem mark em,
+.pv-stem mark i,
+.pv-stem.content-description mark em,
+.pv-stem.content-description mark i {
+  font-style: normal;
+}
+.pv-stem blockquote {
+  margin: 0.4em 0; padding: 0.2em 0.8em;
+  border-left: 3px solid var(--dmoj-green); color: #555; background: #f6faf4;
+}
 
 @media (max-width: 600px) {
   .so-panel { width: 100%; }

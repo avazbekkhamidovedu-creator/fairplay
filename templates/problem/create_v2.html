@@ -11,14 +11,14 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260716c">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260716c">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260717i">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260717i">
 
-  <!-- 数学公式：与全站做题页一致的分隔符（行内 ~...~ / \(...\)，块级 $$...$$ / \[...\]） -->
+  <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
   <script>
     window.MathJax = {
       tex: {
-        inlineMath: [['~', '~'], ['\\(', '\\)']],
+        inlineMath: [['\\(', '\\)'], ['~', '~']],
         displayMath: [['$$', '$$'], ['\\[', '\\]']],
       },
       svg: { fontCache: 'global' },
@@ -28,8 +28,8 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="{{ static('jszip.min.js') }}"></script>
-  <script src="{{ static('rich_editor.js') }}?v=20260716c"></script>
-  <script src="{{ static('markdown_preview.js') }}?v=20260716c"></script>
+  <script src="{{ static('rich_editor.js') }}?v=20260717i"></script>
+  <script src="{{ static('markdown_preview.js') }}?v=20260716d"></script>
 
   <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
   <style>
@@ -509,6 +509,7 @@
     const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
     const PROBLEM_PREVIEW_BATCH_URL = '{{ problem_preview_batch_url }}';
     const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
+    const SEARCH_USERS_URL = '{{ search_users_url }}';
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
@@ -806,7 +807,7 @@
 
     /* ---------- 选项（富文本 / Markdown） ---------- */
     function optionEditorTpl(name) {
-      return RichEditor.html(name, { compact: true, placeholder: '请输入选项内容（支持 ~公式~）' });
+      return RichEditor.html(name, { compact: true, placeholder: '请输入选项内容（支持 $$公式$$）' });
     }
     function getOptionText(row) {
       const ed = row.querySelector('.rich-editor');
@@ -1180,7 +1181,7 @@
         stem = stem.replace(/\{\{\s*blank\s*\}\}/g, () =>
           `<input class="pv-blankinput pv-blank-inline" disabled placeholder="${++blankCount}">`);
       }
-      let html = `<div class="pv-stem">${stem || '<span style="color:#bbb;">题目内容预览…</span>'}</div>`;
+      let html = `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">题目内容预览…</span>'}</div>`;
       if (currentType === 'single' || currentType === 'multiple') {
         html += renderOptsPreviewFromCache('#options', currentType === 'multiple', 'opt-');
       } else if (currentType === 'truefalse') {
@@ -1221,7 +1222,7 @@
         const score = w.querySelector('.sq-score input').value;
         const stem = _previewHtml['sub-stem-' + id] || '';
         h += `<div class="pv-sub"><div class="pv-sub-t">${i + 1}. <span class="pv-badge">${TYPE_META[type].title}</span> <span style="float:right;color:var(--muted);font-size:12px;">${score} 分</span></div>`;
-        h += `<div class="pv-stem">${stem || '<span style="color:#bbb;">子题干…</span>'}</div>`;
+        h += `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">子题干…</span>'}</div>`;
         if (type === 'single' || type === 'multiple') {
           h += renderOptsPreviewFromCache('#sub-opts-' + id, type === 'multiple', 'sub-' + id + '-opt-');
         } else if (type === 'truefalse') {
@@ -1460,6 +1461,7 @@
 
     RichEditor.configure({
       imageUploadUrl: IMAGE_UPLOAD_URL,
+      searchUsersUrl: SEARCH_USERS_URL,
       csrfToken: CSRF_TOKEN,
       onChange: renderPreview,
       messages: {
