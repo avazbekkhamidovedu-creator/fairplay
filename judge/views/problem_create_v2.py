@@ -187,15 +187,20 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise PermissionError(_('You do not have permission to edit this problem.'))
         return problem
 
-    def _clear_type_children(self, problem):
+    def _clear_type_children(self, problem, *, clear_cases=True):
         """Remove every question-type-specific child before repopulating on edit (also handles a
-        type switch, e.g. single -> programming)."""
+        type switch, e.g. single -> programming).
+
+        ``clear_cases`` is False when editing a code problem without a ``testcases`` payload so
+        cases managed on the embedded test_data page are not wiped accidentally.
+        """
         ProblemMCQOption.objects.filter(problem=problem).delete()
         ProblemMCQConfig.objects.filter(problem=problem).delete()
         ProblemBlank.objects.filter(problem=problem).delete()
         ProblemFillBlankConfig.objects.filter(problem=problem).delete()
         ProblemShortAnswerConfig.objects.filter(problem=problem).delete()
-        problem.cases.all().delete()
+        if clear_cases:
+            problem.cases.all().delete()
 
     def _build_edit_data(self, problem):
         """Serialize an existing problem into the shape the add-page JS expects (see collectData)."""
@@ -414,11 +419,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if not (user.is_staff and user.has_perm('judge.add_problem')):
             raise PermissionError(_('You do not have permission to create code problems.'))
 
-        # Inline test cases on the create page: optional on create, always synced on edit when
-        # the payload includes ``testcases`` (empty list clears Normal cases written here).
-        testcases = payload.get('testcases') if 'testcases' in payload else None
+        # Inline test cases: sync only when the client sends ``testcases``. Omitting the key
+        # must not wipe cases; empty list on edit clears Normal cases written here.
+        sync_cases = 'testcases' in payload
         cleaned_cases = None
-        if testcases is not None:
+        if sync_cases:
+            testcases = payload.get('testcases') or []
             cleaned_cases = [
                 tc for tc in testcases
                 if (tc.get('input') or tc.get('output') or tc.get('input_file') or tc.get('output_file'))
@@ -429,7 +435,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 problem = Problem(submission_type=ProblemSubmissionType.CODE)
             else:
                 problem.submission_type = ProblemSubmissionType.CODE
-                self._clear_type_children(problem)
+                self._clear_type_children(problem, clear_cases=sync_cases)
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
@@ -448,12 +454,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
 
-            if cleaned_cases is not None:
-                if cleaned_cases or payload.get('edit_code'):
-                    self._save_testcases(
-                        problem, cleaned_cases,
-                        checker=(payload.get('checker') or ''),
-                    )
+            if sync_cases and (cleaned_cases or payload.get('edit_code')):
+                self._save_testcases(
+                    problem, cleaned_cases or [],
+                    checker=(payload.get('checker') or ''),
+                )
         return problem
 
     def _attach_languages(self, problem, payload):

@@ -297,6 +297,46 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(ProblemType.objects.count(), before)
         self.assertEqual(list(problem.types.all()), [existing])
 
+    def test_edit_code_keeps_testcases_when_payload_omits_them(self):
+        self.client.force_login(self.users['staff_adder'])
+        create_payload = {
+            'type': 'programming',
+            'name': 'Keep Cases',
+            'description': 'has cases',
+            'points': 10,
+            'group_id': self.group.id,
+            'testcases': [
+                {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+        self.assertEqual(problem.cases.count(), 1)
+
+        edit_payload = {
+            'type': 'programming',
+            'name': 'Keep Cases Edited',
+            'description': 'still has cases',
+            'points': 10,
+            'group_id': self.group.id,
+            # intentionally omit testcases
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200)
+        problem.refresh_from_db()
+        self.assertEqual(problem.name, 'Keep Cases Edited')
+        self.assertEqual(problem.cases.count(), 1)
+
 
 class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
     """create-v2 loose-file path vs test_data zip archive interoperability."""
