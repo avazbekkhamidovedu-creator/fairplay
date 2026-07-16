@@ -498,9 +498,19 @@
             <div class="form-row"><label>Testers</label><div class="field"><select multiple style="height:50px;"></select><div class="help">可在公开前查看题目</div></div></div>
             <div class="form-row"><label>Submission source visibility</label><div class="field"><select><option>Follow global setting</option><option>Always visible</option><option>Only own</option><option>Only AC own</option><option>Hidden</option></select></div></div>
             <div class="form-row"><label>Is full markup</label><div class="field"><input type="checkbox"><div class="help">允许题面使用完整 HTML 标记</div></div></div>
-            <div class="form-row"><label>View test cases</label><div class="field"><input type="checkbox"><div class="help">允许选手查看测试样例</div></div></div>
+            <div class="form-row"><label>View test cases</label><div class="field"><input type="checkbox"><div class="help">允许选手下载失败测试样例</div></div></div>
+            <div class="form-row"><label>View tester</label><div class="field"><input type="checkbox" id="f-view-tester"><div class="help">允许下载 tester 文件</div></div></div>
             <div class="form-row"><label>AI hints enabled</label><div class="field"><input type="checkbox"><div class="help">允许 AI 提示</div></div></div>
             <div class="form-row"><label>License</label><div class="field"><select><option>— None —</option><option>CC BY-SA 4.0</option></select></div></div>
+            <div class="form-row"><label>Upload Markdown</label><div class="field"><input type="file" id="f-md-upload" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain"><div class="help">从 Markdown 文件导入题面（对应旧页 markdown_upload）</div></div></div>
+          </div>
+        </fieldset>
+
+        <fieldset class="module">
+          <h2>Advanced Social Media</h2>
+          <div class="form-content">
+            <div class="form-row"><label>OpenGraph image</label><div class="field"><input type="text" id="f-og-image" placeholder="https://…"><div class="help">社交分享预览图 URL</div></div></div>
+            <div class="form-row"><label>Problem summary</label><div class="field"><textarea id="f-summary" rows="3" placeholder="Plain-text meta description for social media" style="width:100%;"></textarea><div class="help">纯文本摘要，用于 meta description</div></div></div>
           </div>
         </fieldset>
 
@@ -508,6 +518,13 @@
           <h2>Classes</h2>
           <div class="form-content">
             <div class="form-row"><label>Classes</label><div class="field"><select multiple style="height:60px;"><option>COMPSCI 101</option></select></div></div>
+          </div>
+        </fieldset>
+
+        <fieldset class="module">
+          <h2>Advanced Points</h2>
+          <div class="form-content">
+            <div class="form-row"><label>Short circuit</label><div class="field"><input type="checkbox" id="f-short-circuit"><div class="help">遇错即停（short circuit），不再跑后续用例</div></div></div>
           </div>
         </fieldset>
 
@@ -528,6 +545,30 @@
           </div>
         </fieldset>
 
+        <div class="inline-group type-panel" data-for="programming">
+          <h2>Language limits</h2>
+          <table class="inline-table">
+            <thead><tr><th>Language</th><th>Time limit (s)</th><th>Memory limit (KB)</th><th>Delete</th></tr></thead>
+            <tbody id="lang-limit-body">
+              <tr>
+                <td style="width:140px;"><select>{% for l in languages %}<option value="{{ l.key }}">{{ l.name }}</option>{% endfor %}</select></td>
+                <td><input type="number" step="0.1" placeholder="继承全局" style="width:100px;"></td>
+                <td><input type="number" placeholder="继承全局" style="width:120px;"></td>
+                <td style="width:40px;"><input type="checkbox"></td>
+              </tr>
+              <tr><td colspan="4"><a href="#" onclick="event.preventDefault();">+ Add another Language limit</a></td></tr>
+            </tbody>
+          </table>
+          <div class="help" style="padding:0.5rem 1rem;">为特定语言覆盖全局时限/内存（对应旧页 LanguageLimit）</div>
+        </div>
+
+        <fieldset class="module">
+          <h2>Advanced Justice</h2>
+          <div class="form-content">
+            <div class="form-row"><label>Banned users</label><div class="field"><select multiple id="f-banned-users" style="height:60px;"></select><div class="help">禁止所选用户提交本题</div></div></div>
+          </div>
+        </fieldset>
+
         <fieldset class="module">
           <h2>Advanced History</h2>
           <div class="form-content">
@@ -535,7 +576,6 @@
           </div>
         </fieldset>
 
-        <!-- 代码模板（仅编程题） -->
         <div class="inline-group type-panel" data-for="programming">
           <h2>Problem templates</h2>
           <table class="inline-table">
@@ -550,13 +590,52 @@
             </tbody>
           </table>
         </div>
+
+        <div class="inline-group">
+          <h2>Clarifications</h2>
+          <table class="inline-table">
+            <thead><tr><th>Description</th><th>Delete</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><textarea rows="2" placeholder="比赛中补充说明…" style="width:100%;"></textarea></td>
+                <td style="width:40px;"><input type="checkbox"></td>
+              </tr>
+              <tr><td colspan="2"><a href="#" onclick="event.preventDefault();">+ Add another Clarification</a></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="inline-group">
+          <h2>Solution</h2>
+          <div class="form-content" style="padding:0.75rem 1rem;">
+            <div class="form-row"><label>Is public</label><div class="field"><input type="checkbox" id="f-sol-public"><div class="help">公开题解</div></div></div>
+            <div class="form-row"><label>Publish on</label><div class="field"><input type="datetime-local" id="f-sol-publish"></div></div>
+            <div class="form-row"><label>Authors</label><div class="field"><select multiple style="height:50px;" id="f-sol-authors"></select></div></div>
+            <div class="form-row"><label>Content</label><div class="field"><textarea id="f-sol-content" rows="4" placeholder="题解正文（旧页 Solution inline；上方「解析」为做题页说明）" style="width:100%;"></textarea></div></div>
+          </div>
+        </div>
+
+        <div class="inline-group">
+          <h2>Translations</h2>
+          <table class="inline-table">
+            <thead><tr><th>Language</th><th>Name</th><th>Description</th><th>Delete</th></tr></thead>
+            <tbody>
+              <tr>
+                <td style="width:100px;"><select><option value="zh-hans">zh-hans</option><option value="en">en</option></select></td>
+                <td style="width:160px;"><input type="text" placeholder="Translated name"></td>
+                <td><textarea rows="2" placeholder="Translated description" style="width:100%;"></textarea></td>
+                <td style="width:40px;"><input type="checkbox"></td>
+              </tr>
+              <tr><td colspan="4"><a href="#" onclick="event.preventDefault();">+ Add another Translation</a></td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div id="bottombar">
         <button type="submit" class="btn btn-primary" value="save" name="action">Save</button>
         <button type="submit" class="btn" value="continue" name="action">Save and continue editing</button>
         <button type="submit" class="btn" value="another" name="action">Save and add another</button>
-        <button type="button" class="btn type-panel" data-for="programming" style="display:none;">Upload Markdown</button>
         <span style="flex:1;"></span>
         <button type="button" class="btn btn-cancel" onclick="cancelEdit()">{{ _('Cancel') }}</button>
       </div>

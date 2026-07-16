@@ -905,6 +905,11 @@ fieldset.module .form-content { padding: 1rem; }
 
 /* 预览区：与 content-description / 富文本投影一致（#→h3） */
 .content-preview img, .pv-stem img { max-width: 100%; }
+.content-preview .h-scrollable-table,
+.pv-stem .h-scrollable-table {
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
 .pv-stem h3 { font-size: 1.6em; margin: 0.5em 0 0.35em; font-weight: 700; }
 .pv-stem h4 {
   font-size: 1.35em; margin: 0.5em 0 0.35em; font-weight: 600;
