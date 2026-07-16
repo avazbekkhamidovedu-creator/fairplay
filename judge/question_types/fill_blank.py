@@ -256,16 +256,16 @@ class FillBlankQuestionType(QuestionType):
             student = answers[i] if i < len(answers) else ''
             name = sub_questions[i]['name'] if i < len(sub_questions) else f'Blank {i + 1}'
             max_pts = sub_questions[i]['max_points'] if i < len(sub_questions) else 1.0
-            accepted_lines.append(f'  {i+1}. {name} (max {max_pts} pts): {accepted}')
-            student_lines.append(f'  {i+1}. {name}: "{student[:500]}"')
+            accepted_lines.append(f'  {i + 1}. {name} (max {max_pts} pts): {accepted}')
+            student_lines.append(f'  {i + 1}. {name}: "{student[:500]}"')
 
         user = (
             f'Question: {question}\n'
-            f'Accepted answers per subquestion:\n'
+            'Accepted answers per subquestion:\n'
             + '\n'.join(accepted_lines) + '\n'
-            f'\nStudent answers:\n'
+            '\nStudent answers:\n'
             + '\n'.join(student_lines) + '\n\n'
-            f'Score each subquestion independently from 0 to its max points. Output JSON.'
+            'Score each subquestion independently from 0 to its max points. Output JSON.'
         )
 
         return [
@@ -290,7 +290,7 @@ class FillBlankQuestionType(QuestionType):
                         text = text.rsplit('```', 1)[0]
                 return text.strip()
             except Exception as exc:
-                logger.warning('LLM attempt %d failed: %s', attempt + 1, exc)
+                logger.warning('LLM attempt %d failed', attempt + 1, exc_info=True)
                 if attempt < len(delays):
                     msg = str(exc).lower()
                     if any(str(code) in msg for code in (429, 500, 502, 503, 504)):

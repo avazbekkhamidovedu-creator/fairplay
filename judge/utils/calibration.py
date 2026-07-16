@@ -8,7 +8,6 @@ Anchor points embedded here come from the Qwen3.6-27B-AWQ-INT4 training run
 (see DKUOJ_JUDGE_PRODUCTION.md §2).
 """
 import math
-from typing import Optional
 
 # --- trained anchor points (model_percentile, human_percentile) ---
 # Each set has 9 anchors at percentiles [0, 5, 15, 30, 50, 70, 85, 95, 100].

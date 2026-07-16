@@ -234,7 +234,7 @@ class ShortAnswerQuestionType(QuestionType):
         table_lines = []
         for i, sq in enumerate(sub_questions, 1):
             table_lines.append(
-                f'  {i}. {sq["name"]}: max {sq["max_points"]} pts, strictness={sq["strictness"]}'
+                f'  {i}. {sq["name"]}: max {sq["max_points"]} pts, strictness={sq["strictness"]}',
             )
         table_text = '\n'.join(table_lines) if table_lines else '  (no sub-questions)'
 
@@ -274,7 +274,7 @@ class ShortAnswerQuestionType(QuestionType):
                         text = text.rsplit('```', 1)[0]
                 return text.strip()
             except Exception as exc:
-                logger.warning('LLM attempt %d failed: %s', attempt + 1, exc)
+                logger.warning('LLM attempt %d failed', attempt + 1, exc_info=True)
                 if attempt < len(delays):
                     msg = str(exc).lower()
                     if any(str(code) in msg for code in (429, 500, 502, 503, 504)):

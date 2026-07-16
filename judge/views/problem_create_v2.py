@@ -874,11 +874,11 @@ class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
 
         try:
             sub_questions = self._decompose(description, float(total_points))
-        except Exception as e:
+        except Exception:
             import logging
             logging.getLogger(__name__).exception('AI decompose failed')
             return JsonResponse({'error': _('The AI service is temporarily unavailable. '
-                                           'Please try again later.')}, status=503)
+                                            'Please try again later.')}, status=503)
         return JsonResponse({'sub_questions': sub_questions})
 
     def _decompose(self, description, total_points):
@@ -931,5 +931,5 @@ class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
                      'max_points': float(item.get('max_points', 0))}
                     for i, item in enumerate(items) if item.get('name')]
         except Exception as e:
-            _log.exception('Decomposition failed: %s', e)
+            _log.exception('Decomposition failed')
             raise RuntimeError('Decomposition failed') from e
