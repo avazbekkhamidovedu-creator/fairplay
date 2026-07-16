@@ -120,6 +120,49 @@ describe('RichEditor.htmlToMd / mdToHtml', () => {
     assert.match(html, /<mark>highlight<\/mark>/);
   });
 
+  it('renders GFM pipe tables like the server preview', () => {
+    const md = '| A | B |\n| --- | --- |\n| 1 | **2** |\n';
+    const html = RichEditor.mdToHtml(md);
+    assert.match(html, /h-scrollable-table/);
+    assert.match(html, /<table class="table">/);
+    assert.match(html, /<th[^>]*>A<\/th>/);
+    assert.match(html, /<td[^>]*>1<\/td>/);
+    assert.match(html, /<strong>2<\/strong>/);
+    const back = RichEditor.htmlToMd(html);
+    assert.match(back, /\| A \| B \|/);
+    assert.match(back, /\| --- \| --- \|/);
+    assert.match(back, /\| 1 \| \*\*2\*\* \|/);
+  });
+
+  it('normalizes pasted tables that have blank lines between rows', () => {
+    const messy =
+      '| Face | Probability |\n' +
+      '\n' +
+      '|------|-------------|\n' +
+      '\n' +
+      '| 1 | 1/8 |\n' +
+      '\n' +
+      '| 6 | 3/8 |\n';
+    const html = RichEditor.mdToHtml(messy);
+    assert.match(html, /h-scrollable-table/);
+    assert.match(html, /<th[^>]*>Face<\/th>/);
+    assert.match(html, /<td[^>]*>1\/8<\/td>/);
+    assert.match(html, /<td[^>]*>3\/8<\/td>/);
+    assert.doesNotMatch(html, /\| Face \|/);
+  });
+
+  it('round-trips HTML tables back to pipe markdown', () => {
+    const html = '<div class="h-scrollable-table"><table class="table">' +
+      '<thead><tr><th>X</th><th>Y</th></tr></thead>' +
+      '<tbody><tr><td>a</td><td>b</td></tr></tbody></table></div>';
+    const md = RichEditor.htmlToMd(html);
+    assert.match(md, /\| X \| Y \|/);
+    assert.match(md, /\| a \| b \|/);
+    const again = RichEditor.mdToHtml(md);
+    assert.match(again, /<th[^>]*>X<\/th>/);
+    assert.match(again, /<td[^>]*>a<\/td>/);
+  });
+
   it('renders lists from markdown', () => {
     const html = RichEditor.mdToHtml('- a\n- b\n\n1. one\n2. two');
     assert.match(html, /<ul>/);

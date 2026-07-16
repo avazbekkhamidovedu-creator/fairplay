@@ -46,6 +46,11 @@
       "expect_substrings": ["src=\"https://example.com/x.png\""]
     },
     {
+      "id": "gfm_table",
+      "markdown": "| A | B |\n| --- | --- |\n| 1 | 2 |\n",
+      "expect_substrings": ["h-scrollable-table", "<table", "<th>", "A", "B", "<td>", "1", "2"]
+    },
+    {
       "id": "script_bleach",
       "markdown": "<script>alert(1)</script>",
       "expect_substrings": ["&lt;script&gt;"],

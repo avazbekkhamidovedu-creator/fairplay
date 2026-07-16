@@ -56,6 +56,7 @@
     quote: '<button type="button" data-cmd="quote" title="引用 (Ctrl+Q)"><i class="fa fa-quote-left"></i></button>',
     ul: '<button type="button" data-cmd="ul" title="无序列表 (Ctrl+U)"><i class="fa fa-list-ul"></i></button>',
     ol: '<button type="button" data-cmd="ol" title="有序列表 (Ctrl+Shift+O)"><i class="fa fa-list-ol"></i></button>',
+    table: '<button type="button" data-cmd="table" title="表格"><i class="fa fa-table"></i></button>',
     link: '<button type="button" data-cmd="link" title="链接 (Ctrl+L)"><i class="fa fa-link"></i></button>',
     image: '<button type="button" data-cmd="image" title="图片"><i class="fa fa-image"></i></button>',
     mention: '<button type="button" data-cmd="mention" title="提及用户 (Ctrl+M)"><i class="fa fa-at"></i></button>',
@@ -65,15 +66,20 @@
     alignRight: '<button type="button" data-cmd="alignRight" title="右对齐"><i class="fa fa-align-right"></i></button>',
     blank: '<button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;"><i class="fa fa-square-o"></i></button>',
   };
-  // Groups: 等级 | 加粗/高亮 | 代码/公式/引用 | 列表 | 对齐 | 链接等
+  // Groups: 等级 | 加粗/高亮 | 代码/公式/引用 | 列表/表格 | 对齐 | 链接等
   const RTE_TOOLBAR = [
     'heading', 'sep',
     'bold', 'highlight', 'italic', 'sep',
     'code', 'math', 'quote', 'sep',
-    'ul', 'ol', 'sep',
+    'ul', 'ol', 'table', 'sep',
     'alignLeft', 'alignCenter', 'alignRight', 'sep',
     'link', 'image', 'mention', 'help', 'blank',
   ];
+  const DEFAULT_TABLE_MD =
+    '| 列1 | 列2 | 列3 |\n' +
+    '| --- | --- | --- |\n' +
+    '|  |  |  |\n' +
+    '|  |  |  |\n';
 
   function richEditorTpl(name, opts) {
     opts = opts || {};
@@ -121,13 +127,14 @@
   function syncMarkdownFromRich(editor) {
     const parts = editorParts(editor);
     if (!parts.rich || !parts.ta) return;
-    parts.ta.value = htmlToMd(parts.rich.innerHTML);
+    parts.ta.value = normalizePipeTables(htmlToMd(parts.rich.innerHTML));
   }
 
   /** Rebuild contenteditable projection from Markdown textarea. */
   function projectRichFromMarkdown(editor) {
     const parts = editorParts(editor);
     if (!parts.rich || !parts.ta) return;
+    parts.ta.value = normalizePipeTables(parts.ta.value);
     parts.rich.innerHTML = mdToHtml(parts.ta.value);
   }
 
@@ -137,6 +144,8 @@
     const ta = ed.querySelector('.rich-editor-markdown textarea');
     if (!ta) return '';
     if (!ed.classList.contains('mode-markdown')) syncMarkdownFromRich(ed);
+    const normalized = normalizePipeTables(ta.value);
+    if (normalized !== ta.value) ta.value = normalized;
     return ta.value;
   }
 
@@ -149,7 +158,7 @@
     if (!ed) return;
     const ta = ed.querySelector('.rich-editor-markdown textarea');
     if (!ta) return;
-    ta.value = md || '';
+    ta.value = normalizePipeTables(md || '');
     if (!ed.classList.contains('mode-markdown')) projectRichFromMarkdown(ed);
     syncPaneHeight(ed);
   }
@@ -182,7 +191,7 @@
   // Inline cmds (bold/italic/highlight/inline code) only sync, to keep the caret.
   const BLOCK_CMDS = {
     heading: 1, h3: 1, h4: 1, h5: 1, p: 1,
-    ul: 1, ol: 1, quote: 1,
+    ul: 1, ol: 1, quote: 1, table: 1,
   };
 
   function initEditors(root) {
@@ -232,6 +241,19 @@
         ta.addEventListener('input', () => {
           syncPaneHeight(editor);
           notifyChange();
+        });
+        // Word / PDF / web paste often inserts blank lines between table rows,
+        // which breaks GFM + server mistune. Collapse after paste.
+        ta.addEventListener('paste', () => {
+          setTimeout(() => {
+            const next = normalizePipeTables(ta.value);
+            if (next !== ta.value) {
+              const pos = ta.selectionStart;
+              ta.value = next;
+              try { ta.selectionStart = ta.selectionEnd = Math.min(pos, next.length); } catch (e) { /* ignore */ }
+              ta.dispatchEvent(new Event('input'));
+            }
+          }, 0);
         });
         ta.addEventListener('mouseup', () => {
           saveSelection(editor);
@@ -412,6 +434,9 @@
       case 'alignLeft': applyTextAlign(area, 'left'); break;
       case 'alignCenter': applyTextAlign(area, 'center'); break;
       case 'alignRight': applyTextAlign(area, 'right'); break;
+      case 'table':
+        document.execCommand('insertHTML', false, mdToHtml(DEFAULT_TABLE_MD) + '<p><br></p>');
+        break;
       case 'math':
         document.execCommand('insertText', false, '$$ a^2 + b^2 = c^2 $$');
         break;
@@ -627,6 +652,7 @@
       case 'h5': linePrefix('### '); break;
       case 'ul': linePrefix('- '); break;
       case 'ol': linePrefix('1. '); break;
+      case 'table': insertAtCaret((s > 0 && ta.value[s - 1] !== '\n' ? '\n\n' : '\n') + DEFAULT_TABLE_MD); break;
       case 'alignLeft': case 'alignCenter': case 'alignRight': break;
       case 'math':
         if (sel && sel.indexOf('\n') !== -1) wrap('$$\n', '\n$$', 'a^2+b^2=c^2');
@@ -696,6 +722,7 @@
                 <tr><td><code>![说明](url)</code></td><td>—</td><td>图片</td></tr>
                 <tr><td><code>&gt; 引用</code></td><td>Ctrl+Q</td><td>引用块</td></tr>
                 <tr><td><code>- 列表</code> / <code>1. 列表</code></td><td>Ctrl+U / Ctrl+Shift+O</td><td>列表</td></tr>
+                <tr><td><code>| A | B |</code><br><code>| --- | --- |</code><br><code>| 1 | 2 |</code></td><td>—</td><td>表格</td></tr>
                 <tr><td><code>\`code\`</code> / 围栏代码块</td><td>—</td><td>代码</td></tr>
                 <tr><td><code>$$ a^2+b^2 $$</code></td><td>Ctrl+Alt+D</td><td>公式</td></tr>
                 <tr><td><code>[user:用户名]</code></td><td>Ctrl+M</td><td>提及用户</td></tr>
@@ -1081,6 +1108,17 @@
         out += '<div style="text-align:' + align + '">' + serializeInline(n) + '</div>\n\n';
         return;
       }
+      if (tag === 'div' && n.classList && n.classList.contains('h-scrollable-table')) {
+        const t = n.querySelector('table');
+        const md = tableToMd(t);
+        if (md) out += md + '\n\n';
+        return;
+      }
+      if (tag === 'table') {
+        const md = tableToMd(n);
+        if (md) out += md + '\n\n';
+        return;
+      }
       switch (tag) {
         // Match AwesomeRenderer header demotion: #→h3, ##→h4, ###→h5
         case 'h1': case 'h2': case 'h3':
@@ -1144,14 +1182,173 @@
       .replace(/`([^`]+)`/g, '<code>$1</code>');
   }
 
+  function splitPipeRow(line) {
+    let s = String(line || '').trim();
+    if (s.charAt(0) === '|') s = s.slice(1);
+    if (s.charAt(s.length - 1) === '|') s = s.slice(0, -1);
+    return s.split('|').map(c => c.trim());
+  }
+
+  function isTableSepRow(line) {
+    const cells = splitPipeRow(line);
+    return cells.length > 0 && cells.every(c => /^:?-+:?$/.test(c));
+  }
+
+  function alignFromSep(cell) {
+    const left = cell.charAt(0) === ':';
+    const right = cell.charAt(cell.length - 1) === ':';
+    if (left && right) return 'center';
+    if (right) return 'right';
+    if (left) return 'left';
+    return '';
+  }
+
+  /** GFM pipe table → same wrapper/classes as AwesomeRenderer.table */
+  function renderPipeTable(lines) {
+    const header = splitPipeRow(lines[0]);
+    const seps = splitPipeRow(lines[1]);
+    const aligns = seps.map(alignFromSep);
+    function cellHtml(text, tag, i) {
+      const a = aligns[i] || '';
+      const style = a ? ' style="text-align:' + a + '"' : '';
+      return '<' + tag + style + '>' + formatInlineMarkdown(escapeHtmlText(text || '')) + '</' + tag + '>';
+    }
+    let html = '<div class="h-scrollable-table"><table class="table"><thead><tr>';
+    header.forEach((c, i) => { html += cellHtml(c, 'th', i); });
+    html += '</tr></thead><tbody>';
+    lines.slice(2).forEach((line) => {
+      const cells = splitPipeRow(line);
+      html += '<tr>';
+      for (let i = 0; i < header.length; i++) html += cellHtml(cells[i], 'td', i);
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  function isPipeTableRow(line) {
+    return /^\s*\|.+\|\s*$/.test(line);
+  }
+
+  /**
+   * Collapse blank lines inside GFM pipe tables.
+   * Pasted tables (Word/web) often look like:
+   *   | A | B |
+   *   <blank>
+   *   |---|---|
+   *   <blank>
+   *   | 1 | 2 |
+   * which mistune/GFM will NOT treat as a table.
+   */
+  function normalizePipeTables(md) {
+    const lines = String(md || '').split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      if (!isPipeTableRow(lines[i])) {
+        out.push(lines[i]);
+        i++;
+        continue;
+      }
+      let j = i + 1;
+      while (j < lines.length && /^\s*$/.test(lines[j])) j++;
+      if (j >= lines.length || !isTableSepRow(lines[j])) {
+        out.push(lines[i]);
+        i++;
+        continue;
+      }
+      const tableRows = [lines[i], lines[j]];
+      j++;
+      while (j < lines.length) {
+        if (/^\s*$/.test(lines[j])) {
+          let k = j + 1;
+          while (k < lines.length && /^\s*$/.test(lines[k])) k++;
+          if (k < lines.length && isPipeTableRow(lines[k]) && !isTableSepRow(lines[k])) {
+            j = k;
+            tableRows.push(lines[j]);
+            j++;
+            continue;
+          }
+          break;
+        }
+        if (isPipeTableRow(lines[j])) {
+          tableRows.push(lines[j]);
+          j++;
+          continue;
+        }
+        break;
+      }
+      for (let t = 0; t < tableRows.length; t++) out.push(tableRows[t]);
+      i = j;
+    }
+    return out.join('\n');
+  }
+
+  function parkPipeTables(s, blocks) {
+    s = normalizePipeTables(s);
+    const lines = String(s || '').split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      if (i + 1 < lines.length &&
+          isPipeTableRow(lines[i]) &&
+          isTableSepRow(lines[i + 1])) {
+        const start = i;
+        i += 2;
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) i++;
+        blocks.push(renderPipeTable(lines.slice(start, i)));
+        out.push('\u0000B' + (blocks.length - 1) + '\u0000');
+        continue;
+      }
+      out.push(lines[i]);
+      i++;
+    }
+    return out.join('\n');
+  }
+
+  function tableToMd(table) {
+    if (!table) return '';
+    const headRow = table.querySelector('thead tr') || table.querySelector('tr');
+    if (!headRow) return '';
+    const headerCells = Array.prototype.filter.call(headRow.children, (c) =>
+      c.tagName === 'TH' || c.tagName === 'TD');
+    if (!headerCells.length) return '';
+    const cellText = (c) =>
+      serializeInline(c).replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim();
+    const head = headerCells.map(cellText);
+    const lines = [
+      '| ' + head.join(' | ') + ' |',
+      '| ' + head.map(() => '---').join(' | ') + ' |',
+    ];
+    const bodyRows = table.querySelectorAll('tbody tr');
+    const rows = bodyRows.length
+      ? bodyRows
+      : Array.prototype.filter.call(table.querySelectorAll('tr'), (tr, idx) => idx > 0);
+    Array.prototype.forEach.call(rows, (tr) => {
+      if (tr === headRow) return;
+      const cells = Array.prototype.filter.call(tr.children, (c) =>
+        c.tagName === 'TH' || c.tagName === 'TD').map(cellText);
+      while (cells.length < head.length) cells.push('');
+      lines.push('| ' + cells.slice(0, head.length).join(' | ') + ' |');
+    });
+    return lines.join('\n');
+  }
+
   /* ---- Markdown → HTML：仅供编辑器渲染；公式保持字面量，原始 <img>/对齐块透传 ---- */
   function mdToHtml(md) {
     if (!md) return '';
     const raw = [], math = [], blocks = [], imgs = [];
     let s = (md || '')
-      // Block-level raw HTML (align wrappers) — parked outside <p> during flow wrap.
+      // Block-level raw HTML (align wrappers / tables) — parked outside <p>.
+      .replace(/<div\b[^>]*class="[^"]*\bh-scrollable-table\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, (m) => {
+        raw.push(m); return '\u0000K' + (raw.length - 1) + '\u0000';
+      })
       .replace(/<div style="text-align:[^"]*">[\s\S]*?<\/div>/gi, (m) => {
         raw.push(m); return '\u0000K' + (raw.length - 1) + '\u0000';
+      })
+      .replace(/<table\b[\s\S]*?<\/table>/gi, (m) => {
+        raw.push('<div class="h-scrollable-table">' + m + '</div>');
+        return '\u0000K' + (raw.length - 1) + '\u0000';
       })
       .replace(/<img\b[^>]*>/gi, (m) => {
         raw.push(m); return '\u0000K' + (raw.length - 1) + '\u0000';
@@ -1168,6 +1365,9 @@
       blocks.push('<pre><code>' + body + '</code></pre>');
       return '\u0000B' + (blocks.length - 1) + '\u0000';
     });
+
+    // GFM pipe tables (same shape as server AwesomeRenderer.table).
+    s = parkPipeTables(s, blocks);
 
     // Blockquotes before escaping `>` (otherwise they become literal arrows).
     s = s.replace(/(^|\n)((?:>[ \t]?.*(?:\n|$))+)/g, (m, lead, block) => {
@@ -1220,7 +1420,7 @@
     // Park block-level HTML (and existing placeholders) so we can paragraphize the rest.
     // Park block constructs + block raw (K). Leave inline math/mark (R/M) inside <p>.
     let t = String(s || '').replace(
-      /<(h[1-6]|ul|ol|pre|blockquote)\b[\s\S]*?<\/\1>|<hr\b[^>]*>|\u0000[BIHK]\d*\u0000/gi,
+      /<div\b[^>]*class="[^"]*\bh-scrollable-table\b[^"]*"[^>]*>[\s\S]*?<\/div>|<table\b[\s\S]*?<\/table>|<(h[1-6]|ul|ol|pre|blockquote)\b[\s\S]*?<\/\1>|<hr\b[^>]*>|\u0000[BIHK]\d*\u0000/gi,
       (m) => {
         held.push(m);
         return '\u0000X' + (held.length - 1) + '\u0000';
