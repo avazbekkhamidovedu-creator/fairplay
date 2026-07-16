@@ -1,6 +1,11 @@
 /**
  * Reusable rich-text / Markdown editor (contenteditable ↔ Markdown).
  *
+ * Preferred editor for new authoring UIs (create_v2 and future pages).
+ * Martor (Ace + single /widgets/preview/*) remains for legacy forms/admin;
+ * both share the server markdown pipeline — create_v2 also uses the batch
+ * endpoint via MarkdownPreview.renderKeyed.
+ *
  * Browser: window.RichEditor
  * Node (tests): module.exports = RichEditor
  *

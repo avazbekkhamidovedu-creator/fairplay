@@ -346,6 +346,8 @@ urlpatterns = [
         path('preview/', include([
             path('default', preview.DefaultMarkdownPreviewView.as_view(), name='default_preview'),
             path('problem', preview.ProblemMarkdownPreviewView.as_view(), name='problem_preview'),
+            path('problem/batch', preview.ProblemMarkdownBatchPreviewView.as_view(),
+                 name='problem_preview_batch'),
             path('blog', preview.BlogMarkdownPreviewView.as_view(), name='blog_preview'),
             path('contest', preview.ContestMarkdownPreviewView.as_view(), name='contest_preview'),
             path('comment', preview.CommentMarkdownPreviewView.as_view(), name='comment_preview'),

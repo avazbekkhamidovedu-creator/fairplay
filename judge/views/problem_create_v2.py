@@ -103,6 +103,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'problem_list_url': reverse('problem_list'),
             'problem_preview_url': reverse('problem_preview'),
+            'problem_preview_batch_url': reverse('problem_preview_batch'),
             'image_upload_url': reverse('martor_image_uploader'),
             'edit_code': '',
             'edit_data_json': 'null',

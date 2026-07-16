@@ -1,10 +1,12 @@
-"""Server-authoritative markdown fixtures shared with resources/tests (RTE)."""
+"""Server-authoritative markdown fixtures + batch preview contract (RTE P2/P3)."""
 import json
 import os
 
-from django.test import SimpleTestCase
+from django.test import RequestFactory, SimpleTestCase
 
 from judge.jinja2.markdown import markdown
+from judge.utils.markdown_preview import render_preview_html
+from judge.views.preview import ProblemMarkdownBatchPreviewView
 
 
 FIXTURE_PATH = os.path.join(
@@ -36,9 +38,88 @@ class RteMarkdownFixtureTest(SimpleTestCase):
 
 
 class ProblemPreviewTemplateContractTest(SimpleTestCase):
-    """create_v2 server preview posts to problem_preview → this template → markdown('problem')."""
+    """create_v2 single preview posts to problem_preview → this template → markdown('problem')."""
 
     def test_preview_template_uses_problem_markdown_style(self):
         with open(os.path.abspath(PREVIEW_TEMPLATE), encoding='utf-8') as f:
             source = f.read()
         self.assertIn("markdown('problem'", source)
+
+
+class SharedPreviewHelperTest(SimpleTestCase):
+    def test_helper_matches_markdown_filter(self):
+        for case in _load_cases():
+            with self.subTest(case=case['id']):
+                self.assertEqual(
+                    render_preview_html(case['markdown'], 'problem'),
+                    str(markdown(case['markdown'], 'problem')),
+                )
+
+
+class ProblemPreviewBatchContractTest(SimpleTestCase):
+    """P3: one JSON POST renders many fragments with the same problem pipeline."""
+
+    def test_batch_preview_returns_keyed_html(self):
+        factory = RequestFactory()
+        view = ProblemMarkdownBatchPreviewView.as_view()
+        items = [
+            {'key': 'stem', 'content': 'Hello **bold** and *italic*.'},
+            {'key': 'opt-0', 'content': '> quoted option'},
+            {'key': 'opt-1', 'content': '```\nint x = 1;\n```'},
+        ]
+        request = factory.post(
+            '/widgets/preview/problem/batch',
+            data=json.dumps({'items': items}),
+            content_type='application/json',
+        )
+        response = view(request)
+        self.assertEqual(response.status_code, 200)
+        body = json.loads(response.content.decode('utf-8'))
+        self.assertIn('items', body)
+        self.assertEqual(len(body['items']), 3)
+
+        by_key = {row['key']: row['html'] for row in body['items']}
+        self.assertIn('<strong>bold</strong>', by_key['stem'])
+        self.assertIn('<em>italic</em>', by_key['stem'])
+        self.assertIn('quoted option', by_key['opt-0'])
+        self.assertIn('blockquote', by_key['opt-0'].lower())
+        self.assertIn('int x = 1', by_key['opt-1'])
+
+        # Same HTML as the shared helper / single-fragment pipeline.
+        for item in items:
+            self.assertEqual(by_key[item['key']], render_preview_html(item['content'], 'problem'))
+
+    def test_batch_rejects_non_list(self):
+        factory = RequestFactory()
+        view = ProblemMarkdownBatchPreviewView.as_view()
+        request = factory.post(
+            '/widgets/preview/problem/batch',
+            data=json.dumps({'items': 'nope'}),
+            content_type='application/json',
+        )
+        response = view(request)
+        self.assertEqual(response.status_code, 400)
+
+    def test_batch_fixtures_roundtrip(self):
+        factory = RequestFactory()
+        view = ProblemMarkdownBatchPreviewView.as_view()
+        cases = _load_cases()
+        payload = {
+            'items': [{'key': c['id'], 'content': c['markdown']} for c in cases],
+        }
+        request = factory.post(
+            '/widgets/preview/problem/batch',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        response = view(request)
+        self.assertEqual(response.status_code, 200)
+        body = json.loads(response.content.decode('utf-8'))
+        by_key = {row['key']: row['html'] for row in body['items']}
+        for case in cases:
+            with self.subTest(case=case['id']):
+                html = by_key[case['id']]
+                for needle in case.get('expect_substrings') or []:
+                    self.assertIn(needle, html)
+                for needle in case.get('forbid_substrings') or []:
+                    self.assertNotIn(needle, html)

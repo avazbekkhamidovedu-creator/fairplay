@@ -11,8 +11,8 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260716b">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260716b">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260716c">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260716c">
 
   <!-- 数学公式：与全站做题页一致的分隔符（行内 ~...~ / \(...\)，块级 $$...$$ / \[...\]） -->
   <script>
@@ -28,8 +28,8 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="{{ static('jszip.min.js') }}"></script>
-  <script src="{{ static('rich_editor.js') }}?v=20260716b"></script>
-  <script src="{{ static('markdown_preview.js') }}?v=20260716b"></script>
+  <script src="{{ static('rich_editor.js') }}?v=20260716c"></script>
+  <script src="{{ static('markdown_preview.js') }}?v=20260716c"></script>
 
   <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
   <style>
@@ -507,6 +507,7 @@
     const CREATE_ORGANIZATION_URL = '{{ create_organization_url }}';
     const AI_PROBLEM_TYPE_URL = '{{ ai_problem_type_url }}';
     const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
+    const PROBLEM_PREVIEW_BATCH_URL = '{{ problem_preview_batch_url }}';
     const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
@@ -1143,7 +1144,11 @@
     let _previewToken = 0;
     const _previewHtml = Object.create(null); // key -> last rendered HTML
 
-    MarkdownPreview.configure({ url: PROBLEM_PREVIEW_URL, csrfToken: CSRF_TOKEN });
+    MarkdownPreview.configure({
+      url: PROBLEM_PREVIEW_URL,
+      batchUrl: PROBLEM_PREVIEW_BATCH_URL,
+      csrfToken: CSRF_TOKEN,
+    });
 
     function collectPreviewMarkdown() {
       const parts = [];
@@ -1240,13 +1245,13 @@
       const token = ++_previewToken;
       _previewTimer = setTimeout(() => {
         const parts = collectPreviewMarkdown();
-        Promise.all(parts.map(p =>
-          MarkdownPreview.render(p.md).then(html => ({ key: p.key, html })).catch(() => ({ key: p.key, html: _previewHtml[p.key] || '' }))
-        )).then(results => {
-          if (token !== _previewToken) return;
-          results.forEach(r => { _previewHtml[r.key] = r.html; });
-          paintPreviewFromCache();
-        });
+        MarkdownPreview.renderKeyed(parts)
+          .then(results => {
+            if (token !== _previewToken) return;
+            results.forEach(r => { _previewHtml[r.key] = r.html; });
+            paintPreviewFromCache();
+          })
+          .catch(() => {});
       }, PREVIEW_DEBOUNCE_MS);
     }
 

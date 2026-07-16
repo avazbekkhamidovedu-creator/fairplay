@@ -1,15 +1,15 @@
 /**
  * Server-authoritative Markdown preview helper.
- * Posts to a Django markdown preview endpoint (same pipeline as problem pages).
+ * Posts to Django markdown preview endpoints (same pipeline as problem pages).
  *
  * Browser: window.MarkdownPreview
  * Node (tests): module.exports
  *
- *   MarkdownPreview.configure({ url, csrfToken })
+ *   MarkdownPreview.configure({ url, batchUrl, csrfToken })
  *   MarkdownPreview.render(md) -> Promise<html>
  *   MarkdownPreview.renderMany(mds) -> Promise<html[]>
- *   MarkdownPreview.getCached(md) -> html|undefined
- *   MarkdownPreview.clearCache()
+ *   MarkdownPreview.renderKeyed([{key, md}]) -> Promise<[{key, html}]>
+ *   MarkdownPreview.getCached(md) / clearCache()
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -22,6 +22,7 @@
 
   const state = {
     url: '',
+    batchUrl: '',
     csrfToken: '',
     cache: new Map(),
     inflight: new Map(),
@@ -30,6 +31,7 @@
   function configure(opts) {
     if (!opts) return;
     if (opts.url != null) state.url = opts.url;
+    if (opts.batchUrl != null) state.batchUrl = opts.batchUrl;
     if (opts.csrfToken != null) state.csrfToken = opts.csrfToken;
   }
 
@@ -79,13 +81,81 @@
 
   function renderMany(mds) {
     const list = Array.isArray(mds) ? mds : [];
-    return Promise.all(list.map(md => render(md)));
+    return renderKeyed(list.map((md, i) => ({ key: String(i), md }))).then(rows =>
+      rows.map(r => r.html));
+  }
+
+  /**
+   * Prefer one batch POST for uncached fragments; fall back to per-item render.
+   * @param {{key:string, md:string}[]} items
+   * @returns {Promise<{key:string, html:string}[]>}
+   */
+  function renderKeyed(items) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return Promise.resolve([]);
+
+    const results = new Array(list.length);
+    const pendingIdx = [];
+    const pendingPayload = [];
+
+    list.forEach((item, i) => {
+      const md = item && item.md == null ? '' : String(item.md);
+      const key = item && item.key != null ? String(item.key) : String(i);
+      if (state.cache.has(md)) {
+        results[i] = { key: key, html: state.cache.get(md) };
+      } else {
+        pendingIdx.push(i);
+        pendingPayload.push({ key: key, content: md, _md: md });
+      }
+    });
+
+    if (!pendingIdx.length) return Promise.resolve(results);
+
+    const finishLocal = (htmlList) => {
+      pendingIdx.forEach((idx, j) => {
+        const md = pendingPayload[j]._md;
+        const html = htmlList[j] || '';
+        state.cache.set(md, html);
+        results[idx] = { key: pendingPayload[j].key, html: html };
+      });
+      return results;
+    };
+
+    if (state.batchUrl) {
+      return fetch(state.batchUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-CSRFToken': state.csrfToken,
+        },
+        body: JSON.stringify({
+          items: pendingPayload.map(p => ({ key: p.key, content: p.content })),
+        }),
+      })
+        .then(r => {
+          if (!r.ok) throw new Error('MarkdownPreview batch HTTP ' + r.status);
+          return r.json();
+        })
+        .then(body => {
+          const rows = (body && body.items) || [];
+          const byKey = Object.create(null);
+          rows.forEach(row => { byKey[String(row.key)] = row.html || ''; });
+          return finishLocal(pendingPayload.map(p =>
+            (Object.prototype.hasOwnProperty.call(byKey, p.key) ? byKey[p.key] : '')));
+        })
+        .catch(() =>
+          // Fall back to single-fragment endpoint if batch fails.
+          Promise.all(pendingPayload.map(p => render(p._md))).then(finishLocal));
+    }
+
+    return Promise.all(pendingPayload.map(p => render(p._md))).then(finishLocal);
   }
 
   return {
     configure: configure,
     render: render,
     renderMany: renderMany,
+    renderKeyed: renderKeyed,
     getCached: getCached,
     clearCache: clearCache,
   };
