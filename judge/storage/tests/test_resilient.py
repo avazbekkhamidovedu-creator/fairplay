@@ -9,7 +9,7 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from judge.models import StoredFileRecord
@@ -37,6 +37,9 @@ class FlakyStorage(FileSystemStorage):
         self._fail()
 
 
+# Run the mirror task inline regardless of settings module — CI runs the suite
+# without a broker, so a real .delay() would fail with ConnectionRefusedError.
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 class StorageTestCase(TestCase):
     def setUp(self):
         self.primary_root = tempfile.mkdtemp()
