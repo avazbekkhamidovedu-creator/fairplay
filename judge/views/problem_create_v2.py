@@ -364,11 +364,43 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise PermissionError(_('You do not have permission to make this problem public.'))
         return True
 
+    def _resolve_problem_type(self, label):
+        """Match an existing ProblemType by name/full_name, or create one (AI / free-text tags)."""
+        label = (label or '').strip()
+        if not label:
+            return None
+        existing = ProblemType.objects.filter(Q(full_name=label) | Q(name=label)).first()
+        if existing is None:
+            existing = ProblemType.objects.filter(Q(full_name__iexact=label) | Q(name__iexact=label)).first()
+        if existing is not None:
+            return existing
+
+        code = _problem_type_code(label)[:20]
+        if ProblemType.objects.filter(name=code).exists():
+            # Same slug, different display name — keep the code unique with a numeric suffix.
+            base = code[:16]
+            for i in range(2, 100):
+                candidate = ('%s-%d' % (base, i))[:20]
+                if not ProblemType.objects.filter(name=candidate).exists():
+                    code = candidate
+                    break
+            else:
+                return None
+
+        return ProblemType.objects.create(name=code, full_name=label[:100])
+
     def _attach_types(self, problem, payload):
-        names = [n for n in (payload.get('problemTypes') or []) if n]
-        types = list(ProblemType.objects.filter(Q(full_name__in=names) | Q(name__in=names))) if names else []
-        if types:
-            problem.types.set(types)
+        labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+        resolved = []
+        seen = set()
+        for label in labels:
+            ptype = self._resolve_problem_type(label)
+            if ptype is None or ptype.pk in seen:
+                continue
+            seen.add(ptype.pk)
+            resolved.append(ptype)
+        if resolved:
+            problem.types.set(resolved)
         elif not problem.types.exists():
             problem.types.add(default_problem_type())
 

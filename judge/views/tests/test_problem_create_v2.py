@@ -9,7 +9,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from judge.models import (Problem, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
-                          ProblemShortAnswerConfig, ProblemTestCase, problem_data_storage)
+                          ProblemShortAnswerConfig, ProblemTestCase, ProblemType, problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
@@ -28,7 +28,8 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
             'staff_adder': create_user(
                 username='code_creator',
                 is_staff=True,
-                user_permissions=('add_problem', 'create_private_problem', 'change_public_visibility'),
+                user_permissions=('add_problem', 'create_private_problem', 'change_public_visibility',
+                                  'edit_own_problem'),
             ),
         })
 
@@ -233,6 +234,68 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['suggestions'])
+
+    def test_save_creates_missing_problem_types_and_lists_them(self):
+        """AI / free-text tags that are not in the DB yet must be created and attached on save."""
+        label = 'Brand New Algorithm Tag'
+        self.assertFalse(ProblemType.objects.filter(full_name=label).exists())
+
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Typed MCQ',
+            'description': 'A problem with a novel knowledge tag.',
+            'points': 5,
+            'group_id': self.group.id,
+            'problemTypes': [label],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+
+        ptype = ProblemType.objects.get(full_name=label)
+        self.assertIn(ptype, list(problem.types.all()))
+
+        # Problem list surfaces knowledge filters from ProblemType rows.
+        list_response = self.client.get(reverse('problem_list'))
+        self.assertEqual(list_response.status_code, 200)
+        knowledge_names = {t.full_name for t in list_response.context['knowledge_types']}
+        self.assertIn(label, knowledge_names)
+
+    def test_save_reuses_existing_problem_type_without_duplicating(self):
+        existing = ProblemType.objects.create(name='graph', full_name='Graph Theory')
+        before = ProblemType.objects.count()
+
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Existing type',
+            'description': 'reuse',
+            'points': 3,
+            'group_id': self.group.id,
+            'problemTypes': ['Graph Theory'],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertEqual(ProblemType.objects.count(), before)
+        self.assertEqual(list(problem.types.all()), [existing])
 
 
 class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
