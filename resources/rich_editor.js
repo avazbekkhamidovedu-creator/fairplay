@@ -93,7 +93,7 @@
     ];
     for (let r = 1; r < rows; r++) {
       const cells = [];
-      for (let c = 0; c < cols; c++) cells.push(' ');
+      for (let c = 0; c < cols; c++) cells.push('');
       lines.push('| ' + cells.join(' | ') + ' |');
     }
     return lines.join('\n');
@@ -238,7 +238,8 @@
           editor.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b === btn));
           syncPaneHeight(editor);
           notifyChange();
-          updateTableControls(editor);
+          updateTableChrome(editor);
+          if (toMd) hideTableChrome();
           closeTablePicker();
         });
       });
@@ -251,14 +252,14 @@
         rich.addEventListener('keyup', () => {
           saveSelection(editor);
           updateToolbarState(editor);
-          updateTableControls(editor);
+          updateTableChrome(editor);
         });
         rich.addEventListener('mouseup', () => {
           saveSelection(editor);
           updateToolbarState(editor);
-          updateTableControls(editor);
+          updateTableChrome(editor);
         });
-        rich.addEventListener('click', () => updateTableControls(editor));
+        rich.addEventListener('click', () => updateTableChrome(editor));
         rich.addEventListener('keydown', (e) => handleEditorShortcut(editor, e));
       }
       if (ta) {
@@ -300,11 +301,10 @@
       });
       const headSel = editor.querySelector('.rte-heading');
       if (headSel) headSel.addEventListener('change', () => applyFormat(editor, headSel.value));
-      ensureTableControls(editor);
       // Initial projection from whatever is already in the textarea (usually empty).
       if (!editor.classList.contains('mode-markdown')) projectRichFromMarkdown(editor);
       syncPaneHeight(editor);
-      updateTableControls(editor);
+      updateTableChrome(editor);
     });
   }
 
@@ -375,7 +375,7 @@
       if (area) {
         const ed = area.closest('.rich-editor');
         updateToolbarState(ed);
-        updateTableControls(ed);
+        updateTableChrome(ed);
       }
     });
   }
@@ -479,7 +479,7 @@
     syncPaneHeight(editor);
     notifyChange();
     updateToolbarState(editor);
-    updateTableControls(editor);
+    updateTableChrome(editor);
   }
 
   /** Align current block or selected image; keeps heading tags (unlike bare justify*). */
@@ -724,7 +724,7 @@
     syncPaneHeight(editor);
     notifyChange();
     updateToolbarState(editor);
-    updateTableControls(editor);
+    updateTableChrome(editor);
   }
 
   function ensureTablePicker() {
@@ -820,29 +820,99 @@
     }
   }
 
-  function ensureTableControls(editor) {
-    let bar = editor.querySelector('.rte-table-controls');
-    if (bar) return bar;
-    bar = document.createElement('div');
-    bar.className = 'rte-table-controls';
-    bar.hidden = true;
-    bar.innerHTML =
-      '<span class="rte-table-controls-label"><i class="fa fa-table"></i> 表格</span>' +
-      '<button type="button" data-table-act="row-below" title="在下方插入行">+ 行</button>' +
-      '<button type="button" data-table-act="del-row" title="删除当前行">删行</button>' +
-      '<button type="button" data-table-act="col-right" title="在右侧插入列">+ 列</button>' +
-      '<button type="button" data-table-act="del-col" title="删除当前列">删列</button>' +
-      '<button type="button" data-table-act="del-table" class="rte-table-act-danger" title="删除整个表格">删表</button>';
-    const toolbar = editor.querySelector('.rich-editor-toolbar-row');
-    if (toolbar && toolbar.parentNode) toolbar.parentNode.insertBefore(bar, toolbar.nextSibling);
-    else editor.insertBefore(bar, editor.firstChild);
-    bar.addEventListener('mousedown', (e) => e.preventDefault());
-    bar.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-table-act]');
-      if (!btn) return;
-      runTableAction(editor, btn.getAttribute('data-table-act'));
+  let tableChromeEditor = null;
+  let tableChromeDocBound = false;
+
+  function ensureTableChrome() {
+    let root = document.getElementById('rte-table-cell-chrome');
+    if (root) return root;
+    root = document.createElement('div');
+    root.id = 'rte-table-cell-chrome';
+    root.className = 'rte-table-cell-chrome';
+    root.hidden = true;
+    root.innerHTML =
+      '<button type="button" class="rte-table-cell-handle" title="表格操作" aria-label="表格操作">' +
+      '<i class="fa fa-chevron-down"></i></button>' +
+      '<div class="rte-table-cell-menu" hidden>' +
+      '<button type="button" data-table-act="col-left">Insert column left</button>' +
+      '<button type="button" data-table-act="col-right">Insert column right</button>' +
+      '<button type="button" data-table-act="row-below">Insert row below</button>' +
+      '<div class="rte-table-cell-menu-sep"></div>' +
+      '<button type="button" data-table-act="del-col">Delete column</button>' +
+      '<button type="button" data-table-act="del-table">Delete table</button>' +
+      '</div>';
+    document.body.appendChild(root);
+
+    const handle = root.querySelector('.rte-table-cell-handle');
+    const menu = root.querySelector('.rte-table-cell-menu');
+    handle.addEventListener('mousedown', (e) => e.preventDefault());
+    menu.addEventListener('mousedown', (e) => e.preventDefault());
+    handle.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const open = menu.hidden;
+      menu.hidden = !open;
+      root.classList.toggle('menu-open', open);
+      if (open) positionTableChromeMenu(root);
     });
-    return bar;
+    menu.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-table-act]');
+      if (!btn || !tableChromeEditor) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const ed = tableChromeEditor;
+      menu.hidden = true;
+      root.classList.remove('menu-open');
+      runTableAction(ed, btn.getAttribute('data-table-act'));
+    });
+
+    if (!tableChromeDocBound) {
+      tableChromeDocBound = true;
+      document.addEventListener('mousedown', (e) => {
+        const chrome = document.getElementById('rte-table-cell-chrome');
+        if (!chrome || chrome.hidden) return;
+        if (chrome.contains(e.target)) return;
+        chrome.querySelector('.rte-table-cell-menu').hidden = true;
+        chrome.classList.remove('menu-open');
+      });
+      window.addEventListener('scroll', () => {
+        if (tableChromeEditor) updateTableChrome(tableChromeEditor);
+      }, true);
+      window.addEventListener('resize', () => {
+        if (tableChromeEditor) updateTableChrome(tableChromeEditor);
+      });
+    }
+    return root;
+  }
+
+  function hideTableChrome() {
+    const root = document.getElementById('rte-table-cell-chrome');
+    if (!root) return;
+    root.hidden = true;
+    root.classList.remove('menu-open');
+    const menu = root.querySelector('.rte-table-cell-menu');
+    if (menu) menu.hidden = true;
+    document.querySelectorAll('.rich-editor-body .rte-table-cell-active').forEach((c) => {
+      c.classList.remove('rte-table-cell-active');
+    });
+    tableChromeEditor = null;
+  }
+
+  function positionTableChromeMenu(root) {
+    const handle = root.querySelector('.rte-table-cell-handle');
+    const menu = root.querySelector('.rte-table-cell-menu');
+    if (!handle || !menu || menu.hidden) return;
+    const hr = handle.getBoundingClientRect();
+    const mw = 220;
+    let left = hr.left + hr.width / 2 - mw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - mw - 8));
+    // Prefer above the handle (Notion-style); fall back below if no room.
+    menu.style.width = mw + 'px';
+    const mh = menu.offsetHeight || 200;
+    let top = hr.top - mh - 8;
+    if (top < 8) top = hr.bottom + 8;
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
   }
 
   function closestEditorTable(node, area) {
@@ -863,17 +933,43 @@
     if (!table) return null;
     let el = node && (node.nodeType === 1 ? node : node.parentElement);
     const cell = el && el.closest ? el.closest('th,td') : null;
-    if (!cell || !table.contains(cell)) return { table: table, cell: null, row: null, colIndex: -1 };
+    if (!cell || !table.contains(cell)) return null;
     const row = cell.parentElement;
     const colIndex = Array.prototype.indexOf.call(row.children, cell);
     return { table: table, cell: cell, row: row, colIndex: colIndex };
   }
 
+  /** Show cell chevron handle when caret is inside a table cell. */
+  function updateTableChrome(editor) {
+    // Drop legacy toolbar bar if an older session injected it.
+    const legacy = editor && editor.querySelector && editor.querySelector('.rte-table-controls');
+    if (legacy) legacy.remove();
+
+    const ctx = editor ? activeTableContext(editor) : null;
+    if (!ctx || !ctx.cell) {
+      if (tableChromeEditor === editor) hideTableChrome();
+      return;
+    }
+    const root = ensureTableChrome();
+    tableChromeEditor = editor;
+    editor._rteTableCtx = ctx;
+    document.querySelectorAll('.rich-editor-body .rte-table-cell-active').forEach((c) => {
+      if (c !== ctx.cell) c.classList.remove('rte-table-cell-active');
+    });
+    ctx.cell.classList.add('rte-table-cell-active');
+
+    const rect = ctx.cell.getBoundingClientRect();
+    root.hidden = false;
+    // Chevron sits near the top-center of the active cell (matches reference UI).
+    const size = 22;
+    root.style.left = (rect.left + rect.width / 2 - size / 2) + 'px';
+    root.style.top = (rect.top + 3) + 'px';
+    if (!root.querySelector('.rte-table-cell-menu').hidden) positionTableChromeMenu(root);
+  }
+
+  // Back-compat name used by older call sites in this file.
   function updateTableControls(editor) {
-    const bar = ensureTableControls(editor);
-    const ctx = activeTableContext(editor);
-    bar.hidden = !ctx;
-    if (ctx) editor._rteTableCtx = ctx;
+    updateTableChrome(editor);
   }
 
   function tableColCount(table) {
@@ -887,6 +983,15 @@
     return cell;
   }
 
+  function insertColumnAt(table, at, tagForRow) {
+    table.querySelectorAll('tr').forEach((tr) => {
+      const tag = tagForRow ? tagForRow(tr) : (tr.closest('thead') ? 'th' : 'td');
+      const cell = makeTableCell(tag);
+      if (at >= tr.children.length) tr.appendChild(cell);
+      else tr.insertBefore(cell, tr.children[at]);
+    });
+  }
+
   function runTableAction(editor, act) {
     const area = editor.querySelector('.rich-editor-body');
     if (!area) return;
@@ -894,7 +999,7 @@
     restoreSavedSelection(area);
     let ctx = activeTableContext(editor) || editor._rteTableCtx;
     if (!ctx || !ctx.table || !area.contains(ctx.table)) {
-      updateTableControls(editor);
+      hideTableChrome();
       return;
     }
     const table = ctx.table;
@@ -917,26 +1022,19 @@
       for (let i = 0; i < cols; i++) tr.appendChild(makeTableCell('td'));
       if (ctx.row && ctx.row.parentElement === tbody) {
         tbody.insertBefore(tr, ctx.row.nextSibling);
+      } else if (ctx.row && ctx.row.closest('thead')) {
+        tbody.insertBefore(tr, tbody.firstChild);
       } else {
         tbody.appendChild(tr);
       }
-    } else if (act === 'del-row') {
-      if (!ctx.row) return;
-      if (ctx.row.closest('thead')) return; // keep header; use 删表 to remove whole table
-      const tbody = ctx.row.parentElement;
-      tbody.removeChild(ctx.row);
-      if (!tbody.querySelector('tr')) {
-        // header-only table is fine
-      }
+    } else if (act === 'col-left') {
+      if (cols >= TABLE_PICKER_MAX) return;
+      const at = ctx.colIndex >= 0 ? ctx.colIndex : 0;
+      insertColumnAt(table, at);
     } else if (act === 'col-right') {
       if (cols >= TABLE_PICKER_MAX) return;
       const at = ctx.colIndex >= 0 ? ctx.colIndex + 1 : cols;
-      table.querySelectorAll('tr').forEach((tr) => {
-        const tag = tr.closest('thead') ? 'th' : 'td';
-        const cell = makeTableCell(tag);
-        if (at >= tr.children.length) tr.appendChild(cell);
-        else tr.insertBefore(cell, tr.children[at]);
-      });
+      insertColumnAt(table, at);
     } else if (act === 'del-col') {
       if (ctx.colIndex < 0) return;
       if (cols <= 1) {
@@ -953,12 +1051,12 @@
       return;
     }
 
+    // Sync MD from the mutated DOM; skip reproject so caret/layout stay stable.
     syncMarkdownFromRich(editor);
-    projectRichFromMarkdown(editor);
     syncPaneHeight(editor);
     notifyChange();
     updateToolbarState(editor);
-    updateTableControls(editor);
+    updateTableChrome(editor);
   }
 
   /* ---- Link / mention / help overlays ---- */
@@ -1534,7 +1632,9 @@
     function cellHtml(text, tag, i) {
       const a = aligns[i] || '';
       const style = a ? ' style="text-align:' + a + '"' : '';
-      return '<' + tag + style + '>' + formatInlineMarkdown(escapeHtmlText(text || '')) + '</' + tag + '>';
+      // Empty cells need <br> in contenteditable or the caret paints between rows.
+      const inner = formatInlineMarkdown(escapeHtmlText(text || ''));
+      return '<' + tag + style + '>' + (inner || '<br>') + '</' + tag + '>';
     }
     let html = '<div class="h-scrollable-table"><table class="table"><thead><tr>';
     header.forEach((c, i) => { html += cellHtml(c, 'th', i); });
@@ -1637,7 +1737,12 @@
       c.tagName === 'TH' || c.tagName === 'TD');
     if (!headerCells.length) return '';
     const cellText = (c) =>
-      serializeInline(c).replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim();
+      serializeInline(c)
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/\|/g, '\\|')
+        .replace(/\n+/g, ' ')
+        .replace(/\u00a0/g, ' ')
+        .trim();
     const head = headerCells.map(cellText);
     const lines = [
       '| ' + head.join(' | ') + ' |',
