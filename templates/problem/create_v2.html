@@ -11,8 +11,8 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260717r">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260717r">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260717s">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260717s">
 
   <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
   <script>
@@ -28,7 +28,7 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="{{ static('jszip.min.js') }}"></script>
-  <script src="{{ static('rich_editor.js') }}?v=20260717r"></script>
+  <script src="{{ static('rich_editor.js') }}?v=20260717s"></script>
   <script src="{{ static('markdown_preview.js') }}?v=20260717p"></script>
 
   <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->

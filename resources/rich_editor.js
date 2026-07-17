@@ -838,6 +838,7 @@
       '<button type="button" data-table-act="col-right">Insert column right</button>' +
       '<button type="button" data-table-act="row-below">Insert row below</button>' +
       '<div class="rte-table-cell-menu-sep"></div>' +
+      '<button type="button" data-table-act="del-row">Delete row</button>' +
       '<button type="button" data-table-act="del-col">Delete column</button>' +
       '<button type="button" data-table-act="del-table">Delete table</button>' +
       '</div>';
@@ -960,10 +961,11 @@
 
     const rect = ctx.cell.getBoundingClientRect();
     root.hidden = false;
-    // Chevron sits near the top-center of the active cell (matches reference UI).
-    const size = 22;
-    root.style.left = (rect.left + rect.width / 2 - size / 2) + 'px';
-    root.style.top = (rect.top + 3) + 'px';
+    // Tiny handle in the cell's top-right corner — must not cover editing area.
+    const size = 18;
+    const pad = 2;
+    root.style.left = Math.max(0, rect.right - size - pad) + 'px';
+    root.style.top = (rect.top + pad) + 'px';
     if (!root.querySelector('.rte-table-cell-menu').hidden) positionTableChromeMenu(root);
   }
 
@@ -1035,6 +1037,18 @@
       if (cols >= TABLE_PICKER_MAX) return;
       const at = ctx.colIndex >= 0 ? ctx.colIndex + 1 : cols;
       insertColumnAt(table, at);
+    } else if (act === 'del-row') {
+      if (!ctx.row) return;
+      // Header row is required by GFM — deleting it removes the whole table.
+      if (ctx.row.closest('thead')) {
+        const p = document.createElement('p');
+        p.innerHTML = '<br>';
+        wrap.parentNode.insertBefore(p, wrap);
+        wrap.parentNode.removeChild(wrap);
+      } else {
+        const parent = ctx.row.parentElement;
+        parent.removeChild(ctx.row);
+      }
     } else if (act === 'del-col') {
       if (ctx.colIndex < 0) return;
       if (cols <= 1) {
