@@ -75,11 +75,29 @@
     'alignLeft', 'alignCenter', 'alignRight', 'sep',
     'link', 'image', 'mention', 'help', 'blank',
   ];
-  const DEFAULT_TABLE_MD =
-    '| 列1 | 列2 | 列3 |\n' +
-    '| --- | --- | --- |\n' +
-    '|  |  |  |\n' +
-    '|  |  |  |\n';
+  const TABLE_PICKER_MAX = 10;
+
+  /** Build a GFM pipe table. ``rows``/``cols`` are HTML dimensions (first row = header). */
+  function buildPipeTableMd(rows, cols) {
+    rows = Math.max(1, Math.min(TABLE_PICKER_MAX, rows | 0));
+    cols = Math.max(1, Math.min(TABLE_PICKER_MAX, cols | 0));
+    const header = [];
+    const sep = [];
+    for (let c = 0; c < cols; c++) {
+      header.push('列' + (c + 1));
+      sep.push('---');
+    }
+    const lines = [
+      '| ' + header.join(' | ') + ' |',
+      '| ' + sep.join(' | ') + ' |',
+    ];
+    for (let r = 1; r < rows; r++) {
+      const cells = [];
+      for (let c = 0; c < cols; c++) cells.push(' ');
+      lines.push('| ' + cells.join(' | ') + ' |');
+    }
+    return lines.join('\n');
+  }
 
   function richEditorTpl(name, opts) {
     opts = opts || {};
@@ -220,6 +238,8 @@
           editor.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b === btn));
           syncPaneHeight(editor);
           notifyChange();
+          updateTableControls(editor);
+          closeTablePicker();
         });
       });
       if (rich) {
@@ -231,11 +251,14 @@
         rich.addEventListener('keyup', () => {
           saveSelection(editor);
           updateToolbarState(editor);
+          updateTableControls(editor);
         });
         rich.addEventListener('mouseup', () => {
           saveSelection(editor);
           updateToolbarState(editor);
+          updateTableControls(editor);
         });
+        rich.addEventListener('click', () => updateTableControls(editor));
         rich.addEventListener('keydown', (e) => handleEditorShortcut(editor, e));
       }
       if (ta) {
@@ -264,10 +287,10 @@
         ta.addEventListener('keydown', (e) => handleEditorShortcut(editor, e));
       }
       editor.querySelectorAll('.rich-toolbar button[data-cmd]').forEach(btn => {
-        // Preserve caret before toolbar steals focus (link / mention / align / image).
+        // Preserve caret before toolbar steals focus (link / mention / align / image / table).
         btn.addEventListener('mousedown', (e) => {
           const cmd = btn.dataset.cmd;
-          if (cmd === 'link' || cmd === 'mention' || cmd === 'image' ||
+          if (cmd === 'link' || cmd === 'mention' || cmd === 'image' || cmd === 'table' ||
               cmd === 'alignLeft' || cmd === 'alignCenter' || cmd === 'alignRight') {
             e.preventDefault();
             saveSelection(editor);
@@ -277,9 +300,11 @@
       });
       const headSel = editor.querySelector('.rte-heading');
       if (headSel) headSel.addEventListener('change', () => applyFormat(editor, headSel.value));
+      ensureTableControls(editor);
       // Initial projection from whatever is already in the textarea (usually empty).
       if (!editor.classList.contains('mode-markdown')) projectRichFromMarkdown(editor);
       syncPaneHeight(editor);
+      updateTableControls(editor);
     });
   }
 
@@ -347,7 +372,11 @@
       if (n.nodeType === 3) n = n.parentElement;
       if (!n || !n.closest) return;
       const area = n.closest('.rich-editor-body');
-      if (area) updateToolbarState(area.closest('.rich-editor'));
+      if (area) {
+        const ed = area.closest('.rich-editor');
+        updateToolbarState(ed);
+        updateTableControls(ed);
+      }
     });
   }
 
@@ -380,11 +409,12 @@
     applyFormat(editor, cmd);
   }
 
-  function applyFormat(editor, cmd) {
+  function applyFormat(editor, cmd, btn) {
     if (cmd === 'image') { pickImage(editor); return; }
     if (cmd === 'help') { openHelpModal(); return; }
     if (cmd === 'link') { openLinkPopover(editor); return; }
     if (cmd === 'mention') { openMentionPopover(editor); return; }
+    if (cmd === 'table') { openTablePicker(editor, btn); return; }
 
     const isMd = editor.classList.contains('mode-markdown');
     if (isMd) {
@@ -435,9 +465,6 @@
       case 'alignLeft': applyTextAlign(area, 'left'); break;
       case 'alignCenter': applyTextAlign(area, 'center'); break;
       case 'alignRight': applyTextAlign(area, 'right'); break;
-      case 'table':
-        document.execCommand('insertHTML', false, mdToHtml(DEFAULT_TABLE_MD) + '<p><br></p>');
-        break;
       case 'math':
         document.execCommand('insertText', false, '$$ a^2 + b^2 = c^2 $$');
         break;
@@ -452,6 +479,7 @@
     syncPaneHeight(editor);
     notifyChange();
     updateToolbarState(editor);
+    updateTableControls(editor);
   }
 
   /** Align current block or selected image; keeps heading tags (unlike bare justify*). */
@@ -653,7 +681,6 @@
       case 'h5': linePrefix('### '); break;
       case 'ul': linePrefix('- '); break;
       case 'ol': linePrefix('1. '); break;
-      case 'table': insertAtCaret((s > 0 && ta.value[s - 1] !== '\n' ? '\n\n' : '\n') + DEFAULT_TABLE_MD); break;
       case 'alignLeft': case 'alignCenter': case 'alignRight': break;
       case 'math':
         if (sel && sel.indexOf('\n') !== -1) wrap('$$\n', '\n$$', 'a^2+b^2=c^2');
@@ -665,6 +692,273 @@
         break;
       case 'blank': insertAtCaret('{{blank}}'); break;
     }
+  }
+
+  /* ---- Table size picker + row/col controls ---- */
+  let tablePickerEditor = null;
+  let tablePickerDocBound = false;
+
+  function insertPipeTable(editor, rows, cols) {
+    const md = buildPipeTableMd(rows, cols);
+    if (editor.classList.contains('mode-markdown')) {
+      const ta = editor.querySelector('.rich-editor-markdown textarea');
+      if (!ta) return;
+      const s = ta.selectionStart;
+      const e = ta.selectionEnd;
+      const pad = (s > 0 && ta.value[s - 1] !== '\n') ? '\n\n' : (s > 0 ? '\n' : '');
+      const text = pad + md + '\n';
+      ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+      const pos = s + text.length;
+      ta.selectionStart = ta.selectionEnd = pos;
+      ta.focus();
+      ta.dispatchEvent(new Event('input'));
+      return;
+    }
+    const area = editor.querySelector('.rich-editor-body');
+    if (!area) return;
+    area.focus();
+    restoreSavedSelection(area);
+    document.execCommand('insertHTML', false, mdToHtml(md) + '<p><br></p>');
+    syncMarkdownFromRich(editor);
+    projectRichFromMarkdown(editor);
+    syncPaneHeight(editor);
+    notifyChange();
+    updateToolbarState(editor);
+    updateTableControls(editor);
+  }
+
+  function ensureTablePicker() {
+    let el = document.getElementById('rte-table-picker');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'rte-table-picker';
+    el.className = 'rte-table-picker';
+    el.hidden = true;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Insert table');
+    let cells = '';
+    for (let r = 1; r <= TABLE_PICKER_MAX; r++) {
+      for (let c = 1; c <= TABLE_PICKER_MAX; c++) {
+        cells += '<button type="button" class="rte-table-picker-cell" data-r="' + r +
+          '" data-c="' + c + '" aria-label="' + r + '\u00d7' + c + '"></button>';
+      }
+    }
+    el.innerHTML =
+      '<div class="rte-table-picker-grid">' + cells + '</div>' +
+      '<div class="rte-table-picker-label">Insert a 1\u00d71 table</div>';
+    document.body.appendChild(el);
+
+    const label = el.querySelector('.rte-table-picker-label');
+    const paint = (rows, cols) => {
+      el.querySelectorAll('.rte-table-picker-cell').forEach((cell) => {
+        const r = +cell.dataset.r;
+        const c = +cell.dataset.c;
+        cell.classList.toggle('is-active', r <= rows && c <= cols);
+      });
+      label.textContent = 'Insert a ' + rows + '\u00d7' + cols + ' table';
+    };
+    paint(1, 1);
+
+    el.addEventListener('mouseover', (e) => {
+      const cell = e.target.closest('.rte-table-picker-cell');
+      if (!cell || !el.contains(cell)) return;
+      paint(+cell.dataset.r, +cell.dataset.c);
+    });
+    el.addEventListener('mouseleave', () => paint(1, 1));
+    el.addEventListener('mousedown', (e) => e.preventDefault());
+    el.addEventListener('click', (e) => {
+      const cell = e.target.closest('.rte-table-picker-cell');
+      if (!cell || !tablePickerEditor) return;
+      const editor = tablePickerEditor;
+      const rows = +cell.dataset.r;
+      const cols = +cell.dataset.c;
+      closeTablePicker();
+      insertPipeTable(editor, rows, cols);
+    });
+    return el;
+  }
+
+  function closeTablePicker() {
+    const el = document.getElementById('rte-table-picker');
+    if (el) el.hidden = true;
+    tablePickerEditor = null;
+  }
+
+  function openTablePicker(editor, anchorBtn) {
+    const el = ensureTablePicker();
+    if (!el.hidden && tablePickerEditor === editor) {
+      closeTablePicker();
+      return;
+    }
+    tablePickerEditor = editor;
+    el.hidden = false;
+    el.querySelectorAll('.rte-table-picker-cell').forEach((c) => c.classList.remove('is-active'));
+    const first = el.querySelector('.rte-table-picker-cell[data-r="1"][data-c="1"]');
+    if (first) first.classList.add('is-active');
+    const label = el.querySelector('.rte-table-picker-label');
+    if (label) label.textContent = 'Insert a 1\u00d71 table';
+
+    const btn = anchorBtn || editor.querySelector('.rich-toolbar button[data-cmd="table"]');
+    const rect = (btn || editor).getBoundingClientRect();
+    const pad = 6;
+    // position:fixed — use viewport coordinates
+    el.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 280)) + 'px';
+    el.style.top = (rect.bottom + pad) + 'px';
+
+    if (!tablePickerDocBound) {
+      tablePickerDocBound = true;
+      document.addEventListener('mousedown', (e) => {
+        const picker = document.getElementById('rte-table-picker');
+        if (!picker || picker.hidden) return;
+        if (picker.contains(e.target)) return;
+        if (e.target.closest && e.target.closest('.rich-toolbar button[data-cmd="table"]')) return;
+        closeTablePicker();
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeTablePicker();
+      });
+    }
+  }
+
+  function ensureTableControls(editor) {
+    let bar = editor.querySelector('.rte-table-controls');
+    if (bar) return bar;
+    bar = document.createElement('div');
+    bar.className = 'rte-table-controls';
+    bar.hidden = true;
+    bar.innerHTML =
+      '<span class="rte-table-controls-label"><i class="fa fa-table"></i> 表格</span>' +
+      '<button type="button" data-table-act="row-below" title="在下方插入行">+ 行</button>' +
+      '<button type="button" data-table-act="del-row" title="删除当前行">删行</button>' +
+      '<button type="button" data-table-act="col-right" title="在右侧插入列">+ 列</button>' +
+      '<button type="button" data-table-act="del-col" title="删除当前列">删列</button>' +
+      '<button type="button" data-table-act="del-table" class="rte-table-act-danger" title="删除整个表格">删表</button>';
+    const toolbar = editor.querySelector('.rich-editor-toolbar-row');
+    if (toolbar && toolbar.parentNode) toolbar.parentNode.insertBefore(bar, toolbar.nextSibling);
+    else editor.insertBefore(bar, editor.firstChild);
+    bar.addEventListener('mousedown', (e) => e.preventDefault());
+    bar.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-table-act]');
+      if (!btn) return;
+      runTableAction(editor, btn.getAttribute('data-table-act'));
+    });
+    return bar;
+  }
+
+  function closestEditorTable(node, area) {
+    if (!node || !area) return null;
+    let el = node.nodeType === 1 ? node : node.parentElement;
+    if (!el || !el.closest) return null;
+    const wrap = el.closest('.h-scrollable-table');
+    if (wrap && area.contains(wrap)) return wrap.querySelector('table');
+    const table = el.closest('table');
+    return (table && area.contains(table)) ? table : null;
+  }
+
+  function activeTableContext(editor) {
+    const area = editor.querySelector('.rich-editor-body');
+    if (!area || editor.classList.contains('mode-markdown')) return null;
+    const node = selectionNode(area);
+    const table = closestEditorTable(node, area);
+    if (!table) return null;
+    let el = node && (node.nodeType === 1 ? node : node.parentElement);
+    const cell = el && el.closest ? el.closest('th,td') : null;
+    if (!cell || !table.contains(cell)) return { table: table, cell: null, row: null, colIndex: -1 };
+    const row = cell.parentElement;
+    const colIndex = Array.prototype.indexOf.call(row.children, cell);
+    return { table: table, cell: cell, row: row, colIndex: colIndex };
+  }
+
+  function updateTableControls(editor) {
+    const bar = ensureTableControls(editor);
+    const ctx = activeTableContext(editor);
+    bar.hidden = !ctx;
+    if (ctx) editor._rteTableCtx = ctx;
+  }
+
+  function tableColCount(table) {
+    const head = table.querySelector('thead tr') || table.querySelector('tr');
+    return head ? head.children.length : 0;
+  }
+
+  function makeTableCell(tag) {
+    const cell = document.createElement(tag || 'td');
+    cell.innerHTML = '<br>';
+    return cell;
+  }
+
+  function runTableAction(editor, act) {
+    const area = editor.querySelector('.rich-editor-body');
+    if (!area) return;
+    area.focus();
+    restoreSavedSelection(area);
+    let ctx = activeTableContext(editor) || editor._rteTableCtx;
+    if (!ctx || !ctx.table || !area.contains(ctx.table)) {
+      updateTableControls(editor);
+      return;
+    }
+    const table = ctx.table;
+    const wrap = table.closest('.h-scrollable-table') || table;
+    const cols = tableColCount(table);
+    if (cols < 1) return;
+
+    if (act === 'del-table') {
+      const p = document.createElement('p');
+      p.innerHTML = '<br>';
+      wrap.parentNode.insertBefore(p, wrap);
+      wrap.parentNode.removeChild(wrap);
+    } else if (act === 'row-below') {
+      let tbody = table.querySelector('tbody');
+      if (!tbody) {
+        tbody = document.createElement('tbody');
+        table.appendChild(tbody);
+      }
+      const tr = document.createElement('tr');
+      for (let i = 0; i < cols; i++) tr.appendChild(makeTableCell('td'));
+      if (ctx.row && ctx.row.parentElement === tbody) {
+        tbody.insertBefore(tr, ctx.row.nextSibling);
+      } else {
+        tbody.appendChild(tr);
+      }
+    } else if (act === 'del-row') {
+      if (!ctx.row) return;
+      if (ctx.row.closest('thead')) return; // keep header; use 删表 to remove whole table
+      const tbody = ctx.row.parentElement;
+      tbody.removeChild(ctx.row);
+      if (!tbody.querySelector('tr')) {
+        // header-only table is fine
+      }
+    } else if (act === 'col-right') {
+      if (cols >= TABLE_PICKER_MAX) return;
+      const at = ctx.colIndex >= 0 ? ctx.colIndex + 1 : cols;
+      table.querySelectorAll('tr').forEach((tr) => {
+        const tag = tr.closest('thead') ? 'th' : 'td';
+        const cell = makeTableCell(tag);
+        if (at >= tr.children.length) tr.appendChild(cell);
+        else tr.insertBefore(cell, tr.children[at]);
+      });
+    } else if (act === 'del-col') {
+      if (ctx.colIndex < 0) return;
+      if (cols <= 1) {
+        const p = document.createElement('p');
+        p.innerHTML = '<br>';
+        wrap.parentNode.insertBefore(p, wrap);
+        wrap.parentNode.removeChild(wrap);
+      } else {
+        table.querySelectorAll('tr').forEach((tr) => {
+          if (tr.children[ctx.colIndex]) tr.removeChild(tr.children[ctx.colIndex]);
+        });
+      }
+    } else {
+      return;
+    }
+
+    syncMarkdownFromRich(editor);
+    projectRichFromMarkdown(editor);
+    syncPaneHeight(editor);
+    notifyChange();
+    updateToolbarState(editor);
+    updateTableControls(editor);
   }
 
   /* ---- Link / mention / help overlays ---- */
