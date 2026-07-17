@@ -99,7 +99,7 @@
     const pendingPayload = [];
 
     list.forEach((item, i) => {
-      const md = item && item.md == null ? '' : String(item.md);
+      const md = !item || item.md == null ? '' : String(item.md);
       const key = item && item.key != null ? String(item.key) : String(i);
       if (state.cache.has(md)) {
         results[i] = { key: key, html: state.cache.get(md) };
