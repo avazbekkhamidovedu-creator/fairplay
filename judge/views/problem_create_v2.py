@@ -532,6 +532,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data.zipfile = None
 
         data.save()
+        # Drop cached reverse OneToOne so later ``problem.data_files`` sees this write
+        # (same request often already touched data_files before _save_testcases).
+        problem.__dict__.pop('data_files', None)
         ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
 
     # ------------------------------------------------------------------ mcq problem

@@ -363,6 +363,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         self.assertEqual(case.input_file, 'sample.in')
         self.assertEqual(case.output_file, 'sample.out')
         data = problem.data_files
+        data.refresh_from_db()
         self.assertEqual(data.checker, 'floats')
         self.assertTrue(bool(data.zipfile))
         with zipfile.ZipFile(data.zipfile.path) as zf:
