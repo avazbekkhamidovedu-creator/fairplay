@@ -49,7 +49,7 @@ class BuildMessagesTests(TestCase):
         messages = ShortAnswerQuestionType._build_messages(
             self.problem, 'x=2', 'Check steps', 'x=2', self.sub_questions,
         )
-        system_msg, user_msg = messages[0], messages[1]
+        system_msg = messages[0]
         self.assertEqual(system_msg['role'], 'system')
         content = system_msg['content']
         self.assertIn('Correctness', content)
