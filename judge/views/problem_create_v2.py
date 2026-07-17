@@ -136,9 +136,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
         # When ``edit_code`` is present we update the existing problem in place (keeping its code/URL)
         # instead of creating a new one; this powers "Save and continue editing".
+        # Prefer body ``edit_code``; fall back to the URL kwarg used by problem_edit_v2.
         existing = None
-        edit_code = (payload.get('edit_code') or '').strip()
+        edit_code = (payload.get('edit_code') or kwargs.get('problem') or '').strip()
         if edit_code:
+            payload['edit_code'] = edit_code
             try:
                 existing = self._get_editable_problem(request, edit_code)
             except PermissionError as e:

@@ -325,6 +325,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
             'description': 'still has cases',
             'points': 10,
             'group_id': self.group.id,
+            'edit_code': code,
             # intentionally omit testcases
         }
         edit_resp = self.client.post(
