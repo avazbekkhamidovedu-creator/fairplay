@@ -180,11 +180,12 @@
     const rich = editor.querySelector('.rich-editor-body');
     const ta = editor.querySelector('.rich-editor-markdown textarea');
     if (!rich || !ta) return;
-    const floor = editor.classList.contains('compact') ? 80 : 200;
-    // Shrink as well as grow: re-measure natural content height against floor.
-    const h = Math.max(measureContentHeight(rich, floor), measureContentHeight(ta, floor), floor);
-    rich.style.minHeight = h + 'px';
-    ta.style.minHeight = h + 'px';
+    // Shell height is CSS-owned (same for rich / Markdown). Clear inline sizes
+    // so mode switches cannot leave one pane taller/shorter than the other.
+    rich.style.minHeight = '';
+    rich.style.height = '';
+    ta.style.minHeight = '';
+    ta.style.height = '';
   }
 
   // Block-level cmds reproject from MD so rich view matches source (lists/quotes/fences).
@@ -1060,6 +1061,34 @@
     return (a === 'center' || a === 'right' || a === 'left') ? a : '';
   }
 
+  /** Serialize children of an align <div>: keep heading/p tags; route imgs via imgToMarkup. */
+  function serializeAlignInner(el) {
+    let inner = '';
+    Array.prototype.forEach.call(el.childNodes, (child) => {
+      if (child.nodeType === 3) {
+        inner += child.nodeValue;
+        return;
+      }
+      if (child.nodeType !== 1) return;
+      const ct = child.tagName.toLowerCase();
+      if (/^h[1-6]$/.test(ct) || ct === 'p' || ct === 'blockquote') {
+        inner += '<' + ct + '>' + serializeInline(child) + '</' + ct + '>';
+        return;
+      }
+      if (ct === 'img') {
+        inner += imgToMarkup(child);
+        return;
+      }
+      if (ct === 'br') {
+        inner += '<br>';
+        return;
+      }
+      // Nested align / misc: fall back to inline serialization of this node.
+      inner += serializeNode(child);
+    });
+    return inner;
+  }
+
   function serializeBlocks(nodes) {
     let out = '';
     let inlineBuf = '';
@@ -1105,7 +1134,7 @@
         return;
       }
       if (align && tag === 'div') {
-        out += '<div style="text-align:' + align + '">' + serializeInline(n) + '</div>\n\n';
+        out += '<div style="text-align:' + align + '">' + serializeAlignInner(n) + '</div>\n\n';
         return;
       }
       if (tag === 'div' && n.classList && n.classList.contains('h-scrollable-table')) {

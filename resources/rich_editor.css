@@ -5,9 +5,17 @@
   border-radius: 6px;
   overflow: hidden;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  /* Fixed shell so rich / Markdown modes share the same viewport size. */
+  height: min(70vh, 640px);
+  max-height: min(70vh, 640px);
+}
+.rich-editor.compact {
+  height: min(45vh, 360px);
+  max-height: min(45vh, 360px);
 }
 .rich-editor.compact .rich-editor-body { min-height: 80px; }
-.rich-editor.compact .rich-editor-markdown textarea { min-height: 80px; }
 .rich-editor-toolbar-row {
   display: flex;
   align-items: center;
@@ -17,6 +25,16 @@
   background: #fafafa;
   border-bottom: 1px solid #ddd;
   flex-wrap: wrap;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.rich-editor-rich,
+.rich-editor-markdown {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 .editor-mode-tabs {
   display: flex;
@@ -77,21 +95,28 @@
 .rich-editor-markdown {
   display: none;
 }
-/* Markdown 模式仅切换编辑面，保留工具栏；高度与富文本面共用同一 min-height */
+/* Markdown 模式与富文本共用同一外壳高度；textarea 撑满剩余区域 */
 .rich-editor.mode-markdown .rich-editor-rich { display: none; }
-.rich-editor.mode-markdown .rich-editor-markdown { display: block; }
-.rich-editor.mode-markdown .editor-preview { display: block; }
+.rich-editor.mode-markdown .rich-editor-markdown {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rich-editor.mode-markdown .editor-preview { display: none; }
 .rich-editor-markdown textarea {
+  flex: 1 1 auto;
   width: 100%;
-  min-height: 200px;
+  min-height: 0;
+  height: 100%;
   box-sizing: border-box;
   border: none;
   padding: 0.75rem 1rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
-  resize: vertical;
+  resize: none;
   outline: none;
+  overflow: auto;
 }
 .editor-preview {
   display: none;
