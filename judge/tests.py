@@ -796,8 +796,10 @@ class FillBlankGradingIntegrationTests(TestCase):
         mock_call.return_value = json.dumps({
             'sub_scores': [
                 {'name': 'Blank 1', 'score': 1.0, 'feedback': 'Correct.'},
+                {'name': 'Blank 2', 'score': 1.0, 'feedback': 'Correct.'},
+                {'name': 'Blank 3', 'score': 1.0, 'feedback': 'Correct.'},
             ],
-            'total_score': 1.0,
+            'total_score': 3.0,
         })
 
         problem = mock.Mock()
