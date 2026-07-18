@@ -927,7 +927,7 @@ class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
             items = parsed.get('sub_questions', [])
             if not isinstance(items, list) or not items:
                 return []
-            return [{'name': f'Part {i + 1}: {str(item.get("name", ""))[:30]}',
+            return [{'name': str(item.get('name', ''))[:30],
                      'max_points': float(item.get('max_points', 0))}
                     for i, item in enumerate(items) if item.get('name')]
         except Exception as e:

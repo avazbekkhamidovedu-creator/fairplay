@@ -123,6 +123,9 @@ def apply_preset(spline_score: float, max_score: float, strictness: str) -> floa
     The lift is applied as percentage points on the 0-100 scale, then
     denormalised back to the original *max_score*.
     """
+    if max_score <= 0:
+        return 0.0
+
     pct = spline_score / max_score * 100.0
 
     if strictness == 'strict':
@@ -146,7 +149,11 @@ def calibrate(raw_score: float, max_score: float,
 
     Returns the calibrated score on the original *max_score* scale,
     rounded to 0.5 precision and clipped to [0, max_score].
+    Safe for max_score ≤ 0 (returns 0).
     """
+    if max_score <= 0:
+        return 0.0
+
     spline = apply_spline(raw_score, max_score)
     corrected = apply_preset(spline, max_score, strictness)
     rounded = round_half(corrected)

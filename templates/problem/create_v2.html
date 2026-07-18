@@ -1937,7 +1937,7 @@
         if (!name) return;
         items.push({
           name: name,
-          max_points: (function(v) { var n = parseFloat(v); return isNaN(n) || n <= 0 ? 0.5 : n; })(ptsEl.value),
+          max_points: (function(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; })(ptsEl.value),
           strictness: active ? active.dataset.level : 'normal',
         });
       });
@@ -1947,8 +1947,8 @@
     function addSubQuestion(item) {
       gtableSeq++;
       if (item) {
-        // AI-generated or restored: use Part N if name missing
-        if (!item.name) item.name = 'Part ' + gtableSeq;
+        // AI-generated or restored: keep existing name, leave blank if missing
+        if (!item.name) item.name = '';
       } else {
         // Manual add: blank name, user fills in
         item = { name: '', max_points: 1, strictness: 'normal' };

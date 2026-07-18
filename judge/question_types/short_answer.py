@@ -139,7 +139,11 @@ class ShortAnswerQuestionType(QuestionType):
         # comparison when the LLM slightly rephrases a label.
         calibrated = []
         for i, sq in enumerate(sub_scores):
-            raw_score = float(sq.get('score', 0))
+            try:
+                raw_score = float(sq.get('score', 0))
+            except (ValueError, TypeError):
+                logger.warning('Short-answer: non-numeric score from LLM: %r', sq.get('score'))
+                raw_score = 0.0
             name = str(sq.get('name', ''))[:30]
             if i < len(sub_questions):
                 max_pts = sub_questions[i]['max_points']

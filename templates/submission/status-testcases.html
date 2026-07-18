@@ -17,6 +17,7 @@
             {% else %}
                 {{ _('We are waiting for a suitable judge to process your submission...') }}
             {% endif %}</h4>
+            {% if qu_retrying %}<p style="color:#888;font-size:12px;">{{ _('Grading timed out — retrying automatically.') }}</p>{% endif %}
         </div>
     {% elif submission.status == 'P' %}
         <h4>{{ _('Your submission is being processed...') }}</h4>
