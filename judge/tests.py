@@ -1,3 +1,7 @@
+import json
+from unittest import TestCase as StdlibTestCase
+from unittest import mock
+
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -5,6 +9,9 @@ from django.utils import timezone
 
 from judge.models import Contest, ContestProblem, Language, Problem
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type
+from judge.question_types.fill_blank import FillBlankQuestionType
+from judge.question_types.short_answer import ShortAnswerQuestionType
+from judge.utils.calibration import apply_preset, apply_spline, calibrate, round_half
 
 
 class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
@@ -339,13 +346,9 @@ class ContestAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertEqual(contest.scoreboard_visibility, Contest.SCOREBOARD_HIDDEN)
         self.assertEqual(contest.points_precision, 5)
         self.assertEqual(contest.access_code, 'contest-code')
-"""Unit tests for judge.utils.calibration — spline, presets, round_half."""
-from unittest import TestCase
-
-from judge.utils.calibration import apply_preset, apply_spline, calibrate, round_half
 
 
-class RoundHalfTests(TestCase):
+class RoundHalfTests(StdlibTestCase):
     def test_exact_half(self):
         self.assertEqual(round_half(0.5), 0.5)
         self.assertEqual(round_half(1.5), 1.5)
@@ -369,7 +372,7 @@ class RoundHalfTests(TestCase):
         self.assertEqual(round_half(-1.2), -1.0)
 
 
-class ApplySplineTests(TestCase):
+class ApplySplineTests(StdlibTestCase):
     def test_max_score_5_known_raw(self):
         """Verify spline at anchor points for max_score=5."""
         # raw=0 → spline ≈ 0
@@ -409,7 +412,7 @@ class ApplySplineTests(TestCase):
             self.assertLessEqual(result, 5.0)
 
 
-class ApplyPresetTests(TestCase):
+class ApplyPresetTests(StdlibTestCase):
     def test_strict_no_lift(self):
         """Strict preset should not add any lift."""
         self.assertAlmostEqual(apply_preset(3.0, 5.0, 'strict'), 3.0, delta=0.1)
@@ -441,7 +444,7 @@ class ApplyPresetTests(TestCase):
         self.assertAlmostEqual(score, normal_score, delta=0.1)
 
 
-class CalibrateFullPipelineTests(TestCase):
+class CalibrateFullPipelineTests(StdlibTestCase):
     def test_zero_in_zero_out(self):
         self.assertEqual(calibrate(0.0, 5.0, 'strict'), 0.0)
 
@@ -481,20 +484,9 @@ class CalibrateFullPipelineTests(TestCase):
         result = calibrate(2.0, 10.0, 'normal')
         self.assertGreaterEqual(result, 0.0)
         self.assertLessEqual(result, 10.0)
-"""Tests for AI grading logic — index matching, calibration integration, edge cases."""
-import json
-from unittest import mock
-from unittest.case import TestCase
-
-from django.test import TestCase as DjangoTestCase
-
-from judge.question_types.fill_blank import FillBlankQuestionType
-from judge.question_types.short_answer import ShortAnswerQuestionType
 
 
-# ── Pure-logic tests (no Django models) ──────────────────────────────
-
-class SubQuestionBuildingTests(TestCase):
+class SubQuestionBuildingTests(StdlibTestCase):
     def test_with_valid_grading_table(self):
         table = [
             {'name': 'Part 1', 'max_points': 3.0, 'strictness': 'strict'},
@@ -518,7 +510,7 @@ class SubQuestionBuildingTests(TestCase):
         self.assertEqual(result[0]['max_points'], 5.0)
 
 
-class BuildMessagesTests(TestCase):
+class BuildMessagesTests(StdlibTestCase):
     """Verify prompt structure includes key scoring dimensions and grading table."""
     def setUp(self):
         self.problem = mock.Mock()
@@ -569,7 +561,7 @@ class BuildMessagesTests(TestCase):
         self.assertNotIn('Teacher Rubric', messages[1]['content'])
 
 
-class IndexMatchingTests(TestCase):
+class IndexMatchingTests(StdlibTestCase):
     """Index-based matching: LLM returns sub_scores in order → match by position."""
 
     def setUp(self):
@@ -660,7 +652,7 @@ class IndexMatchingTests(TestCase):
 
 # ── Django-integration tests ─────────────────────────────────────────
 
-class ShortAnswerGradingIntegrationTests(DjangoTestCase):
+class ShortAnswerGradingIntegrationTests(TestCase):
     """End-to-end short answer grading with mocked LLM in Django context."""
 
     def setUp(self):
@@ -752,7 +744,7 @@ class ShortAnswerGradingIntegrationTests(DjangoTestCase):
         self.assertEqual(calibrated[0]['score'] * 2, int(calibrated[0]['score'] * 2))
 
 
-class FillBlankGradingIntegrationTests(DjangoTestCase):
+class FillBlankGradingIntegrationTests(TestCase):
     """Fill-blank AI grading — index matching, grading_table vs blanks mismatch."""
 
     def setUp(self):
@@ -866,7 +858,7 @@ class FillBlankGradingIntegrationTests(DjangoTestCase):
         self.assertIsNone(result)
 
 
-class FillBlankPromptTests(TestCase):
+class FillBlankPromptTests(StdlibTestCase):
     """Verify fill-blank prompt includes code/math awareness."""
 
     def test_system_prompt_contains_code_aware(self):
