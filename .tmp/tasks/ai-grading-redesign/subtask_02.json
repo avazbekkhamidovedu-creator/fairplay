@@ -1,0 +1,24 @@
+{
+  "id": "ai-grading-redesign-02",
+  "seq": "02",
+  "title": "Add grading_table JSONField to ProblemFillBlankConfig and ProblemShortAnswerConfig models",
+  "status": "pending",
+  "depends_on": [],
+  "parallel": true,
+  "suggested_agent": "CoderAgent",
+  "context_files": [],
+  "reference_files": [
+    "judge/models/question.py"
+  ],
+  "acceptance_criteria": [
+    "ProblemFillBlankConfig gains a grading_table = models.JSONField(null=True, blank=True, default=None) with help_text describing the sub-question structure",
+    "ProblemShortAnswerConfig gains a grading_table = models.JSONField(null=True, blank=True, default=None) with help_text describing the sub-question structure",
+    "grading_table stores a list of dicts, each with keys: 'label' (str), 'score' (float), 'strictness' (str: 'Strict'|'Normal'|'Lenient'), and optionally 'reference' (str)",
+    "grading_table=None means old single-case grading behavior (backward compatible)",
+    "Django migration file is auto-generated and committed",
+    "Existing tests still pass after migration"
+  ],
+  "deliverables": ["Modified judge/models/question.py", "New Django migration in judge/migrations/"],
+  "bounded_context": "grading",
+  "module": "judge.models.question"
+}

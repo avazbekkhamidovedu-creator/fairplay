@@ -1,0 +1,35 @@
+{
+  "id": "ai-grading-redesign-07",
+  "seq": "07",
+  "title": "Build grading table editor UI in create_v2.html with CSS styling and AI decompose integration",
+  "status": "pending",
+  "depends_on": ["02", "06"],
+  "parallel": false,
+  "suggested_agent": "OpenFrontendSpecialist",
+  "context_files": [
+    ".opencode/context/ui/web/ui-styling-standards.md",
+    ".opencode/context/ui/web/animation-basics.md"
+  ],
+  "reference_files": [
+    "templates/problem/create_v2.html",
+    "resources/problem_create_v2.css",
+    "judge/models/question.py"
+  ],
+  "acceptance_criteria": [
+    "Grading table appears on create_v2.html when 'short' or 'blank' question type is selected",
+    "Table has columns: Sub-question Label (text input), Max Score (number input, min 0.5, step 0.5), Strictness (pill buttons: Strict/Normal/Lenient, default Normal), Reference/Key Points (optional textarea)",
+    "Add Row button inserts a new editable row at the bottom",
+    "Each row has a Delete button (× icon) that removes the row",
+    "Strictness pills toggle with visual active state (green highlight for selected, per existing .sq-pill.on pattern in the codebase)",
+    "AI Decompose button triggers POST to /problems/new/ai-decompose/ with the problem description; shows loading spinner during request; on success, populates the grading table with returned sub-questions",
+    "Loading spinner: CSS animation (pulsing/rotating) applied to the AI Decompose button or a dedicated spinner element (using CSS animation patterns from animation-basics.md)",
+    "Grading table data is serialized to a hidden JSON input and sent with the problem form on save",
+    "On edit (existing problem load), the grading table is populated from the saved grading_table JSONField",
+    "Responsive: table is scrollable horizontally on narrow screens",
+    "Styling matches the existing dmoj-green theme and uses existing CSS variables (--admin-border, --dmoj-green, --muted, etc.)",
+    "Table styling added to resources/problem_create_v2.css: .grading-table, .grading-table th, .grading-table td, .grading-table input, .strictness-pills, .ai-decompose-btn"
+  ],
+  "deliverables": ["Modified templates/problem/create_v2.html", "Modified resources/problem_create_v2.css"],
+  "bounded_context": "problem-authoring-ui",
+  "module": "templates"
+}

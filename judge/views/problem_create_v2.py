@@ -70,6 +70,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 raise Http404()
             context['title'] = _('Edit problem')
             context['edit_code'] = problem.code
+            context['edit_name'] = problem.name
             context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
             context['test_data_url'] = reverse('problem_data', args=[problem.code])
             context['edit_detail_url'] = reverse('problem_detail', args=[problem.code])
@@ -101,6 +102,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'create_organization_url': reverse('problem_create_v2_organization'),
             'can_create_organization': user.has_perm('judge.create_private_problem'),
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
+            'ai_decompose_url': reverse('problem_create_v2_ai_decompose'),
             'problem_list_url': reverse('problem_list'),
             'problem_preview_url': reverse('problem_preview'),
             'problem_preview_batch_url': reverse('problem_preview_batch'),
@@ -242,6 +244,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['trimWhitespace'] = bool(config.trim_whitespace) if config else True
             data['ai'] = bool(config and config.grading_mode == GRADE_AI)
             data['rubric'] = (config.ai_rubric if config else '') or ''
+            data['gradingTable'] = config.grading_table if config else None
             # ProblemBlank stores accepted answers one-per-line and the create page now edits them
             # the same way (one accepted answer per line in a textarea), so pass them through as-is.
             data['blanks'] = list(problem.blanks.order_by('order').values_list('answers', flat=True))
@@ -250,7 +253,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             config = getattr(problem, 'short_answer_config', None)
             data['shortAnswer'] = (config.reference_answer if config else '') or ''
             data['rubric'] = (config.ai_rubric if config else '') or ''
-            data['ai'] = bool(config and (config.ai_rubric or '').strip())
+            data['ai'] = True  # short answer always uses AI grading
+            data['gradingTable'] = config.grading_table if config else None
         else:
             data['type'] = 'single'
         return data
@@ -583,6 +587,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 trim_whitespace=bool(payload.get('trimWhitespace', True)),
                 grading_mode=GRADE_AI if bool(payload.get('ai')) else GRADE_EXACT,
                 ai_rubric=(payload.get('rubric') or '').strip(),
+                grading_table=payload.get('gradingTable') or None,
             )
             # The create page enters accepted answers one-per-line per blank; ProblemBlank stores
             # them the same way (the grader splits on newlines).
@@ -623,6 +628,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 problem=problem,
                 reference_answer=(payload.get('shortAnswer') or '').strip(),
                 ai_rubric=(payload.get('rubric') or '').strip(),
+                grading_table=payload.get('gradingTable') or None,
             )
         return problem
 
@@ -845,3 +851,87 @@ class ProblemCreateV2AIProblemTypeView(LoginRequiredMixin, View):
         if picked:
             return picked
         return [{'name': 'general', 'full': 'General', 'existing': False}]
+
+
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
+    """Use the LLM to decompose a problem description into independent sub-questions
+    for a grading table.  Each sub-question should test a distinct, scorable concept.
+
+    Uses a dedicated lightweight model (profile ``decompose``) so grading throughput
+    is not affected."""
+
+    def post(self, request, *args, **kwargs):
+        if not _can_create_any(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': _('Invalid request.')}, status=400)
+
+        description = (payload.get('description') or '').strip()
+        total_points = payload.get('total_points') or 1.0
+        if not description:
+            return JsonResponse({'error': _('Please enter problem content first.')}, status=400)
+
+        try:
+            sub_questions = self._decompose(description, float(total_points))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('AI decompose failed')
+            return JsonResponse({'error': _('The AI service is temporarily unavailable. '
+                                            'Please try again later.')}, status=503)
+        return JsonResponse({'sub_questions': sub_questions})
+
+    def _decompose(self, description, total_points):
+        from judge import llm
+        import logging
+        _log = logging.getLogger(__name__)
+
+        if not llm.is_configured():
+            _log.warning('Decompose called but LLM is not configured')
+            raise RuntimeError('LLM not configured')
+
+        try:
+            messages = [
+                {'role': 'system', 'content': (
+                    'You decompose educational problems into independent sub-questions '
+                    'for grading. Each sub-question must test a distinct conceptual '
+                    'understanding or skill that can be scored independently. '
+                    'Do NOT create sub-questions for trivial aspects like "expression '
+                    'precision" or "writing style". Sub-questions should have no strong '
+                    'dependencies on each other — a student could answer one correctly '
+                    'and another incorrectly based on distinct knowledge gaps.\n\n'
+                    'Reply with ONLY valid JSON:\n'
+                    '{"sub_questions": ['
+                    '  {"name": "short label (≤30 chars)", "max_points": float}, ...]}\n'
+                    '- Use Chinese or English matching the problem language.\n'
+                    '- Each max_points should be a positive number.\n'
+                    '- When there are no clear sub-questions, return exactly one item '
+                    '  with max_points equal to the total points.'
+                )},
+                {'role': 'user', 'content': (
+                    f'Problem description:\n{description[:2000]}\n\n'
+                    f'Total points: {total_points}\n\n'
+                    f'Break this problem into 1-5 independent sub-questions.'
+                )},
+            ]
+            text = llm.chat(messages, profile='decompose', max_tokens=1024).text.strip()
+
+            # Strip markdown fences if present
+            if text.startswith('```'):
+                lines = text.split('\n')
+                text = '\n'.join(lines[1:]) if len(lines) > 1 else text
+                if text.endswith('```'):
+                    text = text.rsplit('```', 1)[0]
+
+            parsed = json.loads(text)
+            items = parsed.get('sub_questions', [])
+            if not isinstance(items, list) or not items:
+                return []
+            return [{'name': str(item.get('name', ''))[:30],
+                     'max_points': float(item.get('max_points', 0))}
+                    for i, item in enumerate(items) if item.get('name')]
+        except Exception as e:
+            _log.exception('Decomposition failed')
+            raise RuntimeError('Decomposition failed') from e
