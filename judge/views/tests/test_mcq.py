@@ -1,12 +1,15 @@
+import io
 import json
 from unittest import mock
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from judge.models import Class, Problem, ProblemMCQConfig, ProblemMCQOption, Submission, SubmissionSource
+from judge.models import Class, Organization, Problem, ProblemMCQConfig, ProblemMCQOption, Submission, SubmissionSource
 from judge.models.tests.util import CommonDataMixin, create_problem, create_user
 from judge.submission_grading import grade_internally
+from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 
 
 def option_post_data(rows, multiple=False, shuffle=False, **problem_fields):
@@ -81,6 +84,47 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(self.client.get(reverse('problem_mcq_create')).status_code, 404)
         self.client.force_login(self.users['creator'])
         self.assertEqual(self.client.get(reverse('problem_mcq_create')).status_code, 200)
+
+    def test_create_page_shows_excel_actions(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.get(reverse('problem_mcq_create'))
+        self.assertContains(response, 'Download Excel Template', html=False)
+        self.assertContains(response, 'Upload Excel', html=False)
+        self.assertContains(response, 'id="mcq-excel-input"', html=False)
+        self.assertContains(response, 'function setStatusText(message, isError)', html=False)
+        self.assertContains(response, 'setStatusText(data.message || ', html=False)
+        self.assertContains(response, 'function escapeHtml(value)', html=False)
+        self.assertContains(response, "var summary = escapeHtml(data.message || '');", html=False)
+
+    def test_excel_actions_require_same_permission_as_create_page(self):
+        restricted_creator = create_user(
+            username='restricted_creator',
+            user_permissions=('edit_own_problem',),
+        )
+        self.client.force_login(restricted_creator)
+
+        create_url = reverse('problem_mcq_create')
+        self.assertEqual(self.client.get(create_url).status_code, 404)
+        self.assertEqual(self.client.get('{}?download_excel_template=1'.format(create_url)).status_code, 404)
+
+        workbook = build_xlsx_workbook([
+            ('Problems', [[
+                'name', 'description', 'points', 'partial', 'is_public',
+                'organizations', 'classes', 'multiple_select', 'shuffle_options',
+                'options', 'correct_options',
+            ]]),
+        ])
+        response = self.client.post(
+            create_url,
+            {
+                'excel_file': SimpleUploadedFile(
+                    'mcq.xlsx',
+                    workbook,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_create_flow(self):
         self.client.force_login(self.users['creator'])
@@ -171,6 +215,137 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         response = self.client.post(reverse('problem_mcq_create'), data)
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Problem.objects.filter(name='Ambiguous').exists())
+
+    def test_mcq_excel_template_download(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.get('{}?download_excel_template=1'.format(reverse('problem_mcq_create')))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        self.assertIn('mcq_batch_upload_template.xlsx', response['Content-Disposition'])
+        rows = read_xlsx_rows(io.BytesIO(response.content))
+        self.assertEqual(
+            rows[0],
+            [
+                'name', 'description', 'points', 'partial', 'is_public',
+                'organizations', 'classes', 'multiple_select', 'shuffle_options',
+                'options', 'correct_options',
+            ],
+        )
+
+    def test_mcq_excel_batch_create(self):
+        org = self.organizations['open']
+        org.admins.add(self.users['creator'].profile)
+        cls = Class.objects.create(organization=org, name='MCQ Class', slug='mcq-class')
+        cls.admins.add(self.users['creator'].profile)
+        self.client.force_login(self.users['creator'])
+        workbook = build_xlsx_workbook([
+            ('Problems', [
+                [
+                    'name', 'description', 'points', 'partial', 'is_public',
+                    'organizations', 'classes', 'multiple_select', 'shuffle_options',
+                    'options', 'correct_options',
+                ],
+                [
+                    'Excel MCQ 1', 'Pick all primes', '8', 'true', 'false',
+                    org.slug, cls.slug, 'true', 'true',
+                    '2 | 3 | 4', '1 | 2',
+                ],
+                [
+                    'Excel MCQ 2', '2 + 2 = ?', '', 'false', 'false',
+                    '', '', 'false', 'false',
+                    '3 | 4 | 5', '2',
+                ],
+                [
+                    'Excel MCQ 3', 'Zero-point practice', '0', 'false', 'false',
+                    '', '', 'false', 'false',
+                    'A | B', '1',
+                ],
+            ]),
+        ])
+        response = self.client.post(
+            reverse('problem_mcq_create'),
+            {
+                'excel_file': SimpleUploadedFile(
+                    'mcq.xlsx',
+                    workbook,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['message'], 'Created 3 multiple-choice problems from Excel.')
+        self.assertEqual(payload['redirect_url'], reverse('problem_list'))
+        self.assertEqual(len(payload['created']), 3)
+
+        problem1 = Problem.objects.get(name='Excel MCQ 1')
+        self.assertEqual(problem1.submission_type, 'M')
+        self.assertEqual(problem1.points, 8)
+        self.assertTrue(problem1.partial)
+        self.assertTrue(problem1.is_organization_private)
+        self.assertCountEqual(problem1.organizations.values_list('slug', flat=True), [org.slug])
+        self.assertCountEqual(problem1.classes.values_list('slug', flat=True), [cls.slug])
+        self.assertEqual(problem1.mcq_options.count(), 3)
+        self.assertEqual(problem1.mcq_options.filter(is_correct=True).count(), 2)
+        self.assertTrue(problem1.mcq_config.multiple_select)
+        self.assertTrue(problem1.mcq_config.shuffle_options)
+
+        problem2 = Problem.objects.get(name='Excel MCQ 2')
+        self.assertEqual(problem2.mcq_options.count(), 3)
+        self.assertEqual(problem2.mcq_options.filter(is_correct=True).count(), 1)
+        self.assertFalse(problem2.mcq_config.multiple_select)
+
+        problem3 = Problem.objects.get(name='Excel MCQ 3')
+        self.assertEqual(problem3.points, 0)
+        self.assertEqual(problem3.mcq_options.count(), 2)
+        self.assertEqual(problem3.mcq_options.filter(is_correct=True).count(), 1)
+        self.assertFalse(problem3.mcq_config.multiple_select)
+
+    def test_mcq_excel_batch_create_rejects_organization_outside_visible_scope(self):
+        hidden_org = Organization.objects.create(
+            name='Hidden Org',
+            slug='hidden-org',
+            short_name='HORG',
+            about='hidden',
+        )
+        self.client.force_login(self.users['creator'])
+        workbook = build_xlsx_workbook([
+            ('Problems', [
+                [
+                    'name', 'description', 'points', 'partial', 'is_public',
+                    'organizations', 'classes', 'multiple_select', 'shuffle_options',
+                    'options', 'correct_options',
+                ],
+                [
+                    'Excel MCQ Hidden', 'Pick one', '5', 'false', 'false',
+                    hidden_org.slug, '', 'false', 'false',
+                    'A | B', '1',
+                ],
+            ]),
+        ])
+        response = self.client.post(
+            reverse('problem_mcq_create'),
+            {
+                'excel_file': SimpleUploadedFile(
+                    'mcq.xlsx',
+                    workbook,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertJSONEqual(
+            response.content.decode(),
+            {
+                'ok': False,
+                'message': 'Organization "hidden-org" was not found.',
+            },
+        )
+        self.assertFalse(Problem.objects.filter(name='Excel MCQ Hidden').exists())
 
     def test_edit_permission_and_manually_managed(self):
         problem = create_problem(
