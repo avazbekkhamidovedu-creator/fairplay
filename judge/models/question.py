@@ -102,6 +102,12 @@ class ProblemFillBlankConfig(models.Model):
     ai_rubric = models.TextField(
         verbose_name=_('AI rubric'), blank=True,
         help_text=_('Grading guidance sent to the model (never shown to students).'))
+    grading_table = models.JSONField(
+        verbose_name=_('grading table'), blank=True, null=True, default=None,
+        help_text=_('Sub-question breakdown: a list of {"name", "max_points", '
+                    '"strictness": "strict|normal|lenient"} objects. '
+                    'When set, the LLM grades each sub-question independently; '
+                    'otherwise the answer is graded as a single whole.'))
 
     def __str__(self):
         return _('Fill-in-the-blank config for %s') % self.problem.code
@@ -122,6 +128,12 @@ class ProblemShortAnswerConfig(models.Model):
     ai_rubric = models.TextField(
         verbose_name=_('AI rubric'), blank=True,
         help_text=_('Grading guidance sent to the model (never shown to students).'))
+    grading_table = models.JSONField(
+        verbose_name=_('grading table'), blank=True, null=True, default=None,
+        help_text=_('Sub-question breakdown: a list of {"name", "max_points", '
+                    '"strictness": "strict|normal|lenient"} objects. '
+                    'When set, the LLM grades each sub-question independently; '
+                    'otherwise the answer is graded as a single whole.'))
 
     def __str__(self):
         return _('Short-answer config for %s') % self.problem.code

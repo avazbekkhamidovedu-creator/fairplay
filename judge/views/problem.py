@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 from datetime import timedelta
 from operator import itemgetter
 from random import randrange
@@ -1271,10 +1272,48 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             self._attach_contest(self.new_submission)
             self.grader.store_answer(self.new_submission, form.cleaned_data)
 
-        # Routes to grade_internally() via Submission.judge() (non-code never hits the bridge).
-        self.new_submission.judge(force_judge=True)
+        # Defer AI grading to a background thread so the submission page
+        # loads immediately with a spinner; the websocket event fires when
+        # grading completes and the page updates in-place.
+        if self._needs_ai_grading():
+            self.new_submission.status = 'QU'
+            self.new_submission.save(update_fields=['status'])
+            threading.Thread(
+                target=self._grade_in_background,
+                args=(self.new_submission,),
+                daemon=True,
+            ).start()
+        else:
+            self.new_submission.judge(force_judge=True)
 
         return super().form_valid(form)
+
+    def _needs_ai_grading(self):
+        """Return True if this submission type requires an LLM call (and thus
+        synchronous grading would block the submit response)."""
+        from judge.models import ProblemSubmissionType
+        st = self.object.submission_type
+        if st == ProblemSubmissionType.SHORT_ANSWER:
+            return True
+        if st == ProblemSubmissionType.FILL_BLANK:
+            from judge.models.question import GRADE_AI
+            try:
+                config = self.object.fill_blank_config
+            except Exception:
+                return False
+            return config.grading_mode == GRADE_AI
+        return False
+
+    @staticmethod
+    def _grade_in_background(submission):
+        """Called from a daemon thread to grade the submission and fire the
+        websocket event so the status page updates."""
+        try:
+            submission.judge(force_judge=True)
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.exception('Background AI grading failed for submission %d',
+                             submission.id)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

@@ -1,4 +1,6 @@
 import json
+import logging
+import threading
 from collections import namedtuple
 from itertools import groupby
 from operator import attrgetter
@@ -178,6 +180,23 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
         submission = self.object
         context['last_msg'] = event.last()
 
+        # QU stuck recovery: daemon thread may die on process restart.
+        # Phase 1 (20–40 s): retry once in background.
+        # Phase 2 (> 40 s): give up, mark AB so student can resubmit.
+        if submission.status == 'QU' and submission.judged_date is None:
+            qu_age = (timezone.now() - submission.date).total_seconds()
+            if qu_age > 40:
+                submission.status = 'AB'
+                submission.save(update_fields=['status'])
+                submission.update_contest()
+            elif qu_age > 20:
+                threading.Thread(
+                    target=self._requeue_grading,
+                    args=(submission,),
+                    daemon=True,
+                ).start()
+                context['qu_retrying'] = True
+
         context['batches'], statuses, context['max_execution_time'] = group_test_cases(submission.test_cases.all())
         context['statuses'] = combine_statuses(statuses, submission)
 
@@ -228,6 +247,18 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
         context = self.get_context_data(object=self.object)
         context['comment_form'] = form
         return self.render_to_response(context)
+
+    @staticmethod
+    def _requeue_grading(submission):
+        """Retry a stuck QU submission in a background daemon thread."""
+        try:
+            submission.judge(force_judge=True)
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.exception('QU recovery re-grade failed for submission %d', submission.id)
+            submission.status = 'AB'
+            submission.save(update_fields=['status'])
+            submission.update_contest()
 
 
 class SubmissionTestCaseQuery(SubmissionStatus):
