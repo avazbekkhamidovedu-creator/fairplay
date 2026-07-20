@@ -86,6 +86,7 @@ def grade_internally(submission):
                 submission=submission, case=case['case'], status=case['status'],
                 time=0, memory=0, points=case.get('points', 0), total=case.get('total', 0),
                 feedback=case.get('feedback', '') or '',
+                extended_feedback=case.get('extended_feedback', '') or '',
             )
             for case in outcome.cases
         ])

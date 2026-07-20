@@ -10,7 +10,15 @@
     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
 {% elif submission.status != 'IE' %}
     {% if submission.status == 'QU' %}
-        <h4>{{ _('We are waiting for a suitable judge to process your submission...') }}</h4>
+        <div class="ai-grading-loading">
+            <div class="ai-grading-spinner"></div>
+            <h4>{% if submission.problem.submission_type in ('B', 'S') %}
+                {{ _('AI is grading your submission...') }}
+            {% else %}
+                {{ _('We are waiting for a suitable judge to process your submission...') }}
+            {% endif %}</h4>
+            {% if qu_retrying %}<p style="color:#888;font-size:12px;">{{ _('Grading timed out — retrying automatically.') }}</p>{% endif %}
+        </div>
     {% elif submission.status == 'P' %}
         <h4>{{ _('Your submission is being processed...') }}</h4>
     {% elif submission.status == 'CE' %}
@@ -22,6 +30,8 @@
             <pre>{{ submission.error|ansi2html }}</pre>
             <hr class="half-hr"><br>
         {% endif %}
+        {# Code submissions: show Execution Results + status icons. A/B gradings skip this. #}
+        {% if submission.problem.submission_type not in ('B', 'S') %}
         {% if is_pretest %}
             <h3>{{ _('Pretest Execution Results') }}</h3>
         {% else %}
@@ -48,7 +58,75 @@
             {% endif %}
             <br><br>
         {% endif %}
+        {% endif %}
         {% set test_case_id = counter() %}
+
+        {# --- AI-graded submissions: clean grading table, no old status icons --- #}
+        {% if submission.problem.submission_type in ('B', 'S') and submission.test_cases.exists() %}
+            <table class="ai-grading-result">
+              <thead>
+                <tr>
+                  <th>{{ _('Sub-question') }}</th>
+                  <th class="ac">{{ _('Score') }}</th>
+                  <th class="ac">{{ _('Status') }}</th>
+                  <th>{{ _('Feedback') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tc in submission.test_cases.all() %}
+                <tr class="ai-grading-row {% if tc.extended_feedback %}toggle closed{% endif %}"
+                    title="{% if tc.extended_feedback %}{{ _('Click to see detailed feedback') }}{% endif %}"
+                    {% if tc.id %}id="{{ tc.id }}"{% endif %}>
+                  <td>
+                    {% if tc.extended_feedback %}
+                      <i class="fa fa-chevron-right fa-fw ai-chevron"></i>
+                    {% endif %}
+                    <span class="ai-sq-name">{{ tc.feedback or _('Sub-question') }}</span>
+                  </td>
+                  <td class="ai-sq-score ac">
+                    <span class="case-{{ tc.status }}">{{ tc.points|floatformat(1) }}</span> / {{ tc.total|floatformat(1) }}
+                  </td>
+                  <td class="ac">
+                    <span class="ai-sq-status case-{{ tc.status }}">
+                      {% if tc.status == 'AC' %}{{ _('Correct') }}{% else %}{{ _('Partial') }}{% endif %}
+                    </span>
+                  </td>
+                  <td class="ai-sq-feedback">
+                    {{ (tc.extended_feedback or '')[:120] }}{% if tc.extended_feedback and tc.extended_feedback|length > 120 %}&hellip;{% endif %}
+                  </td>
+                </tr>
+                {% if tc.extended_feedback %}
+                <tr style="display:none" class="ai-grading-feedback toggled">
+                  <td colspan="4">
+                    <div class="ai-feedback-box">
+                      <strong>{{ _('Detailed Feedback') }}</strong>
+                      <p class="math-feedback">{{ tc.extended_feedback|linebreaksbr }}</p>
+                    </div>
+                  </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+              </tbody>
+              <tfoot>
+                <tr class="ai-grading-total">
+                  <td><strong>{{ _('Total') }}</strong></td>
+                  <td class="ai-sq-score ac"><strong>{{ submission.case_points|floatformat(1) }} / {{ submission.case_total|floatformat(1) }}</strong></td>
+                  <td class="ac">
+                    <span class="case-{{ submission.result }}">
+                      {% if submission.result == 'AC' %}{{ _('All correct') }}{% else %}{{ _('Partial credit') }}{% endif %}
+                    </span>
+                  </td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+            {% if not submission.is_graded %}
+            <div class="ai-grading-loading">
+                <div class="ai-grading-spinner"></div>
+                <h4>{{ _('AI is grading your submission...') }}</h4>
+            </div>
+            {% endif %}
+        {% else %}
         {% for batch in batches %}
             {% if batch.id %}
                 <b>{{ _('Batch #%(id)d', id=test_case_id()) }}</b>
@@ -136,7 +214,8 @@
         {% if batch.id %}</div>{% endif %}
             <br>
         {% endfor %}
-        {% if submission.is_graded %}
+        {% endif %}{# end of ai-graded vs code test cases #}
+        {% if submission.is_graded and submission.problem.submission_type not in ('B', 'S') %}
             <br>
             {% if submission.result != "AB" %}
                 <b>{{ _('Resources:') }}</b>
@@ -182,4 +261,59 @@
     {% endif %}
 {% else %}
     {% include "submission/internal-error-message.html" %}
+{% endif %}
+
+{# --- MathJax typesetting for expanded AI feedback rows --- #}
+{% if submission.problem.submission_type in ('B', 'S') %}
+<script>
+(function() {
+    // DMOJ register_all_toggles handles .toggle elements automatically.
+    // We only need to set up MathJax typesetting when feedback rows expand.
+
+    // Typeset MathJax when feedback rows become visible.
+    function typesetMath(el) {
+        if (window.MathJax) {
+            if (MathJax.typesetPromise) MathJax.typesetPromise([el]).catch(function(){});
+            else if (MathJax.typeset) MathJax.typeset([el]);
+            else if (MathJax.Hub) MathJax.Hub.Queue(["Typeset", MathJax.Hub, el]);
+        }
+    }
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(m) {
+            if (m.target.style.display !== 'none' && m.oldDisplay === 'none') {
+                var math = m.target.querySelector('.math-feedback');
+                if (math) typesetMath(math);
+            }
+        });
+    });
+    document.querySelectorAll('.ai-grading-feedback').forEach(function(row) {
+        observer.observe(row, { attributes: true, attributeFilter: ['style'],
+            attributeOldValue: true });
+    });
+})();
+</script>
+{% endif %}
+
+{# --- QU status polling fallback (in case WebSocket doesn't fire) --- #}
+{% if submission.status == 'QU' %}
+<script>
+(function() {
+    var pollCount = 0;
+    var maxPolls = 12;  // 12 × 5s = 60s max
+    var interval = setInterval(function() {
+        pollCount++;
+        fetch(location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+                // Check if the response still shows QU status
+                if (html.indexOf('ai-grading-loading') === -1) {
+                    clearInterval(interval);
+                    location.reload();
+                }
+            })
+            .catch(function() { /* network error, will retry */ });
+        if (pollCount >= maxPolls) clearInterval(interval);
+    }, 5000);
+})();
+</script>
 {% endif %}

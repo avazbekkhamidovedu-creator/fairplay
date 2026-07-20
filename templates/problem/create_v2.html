@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ _('Add problem') }}{% endblock %}
+{% block title %}{% if edit_code %}{{ _('Edit problem') }} &mdash; {{ edit_name or edit_code }}{% else %}{{ _('Add problem') }}{% endif %}{% endblock %}
 
 {# 与题库列表一致：顶部显示 List / Admin / Add 选项卡（Add 高亮），内容在下方 #}
 {% block title_row %}
@@ -11,8 +11,8 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260717k">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260717k">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260717s">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260717s">
 
   <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
   <script>
@@ -28,14 +28,14 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="{{ static('jszip.min.js') }}"></script>
-  <script src="{{ static('rich_editor.js') }}?v=20260717k"></script>
-  <script src="{{ static('markdown_preview.js') }}?v=20260716d"></script>
+  <script src="{{ static('rich_editor.js') }}?v=20260717s"></script>
+  <script src="{{ static('markdown_preview.js') }}?v=20260717p"></script>
 
   <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
   <style>
     /* 融入站点框架（继承 base.html）：不再锁 100vh，随页面滚动 */
     .v2-main { display: block; }
-    .v2-top { padding: 0.55rem 1.5rem 0.75rem; border-bottom: 1px solid var(--admin-border); background: #fff; flex-shrink: 0; }
+    .v2-top { padding: 0.55rem 1.5rem 0.75rem; border-bottom: 1px solid var(--admin-border); background: var(--admin-bg,#f8f8f8); flex-shrink: 0; }
     .v2-top .breadcrumb { margin: 0; }
     .v2-top h1 { margin: 0.15rem 0 0; }
     .v2-top .note { margin: 0.55rem 0 0; }
@@ -161,7 +161,7 @@
     /* 预览卡片：与左侧 fieldset.module 一致（白底 + 边框 + 灰色标题条） */
     .pv-panel { border: 1px solid var(--admin-border); border-radius: 4px; background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); }
     .v2-right .pv-head {
-      background: #f0f0f0; color: var(--text); margin: 0; padding: 0.6rem 1rem;
+      background: var(--admin-bg,#f0f0f0); color: var(--text); margin: 0; padding: 0.6rem 1rem;
       font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: normal;
       border-bottom: 1px solid var(--admin-border); flex-shrink: 0;
     }
@@ -183,6 +183,7 @@
   <main class="v2-main" id="content-main">
     <div class="v2-top">
       <span class="v2-type-hint">{{ _('Current type:') }} <span class="tag-type regular" id="type-badge">{{ _('Single choice') }}</span></span>
+      {% if edit_code %}&mdash; <a href="{{ edit_detail_url }}">{{ edit_name or edit_code }}</a>{% endif %}
     </div>
 
     <div class="v2-split">
@@ -302,19 +303,19 @@
             </div>
           </div>
 
-          <!-- 需求7：AI 判题（仅 简答/填空） -->
+          <!-- AI Grading (short-answer / fill-blank only) -->
           <div class="form-row type-panel" data-for="short,blank" id="ai-row" style="display:none;">
-            <label>AI 判题</label>
+            <label>AI Grading</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
-                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> 启用 AI 判题
+                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> Enable AI grading
               </label>
-              <div class="help">调用 binghan 的 chat 接口（<code>judge/llm/base.py</code> / <code>judge/ai_hints.py</code>）按评分标准自动打分</div>
+              <div class="help">Sends the rubric and student answer to the configured LLM for automated scoring. Requires <code>LITELLM_API_BASE</code> to be set.</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
-                <div style="font-weight:600;font-size:12px;margin-bottom:0.35rem;">评分标准 / Rubric（发送给模型，不展示给学生）</div>
-                <textarea id="f-rubric" rows="3" placeholder="例如：答出“时间复杂度 O(n log n)”得 60%，答出稳定性得 40%……" style="width:100%;font-family:inherit;"></textarea>
-                <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.4rem;">
-                  <input type="checkbox" checked> AI 打分后仍需教师复核
+                <div style="font-weight:600;font-size:12px;margin-bottom:0.35rem;">Rubric (sent to the model; never shown to students)</div>
+                <textarea id="f-rubric" rows="3" placeholder="e.g. Correctly identifying the time complexity gives 60%, proving stability gives 40%..." style="width:100%;font-family:inherit;"></textarea>
+                <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.4rem;white-space:nowrap;">
+                  <input type="checkbox" checked> Require teacher review after AI scoring
                 </label>
               </div>
             </div>
@@ -330,6 +331,31 @@
               <div class="stem-block">
                 <label class="block-label" id="stem-label">Description <span class="req">*</span></label>
                 <div data-rich-mount="stem" data-toolbar="full" data-placeholder="请输入题目内容，支持 $x^2$ 数学公式…"></div>
+              </div>
+
+              <!-- Grading Table (short-answer / fill-blank, shown when AI grading is on) -->
+              <div class="type-panel" data-for="short,blank" id="grading-table-panel" style="display:none;">
+                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">Grading Table</label>
+                <div class="grading-table-section">
+                  <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
+                    <button type="button" class="btn-mini btn-mini-primary" id="btn-ai-decompose"
+                            onclick="runAIDecompose()">Auto-generate</button>
+                    <span id="decompose-status" style="font-size:11px;color:var(--muted);display:none;"></span>
+                  </div>
+                  <table class="grading-table" id="grading-table">
+                    <thead>
+                      <tr><th>Sub-question</th><th>Points</th><th>Strictness</th><th></th></tr>
+                    </thead>
+                    <tbody id="grading-tbody">
+                      <tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">
+                        Click <b>Auto-generate</b> to let the AI analyse the problem and suggest sub-questions, or add rows manually below.
+                      </td></tr>
+                    </tbody>
+                  </table>
+                  <div style="margin-top:0.35rem;display:flex;gap:0.4rem;">
+                    <button type="button" class="btn-mini" onclick="addSubQuestion()">+ Add sub-question</button>
+                  </div>
+                </div>
               </div>
 
               <!-- 单选 / 多选 -->
@@ -553,9 +579,9 @@
       </div>
 
       <div id="bottombar">
-        <button type="submit" class="btn btn-primary" value="save" name="action">Save</button>
-        <button type="submit" class="btn" value="continue" name="action">Save and continue editing</button>
-        <button type="submit" class="btn" value="another" name="action">Save and add another</button>
+        <button type="button" class="btn btn-primary" onclick="submitForm('save')">Save</button>
+        <button type="button" class="btn" onclick="submitForm('continue')">Save and continue editing</button>
+        <button type="button" class="btn" onclick="submitForm('another')">Save and add another</button>
         <button type="button" class="btn type-panel" data-for="programming" style="display:none;">Upload Markdown</button>
         <span style="flex:1;"></span>
         <button type="button" class="btn btn-cancel" onclick="cancelEdit()">{{ _('Cancel') }}</button>
@@ -615,6 +641,7 @@
     const CREATE_PROBLEM_GROUP_URL = '{{ create_problem_group_url }}';
     const CREATE_ORGANIZATION_URL = '{{ create_organization_url }}';
     const AI_PROBLEM_TYPE_URL = '{{ ai_problem_type_url }}';
+    const AI_DECOMPOSE_URL = '{{ ai_decompose_url }}';
     const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
     const PROBLEM_PREVIEW_BATCH_URL = '{{ problem_preview_batch_url }}';
     const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
@@ -1345,6 +1372,29 @@
       const partialConf = document.getElementById('partial-conf');
       const aiOn = document.getElementById('f-ai').checked;
       document.getElementById('ai-conf').style.display = aiOn ? 'block' : 'none';
+      const gradingPanel = document.getElementById('grading-table-panel');
+      if (gradingPanel) {
+        const isGradingType = currentType === 'short' || currentType === 'blank';
+        gradingPanel.style.display = (aiOn && isGradingType) ? '' : 'none';
+      }
+      if (aiOn) {
+        updateGradingTableState();
+        // Auto-populate grading table from blanks for fill-blank type
+        if (currentType === 'blank' && (document.getElementById('grading-tbody').querySelectorAll('tr:not(#grading-empty)').length === 0)) {
+          const blanks = document.querySelectorAll('#blank-answers .blank-answer');
+          if (blanks.length > 0) {
+            const totalPts = parseFloat(document.getElementById('f-points').value) || 1;
+            const perBlank = Math.round(totalPts / blanks.length * 10) / 10;
+            document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
+            gtableSeq = 0;
+            blanks.forEach((b, i) => addSubQuestion({
+              name: 'Blank ' + (i + 1),
+              max_points: perBlank,
+              strictness: 'normal'
+            }));
+          }
+        }
+      }
 
       const subEl = document.getElementById('partial-sub');
       if (currentType === 'programming') subEl.textContent = '按通过的测试点分值累加得分（在测试用例表逐点配置分值）';
@@ -1503,6 +1553,7 @@
         partial: document.getElementById('f-partial').checked,
         ai: document.getElementById('f-ai').checked,
         rubric: (document.getElementById('f-rubric') || {}).value || '',
+        gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
         problemTypes: [...document.querySelectorAll('#f-types .ptype-tag')].map(t => t.childNodes[0].textContent.trim()),
         description: RichEditor.getMarkdown('stem'), explanation: RichEditor.getMarkdown('explain'),
@@ -1539,19 +1590,31 @@
       if (['single', 'multiple', 'truefalse', 'blank', 'short'].includes(d.type) && !CAN_CREATE_MCQ) {
         return '{{ _("You do not have permission to create this problem type.") }}';
       }
-      if (!d.group_id) return '请选择 Problem group';
-      if (!d.points || Number(d.points) < 0) return '请填写有效的 Points';
-      if (d.type !== 'compound' && d.type !== 'other' && !d.description) return '请填写题目内容';
+      if (!d.group_id) return 'Please select a problem group.';
+      if (!d.points || Number(d.points) < 0) return 'Please enter a valid point value.';
+      if (d.type !== 'compound' && d.type !== 'other' && !d.description) return 'Please enter a problem description.';
       if (d.type === 'single' || d.type === 'multiple') {
         const valid = d.options.filter(o => o.text);
-        if (valid.length < 2) return '至少填写 2 个选项';
+        if (valid.length < 2) return 'At least 2 options are required.';
         const correct = d.options.filter(o => o.correct && o.text).length;
-        if (correct < 1) return '请至少勾选一个正确答案';
-        if (d.type === 'single' && correct > 1) return '单选题只能有一个正确答案';
+        if (correct < 1) return 'Please select at least one correct answer.';
+        if (d.type === 'single' && correct > 1) return 'Single-choice questions may only have one correct answer.';
       }
-      if (d.type === 'short' && !d.shortAnswer) return '请填写参考答案';
-      if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(b => b))) return '请至少填写一个填空答案';
-      if (d.type === 'compound' && (!d.subs || !d.subs.length)) return '请至少添加一个子题目';
+      if (d.type === 'short' && !d.shortAnswer) return 'Please provide a reference answer.';
+      if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(b => b))) return 'Please provide at least one fill-in-the-blank answer.';
+      if (d.type === 'compound' && (!d.subs || !d.subs.length)) return 'Please add at least one sub-problem.';
+      // AI grading requires a grading table
+      if (d.ai && d.gradingTable && d.gradingTable.length) {
+        for (var i = 0; i < d.gradingTable.length; i++) {
+          var pts = Number(d.gradingTable[i].max_points) || 0;
+          if (pts <= 0) return 'Each sub-question must have at least 0.5 points. (Row ' + (i + 1) + ' has ' + pts + ')';
+          if (pts % 0.5 !== 0) return 'Sub-question points must be in 0.5 increments. (Row ' + (i + 1) + ' has ' + pts + ')';
+        }
+        const total = Number(d.points);
+        const sum = d.gradingTable.reduce((s, q) => s + (Number(q.max_points) || 0), 0);
+        if (Math.abs(sum - total) > 0.01)
+          return 'Grading Table points sum (' + sum.toFixed(1) + ') must equal Total Points (' + total + ')';
+      }
       return null;
     }
     function showToast(msg, ok) {
@@ -1569,48 +1632,53 @@
         const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
       { const tb = document.getElementById('tc-body'); if (tb) tb.innerHTML = ''; }
       document.getElementById('sub-list').innerHTML = '';
+      document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
       optionSeq = blankSeq = tcSeq = subSeq = 0; draftSaved = false;
       selectType(currentType);
     }
     function submitForm(action) {
-      let data;
+      console.log('[save] submitForm called, action=' + action);
+      var data;
       try {
         data = collectData();
         data.action = action;
         if (EDIT_CODE) data.edit_code = EDIT_CODE;
-        const err = validate(data);
-        if (err) { showToast(err, false); return; }
+        var err = validate(data);
+        if (err) { console.log('[save] validation error:', err); showToast(err, false); return; }
       } catch (ex) {
         console.error('[add-problem] collectData/validate failed:', ex);
         showToast('{{ _("Page error:") }} ' + ((ex && ex.message) || ex), false);
         return;
       }
+      console.log('[save] validation passed, sending... type=' + data.type + ' ai=' + data.ai + ' gradingTable=' + (data.gradingTable ? data.gradingTable.length + ' rows' : 'null'));
       showToast('{{ _("Saving…") }}', true);
       fetch(SAVE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
         body: JSON.stringify(data),
-      }).then(r => r.text().then(txt => {
-        let body = null;
-        try { body = JSON.parse(txt); } catch (_) { /* non-JSON (e.g. 500 HTML page) */ }
-        return { ok: r.ok, status: r.status, body, txt };
-      })).then(({ ok, status, body, txt }) => {
-        if (!body) {
-          console.error('[add-problem] non-JSON response', status, txt);
-          showToast('{{ _("Save failed (server returned") }} ' + status + ')', false);
+      }).then(function(r) {
+        return r.text().then(function(txt) {
+          var body = null;
+          try { body = JSON.parse(txt); } catch (_) {}
+          return { ok: r.ok, status: r.status, body: body, txt: txt };
+        });
+      }).then(function(res) {
+        console.log('[save] server response:', { ok: res.ok, status: res.status, hasBody: !!res.body, hasRedirect: res.body && !!res.body.redirect, error: res.body && res.body.error });
+        if (!res.body) {
+          console.error('[add-problem] non-JSON response', res.status, res.txt);
+          showToast('{{ _("Save failed (server returned") }} ' + res.status + ')', false);
           return;
         }
-        if (!ok) { showToast(body.error || '{{ _("Save failed") }}', false); return; }
-        showToast('{{ _("Saved") }} ' + body.code, true);
-        if (body.redirect) setTimeout(() => { location.href = body.redirect; }, 600);
+        if (!res.ok) { showToast(res.body.error || '{{ _("Save failed") }}', false); return; }
+        showToast('{{ _("Saved") }} ' + res.body.code, true);
+        if (res.body.redirect) setTimeout(function() { location.href = res.body.redirect; }, 600);
         else resetForm();
-      }).catch((err) => { console.error('[add-problem] network/fetch error:', err); showToast('{{ _("Network error") }}', false); });
+      }).catch(function(err) {
+        console.error('[add-problem] network/fetch error:', err);
+        showToast('{{ _("Network error — please check your connection and try again.") }}', false);
+      });
     }
-    document.getElementById('add-problem-form').addEventListener('submit', function (e) {
-      e.preventDefault();
-      const action = (e.submitter && e.submitter.value) || 'save';
-      submitForm(action);
-    });
+    /* Buttons use onclick directly — no form submit listener needed. */
 
     /* ── 富文本图片拖拽缩放（沿用 add.html） ── */
     (function initImageResize() {
@@ -1642,6 +1710,8 @@
       const partial = document.getElementById('f-partial'); if (partial) partial.checked = !!d.partial;
       const aiCb = document.getElementById('f-ai'); if (aiCb) aiCb.checked = !!d.ai;
       const rub = document.getElementById('f-rubric'); if (rub) rub.value = d.rubric || '';
+      if (d.gradingTable && d.gradingTable.length) restoreGradingTable(d.gradingTable);
+      else renderScoreConf(); // triggers grading table init if AI is on
 
       RichEditor.setMarkdown('stem', d.description || '');
 
@@ -1734,6 +1804,131 @@
         const radio = document.querySelector(`input[name="qtype"][value="${t}"]`);
         if (radio) { radio.checked = true; selectType(t); }
       })();
+    }
+
+    // --- Grading Table ------------------------------------------------
+    var gtableSeq = 0;
+
+    function _gradingEmptyHTML() {
+      return '<tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">Click <b>Auto-generate</b> to let the AI analyse the problem and suggest sub-questions, or add rows manually below.</td></tr>';
+    }
+
+    function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function updateGradingTableState() {
+      const tbody = document.getElementById('grading-tbody');
+      const btn = document.getElementById('btn-ai-decompose');
+      const emptyRow = document.getElementById('grading-empty');
+      // Only count data rows, not the empty-state placeholder row.
+      const dataRows = tbody.querySelectorAll('tr:not(#grading-empty)');
+      const isEmpty = dataRows.length === 0;
+      btn.disabled = !isEmpty;
+      if (emptyRow) emptyRow.style.display = isEmpty ? '' : 'none';
+    }
+
+    function collectGradingTable() {
+      const rows = document.querySelectorAll('#grading-tbody tr:not(#grading-empty)');
+      const items = [];
+      rows.forEach(row => {
+        const nameEl = row.querySelector('.gt-name');
+        const ptsEl = row.querySelector('.gt-points');
+        const active = row.querySelector('.gt-strictness .active');
+        if (!nameEl) return;
+        const name = nameEl.value.trim();
+        if (!name) return;
+        items.push({
+          name: name,
+          max_points: (function(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; })(ptsEl.value),
+          strictness: active ? active.dataset.level : 'normal',
+        });
+      });
+      return items.length ? items : null;
+    }
+
+    function addSubQuestion(item) {
+      gtableSeq++;
+      if (item) {
+        // AI-generated or restored: keep existing name, leave blank if missing
+        if (!item.name) item.name = '';
+      } else {
+        // Manual add: blank name, user fills in
+        item = { name: '', max_points: 1, strictness: 'normal' };
+      }
+      const tr = document.createElement('tr');
+      const strictness = item.strictness || 'normal';
+      const levels = ['strict', 'normal', 'lenient'];
+      const labels = { strict: 'Strict', normal: 'Normal', lenient: 'Lenient' };
+      const pills = levels.map(l =>
+        `<button type="button" class="gt-pill ${l === strictness ? 'active' : ''}"
+                 data-level="${l}" onclick="setStrictness(this,'${l}')">${labels[l]}</button>`
+      ).join('');
+      tr.innerHTML =
+        `<td><input class="gt-name" value="${escHtml(item.name)}" placeholder="e.g. Analyse time complexity" style="width:100%;"></td>
+         <td><input class="gt-points" type="number" step="0.5" min="0.5" value="${item.max_points || 1}"
+                    style="width:70px;"></td>
+         <td class="gt-strictness">${pills}</td>
+         <td><button type="button" class="btn-del-row" onclick="removeSubQuestion(this)">×</button></td>`;
+      document.getElementById('grading-tbody').appendChild(tr);
+      updateGradingTableState();
+    }
+
+    function removeSubQuestion(btn) {
+      btn.closest('tr').remove();
+      updateGradingTableState();
+    }
+
+    function setStrictness(btn, level) {
+      btn.parentElement.querySelectorAll('.gt-pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    }
+
+    function restoreGradingTable(items) {
+      document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
+      gtableSeq = 0;
+      items.forEach(item => addSubQuestion(item));
+      updateGradingTableState();
+    }
+
+    function runAIDecompose() {
+      const desc = getMd('stem').trim();
+      const pts = Number(document.getElementById('f-points').value) || 1;
+      if (!desc) { showToast('Please write the problem description first.', false); return; }
+      const status = document.getElementById('decompose-status');
+      const btn = document.getElementById('btn-ai-decompose');
+      status.style.display = 'inline'; status.textContent = 'Analyzing\u2026';
+      btn.disabled = true;
+      fetch(AI_DECOMPOSE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify({ description: desc, total_points: pts }),
+      }).then(r => {
+        if (!r.ok) {
+          if (r.status >= 500) throw new Error('server_error');
+          return r.json().then(data => { throw new Error(data.error || 'bad_request'); });
+        }
+        return r.json();
+      }).then(data => {
+        status.style.display = 'none';
+        if (!data.sub_questions || !data.sub_questions.length) {
+          showToast('The AI could not identify separable sub-questions. Please add them manually.', false);
+          updateGradingTableState();
+          return;
+        }
+        document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
+        gtableSeq = 0;
+        data.sub_questions.forEach(q => addSubQuestion(q));
+        showToast('Generated ' + data.sub_questions.length + ' sub-question(s).', true);
+      }).catch(err => {
+        status.style.display = 'none';
+        btn.disabled = false;
+        if (err && err.message === 'server_error') {
+          showToast('The AI service is temporarily unavailable. Please try again later.', false);
+        } else if (err && err.message && err.message !== 'bad_request') {
+          showToast(err.message, false);
+        } else {
+          showToast('Unable to reach the AI service. Please check your connection and try again.', false);
+        }
+      });
     }
   </script>
   </div>
