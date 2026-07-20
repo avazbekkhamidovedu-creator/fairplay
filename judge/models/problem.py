@@ -230,6 +230,18 @@ class Problem(models.Model):
     # Problem types whose name marks the difficulty level, ordered from easiest to hardest.
     # These are surfaced as a dedicated difficulty column/filter rather than as tags.
     DIFFICULTY_TYPE_NAMES = ('easy', 'medium', 'hard')
+    # Display labels use django gettext msgids (not dmoj-user / DB full_name), so list/create
+    # UIs stay aligned with the existing Easy / Medium / Hard translations.
+    DIFFICULTY_LABELS = {
+        'easy': _('Easy'),
+        'medium': _('Medium'),
+        'hard': _('Hard'),
+    }
+
+    @classmethod
+    def difficulty_display(cls, name):
+        label = cls.DIFFICULTY_LABELS.get(name)
+        return str(label) if label is not None else None
 
     @cached_property
     def types_list(self):
@@ -270,13 +282,7 @@ class Problem(models.Model):
 
     @cached_property
     def difficulty_label(self):
-        name = self.difficulty
-        if name is None:
-            return None
-        for t in self.types.all():
-            if t.name == name:
-                return user_gettext(t.full_name)
-        return None
+        return self.difficulty_display(self.difficulty)
 
     def languages_list(self):
         return self.allowed_languages.values_list('common_name', flat=True).distinct().order_by('common_name')

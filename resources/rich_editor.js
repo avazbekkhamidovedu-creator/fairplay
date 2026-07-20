@@ -43,29 +43,35 @@
     if (typeof config.onChange === 'function') config.onChange();
   }
 
+  function t(msgid) {
+    return (typeof gettext === 'function') ? gettext(msgid) : msgid;
+  }
+
   // Icons aligned with Martor (Semantic → Font Awesome 4 equivalents).
   // Headings: site markdown demotes by +2 (# → h3), so labels match preview.
-  const RTE_BUTTONS = {
-    heading: '<select class="rte-heading" title="文字等级"><option value="p">正文</option><option value="h3">标题1</option><option value="h4">标题2</option><option value="h5">标题3</option></select>',
-    sep: '<span class="sep"></span>',
-    bold: '<button type="button" data-cmd="bold" title="加粗 (Ctrl+B)"><i class="fa fa-bold"></i></button>',
-    italic: '<button type="button" data-cmd="italic" title="斜体 (Ctrl+I)"><i class="fa fa-italic"></i></button>',
-    highlight: '<button type="button" data-cmd="highlight" class="hl-btn" title="高亮"><i class="fa fa-paint-brush"></i></button>',
-    code: '<button type="button" data-cmd="code" title="代码"><i class="fa fa-code"></i></button>',
-    math: '<button type="button" data-cmd="math" title="公式 (Ctrl+Alt+D)"><i class="fa fa-superscript"></i></button>',
-    quote: '<button type="button" data-cmd="quote" title="引用 (Ctrl+Q)"><i class="fa fa-quote-left"></i></button>',
-    ul: '<button type="button" data-cmd="ul" title="无序列表 (Ctrl+U)"><i class="fa fa-list-ul"></i></button>',
-    ol: '<button type="button" data-cmd="ol" title="有序列表 (Ctrl+Shift+O)"><i class="fa fa-list-ol"></i></button>',
-    table: '<button type="button" data-cmd="table" title="表格"><i class="fa fa-table"></i></button>',
-    link: '<button type="button" data-cmd="link" title="链接 (Ctrl+L)"><i class="fa fa-link"></i></button>',
-    image: '<button type="button" data-cmd="image" title="图片"><i class="fa fa-image"></i></button>',
-    mention: '<button type="button" data-cmd="mention" title="提及用户 (Ctrl+M)"><i class="fa fa-at"></i></button>',
-    help: '<button type="button" data-cmd="help" title="Markdown 帮助"><i class="fa fa-question-circle"></i></button>',
-    alignLeft: '<button type="button" data-cmd="alignLeft" title="左对齐"><i class="fa fa-align-left"></i></button>',
-    alignCenter: '<button type="button" data-cmd="alignCenter" title="居中"><i class="fa fa-align-center"></i></button>',
-    alignRight: '<button type="button" data-cmd="alignRight" title="右对齐"><i class="fa fa-align-right"></i></button>',
-    blank: '<button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;"><i class="fa fa-square-o"></i></button>',
-  };
+  function getRteButtons() {
+    return {
+      heading: '<select class="rte-heading" title="' + t('Text level') + '"><option value="p">' + t('Body') + '</option><option value="h3">' + t('Heading 1') + '</option><option value="h4">' + t('Heading 2') + '</option><option value="h5">' + t('Heading 3') + '</option></select>',
+      sep: '<span class="sep"></span>',
+      bold: '<button type="button" data-cmd="bold" title="' + t('Bold (Ctrl+B)') + '"><i class="fa fa-bold"></i></button>',
+      italic: '<button type="button" data-cmd="italic" title="' + t('Italic (Ctrl+I)') + '"><i class="fa fa-italic"></i></button>',
+      highlight: '<button type="button" data-cmd="highlight" class="hl-btn" title="' + t('Highlight') + '"><i class="fa fa-paint-brush"></i></button>',
+      code: '<button type="button" data-cmd="code" title="' + t('Code') + '"><i class="fa fa-code"></i></button>',
+      math: '<button type="button" data-cmd="math" title="' + t('Math (Ctrl+Alt+D)') + '"><i class="fa fa-superscript"></i></button>',
+      quote: '<button type="button" data-cmd="quote" title="' + t('Quote (Ctrl+Q)') + '"><i class="fa fa-quote-left"></i></button>',
+      ul: '<button type="button" data-cmd="ul" title="' + t('Unordered list (Ctrl+U)') + '"><i class="fa fa-list-ul"></i></button>',
+      ol: '<button type="button" data-cmd="ol" title="' + t('Ordered list (Ctrl+Shift+O)') + '"><i class="fa fa-list-ol"></i></button>',
+      table: '<button type="button" data-cmd="table" title="' + t('Table') + '"><i class="fa fa-table"></i></button>',
+      link: '<button type="button" data-cmd="link" title="' + t('Link (Ctrl+L)') + '"><i class="fa fa-link"></i></button>',
+      image: '<button type="button" data-cmd="image" title="' + t('Image') + '"><i class="fa fa-image"></i></button>',
+      mention: '<button type="button" data-cmd="mention" title="' + t('Mention user (Ctrl+M)') + '"><i class="fa fa-at"></i></button>',
+      help: '<button type="button" data-cmd="help" title="' + t('Markdown help') + '"><i class="fa fa-question-circle"></i></button>',
+      alignLeft: '<button type="button" data-cmd="alignLeft" title="' + t('Align left') + '"><i class="fa fa-align-left"></i></button>',
+      alignCenter: '<button type="button" data-cmd="alignCenter" title="' + t('Align center') + '"><i class="fa fa-align-center"></i></button>',
+      alignRight: '<button type="button" data-cmd="alignRight" title="' + t('Align right') + '"><i class="fa fa-align-right"></i></button>',
+      blank: '<button type="button" data-cmd="blank" class="blank-insert" title="' + t('Insert blank') + '" style="display:none;"><i class="fa fa-square-o"></i></button>',
+    };
+  }
   // Groups: 等级 | 加粗/高亮 | 代码/公式/引用 | 列表/表格 | 对齐 | 链接等
   const RTE_TOOLBAR = [
     'heading', 'sep',
@@ -84,7 +90,9 @@
     const header = [];
     const sep = [];
     for (let c = 0; c < cols; c++) {
-      header.push('列' + (c + 1));
+      header.push((typeof interpolate === 'function')
+        ? interpolate(t('Column %s'), [c + 1])
+        : t('Column %s').replace('%s', String(c + 1)));
       sep.push('---');
     }
     const lines = [
@@ -101,14 +109,15 @@
 
   function richEditorTpl(name, opts) {
     opts = opts || {};
+    const RTE_BUTTONS = getRteButtons();
     const buttons = RTE_TOOLBAR.map(k => RTE_BUTTONS[k] || '').join('');
-    const placeholder = opts.placeholder || '请输入内容，支持 $$公式$$…';
-    const mdPlaceholder = opts.mdPlaceholder || '支持 Markdown 与 $$公式$$…';
+    const placeholder = opts.placeholder || t('Enter content; $$math$$ supported…');
+    const mdPlaceholder = opts.mdPlaceholder || t('Markdown and $$math$$ supported…');
     const compact = opts.compact ? ' compact' : '';
     return `<div class="rich-editor mode-rich${compact}" data-editor="${name}">
       <div class="rich-editor-toolbar-row">
         <div class="editor-mode-tabs">
-          <button type="button" class="mode-btn active" data-mode="rich">富文本</button>
+          <button type="button" class="mode-btn active" data-mode="rich">${t('Rich text')}</button>
           <button type="button" class="mode-btn" data-mode="markdown">Markdown</button>
         </div>
         <div class="rich-toolbar">${buttons}</div>
@@ -667,9 +676,9 @@
       ta.value = ta.value.slice(0, ls) + pre + ta.value.slice(ls);
     };
     switch (cmd) {
-      case 'bold': wrap('**', '**', '加粗'); break;
-      case 'italic': wrap('*', '*', '斜体'); break;
-      case 'highlight': wrap('<mark>', '</mark>', '高亮'); break;
+      case 'bold': wrap('**', '**', t('Bold')); break;
+      case 'italic': wrap('*', '*', t('Italic')); break;
+      case 'highlight': wrap('<mark>', '</mark>', t('Highlight')); break;
       case 'code':
         if (sel && sel.indexOf('\n') !== -1) wrap('```\n', '\n```', 'code');
         else wrap('`', '`', 'code');
@@ -831,7 +840,7 @@
     root.className = 'rte-table-cell-chrome';
     root.hidden = true;
     root.innerHTML =
-      '<button type="button" class="rte-table-cell-handle" title="表格操作" aria-label="表格操作">' +
+      '<button type="button" class="rte-table-cell-handle" title="' + t('Table actions') + '" aria-label="' + t('Table actions') + '">' +
       '<i class="fa fa-chevron-down"></i></button>' +
       '<div class="rte-table-cell-menu" hidden>' +
       '<button type="button" data-table-act="col-left">Insert column left</button>' +
@@ -1092,48 +1101,48 @@
     root.id = 'rte-overlays';
     root.innerHTML = `
       <div id="rte-link-popover" class="rte-popover" hidden>
-        <div class="rte-popover-title">插入链接</div>
-        <label class="rte-field"><span>文字</span><input type="text" class="rte-link-text" placeholder="链接文字"></label>
-        <label class="rte-field"><span>地址</span><input type="url" class="rte-link-url" placeholder="https://"></label>
+        <div class="rte-popover-title">${t('Insert link')}</div>
+        <label class="rte-field"><span>${t('Text')}</span><input type="text" class="rte-link-text" placeholder="${t('Link text')}"></label>
+        <label class="rte-field"><span>${t('URL')}</span><input type="url" class="rte-link-url" placeholder="https://"></label>
         <div class="rte-popover-actions">
-          <button type="button" class="rte-btn-cancel">取消</button>
-          <button type="button" class="rte-btn-ok">插入</button>
+          <button type="button" class="rte-btn-cancel">${t('Cancel')}</button>
+          <button type="button" class="rte-btn-ok">${t('Insert')}</button>
         </div>
       </div>
       <div id="rte-mention-popover" class="rte-popover" hidden>
-        <div class="rte-popover-title">提及用户</div>
-        <label class="rte-field"><span>用户名</span><input type="text" class="rte-mention-input" placeholder="搜索用户…" autocomplete="off"></label>
+        <div class="rte-popover-title">${t('Mention user')}</div>
+        <label class="rte-field"><span>${t('Username')}</span><input type="text" class="rte-mention-input" placeholder="${t('Search users…')}" autocomplete="off"></label>
         <ul class="rte-mention-results"></ul>
         <div class="rte-popover-actions">
-          <button type="button" class="rte-btn-cancel">取消</button>
-          <button type="button" class="rte-btn-ok">插入</button>
+          <button type="button" class="rte-btn-cancel">${t('Cancel')}</button>
+          <button type="button" class="rte-btn-ok">${t('Insert')}</button>
         </div>
       </div>
       <div id="rte-help-modal" class="rte-help-modal" hidden>
         <div class="rte-help-dialog">
           <div class="rte-help-head">
-            <h2><i class="fa fa-question-circle"></i> Markdown 帮助</h2>
-            <button type="button" class="rte-help-close" aria-label="关闭">×</button>
+            <h2><i class="fa fa-question-circle"></i> ${t('Markdown help')}</h2>
+            <button type="button" class="rte-help-close" aria-label="${t('Close')}">×</button>
           </div>
           <div class="rte-help-body">
-            <p>本站题目描述使用 Markdown。完整语法见 <a href="https://commonmark.org/help/" target="_blank" rel="noopener">CommonMark</a>。</p>
+            <p>${t('Problem statements use Markdown. Full syntax:')} <a href="https://commonmark.org/help/" target="_blank" rel="noopener">CommonMark</a>.</p>
             <table class="rte-help-table">
-              <thead><tr><th>写法</th><th>快捷键</th><th>效果</th></tr></thead>
+              <thead><tr><th>${t('Syntax')}</th><th>${t('Shortcut')}</th><th>${t('Result')}</th></tr></thead>
               <tbody>
-                <tr><td><code>**粗体**</code></td><td>Ctrl+B</td><td><strong>粗体</strong></td></tr>
-                <tr><td><code>*斜体*</code></td><td>Ctrl+I</td><td><em>斜体</em></td></tr>
-                <tr><td><code># 大标题</code></td><td>Ctrl+Alt+1</td><td>一级标题（预览为较大标题）</td></tr>
-                <tr><td><code>## 中标题</code></td><td>Ctrl+Alt+2</td><td>二级标题</td></tr>
-                <tr><td><code>### 小标题</code></td><td>Ctrl+Alt+3</td><td>三级标题</td></tr>
-                <tr><td><code>[文字](https://)</code></td><td>Ctrl+L</td><td>链接</td></tr>
-                <tr><td><code>![说明](url)</code></td><td>—</td><td>图片</td></tr>
-                <tr><td><code>&gt; 引用</code></td><td>Ctrl+Q</td><td>引用块</td></tr>
-                <tr><td><code>- 列表</code> / <code>1. 列表</code></td><td>Ctrl+U / Ctrl+Shift+O</td><td>列表</td></tr>
-                <tr><td><code>| A | B |</code><br><code>| --- | --- |</code><br><code>| 1 | 2 |</code></td><td>—</td><td>表格</td></tr>
-                <tr><td><code>\`code\`</code> / 围栏代码块</td><td>—</td><td>代码</td></tr>
-                <tr><td><code>$$ a^2+b^2 $$</code></td><td>Ctrl+Alt+D</td><td>公式</td></tr>
-                <tr><td><code>[user:用户名]</code></td><td>Ctrl+M</td><td>提及用户</td></tr>
-                <tr><td><code>&lt;mark&gt;高亮&lt;/mark&gt;</code></td><td>—</td><td>高亮</td></tr>
+                <tr><td><code>**bold**</code></td><td>Ctrl+B</td><td><strong>${t('bold')}</strong></td></tr>
+                <tr><td><code>*italic*</code></td><td>Ctrl+I</td><td><em>${t('italic')}</em></td></tr>
+                <tr><td><code># ${t('Heading')}</code></td><td>Ctrl+Alt+1</td><td>${t('Level-1 heading (larger in preview)')}</td></tr>
+                <tr><td><code>## ${t('Heading')}</code></td><td>Ctrl+Alt+2</td><td>${t('Level-2 heading')}</td></tr>
+                <tr><td><code>### ${t('Heading')}</code></td><td>Ctrl+Alt+3</td><td>${t('Level-3 heading')}</td></tr>
+                <tr><td><code>[${t('text')}](https://)</code></td><td>Ctrl+L</td><td>${t('Link')}</td></tr>
+                <tr><td><code>![${t('alt')}](url)</code></td><td>—</td><td>${t('Image')}</td></tr>
+                <tr><td><code>&gt; ${t('quote')}</code></td><td>Ctrl+Q</td><td>${t('Block quote')}</td></tr>
+                <tr><td><code>- ${t('list')}</code> / <code>1. ${t('list')}</code></td><td>Ctrl+U / Ctrl+Shift+O</td><td>${t('List')}</td></tr>
+                <tr><td><code>| A | B |</code><br><code>| --- | --- |</code><br><code>| 1 | 2 |</code></td><td>—</td><td>${t('Table')}</td></tr>
+                <tr><td><code>\`code\`</code> / ${t('fenced code block')}</td><td>—</td><td>${t('Code')}</td></tr>
+                <tr><td><code>$$ a^2+b^2 $$</code></td><td>Ctrl+Alt+D</td><td>${t('Math')}</td></tr>
+                <tr><td><code>[user:${t('username')}]</code></td><td>Ctrl+M</td><td>${t('Mention user')}</td></tr>
+                <tr><td><code>&lt;mark&gt;${t('highlight')}&lt;/mark&gt;</code></td><td>—</td><td>${t('Highlight')}</td></tr>
               </tbody>
             </table>
           </div>
@@ -1242,7 +1251,7 @@
   function confirmLinkPopover() {
     const o = ensureOverlays();
     if (!o || !overlayEditor) return;
-    const text = (o.link.querySelector('.rte-link-text').value || '').trim() || '链接文字';
+    const text = (o.link.querySelector('.rte-link-text').value || '').trim() || t('Link text');
     const href = (o.link.querySelector('.rte-link-url').value || '').trim() || 'https://';
     const ed = overlayEditor;
     const snap = savedRange;
@@ -1324,24 +1333,24 @@
     const list = o.mention.querySelector('.rte-mention-results');
     const username = (q || '').trim();
     if (!username || /\s/.test(username)) {
-      list.innerHTML = '<li class="muted">输入用户名片段以搜索</li>';
+      list.innerHTML = '<li class="muted">' + t('Type part of a username to search') + '</li>';
       return;
     }
-    list.innerHTML = '<li class="muted">搜索中…</li>';
+    list.innerHTML = '<li class="muted">' + t('Searching…') + '</li>';
     const url = config.searchUsersUrl + (config.searchUsersUrl.indexOf('?') >= 0 ? '&' : '?') +
       'username=' + encodeURIComponent(username);
     fetch(url, { credentials: 'same-origin' })
       .then(r => r.json())
       .then(body => {
         if (!body || body.status !== 200 || !body.data || !body.data.length) {
-          list.innerHTML = '<li class="muted">无匹配用户，可直接插入</li>';
+          list.innerHTML = '<li class="muted">' + t('No match; you can still insert') + '</li>';
           return;
         }
         list.innerHTML = body.data.map(u =>
           '<li data-username="' + escapeAttr(u.username) + '">@' + escapeHtmlText(u.username) + '</li>'
         ).join('');
       })
-      .catch(() => { list.innerHTML = '<li class="muted">搜索失败</li>'; });
+      .catch(() => { list.innerHTML = '<li class="muted">' + t('Search failed') + '</li>'; });
   }
 
   function confirmMention(username) {

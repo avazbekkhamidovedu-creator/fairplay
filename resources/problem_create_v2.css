@@ -949,13 +949,39 @@ fieldset.module .form-content { padding: 1rem; }
    融入 base.html 后的兼容修正
    站点 widgets.scss 有一条全局规则 `.button, button { color: white !important }`，
    会把本页所有 <button>（工具栏图标、富文本/Markdown 标签、保存/添加/取消等）的
-   文字刷成白色导致看不清。这里按组件用同等 !important 重新指定文字色（背景/边框/
-   布局仍由我方类选择器胜出，无需重设）。
+   文字刷成白色导致看不清。这里按组件用更高特异性 + !important 重新指定文字色。
+   暗色主题交给全站 dark/style.css（media=prefers-color-scheme: dark），本页不再
+   单独维护一套 prefers-color-scheme 覆盖，避免与浅色工具栏修复互相打架。
    ========================================================================== */
-.pcv2 .editor-mode-tabs button { color: var(--muted) !important; }
-.pcv2 .editor-mode-tabs button.active { color: var(--text) !important; }
-.pcv2 .rich-toolbar button { color: #555 !important; }
-.pcv2 .rich-toolbar button.active { color: #fff !important; }
+.pcv2 .editor-mode-tabs button,
+.pcv2 .editor-mode-tabs button.mode-btn {
+  color: #555 !important;
+  background: transparent !important;
+}
+.pcv2 .editor-mode-tabs button.active,
+.pcv2 .editor-mode-tabs button.mode-btn.active {
+  color: #333 !important;
+  background: #fff !important;
+}
+.pcv2 .rich-toolbar button,
+.pcv2 .rich-toolbar button i,
+.pcv2 .rich-toolbar button .fa {
+  color: #555 !important;
+}
+.pcv2 .rich-toolbar button:hover,
+.pcv2 .rich-toolbar button:hover i,
+.pcv2 .rich-toolbar button:hover .fa {
+  color: #333 !important;
+}
+.pcv2 .rich-toolbar button.active,
+.pcv2 .rich-toolbar button.active i,
+.pcv2 .rich-toolbar button.active .fa {
+  color: #fff !important;
+}
+.pcv2 .rich-toolbar .rte-heading {
+  color: #555 !important;
+  background: #fff !important;
+}
 .pcv2 .btn { color: var(--text) !important; }
 .pcv2 .btn-primary,
 .pcv2 .btn.default {
@@ -967,7 +993,7 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .btn.default:hover { background: var(--dmoj-green-dark) !important; }
 .pcv2 .btn-secondary { color: #fff !important; }
 .pcv2 .btn-cancel { color: var(--danger) !important; }
-.pcv2 .btn-icon { color: var(--muted) !important; }
+.pcv2 .btn-icon { color: #666 !important; }
 .pcv2 .btn-icon:hover { color: var(--danger) !important; }
 .pcv2 .btn-add-option { color: var(--dmoj-green-dark) !important; }
 .pcv2 .ptype-add { color: var(--dmoj-green) !important; }
@@ -976,9 +1002,9 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .ptype-ai:hover { color: #fff !important; background: var(--dmoj-green) !important; }
 .pcv2 .inline-add-btn { color: var(--dmoj-green-dark) !important; }
 .pcv2 .inline-add-btn:hover { color: #fff !important; background: var(--dmoj-green) !important; }
- .pcv2 .btn-mini { color: var(--text) !important; }
- .pcv2 .btn-mini:hover { color: var(--text) !important; }
- .pcv2 .btn-mini-primary { color: #fff !important; }
+.pcv2 .btn-mini { color: var(--text) !important; }
+.pcv2 .btn-mini:hover { color: var(--text) !important; }
+.pcv2 .btn-mini-primary { color: #fff !important; }
 
 /* --- Grading Table --- */
 .grading-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -1013,104 +1039,19 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .tc-file-btn:hover { color: #0d47a1 !important; background: #bbdefb !important; }
 .pcv2 .tc-file-btn.manual { color: #263238 !important; }
 
-/* --- dark theme overrides --- */
-@media (prefers-color-scheme: dark) {
-  .pcv2 {
-  --admin-bg: #0f0f0f;
-  --card-bg: #181818;
-  --text: #eee;
-  --muted: #aaa;
-  --admin-border: #3b3b3b;
-  background: var(--card-bg); color: var(--text);
+/* Custom file picker — avoids browser-native "选择文件" locale chrome */
+.pcv2 .file-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
 }
-
-.pcv2 fieldset.module               { background: var(--card-bg); border-color: var(--admin-border); }
-.pcv2 fieldset.module h2            { background: #0f0f0f; color: #eee; border-color: var(--admin-border); }
-.pcv2 .form-row,
-.pcv2 .type-panel                   { border-color: var(--admin-border); }
-.pcv2 .form-content,
-.pcv2 .score-conf,
-.pcv2 .form-row .field              { background: var(--card-bg); }
-  .pcv2 .form-row label               { background: none; color: var(--muted); }
-
-/* ----- buttons ----- */
-.pcv2 .btn,
-.pcv2 .btn-mini                     { background: #555; color: #e0e0e0; border-color: #666; }
-.pcv2 .btn:hover,
-.pcv2 .btn-mini:hover               { background: #6a6a6a; color: #fff; }
-.pcv2 .btn-danger                   { color: #fff; background: #c0392b; border-color: #c0392b; }
-.pcv2 .btn-danger:hover             { background: #e74c3c; border-color: #e74c3c; }
-.pcv2 .btn-mini-primary,
-.pcv2 .btn-primary,
-.pcv2 .btn-info                     { background: var(--dmoj-green); color: #fff; border-color: var(--dmoj-green); }
-.pcv2 .btn-mini-primary:hover,
-.pcv2 .btn-primary:hover,
-.pcv2 .btn-info:hover               { background: var(--dmoj-green-dark); border-color: var(--dmoj-green-dark); }
-.pcv2 .btn-add-option               { background: none; color: #bbb; border: 1px dashed #666; }
-.pcv2 .btn-add-option:hover         { border-color: var(--dmoj-green); color: var(--dmoj-green-dark); }
-  .pcv2 .btn-cancel                   { color: #FF3030; }
-
-/* ----- inputs ----- */
-.pcv2 input[type="text"],
-.pcv2 input[type="number"],
-.pcv2 input[type="url"],
-.pcv2 textarea,
-.pcv2 select                        { background: #3b3b3b; color: #eee; border-color: #555; }
-.pcv2 input:focus,
-.pcv2 textarea:focus,
-.pcv2 select:focus                  { border-color: var(--dmoj-green); }
-.pcv2 .help,
-.pcv2 label                         { color: var(--muted); }
-
-/* ----- editor toolbar ----- */
-.pcv2 .rte-toolbar                  { background: var(--admin-bg); border-color: var(--admin-border); }
-.pcv2 .rte-toolbar button           { color: var(--muted); }
-.pcv2 .rte-toolbar button:hover     { color: #eee; background: #3b3b3b; }
-.pcv2 .rte-toolbar .rte-heading     { background: #3b3b3b; color: #ccc; border-color: #555; }
-
-/* ----- tags / pills ----- */
-.pcv2 .ptype-tag,
-.pcv2 .diff-tag,
-.pcv2 .tag-type                     { background: #3b3b3b; color: var(--muted); }
-.pcv2 .ptype-tag:hover,
-.pcv2 .ptype-tag.active             { color: #fff; }
-.pcv2 .ptype-ai                     { background: #3b3b3b; border-color: var(--dmoj-green); color: var(--dmoj-green-dark); }
-.pcv2 .ptype-ai:hover               { background: var(--dmoj-green); color: #fff; }
-
-/* ----- grading table ----- */
-.grading-table th                   { color: var(--muted); border-color: var(--admin-border); }
-.grading-table td                   { border-color: #222; }
-.grading-table input                { background: #3b3b3b; color: #eee; border-color: #555; }
-.gt-pill                            { background: #3b3b3b !important; color: var(--muted) !important; border-color: #555; }
-.gt-pill.active                     { background: var(--dmoj-green) !important; color: #fff !important; }
-.btn-del-row                        { color: #ff6b7a !important; border-color: #ff6b7a; }
-.btn-del-row:hover                  { background: #ff6b7a; color: #fff !important; }
-
-/* ----- tables ----- */
-.pcv2 .tc-table th,
-.pcv2 .inline-table th,
-.pcv2 .data-table th                { background: #0f0f0f; color: var(--muted); border-color: var(--admin-border); }
-.pcv2 .data-table tr:hover          { background: #111; }
-.pcv2 .sub-q-head                   { background: #0f0f0f; border-color: var(--admin-border); }
-
-/* ----- preview pane ----- */
-.pcv2 #preview-pane                 { background: var(--card-bg); border-color: var(--admin-border); }
-.pcv2 #preview-pane h2              { background: var(--admin-bg); color: var(--text); }
-
-/* ----- misc ----- */
-.pcv2 .blank-answers .blank-row     { border-color: var(--admin-border); background: var(--card-bg); }
-.pcv2 .tf-choices label             { background: #3b3b3b; border-color: #555; color: #eee; }
-.pcv2 .blank-hints,
-.pcv2 #empty-src-tip                { color: var(--muted); }
-.pcv2 .martor-preview               { background: var(--card-bg); color: var(--text); }
-.pcv2 .qtype-card                   { background: var(--card-bg); border-color: var(--admin-border); }
-.pcv2 .qtype-card:hover             { border-color: var(--dmoj-green); }
-  .pcv2 .module > h2                  { background: #0f0f0f; color: #eee; border-color: var(--admin-border); }
-
-  /* ----- editor mode tabs ----- */
-  .editor-mode-tabs                   { background: #2a2a2a; }
-  .editor-mode-tabs button            { color: var(--muted) !important; }
-  .editor-mode-tabs button.active     { background: #1a1a1a; color: var(--text) !important; }
-
-  .rich-editor-markdown textarea      { background: var(--card-bg) !important; }
+.pcv2 .file-pick-btn {
+  display: inline-block;
+  padding: 0.35rem 0.75rem;
+  margin: 0;
+}
+.pcv2 .file-pick-name {
+  font-size: 13px;
+  color: var(--muted);
 }

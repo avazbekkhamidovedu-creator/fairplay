@@ -392,6 +392,7 @@
             <input type="hidden" name="category" id="category-input" value="{{ category if category is not none else '' }}">
             {# Marker that the form was actually submitted, so checkbox defaults (e.g. search_full) can be applied only on first visit. #}
             <input type="hidden" name="filtered" value="1">
+            {% set difficulty_labels = {'easy': _('Easy'), 'medium': _('Medium'), 'hard': _('Hard')} %}
 
             <div class="group-tabs" role="tablist">
                 <button type="button" class="group-tab{% if category is none %} active{% endif %}" data-category="">
@@ -442,7 +443,7 @@
                                     <span id="difficulty-multi-label" data-empty-label="{{ _('All difficulties') }}"
                                           class="multi-select-text {% if not selected_difficulty_types %}multi-select-label-empty{% endif %}">
                                         {% if selected_difficulty_types %}
-                                            {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}{{ user_trans(type.full_name) }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
+                                            {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}{{ difficulty_labels.get(type.name, type.full_name) }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
                                         {% else %}
                                             {{ _('All difficulties') }}
                                         {% endif %}
@@ -454,7 +455,7 @@
                                         <label class="multi-select-option">
                                             <input type="checkbox" name="type" value="{{ type.id }}"
                                                    {% if type.id in selected_difficulty_types %}checked{% endif %}>
-                                            <span>{{ user_trans(type.full_name) }}</span>
+                                            <span>{{ difficulty_labels.get(type.name, type.full_name) }}</span>
                                         </label>
                                     {% else %}
                                         <span class="multi-select-empty">{{ _('No difficulties yet.') }}</span>
@@ -559,7 +560,10 @@
                         {% for f in format_types %}{% if f.code in selected_formats %}
                             <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
-                        {% for type in problem_types %}{% if type.id in selected_types %}
+                        {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}
+                            <span class="chip">{{ difficulty_labels.get(type.name, type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
+                        {% endif %}{% endfor %}
+                        {% for type in knowledge_types %}{% if type.id in selected_knowledge_types %}
                             <span class="chip">{{ user_trans(type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
                         {% if problem_status == 'solved' %}

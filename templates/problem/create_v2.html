@@ -11,8 +11,8 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260717s">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260717s">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}">
 
   <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
   <script>
@@ -28,8 +28,8 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="{{ static('jszip.min.js') }}"></script>
-  <script src="{{ static('rich_editor.js') }}?v=20260717s"></script>
-  <script src="{{ static('markdown_preview.js') }}?v=20260717p"></script>
+  <script src="{{ static('rich_editor.js') }}"></script>
+  <script src="{{ static('markdown_preview.js') }}"></script>
 
   <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
   <style>
@@ -72,7 +72,7 @@
       font-weight: 600;
     }
     .tc-file-btn:hover { background: #bbdefb !important; border-color: #42a5f5 !important; color: #0d47a1 !important; }
-    .tc-file-btn.dirty::after { content: '·已改'; color: #e65100 !important; font-size: 11px; margin-left: 0.2rem; font-weight: 600; }
+    .tc-file-btn.dirty::after { content: '{{ _("· modified") }}'; color: #e65100 !important; font-size: 11px; margin-left: 0.2rem; font-weight: 600; }
     .tc-file-btn.manual { color: #263238 !important; }
     .tc-mode-hint { font-size: 12px; color: var(--muted); margin: 0 0 0.55rem; line-height: 1.5; }
     .tc-old-link { font-size: 12px; margin-top: 0.55rem; }
@@ -190,11 +190,11 @@
     <form id="add-problem-form" class="v2-left" novalidate>
       <!-- ① 基本信息 -->
       <fieldset class="module">
-        <h2>基本信息</h2>
+        <h2>{{ _('Basic information') }}</h2>
         <div class="form-content">
           <!-- 需求4：去掉“题目大类”，直接选题型 -->
           <div class="form-row">
-            <label>题型 <span class="req">*</span></label>
+            <label>{{ _('Type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="type-pills" id="type-pills">
                 <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create code problems') }}" style="opacity:0.45;"{% endif %}>
@@ -217,11 +217,11 @@
             </div>
           </div>
           <div class="form-row">
-            <label>Name <span class="req">*</span></label>
-            <div class="field"><input type="text" id="f-name" placeholder="题目名称" oninput="renderPreview()"></div>
+            <label>{{ _('Name') }} <span class="req">*</span></label>
+            <div class="field"><input type="text" id="f-name" placeholder="{{ _('Problem name') }}" oninput="renderPreview()"></div>
           </div>
           <div class="form-row">
-            <label>Organizations</label>
+            <label>{{ _('Organizations') }}</label>
             <div class="field">
               <div class="select-with-add">
                 <select id="f-org">
@@ -239,11 +239,11 @@
                 <button type="button" class="btn-mini" onclick="toggleInlineAdd('org')">{{ _('Cancel') }}</button>
               </div>
               {% endif %}
-              <div class="help">留空则为公开题（需相应权限）；选择组织后为该组织私有</div>
+              <div class="help">{{ _('Leave blank for a public problem (requires permission); selecting an organization makes it private to that organization') }}</div>
             </div>
           </div>
           <div class="form-row">
-            <label>Problem group <span class="req">*</span></label>
+            <label>{{ _('Problem group') }} <span class="req">*</span></label>
             <div class="field">
               <div class="select-with-add">
                 <select id="f-group">
@@ -259,44 +259,44 @@
             </div>
           </div>
           <div class="form-row">
-            <label>难度 <span class="req">*</span></label>
+            <label>{{ _('Difficulty') }} <span class="req">*</span></label>
             <div class="field">
               <div class="type-pills" id="difficulty">
-                <label class="type-pill"><input type="radio" name="difficulty" value="easy" onchange="setDifficulty('easy')"><span>Easy</span></label>
-                <label class="type-pill"><input type="radio" name="difficulty" value="medium" checked onchange="setDifficulty('medium')"><span>Medium</span></label>
-                <label class="type-pill"><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>Hard</span></label>
+                <label class="type-pill"><input type="radio" name="difficulty" value="easy" onchange="setDifficulty('easy')"><span>{{ _('Easy') }}</span></label>
+                <label class="type-pill"><input type="radio" name="difficulty" value="medium" checked onchange="setDifficulty('medium')"><span>{{ _('Medium') }}</span></label>
+                <label class="type-pill"><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>{{ _('Hard') }}</span></label>
                 <label class="type-pill"><input type="radio" name="difficulty" value="ai" onchange="setDifficulty('ai')"><span>{{ _('AI judge') }}</span></label>
               </div>
               <div id="diff-ai-box" style="display:none;margin-top:0.4rem;">
                 <span id="diff-ai-result"></span>
-                <a href="javascript:void(0)" id="diff-ai-rerun" onclick="runAIDifficulty()" style="display:none;font-size:12px;margin-left:0.5rem;">重新判定</a>
+                <a href="javascript:void(0)" id="diff-ai-rerun" onclick="runAIDifficulty()" style="display:none;font-size:12px;margin-left:0.5rem;">{{ _('Re-judge') }}</a>
               </div>
-              <div class="help">设置难度后自动写入 problem_type 标签；选「AI 判断」将立即调用 AI 依据题面判定 Easy / Medium / Hard</div>
+              <div class="help">{{ _('Setting difficulty writes a problem_type tag automatically; choosing "AI judge" immediately calls AI to classify Easy / Medium / Hard from the statement') }}</div>
             </div>
           </div>
           <div class="form-row">
-            <label>Problem type <span class="req">*</span></label>
+            <label>{{ _('Problem type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="ptype-tags" id="f-types">
-                <button type="button" class="ptype-add" title="从已有类型中选择 / 新建" onclick="openTypeModal()">+</button>
-                <button type="button" class="ptype-ai" id="ptype-ai-btn" title="AI 根据题面推荐类型标签" onclick="runAIProblemTypeInline()">AI</button>
+                <button type="button" class="ptype-add" title="{{ _('Select from existing types / create new') }}" onclick="openTypeModal()">+</button>
+                <button type="button" class="ptype-ai" id="ptype-ai-btn" title="{{ _('AI recommends type tags from the statement') }}" onclick="runAIProblemTypeInline()">AI</button>
               </div>
-              <div class="help">题型与难度标签自动写入，可继续添加其它分类标签；点「🤖 AI」按题面自动推荐</div>
+              <div class="help">{{ _('Type and difficulty tags are written automatically; you can add more category tags. Click "🤖 AI" to recommend from the statement') }}</div>
             </div>
           </div>
 
           <!-- 分值 -->
           <div class="form-row">
-            <label>Points <span class="req">*</span></label>
+            <label>{{ _('Points') }} <span class="req">*</span></label>
             <div class="field"><input type="number" id="f-points" value="1" min="0" step="0.5" style="max-width:120px;"></div>
           </div>
 
           <!-- 需求7：部分分（仅 多选/填空） -->
           <div class="form-row type-panel" data-for="multiple,blank" id="partial-row" style="display:none;">
-            <label>部分分</label>
+            <label>{{ _('Partial scoring') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
-                <input type="checkbox" id="f-partial" onchange="renderScoreConf()"> 允许部分分（Partial）
+                <input type="checkbox" id="f-partial" onchange="renderScoreConf()"> {{ _('Allow partial scoring') }}
               </label>
               <div class="help" id="partial-sub"></div>
               <div id="partial-conf" class="score-conf" style="display:none;"></div>
@@ -305,17 +305,17 @@
 
           <!-- AI Grading (short-answer / fill-blank only) -->
           <div class="form-row type-panel" data-for="short,blank" id="ai-row" style="display:none;">
-            <label>AI Grading</label>
+            <label>{{ _('AI Grading') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
-                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> Enable AI grading
+                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
               </label>
-              <div class="help">Sends the rubric and student answer to the configured LLM for automated scoring. Requires <code>LITELLM_API_BASE</code> to be set.</div>
+              <div class="help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. Requires LITELLM_API_BASE to be set.') }}</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
-                <div style="font-weight:600;font-size:12px;margin-bottom:0.35rem;">Rubric (sent to the model; never shown to students)</div>
-                <textarea id="f-rubric" rows="3" placeholder="e.g. Correctly identifying the time complexity gives 60%, proving stability gives 40%..." style="width:100%;font-family:inherit;"></textarea>
+                <div style="font-weight:600;font-size:12px;margin-bottom:0.35rem;">{{ _('Rubric (sent to the model; never shown to students)') }}</div>
+                <textarea id="f-rubric" rows="3" placeholder="{{ _('e.g. Correctly identifying the time complexity gives 60%%, proving stability gives 40%%...') }}" style="width:100%;font-family:inherit;"></textarea>
                 <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.4rem;white-space:nowrap;">
-                  <input type="checkbox" checked> Require teacher review after AI scoring
+                  <input type="checkbox" checked> {{ _('Require teacher review after AI scoring') }}
                 </label>
               </div>
             </div>
@@ -325,72 +325,72 @@
 
       <!-- ② 题面（预览已移至右栏） -->
       <fieldset class="module">
-        <h2>题面</h2>
+        <h2>{{ _('Statement') }}</h2>
         <div class="form-content">
               <!-- 题干 / 主题干 -->
               <div class="stem-block">
-                <label class="block-label" id="stem-label">Description <span class="req">*</span></label>
-                <div data-rich-mount="stem" data-toolbar="full" data-placeholder="请输入题目内容，支持 $x^2$ 数学公式…"></div>
+                <label class="block-label" id="stem-label">{{ _('Description') }} <span class="req">*</span></label>
+                <div data-rich-mount="stem" data-toolbar="full" data-placeholder="{{ _('Enter the problem statement; $x^2$ math supported…') }}"></div>
               </div>
 
               <!-- Grading Table (short-answer / fill-blank, shown when AI grading is on) -->
               <div class="type-panel" data-for="short,blank" id="grading-table-panel" style="display:none;">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">Grading Table</label>
+                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _('Grading Table') }}</label>
                 <div class="grading-table-section">
                   <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
                     <button type="button" class="btn-mini btn-mini-primary" id="btn-ai-decompose"
-                            onclick="runAIDecompose()">Auto-generate</button>
+                            onclick="runAIDecompose()">{{ _('Auto-generate') }}</button>
                     <span id="decompose-status" style="font-size:11px;color:var(--muted);display:none;"></span>
                   </div>
                   <table class="grading-table" id="grading-table">
                     <thead>
-                      <tr><th>Sub-question</th><th>Points</th><th>Strictness</th><th></th></tr>
+                      <tr><th>{{ _('Sub-question') }}</th><th>{{ _('Points') }}</th><th>{{ _('Strictness') }}</th><th></th></tr>
                     </thead>
                     <tbody id="grading-tbody">
                       <tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">
-                        Click <b>Auto-generate</b> to let the AI analyse the problem and suggest sub-questions, or add rows manually below.
+                        {{ _('Click Auto-generate to let the AI analyse the problem and suggest sub-questions, or add rows manually below.') }}
                       </td></tr>
                     </tbody>
                   </table>
                   <div style="margin-top:0.35rem;display:flex;gap:0.4rem;">
-                    <button type="button" class="btn-mini" onclick="addSubQuestion()">+ Add sub-question</button>
+                    <button type="button" class="btn-mini" onclick="addSubQuestion()">+ {{ _('Add sub-question') }}</button>
                   </div>
                 </div>
               </div>
 
               <!-- 单选 / 多选 -->
               <div class="type-panel" data-for="single,multiple">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">选项 <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);" id="opt-hint">（勾选正确答案）</span></label>
+                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Options") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);" id="opt-hint">{{ _("(select the correct answer)") }}</span></label>
                 <div class="options-list" id="options"></div>
-                <button type="button" class="btn-add-option" onclick="addOption()">+ 添加选项</button>
+                <button type="button" class="btn-add-option" onclick="addOption()">+ {{ _("Add option") }}</button>
               </div>
 
               <!-- 判断题 -->
               <div class="type-panel" data-for="truefalse" style="display:none;">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">答案 <span class="req">*</span></label>
+                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _('Answer') }} <span class="req">*</span></label>
                 <div class="tf-choices">
-                  <label><input type="radio" name="tf" value="true" checked onchange="renderPreview()"><span>正确</span></label>
-                  <label><input type="radio" name="tf" value="false" onchange="renderPreview()"><span>错误</span></label>
+                  <label><input type="radio" name="tf" value="true" checked onchange="renderPreview()"><span>{{ _('True') }}</span></label>
+                  <label><input type="radio" name="tf" value="false" onchange="renderPreview()"><span>{{ _('False') }}</span></label>
                 </div>
               </div>
 
               <!-- 简答题 -->
               <div class="type-panel" data-for="short" style="display:none;">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">参考答案 <span class="req">*</span></label>
-                <div data-rich-mount="short" data-toolbar="mini" data-placeholder="请输入参考答案…"></div>
+                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Reference answer") }} <span class="req">*</span></label>
+                <div data-rich-mount="short" data-toolbar="mini" data-placeholder="{{ _('Enter the reference answer…') }}"></div>
               </div>
 
               <!-- 填空题 -->
               <div class="type-panel" data-for="blank" style="display:none;">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">答案 <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">每个填空位可有多个可接受答案，每行写一个</span></label>
+                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Answers") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">{{ _("Each blank may have multiple acceptable answers; one per line") }}</span></label>
                 <div class="blank-answers" id="blank-answers"></div>
-                <button type="button" class="btn-add-option" onclick="addBlank()">+ 添加填空位答案</button>
+                <button type="button" class="btn-add-option" onclick="addBlank()">+ {{ _("Add blank answer") }}</button>
                 <div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:0.6rem;font-size:13px;">
                   <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer;">
-                    <input type="checkbox" id="f-blank-trim" checked oninput="renderPreview()"> 忽略首尾空格（trim）
+                    <input type="checkbox" id="f-blank-trim" checked oninput="renderPreview()"> {{ _("Ignore leading/trailing spaces (trim)") }}
                   </label>
                   <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer;">
-                    <input type="checkbox" id="f-blank-case" oninput="renderPreview()"> 区分大小写
+                    <input type="checkbox" id="f-blank-case" oninput="renderPreview()"> {{ _("Case sensitive") }}
                   </label>
                 </div>
               </div>
@@ -398,28 +398,28 @@
               <!-- 编程题：题面提示 -->
               <div class="type-panel" data-for="programming" style="display:none;">
                 <div class="blank-hints">
-                  <strong>编程题</strong>：时间/内存限制、允许语言见下方 Advanced；<strong>测试用例可在下方直接录入</strong>（需求8）。
+                  {{ _('For programming problems: set time/memory limits and allowed languages under Advanced; enter test cases directly in the section below.') }}
                 </div>
               </div>
 
               <!-- 复合题：子题目（需求4） -->
               <div class="type-panel" data-for="compound" style="display:none;">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">子题目 <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">每个子题目可选不同题型并单独设置分值</span></label>
+                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Sub-questions") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">{{ _("Each sub-question can use a different type and its own points") }}</span></label>
                 <div id="sub-list"></div>
-                <button type="button" class="btn-add-option" onclick="addSub('single')">+ 添加子题目</button>
+                <button type="button" class="btn-add-option" onclick="addSub('single')">+ {{ _("Add sub-question") }}</button>
               </div>
 
               <!-- 其他题型 -->
               <div class="type-panel" data-for="other" style="display:none;">
-                <div class="blank-hints">“其他”题型仅记录题面与说明，用于线下/人工评分，不参与自动评测。</div>
+                <div class="blank-hints">{{ _('Other type only records the statement and notes for offline/manual grading; it is not auto-judged.') }}</div>
               </div>
 
               <!-- 解析（需求5：默认折叠） -->
               <div class="type-panel" data-for="single,multiple,truefalse,short,blank">
                 <details class="explain-collapse">
-                  <summary><span class="chev">▸</span> 解析 <span style="font-weight:normal;color:var(--muted);">（可选，默认折叠）</span></summary>
+                  <summary><span class="chev">▸</span> {{ _("Explanation") }} <span style="font-weight:normal;color:var(--muted);">{{ _("(optional, collapsed by default)") }}</span></summary>
                   <div class="ec-body">
-                    <div data-rich-mount="explain" data-toolbar="mini" data-placeholder="请输入答案解析…"></div>
+                    <div data-rich-mount="explain" data-toolbar="mini" data-placeholder="{{ _('Enter the answer explanation…') }}"></div>
                   </div>
                 </details>
               </div>
@@ -428,24 +428,24 @@
 
       <!-- ③ 编程题：测试用例（内联录入 / ZIP，不再嵌入旧页） -->
       <fieldset class="module type-panel" data-for="programming" style="display:none;">
-        <h2>测试用例</h2>
+        <h2>{{ _("Test cases") }}</h2>
         <div class="form-content">
           <details class="tc-collapse" id="tc-collapse" open>
-            <summary class="tc-collapse-summary">测试数据配置（点击折叠）</summary>
+            <summary class="tc-collapse-summary">{{ _("Test data settings (click to collapse)") }}</summary>
             <div class="tc-body-wrap">
               <p class="tc-mode-hint">
-                可直接填写输入/输出，或上传 ZIP 自动配对用例（主表显示<strong>文件名</strong>，点击文件名在侧栏查看/编辑内容）。
-                保存后会同步到旧版测试数据页；Batch / Generator / Harness 等请用旧版精调。
+                {{ _('Enter input/output directly, or upload a ZIP to auto-pair cases (the table shows the file name; click it to view/edit in the side panel).') }}
+                {{ _('After saving, cases sync to the legacy test-data page; use that page for Batch / Generator / Harness fine-tuning.') }}
               </p>
               <div class="tc-toolbar">
-                <button type="button" class="btn" onclick="addTestCase()">+ 添加用例</button>
+                <button type="button" class="btn" onclick="addTestCase()">+ {{ _("Add case") }}</button>
                 <label class="btn" style="cursor:pointer;margin:0;">
-                  上传 ZIP
+                  {{ _('Upload ZIP') }}
                   <input type="file" id="tc-zip-input" accept=".zip,application/zip" hidden>
                 </label>
-                <button type="button" class="btn" onclick="distributeCasePoints()">按总分均分</button>
+                <button type="button" class="btn" onclick="distributeCasePoints()">{{ _("Distribute points evenly") }}</button>
                 <span class="tc-sep">|</span>
-                <label>Checker
+                <label>{{ _('Checker') }}
                   <select id="tc-checker" style="max-width:160px;margin-left:0.25rem;">
                     <option value="">{{ _('Default') }}</option>
                     {% for c in checkers %}
@@ -460,10 +460,10 @@
                   <thead>
                     <tr>
                       <th style="width:36px;">#</th>
-                      <th>Input</th>
-                      <th>Output</th>
-                      <th style="width:72px;">Points</th>
-                      <th style="width:64px;">Sample</th>
+                      <th>{{ _('Input') }}</th>
+                      <th>{{ _('Output') }}</th>
+                      <th style="width:72px;">{{ _('Points') }}</th>
+                      <th style="width:64px;">{{ _('Sample') }}</th>
                       <th style="width:36px;"></th>
                     </tr>
                   </thead>
@@ -472,9 +472,9 @@
               </div>
               <div class="tc-old-link" id="tc-old-link">
                 {% if test_data_url %}
-                  <a href="{{ test_data_url }}" target="_blank" rel="noopener">打开旧版测试数据页（更细致编辑）</a>
+                  <a href="{{ test_data_url }}" target="_blank" rel="noopener">{{ _('Open legacy test-data page (finer editing)') }}</a>
                 {% else %}
-                  <span style="color:var(--muted);">题目首次保存后，可在此打开旧版测试数据页做 Batch / Generator 等精调。</span>
+                  <span style="color:var(--muted);">{{ _('After the problem is saved once, open the legacy test-data page here for Batch / Generator fine-tuning.') }}</span>
                 {% endif %}
               </div>
             </div>
@@ -486,182 +486,189 @@
       <div class="tc-drawer-mask" id="tc-drawer-mask" onclick="closeTcDrawer()"></div>
       <aside class="tc-drawer" id="tc-drawer" aria-hidden="true">
         <div class="tc-drawer-head">
-          <strong id="tc-drawer-title">测试用例</strong>
-          <button type="button" class="btn-icon" onclick="closeTcDrawer()" title="关闭">×</button>
+          <strong id="tc-drawer-title">{{ _("Test case") }}</strong>
+          <button type="button" class="btn-icon" onclick="closeTcDrawer()" title="{{ _('Close') }}">×</button>
         </div>
         <div class="tc-drawer-body">
           <div class="tc-drawer-pane">
-            <label id="tc-drawer-in-label">Input</label>
+            <label id="tc-drawer-in-label">{{ _('Input') }}</label>
             <textarea id="tc-drawer-in" spellcheck="false"></textarea>
           </div>
           <div class="tc-drawer-pane">
-            <label id="tc-drawer-out-label">Output</label>
+            <label id="tc-drawer-out-label">{{ _('Output') }}</label>
             <textarea id="tc-drawer-out" spellcheck="false"></textarea>
           </div>
         </div>
         <div class="tc-drawer-foot">
-          <button type="button" class="btn" onclick="closeTcDrawer()">取消</button>
-          <button type="button" class="btn" onclick="applyTcDrawer()">保存到用例</button>
+          <button type="button" class="btn" onclick="closeTcDrawer()">{{ _('Cancel') }}</button>
+          <button type="button" class="btn" onclick="applyTcDrawer()">{{ _('Save to case') }}</button>
         </div>
       </aside>
 
       <!-- ④ 编程题：Creation preset 已移入 Advanced -->
       <p style="margin:1rem 0;">
-        <button type="button" class="btn" id="advanced-btn" onclick="toggleAdvanced()">Advanced</button>
-        <span style="font-size:12px;color:var(--muted);margin-left:0.5rem;">高级设置（按题型展示对应字段）</span>
+        <button type="button" class="btn" id="advanced-btn" onclick="toggleAdvanced()">{{ _('Advanced') }}</button>
+        <span style="font-size:12px;color:var(--muted);margin-left:0.5rem;">{{ _('Advanced settings (fields shown by problem type)') }}</span>
       </p>
       <div class="advanced-hidden">
         <fieldset class="module">
-          <h2>Advanced</h2>
+          <h2>{{ _('Advanced') }}</h2>
           <div class="form-content">
-            <div class="form-row type-panel" data-for="programming"><label>Creation preset</label><div class="field"><select id="preset" style="max-width:200px;"><option selected>Default</option><option>Custom</option></select><div class="help">修改高级字段后自动变为 Custom</div></div></div>
-            <div class="form-row"><label>Code</label><div class="field"><input type="text" id="f-code" value="" placeholder="保存时自动生成 p000000" readonly><div class="help">题目唯一代号，由后端自动生成</div></div></div>
-            <div class="form-row"><label>Is public</label><div class="field"><input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}><div class="help">{% if can_change_public %}{{ _('Visible to everyone when no organization is selected') }}{% else %}{{ _('You cannot make problems public without organization scope') }}{% endif %}</div></div></div>
-            <div class="form-row"><label>Is manually managed</label><div class="field"><input type="checkbox"><div class="help">勾选后无法使用 test_data 页面</div></div></div>
-            <div class="form-row"><label>Date</label><div class="field"><input type="datetime-local"><div class="help">题目公开/发布时间</div></div></div>
-            <div class="form-row"><label>Authors</label><div class="field"><select multiple style="height:50px;"><option selected>current_user</option></select></div></div>
-            <div class="form-row"><label>Curators</label><div class="field"><select multiple style="height:50px;"></select><div class="help">可编辑但不显示为作者</div></div></div>
-            <div class="form-row"><label>Testers</label><div class="field"><select multiple style="height:50px;"></select><div class="help">可在公开前查看题目</div></div></div>
-            <div class="form-row"><label>Submission source visibility</label><div class="field"><select><option>Follow global setting</option><option>Always visible</option><option>Only own</option><option>Only AC own</option><option>Hidden</option></select></div></div>
-            <div class="form-row"><label>Is full markup</label><div class="field"><input type="checkbox"><div class="help">允许题面使用完整 HTML 标记</div></div></div>
-            <div class="form-row"><label>View test cases</label><div class="field"><input type="checkbox"><div class="help">允许选手下载失败测试样例</div></div></div>
-            <div class="form-row"><label>View tester</label><div class="field"><input type="checkbox" id="f-view-tester"><div class="help">允许下载 tester 文件</div></div></div>
-            <div class="form-row"><label>AI hints enabled</label><div class="field"><input type="checkbox"><div class="help">允许 AI 提示</div></div></div>
-            <div class="form-row"><label>License</label><div class="field"><select><option>— None —</option><option>CC BY-SA 4.0</option></select></div></div>
-            <div class="form-row"><label>Upload Markdown</label><div class="field"><input type="file" id="f-md-upload" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain"><div class="help">从 Markdown 文件导入题面（对应旧页 markdown_upload）</div></div></div>
+            <div class="form-row type-panel" data-for="programming"><label>{{ _('Creation preset') }}</label><div class="field"><select id="preset" style="max-width:200px;"><option selected>{{ _('Default') }}</option><option>{{ _('Custom') }}</option></select><div class="help">{{ _('Becomes Custom after you change advanced fields') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Problem code') }}</label><div class="field"><input type="text" id="f-code" value="" placeholder="{{ _('Auto-generated as p000000 on save') }}" readonly><div class="help">{{ _('Unique problem code, generated by the backend') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}><div class="help">{% if can_change_public %}{{ _('Visible to everyone when no organization is selected') }}{% else %}{{ _('You cannot make problems public without organization scope') }}{% endif %}</div></div></div>
+            <div class="form-row"><label>{{ _('Is manually managed') }}</label><div class="field"><input type="checkbox"><div class="help">{{ _('When checked, the test_data page cannot be used') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Date') }}</label><div class="field"><input type="text" id="f-date" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"><div class="help">{{ _('Problem publish/release time') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Authors') }}</label><div class="field"><select multiple style="height:50px;"><option selected>current_user</option></select></div></div>
+            <div class="form-row"><label>{{ _('Curators') }}</label><div class="field"><select multiple style="height:50px;"></select><div class="help">{{ _('Can edit but are not shown as authors') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Testers') }}</label><div class="field"><select multiple style="height:50px;"></select><div class="help">{{ _('Can view the problem before it is public') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Submission source visibility') }}</label><div class="field"><select><option>{{ _('Follow global setting') }}</option><option>{{ _('Always visible') }}</option><option>{{ _('Only own') }}</option><option>{{ _('Only AC own') }}</option><option>{{ _('Hidden') }}</option></select></div></div>
+            <div class="form-row"><label>{{ _('Is full markup') }}</label><div class="field"><input type="checkbox"><div class="help">{{ _('Allow full HTML markup in the statement') }}</div></div></div>
+            <div class="form-row"><label>{{ _('View test cases') }}</label><div class="field"><input type="checkbox"><div class="help">{{ _('Allow contestants to download failed test samples') }}</div></div></div>
+            <div class="form-row"><label>{{ _('View tester') }}</label><div class="field"><input type="checkbox" id="f-view-tester"><div class="help">{{ _('Allow downloading the tester file') }}</div></div></div>
+            <div class="form-row"><label>{{ _('AI hints enabled') }}</label><div class="field"><input type="checkbox"><div class="help">{{ _('Allow AI hints') }}</div></div></div>
+            <div class="form-row"><label>{{ _('License') }}</label><div class="field"><select><option>{{ _('— None —') }}</option><option>CC BY-SA 4.0</option></select></div></div>
+            <div class="form-row"><label>{{ _('Upload Markdown') }}</label><div class="field">
+              <div class="file-pick">
+                <input type="file" id="f-md-upload" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain" hidden>
+                <button type="button" class="btn file-pick-btn" id="f-md-upload-btn">{{ _('Choose file') }}</button>
+                <span class="file-pick-name" id="f-md-upload-name">{{ _('No file selected') }}</span>
+              </div>
+              <div class="help">{{ _('Import statement from a Markdown file (legacy markdown_upload)') }}</div>
+            </div></div>
           </div>
         </fieldset>
 
         <fieldset class="module">
-          <h2>Advanced Social Media</h2>
+          <h2>{{ _('Advanced Social Media') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>OpenGraph image</label><div class="field"><input type="text" id="f-og-image" placeholder="https://…"><div class="help">社交分享预览图 URL</div></div></div>
-            <div class="form-row"><label>Problem summary</label><div class="field"><textarea id="f-summary" rows="3" placeholder="Plain-text meta description for social media" style="width:100%;"></textarea><div class="help">纯文本摘要，用于 meta description</div></div></div>
+            <div class="form-row"><label>{{ _('OpenGraph image') }}</label><div class="field"><input type="text" id="f-og-image" placeholder="https://…"><div class="help">{{ _('Social share preview image URL') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Problem summary') }}</label><div class="field"><textarea id="f-summary" rows="3" placeholder="{{ _('Plain-text meta description for social media') }}" style="width:100%;"></textarea><div class="help">{{ _('Plain-text summary for meta description') }}</div></div></div>
           </div>
         </fieldset>
 
         <fieldset class="module">
-          <h2>Classes</h2>
+          <h2>{{ _('Classes') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>Classes</label><div class="field"><select multiple style="height:60px;"><option>COMPSCI 101</option></select></div></div>
+            <div class="form-row"><label>{{ _('Classes') }}</label><div class="field"><select multiple style="height:60px;"><option>COMPSCI 101</option></select></div></div>
           </div>
         </fieldset>
 
         <fieldset class="module">
-          <h2>Advanced Points</h2>
+          <h2>{{ _('Advanced Points') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>Short circuit</label><div class="field"><input type="checkbox" id="f-short-circuit"><div class="help">遇错即停（short circuit），不再跑后续用例</div></div></div>
+            <div class="form-row"><label>{{ _('Short circuit') }}</label><div class="field"><input type="checkbox" id="f-short-circuit"><div class="help">{{ _('Stop on first failure (short circuit); skip remaining cases') }}</div></div></div>
           </div>
         </fieldset>
 
         <fieldset class="module type-panel" data-for="programming">
-          <h2>Advanced Limits</h2>
+          <h2>{{ _('Advanced Limits') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>Time limit (s)</label><div class="field"><input type="number" id="f-time" value="2" step="0.1" style="width:120px;"></div></div>
-            <div class="form-row"><label>Memory limit (MB)</label><div class="field"><input type="number" id="f-mem" value="256" style="width:120px;"></div></div>
+            <div class="form-row"><label>{{ _('Time limit (s)') }}</label><div class="field"><input type="number" id="f-time" value="2" step="0.1" style="width:120px;"></div></div>
+            <div class="form-row"><label>{{ _('Memory limit (MB)') }}</label><div class="field"><input type="number" id="f-mem" value="256" style="width:120px;"></div></div>
           </div>
         </fieldset>
 
         <fieldset class="module type-panel" data-for="programming">
-          <h2>Advanced Language</h2>
+          <h2>{{ _('Advanced Language') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>Allowed languages</label><div class="field checkbox-list" id="f-langs" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
+            <div class="form-row"><label>{{ _('Allowed languages') }}</label><div class="field checkbox-list" id="f-langs" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
               {% for l in languages %}<label><input type="checkbox" class="lang-cb" value="{{ l.key }}"> {{ l.name }}</label>{% endfor %}
-            </div><div class="help">不勾选则默认允许全部语言</div></div>
+            </div><div class="help">{{ _('If none are checked, all languages are allowed by default') }}</div></div>
           </div>
         </fieldset>
 
         <div class="inline-group type-panel" data-for="programming">
-          <h2>Language limits</h2>
+          <h2>{{ _('Language limits') }}</h2>
           <table class="inline-table">
-            <thead><tr><th>Language</th><th>Time limit (s)</th><th>Memory limit (KB)</th><th>Delete</th></tr></thead>
+            <thead><tr><th>{{ _('Language') }}</th><th>{{ _('Time limit (s)') }}</th><th>{{ _('Memory limit (KB)') }}</th><th>{{ _('Delete') }}</th></tr></thead>
             <tbody id="lang-limit-body">
               <tr>
                 <td style="width:140px;"><select>{% for l in languages %}<option value="{{ l.key }}">{{ l.name }}</option>{% endfor %}</select></td>
-                <td><input type="number" step="0.1" placeholder="继承全局" style="width:100px;"></td>
-                <td><input type="number" placeholder="继承全局" style="width:120px;"></td>
+                <td><input type="number" step="0.1" placeholder="{{ _('Inherit global') }}" style="width:100px;"></td>
+                <td><input type="number" placeholder="{{ _('Inherit global') }}" style="width:120px;"></td>
                 <td style="width:40px;"><input type="checkbox"></td>
               </tr>
-              <tr><td colspan="4"><a href="#" onclick="event.preventDefault();">+ Add another Language limit</a></td></tr>
+              <tr><td colspan="4"><a href="#" onclick="event.preventDefault();">{{ _('+ Add another Language limit') }}</a></td></tr>
             </tbody>
           </table>
-          <div class="help" style="padding:0.5rem 1rem;">为特定语言覆盖全局时限/内存（对应旧页 LanguageLimit）</div>
+          <div class="help" style="padding:0.5rem 1rem;">{{ _('Override global time/memory for specific languages (legacy LanguageLimit)') }}</div>
         </div>
 
         <fieldset class="module">
-          <h2>Advanced Justice</h2>
+          <h2>{{ _('Advanced Justice') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>Banned users</label><div class="field"><select multiple id="f-banned-users" style="height:60px;"></select><div class="help">禁止所选用户提交本题</div></div></div>
+            <div class="form-row"><label>{{ _('Banned users') }}</label><div class="field"><select multiple id="f-banned-users" style="height:60px;"></select><div class="help">{{ _('Ban selected users from submitting this problem') }}</div></div></div>
           </div>
         </fieldset>
 
         <fieldset class="module">
-          <h2>Advanced History</h2>
+          <h2>{{ _('Advanced History') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>Edit reason</label><div class="field"><input type="text" placeholder="Describe the changes you made (optional)"></div></div>
+            <div class="form-row"><label>{{ _('Edit reason') }}</label><div class="field"><input type="text" placeholder="{{ _('Describe the changes you made (optional)') }}"></div></div>
           </div>
         </fieldset>
 
         <div class="inline-group type-panel" data-for="programming">
-          <h2>Problem templates</h2>
+          <h2>{{ _('Problem templates') }}</h2>
           <table class="inline-table">
-            <thead><tr><th>Language</th><th>Code template</th><th>Delete</th></tr></thead>
+            <thead><tr><th>{{ _('Language') }}</th><th>{{ _('Code template') }}</th><th>{{ _('Delete') }}</th></tr></thead>
             <tbody>
               <tr>
                 <td style="width:120px;"><select><option>C++17</option></select></td>
                 <td><textarea rows="2" style="font-family:monospace;">#include &lt;iostream&gt;</textarea></td>
                 <td style="width:40px;"><input type="checkbox"></td>
               </tr>
-              <tr><td colspan="3"><a href="#">+ Add another Problem template</a></td></tr>
+              <tr><td colspan="3"><a href="#">{{ _('+ Add another Problem template') }}</a></td></tr>
             </tbody>
           </table>
         </div>
 
         <div class="inline-group">
-          <h2>Clarifications</h2>
+          <h2>{{ _('Clarifications') }}</h2>
           <table class="inline-table">
-            <thead><tr><th>Description</th><th>Delete</th></tr></thead>
+            <thead><tr><th>{{ _('Description') }}</th><th>{{ _('Delete') }}</th></tr></thead>
             <tbody>
               <tr>
-                <td><textarea rows="2" placeholder="比赛中补充说明…" style="width:100%;"></textarea></td>
+                <td><textarea rows="2" placeholder="{{ _('In-contest clarification…') }}" style="width:100%;"></textarea></td>
                 <td style="width:40px;"><input type="checkbox"></td>
               </tr>
-              <tr><td colspan="2"><a href="#" onclick="event.preventDefault();">+ Add another Clarification</a></td></tr>
+              <tr><td colspan="2"><a href="#" onclick="event.preventDefault();">{{ _('+ Add another Clarification') }}</a></td></tr>
             </tbody>
           </table>
         </div>
 
         <div class="inline-group">
-          <h2>Solution</h2>
+          <h2>{{ _('Solution') }}</h2>
           <div class="form-content" style="padding:0.75rem 1rem;">
-            <div class="form-row"><label>Is public</label><div class="field"><input type="checkbox" id="f-sol-public"><div class="help">公开题解</div></div></div>
-            <div class="form-row"><label>Publish on</label><div class="field"><input type="datetime-local" id="f-sol-publish"></div></div>
-            <div class="form-row"><label>Authors</label><div class="field"><select multiple style="height:50px;" id="f-sol-authors"></select></div></div>
-            <div class="form-row"><label>Content</label><div class="field"><textarea id="f-sol-content" rows="4" placeholder="题解正文（旧页 Solution inline；上方「解析」为做题页说明）" style="width:100%;"></textarea></div></div>
+            <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-sol-public"><div class="help">{{ _('Publish the solution') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Publish on') }}</label><div class="field"><input type="text" id="f-sol-publish" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"></div></div>
+            <div class="form-row"><label>{{ _('Authors') }}</label><div class="field"><select multiple style="height:50px;" id="f-sol-authors"></select></div></div>
+            <div class="form-row"><label>{{ _('Content') }}</label><div class="field"><textarea id="f-sol-content" rows="4" placeholder="{{ _('Solution body (legacy Solution inline; Explanation above is the solve-page note)') }}" style="width:100%;"></textarea></div></div>
           </div>
         </div>
 
         <div class="inline-group">
-          <h2>Translations</h2>
+          <h2>{{ _('Translations') }}</h2>
           <table class="inline-table">
-            <thead><tr><th>Language</th><th>Name</th><th>Description</th><th>Delete</th></tr></thead>
+            <thead><tr><th>{{ _('Language') }}</th><th>{{ _('Name') }}</th><th>{{ _('Description') }}</th><th>{{ _('Delete') }}</th></tr></thead>
             <tbody>
               <tr>
                 <td style="width:100px;"><select><option value="zh-hans">zh-hans</option><option value="en">en</option></select></td>
-                <td style="width:160px;"><input type="text" placeholder="Translated name"></td>
-                <td><textarea rows="2" placeholder="Translated description" style="width:100%;"></textarea></td>
+                <td style="width:160px;"><input type="text" placeholder="{{ _('Translated name') }}"></td>
+                <td><textarea rows="2" placeholder="{{ _('Translated description') }}" style="width:100%;"></textarea></td>
                 <td style="width:40px;"><input type="checkbox"></td>
               </tr>
-              <tr><td colspan="4"><a href="#" onclick="event.preventDefault();">+ Add another Translation</a></td></tr>
+              <tr><td colspan="4"><a href="#" onclick="event.preventDefault();">{{ _('+ Add another Translation') }}</a></td></tr>
             </tbody>
           </table>
         </div>
       </div>
 
       <div id="bottombar">
-        <button type="button" class="btn btn-primary" onclick="submitForm('save')">Save</button>
-        <button type="button" class="btn" onclick="submitForm('continue')">Save and continue editing</button>
-        <button type="button" class="btn" onclick="submitForm('another')">Save and add another</button>
+        <button type="button" class="btn btn-primary" onclick="submitForm('save')">{{ _('Save') }}</button>
+        <button type="button" class="btn" onclick="submitForm('continue')">{{ _('Save and continue editing') }}</button>
+        <button type="button" class="btn" onclick="submitForm('another')">{{ _('Save and add another') }}</button>
         <span style="flex:1;"></span>
         <button type="button" class="btn btn-cancel" onclick="cancelEdit()">{{ _('Cancel') }}</button>
       </div>
@@ -670,7 +677,7 @@
 
     <aside class="v2-right">
       <div class="pv-panel">
-        <div class="pv-head">预览</div>
+        <div class="pv-head">{{ _("Preview") }}</div>
         <div id="preview-body"></div>
       </div>
     </aside>
@@ -684,21 +691,21 @@
   <div class="qtype-modal hidden" id="ptype-modal">
     <div class="qtype-box" style="width:480px;">
       <div class="qtype-head">
-        <h2>选择题目类型 problem_type</h2>
+        <h2>{{ _("Select problem type") }}</h2>
         <button type="button" onclick="closeTypeModal()">×</button>
       </div>
       <div style="padding:1rem 1.25rem;">
         <div id="ptype-options" style="display:flex;flex-direction:column;gap:0.4rem;max-height:260px;overflow:auto;"></div>
         <div id="ptype-new-form" style="display:none;margin-top:0.75rem;padding-top:0.75rem;border-top:1px dashed var(--admin-border);">
-          <div style="font-weight:600;font-size:13px;margin-bottom:0.5rem;">新建 problem_type</div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:0.5rem;">{{ _("New problem type") }}</div>
           <div style="display:flex;flex-direction:column;gap:0.5rem;">
-            <label style="font-size:12px;">类别 ID / 名称（填一项即可，另一项默认同值）
-              <input type="text" id="nt-name" maxlength="100" placeholder="如 dp 或 Dynamic Programming" style="width:100%;padding:0.4rem;margin-top:2px;border:1px solid #aaa;border-radius:4px;">
+            <label style="font-size:12px;">{{ _("Category ID / name (fill one; the other defaults to the same value)") }}
+              <input type="text" id="nt-name" maxlength="100" placeholder="{{ _('e.g. dp or Dynamic Programming') }}" style="width:100%;padding:0.4rem;margin-top:2px;border:1px solid #aaa;border-radius:4px;">
             </label>
             <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
-              <button type="button" class="btn btn-primary" onclick="createNewType()">添加</button>
-              <button type="button" class="btn" onclick="runAIProblemType(true)">🤖 AI 推荐</button>
-              <button type="button" class="btn" onclick="toggleNewTypeForm(false)">取消</button>
+              <button type="button" class="btn btn-primary" onclick="createNewType()">{{ _("Add") }}</button>
+              <button type="button" class="btn" onclick="runAIProblemType(true)">🤖 {{ _("AI suggest") }}</button>
+              <button type="button" class="btn" onclick="toggleNewTypeForm(false)">{{ _("Cancel") }}</button>
             </div>
             <div id="ptype-ai-result" style="font-size:12px;color:var(--muted);"></div>
           </div>
@@ -706,8 +713,8 @@
         <button type="button" class="btn-add-option" style="width:100%;margin-top:0.75rem;" id="ptype-new-btn" onclick="toggleNewTypeForm(true)">+ {{ _('New problem type') }}</button>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:0.5rem;padding:0.75rem 1.25rem;border-top:1px solid var(--admin-border);">
-        <button type="button" class="btn" onclick="closeTypeModal()">取消</button>
-        <button type="button" class="btn btn-primary" onclick="applyTypeSelection()">确定</button>
+        <button type="button" class="btn" onclick="closeTypeModal()">{{ _('Cancel') }}</button>
+        <button type="button" class="btn btn-primary" onclick="applyTypeSelection()">{{ _('OK') }}</button>
       </div>
     </div>
   </div>
@@ -748,6 +755,7 @@
     let optionSeq = 0, blankSeq = 0, tcSeq = 0, subSeq = 0;
     let draftSaved = false;
 
+    /* Canonical English tags stored on problem_type; UI pills use gettext separately. */
     const DIFF_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
     /* 取消：编辑模式=放弃本次修改并回到该题详情；新建模式=放弃这道新题。均不删除任何题目。 */
@@ -966,7 +974,7 @@
       box.querySelectorAll('.ptype-tag.auto-diff').forEach(t => t.remove());
       const el = document.createElement('span');
       el.className = 'ptype-tag auto auto-diff';
-      el.innerHTML = label + ' <span class="meta">· 难度</span>';
+      el.innerHTML = label + ' <span class="meta">· ' + gettext('Difficulty') + '</span>';
       box.insertBefore(el, box.querySelector('.ptype-add'));
     }
     function setTypeTag(tag) {
@@ -974,7 +982,7 @@
       box.querySelectorAll('.ptype-tag.auto-type').forEach(t => t.remove());
       const el = document.createElement('span');
       el.className = 'ptype-tag auto auto-type';
-      el.innerHTML = tag + ' <span class="meta">· 题型</span>';
+      el.innerHTML = tag + ' <span class="meta">· ' + gettext('Type') + '</span>';
       box.insertBefore(el, box.firstChild);
     }
 
@@ -982,7 +990,9 @@
       const cm = document.getElementById('content-main');
       cm.classList.toggle('advanced-visible');
       const open = cm.classList.contains('advanced-visible');
-      document.getElementById('advanced-btn').textContent = open ? 'Hide advanced settings' : 'Advanced';
+      document.getElementById('advanced-btn').textContent = open
+        ? gettext('Hide advanced settings')
+        : gettext('Advanced');
     }
 
     /* ---------- 题型切换（需求4：直接选题型，无大类） ---------- */
@@ -994,7 +1004,7 @@
       badge.className = 'tag-type ' + meta.badge;
       setTypeTag(meta.tag);
 
-      document.getElementById('stem-label').firstChild.textContent = (type === 'compound') ? '主题干 ' : 'Description ';
+      document.getElementById('stem-label').firstChild.textContent = (type === 'compound') ? (gettext('Main stem') + ' ') : (gettext('Description') + ' ');
 
       document.querySelectorAll('.type-panel').forEach(el => {
         const list = (el.dataset.for || '').split(',');
@@ -1003,7 +1013,7 @@
       document.querySelectorAll('.blank-insert').forEach(b => b.style.display = type === 'blank' ? 'inline-block' : 'none');
 
       if (type === 'single' || type === 'multiple') {
-        document.getElementById('opt-hint').textContent = type === 'multiple' ? '（勾选所有正确答案）' : '（勾选正确答案）';
+        document.getElementById('opt-hint').textContent = type === 'multiple' ? gettext('(select all correct answers)') : gettext('(select the correct answer)');
         if (document.getElementById('options').children.length === 0) { addOption('HTTP'); addOption('TCP'); }
         else refreshOptionMarkers();
       }
@@ -1021,7 +1031,7 @@
 
     /* ---------- 选项（富文本 / Markdown） ---------- */
     function optionEditorTpl(name) {
-      return RichEditor.html(name, { compact: true, placeholder: '请输入选项内容（支持 $$公式$$）' });
+      return RichEditor.html(name, { compact: true, placeholder: gettext('Enter option text ($$math$$ supported)') });
     }
     function getOptionText(row) {
       const ed = row.querySelector('.rich-editor');
@@ -1044,7 +1054,7 @@
         <div>
           <div class="option-top">${optionEditorTpl(name)}</div>
         </div>
-        <div class="option-actions"><button type="button" class="btn-icon" title="删除" onclick="delOption(this)">×</button></div>`;
+        <div class="option-actions"><button type="button" class="btn-icon" title="${gettext('Delete')}" onclick="delOption(this)">×</button></div>`;
       document.getElementById('options').appendChild(row);
       RichEditor.init();
       if (value) setOptionText(row, value);
@@ -1052,7 +1062,7 @@
     }
     function delOption(btn) {
       const list = document.getElementById('options');
-      if (list.children.length <= 2) { alert('至少保留 2 个选项'); return; }
+      if (list.children.length <= 2) { alert(gettext('Keep at least 2 options')); return; }
       btn.closest('.option-row').remove(); renderPreview();
     }
     function refreshOptionMarkers() {
@@ -1065,9 +1075,9 @@
       const n = ++blankSeq;
       const row = document.createElement('div');
       row.className = 'blank-answer-row';
-      row.innerHTML = `<span class="blank-label">第 ${n} 空</span>
+      row.innerHTML = `<span class="blank-label">${interpolate(gettext('Blank %s'), [n])}</span>
         <textarea class="blank-answer" rows="2" placeholder="" oninput="renderPreview()" style="flex:1;font-family:inherit;resize:vertical;"></textarea>
-        <span class="inline-num blank-pts" style="display:none;"><input type="number" value="1" min="0" step="0.5" title="本空分值" oninput="renderPreview()"></span>
+        <span class="inline-num blank-pts" style="display:none;"><input type="number" value="1" min="0" step="0.5" title="${gettext('Points for this blank')}" oninput="renderPreview()"></span>
         <button type="button" class="btn-icon" onclick="this.closest('.blank-answer-row').remove();renderPreview();">×</button>`;
       document.getElementById('blank-answers').appendChild(row);
       renderScoreConf(); renderPreview();
@@ -1088,7 +1098,7 @@
     function fileCellHtml(kind, fileName, isZip) {
       const label = fileName || (kind === 'input' ? 'stdin' : 'expected');
       const cls = 'tc-file-btn' + (isZip ? '' : ' manual');
-      return `<button type="button" class="${cls}" data-kind="${kind}" data-file="${escapeAttr(fileName || '')}" title="查看/编辑内容">${escapeHtml(label)}</button>
+      return `<button type="button" class="${cls}" data-kind="${kind}" data-file="${escapeAttr(fileName || '')}" title="${gettext('View/edit content')}">${escapeHtml(label)}</button>
               <textarea class="tc-content" data-kind="${kind}" hidden></textarea>`;
     }
 
@@ -1120,7 +1130,7 @@
              <input type="hidden" class="tc-fname" data-kind="output" value="">`}
         </td>
         <td><input type="number" class="tc-points" value="${points}" min="0"></td>
-        <td style="text-align:center;"><input type="checkbox" class="tc-pretest" title="设为样例/pretest"${pretest ? ' checked' : ''}></td>
+        <td style="text-align:center;"><input type="checkbox" class="tc-pretest" title="${gettext('Mark as sample/pretest')}"${pretest ? ' checked' : ''}></td>
         <td><button type="button" class="btn-icon" onclick="this.closest('tr').remove();renumberTestCases();">×</button></td>`;
       document.getElementById('tc-body').appendChild(tr);
       if (opts) {
@@ -1154,7 +1164,7 @@
       const inName = (inBtn && inBtn.dataset.file) || 'input';
       const outName = (outBtn && outBtn.dataset.file) || 'output';
       const idx = tr.children[0] ? tr.children[0].textContent : '';
-      document.getElementById('tc-drawer-title').textContent = '用例 #' + idx;
+      document.getElementById('tc-drawer-title').textContent = interpolate(gettext('Case #%s'), [idx]);
       document.getElementById('tc-drawer-in-label').textContent = 'Input · ' + inName;
       document.getElementById('tc-drawer-out-label').textContent = 'Output · ' + outName;
       document.getElementById('tc-drawer-in').value = inTa ? (inTa.value || '') : '';
@@ -1204,7 +1214,7 @@
 
     function distributeCasePoints() {
       const rows = [...document.querySelectorAll('#tc-body tr')];
-      if (!rows.length) { setZipStatus('请先添加测试用例。', true); return; }
+      if (!rows.length) { setZipStatus(gettext('Add test cases first.'), true); return; }
       // Case points are integers in DB; round problem points then give remainder to the first cases
       // so the sum always equals the rounded total (same approach as classic test_data page).
       const raw = Number(document.getElementById('f-points').value);
@@ -1219,14 +1229,17 @@
         const input = tr.querySelector('.tc-points');
         if (input) input.value = pts;
       });
-      setZipStatus('已按题目总分均分：' + n + ' 组合计 ' + sum + ' 分' + (sum === total ? '' : '（目标 ' + total + '）') + '。');
+      setZipStatus(interpolate(gettext('Points distributed evenly: %(n)s cases totaling %(sum)s points%(suffix)s.'), {
+        n: n, sum: sum,
+        suffix: (sum === total ? '' : interpolate(gettext(' (target %(total)s)'), {total: total}, true))
+      }, true));
     }
 
     function updateTestDataHint() {
       const el = document.getElementById('tc-old-link');
       if (!el) return;
       if (TEST_DATA_URL) {
-        el.innerHTML = '<a href="' + TEST_DATA_URL + '" target="_blank" rel="noopener">打开旧版测试数据页（更细致编辑）</a>';
+        el.innerHTML = '<a href="' + TEST_DATA_URL + '" target="_blank" rel="noopener">' + gettext('Open legacy test-data page (finer editing)') + '</a>';
       }
     }
     updateTestDataHint();
@@ -1310,27 +1323,27 @@
     async function importZipFile(file) {
       if (!file) return;
       if (typeof JSZip === 'undefined') {
-        setZipStatus('ZIP 解析库未加载，请刷新页面重试。', true);
+        setZipStatus(gettext('ZIP parser not loaded. Please refresh and try again.'), true);
         return;
       }
       if (!/\.zip$/i.test(file.name)) {
-        setZipStatus('请选择 .zip 文件。', true);
+        setZipStatus(gettext('Please choose a .zip file.'), true);
         return;
       }
       const body = document.getElementById('tc-body');
       const hasRows = body && body.children.length > 0;
-      if (hasRows && !confirm('导入 zip 将替换当前表格中的测试用例，是否继续？')) {
+      if (hasRows && !confirm(gettext('Importing a zip will replace the current test cases. Continue?'))) {
         document.getElementById('tc-zip-input').value = '';
         return;
       }
 
-      setZipStatus('正在解析 ' + file.name + ' …');
+      setZipStatus(interpolate(gettext('Parsing %s …'), [file.name]));
       try {
         const zip = await JSZip.loadAsync(file);
         const paths = Object.keys(zip.files);
         const pairs = pairZipEntries(paths);
         if (!pairs.length) {
-          setZipStatus('未找到可配对的测试文件（支持 N.in/N.out、N.in.txt/N.out.txt、inputN.txt/outputN.txt）。', true);
+          setZipStatus(gettext('No pairable test files found (supports N.in/N.out, N.in.txt/N.out.txt, inputN.txt/outputN.txt).'), true);
           return;
         }
 
@@ -1343,12 +1356,12 @@
           const input = await inEntry.async('string');
           const output = await outEntry.async('string');
           if (input.length > TC_ZIP_MAX_FILE || output.length > TC_ZIP_MAX_FILE) {
-            setZipStatus('文件过大（单文件上限 1MB）：' + basename(pair.input) + ' / ' + basename(pair.output) + '。超大包请用旧版 test_data。', true);
+            setZipStatus(interpolate(gettext('File too large (1MB per file limit): %s / %s. Use legacy test_data for large packages.'), [basename(pair.input), basename(pair.output)]), true);
             return;
           }
           total += input.length + output.length;
           if (total > TC_ZIP_MAX_TOTAL) {
-            setZipStatus('解压后总内容超过 8MB，请改用旧版 test_data 上传。', true);
+            setZipStatus(gettext('Decoded content exceeds 8MB; please upload via legacy test_data.'), true);
             return;
           }
           cases.push({
@@ -1361,7 +1374,7 @@
           });
         }
         if (!cases.length) {
-          setZipStatus('zip 内没有可读的文本测试用例。', true);
+          setZipStatus(gettext('No readable text test cases in the zip.'), true);
           return;
         }
 
@@ -1369,10 +1382,10 @@
         tcSeq = 0;
         cases.forEach(tc => addTestCase(tc));
         distributeCasePoints();
-        setZipStatus('已导入 ' + cases.length + ' 组（显示文件名；点击可编辑内容）。保存后同步到旧版页。');
+        setZipStatus(interpolate(gettext('Imported %s pairs (file names shown; click to edit). Syncs to the legacy page after save.'), [cases.length]));
       } catch (err) {
         console.error('[tc-zip]', err);
-        setZipStatus('无法解析该 zip：' + (err && err.message ? err.message : '无效的压缩包'), true);
+        setZipStatus(interpolate(gettext('Could not parse zip: %s'), [err && err.message ? err.message : gettext('invalid archive')]), true);
       } finally {
         document.getElementById('tc-zip-input').value = '';
       }
@@ -1393,9 +1406,9 @@
           <span class="sq-idx"></span>
           <span class="sq-pills">${SUB_TYPES.map(t => `<span class="sq-pill ${t === type ? 'on' : ''}" data-t="${t}" onclick="setSubType(${id},'${t}')">${TYPE_META[t].title}</span>`).join('')}</span>
           <span class="sq-spacer"></span>
-          <span class="sq-score">分值 <input type="number" value="5" min="0" step="0.5" oninput="renderPreview()"></span>
-          <button type="button" class="btn-icon" title="折叠" onclick="toggleSub(${id})">▾</button>
-          <button type="button" class="btn-icon" title="删除" onclick="this.closest('.sub-q').remove();renumberSubs();renderPreview();">×</button>
+          <span class="sq-score">${gettext('Points')} <input type="number" value="5" min="0" step="0.5" oninput="renderPreview()"></span>
+          <button type="button" class="btn-icon" title="${gettext('Collapse')}" onclick="toggleSub(${id})">▾</button>
+          <button type="button" class="btn-icon" title="${gettext('Delete')}" onclick="this.closest('.sub-q').remove();renumberSubs();renderPreview();">×</button>
         </div>
         <div class="sub-q-body"></div>`;
       document.getElementById('sub-list').appendChild(wrap);
@@ -1415,18 +1428,18 @@
     }
     function buildSubBody(wrap, type) {
       const body = wrap.querySelector('.sub-q-body'); const id = wrap.dataset.id;
-      let h = `<div style="margin-bottom:.7rem;"><label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">题目</label>${subEditorTpl('sub-stem-' + id, '子题目题干…')}</div>`;
+      let h = `<div style="margin-bottom:.7rem;"><label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">${gettext('Question')}</label>${subEditorTpl('sub-stem-' + id, gettext('Sub-question stem…'))}</div>`;
       if (type === 'single' || type === 'multiple') {
-        h += `<label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">选项（勾选正确答案）</label>
+        h += `<label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">${gettext('Options (select the correct answer)')}</label>
           <div class="options-list sub-opts" id="sub-opts-${id}"></div>
-          <button type="button" class="btn-add-option" onclick="addSubOption(${id})">+ 添加选项</button>`;
+          <button type="button" class="btn-add-option" onclick="addSubOption(${id})">+ ${gettext('Add option')}</button>`;
       } else if (type === 'truefalse') {
-        h += `<label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">答案</label>
-          <div class="tf-choices"><label><input type="radio" name="sub-tf-${id}" value="true" checked onchange="renderPreview()"><span>正确</span></label><label><input type="radio" name="sub-tf-${id}" value="false" onchange="renderPreview()"><span>错误</span></label></div>`;
+        h += `<label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">${gettext('Answer')}</label>
+          <div class="tf-choices"><label><input type="radio" name="sub-tf-${id}" value="true" checked onchange="renderPreview()"><span>${gettext('True')}</span></label><label><input type="radio" name="sub-tf-${id}" value="false" onchange="renderPreview()"><span>${gettext('False')}</span></label></div>`;
       } else if (type === 'blank') {
-        h += `<label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">答案（多个用 | 分隔）</label><input type="text" class="sub-blank" placeholder="标准答案" style="width:100%;padding:.4rem .6rem;border:1px solid #aaa;border-radius:4px;" oninput="renderPreview()">`;
+        h += `<label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">${gettext('Answer (separate multiple with |)')}</label><input type="text" class="sub-blank" placeholder="${gettext('Expected answer')}" style="width:100%;padding:.4rem .6rem;border:1px solid #aaa;border-radius:4px;" oninput="renderPreview()">`;
       } else if (type === 'short') {
-        h += `<label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">参考答案</label>${subEditorTpl('sub-short-' + id, '参考答案…')}`;
+        h += `<label style="display:block;font-weight:600;font-size:12px;margin-bottom:.3rem;">${gettext('Reference answer')}</label>${subEditorTpl('sub-short-' + id, gettext('Reference answer…'))}`;
       }
       body.innerHTML = h;
       if (type === 'single' || type === 'multiple') { addSubOption(id); addSubOption(id); }
@@ -1438,7 +1451,7 @@
       row.className = 'option-row';
       row.innerHTML = `
         <div class="option-marker"><input type="${multi ? 'checkbox' : 'radio'}" name="sub-correct-${id}" onchange="renderPreview()"></div>
-        <div><div class="option-top"><input class="option-input" placeholder="选项内容" oninput="renderPreview()"></div></div>
+        <div><div class="option-top"><input class="option-input" placeholder="${gettext('Option text')}" oninput="renderPreview()"></div></div>
         <div class="option-actions"><button type="button" class="btn-icon" onclick="this.closest('.option-row').remove();renderPreview();">×</button></div>`;
       document.getElementById('sub-opts-' + id).appendChild(row);
       renderPreview();
@@ -1476,25 +1489,25 @@
       }
 
       const subEl = document.getElementById('partial-sub');
-      if (currentType === 'programming') subEl.textContent = '按通过的测试点分值累加得分（在测试用例表逐点配置分值）';
-      else if (currentType === 'multiple') subEl.textContent = '少选得部分分，错选按规则处理';
-      else if (currentType === 'short') subEl.textContent = '由 AI / 关键点评分给出 0~满分之间的分数';
-      else if (currentType === 'blank') subEl.textContent = '每个填空位单独计分，答对几空得几空的分';
+      if (currentType === 'programming') subEl.textContent = gettext('Score is the sum of points from passed test cases (configure points per case in the test-case table)');
+      else if (currentType === 'multiple') subEl.textContent = gettext('Partial credit for under-selection; wrong selections follow the rule below');
+      else if (currentType === 'short') subEl.textContent = gettext('AI / keyword scoring awards a score between 0 and full points');
+      else if (currentType === 'blank') subEl.textContent = gettext('Each blank is scored separately; points for each correct blank');
 
       partialConf.style.display = partialOn ? 'block' : 'none';
       if (partialOn) {
         if (currentType === 'multiple') {
           partialConf.innerHTML = `<div class="radio-list">
-            <label><input type="radio" name="pmode" checked> 少选给分：每选对 1 个得 <span class="inline-num"><input type="number" value="0.5" step="0.5"></span> 分，选错即 0 分</label>
-            <label><input type="radio" name="pmode"> 比例给分：得分 = 满分 ×（选对数 − 选错数）/ 正确项数，最低 0 分</label>
+            <label><input type="radio" name="pmode" checked> ${gettext('Under-select credit:')} ${gettext('each correct choice earns')} <span class="inline-num"><input type="number" value="0.5" step="0.5"></span> ${gettext('points; any wrong choice scores 0')}</label>
+            <label><input type="radio" name="pmode"> ${gettext('Proportional credit: score = full points × (correct − wrong) / number of correct options, minimum 0')}</label>
           </div>`;
         } else if (currentType === 'blank') {
-          partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">已为每个填空位启用独立分值，请在上方“答案”里为每空填写分数。</div>`;
+          partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Per-blank points are enabled; set points for each blank under Answers above.')}</div>`;
           document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'inline-flex');
         } else if (currentType === 'short') {
-          partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">简答题部分分依赖 <b>AI 判题</b> 或关键点匹配（在下方 AI 判题的 Rubric 中配置分档）。</div>`;
+          partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Short-answer partial scoring depends on <b>AI grading</b> or keyword matching (configure tiers in the AI grading Rubric below).')}</div>`;
         } else if (currentType === 'programming') {
-          partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">编程题部分分 = 通过测试点的分值之和；在“测试用例”表逐点设置分值即可（支持 Batch 子任务打包）。</div>`;
+          partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Programming partial score = sum of points from passed cases; set points per case in the Test cases table (Batch subtasks supported).')}</div>`;
         }
       } else if (currentType === 'blank') {
         document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'none');
@@ -1544,25 +1557,25 @@
         stem = stem.replace(/\{\{\s*blank\s*\}\}/g, () =>
           `<input class="pv-blankinput pv-blank-inline" disabled placeholder="${++blankCount}">`);
       }
-      let html = `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">题目内容预览…</span>'}</div>`;
+      let html = `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">' + gettext('Statement preview…') + '</span>'}</div>`;
       if (currentType === 'single' || currentType === 'multiple') {
         html += renderOptsPreviewFromCache('#options', currentType === 'multiple', 'opt-');
       } else if (currentType === 'truefalse') {
         const val = document.querySelector('input[name="tf"]:checked')?.value;
         html += `<div class="pv-options">
-          <div class="pv-option"><span class="mk ${val === 'true' ? 'on' : ''}"></span>正确</div>
-          <div class="pv-option"><span class="mk ${val === 'false' ? 'on' : ''}"></span>错误</div></div>`;
+          <div class="pv-option"><span class="mk ${val === 'true' ? 'on' : ''}"></span>${gettext('True')}</div>
+          <div class="pv-option"><span class="mk ${val === 'false' ? 'on' : ''}"></span>${gettext('False')}</div></div>`;
       } else if (currentType === 'short') {
-        html += `<div class="pv-answerbox"></div><div class="pv-answerlabel">答案：</div>`;
+        html += `<div class="pv-answerbox"></div><div class="pv-answerlabel">${gettext('Answer:')}</div>`;
       } else if (currentType === 'blank') {
-        if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="请输入答案" disabled>`;
+        if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="${gettext('Enter answer')}" disabled>`;
         const ans = [...document.querySelectorAll('#blank-answers .blank-answer')]
           .map(t => t.value.split('\n').map(s => s.trim()).filter(Boolean).join(' / ')).filter(Boolean);
-        html += `<div class="pv-answerlabel">答案：${ans.length ? ans.join('；') : '—'}</div>`;
+        html += `<div class="pv-answerlabel">${gettext('Answer:')} ${ans.length ? ans.join('; ') : '—'}</div>`;
       } else if (currentType === 'compound') {
         html += renderCompoundPreviewFromCache();
       } else if (currentType === 'other') {
-        html += `<div class="pv-answerlabel" style="color:var(--muted);">其他题型：仅展示题面，人工评分。</div>`;
+        html += `<div class="pv-answerlabel" style="color:var(--muted);">${gettext('Other type: statement only; manual grading.')}</div>`;
       }
       pv.innerHTML = html;
       if (window.MathJax && MathJax.typesetPromise) MathJax.typesetPromise([pv]).catch(() => {});
@@ -1573,7 +1586,7 @@
       document.querySelectorAll(sel + ' .option-row').forEach((op, i) => {
         const txt = _previewHtml[keyPrefix + i] || '';
         const ok = op.querySelector('.option-marker input').checked;
-        h += `<div class="pv-option"><span class="mk ${multi ? 'sq' : ''} ${ok ? 'on' : ''}"></span><div class="pv-option-body">${txt || '选项'}</div></div>`;
+        h += `<div class="pv-option"><span class="mk ${multi ? 'sq' : ''} ${ok ? 'on' : ''}"></span><div class="pv-option-body">${txt || gettext('Option')}</div></div>`;
       });
       return h + '</div>';
     }
@@ -1584,22 +1597,22 @@
         const id = w.dataset.id, type = w.dataset.type;
         const score = w.querySelector('.sq-score input').value;
         const stem = _previewHtml['sub-stem-' + id] || '';
-        h += `<div class="pv-sub"><div class="pv-sub-t">${i + 1}. <span class="pv-badge">${TYPE_META[type].title}</span> <span style="float:right;color:var(--muted);font-size:12px;">${score} 分</span></div>`;
-        h += `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">子题干…</span>'}</div>`;
+        h += `<div class="pv-sub"><div class="pv-sub-t">${i + 1}. <span class="pv-badge">${TYPE_META[type].title}</span> <span style="float:right;color:var(--muted);font-size:12px;">${interpolate(gettext('%s pts'), [score])}</span></div>`;
+        h += `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">' + gettext('Sub-stem…') + '</span>'}</div>`;
         if (type === 'single' || type === 'multiple') {
           h += renderOptsPreviewFromCache('#sub-opts-' + id, type === 'multiple', 'sub-' + id + '-opt-');
         } else if (type === 'truefalse') {
           const v = w.querySelector(`input[name="sub-tf-${id}"]:checked`)?.value;
-          h += `<div class="pv-options"><div class="pv-option"><span class="mk ${v === 'true' ? 'on' : ''}"></span>正确</div><div class="pv-option"><span class="mk ${v === 'false' ? 'on' : ''}"></span>错误</div></div>`;
+          h += `<div class="pv-options"><div class="pv-option"><span class="mk ${v === 'true' ? 'on' : ''}"></span>${gettext('True')}</div><div class="pv-option"><span class="mk ${v === 'false' ? 'on' : ''}"></span>${gettext('False')}</div></div>`;
         } else if (type === 'blank') {
           const a = w.querySelector('.sub-blank').value;
-          h += `<input class="pv-blankinput" placeholder="请输入答案" disabled><div class="pv-answerlabel">答案：${a || '—'}</div>`;
+          h += `<input class="pv-blankinput" placeholder="${gettext('Enter answer')}" disabled><div class="pv-answerlabel">${gettext('Answer:')} ${a || '—'}</div>`;
         } else if (type === 'short') {
           h += `<div class="pv-answerbox"></div>`;
         }
         h += '</div>';
       });
-      return h || '<div class="pv-answerlabel" style="color:var(--muted);">尚未添加子题目。</div>';
+      return h || '<div class="pv-answerlabel" style="color:var(--muted);">' + gettext('No sub-questions yet.') + '</div>';
     }
 
     function renderPreview() {
@@ -1872,6 +1885,20 @@
     });
     RichEditor.mount();
     setDifficulty(currentDifficulty);
+
+    (function bindAdvancedFilePick() {
+      const input = document.getElementById('f-md-upload');
+      const btn = document.getElementById('f-md-upload-btn');
+      const nameEl = document.getElementById('f-md-upload-name');
+      if (!input || !btn || !nameEl) return;
+      const noneLabel = gettext('No file selected');
+      btn.addEventListener('click', () => input.click());
+      input.addEventListener('change', () => {
+        const f = input.files && input.files[0];
+        nameEl.textContent = f ? f.name : noneLabel;
+      });
+    })();
+
     if (EDIT_DATA) {
       loadEditData(EDIT_DATA);
     } else {
