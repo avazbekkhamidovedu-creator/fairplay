@@ -23,7 +23,7 @@ def _excel_column_name(index):
     return result
 
 
-def _sheet_xml(rows, shared_string_lookup):
+def _sheet_xml(rows, shared_string_lookup, validations=()):
     sheet_rows = []
     for row_index, row in enumerate(rows, start=1):
         cells = []
@@ -35,12 +35,29 @@ def _sheet_xml(rows, shared_string_lookup):
             ref = '{}{}'.format(_excel_column_name(col_index), row_index)
             cells.append('<c r="{ref}" t="s"><v>{idx}</v></c>'.format(ref=ref, idx=string_index))
         sheet_rows.append('<row r="{idx}">{cells}</row>'.format(idx=row_index, cells=''.join(cells)))
+    validation_xml = []
+    for validation in validations:
+        values = validation.get('values', ())
+        sqref = validation.get('sqref', '')
+        if not values or not sqref:
+            continue
+        formula = '"{}"'.format(','.join(str(value) for value in values))
+        validation_xml.append(
+            '<dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="{sqref}">'
+            '<formula1>{formula}</formula1></dataValidation>'.format(
+                sqref=escape(sqref), formula=escape(formula),
+            ),
+        )
+    validation_block = ''
+    if validation_xml:
+        validation_block = '<dataValidations count="{count}">{items}</dataValidations>'.format(
+            count=len(validation_xml), items=''.join(validation_xml),
+        )
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<worksheet xmlns="{main}">'
-        '<sheetData>{rows}</sheetData>'
+        '<worksheet xmlns="{main}"><sheetData>{rows}</sheetData>{validations}'
         '</worksheet>'
-    ).format(main=MAIN_NS, rows=''.join(sheet_rows))
+    ).format(main=MAIN_NS, rows=''.join(sheet_rows), validations=validation_block)
 
 
 def build_xlsx_workbook(sheets):
@@ -48,7 +65,8 @@ def build_xlsx_workbook(sheets):
     shared_string_lookup = {}
     total_string_count = 0
 
-    for _, rows in sheets:
+    for sheet in sheets:
+        _, rows = sheet[:2]
         for row in rows:
             for value in row:
                 if value is None or value == '':
@@ -80,7 +98,8 @@ def build_xlsx_workbook(sheets):
         'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>',
     ]
 
-    for index, (sheet_name, _) in enumerate(sheets, start=1):
+    for index, sheet in enumerate(sheets, start=1):
+        sheet_name, _ = sheet[:2]
         workbook_sheets.append(
             '<sheet name="{name}" sheetId="{idx}" r:id="rId{idx}"/>'.format(
                 name=escape(sheet_name),
@@ -159,8 +178,13 @@ def build_xlsx_workbook(sheets):
         archive.writestr('xl/_rels/workbook.xml.rels', workbook_rels_xml)
         archive.writestr('xl/styles.xml', styles_xml)
         archive.writestr('xl/sharedStrings.xml', shared_strings_xml)
-        for index, (_, rows) in enumerate(sheets, start=1):
-            archive.writestr('xl/worksheets/sheet{}.xml'.format(index), _sheet_xml(rows, shared_string_lookup))
+        for index, sheet in enumerate(sheets, start=1):
+            _, rows = sheet[:2]
+            validations = sheet[2] if len(sheet) > 2 else ()
+            archive.writestr(
+                'xl/worksheets/sheet{}.xml'.format(index),
+                _sheet_xml(rows, shared_string_lookup, validations),
+            )
     return output.getvalue()
 
 

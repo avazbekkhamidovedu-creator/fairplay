@@ -21,6 +21,7 @@ from judge.models import Class, Language, LanguageLimit, Organization, Problem, 
     ProblemPointsVote, ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution, \
     SubmissionSourceAccess
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
+from judge.utils.language_matching import matching_languages
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, AdminSelect2MultipleWidget, \
     AdminSelect2Widget, CheckboxSelectMultipleWithSelectAll
@@ -780,6 +781,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 lambda qs, token: list(qs.filter(common_name=token)),
                 lambda qs, token: list(qs.filter(name=token)),
                 lambda qs, token: list(qs.filter(pk=int(token))) if token.isdigit() else [],
+                matching_languages,
             ),
         )
 
@@ -842,6 +844,10 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return problem
 
     def _excel_headers(self):
+        return ['name', 'question_type', 'description', 'answer', 'solution', 'organizations', 'allowed_languages', 'test_data']
+
+    def _legacy_excel_headers(self):
+        """Keep the retired direct-create endpoint compatible with existing API clients."""
         return ['name', 'description', 'organizations', 'classes', 'allowed_languages']
 
     def _visible_excel_organizations(self, user):
@@ -860,16 +866,17 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         languages = self.get_default_languages()
         language_sample = ' | '.join(lang.key for lang in languages[:2]) if languages else 'PY3'
         org = self._visible_excel_organizations(request.user).first()
-        visible_classes = self._visible_excel_classes(request.user)
-        klass = visible_classes.first()
         return [
             self._excel_headers(),
             [
                 'Sample Problem',
+                'code',
                 'Write the full problem statement here. You can use multiple lines.',
+                '',
+                'Explain the intended solution here.',
                 org.slug if org else '',
-                klass.slug if klass else '',
                 language_sample,
+                'input data 1: 2 3\noutput data 1: 5',
             ],
         ]
 
@@ -886,7 +893,10 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return [
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Problem title.', 'Two Sum'],
-            ['description', 'yes', 'Problem statement markdown/plain text.', '# Two Sum\n\nDescribe the task.'],
+            ['question_type', 'yes', 'code, multiple_choice, or fill_blank.', 'multiple_choice'],
+            ['description', 'no', 'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file.', '# Two Sum\n\nDescribe the task.'],
+            ['answer', 'no', 'Optional answer key used by “LLM format question”.', 'B'],
+            ['solution', 'no', 'Editorial content. It is added to the problem solution section.', 'Use addition.'],
             [
                 'organizations', 'no',
                 'Separate multiple values with "|" or ",". Use organization slug/name/id.',
@@ -899,8 +909,13 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ],
             [
                 'allowed_languages', 'no',
-                'Separate multiple values with "|" or ",". Use language key/name/id.',
+                'Separate full language names with "|" or ",". C++11 also matches CPP11.',
                 language_keys,
+            ],
+            [
+                'test_data', 'code only',
+                'Text format: input data 1: ... then output data 1: .... Upload a ZIP from the preview page for .in/.out files.',
+                'input data 1: 2 3\noutput data 1: 5',
             ],
         ]
 
@@ -909,7 +924,10 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             raise PermissionDenied
 
         payload = build_xlsx_workbook([
-            ('Problems', self._excel_template_rows(request)),
+            (
+                'Problems', self._excel_template_rows(request),
+                [{'sqref': 'B2:B1000', 'values': ('code', 'multiple_choice', 'fill_blank')}],
+            ),
             ('Reference', self._excel_reference_rows(request)),
         ])
         response = HttpResponse(
@@ -1024,7 +1042,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             return JsonResponse({'ok': False, 'message': gettext('The Excel file is empty.')}, status=400)
 
         header_row = [str(cell).strip().lower() for cell in rows[0]]
-        required_headers = self._excel_headers()
+        required_headers = self._legacy_excel_headers()
         missing_headers = [header for header in required_headers if header not in header_row]
         if missing_headers:
             return JsonResponse({

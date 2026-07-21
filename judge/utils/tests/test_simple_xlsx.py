@@ -23,6 +23,21 @@ class SimpleXlsxTestCase(SimpleTestCase):
 
         self.assertEqual(rows, [['name', 'description'], ['A', 'B']])
 
+    def test_build_writes_list_validation_for_select_column(self):
+        payload = build_xlsx_workbook([
+            (
+                'Problems', [['question_type'], ['code']],
+                [{'sqref': 'A2:A1000', 'values': ('code', 'multiple_choice', 'fill_blank')}],
+            ),
+        ])
+
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            sheet = archive.read('xl/worksheets/sheet1.xml').decode()
+
+        self.assertIn('dataValidation type="list"', sheet)
+        self.assertIn('sqref="A2:A1000"', sheet)
+        self.assertIn('"code,multiple_choice,fill_blank"', sheet)
+
     def test_validate_xlsx_upload_rejects_oversized_file(self):
         uploaded = SimpleUploadedFile(
             'big.xlsx',

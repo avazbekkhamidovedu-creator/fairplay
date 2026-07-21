@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block media %}
+    <style>
+        .import-preview-card { border: 1px solid #d9d5c9; border-left: 4px solid #d48b31; margin: 1.25em 0; padding: 1.25em; background: #fffdf8; }
+        .import-preview-card h3 { margin-top: 0; }
+        .import-preview-field { margin: 0.8em 0; }
+        .import-preview-field label { display: block; font-weight: bold; margin-bottom: 0.25em; }
+        .import-preview-field input, .import-preview-field textarea, .import-preview-field select { box-sizing: border-box; max-width: 100%; width: 100%; }
+        .import-preview-field textarea { min-height: 7em; font-family: monospace; }
+        .import-preview-source { color: #776f61; font-size: 0.9em; }
+        .import-preview-actions { display: flex; flex-wrap: wrap; gap: 0.6em; margin-top: 1em; }
+        .import-preview-status { display: block; margin-top: 0.65em; min-height: 1.2em; }
+        .import-preview-status.error { color: #a32b20; }
+        .import-preview-status.success { color: #23733f; }
+        .import-type-fields { display: none; }
+        .import-preview-card[data-type="C"] .for-code, .import-preview-card[data-type="M"] .for-mcq, .import-preview-card[data-type="B"] .for-blank { display: block; }
+    </style>
+{% endblock %}
+
+{% block js_media %}
+    <script>
+        $(function () {
+            function csrfToken() { return $('input[name="csrfmiddlewaretoken"]').first().val() || ''; }
+            function updateType(card) { card.attr('data-type', card.find('[name="question_type"]').val()); }
+            function setStatus(card, text, error) {
+                card.find('.import-preview-status').text(text || '').toggleClass('error', !!error).toggleClass('success', !!text && !error);
+            }
+            function updateFields(card, item) {
+                ['description', 'solution', 'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks'].forEach(function (name) {
+                    if (Object.prototype.hasOwnProperty.call(item, name)) card.find('[name="' + name + '"]').val(item[name]);
+                });
+            }
+            $('.import-preview-card').each(function () { updateType($(this)); });
+            $('.import-preview-card [name="question_type"]').on('change', function () { updateType($(this).closest('.import-preview-card')); });
+            $('.import-action').on('click', async function () {
+                var button = $(this), card = button.closest('.import-preview-card'), form = card.find('form');
+                button.prop('disabled', true); setStatus(card, '{{ _("Working...")|escapejs }}', false);
+                try {
+                    var response = await fetch(button.data('url'), {method: 'POST', headers: {'X-CSRFToken': csrfToken()}, body: new FormData(form.get(0))});
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) { setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true); return; }
+                    if (payload.item) updateFields(card, payload.item);
+                    if (payload.edit_url) {
+                        setStatus(card, payload.message + ' ', false);
+                        card.find('.import-preview-status').append($('<a>').attr('href', payload.edit_url).text('{{ _("Edit problem")|escapejs }}'));
+                    } else setStatus(card, payload.message || '{{ _("Saved.")|escapejs }}', false);
+                } catch (error) { setStatus(card, '{{ _("Request failed.")|escapejs }}', true); }
+                finally { button.prop('disabled', false); }
+            });
+        });
+    </script>
+{% endblock %}
+
+{% block body %}
+    <div class="content-body">
+        <h2>{{ _('Excel import preview') }}</h2>
+        <p>{{ _('Review each question before creating it. “LLM format question” only formats the current card using its selected question type.') }}</p>
+        {% for item in items %}
+            <section class="import-preview-card" data-type="{{ item.submission_type }}">
+                <form>
+                    {% csrf_token %}
+                    <h3>{{ _('Row') }} {{ item.row_number }}: {{ item.name }}</h3>
+                    {% if item.source_label %}<p class="import-preview-source">{{ _('Embedded source:') }} {{ item.source_label }}</p>{% endif %}
+                    <div class="import-preview-field"><label>{{ _('Name') }}</label><input name="name" value="{{ item.name }}"></div>
+                    <div class="import-preview-field"><label>{{ _('Question type') }}</label><select name="question_type">{% for value, label in type_choices %}<option value="{{ value }}"{% if item.submission_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+                    <div class="import-preview-field"><label>{{ _('Description') }}</label><textarea name="description">{{ item.description }}</textarea></div>
+                    <div class="import-preview-field"><label>{{ _('Answer key / notes for LLM') }}</label><textarea name="answer">{{ item.answer }}</textarea></div>
+                    <div class="import-preview-field"><label>{{ _('Solution / editorial') }}</label><textarea name="solution">{{ item.solution }}</textarea></div>
+                    <div class="import-preview-field import-type-fields for-code"><label>{{ _('Allowed languages') }}</label><textarea name="allowed_languages" rows="2">{{ item.allowed_languages }}</textarea><small>{{ _('Separate full names with | or commas. C++11 also matches CPP11.') }}</small></div>
+                    <div class="import-preview-field import-type-fields for-code"><label>{{ _('Test data') }}</label><textarea name="test_data" rows="7" placeholder="input data 1: 2 3&#10;output data 1: 5">{{ item.test_data }}</textarea><small>{{ _('Use input data N: and output data N: pairs. Multi-line values are supported.') }}</small></div>
+                    <div class="import-preview-field import-type-fields for-code"><label>{{ _('Test data ZIP') }}</label><input name="test_data_zip" type="file" accept=".zip,application/zip"><small>{{ _('A ZIP with matching .in/.out files is used directly and takes priority over text test data.') }}</small>{% if item.test_data_zip %}<div>{{ _('Current ZIP:') }} {{ item.test_data_zip.name }}</div>{% endif %}</div>
+                    <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Options, one per line') }}</label><textarea name="options">{{ item.options }}</textarea></div>
+                    <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Correct option numbers, one per line') }}</label><textarea name="correct_options">{{ item.correct_options }}</textarea></div>
+                    <div class="import-preview-field import-type-fields for-blank"><label>{{ _('Accepted answers; separate blanks with a line containing ---') }}</label><textarea name="blanks">{{ item.blanks }}</textarea></div>
+                    <div class="import-preview-actions">
+                        <button type="button" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}">{{ _('Save draft') }}</button>
+                        <button type="button" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}">{{ _('LLM format question') }}</button>
+                        {% if item.created_problem %}<a class="button" href="{{ url('problem_detail', item.created_problem.code) }}">{{ _('Created') }}</a>{% else %}<button type="button" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}">{{ _('Create problem') }}</button>{% endif %}
+                    </div>
+                    <span class="import-preview-status{% if item.formatting_error %} error{% endif %}">{{ item.formatting_error }}</span>
+                </form>
+            </section>
+        {% endfor %}
+    </div>
+{% endblock %}
