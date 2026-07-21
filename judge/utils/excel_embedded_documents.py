@@ -1,9 +1,9 @@
-"""Read teacher-authored descriptions embedded in an Excel workbook.
+"""Read teacher-authored files embedded in an Excel workbook.
 
 Excel stores ``Insert -> Object -> Create from file`` attachments as OLE packages
 inside the XLSX zip. The worksheet's VML anchor tells us which spreadsheet row
 owns each attachment, so an embedded document can safely augment that row's
-``description`` field.
+``description`` field. ZIP files are retained for code-problem test data.
 """
 import io
 import posixpath
@@ -17,14 +17,15 @@ from judge.utils import simple_xlsx
 
 
 @dataclass
-class EmbeddedDescription:
+class EmbeddedFile:
     row_number: int
     filename: str
-    text: str
+    content: bytes
+    text: str = ''
 
 
-def read_xlsx_rows_with_embedded_descriptions(file_obj):
-    """Return first-sheet rows and text extracted from row-anchored attachments."""
+def read_xlsx_rows_with_embedded_files(file_obj):
+    """Return first-sheet rows and row-anchored DOCX, Markdown, or ZIP attachments."""
     rows = simple_xlsx.read_xlsx_rows(file_obj)
     file_obj.seek(0)
     with zipfile.ZipFile(file_obj) as archive:
@@ -41,12 +42,17 @@ def read_xlsx_rows_with_embedded_descriptions(file_obj):
             target = rels.get(relation_id)
             row_number = anchors.get(shape_id)
             if not target or row_number is None:
-                raise ValueError('An embedded description file is not attached to a worksheet row.')
+                raise ValueError('An embedded file is not attached to a worksheet row.')
             payload = simple_xlsx._safe_archive_read(archive, target)
             filename, content = _extract_embedded_file(payload)
-            attachments.append(EmbeddedDescription(row_number=row_number, filename=filename,
-                                                    text=_description_text(filename, content)))
+            text = _description_text(filename, content) if filename.lower().endswith(('.docx', '.md', '.markdown')) else ''
+            attachments.append(EmbeddedFile(row_number=row_number, filename=filename, content=content, text=text))
     return rows, attachments
+
+
+# Retain the old name for callers outside this import flow.
+read_xlsx_rows_with_embedded_descriptions = read_xlsx_rows_with_embedded_files
+EmbeddedDescription = EmbeddedFile
 
 
 def _relationship_map(archive, source_path):
@@ -91,9 +97,13 @@ def _shape_rows(archive, sheet, relationships):
 
 
 def _extract_embedded_file(payload):
-    """Return the filename and body of a direct or OLE-packaged office attachment."""
+    """Return the filename and body of a direct or OLE-packaged supported attachment."""
     if payload.startswith(b'PK\x03\x04'):
-        return 'embedded.docx', payload
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                return ('embedded.docx' if 'word/document.xml' in archive.namelist() else 'embedded.zip'), payload
+        except zipfile.BadZipFile as error:
+            raise ValueError('The embedded ZIP file is invalid.') from error
     try:
         import olefile
     except ImportError as error:
@@ -115,20 +125,20 @@ def _extract_embedded_file(payload):
                 return filename, _native_payload(body, filename)
     finally:
         container.close()
-    raise ValueError('The embedded file must be a DOCX or Markdown document.')
+    raise ValueError('The embedded file must be a DOCX, Markdown, or ZIP file.')
 
 
 def _embedded_filename(payload):
-    for match in re.finditer(rb'([^\x00]{1,255}\.(?:docx|md|markdown))\x00', payload, re.IGNORECASE):
+    for match in re.finditer(rb'([^\x00]{1,255}\.(?:docx|md|markdown|zip))\x00', payload, re.IGNORECASE):
         return match.group(1).decode('utf-8', 'replace').split('\\')[-1].split('/')[-1]
     return ''
 
 
 def _native_payload(payload, filename):
-    if filename.lower().endswith('.docx'):
+    if filename.lower().endswith(('.docx', '.zip')):
         start = payload.find(b'PK\x03\x04')
         if start < 0:
-            raise ValueError('The embedded DOCX file is invalid.')
+            raise ValueError('The embedded {} file is invalid.'.format(filename.rsplit('.', 1)[-1].upper()))
         return payload[start:]
 
     # Ole10Native writes a 32-bit payload length immediately before the final

@@ -1,9 +1,11 @@
 """Review-first Excel import for code, multiple-choice, and fill-blank problems."""
-import json
+import errno
 import io
+import json
 import os
 import re
 import zipfile
+from urllib.parse import urlencode
 from xml.etree import ElementTree as ET
 
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -22,7 +24,7 @@ from judge.llm import LLMError
 from judge.models import Language, Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, ProblemImportDraft, \
     ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemSubmissionType, ProblemTestCase, \
     Solution, problem_data_storage
-from judge.utils.excel_embedded_documents import read_xlsx_rows_with_embedded_descriptions
+from judge.utils.excel_embedded_documents import read_xlsx_rows_with_embedded_files
 from judge.utils.language_matching import matching_languages
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type
 from judge.utils.problem_data import ProblemDataCompiler
@@ -66,6 +68,57 @@ def _value(row, headers, name):
     return str(row[index]).strip() if index is not None and index < len(row) and row[index] is not None else ''
 
 
+def _serialize_fill_blanks(blanks):
+    """Store labeled blanks in a reviewable text format without a schema migration."""
+    blocks = []
+    for index, blank in enumerate(blanks, start=1):
+        answers = [str(answer).strip() for answer in blank.get('answers', []) if str(answer).strip()]
+        if not answers:
+            continue
+        lines = ['[blank {}]'.format(index)]
+        label = str(blank.get('label', '')).strip()
+        if label:
+            lines.append('label: {}'.format(label))
+        lines.append('answers:')
+        lines.extend(answers)
+        blocks.append('\n'.join(lines))
+    return '\n---\n'.join(blocks)
+
+
+def _parse_fill_blanks(value):
+    """Return (label, accepted_answers) pairs from the preview's blank format.
+
+    Legacy blocks that contain only answer lines are still accepted and have no label.
+    """
+    result = []
+    for raw_block in re.split(r'\n\s*---\s*\n', value or ''):
+        lines = [line.strip() for line in raw_block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        if not re.match(r'^\[blank(?:\s+\d+)?\]$', lines[0], re.IGNORECASE):
+            result.append(('', '\n'.join(lines)))
+            continue
+        label = ''
+        answers = []
+        reading_answers = False
+        for line in lines[1:]:
+            if not reading_answers and line.lower().startswith('label:'):
+                label = line.split(':', 1)[1].strip()
+            elif line.lower().startswith('answers:'):
+                reading_answers = True
+                first_answer = line.split(':', 1)[1].strip()
+                if first_answer:
+                    answers.append(first_answer)
+            elif reading_answers:
+                answers.append(line)
+            else:
+                raise ValueError('Each formatted blank needs an "answers:" line.')
+        if not answers:
+            raise ValueError('Each blank needs at least one accepted answer.')
+        result.append((label, '\n'.join(answers)))
+    return result
+
+
 class ProblemImportUploadView(LoginRequiredMixin, View):
     """Convert a workbook into an editable, server-side preview."""
     def post(self, request):
@@ -75,7 +128,7 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
             return JsonResponse({'ok': False, 'message': _('Please choose an .xlsx Excel file.')}, status=400)
         try:
             validate_xlsx_upload(uploaded)
-            rows, embedded = read_xlsx_rows_with_embedded_descriptions(uploaded)
+            rows, embedded = read_xlsx_rows_with_embedded_files(uploaded)
         except zipfile.BadZipFile:
             return JsonResponse({'ok': False, 'message': _('The Excel file is invalid.')}, status=400)
         except (ET.ParseError, KeyError, ValueError) as error:
@@ -102,29 +155,46 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                     type_value = _value(row, headers, 'question_type')
                     description = _value(row, headers, 'description')
                     attachments = files_by_row.get(row_number, [])
+                    description_files = [document for document in attachments if document.text]
+                    zip_files = [document for document in attachments if document.filename.lower().endswith('.zip')]
                     if not any((name, type_value, description, attachments)):
                         continue
                     if not name:
                         raise ValueError('Row {} is missing "name".'.format(row_number))
                     question_type = _normalise_type(type_value)
                     parts = [description] if description else []
-                    parts.extend(document.text for document in attachments if document.text)
+                    parts.extend(document.text for document in description_files)
                     if not parts:
                         raise ValueError('Row {} must contain description text or an embedded DOCX/Markdown file.'.format(
                             row_number))
+                    if zip_files and question_type != ProblemSubmissionType.CODE:
+                        raise ValueError('Row {} has an embedded ZIP, but only code problems can use test data ZIPs.'.format(
+                            row_number))
+                    if len(zip_files) > 1:
+                        raise ValueError('Row {} has more than one embedded test data ZIP.'.format(row_number))
+                    test_data_zip = None
+                    if zip_files:
+                        zip_attachment = zip_files[0]
+                        # Validate the archive before storing it in the review draft.
+                        _parse_zip_test_data(ContentFile(zip_attachment.content, name=zip_attachment.filename))
+                        test_data_zip = ContentFile(zip_attachment.content, name=zip_attachment.filename)
+                    answer = _value(row, headers, 'answer')
+                    blanks = _value(row, headers, 'blanks')
                     ProblemImportItem.objects.create(
                         draft=draft,
                         row_number=row_number,
                         name=name,
                         submission_type=question_type,
                         description='\n\n'.join(parts),
-                        answer=_value(row, headers, 'answer'),
+                        answer=answer,
                         solution=_value(row, headers, 'solution'),
                         allowed_languages=_value(row, headers, 'allowed_languages'),
                         test_data=_value(row, headers, 'test_data'),
                         options=_value(row, headers, 'options'),
                         correct_options=_value(row, headers, 'correct_options'),
-                        blanks=_value(row, headers, 'blanks'),
+                        # A fill-blank row can use its answer cell when no separate blanks column exists.
+                        blanks=blanks or (answer if question_type == ProblemSubmissionType.FILL_BLANK else ''),
+                        test_data_zip=test_data_zip,
                         source_label=', '.join(document.filename for document in attachments),
                     )
                     count += 1
@@ -133,7 +203,10 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
         if not count:
             draft.delete()
             return JsonResponse({'ok': False, 'message': _('The Excel file does not contain any problem rows.')}, status=400)
-        return JsonResponse({'ok': True, 'preview_url': reverse('problem_import_preview', args=(draft.pk,))})
+        preview_url = reverse('problem_import_preview', args=(draft.pk,))
+        if request.headers.get('x-requested-with') == 'XMLHttpRequest':
+            return JsonResponse({'ok': True, 'preview_url': preview_url})
+        return redirect(preview_url)
 
 
 class ProblemImportPreviewView(LoginRequiredMixin, View):
@@ -145,6 +218,10 @@ class ProblemImportPreviewView(LoginRequiredMixin, View):
             'draft': draft,
             'items': draft.items.select_related('created_problem'),
             'type_choices': ProblemImportItem.TYPE_CHOICES,
+            'title': _('Excel import preview'),
+            'content_title': _('Excel import preview'),
+            'feedback': request.GET.get('feedback', ''),
+            'feedback_error': request.GET.get('feedback_error') == '1',
         })
 
 
@@ -155,48 +232,81 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         item = get_object_or_404(draft.items, pk=item)
         if action not in ('save', 'format', 'create'):
             raise Http404()
-        self._save_item(item, request.POST, request.FILES)
+        try:
+            self._save_item(item, request.POST, request.FILES)
+        except ValueError as error:
+            return self._error_response(request, draft, item, str(error))
         if action == 'save':
-            return JsonResponse({'ok': True, 'message': _('Draft saved.')})
+            return self._success_response(request, draft, item, _('Draft saved.'))
         if action == 'format':
-            return self._format(item)
+            if not llm.is_configured():
+                return self._error_response(request, draft, item, _('LiteLLM is not configured.'), status=503)
+            try:
+                payload = self._format(item)
+            except (LLMError, ValueError) as error:
+                return self._error_response(request, draft, item, str(error))
+            return self._success_response(request, draft, item, _('Question formatted.'), payload)
         try:
             with transaction.atomic():
                 problem = _create_problem(request, item)
                 item.created_problem = problem
                 item.save(update_fields=['created_problem', 'updated_at'])
         except ValueError as error:
-            return JsonResponse({'ok': False, 'message': str(error)}, status=400)
-        return JsonResponse({
-            'ok': True,
-            'message': _('Created %(name)s.') % {'name': problem.name},
-            'edit_url': _edit_url(problem),
-        })
+            return self._error_response(request, draft, item, str(error))
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.ENOENT, errno.EROFS):
+                raise
+            return self._error_response(
+                request, draft, item,
+                _('Cannot write code-problem test data. An administrator must create and grant write access to '
+                  '%(path)s for the web service.') % {'path': '/mnt/problems'},
+            )
+        return self._success_response(
+            request, draft, item, _('Created %(name)s.') % {'name': problem.name},
+            edit_url=_edit_url(problem),
+        )
+
+    @staticmethod
+    def _wants_json(request):
+        """Keep JSON for API calls while allowing normal browser form submissions."""
+        return request.headers.get('x-requested-with') == 'XMLHttpRequest' or request.POST.get('native_submit') != '1'
+
+    def _preview_redirect(self, draft, item, message, error=False):
+        query = urlencode({'feedback': message, 'feedback_error': '1' if error else '0'})
+        return '{}?{}#import-item-{}'.format(
+            reverse('problem_import_preview', args=(draft.pk,)), query, item.pk)
+
+    def _success_response(self, request, draft, item, message, payload=None, edit_url=None):
+        if not self._wants_json(request):
+            return redirect(self._preview_redirect(draft, item, message))
+        response = {'ok': True, 'message': message}
+        if payload is not None:
+            response['item'] = _item_payload(item)
+        if edit_url:
+            response['edit_url'] = edit_url
+        return JsonResponse(response)
+
+    def _error_response(self, request, draft, item, message, status=400):
+        item.formatting_error = message
+        item.save(update_fields=['formatting_error', 'updated_at'])
+        if not self._wants_json(request):
+            return redirect(self._preview_redirect(draft, item, message, error=True))
+        return JsonResponse({'ok': False, 'message': message}, status=status)
 
     def _save_item(self, item, data, files):
         try:
             item.submission_type = _normalise_type(data.get('question_type', item.submission_type))
         except ValueError as error:
-            raise Http404(str(error))
+            raise ValueError(str(error))
         for field in ('name', 'description', 'answer', 'solution', 'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks'):
             setattr(item, field, (data.get(field, '') or '').strip())
         if files.get('test_data_zip'):
-            uploaded = files['test_data_zip']
-            if not uploaded.name.lower().endswith('.zip'):
-                raise ValueError('Test data must be a .zip file.')
-            item.test_data_zip = uploaded
+            raise ValueError('Test data ZIP files must be embedded as an Excel object.')
         item.formatting_error = ''
         item.save()
 
     def _format(self, item):
-        if not llm.is_configured():
-            return JsonResponse({'ok': False, 'message': _('LiteLLM is not configured.')}, status=503)
-        try:
-            payload = _format_with_llm(item)
-        except (LLMError, ValueError) as error:
-            item.formatting_error = str(error)
-            item.save(update_fields=['formatting_error', 'updated_at'])
-            return JsonResponse({'ok': False, 'message': str(error)}, status=400)
+        payload = _format_with_llm(item)
         item.description = payload.get('description', item.description).strip()
         if item.submission_type == ProblemSubmissionType.MCQ:
             options = payload.get('options', [])
@@ -204,15 +314,10 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
             item.correct_options = '\n'.join(
                 str(index + 1) for index, option in enumerate(options) if option.get('correct'))
         elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
-            blocks = []
-            for blank in payload.get('blanks', []):
-                answers = [str(answer).strip() for answer in blank.get('answers', []) if str(answer).strip()]
-                if answers:
-                    blocks.append('\n'.join(answers))
-            item.blanks = '\n---\n'.join(blocks)
+            item.blanks = _serialize_fill_blanks(payload.get('blanks', []))
         item.formatting_error = ''
         item.save()
-        return JsonResponse({'ok': True, 'item': _item_payload(item)})
+        return _item_payload(item)
 
 
 def _format_with_llm(item):
@@ -221,7 +326,8 @@ def _format_with_llm(item):
         'You format educational questions. Return JSON only. Keep all facts in the source; do not invent '
         'answers. For multiple choice return {"description": string, "options": [{"text": string, '
         '"correct": boolean}]}. For fill-in-the-blank return {"description": string, "blanks": '
-        '[{"answers": [string]}]}. For code return {"description": string}. '
+        '[{"label": string, "answers": [string]}]}; label is the short text shown beside that input. '
+        'For code return {"description": string}. '
         'If an answer cannot be determined, return an empty correct/answers collection.'
     )
     user = 'Question type: {}\n\nDescription:\n{}\n\nAnswer key, if supplied:\n{}'.format(
@@ -399,12 +505,12 @@ def _create_problem(request, item):
         for index, text in enumerate(options, start=1):
             ProblemMCQOption.objects.create(problem=problem, order=index - 1, text=text, is_correct=index in correct)
     elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
-        blocks = [block.strip() for block in re.split(r'\n\s*---\s*\n', item.blanks or '') if block.strip()]
-        if not blocks:
+        blanks = _parse_fill_blanks(item.blanks or item.answer)
+        if not blanks:
             raise ValueError('Fill-in-the-blank questions need at least one blank with an accepted answer.')
         ProblemFillBlankConfig.objects.create(problem=problem)
-        for index, answers in enumerate(blocks):
-            ProblemBlank.objects.create(problem=problem, order=index, answers=answers)
+        for index, (label, answers) in enumerate(blanks):
+            ProblemBlank.objects.create(problem=problem, order=index, label=label, answers=answers)
     return problem
 
 

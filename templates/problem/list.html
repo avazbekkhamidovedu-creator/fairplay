@@ -240,23 +240,24 @@
     {% set tab = 'list' %}
     {% include "problem/problem-list-tabs.html" %}
     {% if creatable_problem_types %}
-        <div class="problem-create-actions">
-            <div class="add-problem-menu">
-                <a href="#" class="button add-problem-toggle" onclick="return false;">{{ _('Add new problem') }} &#9662;</a>
-                <ul class="add-problem-dropdown">
-                    {% for type in creatable_problem_types %}
-                        <li><a href="{{ type.create_url() }}">{{ type.label }}</a></li>
-                    {% endfor %}
-                </ul>
-            </div>
+        <div class="add-problem-menu">
+            <a href="#" class="button add-problem-toggle" onclick="return false;">{{ _('Add new problem') }} &#9662;</a>
+            <ul class="add-problem-dropdown">
+                {% for type in creatable_problem_types %}
+                    <li><a href="{{ type.create_url() }}">{{ type.label }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
         {% if can_import_excel_problems %}
-            <button type="button" class="button excel-import-open" id="excel-import-open"
-                    onclick="document.getElementById('excel-import-modal').setAttribute('aria-hidden', 'false'); return false;">
-                <i class="fa fa-table"></i> {{ _('Import Excel') }}
-            </button>
+            <div class="excel-import-menu">
+                <a href="#" class="button excel-import-open" id="excel-import-open" role="button"
+                   onclick="document.getElementById('excel-import-modal').setAttribute('aria-hidden', 'false'); return false;">
+                    <i class="fa fa-table"></i> {{ _('Import Excel') }}
+                </a>
+            </div>
             <div class="excel-import-modal" id="excel-import-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="excel-import-title"
                  onclick="if (event.target === this) this.setAttribute('aria-hidden', 'true');">
-                <form class="excel-import-dialog" id="excel-import-form">
+                <form class="excel-import-dialog" id="excel-import-form" action="{{ url('problem_import_upload') }}" method="post" enctype="multipart/form-data">
                     {% csrf_token %}
                     <button type="button" class="excel-import-close" aria-label="{{ _('Close') }}"
                             onclick="document.getElementById('excel-import-modal').setAttribute('aria-hidden', 'true');">&times;</button>
@@ -266,7 +267,7 @@
                     <label class="excel-import-dropzone" for="excel-import-file">
                         <i class="fa fa-file-excel-o"></i>
                         <span class="excel-import-file-title">{{ _('Choose an .xlsx file') }}</span>
-                        <span class="excel-import-file-help">{{ _('Include name and question_type. Description may be text or an embedded DOCX/Markdown file.') }}</span>
+                        <span class="excel-import-file-help">{{ _('Include name and question_type. Description may be text or an embedded DOCX/Markdown file; embed a ZIP object in a code-problem row for test data.') }}</span>
                         <input id="excel-import-file" name="excel_file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
                     </label>
                     <div class="excel-import-template">
@@ -283,8 +284,7 @@
             </div>
         {% endif %}
         <style>
-            .problem-create-actions { align-items: center; display: inline-flex; gap: 0.5em; margin-left: 0.5em; vertical-align: middle; }
-            .add-problem-menu { display: inline-block; position: relative; }
+            .add-problem-menu { display: inline-block; position: relative; margin-left: 0.5em; }
             .add-problem-menu .add-problem-dropdown {
                 display: none; position: absolute; z-index: 1000; list-style: none;
                 margin: 0; padding: 0.3em 0; min-width: 180px; background: #fff;
@@ -293,7 +293,7 @@
             .add-problem-menu:hover .add-problem-dropdown { display: block; }
             .add-problem-menu .add-problem-dropdown li a { display: block; padding: 0.4em 1em; white-space: nowrap; }
             .add-problem-menu .add-problem-dropdown li a:hover { background: #f0f0f0; }
-            .excel-import-open { margin-left: 0; }
+            .excel-import-menu { display: inline-block; margin-left: 0.5em; position: relative; }
             .excel-import-modal { align-items: center; background: rgba(29, 35, 29, 0.6); display: none; inset: 0; justify-content: center; padding: 1.25rem; position: fixed; z-index: 3000; }
             .excel-import-modal[aria-hidden="false"] { display: flex; }
             .excel-import-dialog { background: linear-gradient(145deg, #fffdf7, #f5efe2); border: 1px solid #d7c5a7; border-radius: 14px; box-shadow: 0 24px 80px rgba(20, 26, 20, 0.45); max-width: 38rem; padding: 2rem; position: relative; width: 100%; }
@@ -310,44 +310,13 @@
             .excel-import-template .fa { color: #b47e24; margin-top: 0.1rem; }
             .excel-import-template a { font-weight: bold; }
             .excel-import-actions { border-top: 1px solid #e2d8c6; display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 1.4rem; padding-top: 1.15rem; }
-            .excel-import-submit { background: #315d45; border-color: #315d45; color: #fff; }
-            .excel-import-submit:hover { background: #244633; border-color: #244633; }
+            .excel-import-actions .excel-import-submit { background: #315d45 !important; background-image: none !important; border-color: #315d45 !important; color: #fff !important; text-shadow: none; }
+            .excel-import-actions .excel-import-submit:hover { background: #244633 !important; border-color: #244633 !important; }
             .excel-import-close { background: transparent; border: 0; color: #777366; cursor: pointer; font-size: 1.7rem; line-height: 1; padding: 0.2rem; position: absolute; right: 0.9rem; top: 0.8rem; }
             .excel-import-actions .excel-import-close { font-size: inherit; position: static; }
             .excel-import-status { color: #a32b20; display: block; font-size: 0.9rem; margin-top: 0.75rem; min-height: 1.25em; }
             @media (max-width: 520px) { .excel-import-dialog { padding: 1.4rem; } .excel-import-actions { align-items: stretch; flex-direction: column-reverse; } .excel-import-actions .button { text-align: center; } }
         </style>
-        {% if can_import_excel_problems %}
-            <script>
-                $(function () {
-                    var modal = $('#excel-import-modal');
-                    var form = $('#excel-import-form');
-                    var status = form.find('.excel-import-status');
-                    function closeModal() { modal.attr('aria-hidden', 'true'); status.text(''); }
-                    $('#excel-import-open').on('click', function () { modal.attr('aria-hidden', 'false'); $('#excel-import-file').trigger('focus'); });
-                    modal.find('.excel-import-close').on('click', closeModal);
-                    modal.on('click', function (event) { if (event.target === modal.get(0)) closeModal(); });
-                    form.on('submit', async function (event) {
-                        event.preventDefault();
-                        var submit = form.find('[type="submit"]');
-                        submit.prop('disabled', true);
-                        status.text('{{ _("Uploading workbook...")|escapejs }}');
-                        try {
-                            var response = await fetch('{{ url("problem_import_upload") }}', {
-                                method: 'POST',
-                                headers: {'X-CSRFToken': form.find('[name="csrfmiddlewaretoken"]').val() || ''},
-                                body: new FormData(form.get(0))
-                            });
-                            var payload = await response.json();
-                            if (!response.ok || !payload.ok) { status.text(payload.message || '{{ _("Upload failed.")|escapejs }}'); return; }
-                            window.location.href = payload.preview_url;
-                        } catch (error) { status.text('{{ _("Upload failed.")|escapejs }}'); }
-                        finally { submit.prop('disabled', false); }
-                    });
-                });
-            </script>
-        {% endif %}
-        </div>
     {% endif %}
 {% endblock %}
 

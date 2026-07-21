@@ -33,7 +33,8 @@
             }
             $('.import-preview-card').each(function () { updateType($(this)); });
             $('.import-preview-card [name="question_type"]').on('change', function () { updateType($(this).closest('.import-preview-card')); });
-            $('.import-action').on('click', async function () {
+            $('.import-action').on('click', async function (event) {
+                event.preventDefault();
                 var button = $(this), card = button.closest('.import-preview-card'), form = card.find('form');
                 button.prop('disabled', true); setStatus(card, '{{ _("Working...")|escapejs }}', false);
                 try {
@@ -54,12 +55,13 @@
 
 {% block body %}
     <div class="content-body">
-        <h2>{{ _('Excel import preview') }}</h2>
         <p>{{ _('Review each question before creating it. “LLM format question” only formats the current card using its selected question type.') }}</p>
+        {% if feedback %}<p class="import-preview-status{% if feedback_error %} error{% else %} success{% endif %}">{{ feedback }}</p>{% endif %}
         {% for item in items %}
-            <section class="import-preview-card" data-type="{{ item.submission_type }}">
-                <form>
+            <section id="import-item-{{ item.pk }}" class="import-preview-card" data-type="{{ item.submission_type }}">
+                <form method="post" action="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}" enctype="multipart/form-data">
                     {% csrf_token %}
+                    <input type="hidden" name="native_submit" value="1">
                     <h3>{{ _('Row') }} {{ item.row_number }}: {{ item.name }}</h3>
                     {% if item.source_label %}<p class="import-preview-source">{{ _('Embedded source:') }} {{ item.source_label }}</p>{% endif %}
                     <div class="import-preview-field"><label>{{ _('Name') }}</label><input name="name" value="{{ item.name }}"></div>
@@ -69,14 +71,14 @@
                     <div class="import-preview-field"><label>{{ _('Solution / editorial') }}</label><textarea name="solution">{{ item.solution }}</textarea></div>
                     <div class="import-preview-field import-type-fields for-code"><label>{{ _('Allowed languages') }}</label><textarea name="allowed_languages" rows="2">{{ item.allowed_languages }}</textarea><small>{{ _('Separate full names with | or commas. C++11 also matches CPP11.') }}</small></div>
                     <div class="import-preview-field import-type-fields for-code"><label>{{ _('Test data') }}</label><textarea name="test_data" rows="7" placeholder="input data 1: 2 3&#10;output data 1: 5">{{ item.test_data }}</textarea><small>{{ _('Use input data N: and output data N: pairs. Multi-line values are supported.') }}</small></div>
-                    <div class="import-preview-field import-type-fields for-code"><label>{{ _('Test data ZIP') }}</label><input name="test_data_zip" type="file" accept=".zip,application/zip"><small>{{ _('A ZIP with matching .in/.out files is used directly and takes priority over text test data.') }}</small>{% if item.test_data_zip %}<div>{{ _('Current ZIP:') }} {{ item.test_data_zip.name }}</div>{% endif %}</div>
+                    {% if item.test_data_zip %}<div class="import-preview-field import-type-fields for-code"><label>{{ _('Embedded test data ZIP') }}</label><div>{{ item.test_data_zip.name }}</div><small>{{ _('Imported from the Excel object and used in preference to text test data.') }}</small></div>{% endif %}
                     <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Options, one per line') }}</label><textarea name="options">{{ item.options }}</textarea></div>
                     <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Correct option numbers, one per line') }}</label><textarea name="correct_options">{{ item.correct_options }}</textarea></div>
-                    <div class="import-preview-field import-type-fields for-blank"><label>{{ _('Accepted answers; separate blanks with a line containing ---') }}</label><textarea name="blanks">{{ item.blanks }}</textarea></div>
+                    <div class="import-preview-field import-type-fields for-blank"><label>{{ _('Blanks and accepted answers') }}</label><textarea name="blanks" placeholder="[blank 1]&#10;label: First answer&#10;answers:&#10;42&#10;forty-two&#10;---&#10;[blank 2]&#10;label: Second answer&#10;answers:&#10;7">{{ item.blanks }}</textarea><small>{{ _('Use one [blank N] block per input. label is optional; write one accepted answer per line after answers:, and separate blocks with ---.') }}</small></div>
                     <div class="import-preview-actions">
-                        <button type="button" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}">{{ _('Save draft') }}</button>
-                        <button type="button" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}">{{ _('LLM format question') }}</button>
-                        {% if item.created_problem %}<a class="button" href="{{ url('problem_detail', item.created_problem.code) }}">{{ _('Created') }}</a>{% else %}<button type="button" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}">{{ _('Create problem') }}</button>{% endif %}
+                        <button type="submit" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}">{{ _('Save draft') }}</button>
+                        <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}">{{ _('LLM format question') }}</button>
+                        {% if item.created_problem %}<a class="button" href="{{ url('problem_detail', item.created_problem.code) }}">{{ _('Created') }}</a>{% else %}<button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}">{{ _('Create problem') }}</button>{% endif %}
                     </div>
                     <span class="import-preview-status{% if item.formatting_error %} error{% endif %}">{{ item.formatting_error }}</span>
                 </form>

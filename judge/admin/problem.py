@@ -844,7 +844,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return problem
 
     def _excel_headers(self):
-        return ['name', 'question_type', 'description', 'answer', 'solution', 'organizations', 'allowed_languages', 'test_data']
+        return ['name', 'question_type', 'description', 'answer', 'blanks', 'solution', 'organizations', 'allowed_languages', 'test_data']
 
     def _legacy_excel_headers(self):
         """Keep the retired direct-create endpoint compatible with existing API clients."""
@@ -873,6 +873,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 'code',
                 'Write the full problem statement here. You can use multiple lines.',
                 '',
+                '',
                 'Explain the intended solution here.',
                 org.slug if org else '',
                 language_sample,
@@ -895,7 +896,12 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ['name', 'yes', 'Problem title.', 'Two Sum'],
             ['question_type', 'yes', 'code, multiple_choice, or fill_blank.', 'multiple_choice'],
             ['description', 'no', 'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file.', '# Two Sum\n\nDescribe the task.'],
-            ['answer', 'no', 'Optional answer key used by “LLM format question”.', 'B'],
+            ['answer', 'no', 'Optional answer key used by “LLM format question”. For fill_blank, it is used when blanks is empty.', 'B'],
+            [
+                'blanks', 'fill_blank only',
+                'One block per input: [blank 1], optional label: ..., answers:, then one accepted answer per line. Separate blocks with ---.',
+                '[blank 1]\nlabel: Country\nanswers:\nFrance\nFrench Republic\n---\n[blank 2]\nlabel: Capital\nanswers:\nParis',
+            ],
             ['solution', 'no', 'Editorial content. It is added to the problem solution section.', 'Use addition.'],
             [
                 'organizations', 'no',
@@ -914,7 +920,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ],
             [
                 'test_data', 'code only',
-                'Text format: input data 1: ... then output data 1: .... Upload a ZIP from the preview page for .in/.out files.',
+                'Text format: input data 1: ... then output data 1: .... For .in/.out files, embed one ZIP object in the same Excel row.',
                 'input data 1: 2 3\noutput data 1: 5',
             ],
         ]
