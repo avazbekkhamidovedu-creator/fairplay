@@ -9,13 +9,14 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--quiet', action='store_true',
-                            help='no output; exit nonzero if any record is FAILED')
+                            help='no output; exit nonzero if any record is FAILED or ABANDONED')
 
     def handle(self, *args, **options):
-        failed = StoredFileRecord.objects.filter(status=StoredFileRecord.STATUS_FAILED)
+        alerting = StoredFileRecord.objects.filter(status__in=(
+            StoredFileRecord.STATUS_FAILED, StoredFileRecord.STATUS_ABANDONED))
         if options['quiet']:
-            if failed.exists():
-                raise CommandError(f'{failed.count()} records FAILED')
+            if alerting.exists():
+                raise CommandError(f'{alerting.count()} records need attention (FAILED/ABANDONED)')
             return
 
         for status, label in StoredFileRecord.STATUS_CHOICES:

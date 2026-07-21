@@ -1,10 +1,9 @@
-import hashlib
-
 from django.core.files import File
 from django.core.management.base import BaseCommand, CommandError
 
 from judge.models import StoredFileRecord
 from judge.storage import submission_storage
+from judge.storage.mirror import _stream_sha256
 
 
 class Command(BaseCommand):
@@ -40,15 +39,21 @@ class Command(BaseCommand):
                 restored += 1
                 continue
             try:
+                # Verify the backup copy BEFORE touching the primary, so a corrupt or
+                # unreadable backup can never make --force delete a good primary object.
+                with backup.open(record.path, 'rb') as src:
+                    digest, size = _stream_sha256(src)
+                if digest != record.sha256 or size != record.size:
+                    raise ValueError('backup copy fails sha256/size check; refusing to restore')
+
                 if options['force'] and primary.exists(record.path):
                     primary.delete(record.path)
                 with backup.open(record.path, 'rb') as src:
                     primary._save(record.path, File(src, name=record.path))
-                hasher = hashlib.sha256()
+
                 with primary.open(record.path, 'rb') as check:
-                    for chunk in iter(lambda: check.read(1024 * 1024), b''):
-                        hasher.update(chunk)
-                if hasher.hexdigest() != record.sha256:
+                    digest, _ = _stream_sha256(check)
+                if digest != record.sha256:
                     raise ValueError('sha256 mismatch after restore')
                 restored += 1
                 self.stdout.write(f'restored {record.path}')

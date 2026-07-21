@@ -12,8 +12,10 @@ from judge.storage.mirror import MirrorTerminalError, mirror_record, verify_reco
 class Command(BaseCommand):
     help = ('Reconciliation sweep for the submission-file backup mirror: re-mirrors stale '
             'PENDING records (lost Celery tasks) and FAILED records inline, without needing '
-            'a Celery worker. Run from cron (recommended: */15). Exits nonzero while any '
-            'record remains FAILED, so cron MAILTO doubles as the alert channel.')
+            'a Celery worker. ABANDONED records (terminal: zero-byte / primary gone) are left '
+            'alone so they are not re-attempted forever. Run from cron (recommended: */15). '
+            'Exits nonzero while any record is FAILED or ABANDONED, so cron MAILTO doubles as '
+            'the alert channel.')
 
     def add_arguments(self, parser):
         parser.add_argument('--stale-minutes', type=int, default=15,
@@ -42,23 +44,34 @@ class Command(BaseCommand):
                 errors += 1
                 self.stderr.write(f'{record.path}: {type(e).__name__}: {e}')
 
-        corrupt = 0
+        corrupt = healed = 0
         if options['verify']:
             mirrored_ids = list(StoredFileRecord.objects.filter(
                 status=StoredFileRecord.STATUS_MIRRORED).values_list('id', flat=True))
             sample = random.sample(mirrored_ids, min(options['verify'], len(mirrored_ids)))
             for record in StoredFileRecord.objects.filter(id__in=sample):
                 result = verify_record(record)
-                if not all(result.values()):
+                if result['primary'] is True and result['backup'] is False:
+                    # Primary intact, backup corrupt: queue a re-mirror from the primary
+                    # (next sweep re-uploads). None (unreadable) is left alone as transient.
+                    StoredFileRecord.objects.filter(id=record.id).update(
+                        status=StoredFileRecord.STATUS_PENDING, mirrored_at=None)
+                    healed += 1
+                    self.stdout.write(f'VERIFY: backup corrupt, queued re-mirror {record.path}')
+                elif result['primary'] is False or result['backup'] is False:
                     corrupt += 1
                     self.stderr.write(f'VERIFY FAILED {record.path}: {result}')
 
         pending = StoredFileRecord.objects.filter(status=StoredFileRecord.STATUS_PENDING)
         failed_count = StoredFileRecord.objects.filter(status=StoredFileRecord.STATUS_FAILED).count()
+        abandoned_count = StoredFileRecord.objects.filter(
+            status=StoredFileRecord.STATUS_ABANDONED).count()
         oldest = pending.order_by('created_on').first()
         lag = (timezone.now() - oldest.created_on) if oldest else None
-        self.stdout.write(f'swept={swept} errors={errors} pending={pending.count()} '
-                          f'failed={failed_count} oldest_pending_age={lag or "-"}')
+        self.stdout.write(f'swept={swept} errors={errors} healed={healed} pending={pending.count()} '
+                          f'failed={failed_count} abandoned={abandoned_count} '
+                          f'oldest_pending_age={lag or "-"}')
 
-        if failed_count or corrupt:
-            raise CommandError(f'{failed_count} records still FAILED, {corrupt} corrupt')
+        if failed_count or abandoned_count or corrupt:
+            raise CommandError(f'{failed_count} FAILED, {abandoned_count} ABANDONED '
+                               f'(manual action needed), {corrupt} corrupt')
