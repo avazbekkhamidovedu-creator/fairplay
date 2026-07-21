@@ -28,7 +28,28 @@
     {
       "id": "math_tilde",
       "markdown": "Formula ~a^2 + b^2 = c^2~ inline.",
-      "expect_substrings": ["a^2 + b^2 = c^2"]
+      "expect_substrings": ["\\(a^2 + b^2 = c^2\\)"]
+    },
+    {
+      "id": "math_paren",
+      "markdown": "Inline \\(T_{wc}\\) and \\(V \\le 4.8\\).",
+      "expect_substrings": ["\\(T_{wc}\\)", "\\(V \\le 4.8\\)"]
+    },
+    {
+      "id": "math_brackets",
+      "markdown": "Display \\[x \\le 0\\] here.",
+      "expect_substrings": ["\\[x \\le 0\\]"]
+    },
+    {
+      "id": "math_brackets_multiline_blank",
+      "markdown": "\\[\n\nw = 35.74 + (0.4275T - 35.75)\\,v^{0.16}\n\n\\]\n\nWrite `T`.",
+      "expect_substrings": ["\\[", "v^{0.16}", "\\]", "<code>T</code>"],
+      "forbid_substrings": ["<p>[</p>", "<p>]</p>"]
+    },
+    {
+      "id": "math_dollars",
+      "markdown": "Block\n\n$$ a^2 $$\n\nend",
+      "expect_substrings": ["\\[", "a^2", "\\]"]
     },
     {
       "id": "blank_placeholder",
