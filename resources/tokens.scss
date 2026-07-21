@@ -1,0 +1,59 @@
+@use "vars" as *;
+@use "sass:color";
+
+// =============================================================================
+// DKUOJ design tokens
+//
+// Single source of truth for colours, radii, and elevation used by new pages.
+// Values follow the classic OJ look (widgets / table / navbar) and track the
+// active Sass theme (light via vars-default, dark via vars-dark).
+//
+// Usage in CSS:  var(--oj-border), var(--oj-btn-from), …
+// Usage in SCSS: prefer these CSS vars for new UI; keep @use "vars" for legacy.
+// To restyle the site later, change this file (and vars-*.scss) first.
+// =============================================================================
+
+:root {
+    /* Surfaces & text */
+    --oj-surface: #{$color_primary0};
+    --oj-bg: #{$color_primary5};
+    --oj-border: #{$color_primary25};
+    --oj-text: #{$color_primary90};
+    --oj-text-muted: #{$color_primary50};
+    --oj-heading: #{$color_primary75};
+    --oj-heading-text: #{$color_primary0};
+
+    /* Brand accent (nav active, tabs, pagination highlight) */
+    --oj-accent: #{$highlight_blue};
+    --oj-accent-hover: #{color.adjust($highlight_blue, $lightness: -8%)};
+    --oj-accent-soft: #{rgba($highlight_blue, 0.12)};
+    --oj-link: #{$color_link75};
+
+    /* Primary action button — classic Bootstrap-blue gradient */
+    --oj-btn-from: #{$btn_primary_from};
+    --oj-btn-to: #{$btn_primary_to};
+    --oj-btn-border: #{$btn_primary_border};
+    --oj-btn-hover: #{$btn_primary_hover};
+    --oj-btn-text: #fff;
+
+    /* Danger */
+    --oj-danger: #{$btn_danger};
+    --oj-danger-hover: #{$btn_danger_hover};
+
+    /* Shape — classic OJ is modestly rounded */
+    --oj-radius: #{$widget_border_radius};
+    --oj-radius-md: #{$table_header_rounding};
+    --oj-radius-lg: 8px;
+
+    /* Elevation — classic OJ is nearly flat */
+    --oj-shadow: none;
+    --oj-shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.06);
+    --oj-shadow-dropdown: 2px 2px 4px rgba(0, 0, 0, 0.15);
+    --oj-shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.2);
+
+    /* Controls */
+    --oj-control-height: 34px;
+    --oj-font-size: #{$base_font_size};
+    /* Meta / badges only — body text should use --oj-font-size (14px) */
+    --oj-font-size-sm: 12px;
+}

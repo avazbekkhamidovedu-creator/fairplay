@@ -10,30 +10,29 @@
     {% endif %}
     <style>
         .problem-table th.col-select, .problem-table td.col-select { width: 32px; text-align: center; }
-        .problem-table th.col-actions, .problem-table td.col-actions { white-space: nowrap; text-align: right; }
+        .problem-table th.col-actions, .problem-table td.col-actions { white-space: nowrap; }
         .problem-table td.col-actions .row-action {
             display: inline-block; margin-left: 12px; font-size: 15px; cursor: pointer;
-            background: none; border: none; padding: 0; color: var(--primary) !important;
+            background: none; border: none; padding: 0; color: var(--oj-link) !important;
         }
         .problem-table td.col-actions .row-action:hover { opacity: 0.75; }
-        .problem-table td.col-actions .row-action.row-action-danger { color: #d64545 !important; }
-        /* Bulk-delete button: same pill shape as the sort button, greyed while empty. */
+        .problem-table td.col-actions .row-action.row-action-danger { color: var(--oj-danger) !important; }
         .toolbar .bulk-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .toolbar .bulk-delete-btn:not(:disabled):hover { border-color: #d64545; color: #d64545 !important; }
+        .toolbar .bulk-delete-btn:not(:disabled):hover { border-color: var(--oj-danger); color: var(--oj-danger) !important; }
         .toolbar .bulk-delete-btn .fa { color: inherit; }
-        .btn-danger { background: #d64545; border-color: #d64545; color: #fff; }
-        .btn-danger:hover { background: #c53030; border-color: #c53030; }
         .modal-overlay {
             position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
             display: flex; align-items: center; justify-content: center; z-index: 1000;
         }
         .modal-overlay[hidden] { display: none; }
         .modal-box {
-            background: #fff; width: 460px; max-width: 92vw; border-radius: 8px;
-            padding: 1.25rem 1.5rem; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+            background: var(--oj-surface, #fff); width: 460px; max-width: 92vw;
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: var(--oj-radius-lg, 8px);
+            padding: 1.25rem 1.5rem; box-shadow: var(--oj-shadow-modal);
         }
         .modal-title { margin: 0 0 0.5rem; font-size: 1.1rem; }
-        .modal-desc { margin: 0 0 0.75rem; color: #555; font-size: 13px; }
+        .modal-desc { margin: 0 0 0.75rem; color: var(--oj-text-muted, #555); font-size: 13px; }
         .modal-list {
             margin: 0 0 1rem; padding-left: 1.1rem; max-height: 220px; overflow: auto; font-size: 13px;
         }
@@ -388,7 +387,7 @@
         {% endif %}
     {% else %}
         {# Redesigned problem list. #}
-        <form id="filter-form" name="form" action="" method="get" class="problem-list-redesign">
+        <form id="filter-form" name="form" action="" method="get" class="problem-list-redesign oj-ui">
             <input type="hidden" name="category" id="category-input" value="{{ category if category is not none else '' }}">
             {# Marker that the form was actually submitted, so checkbox defaults (e.g. search_full) can be applied only on first visit. #}
             <input type="hidden" name="filtered" value="1">

@@ -11,8 +11,8 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
 
   <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
   <script>
@@ -31,7 +31,7 @@
   <script src="{{ static('rich_editor.js') }}"></script>
   <script src="{{ static('markdown_preview.js') }}"></script>
 
-  <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
+  <!-- Page-local layout tweaks; colours come from --oj-* / problem_create_v2.css -->
   <style>
     /* 融入站点框架（继承 base.html）：不再锁 100vh，随页面滚动 */
     .v2-main { display: block; }
@@ -39,7 +39,7 @@
     .v2-top .breadcrumb { margin: 0; }
     .v2-top h1 { margin: 0.15rem 0 0; }
     .v2-top .note { margin: 0.55rem 0 0; }
-    .v2-type-hint { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
+    .v2-type-hint { font-size: var(--oj-font-size, 14px); color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
 
     /* 隐藏添加题目页的所有使用提示（保留字段标签与必填标记） */
     .help,
@@ -52,33 +52,51 @@
     /* 需求6：题面标签与预览标题同高，保证左右齐平 */
     .stem-block > .block-label,
     .content-preview .pv-head { height: 20px; line-height: 20px; margin-bottom: 0.6rem !important; }
-    .stem-block > .block-label { display: block; font-weight: 600; font-size: 13px; }
+    .stem-block > .block-label { display: block; font-weight: 600; font-size: var(--oj-font-size, 14px); }
 
     /* 需求8：内联测试用例 */
-    .tc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .tc-table { width: 100%; border-collapse: collapse; font-size: var(--oj-font-size-sm, 12px); }
     .tc-table th, .tc-table td { border: 1px solid #ddd; padding: 0.35rem 0.4rem; text-align: left; vertical-align: top; }
-    .tc-table th { background: #f0f0f0; font-weight: 600; }
-    .tc-table textarea { width: 100%; min-height: 64px; font-family: monospace; font-size: 12px; resize: vertical; }
+    .tc-table th { background: var(--oj-heading, #3b3b3b); color: var(--oj-heading-text, #fff); font-weight: 600; }
+    .tc-table textarea { width: 100%; min-height: 64px; font-family: monospace; font-size: var(--oj-font-size-sm, 12px); resize: vertical; }
     .tc-table input[type="number"] { width: 64px; }
-    .tc-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin-bottom: 0.65rem; font-size: 12px; }
-    .tc-toolbar .tc-sep { color: #ccc; }
+    .tc-toolbar {
+      display: flex; flex-wrap: wrap; gap: 0.45rem 0.6rem; align-items: center;
+      margin-bottom: 0.65rem; font-size: var(--oj-font-size-sm, 12px);
+    }
+    .tc-toolbar .tc-sep { color: #ccc; line-height: 1; }
+    .tc-toolbar .btn,
+    .tc-toolbar label.btn {
+      min-height: 28px; height: 28px; padding: 0 10px;
+      font-size: var(--oj-font-size-sm, 12px); line-height: 1; box-sizing: border-box;
+    }
+    .tc-toolbar .tc-checker-label {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      font-weight: 600; font-size: var(--oj-font-size-sm, 12px); color: var(--text);
+    }
+    .tc-toolbar .tc-checker-label select,
+    .tc-toolbar #tc-checker {
+      width: auto; max-width: 160px; height: 28px; min-height: 28px;
+      padding: 0 8px; margin: 0; font-size: var(--oj-font-size-sm, 12px);
+      box-sizing: border-box; border: 1px solid var(--admin-border);
+      border-radius: var(--oj-radius, 4px); background: #fff; color: var(--text);
+    }
     .tc-file-btn {
       display: inline-flex; align-items: center; gap: 0.25rem;
       border: 1px solid #90a4ae !important;
       background: #eceff1 !important;
       color: #0d47a1 !important;
-      border-radius: 4px; padding: 0.25rem 0.5rem; font-size: 12px; cursor: pointer;
+      border-radius: var(--oj-radius, 4px); padding: 0.25rem 0.5rem; font-size: var(--oj-font-size-sm, 12px); cursor: pointer;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-width: 100%;
       font-weight: 600;
     }
     .tc-file-btn:hover { background: #bbdefb !important; border-color: #42a5f5 !important; color: #0d47a1 !important; }
     .tc-file-btn.dirty::after { content: '{{ _("· modified") }}'; color: #e65100 !important; font-size: 11px; margin-left: 0.2rem; font-weight: 600; }
     .tc-file-btn.manual { color: #263238 !important; }
-    .tc-mode-hint { font-size: 12px; color: var(--muted); margin: 0 0 0.55rem; line-height: 1.5; }
-    .tc-old-link { font-size: 12px; margin-top: 0.55rem; }
+    .tc-old-link { font-size: var(--oj-font-size-sm, 12px); margin-top: 0.55rem; }
     .tc-old-link a { color: var(--dmoj-green-dark); }
-    .tc-collapse { border: 1px solid var(--admin-border); border-radius: 6px; background: #fff; }
-    .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: 13px; list-style: none; user-select: none; }
+    .tc-collapse { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: #fff; }
+    .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: var(--oj-font-size, 14px); list-style: none; user-select: none; }
     .tc-collapse-summary::-webkit-details-marker { display: none; }
     .tc-collapse-summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; color: var(--muted); transition: transform 0.15s; }
     .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
@@ -99,7 +117,7 @@
       display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.75rem;
       border-bottom: 1px solid var(--admin-border); background: #fafafa;
     }
-    .tc-drawer-head strong { flex: 1; font-size: 12px; word-break: break-all; color: #212121; }
+    .tc-drawer-head strong { flex: 1; font-size: var(--oj-font-size-sm, 12px); word-break: break-all; color: #212121; }
     .tc-drawer-body {
       flex: 1; padding: 0.55rem 0.75rem; overflow: auto;
       display: flex; flex-direction: column; gap: 0.55rem;
@@ -111,8 +129,8 @@
     }
     .tc-drawer-pane textarea {
       width: 100%; flex: 1; min-height: 120px; max-height: 38vh;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
-      border: 1px solid #ddd; border-radius: 4px; padding: 0.4rem; resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--oj-font-size-sm, 12px);
+      border: 1px solid #ddd; border-radius: var(--oj-radius, 4px); padding: 0.4rem; resize: vertical;
       color: #212121; background: #fff;
     }
     .tc-drawer-foot {
@@ -120,17 +138,17 @@
       border-top: 1px solid var(--admin-border); background: #fafafa;
     }
 
-    .draft-banner { display: flex; align-items: center; gap: 0.5rem; background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 4px; padding: 0.5rem 0.75rem; font-size: 12px; margin-bottom: 0.6rem; }
+    .draft-banner { display: flex; align-items: center; gap: 0.5rem; background: var(--pcv2-accent-soft, rgba(41,128,185,0.12)); border: 1px solid var(--admin-border); border-radius: var(--oj-radius, 4px); padding: 0.5rem 0.75rem; font-size: var(--oj-font-size-sm, 12px); margin-bottom: 0.6rem; }
     .draft-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: #f39c12; flex-shrink: 0; }
     .draft-banner.saved .dot { background: var(--dmoj-green); }
 
     /* 需求4：复合题子题目 */
-    .sub-q { border: 1px solid var(--admin-border); border-radius: 6px; margin-bottom: 0.75rem; overflow: hidden; background: #fff; }
+    .sub-q { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); margin-bottom: 0.75rem; overflow: hidden; background: #fff; }
     .sub-q-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.65rem; background: #f5f5f5; border-bottom: 1px solid var(--admin-border); }
-    .sub-q-head .sq-idx { font-weight: 700; color: var(--dmoj-green-dark); }
+    .sub-q-head .sq-idx { font-weight: 700; color: var(--oj-accent, #2980B9); }
     .sq-pills { display: inline-flex; gap: 0.25rem; flex-wrap: wrap; }
-    .sq-pill { border: 1px solid var(--admin-border); background: #fff; border-radius: 16px; padding: 0.1rem 0.6rem; font-size: 12px; cursor: pointer; color: var(--muted); }
-    .sq-pill.on { border-color: var(--dmoj-green); background: #e8f5e9; color: var(--dmoj-green-dark); font-weight: 600; }
+    .sq-pill { border: 1px solid var(--admin-border); background: #fff; border-radius: var(--oj-radius, 4px); padding: 0.1rem 0.6rem; font-size: var(--oj-font-size-sm, 12px); cursor: pointer; color: var(--muted); }
+    .sq-pill.on { border-color: var(--oj-accent, #2980B9); background: var(--pcv2-accent-soft, rgba(41,128,185,0.12)); color: var(--oj-accent, #2980B9); font-weight: 600; }
     .sub-q-head .sq-spacer { flex: 1; }
     .sub-q-head .sq-score { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 0.3rem; }
     .sub-q-head .sq-score input { width: 60px; }
@@ -159,11 +177,11 @@
     .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
     .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
     /* 预览卡片：与左侧 fieldset.module 一致（白底 + 边框 + 灰色标题条） */
-    .pv-panel { border: 1px solid var(--admin-border); border-radius: 4px; background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); }
+    .pv-panel { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); box-shadow: var(--oj-shadow, none); }
     .v2-right .pv-head {
-      background: var(--admin-bg,#f0f0f0); color: var(--text); margin: 0; padding: 0.6rem 1rem;
-      font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: normal;
-      border-bottom: 1px solid var(--admin-border); flex-shrink: 0;
+      background: var(--oj-heading, #3b3b3b); color: var(--oj-heading-text, #fff); margin: 0; padding: 0.55rem 1rem;
+      font-size: 1.1em; font-weight: 600; text-transform: none; letter-spacing: normal;
+      border-bottom: 1px solid #808080; flex-shrink: 0;
     }
     #preview-body { padding: 1rem; overflow-y: auto; }
     @media (max-width: 900px) {
@@ -278,8 +296,8 @@
             <label>{{ _('Problem type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="ptype-tags" id="f-types">
-                <button type="button" class="ptype-add" title="{{ _('Select from existing types / create new') }}" onclick="openTypeModal()">+</button>
-                <button type="button" class="ptype-ai" id="ptype-ai-btn" title="{{ _('AI recommends type tags from the statement') }}" onclick="runAIProblemTypeInline()">AI</button>
+                <button type="button" class="inline-add-btn ptype-add" title="{{ _('Select from existing types / create new') }}" onclick="openTypeModal()">+</button>
+                <button type="button" class="inline-add-btn ptype-ai" id="ptype-ai-btn" title="{{ _('AI recommends type tags from the statement') }}" onclick="runAIProblemTypeInline()">🤖 AI</button>
               </div>
               <div class="help">{{ _('Type and difficulty tags are written automatically; you can add more category tags. Click "🤖 AI" to recommend from the statement') }}</div>
             </div>
@@ -445,8 +463,8 @@
                 </label>
                 <button type="button" class="btn" onclick="distributeCasePoints()">{{ _("Distribute points evenly") }}</button>
                 <span class="tc-sep">|</span>
-                <label>{{ _('Checker') }}
-                  <select id="tc-checker" style="max-width:160px;margin-left:0.25rem;">
+                <label class="tc-checker-label">{{ _('Checker') }}
+                  <select id="tc-checker">
                     <option value="">{{ _('Default') }}</option>
                     {% for c in checkers %}
                       <option value="{{ c.value }}">{{ c.label }}</option>
@@ -811,7 +829,7 @@
         box.style.display = 'block';
         // 未判定前先移除难度标签，判定完成后再写入
         document.getElementById('f-types').querySelectorAll('.ptype-tag.auto-diff').forEach(t => t.remove());
-        // 选中「AI 判断」即直接调用，无需再点按钮
+        // 选中「AI 推荐」即直接调用，无需再点按钮
         runAIDifficulty();
       } else {
         box.style.display = 'none';
@@ -2347,7 +2365,7 @@
     }
 
     function runAIDecompose() {
-      const desc = getMd('stem').trim();
+      const desc = (RichEditor.getMarkdown('stem') || '').trim();
       const pts = Number(document.getElementById('f-points').value) || 1;
       if (!desc) { showToast('Please write the problem description first.', false); return; }
       const status = document.getElementById('decompose-status');
