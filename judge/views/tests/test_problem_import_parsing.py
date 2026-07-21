@@ -4,10 +4,22 @@ import zipfile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase
 
-from judge.views.problem_import import _parse_fill_blanks, _parse_text_test_data, _parse_zip_test_data, _serialize_fill_blanks
+from judge.views.problem_import import _parse_fill_blanks, _parse_text_test_data, _parse_zip_test_data, \
+    _remove_multiple_choice_option_block, _serialize_fill_blanks
 
 
 class ProblemImportTestDataParsingTestCase(SimpleTestCase):
+    def test_removes_only_the_exact_multiple_choice_option_block(self):
+        description = 'Which number is prime?\nA. 4\nB. 5\nExplain your answer.'
+        self.assertEqual(
+            _remove_multiple_choice_option_block(description, 'A. 4\nB. 5'),
+            'Which number is prime?\nExplain your answer.',
+        )
+
+    def test_keeps_description_when_option_block_is_not_exact(self):
+        description = 'Which number is prime?\nA. 4\nB. 5'
+        self.assertEqual(_remove_multiple_choice_option_block(description, 'A. four\nB. five'), description)
+
     def test_parses_labeled_fill_blanks_with_multiple_answers(self):
         blanks = _parse_fill_blanks(
             '[blank 1]\nlabel: Country\nanswers:\nFrance\nFrench Republic\n---\n'

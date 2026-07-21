@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.conf.urls.static import static as static_files
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.contrib.sitemaps.views import sitemap
@@ -422,6 +423,11 @@ for favicon in favicon_paths:
 handler404 = 'judge.views.error.error404'
 handler403 = 'judge.views.error.error403'
 handler500 = 'judge.views.error.error500'
+
+# Production deployments should serve MEDIA_URL directly through Nginx. This
+# fallback makes uploaded Markdown and DOCX figures visible in local DEBUG runs.
+if settings.DEBUG:
+    urlpatterns += static_files(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 if 'newsletter' in settings.INSTALLED_APPS:
     urlpatterns.append(path('newsletter/', include('newsletter.urls')))

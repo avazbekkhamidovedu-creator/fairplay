@@ -119,6 +119,16 @@ def _parse_fill_blanks(value):
     return result
 
 
+def _remove_multiple_choice_option_block(description, option_block):
+    """Remove only an exact LLM-identified source block; never rewrite the prompt."""
+    if not option_block or option_block not in description:
+        return description
+    result = description.replace(option_block, '', 1)
+    result = re.sub(r'[ \t]+\n', '\n', result)
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    return result.strip()
+
+
 class ProblemImportUploadView(LoginRequiredMixin, View):
     """Convert a workbook into an editable, server-side preview."""
     def post(self, request):
@@ -307,14 +317,18 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
 
     def _format(self, item):
         payload = _format_with_llm(item)
-        item.description = payload.get('description', item.description).strip()
         if item.submission_type == ProblemSubmissionType.MCQ:
             options = payload.get('options', [])
             item.options = '\n'.join(option['text'].strip() for option in options if option.get('text', '').strip())
             item.correct_options = '\n'.join(
                 str(index + 1) for index, option in enumerate(options) if option.get('correct'))
+            item.description = _remove_multiple_choice_option_block(
+                item.description, payload.get('option_block', ''))
         elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
+            item.description = payload.get('description', item.description).strip()
             item.blanks = _serialize_fill_blanks(payload.get('blanks', []))
+        else:
+            item.description = payload.get('description', item.description).strip()
         item.formatting_error = ''
         item.save()
         return _item_payload(item)
@@ -324,8 +338,11 @@ def _format_with_llm(item):
     type_name = dict(ProblemImportItem.TYPE_CHOICES)[item.submission_type]
     system = (
         'You format educational questions. Return JSON only. Keep all facts in the source; do not invent '
-        'answers. For multiple choice return {"description": string, "options": [{"text": string, '
-        '"correct": boolean}]}. For fill-in-the-blank return {"description": string, "blanks": '
+        'answers. For multiple choice return {"options": [{"text": string, '
+        '"correct": boolean}], "option_block": string}. option_block must be an exact, contiguous substring '
+        'copied from Description and contain only the displayed options. Do not rewrite, summarize, correct, or '
+        'translate Description: the system removes only option_block and preserves all other text exactly. '
+        'For fill-in-the-blank return {"description": string, "blanks": '
         '[{"label": string, "answers": [string]}]}; label is the short text shown beside that input. '
         'For code return {"description": string}. '
         'If an answer cannot be determined, return an empty correct/answers collection.'
@@ -341,12 +358,16 @@ def _format_with_llm(item):
         payload = json.loads(text)
     except (TypeError, ValueError) as error:
         raise ValueError('The LLM did not return valid JSON.') from error
-    if not isinstance(payload, dict) or not isinstance(payload.get('description', ''), str):
+    if not isinstance(payload, dict):
         raise ValueError('The LLM returned an invalid question format.')
     if item.submission_type == ProblemSubmissionType.MCQ:
         options = payload.get('options', [])
         if not isinstance(options, list) or any(not isinstance(option, dict) for option in options):
             raise ValueError('The LLM returned invalid multiple-choice options.')
+        if not isinstance(payload.get('option_block', ''), str):
+            raise ValueError('The LLM returned an invalid multiple-choice option block.')
+    elif not isinstance(payload.get('description', ''), str):
+        raise ValueError('The LLM returned an invalid question format.')
     if item.submission_type == ProblemSubmissionType.FILL_BLANK:
         blanks = payload.get('blanks', [])
         if not isinstance(blanks, list) or any(not isinstance(blank, dict) for blank in blanks):

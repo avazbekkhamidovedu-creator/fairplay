@@ -55,7 +55,7 @@
 
 {% block body %}
     <div class="content-body">
-        <p>{{ _('Review each question before creating it. “LLM format question” only formats the current card using its selected question type.') }}</p>
+        <p>{{ _('Review each question before creating it. “LLM format question” only formats the current card using its selected question type. For multiple choice, it removes only the exact option block it recognizes and preserves the remaining description.') }}</p>
         {% if feedback %}<p class="import-preview-status{% if feedback_error %} error{% else %} success{% endif %}">{{ feedback }}</p>{% endif %}
         {% for item in items %}
             <section id="import-item-{{ item.pk }}" class="import-preview-card" data-type="{{ item.submission_type }}">

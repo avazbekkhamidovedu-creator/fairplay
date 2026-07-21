@@ -895,7 +895,11 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Problem title.', 'Two Sum'],
             ['question_type', 'yes', 'code, multiple_choice, or fill_blank.', 'multiple_choice'],
-            ['description', 'no', 'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file.', '# Two Sum\n\nDescribe the task.'],
+            [
+                'description', 'no',
+                'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file. PNG, JPG, and GIF figures inside DOCX are uploaded and inserted into the description.',
+                '# Two Sum\n\nDescribe the task.',
+            ],
             ['answer', 'no', 'Optional answer key used by “LLM format question”. For fill_blank, it is used when blanks is empty.', 'B'],
             [
                 'blanks', 'fill_blank only',
