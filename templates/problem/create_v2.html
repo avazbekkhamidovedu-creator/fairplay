@@ -11,8 +11,8 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}?v=20260721a">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260721a">
 
   <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
   <script>
@@ -28,8 +28,8 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="{{ static('jszip.min.js') }}"></script>
-  <script src="{{ static('rich_editor.js') }}"></script>
-  <script src="{{ static('markdown_preview.js') }}"></script>
+  <script src="{{ static('rich_editor.js') }}?v=20260721a"></script>
+  <script src="{{ static('markdown_preview.js') }}?v=20260721a"></script>
 
   <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
   <style>
@@ -1608,7 +1608,30 @@
         html += `<div class="pv-answerlabel" style="color:var(--muted);">${gettext('Other type: statement only; manual grading.')}</div>`;
       }
       pv.innerHTML = html;
-      if (window.MathJax && MathJax.typesetPromise) MathJax.typesetPromise([pv]).catch(() => {});
+      typesetPreviewMath(pv);
+    }
+
+    /** Wait for async MathJax load, then typeset preview (no-Mathoid path). */
+    function typesetPreviewMath(el) {
+      if (!el) return;
+      function run() {
+        if (!(window.MathJax && typeof MathJax.typesetPromise === 'function')) return false;
+        const ready = (MathJax.startup && MathJax.startup.promise)
+          ? MathJax.startup.promise
+          : Promise.resolve();
+        ready.then(() => {
+          if (typeof MathJax.typesetClear === 'function') {
+            try { MathJax.typesetClear([el]); } catch (e) { /* ignore */ }
+          }
+          return MathJax.typesetPromise([el]);
+        }).catch(() => {});
+        return true;
+      }
+      if (run()) return;
+      let n = 0;
+      const t = setInterval(() => {
+        if (run() || ++n > 40) clearInterval(t);
+      }, 50);
     }
 
     function renderOptsPreviewFromCache(sel, multi, keyPrefix) {
