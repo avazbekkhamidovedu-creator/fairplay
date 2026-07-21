@@ -682,6 +682,30 @@ if not DEBUG:
             'set a unique value in local_settings.py before enabling the event daemon '
             'with DEBUG = False.')
 
+    # Submission-file storage: fail loudly rather than silently degrade to local disk.
+    # These fire only for deployments that actually use the feature (endpoint set, or
+    # the Box mirror switched on), so a site not yet using it is unaffected.
+    if DMOJ_S3_ENDPOINT_URL and not (DMOJ_S3_ACCESS_KEY and DMOJ_S3_SECRET_KEY):
+        raise ImproperlyConfigured(
+            'DMOJ_S3_ENDPOINT_URL is set but DMOJ_S3_ACCESS_KEY / DMOJ_S3_SECRET_KEY are '
+            'empty; the submission-file store cannot authenticate.')
+    if DMOJ_BACKUP_MIRROR_ENABLED:
+        if not DMOJ_S3_ENDPOINT_URL:
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but DMOJ_S3_ENDPOINT_URL is empty; the '
+                'primary store would silently be local disk. Configure the S3 endpoint or '
+                'disable the mirror.')
+        if not (DMOJ_BOX_SFTP_USER and DMOJ_BOX_SFTP_PASSWORD):
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but Box SFTP credentials are missing; the '
+                'mirror would silently write to a local directory. Set DMOJ_BOX_SFTP_USER / '
+                'DMOJ_BOX_SFTP_PASSWORD or disable the mirror.')
+        if not (DMOJ_BOX_KNOWN_HOSTS and os.path.isfile(DMOJ_BOX_KNOWN_HOSTS)):
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but DMOJ_BOX_KNOWN_HOSTS is not a readable '
+                'file; without pinned host keys the SFTP backup is exposed to a first-connect '
+                'MITM. Point it at a known_hosts file for sftp.services.box.com.')
+
 assert DMOJ_PROBLEM_MIN_USER_POINTS_VOTE >= DMOJ_PROBLEM_MIN_PROBLEM_POINTS
 
 # <= 1 minute expiry is unusable UX

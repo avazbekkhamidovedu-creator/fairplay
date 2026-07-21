@@ -54,6 +54,9 @@ pypandoc
 # This is for the AI hint function
 openai
 
-# Submission file storage: S3-compatible primary + Box SFTP backup mirror
-django-storages[s3,sftp]>=1.14.4
+# Submission file storage: S3-compatible primary + Box SFTP backup mirror.
+# Capped: box.py depends on SFTPStorage internals that can shift across minor versions.
+django-storages[s3,sftp]>=1.14.4,<1.15
 boto3
+botocore
+paramiko
