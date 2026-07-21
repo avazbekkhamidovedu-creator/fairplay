@@ -12,11 +12,15 @@ Other question types from the design (fill-in-blank, true/false, short answer, c
 have no backend grader yet; the page shows them but this view refuses to save them
 (``NOT_IMPLEMENTED_TYPES``) until their models/graders land.
 
-The page talks to this view with a single JSON POST (the rich client collects everything and
-submits ``application/json``); responses are JSON ``{ok, redirect}`` or ``{error}``.
+The page talks to this view with JSON POSTs for most saves. Programming problems that carry a
+ZIP of test data use ``multipart/form-data`` (field ``payload`` = JSON metadata, field
+``testcase_zip`` = the archive) so large packages share the same upload path and size limits as
+the classic admin test_data page. Responses are JSON ``{ok, redirect}`` or ``{error}``.
 """
 import json
+import os
 import re
+from zipfile import BadZipfile, ZipFile
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.files.base import ContentFile
@@ -120,13 +124,31 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         }
 
     # ------------------------------------------------------------------ POST
+    def _parse_save_request(self, request):
+        """Return ``(payload_dict, uploaded_zip_or_None)`` from JSON or multipart save posts."""
+        content_type = (request.content_type or '').split(';')[0].strip().lower()
+        if content_type == 'multipart/form-data':
+            raw = request.POST.get('payload')
+            if raw is None:
+                raise ValueError(_('Invalid request.'))
+            try:
+                payload = json.loads(raw)
+            except (ValueError, TypeError):
+                raise ValueError(_('Invalid request.'))
+            return payload, request.FILES.get('testcase_zip')
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            raise ValueError(_('Invalid request.'))
+        return payload, None
+
     def post(self, request, *args, **kwargs):
         if not _can_create_any(request.user):
             return JsonResponse({'error': _('Permission denied.')}, status=403)
         try:
-            payload = json.loads(request.body.decode('utf-8'))
-        except (ValueError, UnicodeDecodeError):
-            return JsonResponse({'error': _('Invalid request.')}, status=400)
+            payload, zip_upload = self._parse_save_request(request)
+        except ValueError as e:
+            return JsonResponse({'error': str(e)}, status=400)
 
         qtype = payload.get('type')
         name = (payload.get('name') or '').strip()
@@ -152,7 +174,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
         try:
             if qtype == 'programming':
-                problem = self._create_code(request, payload, name, problem=existing)
+                problem = self._create_code(request, payload, name, problem=existing,
+                                            zip_upload=zip_upload)
             elif qtype in ('single', 'multiple'):
                 problem = self._create_mcq(request, payload, name, multiple=(qtype == 'multiple'), problem=existing)
             elif qtype == 'truefalse':
@@ -167,6 +190,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             return JsonResponse({'error': str(e)}, status=403)
         except ValueError as e:
             return JsonResponse({'error': str(e)}, status=400)
+        except BadZipfile:
+            return JsonResponse({'error': _('Your zip file is invalid!')}, status=400)
 
         action = payload.get('action') or 'save'
         if action == 'another':
@@ -276,8 +301,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return data
 
     def _read_testcases(self, problem):
-        from zipfile import BadZipfile, ZipFile
-
         from judge.models import ProblemData, problem_data_storage
 
         zip_file = None
@@ -420,14 +443,102 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         problem.organizations.set(Organization.objects.filter(pk__in=ids))
 
     # ------------------------------------------------------------------ code problem
-    def _create_code(self, request, payload, name, problem=None):
+    @staticmethod
+    def _zip_basename(path):
+        path = (path or '').replace('\\', '/')
+        return path.rsplit('/', 1)[-1] if path else ''
+
+    @staticmethod
+    def _zip_dirname(path):
+        path = (path or '').replace('\\', '/')
+        if '/' not in path:
+            return ''
+        return path.rsplit('/', 1)[0]
+
+    @staticmethod
+    def _zip_natural_key(name):
+        return re.sub(r'(\d+)', lambda m: m.group(1).zfill(10), (name or '').lower())
+
+    @classmethod
+    def _pair_zip_entries(cls, paths):
+        """Pair zip member paths into input/output cases (same rules as create_v2.js)."""
+        usable = []
+        for path in paths:
+            if not path or path.endswith('/'):
+                continue
+            base = cls._zip_basename(path)
+            if base.startswith('.') or '__MACOSX' in path.replace('\\', '/'):
+                continue
+            usable.append(path.replace('\\', '/'))
+
+        by_dir = {}
+        for path in usable:
+            by_dir.setdefault(cls._zip_dirname(path), []).append(path)
+
+        pairs = []
+        used = set()
+
+        for directory in sorted(by_dir):
+            files = by_dir[directory]
+            lower_map = {cls._zip_basename(p).lower(): p for p in files}
+            for in_path in files:
+                if in_path in used:
+                    continue
+                base = cls._zip_basename(in_path)
+                lower = base.lower()
+                out_base = None
+                m = re.match(r'^(.+)\.in\.txt$', lower)
+                if m:
+                    stem = m.group(1)
+                    for candidate in (stem + '.out.txt', stem + '.ans.txt'):
+                        if candidate in lower_map and lower_map[candidate] not in used:
+                            out_base = candidate
+                            break
+                else:
+                    m = re.match(r'^(.+)\.in$', lower)
+                    if m:
+                        stem = m.group(1)
+                        for candidate in (stem + '.out', stem + '.ans', stem + '.out.txt', stem + '.ans.txt'):
+                            if candidate in lower_map and lower_map[candidate] not in used:
+                                out_base = candidate
+                                break
+                    else:
+                        m = re.match(r'^input(\d+)\.txt$', lower)
+                        if m:
+                            for candidate in ('output' + m.group(1) + '.txt', 'output' + m.group(1) + '.out'):
+                                if candidate in lower_map and lower_map[candidate] not in used:
+                                    out_base = candidate
+                                    break
+                        else:
+                            m = re.match(r'^in(\d+)\.txt$', lower)
+                            if m:
+                                for candidate in ('out' + m.group(1) + '.txt', 'ans' + m.group(1) + '.txt'):
+                                    if candidate in lower_map and lower_map[candidate] not in used:
+                                        out_base = candidate
+                                        break
+                if not out_base:
+                    continue
+                out_path = lower_map[out_base]
+                used.add(in_path)
+                used.add(out_path)
+                pairs.append({
+                    'input': in_path,
+                    'output': out_path,
+                    'sort_key': cls._zip_natural_key(directory + '/' + base),
+                })
+
+        pairs.sort(key=lambda item: item['sort_key'])
+        return pairs
+
+    def _create_code(self, request, payload, name, problem=None, zip_upload=None):
         user = request.user
         if not (user.is_staff and user.has_perm('judge.add_problem')):
             raise PermissionError(_('You do not have permission to create code problems.'))
 
-        # Inline test cases: sync only when the client sends ``testcases``. Omitting the key
-        # must not wipe cases; empty list on edit clears Normal cases written here.
-        sync_cases = 'testcases' in payload
+        # Inline test cases: sync only when the client sends ``testcases`` (or a ZIP upload).
+        # Omitting the key must not wipe cases; empty list on edit clears Normal cases written here.
+        # A multipart ``testcase_zip`` uses the same archive path as classic test_data.
+        sync_cases = 'testcases' in payload or zip_upload is not None
         cleaned_cases = None
         if sync_cases:
             testcases = payload.get('testcases') or []
@@ -460,11 +571,15 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
 
-            if sync_cases and (cleaned_cases or payload.get('edit_code')):
-                self._save_testcases(
-                    problem, cleaned_cases or [],
-                    checker=(payload.get('checker') or ''),
+            checker = payload.get('checker') or ''
+            if zip_upload is not None:
+                self._save_testcases_from_zip(
+                    problem, zip_upload,
+                    meta_cases=cleaned_cases if cleaned_cases is not None else [],
+                    checker=checker,
                 )
+            elif sync_cases and (cleaned_cases or payload.get('edit_code')):
+                self._save_testcases(problem, cleaned_cases or [], checker=checker)
         return problem
 
     def _attach_languages(self, problem, payload):
@@ -478,8 +593,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
     def _clear_problem_data_files(self, problem):
         """Drop leftover zip/archive and old loose case files before rewriting from create-v2."""
-        import os
-
         from judge.models import ProblemData, problem_data_storage
 
         try:
@@ -496,11 +609,75 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if problem_dir and os.path.isdir(problem_dir):
             for name in os.listdir(problem_dir):
                 lower = name.lower()
-                if lower.endswith('.in') or lower.endswith('.out') or lower.endswith('.ans'):
+                if (lower.endswith('.in') or lower.endswith('.out') or lower.endswith('.ans') or
+                        lower.endswith('.in.txt') or lower.endswith('.out.txt') or lower.endswith('.ans.txt')):
                     try:
                         problem_data_storage.delete('%s/%s' % (problem.code, name))
                     except Exception:
                         pass
+
+    def _apply_checker(self, data, checker):
+        checker_value = (checker or '')[:10]
+        if checker_value and checker_value not in {c[0] for c in CHECKERS}:
+            checker_value = ''
+        data.checker = checker_value
+
+    def _save_testcases_from_zip(self, problem, uploaded_zip, meta_cases=None, checker=''):
+        """Persist cases from an uploaded archive the same way classic test_data stores zipfile.
+
+        ``meta_cases`` supplies points/pretest (and optional preferred names) by index; file bytes
+        always come from the zip so large packages never need to ride in the JSON body.
+        """
+        from judge.models import ProblemData, ProblemTestCase
+        from judge.utils.problem_data import ProblemDataCompiler
+
+        if not uploaded_zip:
+            raise ValueError(_('Your zip file is invalid!'))
+        zip_name = self._zip_basename(getattr(uploaded_zip, 'name', '') or '') or 'data.zip'
+        if not zip_name.lower().endswith('.zip'):
+            raise ValueError(_("Zip files must end in '.zip'"))
+
+        # Pair before mutating storage so a bad archive fails without clearing existing data.
+        try:
+            with ZipFile(uploaded_zip, 'r') as zf:
+                pairs = self._pair_zip_entries(zf.namelist())
+        except BadZipfile:
+            raise
+        except Exception:
+            raise ValueError(_('Your zip file is invalid!'))
+        finally:
+            if hasattr(uploaded_zip, 'seek'):
+                uploaded_zip.seek(0)
+
+        if not pairs:
+            raise ValueError(_('No paired test files found in the zip '
+                               '(supported: N.in/N.out, N.in.txt/N.out.txt, inputN.txt/outputN.txt).'))
+
+        meta_cases = meta_cases or []
+        self._clear_problem_data_files(problem)
+        problem.cases.filter(type='C').delete()
+
+        valid_files = []
+        for order, pair in enumerate(pairs, start=1):
+            meta = meta_cases[order - 1] if order - 1 < len(meta_cases) else {}
+            in_name = pair['input']
+            out_name = pair['output']
+            valid_files += [in_name, out_name]
+            ProblemTestCase.objects.create(
+                dataset=problem, order=order, type='C',
+                input_file=in_name, output_file=out_name,
+                points=int(self._num(meta.get('points'), 0)),
+                is_pretest=bool(meta.get('pretest')),
+                checker=(meta.get('checker') or '')[:10],
+            )
+
+        data, _created = ProblemData.objects.get_or_create(problem=problem)
+        self._apply_checker(data, checker)
+        # Same FileField path as classic ProblemDataForm zip upload.
+        data.zipfile.save(zip_name, uploaded_zip, save=False)
+        data.save()
+        problem.__dict__.pop('data_files', None)
+        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
 
     def _save_testcases(self, problem, testcases, checker=''):
         """Persist inline cases as loose files + a data.zip so the classic test_data page stays in sync.
@@ -510,8 +687,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         those files so the old editor's ``valid_files`` (ZIP namelist) matches.
         """
         import io
-        import os
-        from zipfile import ZipFile, ZIP_DEFLATED
+        from zipfile import ZIP_DEFLATED
 
         from django.core.files.base import ContentFile as DjangoContentFile
 
@@ -556,10 +732,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             )
 
         data, _created = ProblemData.objects.get_or_create(problem=problem)
-        checker_value = (checker or '')[:10]
-        if checker_value and checker_value not in {c[0] for c in CHECKERS}:
-            checker_value = ''
-        data.checker = checker_value
+        self._apply_checker(data, checker)
 
         # Rebuild a zip from the current loose files so classic test_data sees matching names.
         if valid_files:

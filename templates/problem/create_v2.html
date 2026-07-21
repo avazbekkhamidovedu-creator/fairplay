@@ -435,7 +435,7 @@
             <div class="tc-body-wrap">
               <p class="tc-mode-hint">
                 {{ _('Enter input/output directly, or upload a ZIP to auto-pair cases (the table shows the file name; click it to view/edit in the side panel).') }}
-                {{ _('After saving, cases sync to the legacy test-data page; use that page for Batch / Generator / Harness fine-tuning.') }}
+                {{ _('ZIP saves upload the archive as a file (same size limits as the legacy test-data page). Use that page for Batch / Generator / Harness fine-tuning.') }}
               </p>
               <div class="tc-toolbar">
                 <button type="button" class="btn" onclick="addTestCase()">+ {{ _("Add case") }}</button>
@@ -1084,10 +1084,11 @@
     }
 
     /* ---------- 测试用例（内联录入 + ZIP 文件名模式）---------- */
-    const TC_ZIP_MAX_FILE = 1024 * 1024;      // 1MB per file
-    const TC_ZIP_MAX_TOTAL = 8 * 1024 * 1024; // 8MB total decoded text
+    // Soft warning only: save uploads the archive as a file (same path as classic test_data).
+    const TC_ZIP_WARN_TOTAL = 8 * 1024 * 1024;
     const TEST_DATA_URL = '{{ test_data_url }}';
     let tcDrawerTarget = null; // { tr }
+    let pendingZipFile = null; // original File from <input>, reused on save when unchanged
 
     function renumberTestCases() {
       const rows = document.querySelectorAll('#tc-body tr');
@@ -1096,9 +1097,10 @@
     }
 
     function fileCellHtml(kind, fileName, isZip) {
-      const label = fileName || (kind === 'input' ? 'stdin' : 'expected');
+      const path = fileName || '';
+      const label = path ? basename(path) : (kind === 'input' ? 'stdin' : 'expected');
       const cls = 'tc-file-btn' + (isZip ? '' : ' manual');
-      return `<button type="button" class="${cls}" data-kind="${kind}" data-file="${escapeAttr(fileName || '')}" title="${gettext('View/edit content')}">${escapeHtml(label)}</button>
+      return `<button type="button" class="${cls}" data-kind="${kind}" data-file="${escapeAttr(path)}" title="${escapeAttr(path || gettext('View/edit content'))}">${escapeHtml(label)}</button>
               <textarea class="tc-content" data-kind="${kind}" hidden></textarea>`;
     }
 
@@ -1131,7 +1133,7 @@
         </td>
         <td><input type="number" class="tc-points" value="${points}" min="0"></td>
         <td style="text-align:center;"><input type="checkbox" class="tc-pretest" title="${gettext('Mark as sample/pretest')}"${pretest ? ' checked' : ''}></td>
-        <td><button type="button" class="btn-icon" onclick="this.closest('tr').remove();renumberTestCases();">×</button></td>`;
+        <td><button type="button" class="btn-icon" onclick="removeTestCaseRow(this)">×</button></td>`;
       document.getElementById('tc-body').appendChild(tr);
       if (opts) {
         const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
@@ -1193,6 +1195,18 @@
       closeTcDrawer();
     }
 
+    function removeTestCaseRow(btn) {
+      const tr = btn && btn.closest('tr');
+      if (tr) tr.remove();
+      renumberTestCases();
+      syncPendingZipState();
+    }
+
+    function syncPendingZipState() {
+      const hasZipRow = [...document.querySelectorAll('#tc-body tr')].some(tr => tr.dataset.mode === 'zip');
+      if (!hasZipRow) pendingZipFile = null;
+    }
+
     function collectTestCases() {
       return [...document.querySelectorAll('#tc-body tr')].map(tr => {
         const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
@@ -1208,8 +1222,25 @@
           output_file: (outBtn && outBtn.dataset.file) || (outF && outF.value) || '',
           points: Number((tr.querySelector('.tc-points') || {}).value || 0),
           pretest: !!(tr.querySelector('.tc-pretest') || {}).checked,
+          fromZip: tr.dataset.mode === 'zip',
         };
       });
+    }
+
+    async function buildTestcaseZipBlob(cases) {
+      if (typeof JSZip === 'undefined') throw new Error('JSZip missing');
+      const zip = new JSZip();
+      const used = new Set();
+      cases.forEach((tc, i) => {
+        let inName = String(tc.input_file || '').replace(/\\/g, '/') || (String(i + 1).padStart(2, '0') + '.in');
+        let outName = String(tc.output_file || '').replace(/\\/g, '/') || (String(i + 1).padStart(2, '0') + '.out');
+        if (used.has(inName)) inName = String(i + 1).padStart(2, '0') + '_' + basename(inName);
+        if (used.has(outName)) outName = String(i + 1).padStart(2, '0') + '_' + basename(outName);
+        used.add(inName); used.add(outName);
+        zip.file(inName, tc.input || '');
+        zip.file(outName, tc.output || '');
+      });
+      return zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
     }
 
     function distributeCasePoints() {
@@ -1355,19 +1386,12 @@
           if (inEntry.dir || outEntry.dir) continue;
           const input = await inEntry.async('string');
           const output = await outEntry.async('string');
-          if (input.length > TC_ZIP_MAX_FILE || output.length > TC_ZIP_MAX_FILE) {
-            setZipStatus(interpolate(gettext('File too large (1MB per file limit): %s / %s. Use legacy test_data for large packages.'), [basename(pair.input), basename(pair.output)]), true);
-            return;
-          }
           total += input.length + output.length;
-          if (total > TC_ZIP_MAX_TOTAL) {
-            setZipStatus(gettext('Decoded content exceeds 8MB; please upload via legacy test_data.'), true);
-            return;
-          }
           cases.push({
             input, output,
-            input_file: basename(pair.input),
-            output_file: basename(pair.output),
+            // Keep zip-relative paths so save/re-upload matches classic valid_files / namelist.
+            input_file: pair.input.replace(/\\/g, '/'),
+            output_file: pair.output.replace(/\\/g, '/'),
             fromZip: true,
             points: 0,
             pretest: false,
@@ -1380,11 +1404,17 @@
 
         body.innerHTML = '';
         tcSeq = 0;
+        pendingZipFile = file;
         cases.forEach(tc => addTestCase(tc));
         distributeCasePoints();
-        setZipStatus(interpolate(gettext('Imported %s pairs (file names shown; click to edit). Syncs to the legacy page after save.'), [cases.length]));
+        let msg = interpolate(gettext('Imported %s pairs (saved as a ZIP file upload, same limits as legacy test_data).'), [cases.length]);
+        if (total > TC_ZIP_WARN_TOTAL) {
+          msg += ' ' + gettext('Preview content is large; the browser may be slow, but save still uploads the ZIP file.');
+        }
+        setZipStatus(msg);
       } catch (err) {
         console.error('[tc-zip]', err);
+        pendingZipFile = null;
         setZipStatus(interpolate(gettext('Could not parse zip: %s'), [err && err.message ? err.message : gettext('invalid archive')]), true);
       } finally {
         document.getElementById('tc-zip-input').value = '';
@@ -1723,11 +1753,46 @@
       { const t = document.getElementById('f-blank-trim'); if (t) t.checked = true;
         const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
       { const tb = document.getElementById('tc-body'); if (tb) tb.innerHTML = ''; }
+      pendingZipFile = null;
       document.getElementById('sub-list').innerHTML = '';
       document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
       optionSeq = blankSeq = tcSeq = subSeq = 0; draftSaved = false;
       selectType(currentType);
     }
+    async function prepareSaveRequest(data) {
+      const cases = data.testcases || [];
+      const rows = [...document.querySelectorAll('#tc-body tr')];
+      const needsZipUpload = data.type === 'programming' && cases.length > 0 &&
+        (pendingZipFile || rows.some(tr => tr.dataset.mode === 'zip'));
+      if (!needsZipUpload) {
+        return {
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+          body: JSON.stringify(data),
+        };
+      }
+      const dirty = rows.some(tr => tr.querySelector('.tc-file-btn.dirty'));
+      const hasManual = rows.some(tr => tr.dataset.mode === 'manual');
+      let zipBlob;
+      let zipName = 'data.zip';
+      if (pendingZipFile && !dirty && !hasManual) {
+        zipBlob = pendingZipFile;
+        zipName = pendingZipFile.name || zipName;
+      } else {
+        zipBlob = await buildTestcaseZipBlob(cases);
+      }
+      // Metadata only in JSON — file bytes travel as multipart (classic test_data limits).
+      data.testcases = cases.map(tc => ({
+        input_file: tc.input_file || '',
+        output_file: tc.output_file || '',
+        points: tc.points,
+        pretest: tc.pretest,
+      }));
+      const fd = new FormData();
+      fd.append('payload', JSON.stringify(data));
+      fd.append('testcase_zip', zipBlob, zipName);
+      return { headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd };
+    }
+
     function submitForm(action) {
       console.log('[save] submitForm called, action=' + action);
       var data;
@@ -1744,10 +1809,8 @@
       }
       console.log('[save] validation passed, sending... type=' + data.type + ' ai=' + data.ai + ' gradingTable=' + (data.gradingTable ? data.gradingTable.length + ' rows' : 'null'));
       showToast('{{ _("Saving…") }}', true);
-      fetch(SAVE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
-        body: JSON.stringify(data),
+      prepareSaveRequest(data).then(function(req) {
+        return fetch(SAVE_URL, { method: 'POST', headers: req.headers, body: req.body });
       }).then(function(r) {
         return r.text().then(function(txt) {
           var body = null;

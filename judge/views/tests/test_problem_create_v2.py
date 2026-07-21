@@ -5,6 +5,7 @@ import zipfile
 from io import BytesIO
 
 from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
@@ -473,3 +474,82 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         with zipfile.ZipFile(data.zipfile.path) as zf:
             self.assertIn('sample.in', zf.namelist())
             self.assertEqual(zf.read('sample.in').decode('utf-8'), '1\n')
+
+    def test_pair_zip_entries_dat_in_out(self):
+        pairs = ProblemCreateV2View._pair_zip_entries([
+            'dat10.in', 'dat10.out', 'dat2.in', 'dat2.out', 'dat1.in', 'dat1.out',
+            '__MACOSX/._dat1.in', '.DS_Store',
+        ])
+        self.assertEqual([p['input'] for p in pairs], ['dat1.in', 'dat2.in', 'dat10.in'])
+        self.assertEqual(pairs[0]['output'], 'dat1.out')
+
+    def test_create_code_with_multipart_zip(self):
+        """Large ZIP path: metadata in JSON field, archive as multipart file (classic limits)."""
+        self.client.force_login(self.users['staff_adder'])
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr('dat1.in', '1 2\n')
+            zf.writestr('dat1.out', '3\n')
+            zf.writestr('dat2.in', '4 5\n')
+            zf.writestr('dat2.out', '9\n')
+        buf.seek(0)
+
+        payload = {
+            'type': 'programming',
+            'name': 'Multipart Zip',
+            'description': 'zip upload',
+            'points': 10,
+            'group_id': self.group.id,
+            'checker': 'standard',
+            'testcases': [
+                {'input_file': 'dat1.in', 'output_file': 'dat1.out', 'points': 4, 'pretest': True},
+                {'input_file': 'dat2.in', 'output_file': 'dat2.out', 'points': 6, 'pretest': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data={
+                'payload': json.dumps(payload),
+                'testcase_zip': SimpleUploadedFile('cases.zip', buf.read(), content_type='application/zip'),
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        problem = Problem.objects.get(code=body['code'])
+        cases = list(problem.cases.filter(type='C').order_by('order'))
+        self.assertEqual(len(cases), 2)
+        self.assertEqual(cases[0].input_file, 'dat1.in')
+        self.assertEqual(cases[0].points, 4)
+        self.assertTrue(cases[0].is_pretest)
+        self.assertEqual(cases[1].points, 6)
+        data = problem.data_files
+        self.assertTrue(bool(data.zipfile))
+        self.assertEqual(data.checker, 'standard')
+        with zipfile.ZipFile(data.zipfile.path) as zf:
+            self.assertEqual(zf.read('dat1.in').decode('utf-8'), '1 2\n')
+            self.assertEqual(zf.read('dat2.out').decode('utf-8'), '9\n')
+
+    def test_multipart_zip_rejects_unpaired(self):
+        self.client.force_login(self.users['staff_adder'])
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr('only.in', '1\n')
+        buf.seek(0)
+        payload = {
+            'type': 'programming',
+            'name': 'Bad Zip',
+            'description': 'x',
+            'points': 1,
+            'group_id': self.group.id,
+            'testcases': [],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data={
+                'payload': json.dumps(payload),
+                'testcase_zip': SimpleUploadedFile('bad.zip', buf.read(), content_type='application/zip'),
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('paired', response.json()['error'].lower())
