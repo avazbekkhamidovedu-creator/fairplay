@@ -16,11 +16,13 @@ class StoredFileRecord(models.Model):
     STATUS_MIRRORED = 'M'
     STATUS_FAILED = 'F'
     STATUS_DELETED = 'D'
+    STATUS_ABANDONED = 'A'
     STATUS_CHOICES = (
         (STATUS_PENDING, _('Pending mirror')),
         (STATUS_MIRRORED, _('Mirrored')),
         (STATUS_FAILED, _('Mirror failed')),
         (STATUS_DELETED, _('Deleted from primary')),
+        (STATUS_ABANDONED, _('Abandoned (needs manual action)')),
     )
 
     path = models.CharField(verbose_name=_('storage path'), max_length=255, unique=True)
