@@ -55,6 +55,12 @@ class ResilientStorage(Storage):
     # -- writes ------------------------------------------------------------------
 
     def _save(self, name, content):
+        # We hash the content in a first pass and rewind before handing it to the
+        # primary; a non-rewindable stream would be stored truncated while the record
+        # claims the full digest. Fail loudly instead of silently corrupting.
+        if not getattr(content, 'seekable', lambda: True)():
+            raise ValueError('ResilientStorage needs seekable content (it is hashed before '
+                             'storage); wrap non-seekable streams in a File/ContentFile first')
         hasher = hashlib.sha256()
         size = 0
         for chunk in content.chunks():
@@ -66,14 +72,25 @@ class ResilientStorage(Storage):
         name = self.primary._save(name, content)
 
         from judge.models.stored_file import StoredFileRecord
-        record, _ = StoredFileRecord.objects.update_or_create(path=name, defaults={
-            'sha256': hasher.hexdigest(),
-            'size': size,
-            'status': StoredFileRecord.STATUS_PENDING,
-            'mirrored_at': None,
-            'attempts': 0,
-            'last_error': '',
-        })
+        try:
+            record, _ = StoredFileRecord.objects.update_or_create(path=name, defaults={
+                'sha256': hasher.hexdigest(),
+                'size': size,
+                'status': StoredFileRecord.STATUS_PENDING,
+                'mirrored_at': None,
+                'attempts': 0,
+                'last_error': '',
+            })
+        except Exception:
+            # The primary object is already written; without a tracking row it is an
+            # orphan the mirror/restore machinery can never see. Best-effort remove it.
+            # (An enclosing request that rolls back *after* we return can still orphan
+            # the object — that residual window is accepted.)
+            try:
+                self.primary.delete(name)
+            except Exception:
+                logger.exception('could not clean up orphan primary object %s', name)
+            raise
         if self.mirror_enabled:
             # on_commit: the mirror task must only fire once the row referencing this
             # file is durable; outside a transaction it fires immediately.
@@ -94,10 +111,21 @@ class ResilientStorage(Storage):
         except Exception as e:
             if not self.mirror_enabled or not self._should_fall_back(e):
                 raise
+            if self._is_deleted(name):
+                # Deliberately deleted from the primary. The backup still holds the
+                # bytes for disaster restore, but we must not resurrect a deleted file
+                # on a routine read — re-raise the primary's error (404 semantics).
+                raise
             logger.warning('Primary storage failed for %s (%s); falling back to backup',
                            name, type(e).__name__)
             return self._open_backup(name, e)
         return self.primary.open(name, mode)
+
+    def _is_deleted(self, name):
+        from judge.models.stored_file import StoredFileRecord
+        status = (StoredFileRecord.objects.filter(path=name)
+                  .values_list('status', flat=True).first())
+        return status == StoredFileRecord.STATUS_DELETED
 
     def _should_fall_back(self, exc):
         if isinstance(exc, ClientError):

@@ -12,7 +12,7 @@ CHUNK_SIZE = 1024 * 1024
 
 class MirrorTerminalError(Exception):
     """Mirroring this record can never succeed (zero-byte file, primary object gone).
-    The record is marked FAILED; retrying is pointless."""
+    The record is marked ABANDONED; retrying is pointless."""
 
 
 def _stream_sha256(fileobj):
@@ -53,7 +53,8 @@ def mirror_record(record, primary=None, backup=None):
     if backup is None:
         raise ImproperlyConfigured('no backup storage configured; enable DMOJ_BACKUP_MIRROR_ENABLED')
 
-    if record.status in (StoredFileRecord.STATUS_MIRRORED, StoredFileRecord.STATUS_DELETED):
+    if record.status in (StoredFileRecord.STATUS_MIRRORED, StoredFileRecord.STATUS_DELETED,
+                         StoredFileRecord.STATUS_ABANDONED):
         return record
 
     record.attempts += 1
@@ -87,17 +88,26 @@ def mirror_record(record, primary=None, backup=None):
 
 def _mark_mirrored(record):
     from judge.models.stored_file import StoredFileRecord
+    now = timezone.now()
+    # Conditional update: never clobber a DELETED row set by a concurrent delete()
+    # while this mirror was mid-flight — that would resurrect a deleted file to MIRRORED.
+    updated = (StoredFileRecord.objects.filter(id=record.id)
+               .exclude(status=StoredFileRecord.STATUS_DELETED)
+               .update(status=StoredFileRecord.STATUS_MIRRORED, mirrored_at=now,
+                       attempts=record.attempts, last_error=''))
+    if not updated:
+        record.refresh_from_db()
+        return record
     record.status = StoredFileRecord.STATUS_MIRRORED
-    record.mirrored_at = timezone.now()
+    record.mirrored_at = now
     record.last_error = ''
-    record.save(update_fields=['status', 'mirrored_at', 'attempts', 'last_error'])
     return record
 
 
 def _fail(record, message):
     from judge.models.stored_file import StoredFileRecord
-    logger.error('mirror of %s failed terminally: %s', record.path, message)
-    record.status = StoredFileRecord.STATUS_FAILED
+    logger.error('mirror of %s abandoned: %s', record.path, message)
+    record.status = StoredFileRecord.STATUS_ABANDONED
     record.last_error = message
     record.save(update_fields=['status', 'attempts', 'last_error'])
     raise MirrorTerminalError(message)
@@ -106,8 +116,10 @@ def _fail(record, message):
 def verify_record(record, primary=None, backup=None):
     """Integrity spot-check of a MIRRORED record against both stores.
 
-    Returns a dict of {'primary': bool, 'backup': bool} so a mismatch can be
-    localized to the corrupt side.
+    Returns {'primary': tri, 'backup': tri} where each value is True (matches),
+    False (readable but sha256/size mismatch = corrupt) or None (unreadable right
+    now). Distinguishing None from False keeps a transient outage from being
+    reported as corruption.
     """
     if primary is None or backup is None:
         from judge.storage import submission_storage
@@ -123,5 +135,5 @@ def verify_record(record, primary=None, backup=None):
             result[side] = digest == record.sha256 and size == record.size
         except Exception:
             logger.exception('verify: cannot read %s from %s', record.path, side)
-            result[side] = False
+            result[side] = None
     return result
