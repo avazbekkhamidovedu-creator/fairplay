@@ -252,8 +252,12 @@ msgstr "图片"
 
 #: problem create_v2 / rich_editor i18n
 #, javascript-format
-msgid "Imported %s pairs (file names shown; click to edit). Syncs to the legacy page after save."
-msgstr "已导入 %s 组（显示文件名；点击可编辑内容）。保存后同步到旧版页。"
+msgid "Imported %s pairs (saved as a ZIP file upload, same limits as legacy test_data)."
+msgstr "已导入 %s 组（保存时按文件上传，与旧版测试数据页相同上限）。"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Preview content is large; the browser may be slow, but save still uploads the ZIP file."
+msgstr "预览内容较大，浏览器可能较慢；保存仍走 ZIP 文件上传。"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Importing a zip will replace the current test cases. Continue?"

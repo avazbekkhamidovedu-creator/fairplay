@@ -6440,8 +6440,8 @@ msgid "Advanced settings (fields shown by problem type)"
 msgstr "高级设置（按题型展示对应字段）"
 
 #: problem create_v2 / rich_editor i18n
-msgid "After saving, cases sync to the legacy test-data page; use that page for Batch / Generator / Harness fine-tuning."
-msgstr "保存后会同步到旧版测试数据页；Batch / Generator / Harness 等请用旧版精调。"
+msgid "ZIP saves upload the archive as a file (same size limits as the legacy test-data page). Use that page for Batch / Generator / Harness fine-tuning."
+msgstr "ZIP 保存时按文件上传（与旧版测试数据页相同上限）；Batch / Generator / Harness 等请用旧版精调。"
 
 #: problem create_v2 / rich_editor i18n
 msgid "After the problem is saved once, open the legacy test-data page here for Batch / Generator fine-tuning."
