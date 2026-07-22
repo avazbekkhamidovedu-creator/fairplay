@@ -76,9 +76,12 @@
 }
 .breadcrumb a { color: var(--muted); }
 
-.pcv2 h1 { font-size: 1.5rem; margin: 0.5rem 0 1rem; font-weight: 400; }
-.pcv2 h2 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; }
-.pcv2 h3 { font-size: 1rem; margin: 0 0 0.5rem; }
+/* Page chrome only — do not style editor/preview headings */
+.pcv2 .v2-top h1 { font-size: 1.5rem; margin: 0.5rem 0 1rem; font-weight: 400; }
+.pcv2 .form-section-header h2,
+.pcv2 .qtype-box .qtype-head h2,
+.pcv2 .so-head h2,
+.pcv2 .admin-sidebar h2 { font-size: 1.1rem; margin: 0; }
 
 .note {
   background: #fffde7;
@@ -491,113 +494,7 @@ fieldset.module .form-content { padding: 1rem; }
 #difficulty > label { flex: 0 0 auto; width: auto; border: none; margin: 0; }
 #difficulty .type-pill span { display: inline-block; white-space: nowrap; padding: 0.35rem 0.7rem; }
 
-/* Rich / Markdown editor */
-.rich-editor {
-  border: 1px solid #bbb;
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--card-bg);
-}
-.rich-editor.compact .rich-editor-body { min-height: 80px; }
-.rich-editor.compact .rich-editor-markdown textarea { min-height: 80px; }
-.rich-editor-toolbar-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem;
-  background: var(--card-bg);
-  border-bottom: 1px solid #ddd;
-  flex-wrap: wrap;
-}
-.editor-mode-tabs {
-  display: flex;
-  gap: 2px;
-  background: var(--admin-bg,#e8e8e8);
-  border-radius: 4px;
-  padding: 2px;
-}
-.editor-mode-tabs button {
-  border: none;
-  background: transparent;
-  padding: 0.25rem 0.65rem;
-  font-size: 12px;
-  border-radius: 3px;
-  cursor: pointer;
-  color: var(--muted);
-}
-.editor-mode-tabs button.active {
-  background: var(--card-bg);
-  color: var(--text);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
-}
-.rich-toolbar {
-  display: flex;
-  gap: 2px;
-  flex-wrap: wrap;
-}
-.rich-toolbar button {
-  border: 1px solid transparent;
-  background: transparent;
-  padding: 0.2rem 0.45rem;
-  font-size: 12px;
-  border-radius: 3px;
-  cursor: pointer;
-  color: #555;
-  min-width: 28px;
-}
-.rich-toolbar button:hover { background: #eee; border-color: #ccc; }
-.rich-toolbar button.active {
-  background: var(--dmoj-green);
-  border-color: var(--dmoj-green-dark);
-  color: #fff;
-}
-.rich-toolbar button.active.hl-btn span { background: rgba(255,255,255,0.35); color: inherit; }
-.rich-editor-body {
-  min-height: 200px;
-  padding: 0.75rem 1rem;
-  outline: none;
-  font-size: 14px;
-  line-height: 1.6;
-}
-.rich-editor-body:empty:before {
-  content: attr(data-placeholder);
-  color: #aaa;
-}
-.rich-editor-markdown {
-  display: none;
-}
-.rich-editor.mode-markdown .rich-editor-rich,
-.rich-editor.mode-markdown .rich-toolbar { display: none; }
-.rich-editor.mode-markdown .rich-editor-markdown { display: block; }
-.rich-editor.mode-markdown .editor-preview { display: block; }
-.rich-editor-markdown textarea {
-  width: 100%;
-  min-height: 200px;
-  border: none;
-  border-bottom: 1px solid #eee;
-  padding: 0.75rem 1rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
-  resize: vertical;
-  outline: none;
-}
-.editor-preview {
-  display: none;
-  padding: 0.75rem 1rem;
-  background: #fcfcfc;
-  border-top: 1px solid #eee;
-  font-size: 13px;
-  min-height: 60px;
-}
-.editor-preview-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin-bottom: 0.35rem;
-}
+/* RichEditor chrome lives in rich_editor.css (extracted reusable module). */
 
 /* Options list (choice questions) */
 .options-list { display: flex; flex-direction: column; gap: 0.65rem; }
@@ -839,10 +736,22 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-stem pre { background: #f4f4f4; padding: 0.5rem; border-radius: 4px; overflow: auto; font-size: 12px; }
 .pv-stem u { text-decoration: none; border-bottom: 1.5px solid var(--dmoj-green); padding: 0 1.2em; }
 .pv-options { display: flex; flex-direction: column; gap: 0.55rem; }
-.pv-option { display: flex; align-items: center; gap: 0.5rem; font-size: 14px; }
-.pv-option .mk { width: 14px; height: 14px; border: 1.5px solid #b9b9b9; border-radius: 50%; flex-shrink: 0; }
+.pv-option { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 14px; }
+.pv-option .mk { width: 14px; height: 14px; border: 1.5px solid #b9b9b9; border-radius: 50%; flex-shrink: 0; margin-top: 0.2rem; }
 .pv-option .mk.sq { border-radius: 3px; }
 .pv-option .mk.on { border-color: var(--dmoj-green); background: var(--dmoj-green); }
+.pv-option-body { flex: 1; min-width: 0; line-height: 1.6; }
+.pv-option-body > :first-child { margin-top: 0; }
+.pv-option-body > :last-child { margin-bottom: 0; }
+.pv-option-body blockquote {
+  margin: 0.35em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--dmoj-green); color: #555; background: #f6faf4;
+}
+.pv-option-body pre {
+  background: #f4f4f4; padding: 0.45rem 0.65rem; border-radius: 4px; overflow: auto; font-size: 12px; margin: 0.35em 0;
+}
+.pv-option-body code { background: #f0f0f0; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
+.pv-option-body pre code { background: transparent; padding: 0; }
+.pv-option-body ul, .pv-option-body ol { margin: 0.3em 0; padding-left: 1.4em; }
 .pv-answerbox { background: var(--admin-bg); height: 38px; border-radius: 4px; margin-bottom: 0.6rem; }
 .pv-answerlabel { font-size: 13px; color: var(--text); }
 .pv-blankinput { width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 0.6rem; font-size: 13px; }
@@ -996,36 +905,34 @@ fieldset.module .form-content { padding: 1rem; }
 .so-foot .so-pager button.active { background: var(--dmoj-green); color: #fff; border-color: var(--dmoj-green); }
 .so-foot .so-pager button:disabled { opacity: 0.4; cursor: default; }
 
-/* ── 富文本增强：标题选择 / 高亮 / 对齐 / 图片缩放 ── */
-.rich-toolbar .rte-heading {
-  font-size: 12px; border: 1px solid var(--admin-border); border-radius: 4px;
-  padding: 0.1rem 0.2rem; background: var(--card-bg); color: #555; cursor: pointer; height: 28px;
-}
-.rich-toolbar .hl-btn span { background: #fde68a; padding: 0 3px; border-radius: 2px; }
-.rich-toolbar .sep { width: 1px; align-self: stretch; background: var(--admin-border); margin: 2px 3px; }
-
-.rich-editor-body h1 { font-size: 1.6em; margin: 0.4em 0; font-weight: 700; }
-.rich-editor-body h2 { font-size: 1.3em; margin: 0.4em 0; font-weight: 700; }
-.rich-editor-body h3 { font-size: 1.1em; margin: 0.4em 0; font-weight: 600; }
-.rich-editor-body mark { background: #fde68a; padding: 0 2px; border-radius: 2px; }
-.rich-editor-body blockquote {
-  margin: 0.4em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--dmoj-green); color: #555; background: #f6faf4;
-}
-.rich-editor-body img { max-width: 100%; cursor: pointer; vertical-align: middle; }
-.rich-editor-body img.img-selected { outline: 2px solid var(--dmoj-green); outline-offset: 1px; }
-
-/* 预览区同步样式 */
+/* 预览区：与 content-description / 富文本投影一致（#→h3） */
 .content-preview img, .pv-stem img { max-width: 100%; }
-.pv-stem h1 { font-size: 1.6em; margin: 0.4em 0; }
-.pv-stem h2 { font-size: 1.3em; margin: 0.4em 0; }
-.pv-stem mark { background: #fde68a; padding: 0 2px; border-radius: 2px; }
-.pv-stem blockquote { margin: 0.4em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--dmoj-green); color: #555; background: #f6faf4; }
-
-/* 图片缩放手柄 */
-.img-resize-handle {
-  position: absolute; width: 14px; height: 14px; box-sizing: border-box;
-  background: var(--dmoj-green); border: 2px solid #fff; border-radius: 3px;
-  cursor: nwse-resize; z-index: 400; display: none; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+.pv-stem h3 { font-size: 1.6em; margin: 0.5em 0 0.35em; font-weight: 700; }
+.pv-stem h4 {
+  font-size: 1.35em; margin: 0.5em 0 0.35em; font-weight: 600;
+  border-bottom: 1px solid rgba(0,0,0,0.08); padding-bottom: 0.25em;
+}
+.pv-stem h5 { font-size: 1.15em; margin: 0.45em 0 0.3em; font-weight: 600; }
+/* Override site .content-description mark { font-style: italic; font-weight: bold } —
+   toolbar highlight is background-only, not emphasis. */
+.pv-stem mark,
+.pv-stem.content-description mark {
+  background: #fde68a;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+  font-style: normal !important;
+  font-weight: inherit;
+}
+.pv-stem mark em,
+.pv-stem mark i,
+.pv-stem.content-description mark em,
+.pv-stem.content-description mark i {
+  font-style: normal;
+}
+.pv-stem blockquote {
+  margin: 0.4em 0; padding: 0.2em 0.8em;
+  border-left: 3px solid var(--dmoj-green); color: #555; background: #f6faf4;
 }
 
 @media (max-width: 600px) {

@@ -11,13 +11,14 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}?v=20260708c">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}">
 
-  <!-- 数学公式：与全站做题页一致的分隔符（行内 ~...~ / \(...\)，块级 $$...$$ / \[...\]） -->
+  <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
   <script>
     window.MathJax = {
       tex: {
-        inlineMath: [['~', '~'], ['\\(', '\\)']],
+        inlineMath: [['\\(', '\\)'], ['~', '~']],
         displayMath: [['$$', '$$'], ['\\[', '\\]']],
       },
       svg: { fontCache: 'global' },
@@ -27,6 +28,8 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="{{ static('jszip.min.js') }}"></script>
+  <script src="{{ static('rich_editor.js') }}"></script>
+  <script src="{{ static('markdown_preview.js') }}"></script>
 
   <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
   <style>
@@ -486,7 +489,7 @@
     </div><!-- /.v2-split -->
 
     <div id="save-toast" style="display:none;position:fixed;left:50%;bottom:2rem;transform:translateX(-50%);background:var(--dmoj-green);color:#fff;padding:0.6rem 1.2rem;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.2);z-index:300;font-size:14px;"></div>
-    <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="onImgPicked(event)">
+    <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="RichEditor.onImagePicked(event)">
   </main>
 
   <!-- problem_type 选择 / 新建弹窗（沿用 add.html） -->
@@ -531,7 +534,9 @@
     const AI_PROBLEM_TYPE_URL = '{{ ai_problem_type_url }}';
     const AI_DECOMPOSE_URL = '{{ ai_decompose_url }}';
     const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
+    const PROBLEM_PREVIEW_BATCH_URL = '{{ problem_preview_batch_url }}';
     const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
+    const SEARCH_USERS_URL = '{{ search_users_url }}';
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
@@ -565,7 +570,7 @@
         return;
       }
       const hasContent = ((document.getElementById('f-name') || {}).value || '').trim()
-        || (getMd('stem') || '').trim();
+        || (RichEditor.getMarkdown('stem') || '').trim();
       if (hasContent && !confirm('{{ _("Discard this new problem? Unsaved changes will be lost.") }}')) return;
       window.location.href = PROBLEM_LIST_URL;
     }
@@ -588,7 +593,7 @@
     function runAIDifficulty() {
       const res = document.getElementById('diff-ai-result');
       const rerun = document.getElementById('diff-ai-rerun');
-      const description = getMd('stem');
+      const description = RichEditor.getMarkdown('stem');
       if (!description.trim()) {
         res.innerHTML = '<span style="color:#c0392b;">{{ _("Please enter problem content first.") }}</span>';
         if (rerun) rerun.style.display = 'inline';
@@ -698,7 +703,7 @@
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
     function runAIProblemType(fillInput) {
-      const description = getMd('stem');
+      const description = RichEditor.getMarkdown('stem');
       if (!description.trim()) { showToast('{{ _("Please enter problem content first.") }}', false); return; }
       const target = fillInput ? document.getElementById('ptype-ai-result') : document.getElementById('ptype-options');
       if (fillInput) target.textContent = '{{ _("Analyzing…") }}';
@@ -727,7 +732,7 @@
     }
     /* 需求：AI 入口放在加号旁边，直接按题面推荐并写入标签（无需打开弹窗） */
     function runAIProblemTypeInline() {
-      const description = getMd('stem');
+      const description = RichEditor.getMarkdown('stem');
       if (!description.trim()) { showToast('{{ _("Please enter problem content first.") }}', false); return; }
       const btn = document.getElementById('ptype-ai-btn');
       const old = btn.textContent;
@@ -825,419 +830,21 @@
       renderPreview();
     }
 
-    /* ==========================================================================
-       可复用富文本编辑器组件（RichEditor）
-       单一 markup 工厂 + 统一初始化/取值 API，页面内 5 处编辑器以及未来其它页面
-       都用同一个组件：
-         RichEditor.html(name, {toolbar, compact, placeholder})  -> 生成 markup
-         RichEditor.mount(root)                                   -> 展开 [data-rich-mount] 占位并绑定
-         RichEditor.init(root)                                    -> 绑定 root 下所有 .rich-editor（幂等）
-         RichEditor.getMarkdown(name) / getHtml(name) / setMarkdown(name, md)
-       ========================================================================== */
-    const RTE_BUTTONS = {
-      heading: '<select class="rte-heading" title="标题大小"><option value="p">正文</option><option value="h1">标题 H1</option><option value="h2">标题 H2</option><option value="h3">标题 H3</option></select>',
-      sep: '<span class="sep"></span>',
-      bold: '<button type="button" data-cmd="bold" title="加粗"><i class="fa fa-bold"></i></button>',
-      italic: '<button type="button" data-cmd="italic" title="斜体"><i class="fa fa-italic"></i></button>',
-      highlight: '<button type="button" data-cmd="highlight" class="hl-btn" title="高亮"><i class="fa fa-paint-brush"></i></button>',
-      ul: '<button type="button" data-cmd="ul" title="无序列表"><i class="fa fa-list-ul"></i></button>',
-      ol: '<button type="button" data-cmd="ol" title="有序列表"><i class="fa fa-list-ol"></i></button>',
-      quote: '<button type="button" data-cmd="quote" title="引用"><i class="fa fa-quote-right"></i></button>',
-      code: '<button type="button" data-cmd="code" title="代码"><i class="fa fa-code"></i></button>',
-      alignLeft: '<button type="button" data-cmd="alignLeft" title="左对齐"><i class="fa fa-align-left"></i></button>',
-      alignCenter: '<button type="button" data-cmd="alignCenter" title="居中"><i class="fa fa-align-center"></i></button>',
-      alignRight: '<button type="button" data-cmd="alignRight" title="右对齐"><i class="fa fa-align-right"></i></button>',
-      image: '<button type="button" data-cmd="image" title="图片"><i class="fa fa-picture-o"></i></button>',
-      math: '<button type="button" data-cmd="math" title="插入公式"><i class="fa fa-superscript"></i></button>',
-      blank: '<button type="button" data-cmd="blank" class="blank-insert" title="插入填空位" style="display:none;"><i class="fa fa-square-o"></i></button>',
-    };
-    /* 单一工具栏：不再区分 简约/复杂，所有编辑器都用同一套。 */
-    const RTE_TOOLBAR = ['heading', 'sep', 'bold', 'italic', 'highlight', 'code', 'sep',
-      'ul', 'ol', 'quote', 'sep', 'alignLeft', 'alignCenter', 'alignRight', 'sep', 'image', 'math', 'blank'];
-    function richEditorTpl(name, opts) {
-      opts = opts || {};
-      const buttons = RTE_TOOLBAR.map(k => RTE_BUTTONS[k] || '').join('');
-      const placeholder = opts.placeholder || '请输入内容，支持 ~公式~…';
-      const mdPlaceholder = opts.mdPlaceholder || '支持 Markdown 与 ~公式~…';
-      const compact = opts.compact ? ' compact' : '';
-      return `<div class="rich-editor mode-rich${compact}" data-editor="${name}">
-        <div class="rich-editor-toolbar-row">
-          <div class="editor-mode-tabs">
-            <button type="button" class="mode-btn active" data-mode="rich">富文本</button>
-            <button type="button" class="mode-btn" data-mode="markdown">Markdown</button>
-          </div>
-          <div class="rich-toolbar">${buttons}</div>
-        </div>
-        <div class="rich-editor-rich"><div class="rich-editor-body" contenteditable="true" data-placeholder="${placeholder}"></div></div>
-        <div class="rich-editor-markdown"><textarea placeholder="${mdPlaceholder}"></textarea></div>
-      </div>`;
-    }
-    function mountRichEditors(root) {
-      (root || document).querySelectorAll('[data-rich-mount]').forEach(m => {
-        const name = m.getAttribute('data-rich-mount');
-        m.outerHTML = richEditorTpl(name, {
-          toolbar: m.getAttribute('data-toolbar') || 'mini',
-          compact: m.hasAttribute('data-compact'),
-          placeholder: m.getAttribute('data-placeholder') || undefined,
-        });
-      });
-    }
-    window.RichEditor = {
-      html: richEditorTpl,
-      toolbar: RTE_TOOLBAR,
-      mount(root) { mountRichEditors(root); initEditors(root); },
-      init(root) { initEditors(root); },
-      getMarkdown(name) { return getMd(name); },
-      getHtml(name) { return editorHtml(name); },
-      setMarkdown(name, md) {
-        const ed = document.querySelector('.rich-editor[data-editor="' + name + '"]');
-        if (!ed) return;
-        const body = ed.querySelector('.rich-editor-body');
-        const ta = ed.querySelector('.rich-editor-markdown textarea');
-        if (body) body.innerHTML = mdToHtml(md || '');
-        if (ta) ta.value = md || '';
-      },
-    };
-    /* ---------- 编辑器（需求3：可复用 + Markdown 互转 + 公式）---------- */
-    function initEditors(root) {
-      (root || document).querySelectorAll('.rich-editor').forEach(editor => {
-        if (editor.dataset.bound) return;
-        editor.dataset.bound = '1';
-        const rich = editor.querySelector('.rich-editor-body');
-        const ta = editor.querySelector('.rich-editor-markdown textarea');
-        editor.querySelectorAll('.mode-btn').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const md = btn.dataset.mode === 'markdown';
-            if (md) ta.value = htmlToMd(rich.innerHTML);
-            else rich.innerHTML = mdToHtml(ta.value);
-            editor.classList.toggle('mode-markdown', md);
-            editor.classList.toggle('mode-rich', !md);
-            editor.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b === btn));
-            renderPreview();
-          });
-        });
-        if (rich) {
-          rich.addEventListener('input', () => { ta.value = htmlToMd(rich.innerHTML); renderPreview(); });
-          rich.addEventListener('keyup', () => updateToolbarState(editor));
-          rich.addEventListener('mouseup', () => updateToolbarState(editor));
-        }
-        if (ta) ta.addEventListener('input', renderPreview);
-        editor.querySelectorAll('.rich-toolbar button[data-cmd]').forEach(btn => {
-          btn.addEventListener('click', () => applyFormat(editor, btn.dataset.cmd, btn));
-        });
-        const headSel = editor.querySelector('.rte-heading');
-        if (headSel) headSel.addEventListener('change', () => applyFormat(editor, headSel.value));
-      });
-    }
-    function selectionNode(area) {
-      const sel = window.getSelection();
-      if (!sel.rangeCount || !area) return null;
-      let n = sel.anchorNode;
-      if (!n) return null;
-      if (n.nodeType === 3) n = n.parentElement;
-      return area.contains(n) ? n : null;
-    }
-    function selectionInTag(area, tag) {
-      const n = selectionNode(area);
-      return n ? !!n.closest(tag) : false;
-    }
-    function unwrapTagFromSelection(area, tag) {
-      const n = selectionNode(area);
-      const el = n && n.closest(tag);
-      if (!el || !area.contains(el)) return;
-      const parent = el.parentNode;
-      while (el.firstChild) parent.insertBefore(el.firstChild, el);
-      parent.removeChild(el);
-    }
-    function updateToolbarState(editor) {
-      if (!editor || editor.classList.contains('mode-markdown')) return;
-      const area = editor.querySelector('.rich-editor-body');
-      if (!area || !selectionNode(area)) return;
-      editor.querySelectorAll('.rich-toolbar button[data-cmd]').forEach(btn => {
-        const cmd = btn.dataset.cmd;
-        let active = false;
-        switch (cmd) {
-          case 'bold': active = document.queryCommandState('bold'); break;
-          case 'italic': active = document.queryCommandState('italic'); break;
-          case 'highlight': active = selectionInTag(area, 'mark'); break;
-          case 'ul': active = document.queryCommandState('insertUnorderedList'); break;
-          case 'ol': active = document.queryCommandState('insertOrderedList'); break;
-          case 'quote': active = selectionInTag(area, 'blockquote'); break;
-          case 'code': active = selectionInTag(area, 'code'); break;
-        }
-        btn.classList.toggle('active', !!active);
-      });
-      const headSel = editor.querySelector('.rte-heading');
-      if (headSel) {
-        const block = selectionNode(area)?.closest('h1,h2,h3,p,blockquote');
-        if (block) {
-          const map = { H1: 'h1', H2: 'h2', H3: 'h3', P: 'p', BLOCKQUOTE: 'quote' };
-          headSel.value = map[block.tagName] || 'p';
-        }
-      }
-    }
-    document.addEventListener('selectionchange', () => {
-      const sel = window.getSelection();
-      if (!sel.rangeCount) return;
-      let n = sel.anchorNode;
-      if (!n) return;
-      if (n.nodeType === 3) n = n.parentElement;
-      const area = n.closest('.rich-editor-body');
-      if (area) updateToolbarState(area.closest('.rich-editor'));
-    });
-    function applyFormat(editor, cmd, btn) {
-      if (cmd === 'image') { pickImage(editor); return; }
-      const isMd = editor.classList.contains('mode-markdown');
-      if (isMd) { const ta = editor.querySelector('.rich-editor-markdown textarea'); applyMarkdown(ta, cmd); ta.focus(); ta.dispatchEvent(new Event('input')); return; }
-      const area = editor.querySelector('.rich-editor-body');
-      area.focus();
-      switch (cmd) {
-        case 'bold':
-          document.execCommand('bold');
-          break;
-        case 'italic':
-          document.execCommand('italic');
-          break;
-        case 'highlight':
-          if (selectionInTag(area, 'mark')) unwrapTagFromSelection(area, 'mark');
-          else wrapInline('mark');
-          break;
-        case 'heading': case 'h3': document.execCommand('formatBlock', false, 'h3'); break;
-        case 'h1': document.execCommand('formatBlock', false, 'h1'); break;
-        case 'h2': document.execCommand('formatBlock', false, 'h2'); break;
-        case 'p': document.execCommand('formatBlock', false, 'p'); break;
-        case 'ul':
-          if (document.queryCommandState('insertUnorderedList')) document.execCommand('insertUnorderedList');
-          else document.execCommand('insertUnorderedList');
-          break;
-        case 'ol':
-          if (document.queryCommandState('insertOrderedList')) document.execCommand('insertOrderedList');
-          else document.execCommand('insertOrderedList');
-          break;
-        case 'quote':
-          if (selectionInTag(area, 'blockquote')) document.execCommand('formatBlock', false, 'p');
-          else document.execCommand('formatBlock', false, 'blockquote');
-          break;
-        case 'code':
-          if (selectionInTag(area, 'code')) unwrapTagFromSelection(area, 'code');
-          else wrapInline('code');
-          break;
-        case 'alignLeft': document.execCommand('justifyLeft'); break;
-        case 'alignCenter': document.execCommand('justifyCenter'); break;
-        case 'alignRight': document.execCommand('justifyRight'); break;
-        case 'math': document.execCommand('insertText', false, '~a^2 + b^2 = c^2~'); break;
-        case 'blank': document.execCommand('insertText', false, '{{blank}}'); break;
-      }
-      area.dispatchEvent(new Event('input'));
-      updateToolbarState(editor);
-    }
-    let pendingImgEditor = null;
-    function pickImage(editor) { pendingImgEditor = editor; const input = document.getElementById('img-file'); input.value = ''; input.click(); }
-    function onImgPicked(e) {
-      const file = e.target.files && e.target.files[0];
-      if (!file || !pendingImgEditor) return;
-      const ed = pendingImgEditor; pendingImgEditor = null;
-      // 上传到全站图片端点，得到真实 URL；不再用 data: base64（做题页会被 bleach 剥离）。
-      const fd = new FormData();
-      fd.append('markdown-image-upload', file);
-      fetch(IMAGE_UPLOAD_URL, { method: 'POST', headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd })
-        .then(r => r.json().then(body => ({ ok: r.ok, body })).catch(() => ({ ok: false, body: null })))
-        .then(({ ok, body }) => {
-          if (!ok || !body || body.status !== 200 || !body.link) {
-            alert('{{ _("Image upload failed. Make sure you are signed in with upload permission.") }}');
-            return;
-          }
-          insertImageUrl(ed, body.link);
-        })
-        .catch(() => alert('{{ _("Image upload failed.") }}'));
-    }
-    function insertImageUrl(ed, url) {
-      if (ed.classList.contains('mode-markdown')) {
-        const ta = ed.querySelector('.rich-editor-markdown textarea');
-        const s = ta.selectionStart;
-        ta.value = ta.value.slice(0, s) + '![](' + url + ')' + ta.value.slice(ta.selectionEnd);
-        ta.dispatchEvent(new Event('input'));
-      } else {
-        const area = ed.querySelector('.rich-editor-body'); area.focus();
-        document.execCommand('insertImage', false, url); area.dispatchEvent(new Event('input'));
-      }
-    }
-    function wrapInline(tag) {
-      const sel = window.getSelection(); if (!sel.rangeCount) return;
-      const range = sel.getRangeAt(0); const el = document.createElement(tag);
-      el.appendChild(range.extractContents()); range.insertNode(el); sel.removeAllRanges();
-    }
-    function applyMarkdown(ta, cmd) {
-      const s = ta.selectionStart, e = ta.selectionEnd, sel = ta.value.slice(s, e);
-      const wrap = (pre, post, ph) => { const txt = sel || ph; ta.value = ta.value.slice(0, s) + pre + txt + post + ta.value.slice(e); };
-      const linePrefix = (pre) => { const ls = ta.value.lastIndexOf('\n', s - 1) + 1; ta.value = ta.value.slice(0, ls) + pre + ta.value.slice(ls); };
-      switch (cmd) {
-        case 'bold': wrap('**', '**', '加粗'); break;
-        case 'italic': wrap('*', '*', '斜体'); break;
-        case 'highlight': wrap('<mark>', '</mark>', '高亮'); break;
-        case 'code': wrap('`', '`', 'code'); break;
-        case 'quote': linePrefix('> '); break;
-        case 'heading': case 'h3': linePrefix('### '); break;
-        case 'h1': linePrefix('# '); break;
-        case 'h2': linePrefix('## '); break;
-        case 'ul': linePrefix('- '); break;
-        case 'ol': linePrefix('1. '); break;
-        case 'alignLeft': case 'alignCenter': case 'alignRight': break;
-        case 'math': wrap('~', '~', 'a^2+b^2=c^2'); break;
-        case 'blank': ta.value = ta.value.slice(0, s) + '{{blank}}' + ta.value.slice(e); break;
-      }
-    }
-    function getMd(name) {
-      const ed = document.querySelector('.rich-editor[data-editor="' + name + '"]');
-      if (!ed) return '';
-      return ed.classList.contains('mode-markdown') ? ed.querySelector('textarea').value : htmlToMd(ed.querySelector('.rich-editor-body').innerHTML);
-    }
-    function editorHtml(name) {
-      const ed = document.querySelector('.rich-editor[data-editor="' + name + '"]');
-      if (!ed) return '';
-      if (ed.classList.contains('mode-markdown')) return mdToHtml(ed.querySelector('textarea').value);
-      return ed.querySelector('.rich-editor-body').innerHTML || '';
-    }
-
-    /* Markdown 互转：保护公式（~…~ / $$…$$ / \(…\) / \[…\]），与做题页分隔符一致 */
-    function protectMath(str, store) {
-      return (str || '')
-        .replace(/\$\$([\s\S]+?)\$\$/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; })
-        .replace(/\\\[([\s\S]+?)\\\]/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; })
-        .replace(/\\\(([\s\S]+?)\\\)/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; })
-        .replace(/~([^~\n]+?)~/g, (m) => { store.push(m); return '\u0000M' + (store.length - 1) + '\u0000'; });
-    }
-    function restoreMath(str, store) { return str.replace(/\u0000M(\d+)\u0000/g, (m, i) => store[+i]); }
-
-    /* ---- HTML → Markdown：DOM 遍历，保留图片尺寸(style/width)与块级对齐(text-align) ---- */
-    function imgToMarkup(img) {
-      const src = img.getAttribute('src') || '';
-      const alt = img.getAttribute('alt') || '';
-      let w = img.style.width || img.getAttribute('width') || '';
-      let h = img.style.height || img.getAttribute('height') || '';
-      if (w && /^\d+$/.test(w)) w += 'px';
-      if (h && /^\d+$/.test(h)) h += 'px';
-      let style = '';
-      if (w) style += 'width:' + w + ';';
-      if (h) style += 'height:' + h + ';';
-      if (!style) return '![' + alt + '](' + src + ')';   // 无固定尺寸时用干净的 Markdown
-      return '<img src="' + src + '"' + (alt ? ' alt="' + alt + '"' : '') + ' style="' + style + '">';
-    }
-    /* 处理单个节点：含该节点自身标签/内联样式产生的 Markdown 标记（无论它是裸顶层元素还是子元素） */
-    function serializeNode(n) {
-      if (n.nodeType === 3) return n.nodeValue;
-      if (n.nodeType !== 1) return '';
-      const tag = n.tagName.toLowerCase();
-      if (tag === 'br') return '\n';
-      if (tag === 'img') return imgToMarkup(n);
-      if (tag === 'a') return '[' + serializeInline(n) + '](' + (n.getAttribute('href') || '') + ')';
-      if (tag === 'code') return '`' + serializeInline(n) + '`';
-      let inner = serializeInline(n);
-      if (!inner) return '';
-      const st = n.style || {};
-      const fw = String(st.fontWeight || '');
-      const isBold = tag === 'b' || tag === 'strong' || fw === 'bold' || fw === 'bolder' ||
-                     (/^\d+$/.test(fw) && parseInt(fw, 10) >= 600);
-      const isItalic = tag === 'i' || tag === 'em' || st.fontStyle === 'italic' || st.fontStyle === 'oblique';
-      const bg = String(st.backgroundColor || '');
-      const isMark = tag === 'mark' || (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)');
-      const deco = String(st.textDecoration || '') + ' ' + String(st.textDecorationLine || '');
-      const isUnder = tag === 'u' || deco.indexOf('underline') !== -1;
-      if (isMark) inner = '<mark>' + inner + '</mark>';
-      if (isUnder) inner = '<u>' + inner + '</u>';
-      if (isItalic && inner.trim()) inner = '*' + inner + '*';
-      if (isBold && inner.trim()) inner = '**' + inner + '**';
-      return inner;
-    }
-    function serializeInline(node) {
-      let out = '';
-      node.childNodes.forEach(n => { out += serializeNode(n); });
-      return out;
-    }
-    function blockAlign(el) {
-      const a = el.style && el.style.textAlign;
-      return (a === 'center' || a === 'right' || a === 'left') ? a : '';
-    }
-    function serializeBlocks(nodes) {
-      let out = '';
-      nodes.forEach(n => {
-        if (n.nodeType === 3) { out += n.nodeValue; return; }
-        if (n.nodeType !== 1) return;
-        const tag = n.tagName.toLowerCase();
-        const align = blockAlign(n);
-        if (align && (tag === 'p' || tag === 'div' || /^h[1-6]$/.test(tag) || tag === 'blockquote')) {
-          // 对齐块保存为原始 HTML，服务端 bleach 允许 div + text-align，做题页得以保留
-          out += '\n<div style="text-align:' + align + '">' + n.innerHTML + '</div>\n\n';
-          return;
-        }
-        switch (tag) {
-          case 'h1': out += '\n# ' + serializeInline(n).trim() + '\n\n'; break;
-          case 'h2': out += '\n## ' + serializeInline(n).trim() + '\n\n'; break;
-          case 'h3': case 'h4': case 'h5': case 'h6': out += '\n### ' + serializeInline(n).trim() + '\n\n'; break;
-          case 'ul': case 'ol':
-            Array.prototype.forEach.call(n.children, (li, i) => {
-              if (li.tagName && li.tagName.toLowerCase() === 'li')
-                out += (tag === 'ol' ? (i + 1) + '. ' : '- ') + serializeInline(li).trim() + '\n';
-            });
-            out += '\n'; break;
-          case 'blockquote': out += '\n> ' + serializeInline(n).trim().replace(/\n/g, '\n> ') + '\n\n'; break;
-          case 'pre': out += '\n```\n' + (n.textContent || '').replace(/\n$/, '') + '\n```\n\n'; break;
-          case 'img': out += imgToMarkup(n) + '\n'; break;
-          case 'div': case 'p': { const inner = serializeInline(n).trim(); out += inner + '\n\n'; break; }
-          case 'br': out += '\n'; break;
-          default: out += serializeNode(n) + '\n';
-        }
-      });
-      return out;
-    }
-    function htmlToMd(html) {
-      const root = document.createElement('div');
-      root.innerHTML = html || '';
-      return serializeBlocks(Array.prototype.slice.call(root.childNodes)).replace(/\n{3,}/g, '\n\n').trim();
-    }
-
-    /* ---- Markdown → HTML：仅供编辑器渲染；公式保持字面量，原始 <img>/对齐块透传 ---- */
-    function mdToHtml(md) {
-      if (!md) return '';
-      const raw = [], math = [], imgs = [];
-      let s = (md || '')
-        .replace(/<div style="text-align:[^"]*">[\s\S]*?<\/div>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; })
-        .replace(/<img\b[^>]*>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; })
-        .replace(/<\/?(?:mark|u)>/gi, (m) => { raw.push(m); return '\u0000R' + (raw.length - 1) + '\u0000'; });
-      s = protectMath(s, math);
-      s = s.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (m, url) => { imgs.push('<img src="' + url + '" style="max-width:100%;border-radius:4px;">'); return '\u0000I' + (imgs.length - 1) + '\u0000'; })
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/```([\s\S]*?)```/g, (m, c) => '<pre>' + c.trim() + '</pre>')
-        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-        .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-        .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/==(.+?)==/g, '<mark>$1</mark>')
-        .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-        .replace(/`([^`]+)`/g, '<code>$1</code>');
-      s = s.replace(/(?:^|\n)((?:\d+\. .*(?:\n|$))+)/g, (m) => '\n<ol>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^\d+\. /, '') + '</li>').join('') + '</ol>\n');
-      s = s.replace(/(?:^|\n)((?:- .*(?:\n|$))+)/g, (m) => '\n<ul>' + m.trim().split('\n').map(l => '<li>' + l.replace(/^- /, '') + '</li>').join('') + '</ul>\n');
-      s = s.replace(/\n/g, '<br>').replace(/<br>(<ul>|<\/ul>|<ol>|<\/ol>|<h1>|<h2>|<h3>|<pre>)/g, '$1');
-      s = s.replace(/\u0000I(\d+)\u0000/g, (m, i) => imgs[+i]);
-      s = restoreMath(s, math);
-      s = s.replace(/\u0000R(\d+)\u0000/g, (m, i) => raw[+i]);
-      return s;
-    }
+    /* RichEditor / MarkdownPreview loaded from static JS; see resources/rich_editor.js */
 
     /* ---------- 选项（富文本 / Markdown） ---------- */
     function optionEditorTpl(name) {
-      return richEditorTpl(name, { compact: true, placeholder: '请输入选项内容（支持 ~公式~）' });
+      return RichEditor.html(name, { compact: true, placeholder: '请输入选项内容（支持 $$公式$$）' });
     }
     function getOptionText(row) {
       const ed = row.querySelector('.rich-editor');
       if (!ed) return row.querySelector('.option-input')?.value || '';
-      return getMd(ed.dataset.editor);
+      return RichEditor.getMarkdown(ed.dataset.editor);
     }
     function setOptionText(row, value) {
       const ed = row.querySelector('.rich-editor');
       if (!ed) { const inp = row.querySelector('.option-input'); if (inp) inp.value = value || ''; return; }
-      ed.querySelector('.rich-editor-body').innerHTML = mdToHtml(value || '');
-      ed.querySelector('textarea').value = value || '';
+      RichEditor.setMarkdown(ed.dataset.editor, value || '');
     }
     function addOption(value) {
       const isMulti = currentType === 'multiple';
@@ -1252,7 +859,7 @@
         </div>
         <div class="option-actions"><button type="button" class="btn-icon" title="删除" onclick="delOption(this)">×</button></div>`;
       document.getElementById('options').appendChild(row);
-      initEditors();
+      RichEditor.init();
       if (value) setOptionText(row, value);
       renderPreview();
     }
@@ -1480,18 +1087,18 @@
         <div class="sub-q-body"></div>`;
       document.getElementById('sub-list').appendChild(wrap);
       buildSubBody(wrap, type);
-      renumberSubs(); initEditors(); renderPreview();
+      renumberSubs(); RichEditor.init(); renderPreview();
     }
     function setSubType(id, type) {
       const wrap = document.querySelector(`.sub-q[data-id="${id}"]`);
       wrap.dataset.type = type;
       wrap.querySelectorAll('.sq-pill').forEach(p => p.classList.toggle('on', p.dataset.t === type));
-      buildSubBody(wrap, type); initEditors(); renderPreview();
+      buildSubBody(wrap, type); RichEditor.init(); renderPreview();
     }
     function toggleSub(id) { document.querySelector(`.sub-q[data-id="${id}"]`).classList.toggle('collapsed'); }
     function renumberSubs() { document.querySelectorAll('#sub-list .sub-q').forEach((w, i) => w.querySelector('.sq-idx').textContent = (i + 1) + '.'); }
     function subEditorTpl(name, ph) {
-      return richEditorTpl(name, { compact: true, placeholder: ph });
+      return RichEditor.html(name, { compact: true, placeholder: ph });
     }
     function buildSubBody(wrap, type) {
       const body = wrap.querySelector('.sub-q-body'); const id = wrap.dataset.id;
@@ -1582,37 +1189,51 @@
       renderPreview();
     }
 
-    /* ---------- 预览 ---------- */
-    /* 题面预览走服务端渲染端点，与真实做题页 100% 一致（同一 markdown+bleach 管线）。 */
-    let _stemMd = null, _stemHtml = '', _stemTimer = null;
-    function scheduleStemPreview() {
-      const md = getMd('stem');
-      if (md === _stemMd) return;
-      clearTimeout(_stemTimer);
-      _stemTimer = setTimeout(() => {
-        const body = new URLSearchParams(); body.set('content', md);
-        fetch(PROBLEM_PREVIEW_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-CSRFToken': CSRF_TOKEN },
-          body: body.toString(),
-        }).then(r => r.text()).then(htmlText => {
-          _stemMd = md; _stemHtml = htmlText || '';
-          renderPreview();
-        }).catch(() => {});
-      }, 350);
+    /* ---------- 预览（全部走服务端 markdown 管线） ---------- */
+    const PREVIEW_DEBOUNCE_MS = 350;
+    let _previewTimer = null;
+    let _previewToken = 0;
+    const _previewHtml = Object.create(null); // key -> last rendered HTML
+
+    MarkdownPreview.configure({
+      url: PROBLEM_PREVIEW_URL,
+      batchUrl: PROBLEM_PREVIEW_BATCH_URL,
+      csrfToken: CSRF_TOKEN,
+    });
+
+    function collectPreviewMarkdown() {
+      const parts = [];
+      parts.push({ key: 'stem', md: RichEditor.getMarkdown('stem') || '' });
+      if (currentType === 'single' || currentType === 'multiple') {
+        document.querySelectorAll('#options .option-row').forEach((op, i) => {
+          parts.push({ key: 'opt-' + i, md: getOptionText(op) || '' });
+        });
+      } else if (currentType === 'compound') {
+        document.querySelectorAll('#sub-list .sub-q').forEach((w) => {
+          const id = w.dataset.id;
+          const type = w.dataset.type;
+          parts.push({ key: 'sub-stem-' + id, md: RichEditor.getMarkdown('sub-stem-' + id) || '' });
+          if (type === 'single' || type === 'multiple') {
+            document.querySelectorAll('#sub-opts-' + id + ' .option-row').forEach((op, i) => {
+              parts.push({ key: 'sub-' + id + '-opt-' + i, md: getOptionText(op) || '' });
+            });
+          }
+        });
+      }
+      return parts;
     }
-    function renderPreview() {
+
+    function paintPreviewFromCache() {
       const pv = document.getElementById('preview-body');
-      scheduleStemPreview();
-      let stem = _stemHtml;
+      let stem = _previewHtml['stem'] || '';
       let blankCount = 0;
       if (currentType === 'blank') {
-        // 把题面里的 {{blank}} 占位符渲染成内联填空框（按顺序编号）
-        stem = stem.replace(/\{\{\s*blank\s*\}\}/g, () => `<input class="pv-blankinput pv-blank-inline" disabled placeholder="${++blankCount}">`);
+        stem = stem.replace(/\{\{\s*blank\s*\}\}/g, () =>
+          `<input class="pv-blankinput pv-blank-inline" disabled placeholder="${++blankCount}">`);
       }
-      let html = `<div class="pv-stem">${stem || '<span style="color:#bbb;">题目内容预览…</span>'}</div>`;
+      let html = `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">题目内容预览…</span>'}</div>`;
       if (currentType === 'single' || currentType === 'multiple') {
-        html += renderOptsPreview('#options', currentType === 'multiple');
+        html += renderOptsPreviewFromCache('#options', currentType === 'multiple', 'opt-');
       } else if (currentType === 'truefalse') {
         const val = document.querySelector('input[name="tf"]:checked')?.value;
         html += `<div class="pv-options">
@@ -1621,49 +1242,91 @@
       } else if (currentType === 'short') {
         html += `<div class="pv-answerbox"></div><div class="pv-answerlabel">答案：</div>`;
       } else if (currentType === 'blank') {
-        // 题面未插入 {{blank}} 时，退化为末尾单个填空框
         if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="请输入答案" disabled>`;
         const ans = [...document.querySelectorAll('#blank-answers .blank-answer')]
           .map(t => t.value.split('\n').map(s => s.trim()).filter(Boolean).join(' / ')).filter(Boolean);
         html += `<div class="pv-answerlabel">答案：${ans.length ? ans.join('；') : '—'}</div>`;
-      } else if (currentType === 'programming') {
-        /* 代码编辑器与提交按钮在做题页展示，此处不再赘述提示 */
       } else if (currentType === 'compound') {
-        html += renderCompoundPreview();
+        html += renderCompoundPreviewFromCache();
       } else if (currentType === 'other') {
         html += `<div class="pv-answerlabel" style="color:var(--muted);">其他题型：仅展示题面，人工评分。</div>`;
       }
       pv.innerHTML = html;
-      if (window.MathJax && MathJax.typesetPromise) MathJax.typesetPromise([pv]).catch(() => {});
+      typesetPreviewMath(pv);
     }
-    function renderOptsPreview(sel, multi) {
+
+    /** Wait for async MathJax load, then typeset preview (no-Mathoid path). */
+    function typesetPreviewMath(el) {
+      if (!el) return;
+      function run() {
+        if (!(window.MathJax && typeof MathJax.typesetPromise === 'function')) return false;
+        const ready = (MathJax.startup && MathJax.startup.promise)
+          ? MathJax.startup.promise
+          : Promise.resolve();
+        ready.then(() => {
+          if (typeof MathJax.typesetClear === 'function') {
+            try { MathJax.typesetClear([el]); } catch (e) { /* ignore */ }
+          }
+          return MathJax.typesetPromise([el]);
+        }).catch(() => {});
+        return true;
+      }
+      if (run()) return;
+      let n = 0;
+      const t = setInterval(() => {
+        if (run() || ++n > 40) clearInterval(t);
+      }, 50);
+    }
+
+    function renderOptsPreviewFromCache(sel, multi, keyPrefix) {
       let h = '<div class="pv-options">';
-      document.querySelectorAll(sel + ' .option-row').forEach(op => {
-        const txt = mdToHtml(getOptionText(op)) || '选项';
+      document.querySelectorAll(sel + ' .option-row').forEach((op, i) => {
+        const txt = _previewHtml[keyPrefix + i] || '';
         const ok = op.querySelector('.option-marker input').checked;
-        h += `<div class="pv-option"><span class="mk ${multi ? 'sq' : ''} ${ok ? 'on' : ''}"></span><span>${txt}</span></div>`;
+        h += `<div class="pv-option"><span class="mk ${multi ? 'sq' : ''} ${ok ? 'on' : ''}"></span><div class="pv-option-body">${txt || '选项'}</div></div>`;
       });
       return h + '</div>';
     }
-    function renderCompoundPreview() {
+
+    function renderCompoundPreviewFromCache() {
       let h = '';
       document.querySelectorAll('#sub-list .sub-q').forEach((w, i) => {
         const id = w.dataset.id, type = w.dataset.type;
         const score = w.querySelector('.sq-score input').value;
-        const stem = editorHtml('sub-stem-' + id);
+        const stem = _previewHtml['sub-stem-' + id] || '';
         h += `<div class="pv-sub"><div class="pv-sub-t">${i + 1}. <span class="pv-badge">${TYPE_META[type].title}</span> <span style="float:right;color:var(--muted);font-size:12px;">${score} 分</span></div>`;
-        h += `<div class="pv-stem">${stem || '<span style="color:#bbb;">子题干…</span>'}</div>`;
-        if (type === 'single' || type === 'multiple') h += renderOptsPreview('#sub-opts-' + id, type === 'multiple');
-        else if (type === 'truefalse') {
+        h += `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">子题干…</span>'}</div>`;
+        if (type === 'single' || type === 'multiple') {
+          h += renderOptsPreviewFromCache('#sub-opts-' + id, type === 'multiple', 'sub-' + id + '-opt-');
+        } else if (type === 'truefalse') {
           const v = w.querySelector(`input[name="sub-tf-${id}"]:checked`)?.value;
           h += `<div class="pv-options"><div class="pv-option"><span class="mk ${v === 'true' ? 'on' : ''}"></span>正确</div><div class="pv-option"><span class="mk ${v === 'false' ? 'on' : ''}"></span>错误</div></div>`;
         } else if (type === 'blank') {
           const a = w.querySelector('.sub-blank').value;
           h += `<input class="pv-blankinput" placeholder="请输入答案" disabled><div class="pv-answerlabel">答案：${a || '—'}</div>`;
-        } else if (type === 'short') { h += `<div class="pv-answerbox"></div>`; }
+        } else if (type === 'short') {
+          h += `<div class="pv-answerbox"></div>`;
+        }
         h += '</div>';
       });
       return h || '<div class="pv-answerlabel" style="color:var(--muted);">尚未添加子题目。</div>';
+    }
+
+    function renderPreview() {
+      // Immediate paint from cache (markers / non-md UI), then debounce server fetch.
+      paintPreviewFromCache();
+      clearTimeout(_previewTimer);
+      const token = ++_previewToken;
+      _previewTimer = setTimeout(() => {
+        const parts = collectPreviewMarkdown();
+        MarkdownPreview.renderKeyed(parts)
+          .then(results => {
+            if (token !== _previewToken) return;
+            results.forEach(r => { _previewHtml[r.key] = r.html; });
+            paintPreviewFromCache();
+          })
+          .catch(() => {});
+      }, PREVIEW_DEBOUNCE_MS);
     }
 
     /* ---------- 收集 / 校验 / 保存 ---------- */
@@ -1682,7 +1345,7 @@
         gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
         problemTypes: [...document.querySelectorAll('#f-types .ptype-tag')].map(t => t.childNodes[0].textContent.trim()),
-        description: getMd('stem'), explanation: getMd('explain'),
+        description: RichEditor.getMarkdown('stem'), explanation: RichEditor.getMarkdown('explain'),
       };
       if (currentType === 'single' || currentType === 'multiple') {
         data.multiple = currentType === 'multiple';
@@ -1690,13 +1353,13 @@
       } else if (currentType === 'truefalse') {
         data.tfAnswer = document.querySelector('input[name="tf"]:checked').value;
       } else if (currentType === 'short') {
-        data.shortAnswer = getMd('short');
+        data.shortAnswer = RichEditor.getMarkdown('short');
       } else if (currentType === 'blank') {
         data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer')].map(t => t.value.trim());
         data.trimWhitespace = (document.getElementById('f-blank-trim') || {}).checked !== false;
         data.caseSensitive = !!(document.getElementById('f-blank-case') || {}).checked;
       } else if (currentType === 'compound') {
-        data.subs = [...document.querySelectorAll('#sub-list .sub-q')].map(w => ({ type: w.dataset.type, score: w.querySelector('.sq-score input').value, stem: getMd('sub-stem-' + w.dataset.id) }));
+        data.subs = [...document.querySelectorAll('#sub-list .sub-q')].map(w => ({ type: w.dataset.type, score: w.querySelector('.sq-score input').value, stem: RichEditor.getMarkdown('sub-stem-' + w.dataset.id) }));
       } else if (currentType === 'programming') {
         data.time_limit = document.getElementById('f-time').value;
         data.memory_limit = document.getElementById('f-mem').value;
@@ -1889,8 +1552,17 @@
       renderPreview();
     }
 
-    mountRichEditors();
-    initEditors();
+    RichEditor.configure({
+      imageUploadUrl: IMAGE_UPLOAD_URL,
+      searchUsersUrl: SEARCH_USERS_URL,
+      csrfToken: CSRF_TOKEN,
+      onChange: renderPreview,
+      messages: {
+        uploadFailed: '{{ _("Image upload failed.") }}',
+        uploadFailedAuth: '{{ _("Image upload failed. Make sure you are signed in with upload permission.") }}',
+      },
+    });
+    RichEditor.mount();
     setDifficulty(currentDifficulty);
     if (EDIT_DATA) {
       loadEditData(EDIT_DATA);
