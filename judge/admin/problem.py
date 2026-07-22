@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import re
@@ -11,7 +12,7 @@ from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.forms import ModelForm
-from django.http import FileResponse, HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.urls import path, reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.html import format_html
@@ -21,6 +22,7 @@ from reversion.admin import VersionAdmin
 from judge.models import Class, Language, LanguageLimit, Organization, Problem, ProblemClarification, ProblemGroup, \
     ProblemPointsVote, ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution, \
     SubmissionSourceAccess
+from judge.utils import simple_xlsx
 from judge.utils.language_matching import matching_languages
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 from judge.utils.views import NoBatchDeleteMixin
@@ -952,6 +954,84 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ],
         ]
 
+    def _template_with_current_references(self, request, sample_path):
+        """Keep the sample's Word object while replacing permission-scoped references."""
+        reference_rows = self._excel_reference_rows(request)
+        strings_path = 'xl/sharedStrings.xml'
+        reference_sheet_path = 'xl/worksheets/sheet2.xml'
+        namespace = {'x': simple_xlsx.MAIN_NS}
+
+        with zipfile.ZipFile(sample_path) as source:
+            shared_strings = ET.fromstring(source.read(strings_path))
+            reference_sheet = ET.fromstring(source.read(reference_sheet_path))
+            old_string_cells = len(reference_sheet.findall('.//x:c[@t="s"]', namespace))
+            string_lookup = {}
+            string_items = shared_strings.findall('x:si', namespace)
+            for index, item in enumerate(string_items):
+                value = ''.join(node.text or '' for node in item.iterfind('.//x:t', namespace))
+                string_lookup.setdefault(value, index)
+
+            new_string_cells = 0
+            next_string_index = len(string_items)
+            for row in reference_rows:
+                for value in row:
+                    if value is None or value == '':
+                        continue
+                    new_string_cells += 1
+                    value = str(value)
+                    if value in string_lookup:
+                        continue
+                    string_lookup[value] = next_string_index
+                    next_string_index += 1
+                    item = ET.SubElement(shared_strings, '{%s}si' % simple_xlsx.MAIN_NS)
+                    text = ET.SubElement(item, '{%s}t' % simple_xlsx.MAIN_NS)
+                    if value != value.strip():
+                        text.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+                    text.text = value
+
+            sheet_data = reference_sheet.find('x:sheetData', namespace)
+            sheet_data.clear()
+            max_columns = max(len(row) for row in reference_rows)
+            for row_index, row in enumerate(reference_rows, start=1):
+                row_element = ET.SubElement(
+                    sheet_data,
+                    '{%s}row' % simple_xlsx.MAIN_NS,
+                    {'r': str(row_index), 'spans': '1:{}'.format(max_columns)},
+                )
+                for column_index, value in enumerate(row):
+                    if value is None or value == '':
+                        continue
+                    cell = ET.SubElement(
+                        row_element,
+                        '{%s}c' % simple_xlsx.MAIN_NS,
+                        {
+                            'r': '{}{}'.format(simple_xlsx._excel_column_name(column_index), row_index),
+                            't': 's',
+                        },
+                    )
+                    ET.SubElement(cell, '{%s}v' % simple_xlsx.MAIN_NS).text = str(string_lookup[str(value)])
+
+            dimension = reference_sheet.find('x:dimension', namespace)
+            dimension.set('ref', 'A1:{}{}'.format(
+                simple_xlsx._excel_column_name(max_columns - 1), len(reference_rows),
+            ))
+            string_count = int(shared_strings.attrib.get('count', 0))
+            shared_strings.set('count', str(string_count - old_string_cells + new_string_cells))
+            shared_strings.set('uniqueCount', str(next_string_index))
+            ET.register_namespace('', simple_xlsx.MAIN_NS)
+
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as target:
+                for info in source.infolist():
+                    if info.filename == strings_path:
+                        content = ET.tostring(shared_strings, encoding='utf-8', xml_declaration=True)
+                    elif info.filename == reference_sheet_path:
+                        content = ET.tostring(reference_sheet, encoding='utf-8', xml_declaration=True)
+                    else:
+                        content = source.read(info.filename)
+                    target.writestr(info, content)
+        return output.getvalue()
+
     def download_excel_template_view(self, request):
         if not request.user.has_perm('judge.edit_own_problem'):
             raise PermissionDenied
@@ -960,20 +1040,15 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         # exactly how embedded DOCX descriptions and their figures are imported.
         sample_path = os.path.join(settings.BASE_DIR, 'resources', 'problem_batch_upload_template.xlsx')
         if os.path.isfile(sample_path):
-            return FileResponse(
-                open(sample_path, 'rb'),
-                as_attachment=True,
-                filename='problem_batch_upload_template.xlsx',
-                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            )
-
-        payload = build_xlsx_workbook([
-            (
-                'Problems', self._excel_template_rows(request),
-                [{'sqref': 'B2:B1000', 'values': ('code', 'multiple_choice', 'fill_blank')}],
-            ),
-            ('Reference', self._excel_reference_rows(request)),
-        ])
+            payload = self._template_with_current_references(request, sample_path)
+        else:
+            payload = build_xlsx_workbook([
+                (
+                    'Problems', self._excel_template_rows(request),
+                    [{'sqref': 'B2:B1000', 'values': ('code', 'multiple_choice', 'fill_blank')}],
+                ),
+                ('Reference', self._excel_reference_rows(request)),
+            ])
         response = HttpResponse(
             payload,
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

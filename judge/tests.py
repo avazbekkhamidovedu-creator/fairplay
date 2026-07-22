@@ -1,4 +1,5 @@
 import io
+import zipfile
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
@@ -298,8 +299,13 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         rows = read_xlsx_rows(io.BytesIO(response.content))
         self.assertEqual(
             rows[0],
-            ['name', 'description', 'organizations', 'classes', 'allowed_languages'],
+            [
+                'name', 'question_type', 'description', 'answer', 'solution', 'organizations',
+                'allowed_languages', 'test_data',
+            ],
         )
+        with zipfile.ZipFile(io.BytesIO(response.content)) as workbook:
+            self.assertIn('xl/embeddings/Microsoft_Word_Document.docx', workbook.namelist())
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(
@@ -334,13 +340,13 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         visible_class.admins.add(scoped_admin.profile)
 
         response = self.client.get(reverse('admin:judge_problem_download_excel_template'))
-        rows = read_xlsx_rows(io.BytesIO(response.content))
-        flattened = '\n'.join(' | '.join(row) for row in rows)
+        with zipfile.ZipFile(io.BytesIO(response.content)) as workbook:
+            shared_strings = workbook.read('xl/sharedStrings.xml').decode('utf-8')
 
-        self.assertIn('visible-org', flattened)
-        self.assertIn('visible-class', flattened)
-        self.assertNotIn('hidden-org', flattened)
-        self.assertNotIn('hidden-class', flattened)
+        self.assertIn('visible-org', shared_strings)
+        self.assertIn('visible-class', shared_strings)
+        self.assertNotIn('hidden-org', shared_strings)
+        self.assertNotIn('hidden-class', shared_strings)
 
     def test_admin_excel_batch_create_rejects_organization_outside_visible_scope(self):
         scoped_admin = create_user(

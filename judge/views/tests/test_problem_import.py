@@ -32,7 +32,7 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
                 'questions.xlsx', workbook,
                 content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             ),
-        })
+        }, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
 
     def test_upload_creates_preview_draft_from_question_type_column(self):
         response = self.upload([
