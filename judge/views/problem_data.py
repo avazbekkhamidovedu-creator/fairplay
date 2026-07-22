@@ -218,14 +218,31 @@ class ProblemDataView(TitleMixin, ProblemManagerMixin):
     def get_valid_files(self, data, post=False) -> List[str]:
         try:
             if post and 'problem-data-zipfile-clear' in self.request.POST:
-                return []
+                return self._loose_case_files()
             elif post and 'problem-data-zipfile' in self.request.FILES:
                 return ZipFile(self.request.FILES['problem-data-zipfile']).namelist()
             elif data.zipfile:
                 return ZipFile(data.zipfile.path).namelist()
         except BadZipfile:
             raise
-        return []
+        return self._loose_case_files()
+
+    def _loose_case_files(self) -> List[str]:
+        """Include loose .in/.out/.ans written by create-v2 so they are not marked bad-file."""
+        import os
+
+        from judge.models import problem_data_storage
+
+        root = getattr(problem_data_storage, 'location', None) or ''
+        problem_dir = os.path.join(root, self.object.code) if root else ''
+        if not problem_dir or not os.path.isdir(problem_dir):
+            return []
+        names = []
+        for name in sorted(os.listdir(problem_dir)):
+            lower = name.lower()
+            if lower.endswith('.in') or lower.endswith('.out') or lower.endswith('.ans'):
+                names.append(name)
+        return names
 
     def get_context_data(self, **kwargs):
         context = super(ProblemDataView, self).get_context_data(**kwargs)

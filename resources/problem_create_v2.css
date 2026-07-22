@@ -1004,6 +1004,9 @@ fieldset.module .form-content { padding: 1rem; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 #btn-ai-decompose:disabled { opacity: 0.45; cursor: not-allowed; }
 .pcv2 .btn-mini-primary:hover { color: #fff !important; background: var(--dmoj-green-dark) !important; }
+.pcv2 .tc-file-btn { color: #0d47a1 !important; background: #eceff1 !important; }
+.pcv2 .tc-file-btn:hover { color: #0d47a1 !important; background: #bbdefb !important; }
+.pcv2 .tc-file-btn.manual { color: #263238 !important; }
 
 /* --- dark theme overrides --- */
 @media (prefers-color-scheme: dark) {

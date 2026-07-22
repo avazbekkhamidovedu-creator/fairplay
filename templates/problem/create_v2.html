@@ -58,21 +58,71 @@
     .tc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .tc-table th, .tc-table td { border: 1px solid #ddd; padding: 0.35rem 0.4rem; text-align: left; vertical-align: top; }
     .tc-table th { background: #f0f0f0; font-weight: 600; }
-    .tc-table textarea { width: 100%; min-height: 52px; font-family: monospace; font-size: 12px; }
-    .tc-table input[type="number"] { width: 56px; }
-    .draft-banner { display: flex; align-items: center; gap: 0.5rem; background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 4px; padding: 0.5rem 0.75rem; font-size: 12px; margin-bottom: 0.6rem; }
-    .draft-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: #f39c12; flex-shrink: 0; }
-    .draft-banner.saved .dot { background: var(--dmoj-green); }
-
-    /* 测试用例：折叠 + 内嵌 test_data */
+    .tc-table textarea { width: 100%; min-height: 64px; font-family: monospace; font-size: 12px; resize: vertical; }
+    .tc-table input[type="number"] { width: 64px; }
+    .tc-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin-bottom: 0.65rem; font-size: 12px; }
+    .tc-toolbar .tc-sep { color: #ccc; }
+    .tc-file-btn {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      border: 1px solid #90a4ae !important;
+      background: #eceff1 !important;
+      color: #0d47a1 !important;
+      border-radius: 4px; padding: 0.25rem 0.5rem; font-size: 12px; cursor: pointer;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-width: 100%;
+      font-weight: 600;
+    }
+    .tc-file-btn:hover { background: #bbdefb !important; border-color: #42a5f5 !important; color: #0d47a1 !important; }
+    .tc-file-btn.dirty::after { content: '·已改'; color: #e65100 !important; font-size: 11px; margin-left: 0.2rem; font-weight: 600; }
+    .tc-file-btn.manual { color: #263238 !important; }
+    .tc-mode-hint { font-size: 12px; color: var(--muted); margin: 0 0 0.55rem; line-height: 1.5; }
+    .tc-old-link { font-size: 12px; margin-top: 0.55rem; }
+    .tc-old-link a { color: var(--dmoj-green-dark); }
     .tc-collapse { border: 1px solid var(--admin-border); border-radius: 6px; background: #fff; }
     .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: 13px; list-style: none; user-select: none; }
     .tc-collapse-summary::-webkit-details-marker { display: none; }
     .tc-collapse-summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; color: var(--muted); transition: transform 0.15s; }
     .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
-    .tc-embed-wrap { border-top: 1px solid var(--admin-border); }
-    .tc-embed-frame { display: block; width: 100%; height: 720px; border: 0; }
-    .tc-embed-placeholder { padding: 1rem 0.85rem; font-size: 13px; color: var(--muted); line-height: 1.6; }
+    .tc-body-wrap { border-top: 1px solid var(--admin-border); padding: 0.75rem 0.85rem 0.9rem; }
+
+    /* ZIP 用例预览：更窄；同时展示该用例的 in + out */
+    .tc-drawer-mask {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.28); z-index: 1200;
+    }
+    .tc-drawer-mask.open { display: block; }
+    .tc-drawer {
+      position: fixed; top: 0; right: 0; width: min(420px, 88vw); height: 100%;
+      background: #fff; box-shadow: -8px 0 24px rgba(0,0,0,0.12); z-index: 1201;
+      transform: translateX(100%); transition: transform 0.2s ease; display: flex; flex-direction: column;
+    }
+    .tc-drawer.open { transform: translateX(0); }
+    .tc-drawer-head {
+      display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.75rem;
+      border-bottom: 1px solid var(--admin-border); background: #fafafa;
+    }
+    .tc-drawer-head strong { flex: 1; font-size: 12px; word-break: break-all; color: #212121; }
+    .tc-drawer-body {
+      flex: 1; padding: 0.55rem 0.75rem; overflow: auto;
+      display: flex; flex-direction: column; gap: 0.55rem;
+    }
+    .tc-drawer-pane { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; min-height: 0; }
+    .tc-drawer-pane label {
+      font-size: 11px; font-weight: 700; color: #37474f;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .tc-drawer-pane textarea {
+      width: 100%; flex: 1; min-height: 120px; max-height: 38vh;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+      border: 1px solid #ddd; border-radius: 4px; padding: 0.4rem; resize: vertical;
+      color: #212121; background: #fff;
+    }
+    .tc-drawer-foot {
+      display: flex; justify-content: flex-end; gap: 0.5rem; padding: 0.5rem 0.75rem;
+      border-top: 1px solid var(--admin-border); background: #fafafa;
+    }
+
+    .draft-banner { display: flex; align-items: center; gap: 0.5rem; background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 4px; padding: 0.5rem 0.75rem; font-size: 12px; margin-bottom: 0.6rem; }
+    .draft-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: #f39c12; flex-shrink: 0; }
+    .draft-banner.saved .dot { background: var(--dmoj-green); }
 
     /* 需求4：复合题子题目 */
     .sub-q { border: 1px solid var(--admin-border); border-radius: 6px; margin-bottom: 0.75rem; overflow: hidden; background: #fff; }
@@ -376,25 +426,84 @@
         </div>
       </fieldset>
 
-      <!-- ③ 编程题：测试用例（默认折叠，展开后内嵌 test_data 精配） -->
+      <!-- ③ 编程题：测试用例（内联录入 / ZIP，不再嵌入旧页） -->
       <fieldset class="module type-panel" data-for="programming" style="display:none;">
         <h2>测试用例</h2>
         <div class="form-content">
-          <details class="tc-collapse" id="tc-collapse">
-            <summary class="tc-collapse-summary">测试数据配置（点击展开）</summary>
-            <div class="tc-embed-wrap">
-              {% if test_data_url %}
-                <iframe id="tc-embed-frame" class="tc-embed-frame" data-src="{{ test_data_url }}?embed=1"
-                        title="{{ _('Test data') }}"></iframe>
-              {% else %}
-                <div class="tc-embed-placeholder">
-                  先填写并<strong>保存</strong>题目基本信息；保存后可在此上传测试数据 zip，并按<strong>文件名</strong>逐条配置用例（支持样例、分值、Checker、Generator、Batch、Harness）。
-                </div>
-              {% endif %}
+          <details class="tc-collapse" id="tc-collapse" open>
+            <summary class="tc-collapse-summary">测试数据配置（点击折叠）</summary>
+            <div class="tc-body-wrap">
+              <p class="tc-mode-hint">
+                可直接填写输入/输出，或上传 ZIP 自动配对用例（主表显示<strong>文件名</strong>，点击文件名在侧栏查看/编辑内容）。
+                ZIP 保存时按文件上传（与旧版测试数据页相同上限）；Batch / Generator / Harness 等请用旧版精调。
+              </p>
+              <div class="tc-toolbar">
+                <button type="button" class="btn" onclick="addTestCase()">+ 添加用例</button>
+                <label class="btn" style="cursor:pointer;margin:0;">
+                  上传 ZIP
+                  <input type="file" id="tc-zip-input" accept=".zip,application/zip" hidden>
+                </label>
+                <button type="button" class="btn" onclick="distributeCasePoints()">按总分均分</button>
+                <span class="tc-sep">|</span>
+                <label>Checker
+                  <select id="tc-checker" style="max-width:160px;margin-left:0.25rem;">
+                    <option value="">{{ _('Default') }}</option>
+                    {% for c in checkers %}
+                      <option value="{{ c.value }}">{{ c.label }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <span id="tc-zip-status" style="color:var(--muted);"></span>
+              </div>
+              <div style="overflow-x:auto;">
+                <table class="tc-table" id="tc-table">
+                  <thead>
+                    <tr>
+                      <th style="width:36px;">#</th>
+                      <th>Input</th>
+                      <th>Output</th>
+                      <th style="width:72px;">Points</th>
+                      <th style="width:64px;">Sample</th>
+                      <th style="width:36px;"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="tc-body"></tbody>
+                </table>
+              </div>
+              <div class="tc-old-link" id="tc-old-link">
+                {% if test_data_url %}
+                  <a href="{{ test_data_url }}" target="_blank" rel="noopener">打开旧版测试数据页（更细致编辑）</a>
+                {% else %}
+                  <span style="color:var(--muted);">题目首次保存后，可在此打开旧版测试数据页做 Batch / Generator 等精调。</span>
+                {% endif %}
+              </div>
             </div>
           </details>
         </div>
       </fieldset>
+
+      <!-- 测试用例文件内容抽屉：同时展示该用例 in + out -->
+      <div class="tc-drawer-mask" id="tc-drawer-mask" onclick="closeTcDrawer()"></div>
+      <aside class="tc-drawer" id="tc-drawer" aria-hidden="true">
+        <div class="tc-drawer-head">
+          <strong id="tc-drawer-title">测试用例</strong>
+          <button type="button" class="btn-icon" onclick="closeTcDrawer()" title="关闭">×</button>
+        </div>
+        <div class="tc-drawer-body">
+          <div class="tc-drawer-pane">
+            <label id="tc-drawer-in-label">Input</label>
+            <textarea id="tc-drawer-in" spellcheck="false"></textarea>
+          </div>
+          <div class="tc-drawer-pane">
+            <label id="tc-drawer-out-label">Output</label>
+            <textarea id="tc-drawer-out" spellcheck="false"></textarea>
+          </div>
+        </div>
+        <div class="tc-drawer-foot">
+          <button type="button" class="btn" onclick="closeTcDrawer()">取消</button>
+          <button type="button" class="btn" onclick="applyTcDrawer()">保存到用例</button>
+        </div>
+      </aside>
 
       <!-- ④ 编程题：Creation preset 已移入 Advanced -->
       <p style="margin:1rem 0;">
@@ -821,9 +930,8 @@
       }
       if (type === 'blank' && document.getElementById('blank-answers').children.length === 0) addBlank();
       if (type === 'compound' && document.getElementById('sub-list').children.length === 0) addSub('single');
-      if (type === 'programming') {
-        const f = document.getElementById('tc-embed-frame');
-        if (f && !f.getAttribute('src') && f.dataset.src) f.setAttribute('src', f.dataset.src);
+      if (type === 'programming' && document.getElementById('tc-body') && !document.getElementById('tc-body').children.length) {
+        /* keep empty until user adds / imports; do not auto-seed */
       }
 
       renderScoreConf();
@@ -879,47 +987,198 @@
       const row = document.createElement('div');
       row.className = 'blank-answer-row';
       row.innerHTML = `<span class="blank-label">第 ${n} 空</span>
-        <textarea class="blank-answer" rows="2" placeholder="标准答案（多个可接受答案时，每行写一个）" oninput="renderPreview()" style="flex:1;font-family:inherit;resize:vertical;"></textarea>
+        <textarea class="blank-answer" rows="2" placeholder="" oninput="renderPreview()" style="flex:1;font-family:inherit;resize:vertical;"></textarea>
         <span class="inline-num blank-pts" style="display:none;"><input type="number" value="1" min="0" step="0.5" title="本空分值" oninput="renderPreview()"></span>
         <button type="button" class="btn-icon" onclick="this.closest('.blank-answer-row').remove();renderPreview();">×</button>`;
       document.getElementById('blank-answers').appendChild(row);
       renderScoreConf(); renderPreview();
     }
 
-    /* ---------- 测试用例（需求8）---------- */
-    const TC_ZIP_MAX_FILE = 1024 * 1024;      // 1MB per file
-    const TC_ZIP_MAX_TOTAL = 8 * 1024 * 1024; // 8MB total decoded text
+    /* ---------- 测试用例（内联录入 + ZIP 文件名模式）---------- */
+    // Soft warning only: save uploads the archive as a file (same path as classic test_data).
+    const TC_ZIP_WARN_TOTAL = 8 * 1024 * 1024;
     const TEST_DATA_URL = '{{ test_data_url }}';
+    let tcDrawerTarget = null; // { tr }
+    let pendingZipFile = null; // original File from <input>, reused on save when unchanged
 
-    function ensureDraft() { /* test cases saved atomically on submit */ }
+    function renumberTestCases() {
+      const rows = document.querySelectorAll('#tc-body tr');
+      rows.forEach((tr, i) => { tr.children[0].textContent = String(i + 1); });
+      tcSeq = rows.length;
+    }
+
+    function fileCellHtml(kind, fileName, isZip) {
+      const path = fileName || '';
+      const label = path ? basename(path) : (kind === 'input' ? 'stdin' : 'expected');
+      const cls = 'tc-file-btn' + (isZip ? '' : ' manual');
+      return `<button type="button" class="${cls}" data-kind="${kind}" data-file="${escapeAttr(path)}" title="${escapeAttr(path || '查看/编辑内容')}">${escapeHtml(label)}</button>
+              <textarea class="tc-content" data-kind="${kind}" hidden></textarea>`;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function escapeAttr(s) {
+      return escapeHtml(s).replace(/\n/g, ' ');
+    }
+
     function addTestCase(opts) {
-      ensureDraft();
-      const n = ++tcSeq;
       const points = (opts && opts.points != null) ? opts.points : 10;
       const pretest = !!(opts && opts.pretest);
+      const fromZip = !!(opts && (opts.input_file || opts.output_file || opts.fromZip));
+      const inName = (opts && opts.input_file) || '';
+      const outName = (opts && opts.output_file) || '';
       const tr = document.createElement('tr');
+      tr.dataset.mode = fromZip ? 'zip' : 'manual';
       tr.innerHTML = `
-        <td>${n}</td>
-        <td><textarea placeholder="stdin"></textarea></td>
-        <td><textarea placeholder="expected"></textarea></td>
-        <td><input type="number" value="${points}" min="0"></td>
-        <td style="text-align:center;"><input type="checkbox" title="设为样例/pretest"${pretest ? ' checked' : ''}></td>
-        <td><button type="button" class="btn-icon" onclick="this.closest('tr').remove()">×</button></td>`;
+        <td></td>
+        <td class="tc-in">${fromZip
+          ? fileCellHtml('input', inName, true)
+          : `<textarea class="tc-content" data-kind="input" placeholder="stdin"></textarea>
+             <input type="hidden" class="tc-fname" data-kind="input" value="">`}
+        </td>
+        <td class="tc-out">${fromZip
+          ? fileCellHtml('output', outName, true)
+          : `<textarea class="tc-content" data-kind="output" placeholder="expected"></textarea>
+             <input type="hidden" class="tc-fname" data-kind="output" value="">`}
+        </td>
+        <td><input type="number" class="tc-points" value="${points}" min="0"></td>
+        <td style="text-align:center;"><input type="checkbox" class="tc-pretest" title="设为样例/pretest"${pretest ? ' checked' : ''}></td>
+        <td><button type="button" class="btn-icon" onclick="removeTestCaseRow(this)">×</button></td>`;
       document.getElementById('tc-body').appendChild(tr);
       if (opts) {
-        if (opts.input != null) tr.children[1].querySelector('textarea').value = opts.input;
-        if (opts.output != null) tr.children[2].querySelector('textarea').value = opts.output;
+        const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
+        const outTa = tr.querySelector('textarea.tc-content[data-kind="output"]');
+        if (inTa && opts.input != null) inTa.value = opts.input;
+        if (outTa && opts.output != null) outTa.value = opts.output;
+        if (!fromZip) {
+          const inF = tr.querySelector('.tc-fname[data-kind="input"]');
+          const outF = tr.querySelector('.tc-fname[data-kind="output"]');
+          if (inF && opts.input_file) inF.value = opts.input_file;
+          if (outF && opts.output_file) outF.value = opts.output_file;
+        }
       }
+      if (fromZip) {
+        tr.querySelectorAll('.tc-file-btn').forEach(btn => {
+          btn.addEventListener('click', () => openTcDrawer(tr));
+        });
+      }
+      renumberTestCases();
       return tr;
     }
 
+    function openTcDrawer(tr) {
+      const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
+      const outTa = tr.querySelector('textarea.tc-content[data-kind="output"]');
+      const inBtn = tr.querySelector('.tc-file-btn[data-kind="input"]');
+      const outBtn = tr.querySelector('.tc-file-btn[data-kind="output"]');
+      if (!inTa && !outTa) return;
+      tcDrawerTarget = { tr };
+      const inName = (inBtn && inBtn.dataset.file) || 'input';
+      const outName = (outBtn && outBtn.dataset.file) || 'output';
+      const idx = tr.children[0] ? tr.children[0].textContent : '';
+      document.getElementById('tc-drawer-title').textContent = '用例 #' + idx;
+      document.getElementById('tc-drawer-in-label').textContent = 'Input · ' + inName;
+      document.getElementById('tc-drawer-out-label').textContent = 'Output · ' + outName;
+      document.getElementById('tc-drawer-in').value = inTa ? (inTa.value || '') : '';
+      document.getElementById('tc-drawer-out').value = outTa ? (outTa.value || '') : '';
+      document.getElementById('tc-drawer-mask').classList.add('open');
+      document.getElementById('tc-drawer').classList.add('open');
+      document.getElementById('tc-drawer').setAttribute('aria-hidden', 'false');
+    }
+    function closeTcDrawer() {
+      document.getElementById('tc-drawer-mask').classList.remove('open');
+      document.getElementById('tc-drawer').classList.remove('open');
+      document.getElementById('tc-drawer').setAttribute('aria-hidden', 'true');
+      tcDrawerTarget = null;
+    }
+    function applyTcDrawer() {
+      if (!tcDrawerTarget) return;
+      const { tr } = tcDrawerTarget;
+      const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
+      const outTa = tr.querySelector('textarea.tc-content[data-kind="output"]');
+      const inBtn = tr.querySelector('.tc-file-btn[data-kind="input"]');
+      const outBtn = tr.querySelector('.tc-file-btn[data-kind="output"]');
+      if (inTa) inTa.value = document.getElementById('tc-drawer-in').value;
+      if (outTa) outTa.value = document.getElementById('tc-drawer-out').value;
+      if (inBtn) inBtn.classList.add('dirty');
+      if (outBtn) outBtn.classList.add('dirty');
+      closeTcDrawer();
+    }
+
+    function removeTestCaseRow(btn) {
+      const tr = btn && btn.closest('tr');
+      if (tr) tr.remove();
+      renumberTestCases();
+      syncPendingZipState();
+    }
+
+    function syncPendingZipState() {
+      const hasZipRow = [...document.querySelectorAll('#tc-body tr')].some(tr => tr.dataset.mode === 'zip');
+      if (!hasZipRow) pendingZipFile = null;
+    }
+
+    function collectTestCases() {
+      return [...document.querySelectorAll('#tc-body tr')].map(tr => {
+        const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
+        const outTa = tr.querySelector('textarea.tc-content[data-kind="output"]');
+        const inBtn = tr.querySelector('.tc-file-btn[data-kind="input"]');
+        const outBtn = tr.querySelector('.tc-file-btn[data-kind="output"]');
+        const inF = tr.querySelector('.tc-fname[data-kind="input"]');
+        const outF = tr.querySelector('.tc-fname[data-kind="output"]');
+        return {
+          input: inTa ? inTa.value : '',
+          output: outTa ? outTa.value : '',
+          input_file: (inBtn && inBtn.dataset.file) || (inF && inF.value) || '',
+          output_file: (outBtn && outBtn.dataset.file) || (outF && outF.value) || '',
+          points: Number((tr.querySelector('.tc-points') || {}).value || 0),
+          pretest: !!(tr.querySelector('.tc-pretest') || {}).checked,
+          fromZip: tr.dataset.mode === 'zip',
+        };
+      });
+    }
+
+    async function buildTestcaseZipBlob(cases) {
+      if (typeof JSZip === 'undefined') throw new Error('JSZip missing');
+      const zip = new JSZip();
+      const used = new Set();
+      cases.forEach((tc, i) => {
+        let inName = String(tc.input_file || '').replace(/\\/g, '/') || (String(i + 1).padStart(2, '0') + '.in');
+        let outName = String(tc.output_file || '').replace(/\\/g, '/') || (String(i + 1).padStart(2, '0') + '.out');
+        if (used.has(inName)) inName = String(i + 1).padStart(2, '0') + '_' + basename(inName);
+        if (used.has(outName)) outName = String(i + 1).padStart(2, '0') + '_' + basename(outName);
+        used.add(inName); used.add(outName);
+        zip.file(inName, tc.input || '');
+        zip.file(outName, tc.output || '');
+      });
+      return zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+    }
+
+    function distributeCasePoints() {
+      const rows = [...document.querySelectorAll('#tc-body tr')];
+      if (!rows.length) { setZipStatus('请先添加测试用例。', true); return; }
+      // Case points are integers in DB; round problem points then give remainder to the first cases
+      // so the sum always equals the rounded total (same approach as classic test_data page).
+      const raw = Number(document.getElementById('f-points').value);
+      const total = Math.max(0, Math.round(Number.isFinite(raw) ? raw : 0));
+      const n = rows.length;
+      const base = Math.floor(total / n);
+      const rem = total - base * n;
+      let sum = 0;
+      rows.forEach((tr, i) => {
+        const pts = base + (i < rem ? 1 : 0);
+        sum += pts;
+        const input = tr.querySelector('.tc-points');
+        if (input) input.value = pts;
+      });
+      setZipStatus('已按题目总分均分：' + n + ' 组合计 ' + sum + ' 分' + (sum === total ? '' : '（目标 ' + total + '）') + '。');
+    }
+
     function updateTestDataHint() {
-      const el = document.getElementById('tc-testdata-hint');
+      const el = document.getElementById('tc-old-link');
       if (!el) return;
       if (TEST_DATA_URL) {
-        el.innerHTML = '保存后仍可在 <a href="' + TEST_DATA_URL + '" target="_blank" rel="noopener">test_data</a> 精调（Batch / Checker / Generator）';
-      } else {
-        el.textContent = '保存题目后可在 test_data 精调（Batch / Checker / Generator）';
+        el.innerHTML = '<a href="' + TEST_DATA_URL + '" target="_blank" rel="noopener">打开旧版测试数据页（更细致编辑）</a>';
       }
     }
     updateTestDataHint();
@@ -1012,8 +1271,7 @@
       }
       const body = document.getElementById('tc-body');
       const hasRows = body && body.children.length > 0;
-      const hasContent = hasRows && [...body.querySelectorAll('textarea')].some(t => (t.value || '').trim());
-      if (hasContent && !confirm('导入 zip 将替换当前表格中的测试用例，是否继续？')) {
+      if (hasRows && !confirm('导入 zip 将替换当前表格中的测试用例，是否继续？')) {
         document.getElementById('tc-zip-input').value = '';
         return;
       }
@@ -1034,19 +1292,18 @@
           const inEntry = zip.files[pair.input];
           const outEntry = zip.files[pair.output];
           if (inEntry.dir || outEntry.dir) continue;
-          // uncompressedSize may be 0 for some zips; still read and check length
           const input = await inEntry.async('string');
           const output = await outEntry.async('string');
-          if (input.length > TC_ZIP_MAX_FILE || output.length > TC_ZIP_MAX_FILE) {
-            setZipStatus('文件过大（单文件上限 1MB）：' + basename(pair.input) + ' / ' + basename(pair.output) + '。超大包请用 test_data。', true);
-            return;
-          }
           total += input.length + output.length;
-          if (total > TC_ZIP_MAX_TOTAL) {
-            setZipStatus('解压后总内容超过 8MB，请改用 test_data 上传。', true);
-            return;
-          }
-          cases.push({ input, output, points: 10, pretest: false });
+          cases.push({
+            input, output,
+            // Keep zip-relative paths so save/re-upload matches classic valid_files / namelist.
+            input_file: pair.input.replace(/\\/g, '/'),
+            output_file: pair.output.replace(/\\/g, '/'),
+            fromZip: true,
+            points: 0,
+            pretest: false,
+          });
         }
         if (!cases.length) {
           setZipStatus('zip 内没有可读的文本测试用例。', true);
@@ -1055,10 +1312,17 @@
 
         body.innerHTML = '';
         tcSeq = 0;
+        pendingZipFile = file;
         cases.forEach(tc => addTestCase(tc));
-        setZipStatus('已导入 ' + cases.length + ' 组测试用例，保存题目后生效。');
+        distributeCasePoints();
+        let msg = '已导入 ' + cases.length + ' 组（保存时按文件上传，与旧版测试数据页相同上限）。';
+        if (total > TC_ZIP_WARN_TOTAL) {
+          msg += ' 预览内容较大，浏览器可能较慢；保存仍走 ZIP 文件上传。';
+        }
+        setZipStatus(msg);
       } catch (err) {
         console.error('[tc-zip]', err);
+        pendingZipFile = null;
         setZipStatus('无法解析该 zip：' + (err && err.message ? err.message : '无效的压缩包'), true);
       } finally {
         document.getElementById('tc-zip-input').value = '';
@@ -1364,8 +1628,8 @@
         data.time_limit = document.getElementById('f-time').value;
         data.memory_limit = document.getElementById('f-mem').value;
         data.languages = [...document.querySelectorAll('#f-langs .lang-cb:checked')].map(c => c.value);
-        // Test data is configured through the embedded test_data page after saving.
-        data.testcases = [];
+        data.checker = (document.getElementById('tc-checker') || {}).value || '';
+        data.testcases = collectTestCases();
       }
       return data;
     }
@@ -1420,11 +1684,46 @@
       { const t = document.getElementById('f-blank-trim'); if (t) t.checked = true;
         const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
       { const tb = document.getElementById('tc-body'); if (tb) tb.innerHTML = ''; }
+      pendingZipFile = null;
       document.getElementById('sub-list').innerHTML = '';
       document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
       optionSeq = blankSeq = tcSeq = subSeq = 0; draftSaved = false;
       selectType(currentType);
     }
+    async function prepareSaveRequest(data) {
+      const cases = data.testcases || [];
+      const rows = [...document.querySelectorAll('#tc-body tr')];
+      const needsZipUpload = data.type === 'programming' && cases.length > 0 &&
+        (pendingZipFile || rows.some(tr => tr.dataset.mode === 'zip'));
+      if (!needsZipUpload) {
+        return {
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+          body: JSON.stringify(data),
+        };
+      }
+      const dirty = rows.some(tr => tr.querySelector('.tc-file-btn.dirty'));
+      const hasManual = rows.some(tr => tr.dataset.mode === 'manual');
+      let zipBlob;
+      let zipName = 'data.zip';
+      if (pendingZipFile && !dirty && !hasManual) {
+        zipBlob = pendingZipFile;
+        zipName = pendingZipFile.name || zipName;
+      } else {
+        zipBlob = await buildTestcaseZipBlob(cases);
+      }
+      // Metadata only in JSON — file bytes travel as multipart (classic test_data limits).
+      data.testcases = cases.map(tc => ({
+        input_file: tc.input_file || '',
+        output_file: tc.output_file || '',
+        points: tc.points,
+        pretest: tc.pretest,
+      }));
+      const fd = new FormData();
+      fd.append('payload', JSON.stringify(data));
+      fd.append('testcase_zip', zipBlob, zipName);
+      return { headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd };
+    }
+
     function submitForm(action) {
       console.log('[save] submitForm called, action=' + action);
       var data;
@@ -1441,10 +1740,8 @@
       }
       console.log('[save] validation passed, sending... type=' + data.type + ' ai=' + data.ai + ' gradingTable=' + (data.gradingTable ? data.gradingTable.length + ' rows' : 'null'));
       showToast('{{ _("Saving…") }}', true);
-      fetch(SAVE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
-        body: JSON.stringify(data),
+      prepareSaveRequest(data).then(function(req) {
+        return fetch(SAVE_URL, { method: 'POST', headers: req.headers, body: req.body });
       }).then(function(r) {
         return r.text().then(function(txt) {
           var body = null;
@@ -1546,7 +1843,25 @@
           const cb = document.querySelector(`#f-langs .lang-cb[value="${k}"]`);
           if (cb) cb.checked = true;
         });
-        // Test data is edited through the embedded test_data iframe, not restored here.
+        const chk = document.getElementById('tc-checker');
+        if (chk) chk.value = d.checker || '';
+        const tb = document.getElementById('tc-body');
+        if (tb) {
+          tb.innerHTML = '';
+          tcSeq = 0;
+          (d.testcases || []).forEach(tc => {
+            const hasNames = !!(tc.input_file || tc.output_file);
+            addTestCase({
+              input: tc.input || '',
+              output: tc.output || '',
+              input_file: tc.input_file || '',
+              output_file: tc.output_file || '',
+              points: tc.points != null ? tc.points : 0,
+              pretest: !!tc.pretest,
+              fromZip: hasNames,
+            });
+          });
+        }
       }
       renderScoreConf();
       renderPreview();
