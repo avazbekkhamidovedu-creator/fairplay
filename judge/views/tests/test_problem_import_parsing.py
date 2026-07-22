@@ -5,10 +5,24 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase
 
 from judge.views.problem_import import _parse_fill_blanks, _parse_text_test_data, _parse_zip_test_data, \
-    _remove_multiple_choice_option_block, _serialize_fill_blanks
+    _fill_blanks_from_signs, _multiple_choice_answer_indices, _remove_multiple_choice_option_block, _serialize_fill_blanks
 
 
 class ProblemImportTestDataParsingTestCase(SimpleTestCase):
+    def test_maps_multiple_choice_excel_answers_without_llm_correctness(self):
+        self.assertEqual(_multiple_choice_answer_indices('B|3', ['one', 'two', 'three']), [2, 3])
+
+    def test_maps_blank_signs_to_pipe_separated_answers(self):
+        description, blanks = _fill_blanks_from_signs(
+            'The capital is [[blank]] and 2 + 2 = [[blank]].', 'Paris|4',
+        )
+        self.assertEqual(description, 'The capital is **[Blank 1]** and 2 + 2 = **[Blank 2]**.')
+        self.assertEqual(blanks, [('Blank 1', 'Paris'), ('Blank 2', '4')])
+
+    def test_rejects_mismatched_blank_sign_answers(self):
+        with self.assertRaisesMessage(ValueError, 'separated by |'):
+            _fill_blanks_from_signs('A [[blank]] B [[blank]]', 'one')
+
     def test_removes_only_the_exact_multiple_choice_option_block(self):
         description = 'Which number is prime?\nA. 4\nB. 5\nExplain your answer.'
         self.assertEqual(

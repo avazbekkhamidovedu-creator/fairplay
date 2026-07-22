@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import zipfile
 from operator import attrgetter
@@ -10,7 +11,7 @@ from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.forms import ModelForm
-from django.http import HttpResponse, JsonResponse
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.urls import path, reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.html import format_html
@@ -844,7 +845,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return problem
 
     def _excel_headers(self):
-        return ['name', 'question_type', 'description', 'answer', 'blanks', 'solution', 'organizations', 'allowed_languages', 'test_data']
+        return ['name', 'question_type', 'description', 'answer', 'solution', 'organizations', 'allowed_languages', 'test_data']
 
     def _legacy_excel_headers(self):
         """Keep the retired direct-create endpoint compatible with existing API clients."""
@@ -873,7 +874,6 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 'code',
                 'Write the full problem statement here. You can use multiple lines.',
                 '',
-                '',
                 'Explain the intended solution here.',
                 org.slug if org else '',
                 language_sample,
@@ -894,17 +894,21 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return [
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Problem title.', 'Two Sum'],
-            ['question_type', 'yes', 'code, multiple_choice, or fill_blank.', 'multiple_choice'],
+            ['question_type', 'yes', 'Choose code, multiple_choice, or fill_blank from the Excel dropdown.', 'multiple_choice'],
             [
                 'description', 'no',
-                'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file. PNG, JPG, and GIF figures inside DOCX are uploaded and inserted into the description.',
-                '# Two Sum\n\nDescribe the task.',
+                'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file. PNG, JPG, and GIF figures inside DOCX are uploaded and inserted in place. For fill_blank, use [[blank]] for each input.',
+                'The capital of France is [[blank]] and 2 + 2 = [[blank]].',
             ],
-            ['answer', 'no', 'Optional answer key used by “LLM format question”. For fill_blank, it is used when blanks is empty.', 'B'],
             [
-                'blanks', 'fill_blank only',
-                'One block per input: [blank 1], optional label: ..., answers:, then one accepted answer per line. Separate blocks with ---.',
-                '[blank 1]\nlabel: Country\nanswers:\nFrance\nFrench Republic\n---\n[blank 2]\nlabel: Capital\nanswers:\nParis',
+                'answer', 'MCQ / fill_blank',
+                'For MCQ use an option letter, number, or exact option text; separate multiple correct answers with |. For fill_blank use one answer per [[blank]] in order, separated with |. LLM never changes this cell.',
+                'B  or  Paris|4',
+            ],
+            [
+                'LLM format question', 'optional',
+                'In preview, this formats MCQ options or fill blanks only. For MCQ it preserves the answer column and removes only an exact recognized option block from description.',
+                'Review the rendered preview before creating the problem.',
             ],
             ['solution', 'no', 'Editorial content. It is added to the problem solution section.', 'Use addition.'],
             [
@@ -924,14 +928,30 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ],
             [
                 'test_data', 'code only',
-                'Text format: input data 1: ... then output data 1: .... For .in/.out files, embed one ZIP object in the same Excel row.',
-                'input data 1: 2 3\noutput data 1: 5',
+                'Use input data N: followed by output data N:. Repeat N = 1, 2, ... for multiple cases. For .in/.out files, embed one ZIP object in the same Excel row; preview uploads are not accepted.',
+                'input data 1: 2 3\noutput data 1: 5\n\ninput data 2: 4 6\noutput data 2: 10',
+            ],
+            [
+                'embedded DOCX / Markdown', 'optional',
+                'Use Excel Insert -> Object -> Create from File, without Link. Leave Display as icon unchecked to preview the Word document in Excel and double-click it to revise. Keep the object on the same row as the question.',
+                'The Word object on the sample MCQ row.',
             ],
         ]
 
     def download_excel_template_view(self, request):
         if not request.user.has_perm('judge.edit_own_problem'):
             raise PermissionDenied
+
+        # This example retains a real Excel Word object so teachers can see
+        # exactly how embedded DOCX descriptions and their figures are imported.
+        sample_path = os.path.join(settings.BASE_DIR, 'resources', 'problem_batch_upload_template.xlsx')
+        if os.path.isfile(sample_path):
+            return FileResponse(
+                open(sample_path, 'rb'),
+                as_attachment=True,
+                filename='problem_batch_upload_template.xlsx',
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            )
 
         payload = build_xlsx_workbook([
             (

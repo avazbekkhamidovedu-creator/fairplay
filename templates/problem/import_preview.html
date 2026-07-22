@@ -15,6 +15,8 @@
         .import-preview-status.success { color: #23733f; }
         .import-type-fields { display: none; }
         .import-preview-card[data-type="C"] .for-code, .import-preview-card[data-type="M"] .for-mcq, .import-preview-card[data-type="B"] .for-blank { display: block; }
+        .import-preview-card[data-type="B"] .not-for-blank { display: none; }
+        .import-preview-card[data-type="M"] .not-for-mcq { display: none; }
     </style>
 {% endblock %}
 
@@ -67,14 +69,12 @@
                     <div class="import-preview-field"><label>{{ _('Name') }}</label><input name="name" value="{{ item.name }}"></div>
                     <div class="import-preview-field"><label>{{ _('Question type') }}</label><select name="question_type">{% for value, label in type_choices %}<option value="{{ value }}"{% if item.submission_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
                     <div class="import-preview-field"><label>{{ _('Description') }}</label><textarea name="description">{{ item.description }}</textarea></div>
-                    <div class="import-preview-field"><label>{{ _('Answer key / notes for LLM') }}</label><textarea name="answer">{{ item.answer }}</textarea></div>
+                    <div class="import-preview-field"><label class="not-for-blank not-for-mcq">{{ _('Answer key / notes for LLM') }}</label><label class="import-type-fields for-mcq">{{ _('Correct answer from Excel') }}</label><label class="import-type-fields for-blank">{{ _('Answers for blank signs') }}</label><textarea name="answer">{{ item.answer }}</textarea><small class="import-type-fields for-mcq">{{ _('Use option letters, numbers, or exact option text. Separate multiple correct answers with |. LLM does not change this value.') }}</small><small class="import-type-fields for-blank">{{ _('Use [[blank]] in the description for each blank, then write matching answers here in the same order, separated by |. Example: Paris|4') }}</small></div>
                     <div class="import-preview-field"><label>{{ _('Solution / editorial') }}</label><textarea name="solution">{{ item.solution }}</textarea></div>
                     <div class="import-preview-field import-type-fields for-code"><label>{{ _('Allowed languages') }}</label><textarea name="allowed_languages" rows="2">{{ item.allowed_languages }}</textarea><small>{{ _('Separate full names with | or commas. C++11 also matches CPP11.') }}</small></div>
                     <div class="import-preview-field import-type-fields for-code"><label>{{ _('Test data') }}</label><textarea name="test_data" rows="7" placeholder="input data 1: 2 3&#10;output data 1: 5">{{ item.test_data }}</textarea><small>{{ _('Use input data N: and output data N: pairs. Multi-line values are supported.') }}</small></div>
                     {% if item.test_data_zip %}<div class="import-preview-field import-type-fields for-code"><label>{{ _('Embedded test data ZIP') }}</label><div>{{ item.test_data_zip.name }}</div><small>{{ _('Imported from the Excel object and used in preference to text test data.') }}</small></div>{% endif %}
                     <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Options, one per line') }}</label><textarea name="options">{{ item.options }}</textarea></div>
-                    <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Correct option numbers, one per line') }}</label><textarea name="correct_options">{{ item.correct_options }}</textarea></div>
-                    <div class="import-preview-field import-type-fields for-blank"><label>{{ _('Blanks and accepted answers') }}</label><textarea name="blanks" placeholder="[blank 1]&#10;label: First answer&#10;answers:&#10;42&#10;forty-two&#10;---&#10;[blank 2]&#10;label: Second answer&#10;answers:&#10;7">{{ item.blanks }}</textarea><small>{{ _('Use one [blank N] block per input. label is optional; write one accepted answer per line after answers:, and separate blocks with ---.') }}</small></div>
                     <div class="import-preview-actions">
                         <button type="submit" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}">{{ _('Save draft') }}</button>
                         <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}">{{ _('LLM format question') }}</button>

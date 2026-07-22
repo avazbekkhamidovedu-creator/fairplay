@@ -44,6 +44,8 @@ QUESTION_TYPE_MAP = {
     'b': ProblemSubmissionType.FILL_BLANK,
 }
 
+BLANK_SIGN_RE = re.compile(r'\[\[blank\]\]', re.IGNORECASE)
+
 
 def _require_creator(request):
     if not request.user.has_perm('judge.create_private_problem'):
@@ -127,6 +129,44 @@ def _remove_multiple_choice_option_block(description, option_block):
     result = re.sub(r'[ \t]+\n', '\n', result)
     result = re.sub(r'\n{3,}', '\n\n', result)
     return result.strip()
+
+
+def _fill_blanks_from_signs(description, answer):
+    """Map each [[blank]] in a prompt to one pipe-separated answer cell value."""
+    sign_count = len(BLANK_SIGN_RE.findall(description or ''))
+    if not sign_count:
+        return description, []
+    answers = [part.strip() for part in (answer or '').split('|')]
+    if len(answers) != sign_count or any(not value for value in answers):
+        raise ValueError('Fill-in-the-blank answers must use one value per [[blank]], separated by |.')
+    counter = iter(range(1, sign_count + 1))
+    cleaned_description = BLANK_SIGN_RE.sub(
+        lambda _match: '**[Blank {}]**'.format(next(counter)), description)
+    return cleaned_description, [('Blank {}'.format(index), value) for index, value in enumerate(answers, start=1)]
+
+
+def _multiple_choice_answer_indices(answer, options):
+    """Resolve Excel answer values without asking the LLM to infer correctness."""
+    result = []
+    for token in _split_lines(answer):
+        value = token.strip().strip('()[]').rstrip('.)').strip()
+        if value.isdigit():
+            index = int(value)
+        elif re.fullmatch(r'[A-Za-z]', value):
+            index = ord(value.upper()) - ord('A') + 1
+        else:
+            matches = [index for index, option in enumerate(options, start=1)
+                       if option.strip().casefold() == value.casefold()]
+            if len(matches) != 1:
+                raise ValueError('MCQ answer "{}" must be an option letter, number, or exact option text.'.format(token))
+            index = matches[0]
+        if index < 1 or index > len(options):
+            raise ValueError('MCQ answer "{}" does not match an option.'.format(token))
+        if index not in result:
+            result.append(index)
+    if not result:
+        raise ValueError('Multiple-choice questions need an answer in the answer column.')
+    return result
 
 
 class ProblemImportUploadView(LoginRequiredMixin, View):
@@ -309,7 +349,8 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         except ValueError as error:
             raise ValueError(str(error))
         for field in ('name', 'description', 'answer', 'solution', 'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks'):
-            setattr(item, field, (data.get(field, '') or '').strip())
+            if field in data:
+                setattr(item, field, (data.get(field, '') or '').strip())
         if files.get('test_data_zip'):
             raise ValueError('Test data ZIP files must be embedded as an Excel object.')
         item.formatting_error = ''
@@ -319,9 +360,10 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         payload = _format_with_llm(item)
         if item.submission_type == ProblemSubmissionType.MCQ:
             options = payload.get('options', [])
-            item.options = '\n'.join(option['text'].strip() for option in options if option.get('text', '').strip())
-            item.correct_options = '\n'.join(
-                str(index + 1) for index, option in enumerate(options) if option.get('correct'))
+            option_texts = [option['text'].strip() for option in options if option.get('text', '').strip()]
+            item.options = '\n'.join(option_texts)
+            item.correct_options = '\n'.join(str(index) for index in _multiple_choice_answer_indices(
+                item.answer, option_texts))
             item.description = _remove_multiple_choice_option_block(
                 item.description, payload.get('option_block', ''))
         elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
@@ -338,8 +380,8 @@ def _format_with_llm(item):
     type_name = dict(ProblemImportItem.TYPE_CHOICES)[item.submission_type]
     system = (
         'You format educational questions. Return JSON only. Keep all facts in the source; do not invent '
-        'answers. For multiple choice return {"options": [{"text": string, '
-        '"correct": boolean}], "option_block": string}. option_block must be an exact, contiguous substring '
+        'answers. For multiple choice return {"options": [{"text": string}], "option_block": string}. '
+        'Do not infer, return, or modify correct answers: the Excel answer column is authoritative. option_block must be an exact, contiguous substring '
         'copied from Description and contain only the displayed options. Do not rewrite, summarize, correct, or '
         'translate Description: the system removes only option_block and preserves all other text exactly. '
         'For fill-in-the-blank return {"description": string, "blanks": '
@@ -347,8 +389,9 @@ def _format_with_llm(item):
         'For code return {"description": string}. '
         'If an answer cannot be determined, return an empty correct/answers collection.'
     )
-    user = 'Question type: {}\n\nDescription:\n{}\n\nAnswer key, if supplied:\n{}'.format(
-        type_name, item.description, item.answer)
+    user = 'Question type: {}\n\nDescription:\n{}'.format(type_name, item.description)
+    if item.submission_type != ProblemSubmissionType.MCQ:
+        user += '\n\nAnswer key, if supplied:\n{}'.format(item.answer)
     result = llm.chat([{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
                       profile='question_import')
     text = result.text.strip()
@@ -492,7 +535,11 @@ def _create_problem(request, item):
         return item.created_problem
     if not item.name or not item.description:
         raise ValueError('A name and description are required.')
-    problem = Problem(name=item.name, description=item.description, submission_type=item.submission_type, points=10)
+    description = item.description
+    signed_blanks = []
+    if item.submission_type == ProblemSubmissionType.FILL_BLANK:
+        description, signed_blanks = _fill_blanks_from_signs(item.description, item.answer)
+    problem = Problem(name=item.name, description=description, submission_type=item.submission_type, points=10)
     apply_simple_problem_defaults(problem)
     problem.save()
     problem.types.add(default_problem_type())
@@ -513,7 +560,7 @@ def _create_problem(request, item):
         _add_test_cases(problem, item)
     elif item.submission_type == ProblemSubmissionType.MCQ:
         options = _split_lines(item.options)
-        correct = {int(value) for value in _split_lines(item.correct_options) if value.isdigit()}
+        correct = set(_multiple_choice_answer_indices(item.answer, options))
         if len(options) < 2:
             raise ValueError('Multiple-choice questions need at least two options.')
         if not correct or any(index < 1 or index > len(options) for index in correct):
@@ -526,7 +573,7 @@ def _create_problem(request, item):
         for index, text in enumerate(options, start=1):
             ProblemMCQOption.objects.create(problem=problem, order=index - 1, text=text, is_correct=index in correct)
     elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
-        blanks = _parse_fill_blanks(item.blanks or item.answer)
+        blanks = signed_blanks or _parse_fill_blanks(item.blanks or item.answer)
         if not blanks:
             raise ValueError('Fill-in-the-blank questions need at least one blank with an accepted answer.')
         ProblemFillBlankConfig.objects.create(problem=problem)

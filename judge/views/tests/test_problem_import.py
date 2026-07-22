@@ -59,8 +59,8 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         draft = ProblemImportDraft.objects.get(owner=self.creator.profile)
         item = draft.items.get()
         chat.return_value = LLMResult(text=json.dumps({
-            'description': 'Which number is prime?',
-            'options': [{'text': '4', 'correct': False}, {'text': '5', 'correct': True}],
+            'options': [{'text': '4'}, {'text': '5'}],
+            'option_block': 'A. 4 B. 5',
         }))
         response = self.client.post(reverse('problem_import_item_action', args=(draft.pk, item.pk, 'format')), {
             'name': item.name,
@@ -90,7 +90,7 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
             'name': item.name,
             'question_type': 'M',
             'description': item.description,
-            'answer': '',
+            'answer': '2',
             'solution': '5 is the only prime option.',
             'options': '4\n5',
             'correct_options': '2',
