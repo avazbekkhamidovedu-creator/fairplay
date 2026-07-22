@@ -21,8 +21,8 @@ from reversion.admin import VersionAdmin
 from judge.models import Class, Language, LanguageLimit, Organization, Problem, ProblemClarification, ProblemGroup, \
     ProblemPointsVote, ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution, \
     SubmissionSourceAccess
-from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 from judge.utils.language_matching import matching_languages
+from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, AdminSelect2MultipleWidget, \
     AdminSelect2Widget, CheckboxSelectMultipleWithSelectAll
@@ -845,7 +845,10 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return problem
 
     def _excel_headers(self):
-        return ['name', 'question_type', 'description', 'answer', 'solution', 'organizations', 'allowed_languages', 'test_data']
+        return [
+            'name', 'question_type', 'description', 'answer', 'solution', 'organizations', 'allowed_languages',
+            'test_data',
+        ]
 
     def _legacy_excel_headers(self):
         """Keep the retired direct-create endpoint compatible with existing API clients."""
@@ -894,20 +897,28 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return [
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Problem title.', 'Two Sum'],
-            ['question_type', 'yes', 'Choose code, multiple_choice, or fill_blank from the Excel dropdown.', 'multiple_choice'],
+            [
+                'question_type', 'yes', 'Choose code, multiple_choice, or fill_blank from the Excel dropdown.',
+                'multiple_choice',
+            ],
             [
                 'description', 'no',
-                'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file. PNG, JPG, and GIF figures inside DOCX are uploaded and inserted in place. For fill_blank, use [[blank]] for each input.',
+                'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file. PNG, JPG, '
+                'and GIF figures inside DOCX are uploaded and inserted in place. For fill_blank, use [[blank]] for '
+                'each input.',
                 'The capital of France is [[blank]] and 2 + 2 = [[blank]].',
             ],
             [
                 'answer', 'MCQ / fill_blank',
-                'For MCQ use an option letter, number, or exact option text; separate multiple correct answers with |. For fill_blank use one answer per [[blank]] in order, separated with |. LLM never changes this cell.',
+                'For MCQ use an option letter, number, or exact option text; separate multiple correct answers '
+                'with |. For fill_blank use one answer per [[blank]] in order, separated with |. LLM never '
+                'changes this cell.',
                 'B  or  Paris|4',
             ],
             [
                 'LLM format question', 'optional',
-                'In preview, this formats MCQ options or fill blanks only. For MCQ it preserves the answer column and removes only an exact recognized option block from description.',
+                'In preview, this formats MCQ options or fill blanks only. For MCQ it preserves the answer column '
+                'and removes only an exact recognized option block from description.',
                 'Review the rendered preview before creating the problem.',
             ],
             ['solution', 'no', 'Editorial content. It is added to the problem solution section.', 'Use addition.'],
@@ -928,12 +939,15 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ],
             [
                 'test_data', 'code only',
-                'Use input data N: followed by output data N:. Repeat N = 1, 2, ... for multiple cases. For .in/.out files, embed one ZIP object in the same Excel row; preview uploads are not accepted.',
+                'Use input data N: followed by output data N:. Repeat N = 1, 2, ... for multiple cases. For '
+                '.in/.out files, embed one ZIP object in the same Excel row; preview uploads are not accepted.',
                 'input data 1: 2 3\noutput data 1: 5\n\ninput data 2: 4 6\noutput data 2: 10',
             ],
             [
                 'embedded DOCX / Markdown', 'optional',
-                'Use Excel Insert -> Object -> Create from File, without Link. Leave Display as icon unchecked to preview the Word document in Excel and double-click it to revise. Keep the object on the same row as the question.',
+                'Use Excel Insert -> Object -> Create from File, without Link. Leave Display as icon unchecked '
+                'to preview the Word document in Excel and double-click it to revise. Keep the object on the '
+                'same row as the question.',
                 'The Word object on the sample MCQ row.',
             ],
         ]

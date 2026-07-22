@@ -4,8 +4,10 @@ import zipfile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase
 
-from judge.views.problem_import import _parse_fill_blanks, _parse_text_test_data, _parse_zip_test_data, \
-    _fill_blanks_from_signs, _multiple_choice_answer_indices, _remove_multiple_choice_option_block, _serialize_fill_blanks
+from judge.views.problem_import import (
+    _fill_blanks_from_signs, _multiple_choice_answer_indices, _parse_fill_blanks, _parse_text_test_data,
+    _parse_zip_test_data, _remove_multiple_choice_option_block, _serialize_fill_blanks,
+)
 
 
 class ProblemImportTestDataParsingTestCase(SimpleTestCase):

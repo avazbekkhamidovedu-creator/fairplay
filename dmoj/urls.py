@@ -12,9 +12,11 @@ from django.views.generic import RedirectView
 
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
-from judge.views import TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, \
-    language, license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission, register, \
-    stats, status, submission, tasks, ticket, two_factor, user, widgets
+from judge.views import (
+    TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, language, license,
+    mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission, register,
+    stats, status, submission, tasks, ticket, two_factor, user, widgets,
+)
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView

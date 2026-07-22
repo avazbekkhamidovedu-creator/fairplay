@@ -125,7 +125,13 @@ def _remove_multiple_choice_option_block(description, option_block):
     """Remove only an exact LLM-identified source block; never rewrite the prompt."""
     if not option_block or option_block not in description:
         return description
-    result = description.replace(option_block, '', 1)
+    start = description.index(option_block)
+    before = description[:start]
+    after = description[start + len(option_block):]
+    # The option block occupies complete lines, so keep its removal from adding a blank paragraph.
+    if before.endswith('\n') and after.startswith('\n'):
+        after = after[1:]
+    result = before + after
     result = re.sub(r'[ \t]+\n', '\n', result)
     result = re.sub(r'\n{3,}', '\n\n', result)
     return result.strip()
@@ -158,7 +164,9 @@ def _multiple_choice_answer_indices(answer, options):
             matches = [index for index, option in enumerate(options, start=1)
                        if option.strip().casefold() == value.casefold()]
             if len(matches) != 1:
-                raise ValueError('MCQ answer "{}" must be an option letter, number, or exact option text.'.format(token))
+                raise ValueError(
+                    'MCQ answer "{}" must be an option letter, number, or exact option text.'.format(token),
+                )
             index = matches[0]
         if index < 1 or index > len(options):
             raise ValueError('MCQ answer "{}" does not match an option.'.format(token))
@@ -215,11 +223,15 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                     parts = [description] if description else []
                     parts.extend(document.text for document in description_files)
                     if not parts:
-                        raise ValueError('Row {} must contain description text or an embedded DOCX/Markdown file.'.format(
-                            row_number))
+                        raise ValueError(
+                            'Row {} must contain description text or an embedded DOCX/Markdown file.'.format(
+                                row_number),
+                        )
                     if zip_files and question_type != ProblemSubmissionType.CODE:
-                        raise ValueError('Row {} has an embedded ZIP, but only code problems can use test data ZIPs.'.format(
-                            row_number))
+                        raise ValueError(
+                            'Row {} has an embedded ZIP, but only code problems can use test data ZIPs.'.format(
+                                row_number),
+                        )
                     if len(zip_files) > 1:
                         raise ValueError('Row {} has more than one embedded test data ZIP.'.format(row_number))
                     test_data_zip = None
@@ -252,7 +264,9 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
             return JsonResponse({'ok': False, 'message': str(error)}, status=400)
         if not count:
             draft.delete()
-            return JsonResponse({'ok': False, 'message': _('The Excel file does not contain any problem rows.')}, status=400)
+            return JsonResponse(
+                {'ok': False, 'message': _('The Excel file does not contain any problem rows.')}, status=400,
+            )
         preview_url = reverse('problem_import_preview', args=(draft.pk,))
         if request.headers.get('x-requested-with') == 'XMLHttpRequest':
             return JsonResponse({'ok': True, 'preview_url': preview_url})
@@ -348,7 +362,10 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
             item.submission_type = _normalise_type(data.get('question_type', item.submission_type))
         except ValueError as error:
             raise ValueError(str(error))
-        for field in ('name', 'description', 'answer', 'solution', 'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks'):
+        for field in (
+            'name', 'description', 'answer', 'solution', 'allowed_languages', 'test_data', 'options',
+            'correct_options', 'blanks',
+        ):
             if field in data:
                 setattr(item, field, (data.get(field, '') or '').strip())
         if files.get('test_data_zip'):
@@ -381,13 +398,13 @@ def _format_with_llm(item):
     system = (
         'You format educational questions. Return JSON only. Keep all facts in the source; do not invent '
         'answers. For multiple choice return {"options": [{"text": string}], "option_block": string}. '
-        'Do not infer, return, or modify correct answers: the Excel answer column is authoritative. option_block must be an exact, contiguous substring '
-        'copied from Description and contain only the displayed options. Do not rewrite, summarize, correct, or '
-        'translate Description: the system removes only option_block and preserves all other text exactly. '
-        'For fill-in-the-blank return {"description": string, "blanks": '
-        '[{"label": string, "answers": [string]}]}; label is the short text shown beside that input. '
-        'For code return {"description": string}. '
-        'If an answer cannot be determined, return an empty correct/answers collection.'
+        'Do not infer, return, or modify correct answers: the Excel answer column is authoritative. '
+        'option_block must be an exact, contiguous substring copied from Description and contain only the '
+        'displayed options. Do not rewrite, summarize, correct, or translate Description: the system removes '
+        'only option_block and preserves all other text exactly. For fill-in-the-blank return '
+        '{"description": string, "blanks": [{"label": string, "answers": [string]}]}; label is the short '
+        'text shown beside that input. For code return {"description": string}. If an answer cannot be '
+        'determined, return an empty correct/answers collection.'
     )
     user = 'Question type: {}\n\nDescription:\n{}'.format(type_name, item.description)
     if item.submission_type != ProblemSubmissionType.MCQ:

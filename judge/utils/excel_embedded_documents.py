@@ -42,7 +42,6 @@ def read_xlsx_rows_with_embedded_files(file_obj):
         rels = _relationship_map(archive, sheet_path)
         anchors = _shape_rows(archive, sheet, rels)
         attachments = []
-        namespace = {'x': simple_xlsx.MAIN_NS, 'r': simple_xlsx.REL_NS}
         # Modern Excel wraps OLE objects in mc:AlternateContent; iterating also
         # supports the older direct-child layout. Choice/Fallback duplicates use
         # the same relationship, so process each embedded package only once.
@@ -60,7 +59,10 @@ def read_xlsx_rows_with_embedded_files(file_obj):
                 raise ValueError('An embedded file is not attached to a worksheet row.')
             payload = simple_xlsx._safe_archive_read(archive, target)
             filename, content = _extract_embedded_file(payload)
-            text = _description_text(filename, content) if filename.lower().endswith(('.docx', '.md', '.markdown')) else ''
+            text = (
+                _description_text(filename, content)
+                if filename.lower().endswith(('.docx', '.md', '.markdown')) else ''
+            )
             attachments.append(EmbeddedFile(row_number=row_number, filename=filename, content=content, text=text))
     return rows, attachments
 
