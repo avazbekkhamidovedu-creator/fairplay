@@ -950,8 +950,8 @@ fieldset.module .form-content { padding: 1rem; }
    站点 widgets.scss 有一条全局规则 `.button, button { color: white !important }`，
    会把本页所有 <button>（工具栏图标、富文本/Markdown 标签、保存/添加/取消等）的
    文字刷成白色导致看不清。这里按组件用更高特异性 + !important 重新指定文字色。
-   暗色主题交给全站 dark/style.css（media=prefers-color-scheme: dark），本页不再
-   单独维护一套 prefers-color-scheme 覆盖，避免与浅色工具栏修复互相打架。
+   暗色主题：页面底部另有 @media (prefers-color-scheme: dark) 覆盖（对齐
+   feature/frontend-redesign MR31），并与下方按钮文字色修复共存。
    ========================================================================== */
 .pcv2 .editor-mode-tabs button,
 .pcv2 .editor-mode-tabs button.mode-btn {
@@ -1054,4 +1054,150 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .file-pick-name {
   font-size: 13px;
   color: var(--muted);
+}
+
+/* ── OJ token alignment overrides (win over older green soft tints) ── */
+.pcv2 .sq-pill.on {
+  border-color: var(--oj-accent, #2980B9) !important;
+  background: var(--pcv2-accent-soft) !important;
+  color: var(--oj-accent, #2980B9) !important;
+}
+.pcv2 .draft-banner {
+  background: var(--pcv2-accent-soft) !important;
+  border-color: var(--admin-border) !important;
+}
+.pcv2 .v2-right .pv-head,
+.pcv2 .content-preview .pv-head {
+  background: var(--oj-heading, #3b3b3b) !important;
+  color: var(--oj-heading-text, #fff) !important;
+  border-bottom-color: #808080 !important;
+  font-size: 1.1em !important;
+  font-weight: 600 !important;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
+.pcv2 .tc-table th {
+  background: var(--oj-heading, #3b3b3b) !important;
+  color: var(--oj-heading-text, #fff) !important;
+}
+.pcv2 .btn-mini-primary {
+  background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%) !important;
+  border-color: var(--oj-btn-border, #245580) !important;
+  color: #fff !important;
+}
+.pcv2 .btn-mini-primary:hover {
+  background: var(--oj-btn-hover, #265a88) !important;
+}
+
+/* --- dark theme overrides (MR31 / feature/frontend-redesign) --- */
+@media (prefers-color-scheme: dark) {
+  .pcv2 {
+    --admin-bg: #0f0f0f;
+    --card-bg: #181818;
+    --text: #eee;
+    --muted: #aaa;
+    --admin-border: #3b3b3b;
+    --pcv2-accent-soft: rgba(41, 128, 185, 0.18);
+    background: var(--card-bg);
+    color: var(--text);
+  }
+
+  .pcv2 fieldset.module { background: var(--card-bg); border-color: var(--admin-border); }
+  .pcv2 fieldset.module h2,
+  .pcv2 .module > h2 { background: #0f0f0f; color: #eee; border-color: var(--admin-border); }
+  .pcv2 .form-row,
+  .pcv2 .type-panel { border-color: var(--admin-border); }
+  .pcv2 .form-content,
+  .pcv2 .score-conf,
+  .pcv2 .form-row .field { background: var(--card-bg); }
+  .pcv2 .form-row label { background: none; color: var(--muted); }
+
+  .pcv2 .btn,
+  .pcv2 .btn-mini { background: #555; color: #e0e0e0 !important; border-color: #666; }
+  .pcv2 .btn:hover,
+  .pcv2 .btn-mini:hover { background: #6a6a6a; color: #fff !important; }
+  .pcv2 .btn-danger { color: #fff !important; background: #c0392b; border-color: #c0392b; }
+  .pcv2 .btn-danger:hover { background: #e74c3c; border-color: #e74c3c; }
+  .pcv2 .btn-mini-primary,
+  .pcv2 .btn-primary,
+  .pcv2 .btn-info {
+    background: var(--oj-btn-from, var(--dmoj-green)) !important;
+    color: #fff !important;
+    border-color: var(--oj-btn-border, var(--dmoj-green)) !important;
+  }
+  .pcv2 .btn-mini-primary:hover,
+  .pcv2 .btn-primary:hover,
+  .pcv2 .btn-info:hover {
+    background: var(--oj-btn-hover, var(--dmoj-green-dark)) !important;
+    border-color: var(--oj-btn-hover, var(--dmoj-green-dark)) !important;
+  }
+  .pcv2 .btn-add-option { background: none; color: #bbb !important; border: 1px dashed #666; }
+  .pcv2 .btn-add-option:hover { border-color: var(--dmoj-green); color: var(--dmoj-green-dark) !important; }
+  .pcv2 .btn-cancel { color: #FF3030 !important; }
+
+  .pcv2 input[type="text"],
+  .pcv2 input[type="number"],
+  .pcv2 input[type="url"],
+  .pcv2 input[type="search"],
+  .pcv2 textarea,
+  .pcv2 select { background: #3b3b3b; color: #eee; border-color: #555; }
+  .pcv2 input:focus,
+  .pcv2 textarea:focus,
+  .pcv2 select:focus { border-color: var(--dmoj-green); }
+  .pcv2 .help,
+  .pcv2 label { color: var(--muted); }
+
+  .pcv2 .rte-toolbar { background: var(--admin-bg); border-color: var(--admin-border); }
+  .pcv2 .rte-toolbar button { color: var(--muted) !important; }
+  .pcv2 .rte-toolbar button:hover { color: #eee !important; background: #3b3b3b; }
+  .pcv2 .rte-toolbar .rte-heading { background: #3b3b3b; color: #ccc; border-color: #555; }
+
+  .pcv2 .ptype-tag,
+  .pcv2 .diff-tag,
+  .pcv2 .tag-type { background: #3b3b3b; color: var(--muted); }
+  .pcv2 .ptype-tag:hover,
+  .pcv2 .ptype-tag.active { color: #fff; }
+  .pcv2 .ptype-ai { background: #3b3b3b; border-color: var(--dmoj-green); color: var(--dmoj-green-dark); }
+  .pcv2 .ptype-ai:hover { background: var(--dmoj-green); color: #fff; }
+
+  .grading-table th { color: var(--muted); border-color: var(--admin-border); }
+  .grading-table td { border-color: #222; }
+  .grading-table input { background: #3b3b3b; color: #eee; border-color: #555; }
+  .gt-pill { background: #3b3b3b !important; color: var(--muted) !important; border-color: #555; }
+  .gt-pill.active { background: var(--dmoj-green) !important; color: #fff !important; }
+  .btn-del-row { color: #ff6b7a !important; border-color: #ff6b7a; }
+  .btn-del-row:hover { background: #ff6b7a; color: #fff !important; }
+
+  .pcv2 .tc-table th,
+  .pcv2 .inline-table th,
+  .pcv2 .data-table th { background: #0f0f0f; color: var(--muted); border-color: var(--admin-border); }
+  .pcv2 .data-table tr:hover { background: #111; }
+  .pcv2 .sub-q-head { background: #0f0f0f; border-color: var(--admin-border); }
+
+  .pcv2 #preview-pane { background: var(--card-bg); border-color: var(--admin-border); }
+  .pcv2 #preview-pane h2 { background: var(--admin-bg); color: var(--text); }
+  .pcv2 .v2-right .pv-head,
+  .pcv2 .content-preview .pv-head {
+    background: #0f0f0f !important;
+    color: #eee !important;
+    border-bottom-color: var(--admin-border) !important;
+  }
+
+  .pcv2 .blank-answers .blank-row { border-color: var(--admin-border); background: var(--card-bg); }
+  .pcv2 .tf-choices label { background: #3b3b3b; border-color: #555; color: #eee; }
+  .pcv2 .blank-hints,
+  .pcv2 #empty-src-tip { color: var(--muted); }
+  .pcv2 .martor-preview { background: var(--card-bg); color: var(--text); }
+  .pcv2 .qtype-card { background: var(--card-bg); border-color: var(--admin-border); }
+  .pcv2 .qtype-card:hover { border-color: var(--dmoj-green); }
+
+  .pcv2 .editor-mode-tabs { background: #2a2a2a; }
+  .pcv2 .editor-mode-tabs button,
+  .pcv2 .editor-mode-tabs button.mode-btn { color: var(--muted) !important; background: transparent !important; }
+  .pcv2 .editor-mode-tabs button.active,
+  .pcv2 .editor-mode-tabs button.mode-btn.active {
+    background: #1a1a1a !important;
+    color: var(--text) !important;
+  }
+  .pcv2 .rich-editor-markdown textarea { background: var(--card-bg) !important; color: var(--text) !important; }
 }
