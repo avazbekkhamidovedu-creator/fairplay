@@ -567,42 +567,46 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             class_qs = class_qs.none()
         problem.classes.set(class_qs)
 
-        sol = payload.get('solution') or {}
-        sol_content = (sol.get('content') or '').strip()
-        sol_publish = self._parse_local_dt(sol.get('publish_on'))
-        if sol_content or sol.get('is_public') or sol_publish or sol.get('authors'):
-            if sol_publish is None:
-                sol_publish = timezone.now()
-            solution, _created = Solution.objects.update_or_create(
-                problem=problem,
-                defaults={
-                    'is_public': bool(sol.get('is_public')),
-                    'publish_on': sol_publish,
-                    'content': sol_content,
-                },
-            )
-            solution.authors.set(Profile.objects.filter(pk__in=self._profile_ids(sol.get('authors'))))
-        elif hasattr(problem, 'solution'):
-            try:
-                problem.solution.delete()
-            except Solution.DoesNotExist:
-                pass
+        # Only sync when the client explicitly sent these keys. Omitting them
+        # on a partial edit must not wipe existing solution / translations.
+        if 'solution' in payload:
+            sol = payload.get('solution') or {}
+            sol_content = (sol.get('content') or '').strip()
+            sol_publish = self._parse_local_dt(sol.get('publish_on'))
+            if sol_content or sol.get('is_public') or sol_publish or sol.get('authors'):
+                if sol_publish is None:
+                    sol_publish = timezone.now()
+                solution, _created = Solution.objects.update_or_create(
+                    problem=problem,
+                    defaults={
+                        'is_public': bool(sol.get('is_public')),
+                        'publish_on': sol_publish,
+                        'content': sol_content,
+                    },
+                )
+                solution.authors.set(Profile.objects.filter(pk__in=self._profile_ids(sol.get('authors'))))
+            elif hasattr(problem, 'solution'):
+                try:
+                    problem.solution.delete()
+                except Solution.DoesNotExist:
+                    pass
 
-        keep_langs = set()
-        for row in payload.get('translations') or []:
-            lang = (row.get('language') or '').strip()
-            name = (row.get('name') or '').strip()
-            description = (row.get('description') or '').strip()
-            if not lang or lang not in dict(settings.LANGUAGES):
-                continue
-            if not name and not description:
-                continue
-            keep_langs.add(lang)
-            ProblemTranslation.objects.update_or_create(
-                problem=problem, language=lang,
-                defaults={'name': name or problem.name, 'description': description or ''},
-            )
-        problem.translations.exclude(language__in=keep_langs).delete()
+        if 'translations' in payload:
+            keep_langs = set()
+            for row in payload.get('translations') or []:
+                lang = (row.get('language') or '').strip()
+                name = (row.get('name') or '').strip()
+                description = (row.get('description') or '').strip()
+                if not lang or lang not in dict(settings.LANGUAGES):
+                    continue
+                if not name and not description:
+                    continue
+                keep_langs.add(lang)
+                ProblemTranslation.objects.update_or_create(
+                    problem=problem, language=lang,
+                    defaults={'name': name or problem.name, 'description': description or ''},
+                )
+            problem.translations.exclude(language__in=keep_langs).delete()
 
     # ------------------------------------------------------------------ code problem
     @staticmethod

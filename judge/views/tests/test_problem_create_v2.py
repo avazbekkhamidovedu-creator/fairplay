@@ -167,6 +167,62 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(tr.name, '进阶题')
         self.assertEqual(tr.description, '中文描述')
 
+    def test_edit_omitting_solution_and_translations_keeps_them(self):
+        """Partial edit payloads must not wipe Advanced solution/translations."""
+        self.client.force_login(self.users['creator'])
+        create_payload = {
+            'type': 'single',
+            'name': 'Keep advanced',
+            'description': 'Has solution and translation.',
+            'points': 5,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+            'solution': {
+                'is_public': True,
+                'content': 'Keep me',
+                'authors': [self.users['creator'].profile.id],
+            },
+            'translations': [
+                {'language': 'zh-hans', 'name': '保留', 'description': '保留描述'},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+
+        edit_payload = {
+            'type': 'single',
+            'name': 'Keep advanced (renamed)',
+            'description': 'Updated description only.',
+            'points': 5,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+            'edit_code': code,
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200)
+        self.assertTrue(edit_resp.json()['ok'])
+        problem = Problem.objects.get(code=code)
+        self.assertEqual(problem.name, 'Keep advanced (renamed)')
+        sol = Solution.objects.get(problem=problem)
+        self.assertEqual(sol.content, 'Keep me')
+        tr = ProblemTranslation.objects.get(problem=problem, language='zh-hans')
+        self.assertEqual(tr.name, '保留')
+
     def test_ai_difficulty_endpoint(self):
         self.client.force_login(self.users['creator'])
         response = self.client.post(
