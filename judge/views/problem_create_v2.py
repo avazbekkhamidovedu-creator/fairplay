@@ -32,8 +32,8 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.decorators import method_decorator
 from django.utils.dateparse import parse_datetime
+from django.utils.decorators import method_decorator
 from django.utils.text import slugify
 from django.utils.translation import gettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
