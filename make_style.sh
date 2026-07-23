@@ -26,6 +26,8 @@ build_style() {
       sass_processed/martor-description.css \
       sass_processed/select2-dmoj.css \
       sass_processed/style.css \
+      sass_processed/problem_create_v2.css \
+      sass_processed/rich_editor.css \
       --verbose --use autoprefixer -d "$2"
   rm resources/vars.scss
 }

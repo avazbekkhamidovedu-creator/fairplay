@@ -20,8 +20,10 @@
     --oj-border: #{$color_primary25};
     --oj-text: #{$color_primary90};
     --oj-text-muted: #{$color_primary50};
+    --oj-text-secondary: #{$color_primary66};
     --oj-heading: #{$color_primary75};
     --oj-heading-text: #{$color_primary0};
+    --oj-control-border: #{$color_primary33};
 
     /* Brand accent (nav active, tabs, pagination highlight) */
     --oj-accent: #{$highlight_blue};
@@ -36,9 +38,15 @@
     --oj-btn-hover: #{$btn_primary_hover};
     --oj-btn-text: #fff;
 
-    /* Danger */
+    /* Danger / success */
     --oj-danger: #{$btn_danger};
     --oj-danger-hover: #{$btn_danger_hover};
+    --oj-success: #2d7a2d;
+    --oj-success-soft: #e8f5e9;
+    --oj-info-soft: #e3f2fd;
+    --oj-warning-soft: #fde68a;
+    --oj-surface-soft: #{$color_primary10};
+    --oj-surface-muted: #{$color_primary25};
 
     /* Shape — classic OJ is modestly rounded */
     --oj-radius: #{$widget_border_radius};
