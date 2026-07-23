@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block media %}
+    {{ form.media.css }}
+    <style>
+        .fb-field { margin-bottom: 1em; }
+        .fb-field label { font-weight: bold; display: block; margin-bottom: 0.3em; }
+        .fb-field input[type="text"], .fb-field input[type="number"], .fb-field textarea { width: 100%; }
+    </style>
+{% endblock %}
+
+{% block js_media %}
+    {{ form.media.js }}
+{% endblock %}
+
+{% block body %}
+    <form id="file-form" action="" method="post" class="form-area">
+        {% csrf_token %}
+        {% include "messages.html" %}
+        {{ form.non_field_errors() }}
+        {{ config_form.non_field_errors() }}
+
+        <div class="fb-field">
+            <label for="{{ form.name.id_for_label }}">{{ _('Name') }}</label>
+            {{ form.name.errors }}
+            {{ form.name }}
+        </div>
+
+        <div class="fb-field">
+            <label for="{{ form.description.id_for_label }}">{{ _('Question prompt') }}</label>
+            {{ form.description.errors }}
+            {{ form.description }}
+        </div>
+
+        <div class="fb-field">
+            <label for="{{ config_form.instructions.id_for_label }}">{{ _('Submission instructions (optional)') }}</label>
+            {{ config_form.instructions.errors }}
+            {{ config_form.instructions }}
+        </div>
+
+        <div class="fb-field">
+            <label>{{ _('Upload limits') }}</label>
+            <div>
+                <label for="{{ config_form.allowed_extensions.id_for_label }}">{{ config_form.allowed_extensions.label }}</label>
+                {{ config_form.allowed_extensions.errors }}
+                {{ config_form.allowed_extensions }}
+                <p class="help-text">{{ config_form.allowed_extensions.help_text }}</p>
+            </div>
+            <div>
+                <label for="{{ config_form.max_file_size.id_for_label }}">{{ config_form.max_file_size.label }}</label>
+                {{ config_form.max_file_size.errors }}
+                {{ config_form.max_file_size }}
+                <p class="help-text">{{ config_form.max_file_size.help_text }}</p>
+            </div>
+        </div>
+
+        <div class="fb-field">
+            <label>{{ _('Settings') }}</label>
+            <div>{{ form.partial }} {{ form.partial.label }}</div>
+            <div>{{ form.is_public }} {{ form.is_public.label }}</div>
+        </div>
+
+        <div class="fb-field">
+            <label>{{ _('Visibility') }}</label>
+            <div>
+                <label for="{{ form.organizations.id_for_label }}">{{ form.organizations.label }}</label>
+                {{ form.organizations.errors }}
+                {{ form.organizations }}
+            </div>
+            <div>
+                <label for="{{ form.classes.id_for_label }}">{{ form.classes.label }}</label>
+                {{ form.classes.errors }}
+                {{ form.classes }}
+            </div>
+        </div>
+
+        <div class="fb-field">
+            <label for="{{ form.points.id_for_label }}">{{ _('Points') }}</label>
+            {{ form.points.errors }}
+            {{ form.points }}
+        </div>
+
+        <div class="submit-bar">
+            <input type="submit" value="{{ _('Save') }}" class="button">
+        </div>
+    </form>
+{% endblock %}

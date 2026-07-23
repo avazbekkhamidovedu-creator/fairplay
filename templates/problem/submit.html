@@ -136,6 +136,8 @@
         {% include "problem/submit/_mcq.html" %}
     {% elif submission_type == 'B' %}
         {% include "problem/submit/_fill_blank.html" %}
+    {% elif submission_type == 'F' %}
+        {% include "problem/submit/_file.html" %}
     {% else %}
         {% include "problem/submit/_code.html" %}
     {% endif %}
