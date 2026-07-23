@@ -22,7 +22,7 @@ from django.views import View
 from judge import llm
 from judge.llm import LLMError
 from judge.models import Language, Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, ProblemImportDraft, \
-    ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemSubmissionType, ProblemTestCase, \
+    ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemSubmissionType, ProblemTestCase, ProblemType, \
     Solution, problem_data_storage
 from judge.utils.excel_embedded_documents import read_xlsx_rows_with_embedded_files
 from judge.utils.language_matching import matching_languages
@@ -45,6 +45,13 @@ QUESTION_TYPE_MAP = {
 }
 
 BLANK_SIGN_RE = re.compile(r'\[\[blank\]\]', re.IGNORECASE)
+MCQ_OPTION_LINE_RE = re.compile(r'^\s*([A-Z])\s*[.)]\s*(\S(?:.*\S)?)\s*$')
+HEADER_ALIASES = {
+    'explanation': 'solution',
+    'problem_type': 'question_type',
+    'tag': 'tags',
+}
+DIFFICULTY_VALUES = {'0': 'easy', '1': 'medium', '2': 'hard'}
 
 
 def _require_creator(request):
@@ -68,6 +75,13 @@ def _normalise_type(value):
 def _value(row, headers, name):
     index = headers.get(name)
     return str(row[index]).strip() if index is not None and index < len(row) and row[index] is not None else ''
+
+
+def _header_name(value):
+    """Normalize the annotated headings used by the teacher-facing workbook."""
+    name = re.sub(r'\s+', ' ', str(value or '').replace('*', '').strip().lower())
+    name = re.split(r'[（(]', name, maxsplit=1)[0].strip().replace(' ', '_')
+    return HEADER_ALIASES.get(name, name)
 
 
 def _serialize_fill_blanks(blanks):
@@ -137,6 +151,72 @@ def _remove_multiple_choice_option_block(description, option_block):
     return result.strip()
 
 
+def _extract_labeled_multiple_choice_options(description, answer=''):
+    """Extract a complete labeled block, or answer-constrained unlabeled option paragraphs."""
+    lines = (description or '').splitlines()
+    for start, line in enumerate(lines):
+        first = MCQ_OPTION_LINE_RE.match(line)
+        if first is None or first.group(1) != 'A':
+            continue
+        options = [first.group(2)]
+        end = start + 1
+        while end < len(lines):
+            match = MCQ_OPTION_LINE_RE.match(lines[end])
+            expected_label = chr(ord('A') + len(options))
+            if match is None or match.group(1) != expected_label:
+                break
+            options.append(match.group(2))
+            end += 1
+        if len(options) >= 2:
+            return options, '\n'.join(lines[start:end])
+    required_options = _maximum_answer_index(answer)
+    if not required_options:
+        return [], ''
+    paragraphs = []
+    paragraph_lines = []
+    paragraph_start = 0
+    for line_number, line in enumerate(lines + ['']):
+        if line.strip():
+            if not paragraph_lines:
+                paragraph_start = line_number
+            paragraph_lines.append(line)
+            continue
+        if paragraph_lines:
+            paragraphs.append((paragraph_start, line_number, paragraph_lines))
+            paragraph_lines = []
+    candidates = []
+    for start, end, paragraph in paragraphs:
+        text = '\n'.join(paragraph).strip()
+        if len(paragraph) != 1 or len(text) > 120 or text.endswith(('?', ':')) or text.startswith(('#', '![')):
+            if len(candidates) >= required_options:
+                option_start = candidates[0][0]
+                option_end = candidates[-1][1]
+                options = ['\n'.join(value).strip() for _start, _end, value in candidates]
+                return options, '\n'.join(lines[option_start:option_end])
+            candidates = []
+            continue
+        candidates.append((start, end, paragraph))
+    if len(candidates) >= required_options:
+        option_start = candidates[0][0]
+        option_end = candidates[-1][1]
+        options = ['\n'.join(value).strip() for _start, _end, value in candidates]
+        return options, '\n'.join(lines[option_start:option_end])
+    return [], ''
+
+
+def _maximum_answer_index(answer):
+    maximum = 0
+    for token in _split_lines(answer):
+        value = token.strip().strip('()[]').rstrip('.)').strip()
+        if value.isdigit():
+            maximum = max(maximum, int(value))
+        elif re.fullmatch(r'[A-Za-z]', value):
+            maximum = max(maximum, ord(value.upper()) - ord('A') + 1)
+        else:
+            return 0
+    return maximum
+
+
 def _fill_blanks_from_signs(description, answer):
     """Map each [[blank]] in a prompt to one pipe-separated answer cell value."""
     sign_count = len(BLANK_SIGN_RE.findall(description or ''))
@@ -194,7 +274,7 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
 
         if not rows:
             return JsonResponse({'ok': False, 'message': _('The Excel file is empty.')}, status=400)
-        headers = {str(value).strip().lower(): index for index, value in enumerate(rows[0])}
+        headers = {_header_name(value): index for index, value in enumerate(rows[0])}
         missing = [name for name in ('name', 'question_type') if name not in headers]
         if missing:
             return JsonResponse({'ok': False, 'message': _('Missing required columns: %(columns)s.') % {
@@ -242,18 +322,51 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                         test_data_zip = ContentFile(zip_attachment.content, name=zip_attachment.filename)
                     answer = _value(row, headers, 'answer')
                     blanks = _value(row, headers, 'blanks')
+                    if question_type == ProblemSubmissionType.FILL_BLANK and not blanks:
+                        try:
+                            _description, signed_blanks = _fill_blanks_from_signs(description, answer)
+                        except ValueError:
+                            signed_blanks = []
+                        if signed_blanks:
+                            blanks = _serialize_fill_blanks([
+                                {'label': label, 'answers': [accepted]}
+                                for label, accepted in signed_blanks
+                            ])
+                        else:
+                            blanks = answer
+                    item_description = '\n\n'.join(parts)
+                    options = _value(row, headers, 'options')
+                    correct_options = _value(row, headers, 'correct_options')
+                    if question_type == ProblemSubmissionType.MCQ and not options:
+                        extracted_options, option_block = _extract_labeled_multiple_choice_options(
+                            item_description, answer,
+                        )
+                        if extracted_options:
+                            cleaned_description = _remove_multiple_choice_option_block(item_description, option_block)
+                            if cleaned_description:
+                                item_description = cleaned_description
+                            options = '\n'.join(extracted_options)
+                            if not correct_options:
+                                try:
+                                    correct_options = '\n'.join(str(index) for index in _multiple_choice_answer_indices(
+                                        answer, extracted_options))
+                                except ValueError:
+                                    # Keep the answer cell editable when it does not yet match the extracted options.
+                                    correct_options = ''
                     ProblemImportItem.objects.create(
                         draft=draft,
                         row_number=row_number,
                         name=name,
                         submission_type=question_type,
-                        description='\n\n'.join(parts),
+                        description=item_description,
                         answer=answer,
                         solution=_value(row, headers, 'solution'),
+                        tags=_value(row, headers, 'tags'),
+                        difficulty=_value(row, headers, 'difficulty'),
                         allowed_languages=_value(row, headers, 'allowed_languages'),
                         test_data=_value(row, headers, 'test_data'),
-                        options=_value(row, headers, 'options'),
-                        correct_options=_value(row, headers, 'correct_options'),
+                        options=options,
+                        correct_options=correct_options,
                         # A fill-blank row can use its answer cell when no separate blanks column exists.
                         blanks=blanks or (answer if question_type == ProblemSubmissionType.FILL_BLANK else ''),
                         test_data_zip=test_data_zip,
@@ -278,9 +391,13 @@ class ProblemImportPreviewView(LoginRequiredMixin, View):
 
     def get(self, request, draft):
         draft = _draft_for(request, draft)
+        items = list(draft.items.select_related('created_problem'))
+        for item in items:
+            item.preview_options = _preview_options(item)
+            item.preview_blanks = _preview_blanks(item)
         return render(request, self.template_name, {
             'draft': draft,
-            'items': draft.items.select_related('created_problem'),
+            'items': items,
             'type_choices': ProblemImportItem.TYPE_CHOICES,
             'title': _('Excel import preview'),
             'content_title': _('Excel import preview'),
@@ -363,7 +480,8 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         except ValueError as error:
             raise ValueError(str(error))
         for field in (
-            'name', 'description', 'answer', 'solution', 'allowed_languages', 'test_data', 'options',
+            'name', 'description', 'answer', 'solution', 'tags', 'difficulty', 'allowed_languages', 'test_data',
+            'options',
             'correct_options', 'blanks',
         ):
             if field in data:
@@ -436,7 +554,33 @@ def _format_with_llm(item):
 
 
 def _item_payload(item):
-    return {field: getattr(item, field) for field in ('description', 'options', 'correct_options', 'blanks')}
+    payload = {
+        field: getattr(item, field)
+        for field in ('description', 'tags', 'difficulty', 'options', 'correct_options', 'blanks')
+    }
+    payload['preview_options'] = _preview_options(item)
+    payload['preview_blanks'] = _preview_blanks(item)
+    return payload
+
+
+def _preview_options(item):
+    options = _split_lines(item.options)
+    try:
+        correct = set(_multiple_choice_answer_indices(item.answer, options)) if options else set()
+    except ValueError:
+        correct = set()
+    return [{'text': text, 'is_correct': index in correct} for index, text in enumerate(options, start=1)]
+
+
+def _preview_blanks(item):
+    try:
+        blanks = _parse_fill_blanks(item.blanks)
+    except ValueError:
+        blanks = []
+    return [
+        {'label': label, 'answers': answers}
+        for label, answers in blanks
+    ]
 
 
 def _split_lines(value):
@@ -461,6 +605,46 @@ def _resolve_allowed_languages(raw_value):
             resolved.append(match)
             seen.add(match.pk)
     return resolved
+
+
+def _resolve_import_tags(raw_value):
+    tags = _split_lines(raw_value)
+    if len(tags) > 5:
+        raise ValueError('Use at most five tags per problem.')
+    resolved = []
+    seen = set()
+    for tag in tags:
+        if len(tag) > 20:
+            raise ValueError('Each tag must be at most 20 characters.')
+        existing = ProblemType.objects.filter(name__iexact=tag).first()
+        if existing is None:
+            existing = ProblemType.objects.filter(full_name__iexact=tag).first()
+        if existing is None:
+            identifier = re.sub(r'[^a-z0-9]+', '_', tag.casefold()).strip('_')
+            if not identifier or len(identifier) > 20:
+                raise ValueError('Each tag must contain letters or numbers and be at most 20 characters.')
+            existing, _created = ProblemType.objects.get_or_create(
+                name=identifier,
+                defaults={'full_name': tag},
+            )
+        if existing.pk not in seen:
+            resolved.append(existing)
+            seen.add(existing.pk)
+    return resolved
+
+
+def _resolve_import_difficulty(raw_value):
+    value = str(raw_value or '').strip().casefold()
+    if not value:
+        return None
+    name = DIFFICULTY_VALUES.get(value, value)
+    if name not in Problem.DIFFICULTY_TYPE_NAMES:
+        raise ValueError('Difficulty must be 0 (easy), 1 (medium), or 2 (hard).')
+    difficulty, _created = ProblemType.objects.get_or_create(
+        name=name,
+        defaults={'full_name': name.title()},
+    )
+    return difficulty
 
 
 def _parse_text_test_data(value):
@@ -555,11 +739,20 @@ def _create_problem(request, item):
     description = item.description
     signed_blanks = []
     if item.submission_type == ProblemSubmissionType.FILL_BLANK:
-        description, signed_blanks = _fill_blanks_from_signs(item.description, item.answer)
+        if item.blanks.strip():
+            counter = iter(range(1, len(BLANK_SIGN_RE.findall(description)) + 1))
+            description = BLANK_SIGN_RE.sub(
+                lambda _match: '**[Blank {}]**'.format(next(counter)), description)
+        else:
+            description, signed_blanks = _fill_blanks_from_signs(item.description, item.answer)
     problem = Problem(name=item.name, description=description, submission_type=item.submission_type, points=10)
     apply_simple_problem_defaults(problem)
     problem.save()
     problem.types.add(default_problem_type())
+    problem.types.add(*_resolve_import_tags(item.tags))
+    difficulty = _resolve_import_difficulty(item.difficulty)
+    if difficulty is not None:
+        problem.types.add(difficulty)
     problem.authors.add(request.user.profile)
     if item.solution.strip():
         solution = Solution.objects.create(
@@ -590,7 +783,7 @@ def _create_problem(request, item):
         for index, text in enumerate(options, start=1):
             ProblemMCQOption.objects.create(problem=problem, order=index - 1, text=text, is_correct=index in correct)
     elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
-        blanks = signed_blanks or _parse_fill_blanks(item.blanks or item.answer)
+        blanks = _parse_fill_blanks(item.blanks or item.answer) or signed_blanks
         if not blanks:
             raise ValueError('Fill-in-the-blank questions need at least one blank with an accepted answer.')
         ProblemFillBlankConfig.objects.create(problem=problem)

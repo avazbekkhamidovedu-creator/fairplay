@@ -296,12 +296,14 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         )
         self.assertIn('problem_batch_upload_template.xlsx', response['Content-Disposition'])
 
-        rows = read_xlsx_rows(io.BytesIO(response.content))
+        rows = read_xlsx_rows(io.BytesIO(response.content), sheet_name='Problems')
         self.assertEqual(
             rows[0],
             [
-                'name', 'question_type', 'description', 'answer', 'solution', 'organizations',
-                'allowed_languages', 'test_data',
+                'name*', 'problem_type*', 'description*', 'answer*', 'organizations*',
+                'tag（less than 20 characters, spaced with commas)',
+                'difficulty\n(easy:0; medium:1; difficult:2)', 'explanation',
+                'allowed_languages(support multiple languages, spaced with commas)', 'test_data',
             ],
         )
         with zipfile.ZipFile(io.BytesIO(response.content)) as workbook:

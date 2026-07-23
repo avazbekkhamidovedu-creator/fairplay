@@ -4,15 +4,59 @@ import zipfile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase
 
+from judge.utils.excel_embedded_documents import read_xlsx_rows_with_embedded_files
+from judge.utils.simple_xlsx import build_xlsx_workbook
 from judge.views.problem_import import (
-    _fill_blanks_from_signs, _multiple_choice_answer_indices, _parse_fill_blanks, _parse_text_test_data,
+    _extract_labeled_multiple_choice_options, _fill_blanks_from_signs, _header_name, _multiple_choice_answer_indices,
+    _parse_fill_blanks, _parse_text_test_data,
     _parse_zip_test_data, _remove_multiple_choice_option_block, _serialize_fill_blanks,
 )
 
 
 class ProblemImportTestDataParsingTestCase(SimpleTestCase):
+    def test_reads_the_problems_sheet_when_instructions_come_first(self):
+        workbook = build_xlsx_workbook([
+            ('Instructions', [['Import Instructions']]),
+            ('Problems', [['name*', 'problem_type*', 'description*'], ['Example', 'code', 'Body']]),
+        ])
+
+        rows, attachments = read_xlsx_rows_with_embedded_files(io.BytesIO(workbook))
+
+        self.assertEqual(rows[0], ['name*', 'problem_type*', 'description*'])
+        self.assertEqual(rows[1], ['Example', 'code', 'Body'])
+        self.assertEqual(attachments, [])
+
+    def test_normalizes_new_template_column_headers(self):
+        self.assertEqual(_header_name('problem_type*'), 'question_type')
+        self.assertEqual(_header_name('tag（less than 20 characters, spaced with commas)'), 'tags')
+        self.assertEqual(_header_name('difficulty\n(easy:0; medium:1; difficult:2)'), 'difficulty')
+        self.assertEqual(_header_name('explanation'), 'solution')
+
     def test_maps_multiple_choice_excel_answers_without_llm_correctness(self):
         self.assertEqual(_multiple_choice_answer_indices('B|3', ['one', 'two', 'three']), [2, 3])
+
+    def test_extracts_consecutive_lettered_multiple_choice_options(self):
+        options, block = _extract_labeled_multiple_choice_options(
+            'Which number is prime?\nA. 4\nB. 5\nC. 6\nExplain your answer.',
+        )
+
+        self.assertEqual(options, ['4', '5', '6'])
+        self.assertEqual(block, 'A. 4\nB. 5\nC. 6')
+
+    def test_extracts_unlabeled_options_when_answer_uses_letter_indexes(self):
+        options, block = _extract_labeled_multiple_choice_options(
+            'What is 1 + 2?\n\n2\n\n3\n\n4\n\n5\n\nHere is a figure:',
+            'B|C',
+        )
+
+        self.assertEqual(options, ['2', '3', '4', '5'])
+        self.assertEqual(block, '2\n\n3\n\n4\n\n5')
+
+    def test_does_not_extract_incomplete_lettered_multiple_choice_options(self):
+        self.assertEqual(
+            _extract_labeled_multiple_choice_options('Question\nA. one\nC. three'),
+            ([], ''),
+        )
 
     def test_maps_blank_signs_to_pipe_separated_answers(self):
         description, blanks = _fill_blanks_from_signs(

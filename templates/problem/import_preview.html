@@ -17,6 +17,12 @@
         .import-preview-card[data-type="C"] .for-code, .import-preview-card[data-type="M"] .for-mcq, .import-preview-card[data-type="B"] .for-blank { display: block; }
         .import-preview-card[data-type="B"] .not-for-blank { display: none; }
         .import-preview-card[data-type="M"] .not-for-mcq { display: none; }
+        .mcq-field, .fb-field { margin: 1em 0; }
+        .mcq-field label, .fb-field label { display: block; font-weight: bold; margin-bottom: 0.3em; }
+        .mcq-option-table, .fb-blank-table { border-collapse: collapse; width: 100%; }
+        .mcq-option-table td, .fb-blank-table td { padding: 4px; vertical-align: top; }
+        .mcq-option-text, .fb-blank-label, .fb-blank-answers { box-sizing: border-box; width: 100%; }
+        .preview-drag-handle { color: #888; cursor: move; padding: 6px; }
     </style>
 {% endblock %}
 
@@ -25,21 +31,79 @@
         $(function () {
             function csrfToken() { return $('input[name="csrfmiddlewaretoken"]').first().val() || ''; }
             function updateType(card) { card.attr('data-type', card.find('[name="question_type"]').val()); }
+            function syncMcq(card) {
+                var options = [], answers = [];
+                card.find('.mcq-option-row:visible').each(function (index) {
+                    var text = $(this).find('.mcq-option-text').val().trim();
+                    if (!text) return;
+                    options.push(text);
+                    if ($(this).find('.mcq-is-correct').is(':checked')) answers.push(options.length);
+                });
+                card.find('[name="options"]').val(options.join('\n'));
+                card.find('[name="answer"]').val(answers.join('|'));
+            }
+            function syncBlanks(card) {
+                var blocks = [];
+                card.find('.fb-blank-row:visible').each(function (index) {
+                    var label = $(this).find('.fb-blank-label').val().trim();
+                    var answers = $(this).find('.fb-blank-answers').val().trim();
+                    if (!answers) return;
+                    var block = ['[blank ' + (index + 1) + ']'];
+                    if (label) block.push('label: ' + label);
+                    block.push('answers:');
+                    blocks.push(block.concat(answers.split(/\r?\n/)).join('\n'));
+                });
+                card.find('[name="blanks"]').val(blocks.join('\n---\n'));
+            }
+            function syncEditor(card) {
+                if (card.attr('data-type') === 'M') syncMcq(card);
+                if (card.attr('data-type') === 'B') syncBlanks(card);
+            }
+            function addMcqRow(card, option) {
+                var template = card.find('.empty-mcq-row').get(0);
+                var row = $($(template.content).children().first().cloneNode(true));
+                row.find('.mcq-option-text').val(option && option.text || '');
+                row.find('.mcq-is-correct').prop('checked', !!(option && option.is_correct));
+                card.find('.mcq-option-rows').append(row);
+            }
+            function addBlankRow(card, blank) {
+                var template = card.find('.empty-blank-row').get(0);
+                var row = $($(template.content).children().first().cloneNode(true));
+                row.find('.fb-blank-label').val(blank && blank.label || '');
+                row.find('.fb-blank-answers').val(blank && blank.answers || '');
+                card.find('.fb-blank-rows').append(row);
+            }
+            function renderMcqRows(card, options) {
+                card.find('.mcq-option-rows').empty();
+                (options || []).forEach(function (option) { addMcqRow(card, option); });
+            }
+            function renderBlankRows(card, blanks) {
+                card.find('.fb-blank-rows').empty();
+                (blanks || []).forEach(function (blank) { addBlankRow(card, blank); });
+            }
             function setStatus(card, text, error) {
                 card.find('.import-preview-status').text(text || '').toggleClass('error', !!error).toggleClass('success', !!text && !error);
             }
             function updateFields(card, item) {
-                ['description', 'solution', 'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks'].forEach(function (name) {
+                ['description', 'solution', 'tags', 'difficulty', 'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks'].forEach(function (name) {
                     if (Object.prototype.hasOwnProperty.call(item, name)) card.find('[name="' + name + '"]').val(item[name]);
                 });
+                if (item.preview_options) renderMcqRows(card, item.preview_options);
+                if (item.preview_blanks) renderBlankRows(card, item.preview_blanks);
             }
             $('.import-preview-card').each(function () { updateType($(this)); });
             $('.import-preview-card [name="question_type"]').on('change', function () { updateType($(this).closest('.import-preview-card')); });
+            $('.import-preview-card').on('click', '.remove-option', function (event) {
+                event.preventDefault(); $(this).closest('.mcq-option-row').remove();
+            }).on('click', '.remove-blank', function (event) {
+                event.preventDefault(); $(this).closest('.fb-blank-row').remove();
+            });
             $('.import-action').on('click', async function (event) {
                 event.preventDefault();
                 var button = $(this), card = button.closest('.import-preview-card'), form = card.find('form');
                 button.prop('disabled', true); setStatus(card, '{{ _("Working...")|escapejs }}', false);
                 try {
+                    syncEditor(card);
                     var response = await fetch(button.data('url'), {method: 'POST', headers: {'X-CSRFToken': csrfToken()}, body: new FormData(form.get(0))});
                     var payload = await response.json();
                     if (!response.ok || !payload.ok) { setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true); return; }
@@ -57,31 +121,48 @@
 
 {% block body %}
     <div class="content-body">
-        <p>{{ _('Review each question before creating it. “LLM format question” only formats the current card using its selected question type. For multiple choice, it removes only the exact option block it recognizes and preserves the remaining description.') }}</p>
+        <p>{{ _('Review each question before creating it. Multiple-choice rows with consecutive A., B., C. option lines are formatted locally on upload; their answer always comes from the Excel answer column. Use “LLM format question” only when that result needs revision.') }}</p>
         {% if feedback %}<p class="import-preview-status{% if feedback_error %} error{% else %} success{% endif %}">{{ feedback }}</p>{% endif %}
         {% for item in items %}
             <section id="import-item-{{ item.pk }}" class="import-preview-card" data-type="{{ item.submission_type }}">
+                <h3>{{ _('Row') }} {{ item.row_number }}: {{ item.name }}</h3>
+                {% if item.created_problem %}
+                    <div class="import-preview-actions"><a class="button" href="{{ url('problem_detail', item.created_problem.code) }}">{{ _('Created') }}</a></div>
+                {% else %}
                 <form method="post" action="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}" enctype="multipart/form-data">
                     {% csrf_token %}
                     <input type="hidden" name="native_submit" value="1">
-                    <h3>{{ _('Row') }} {{ item.row_number }}: {{ item.name }}</h3>
                     {% if item.source_label %}<p class="import-preview-source">{{ _('Embedded source:') }} {{ item.source_label }}</p>{% endif %}
                     <div class="import-preview-field"><label>{{ _('Name') }}</label><input name="name" value="{{ item.name }}"></div>
                     <div class="import-preview-field"><label>{{ _('Question type') }}</label><select name="question_type">{% for value, label in type_choices %}<option value="{{ value }}"{% if item.submission_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
                     <div class="import-preview-field"><label>{{ _('Description') }}</label><textarea name="description">{{ item.description }}</textarea></div>
-                    <div class="import-preview-field"><label class="not-for-blank not-for-mcq">{{ _('Answer key / notes for LLM') }}</label><label class="import-type-fields for-mcq">{{ _('Correct answer from Excel') }}</label><label class="import-type-fields for-blank">{{ _('Answers for blank signs') }}</label><textarea name="answer">{{ item.answer }}</textarea><small class="import-type-fields for-mcq">{{ _('Use option letters, numbers, or exact option text. Separate multiple correct answers with |. LLM does not change this value.') }}</small><small class="import-type-fields for-blank">{{ _('Use [[blank]] in the description for each blank, then write matching answers here in the same order, separated by |. Example: Paris|4') }}</small></div>
+                    <div class="import-preview-field not-for-blank not-for-mcq"><label>{{ _('Answer key / notes for LLM') }}</label><textarea name="answer">{{ item.answer }}</textarea></div>
+                    <div class="mcq-field import-type-fields for-mcq">
+                        <input type="hidden" name="answer" value="{{ item.answer }}"><textarea name="options" hidden>{{ item.options }}</textarea>
+                        <label>{{ _('Choices') }}</label>
+                        <table class="mcq-option-table"><thead><tr><th></th><th>{{ _('Choice') }}</th><th>{{ _('Correct') }}</th><th></th></tr></thead><tbody class="mcq-option-rows">{% for option in item.preview_options %}<tr class="mcq-option-row"><td class="preview-drag-handle">&#9776;</td><td><textarea rows="2" class="mcq-option-text">{{ option.text }}</textarea></td><td><input type="checkbox" class="mcq-is-correct"{% if option.is_correct %} checked{% endif %}></td><td><a href="#" class="remove-option">{{ _('Remove') }}</a></td></tr>{% endfor %}</tbody></table>
+                        <template class="empty-mcq-row"><tr class="mcq-option-row"><td class="preview-drag-handle">&#9776;</td><td><textarea rows="2" class="mcq-option-text"></textarea></td><td><input type="checkbox" class="mcq-is-correct"></td><td><a href="#" class="remove-option">{{ _('Remove') }}</a></td></tr></template>
+                    </div>
+                    <div class="fb-field import-type-fields for-blank">
+                        <input type="hidden" name="answer" value="{{ item.answer }}"><textarea name="blanks" hidden>{{ item.blanks }}</textarea>
+                        <label>{{ _('Blanks') }}</label><p>{{ _('One accepted answer per line; any of them counts as correct.') }}</p>
+                        <table class="fb-blank-table"><thead><tr><th></th><th>{{ _('Label (optional)') }}</th><th>{{ _('Accepted answers') }}</th><th></th></tr></thead><tbody class="fb-blank-rows">{% for blank in item.preview_blanks %}<tr class="fb-blank-row"><td class="preview-drag-handle">&#9776;</td><td><input class="fb-blank-label" value="{{ blank.label }}"></td><td><textarea rows="2" class="fb-blank-answers">{{ blank.answers }}</textarea></td><td><a href="#" class="remove-blank">{{ _('Remove') }}</a></td></tr>{% endfor %}</tbody></table>
+                        <template class="empty-blank-row"><tr class="fb-blank-row"><td class="preview-drag-handle">&#9776;</td><td><input class="fb-blank-label"></td><td><textarea rows="2" class="fb-blank-answers"></textarea></td><td><a href="#" class="remove-blank">{{ _('Remove') }}</a></td></tr></template>
+                    </div>
                     <div class="import-preview-field"><label>{{ _('Solution / editorial') }}</label><textarea name="solution">{{ item.solution }}</textarea></div>
+                    <div class="import-preview-field"><label>{{ _('Tags') }}</label><input name="tags" value="{{ item.tags }}"><small>{{ _('Separate up to five tags with commas. Each tag can have at most 20 characters.') }}</small></div>
+                    <div class="import-preview-field"><label>{{ _('Difficulty') }}</label><select name="difficulty"><option value="">{{ _('Not set') }}</option><option value="0"{% if item.difficulty == '0' or item.difficulty == 'easy' %} selected{% endif %}>{{ _('Easy (0)') }}</option><option value="1"{% if item.difficulty == '1' or item.difficulty == 'medium' %} selected{% endif %}>{{ _('Medium (1)') }}</option><option value="2"{% if item.difficulty == '2' or item.difficulty == 'hard' %} selected{% endif %}>{{ _('Hard (2)') }}</option></select></div>
                     <div class="import-preview-field import-type-fields for-code"><label>{{ _('Allowed languages') }}</label><textarea name="allowed_languages" rows="2">{{ item.allowed_languages }}</textarea><small>{{ _('Separate full names with | or commas. C++11 also matches CPP11.') }}</small></div>
                     <div class="import-preview-field import-type-fields for-code"><label>{{ _('Test data') }}</label><textarea name="test_data" rows="7" placeholder="input data 1: 2 3&#10;output data 1: 5">{{ item.test_data }}</textarea><small>{{ _('Use input data N: and output data N: pairs. Multi-line values are supported.') }}</small></div>
                     {% if item.test_data_zip %}<div class="import-preview-field import-type-fields for-code"><label>{{ _('Embedded test data ZIP') }}</label><div>{{ item.test_data_zip.name }}</div><small>{{ _('Imported from the Excel object and used in preference to text test data.') }}</small></div>{% endif %}
                     <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Options, one per line') }}</label><textarea name="options">{{ item.options }}</textarea></div>
                     <div class="import-preview-actions">
-                        <button type="submit" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}">{{ _('Save draft') }}</button>
                         <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}">{{ _('LLM format question') }}</button>
-                        {% if item.created_problem %}<a class="button" href="{{ url('problem_detail', item.created_problem.code) }}">{{ _('Created') }}</a>{% else %}<button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}">{{ _('Create problem') }}</button>{% endif %}
+                        <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}">{{ _('Create problem') }}</button>
                     </div>
                     <span class="import-preview-status{% if item.formatting_error %} error{% endif %}">{{ item.formatting_error }}</span>
                 </form>
+                {% endif %}
             </section>
         {% endfor %}
     </div>

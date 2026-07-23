@@ -37,6 +37,8 @@ class ProblemImportItem(models.Model):
     description = models.TextField(blank=True)
     answer = models.TextField(blank=True)
     solution = models.TextField(blank=True)
+    tags = models.TextField(blank=True)
+    difficulty = models.CharField(max_length=10, blank=True)
     allowed_languages = models.TextField(blank=True)
     test_data = models.TextField(blank=True)
     test_data_zip = models.FileField(upload_to='problem_import_test_data/', blank=True)

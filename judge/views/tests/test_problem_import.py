@@ -36,9 +36,19 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
 
     def test_upload_creates_preview_draft_from_question_type_column(self):
         response = self.upload([
-            ['name', 'question_type', 'description', 'answer'],
-            ['Prime check', 'multiple_choice', 'Which is prime?\nA. 4\nB. 5', 'B'],
-            ['Greeting', 'fill_blank', 'Complete: Hello ____', 'world'],
+            [
+                'name*', 'problem_type*', 'description*', 'answer*',
+                'tag（less than 20 characters, spaced with commas)',
+                'difficulty\n(easy:0; medium:1; difficult:2)', 'explanation',
+            ],
+            [
+                'Prime check', 'multiple_choice', 'Which is prime?\nA. 4\nB. 5', 'B',
+                'number theory, primes', '2', 'Prime is only divisible by 1 and itself.',
+            ],
+            [
+                'Greeting', 'fill_blank', 'Complete: Hello ____', 'world', 'vocabulary', '0',
+                'Use the familiar greeting.',
+            ],
         ])
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -47,6 +57,13 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(draft.items.count(), 2)
         self.assertEqual(draft.items.get(name='Prime check').submission_type, 'M')
         self.assertEqual(draft.items.get(name='Greeting').submission_type, 'B')
+        self.assertEqual(draft.items.get(name='Prime check').tags, 'number theory, primes')
+        self.assertEqual(draft.items.get(name='Prime check').difficulty, '2')
+        self.assertEqual(draft.items.get(name='Prime check').description, 'Which is prime?')
+        self.assertEqual(draft.items.get(name='Prime check').options, '4\n5')
+        self.assertEqual(draft.items.get(name='Prime check').answer, 'B')
+        self.assertEqual(draft.items.get(name='Prime check').correct_options, '2')
+        self.assertEqual(draft.items.get(name='Greeting').solution, 'Use the familiar greeting.')
         self.assertEqual(self.client.get(payload['preview_url']).status_code, 200)
 
     @mock.patch('judge.views.problem_import.llm.chat')
@@ -92,6 +109,8 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
             'description': item.description,
             'answer': '2',
             'solution': '5 is the only prime option.',
+            'tags': 'number theory, primes',
+            'difficulty': '2',
             'options': '4\n5',
             'correct_options': '2',
             'blanks': '',
@@ -101,4 +120,8 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         problem = Problem.objects.get(name='Prime check')
         self.assertEqual(problem.submission_type, 'M')
         self.assertEqual(problem.mcq_options.filter(is_correct=True).count(), 1)
+        self.assertSetEqual(
+            set(problem.types.values_list('name', flat=True)),
+            {'import-type', 'number_theory', 'primes', 'hard'},
+        )
         self.assertEqual(Solution.objects.get(problem=problem).content, '5 is the only prime option.')

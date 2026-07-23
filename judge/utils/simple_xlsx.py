@@ -237,7 +237,7 @@ def _load_shared_strings(archive):
     return result
 
 
-def _find_first_sheet_path(archive):
+def _find_sheet_path(archive, sheet_name=None):
     workbook = ET.fromstring(_safe_archive_read(archive, 'xl/workbook.xml'))
     rels = ET.fromstring(_safe_archive_read(archive, 'xl/_rels/workbook.xml.rels'))
     namespace = {'x': MAIN_NS, 'r': REL_NS, 'pr': PKG_REL_NS}
@@ -245,7 +245,16 @@ def _find_first_sheet_path(archive):
     if first_sheet is None:
         raise ValueError('Workbook does not contain any sheets.')
 
-    rel_id = first_sheet.attrib.get('{%s}id' % REL_NS)
+    sheet = first_sheet
+    if sheet_name:
+        expected_name = str(sheet_name).casefold()
+        sheet = next(
+            (candidate for candidate in workbook.findall('x:sheets/x:sheet', namespace)
+             if candidate.attrib.get('name', '').casefold() == expected_name),
+            first_sheet,
+        )
+
+    rel_id = sheet.attrib.get('{%s}id' % REL_NS)
     for relation in rels.findall('pr:Relationship', namespace):
         if relation.attrib.get('Id') == rel_id:
             target = relation.attrib.get('Target', '')
@@ -253,6 +262,10 @@ def _find_first_sheet_path(archive):
                 return target.lstrip('/')
             return 'xl/{}'.format(target.lstrip('/'))
     raise ValueError('Workbook sheet relationship is missing.')
+
+
+def _find_first_sheet_path(archive):
+    return _find_sheet_path(archive)
 
 
 def _cell_column_index(cell_ref):
@@ -285,12 +298,12 @@ def _cell_value(cell, shared_strings, namespace):
     return raw_value or ''
 
 
-def read_xlsx_rows(file_obj):
+def read_xlsx_rows(file_obj, sheet_name=None):
     validate_xlsx_upload(file_obj)
     with zipfile.ZipFile(file_obj) as archive:
         _validate_archive_members(archive)
         shared_strings = _load_shared_strings(archive)
-        sheet_path = _find_first_sheet_path(archive)
+        sheet_path = _find_sheet_path(archive, sheet_name)
         sheet = ET.fromstring(_safe_archive_read(archive, sheet_path))
 
     namespace = {'x': MAIN_NS}

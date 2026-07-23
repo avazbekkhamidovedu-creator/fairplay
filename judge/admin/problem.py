@@ -848,8 +848,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
 
     def _excel_headers(self):
         return [
-            'name', 'question_type', 'description', 'answer', 'solution', 'organizations', 'allowed_languages',
-            'test_data',
+            'name', 'problem_type', 'description', 'answer', 'organizations', 'tag', 'difficulty', 'explanation',
+            'allowed_languages', 'test_data',
         ]
 
     def _legacy_excel_headers(self):
@@ -879,8 +879,10 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 'code',
                 'Write the full problem statement here. You can use multiple lines.',
                 '',
-                'Explain the intended solution here.',
                 org.slug if org else '',
+                'implementation',
+                '1',
+                'Explain the intended solution here.',
                 language_sample,
                 'input data 1: 2 3\noutput data 1: 5',
             ],
@@ -897,10 +899,12 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             Language.objects.order_by('key').values_list('key', flat=True)[:8],
         ) or 'PY3'
         return [
+            ['Import Instructions', '', '', ''],
+            ['Fill the Problems sheet and follow the specification for each field.', '', '', ''],
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Problem title.', 'Two Sum'],
             [
-                'question_type', 'yes', 'Choose code, multiple_choice, or fill_blank from the Excel dropdown.',
+                'problem_type', 'yes', 'Choose code, multiple_choice, or fill_blank from the Excel dropdown.',
                 'multiple_choice',
             ],
             [
@@ -918,13 +922,6 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 'B  or  Paris|4',
             ],
             [
-                'LLM format question', 'optional',
-                'In preview, this formats MCQ options or fill blanks only. For MCQ it preserves the answer column '
-                'and removes only an exact recognized option block from description.',
-                'Review the rendered preview before creating the problem.',
-            ],
-            ['solution', 'no', 'Editorial content. It is added to the problem solution section.', 'Use addition.'],
-            [
                 'organizations', 'no',
                 'Separate multiple values with "|" or ",". Use organization slug/name/id.',
                 org_names,
@@ -935,8 +932,19 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 class_names,
             ],
             [
+                'tag', 'no',
+                'Separate up to five knowledge tags with commas. Each tag must be at most 20 characters.',
+                'calculation, physics',
+            ],
+            [
+                'difficulty', 'no',
+                'Use 0 for easy, 1 for medium, or 2 for hard.',
+                '1',
+            ],
+            ['explanation', 'no', 'Editorial content. It is added to the problem solution section.', 'Use addition.'],
+            [
                 'allowed_languages', 'no',
-                'Separate full language names with "|" or ",". C++11 also matches CPP11.',
+                'Separate full language names with "|" or ",". Names must match exactly.',
                 language_keys,
             ],
             [
@@ -958,10 +966,29 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         """Keep the sample's Word object while replacing permission-scoped references."""
         reference_rows = self._excel_reference_rows(request)
         strings_path = 'xl/sharedStrings.xml'
-        reference_sheet_path = 'xl/worksheets/sheet2.xml'
         namespace = {'x': simple_xlsx.MAIN_NS}
 
         with zipfile.ZipFile(sample_path) as source:
+            workbook = ET.fromstring(source.read('xl/workbook.xml'))
+            relationships = ET.fromstring(source.read('xl/_rels/workbook.xml.rels'))
+            relation_targets = {
+                relation.attrib.get('Id'): relation.attrib.get('Target', '')
+                for relation in relationships
+            }
+            reference_sheet_path = ''
+            for sheet_name in ('Instructions', 'Reference'):
+                sheet = next(
+                    (item for item in workbook.iter() if item.tag.endswith('}sheet')
+                     and item.attrib.get('name') == sheet_name),
+                    None,
+                )
+                if sheet is None:
+                    continue
+                target = relation_targets.get(sheet.attrib.get('{%s}id' % simple_xlsx.REL_NS), '')
+                reference_sheet_path = target.lstrip('/') if target.startswith('/') else 'xl/{}'.format(target)
+                break
+            if not reference_sheet_path:
+                raise ValueError('The Excel template must contain an Instructions or Reference worksheet.')
             shared_strings = ET.fromstring(source.read(strings_path))
             reference_sheet = ET.fromstring(source.read(reference_sheet_path))
             old_string_cells = len(reference_sheet.findall('.//x:c[@t="s"]', namespace))

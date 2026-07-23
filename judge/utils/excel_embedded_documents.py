@@ -33,11 +33,11 @@ class EmbeddedFile:
 
 def read_xlsx_rows_with_embedded_files(file_obj):
     """Return first-sheet rows and row-anchored DOCX, Markdown, or ZIP attachments."""
-    rows = simple_xlsx.read_xlsx_rows(file_obj)
+    rows = simple_xlsx.read_xlsx_rows(file_obj, sheet_name='Problems')
     file_obj.seek(0)
     with zipfile.ZipFile(file_obj) as archive:
         simple_xlsx._validate_archive_members(archive)
-        sheet_path = simple_xlsx._find_first_sheet_path(archive)
+        sheet_path = simple_xlsx._find_sheet_path(archive, sheet_name='Problems')
         sheet = ET.fromstring(simple_xlsx._safe_archive_read(archive, sheet_path))
         rels = _relationship_map(archive, sheet_path)
         anchors = _shape_rows(archive, sheet, rels)
