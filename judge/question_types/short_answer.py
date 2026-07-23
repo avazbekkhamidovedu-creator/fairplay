@@ -70,18 +70,20 @@ class ShortAnswerQuestionType(QuestionType):
         except (ValueError, TypeError, ObjectDoesNotExist):
             answer = ''
 
+        case_total = self._case_total(problem, config)
+
         scored = self._grade_ai(problem, config, answer)
         if scored is None:
             # AI unavailable/failed is an infrastructure issue, not a wrong student answer (WA).
-            cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': 100,
+            cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
                       'feedback': _('Awaiting manual grading (AI grader unavailable).')}]
-            return GradingResult(case_points=0, case_total=100, result='IR', cases=cases)
+            return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
 
         sub_scores, total = scored
         if not sub_scores:
-            cases = [{'case': 1, 'status': 'WA', 'points': 0, 'total': 100,
+            cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
                       'feedback': _('Grading error — please contact staff.')}]
-            return GradingResult(case_points=0, case_total=100, result='WA', cases=cases)
+            return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
 
         case_total = sum(item['max_points'] for item in sub_scores)
         result = 'AC' if total >= case_total else 'WA'
@@ -101,6 +103,22 @@ class ShortAnswerQuestionType(QuestionType):
 
         return GradingResult(case_points=total, case_total=case_total,
                              result=result, cases=cases)
+
+    @staticmethod
+    def _case_total(problem, config):
+        """Full points for status-page display when AI grading did not produce a table."""
+        table = getattr(config, 'grading_table', None) if config else None
+        if isinstance(table, list) and table:
+            try:
+                total = sum(float(item.get('max_points') or 0) for item in table)
+                if total > 0:
+                    return total
+            except (TypeError, ValueError, AttributeError):
+                pass
+        try:
+            return float(problem.points or 0) or 0
+        except (TypeError, ValueError):
+            return 0
 
     # ------------------------------------------------------------------
     def _grade_ai(self, problem, config, answer):

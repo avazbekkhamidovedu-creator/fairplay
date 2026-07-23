@@ -20,8 +20,10 @@ the classic admin test_data page. Responses are JSON ``{ok, redirect}`` or ``{er
 import json
 import os
 import re
+from datetime import datetime
 from zipfile import BadZipfile, ZipFile
 
+from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.files.base import ContentFile
 from django.db import transaction
@@ -29,15 +31,18 @@ from django.db.models import Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.decorators import method_decorator
+from django.utils.dateparse import parse_datetime
 from django.utils.text import slugify
 from django.utils.translation import gettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
 
-from judge.models import (Language, Organization, Problem, ProblemBlank, ProblemFillBlankConfig, ProblemGroup,
-                          ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
-                          ProblemType)
+from judge.models import (Class, Language, License, Organization, Problem, ProblemBlank, ProblemFillBlankConfig,
+                          ProblemGroup, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig,
+                          ProblemSubmissionType, ProblemTranslation, ProblemType, Profile, Solution,
+                          SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
@@ -113,6 +118,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'problem_preview_batch_url': reverse('problem_preview_batch'),
             'image_upload_url': reverse('martor_image_uploader'),
             'search_users_url': reverse('martor_search_user'),
+            'profile_select2_url': reverse('profile_select2'),
+            'class_select2_url': reverse('class_select2'),
+            'current_profile_json': json.dumps({
+                'id': profile.id,
+                'username': profile.username,
+            } if profile else {'id': None, 'username': ''}),
+            'licenses': list(License.objects.order_by('name').values('id', 'key', 'name', 'display')),
+            'ui_languages': list(settings.LANGUAGES),
             'edit_code': '',
             'edit_data_json': 'null',
             'test_data_url': '',
@@ -298,6 +311,40 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['gradingTable'] = config.grading_table if config else None
         else:
             data['type'] = 'single'
+
+        from django.db.models import F as DbF
+        data['authors'] = list(problem.authors.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['curators'] = list(problem.curators.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['testers'] = list(problem.testers.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['banned_users'] = list(
+            problem.banned_users.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['classes'] = list(problem.classes.values('id', 'name'))
+        data['license_id'] = problem.license_id or ''
+        data['is_manually_managed'] = problem.is_manually_managed
+        data['date'] = timezone.localtime(problem.date).strftime('%Y-%m-%d %H:%M') if problem.date else ''
+        data['submission_source_visibility_mode'] = problem.submission_source_visibility_mode
+        data['is_full_markup'] = problem.is_full_markup
+        data['view_test_cases'] = problem.view_test_cases
+        data['view_tester'] = problem.view_tester
+        data['ai_hints_enabled'] = problem.ai_hints_enabled
+        data['og_image'] = problem.og_image or ''
+        data['summary'] = problem.summary or ''
+        data['short_circuit'] = problem.short_circuit
+        try:
+            sol = problem.solution
+        except Solution.DoesNotExist:
+            sol = None
+        if sol:
+            data['solution'] = {
+                'is_public': sol.is_public,
+                'publish_on': timezone.localtime(sol.publish_on).strftime('%Y-%m-%d %H:%M') if sol.publish_on else '',
+                'content': sol.content or '',
+                'authors': list(sol.authors.annotate(username=DbF('user__username')).values('id', 'username')),
+            }
+        else:
+            data['solution'] = {'is_public': False, 'publish_on': '', 'content': '', 'authors': []}
+        data['translations'] = list(
+            problem.translations.values('language', 'name', 'description'))
         return data
 
     def _read_testcases(self, problem):
@@ -442,6 +489,121 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ids = payload.get('organizations') or []
         problem.organizations.set(Organization.objects.filter(pk__in=ids))
 
+    def _parse_local_dt(self, value):
+        text = (value or '').strip()
+        if not text:
+            return None
+        dt = parse_datetime(text.replace(' ', 'T', 1) if 'T' not in text and ' ' in text else text)
+        if dt is None:
+            for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+                try:
+                    dt = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+        if dt is None:
+            return None
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+        return dt
+
+    def _profile_ids(self, raw):
+        ids = []
+        for item in raw or []:
+            try:
+                ids.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return ids
+
+    def _apply_advanced(self, problem, payload, request):
+        """Persist Advanced-section fields from create_v2 JSON payload."""
+        problem.is_manually_managed = bool(payload.get('is_manually_managed'))
+        problem.is_full_markup = bool(payload.get('is_full_markup'))
+        problem.view_test_cases = bool(payload.get('view_test_cases'))
+        problem.view_tester = bool(payload.get('view_tester'))
+        problem.ai_hints_enabled = bool(payload.get('ai_hints_enabled'))
+        problem.short_circuit = bool(payload.get('short_circuit'))
+        problem.og_image = (payload.get('og_image') or '')[:150]
+        problem.summary = (payload.get('summary') or '')[:300]
+
+        mode = payload.get('submission_source_visibility_mode') or SubmissionSourceAccess.FOLLOW
+        valid_modes = {c[0] for c in Problem.SUBMISSION_SOURCE_ACCESS}
+        if mode not in valid_modes:
+            mode = SubmissionSourceAccess.FOLLOW
+        problem.submission_source_visibility_mode = mode
+
+        date_val = self._parse_local_dt(payload.get('date'))
+        if date_val is not None:
+            problem.date = date_val
+
+        license_id = payload.get('license_id')
+        if license_id in ('', None):
+            problem.license = None
+        else:
+            try:
+                problem.license = License.objects.get(pk=int(license_id))
+            except (TypeError, ValueError, License.DoesNotExist):
+                problem.license = None
+
+        problem.save()
+
+        author_ids = self._profile_ids(payload.get('authors'))
+        if request.profile and request.profile.id not in author_ids:
+            author_ids.append(request.profile.id)
+        if not author_ids and request.profile:
+            author_ids = [request.profile.id]
+        problem.authors.set(Profile.objects.filter(pk__in=author_ids))
+        problem.curators.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('curators'))))
+        problem.testers.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('testers'))))
+        problem.banned_users.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('banned_users'))))
+
+        org_ids = list(problem.organizations.values_list('id', flat=True))
+        class_ids = self._profile_ids(payload.get('classes'))  # reuse int parser
+        class_qs = Class.get_visible_classes(request.user).filter(pk__in=class_ids)
+        if org_ids:
+            class_qs = class_qs.filter(organization_id__in=org_ids)
+        else:
+            class_qs = class_qs.none()
+        problem.classes.set(class_qs)
+
+        sol = payload.get('solution') or {}
+        sol_content = (sol.get('content') or '').strip()
+        sol_publish = self._parse_local_dt(sol.get('publish_on'))
+        if sol_content or sol.get('is_public') or sol_publish or sol.get('authors'):
+            if sol_publish is None:
+                sol_publish = timezone.now()
+            solution, _created = Solution.objects.update_or_create(
+                problem=problem,
+                defaults={
+                    'is_public': bool(sol.get('is_public')),
+                    'publish_on': sol_publish,
+                    'content': sol_content,
+                },
+            )
+            solution.authors.set(Profile.objects.filter(pk__in=self._profile_ids(sol.get('authors'))))
+        elif hasattr(problem, 'solution'):
+            try:
+                problem.solution.delete()
+            except Solution.DoesNotExist:
+                pass
+
+        keep_langs = set()
+        for row in payload.get('translations') or []:
+            lang = (row.get('language') or '').strip()
+            name = (row.get('name') or '').strip()
+            description = (row.get('description') or '').strip()
+            if not lang or lang not in dict(settings.LANGUAGES):
+                continue
+            if not name and not description:
+                continue
+            keep_langs.add(lang)
+            ProblemTranslation.objects.update_or_create(
+                problem=problem, language=lang,
+                defaults={'name': name or problem.name, 'description': description or ''},
+            )
+        problem.translations.exclude(language__in=keep_langs).delete()
+
     # ------------------------------------------------------------------ code problem
     @staticmethod
     def _zip_basename(path):
@@ -570,6 +732,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request)
 
             checker = payload.get('checker') or ''
             if zip_upload is not None:
@@ -788,6 +951,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request)
 
             ProblemMCQConfig.objects.create(
                 problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')))
@@ -827,6 +991,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request)
 
             ProblemMCQConfig.objects.create(problem=problem, multiple_select=False, shuffle_options=False,
                                             is_true_false=True)
@@ -863,6 +1028,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request)
 
             ProblemFillBlankConfig.objects.create(
                 problem=problem,
@@ -906,6 +1072,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request)
 
             ProblemShortAnswerConfig.objects.create(
                 problem=problem,

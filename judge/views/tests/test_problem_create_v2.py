@@ -9,8 +9,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from judge.models import (Problem, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
-                          ProblemShortAnswerConfig, ProblemTestCase, ProblemType, problem_data_storage)
+from judge.models import (License, Problem, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
+                          ProblemShortAnswerConfig, ProblemTestCase, ProblemTranslation, ProblemType,
+                          Solution, problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
@@ -96,9 +97,9 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_rejects_unimplemented_type(self):
         self.client.force_login(self.users['creator'])
         payload = {
-            'type': 'blank',
-            'name': 'Fill',
-            'description': 'Fill {{blank}}',
+            'type': 'compound',
+            'name': 'Compound',
+            'description': 'Not implemented yet',
             'points': 1,
             'group_id': self.group.id,
         }
@@ -108,6 +109,63 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
             content_type='application/json',
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_create_mcq_persists_advanced_fields(self):
+        self.client.force_login(self.users['creator'])
+        curator = self.users['normal'].profile
+        license_obj = License.objects.create(
+            key='cc-by-sa-4.0', link='https://example.com/license', name='CC BY-SA 4.0',
+            display='CC BY-SA 4.0', text='license text',
+        )
+        payload = {
+            'type': 'single',
+            'name': 'Advanced wired',
+            'description': 'Authors and license should persist.',
+            'points': 5,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+            'curators': [curator.id],
+            'license_id': license_obj.id,
+            'is_full_markup': True,
+            'view_test_cases': True,
+            'summary': 'short summary',
+            'submission_source_visibility_mode': 'S',
+            'solution': {
+                'is_public': True,
+                'publish_on': '2030-01-02 15:30',
+                'content': 'Official solution body',
+                'authors': [self.users['creator'].profile.id],
+            },
+            'translations': [
+                {'language': 'zh-hans', 'name': '进阶题', 'description': '中文描述'},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        problem = Problem.objects.get(code=body['code'])
+        self.assertTrue(problem.authors.filter(id=self.users['creator'].profile.id).exists())
+        self.assertTrue(problem.curators.filter(id=curator.id).exists())
+        self.assertEqual(problem.license_id, license_obj.id)
+        self.assertTrue(problem.is_full_markup)
+        self.assertTrue(problem.view_test_cases)
+        self.assertEqual(problem.summary, 'short summary')
+        self.assertEqual(problem.submission_source_visibility_mode, 'S')
+        sol = Solution.objects.get(problem=problem)
+        self.assertTrue(sol.is_public)
+        self.assertEqual(sol.content, 'Official solution body')
+        self.assertTrue(sol.authors.filter(id=self.users['creator'].profile.id).exists())
+        tr = ProblemTranslation.objects.get(problem=problem, language='zh-hans')
+        self.assertEqual(tr.name, '进阶题')
+        self.assertEqual(tr.description, '中文描述')
 
     def test_ai_difficulty_endpoint(self):
         self.client.force_login(self.users['creator'])
