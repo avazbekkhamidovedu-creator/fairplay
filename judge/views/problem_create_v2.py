@@ -38,11 +38,12 @@ from django.utils.text import slugify
 from django.utils.translation import gettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
+from reversion import revisions
 
-from judge.models import (Class, Language, License, Organization, Problem, ProblemBlank, ProblemFillBlankConfig,
-                          ProblemGroup, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig,
-                          ProblemSubmissionType, ProblemTranslation, ProblemType, Profile, Solution,
-                          SubmissionSourceAccess)
+from judge.models import (Class, Language, LanguageLimit, License, Organization, Problem, ProblemBlank,
+                          ProblemClarification, ProblemFillBlankConfig, ProblemGroup, ProblemMCQConfig,
+                          ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType, ProblemTemplate,
+                          ProblemTranslation, ProblemType, Profile, Solution, SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
@@ -96,6 +97,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'organizations': orgs,
             'groups': list(ProblemGroup.objects.order_by('full_name', 'name').values('id', 'full_name', 'name')),
             'languages': list(Language.objects.order_by('name', 'key').values('id', 'key', 'name')),
+            'languages_json': json.dumps([
+                {'key': lang['key'], 'name': lang['name']}
+                for lang in Language.objects.order_by('name', 'key').values('key', 'name')
+            ]),
             'problem_types': list(ProblemType.objects.order_by('full_name', 'name').values('id', 'full_name', 'name')),
             'problem_types_json': json.dumps([
                 {'name': t['name'], 'full': t['full_name'] or t['name']}
@@ -188,19 +193,30 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 return JsonResponse({'error': _('Problem not found.')}, status=404)
 
         try:
-            if qtype == 'programming':
-                problem = self._create_code(request, payload, name, problem=existing,
-                                            zip_upload=zip_upload)
-            elif qtype in ('single', 'multiple'):
-                problem = self._create_mcq(request, payload, name, multiple=(qtype == 'multiple'), problem=existing)
-            elif qtype == 'truefalse':
-                problem = self._create_truefalse(request, payload, name, problem=existing)
-            elif qtype == 'blank':
-                problem = self._create_fill_blank(request, payload, name, problem=existing)
-            elif qtype == 'short':
-                problem = self._create_short_answer(request, payload, name, problem=existing)
-            else:
-                return JsonResponse({'error': _('Unknown question type.')}, status=400)
+            # Mirror classic VersionAdmin: store an optional edit-reason comment on the revision.
+            with revisions.create_revision(atomic=True):
+                if qtype == 'programming':
+                    problem = self._create_code(request, payload, name, problem=existing,
+                                                zip_upload=zip_upload)
+                elif qtype in ('single', 'multiple'):
+                    problem = self._create_mcq(request, payload, name, multiple=(qtype == 'multiple'),
+                                               problem=existing)
+                elif qtype == 'truefalse':
+                    problem = self._create_truefalse(request, payload, name, problem=existing)
+                elif qtype == 'blank':
+                    problem = self._create_fill_blank(request, payload, name, problem=existing)
+                elif qtype == 'short':
+                    problem = self._create_short_answer(request, payload, name, problem=existing)
+                else:
+                    return JsonResponse({'error': _('Unknown question type.')}, status=400)
+                revisions.set_user(request.user)
+                reason = (payload.get('edit_reason') or '').strip()
+                if reason:
+                    revisions.set_comment(reason)
+                elif existing:
+                    revisions.set_comment(_('Edited from create_v2'))
+                else:
+                    revisions.set_comment(_('Created from create_v2'))
         except PermissionError as e:
             return JsonResponse({'error': str(e)}, status=403)
         except ValueError as e:
@@ -347,6 +363,29 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['solution'] = {'is_public': False, 'publish_on': '', 'content': '', 'authors': []}
         data['translations'] = list(
             problem.translations.values('language', 'name', 'description'))
+        data['language_limits'] = [
+            {
+                'language': lim.language.key,
+                'time_limit': lim.time_limit,
+                'memory_limit': lim.memory_limit,  # KB (same as classic admin)
+            }
+            for lim in problem.language_limits.select_related('language').order_by('language__key')
+        ]
+        data['templates'] = [
+            {
+                'language': tmpl.language.key,
+                'code': tmpl.code or '',
+            }
+            for tmpl in problem.templates.select_related('language').order_by('language__key')
+        ]
+        data['clarifications'] = [
+            {
+                'id': clar.id,
+                'description': clar.description or '',
+                'date': timezone.localtime(clar.date).strftime('%Y-%m-%d %H:%M') if clar.date else '',
+            }
+            for clar in ProblemClarification.objects.filter(problem=problem).order_by('-date', '-id')
+        ]
         return data
 
     def _read_testcases(self, problem):
@@ -643,6 +682,103 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     defaults={'name': name or problem.name, 'description': description or ''},
                 )
             problem.translations.exclude(language__in=keep_langs).delete()
+
+        # Same omit-safe rule as solution/translations: only sync when the client sent the key.
+        if 'language_limits' in payload:
+            self._sync_language_limits(problem, payload.get('language_limits') or [])
+        if 'templates' in payload:
+            self._sync_templates(problem, payload.get('templates') or [])
+        if 'clarifications' in payload:
+            self._sync_clarifications(problem, payload.get('clarifications') or [])
+
+    def _sync_language_limits(self, problem, rows):
+        """Replace LanguageLimit rows (classic admin LanguageLimitInline)."""
+        keep_lang_ids = set()
+        seen_keys = set()
+        for row in rows:
+            if row.get('delete'):
+                continue
+            lang_key = (row.get('language') or '').strip()
+            if not lang_key:
+                continue
+            if lang_key in seen_keys:
+                raise ValueError(_('Duplicate language limit for %(lang)s.') % {'lang': lang_key})
+            seen_keys.add(lang_key)
+            lang = Language.objects.filter(key=lang_key).first()
+            if lang is None:
+                raise ValueError(_('Unknown language: %(lang)s') % {'lang': lang_key})
+            try:
+                time_limit = float(row.get('time_limit'))
+                memory_limit = int(float(row.get('memory_limit')))
+            except (TypeError, ValueError):
+                raise ValueError(_('Invalid language limit values for %(lang)s.') % {'lang': lang_key})
+            if not (settings.DMOJ_PROBLEM_MIN_TIME_LIMIT <= time_limit <= settings.DMOJ_PROBLEM_MAX_TIME_LIMIT):
+                raise ValueError(_('Time limit out of range for %(lang)s.') % {'lang': lang_key})
+            if not (settings.DMOJ_PROBLEM_MIN_MEMORY_LIMIT <= memory_limit <= settings.DMOJ_PROBLEM_MAX_MEMORY_LIMIT):
+                raise ValueError(_('Memory limit out of range for %(lang)s.') % {'lang': lang_key})
+            LanguageLimit.objects.update_or_create(
+                problem=problem, language=lang,
+                defaults={'time_limit': time_limit, 'memory_limit': memory_limit},
+            )
+            keep_lang_ids.add(lang.id)
+        problem.language_limits.exclude(language_id__in=keep_lang_ids).delete()
+
+    def _sync_templates(self, problem, rows):
+        """Replace ProblemTemplate rows (classic admin ProblemTemplateInline)."""
+        keep_lang_ids = set()
+        seen_keys = set()
+        for row in rows:
+            if row.get('delete'):
+                continue
+            lang_key = (row.get('language') or '').strip()
+            code = row.get('code')
+            if code is None:
+                code = ''
+            else:
+                code = str(code)
+            if not lang_key:
+                continue
+            # Empty template rows are ignored (same as leaving an unused inline blank).
+            if not code.strip():
+                continue
+            if lang_key in seen_keys:
+                raise ValueError(_('Duplicate problem template for %(lang)s.') % {'lang': lang_key})
+            seen_keys.add(lang_key)
+            lang = Language.objects.filter(key=lang_key).first()
+            if lang is None:
+                raise ValueError(_('Unknown language: %(lang)s') % {'lang': lang_key})
+            ProblemTemplate.objects.update_or_create(
+                problem=problem, language=lang,
+                defaults={'code': code},
+            )
+            keep_lang_ids.add(lang.id)
+        problem.templates.exclude(language_id__in=keep_lang_ids).delete()
+
+    def _sync_clarifications(self, problem, rows):
+        """Replace ProblemClarification rows (classic admin ProblemClarificationInline)."""
+        keep_ids = set()
+        for row in rows:
+            if row.get('delete'):
+                continue
+            description = (row.get('description') or '').strip()
+            if not description:
+                continue
+            clar_id = row.get('id')
+            if clar_id not in (None, ''):
+                try:
+                    clar_id = int(clar_id)
+                except (TypeError, ValueError):
+                    clar_id = None
+            if clar_id is not None:
+                updated = ProblemClarification.objects.filter(problem=problem, pk=clar_id).update(
+                    description=description,
+                )
+                if updated:
+                    keep_ids.add(clar_id)
+                    continue
+            obj = ProblemClarification.objects.create(problem=problem, description=description)
+            keep_ids.add(obj.id)
+        ProblemClarification.objects.filter(problem=problem).exclude(id__in=keep_ids).delete()
 
     # ------------------------------------------------------------------ code problem
     @staticmethod

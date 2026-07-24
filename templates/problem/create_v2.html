@@ -606,7 +606,13 @@
 
         <div class="inline-group type-panel" data-for="programming">
           <h2>{{ _('Language limits') }}</h2>
-          <p class="unsaved-note">{{ _('Not saved yet — use the classic admin page for per-language limits.') }}</p>
+          <table class="inline-table">
+            <thead><tr><th>{{ _('Language') }}</th><th>{{ _('Time limit (s)') }}</th><th>{{ _('Memory limit (KB)') }}</th><th>{{ _('Delete') }}</th></tr></thead>
+            <tbody id="lang-limit-body">
+              <tr><td colspan="4"><a href="#" id="lang-limit-add" onclick="event.preventDefault(); addLangLimitRow();">{{ _('+ Add another Language limit') }}</a></td></tr>
+            </tbody>
+          </table>
+          <p class="unsaved-note">{{ _('Override global time/memory for specific languages (same as classic LanguageLimit).') }}</p>
         </div>
 
         <fieldset class="module">
@@ -622,18 +628,33 @@
         <fieldset class="module">
           <h2>{{ _('Advanced History') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>{{ _('Edit reason') }}</label><div class="field"><input type="text" disabled placeholder="{{ _('Not saved yet') }}"><div class="unsaved-note">{{ _('Edit reason is not persisted on this page yet.') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Edit reason') }}</label><div class="field">
+              <input type="text" id="f-edit-reason" placeholder="{{ _('Describe the changes you made (optional)') }}" maxlength="200">
+              <p class="unsaved-note">{{ _('Stored as the revision comment (same as classic admin history).') }}</p>
+            </div></div>
           </div>
         </fieldset>
 
         <div class="inline-group type-panel" data-for="programming">
           <h2>{{ _('Problem templates') }}</h2>
-          <p class="unsaved-note">{{ _('Not saved yet — use the classic admin page for code templates.') }}</p>
+          <table class="inline-table">
+            <thead><tr><th>{{ _('Language') }}</th><th>{{ _('Code template') }}</th><th>{{ _('Delete') }}</th></tr></thead>
+            <tbody id="template-body">
+              <tr><td colspan="3"><a href="#" id="template-add" onclick="event.preventDefault(); addTemplateRow();">{{ _('+ Add another Problem template') }}</a></td></tr>
+            </tbody>
+          </table>
+          <p class="unsaved-note">{{ _('Starter code shown in the submit editor (same as classic ProblemTemplate).') }}</p>
         </div>
 
         <div class="inline-group">
           <h2>{{ _('Clarifications') }}</h2>
-          <p class="unsaved-note">{{ _('Not saved yet — manage contest clarifications from the contest admin.') }}</p>
+          <table class="inline-table">
+            <thead><tr><th>{{ _('Description') }}</th><th>{{ _('Delete') }}</th></tr></thead>
+            <tbody id="clarification-body">
+              <tr><td colspan="2"><a href="#" id="clarification-add" onclick="event.preventDefault(); addClarificationRow();">{{ _('+ Add another Clarification') }}</a></td></tr>
+            </tbody>
+          </table>
+          <p class="unsaved-note">{{ _('Shown on the problem page (same as classic ProblemClarification).') }}</p>
         </div>
 
         <div class="inline-group">
@@ -736,6 +757,7 @@
     const CLASS_SELECT2_URL = '{{ class_select2_url }}';
     const SELECT2_THEME = '{{ DMOJ_SELECT2_THEME }}';
     const CURRENT_PROFILE = {{ current_profile_json|safe }};
+    const JUDGE_LANGUAGES = {{ languages_json|safe }};
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
@@ -1868,6 +1890,104 @@
         delete: tr.querySelector('.tr-del').checked,
       })).filter(row => !row.delete && (row.name || row.description));
     }
+    function judgeLangSelectHtml(selected, className) {
+      const sel = document.createElement('select');
+      sel.className = className || 'll-lang';
+      (JUDGE_LANGUAGES || []).forEach(l => {
+        const o = document.createElement('option');
+        o.value = l.key;
+        o.textContent = l.name;
+        sel.appendChild(o);
+      });
+      if (selected) sel.value = selected;
+      return sel;
+    }
+    function addLangLimitRow(data) {
+      const body = document.getElementById('lang-limit-body');
+      if (!body) return;
+      const addRow = body.querySelector('#lang-limit-add').closest('tr');
+      const tr = document.createElement('tr');
+      tr.className = 'll-row';
+      const tdLang = document.createElement('td'); tdLang.style.width = '140px';
+      tdLang.appendChild(judgeLangSelectHtml(data && data.language, 'll-lang'));
+      const tdTime = document.createElement('td');
+      const time = document.createElement('input'); time.type = 'number'; time.step = '0.1';
+      time.className = 'll-time'; time.style.width = '100px';
+      if (data && data.time_limit != null) time.value = data.time_limit;
+      else time.value = '1';
+      tdTime.appendChild(time);
+      const tdMem = document.createElement('td');
+      const mem = document.createElement('input'); mem.type = 'number';
+      mem.className = 'll-mem'; mem.style.width = '120px';
+      if (data && data.memory_limit != null) mem.value = data.memory_limit;
+      else mem.value = '262144';
+      tdMem.appendChild(mem);
+      const tdDel = document.createElement('td'); tdDel.style.width = '40px';
+      const del = document.createElement('input'); del.type = 'checkbox'; del.className = 'll-del';
+      tdDel.appendChild(del);
+      tr.appendChild(tdLang); tr.appendChild(tdTime); tr.appendChild(tdMem); tr.appendChild(tdDel);
+      body.insertBefore(tr, addRow);
+    }
+    function collectLangLimits() {
+      return [...document.querySelectorAll('#lang-limit-body tr.ll-row')].map(tr => ({
+        language: tr.querySelector('.ll-lang').value,
+        time_limit: tr.querySelector('.ll-time').value,
+        memory_limit: tr.querySelector('.ll-mem').value,
+        delete: tr.querySelector('.ll-del').checked,
+      })).filter(row => !row.delete && row.language && row.time_limit !== '' && row.memory_limit !== '');
+    }
+    function addTemplateRow(data) {
+      const body = document.getElementById('template-body');
+      if (!body) return;
+      const addRow = body.querySelector('#template-add').closest('tr');
+      const tr = document.createElement('tr');
+      tr.className = 'pt-row';
+      const tdLang = document.createElement('td'); tdLang.style.width = '120px';
+      tdLang.appendChild(judgeLangSelectHtml(data && data.language, 'pt-lang'));
+      const tdCode = document.createElement('td');
+      const code = document.createElement('textarea'); code.rows = 3; code.className = 'pt-code';
+      code.style.width = '100%'; code.style.fontFamily = 'monospace';
+      if (data && data.code != null) code.value = data.code;
+      tdCode.appendChild(code);
+      const tdDel = document.createElement('td'); tdDel.style.width = '40px';
+      const del = document.createElement('input'); del.type = 'checkbox'; del.className = 'pt-del';
+      tdDel.appendChild(del);
+      tr.appendChild(tdLang); tr.appendChild(tdCode); tr.appendChild(tdDel);
+      body.insertBefore(tr, addRow);
+    }
+    function collectTemplates() {
+      return [...document.querySelectorAll('#template-body tr.pt-row')].map(tr => ({
+        language: tr.querySelector('.pt-lang').value,
+        code: tr.querySelector('.pt-code').value,
+        delete: tr.querySelector('.pt-del').checked,
+      })).filter(row => !row.delete && row.language && (row.code || '').trim());
+    }
+    function addClarificationRow(data) {
+      const body = document.getElementById('clarification-body');
+      if (!body) return;
+      const addRow = body.querySelector('#clarification-add').closest('tr');
+      const tr = document.createElement('tr');
+      tr.className = 'cl-row';
+      if (data && data.id) tr.dataset.id = data.id;
+      const tdDesc = document.createElement('td');
+      const desc = document.createElement('textarea'); desc.rows = 2; desc.className = 'cl-desc';
+      desc.placeholder = '{{ _("In-contest / problem clarification…") }}';
+      desc.style.width = '100%';
+      if (data && data.description) desc.value = data.description;
+      tdDesc.appendChild(desc);
+      const tdDel = document.createElement('td'); tdDel.style.width = '40px';
+      const del = document.createElement('input'); del.type = 'checkbox'; del.className = 'cl-del';
+      tdDel.appendChild(del);
+      tr.appendChild(tdDesc); tr.appendChild(tdDel);
+      body.insertBefore(tr, addRow);
+    }
+    function collectClarifications() {
+      return [...document.querySelectorAll('#clarification-body tr.cl-row')].map(tr => ({
+        id: tr.dataset.id || '',
+        description: tr.querySelector('.cl-desc').value.trim(),
+        delete: tr.querySelector('.cl-del').checked,
+      })).filter(row => !row.delete && row.description);
+    }
     function collectAdvanced() {
       return {
         is_manually_managed: !!(document.getElementById('f-manual') || {}).checked,
@@ -1886,6 +2006,8 @@
         og_image: (document.getElementById('f-og-image') || {}).value || '',
         summary: (document.getElementById('f-summary') || {}).value || '',
         short_circuit: !!(document.getElementById('f-short-circuit') || {}).checked,
+        edit_reason: ((document.getElementById('f-edit-reason') || {}).value || '').trim(),
+        clarifications: collectClarifications(),
         solution: (function () {
           const ta = ((document.getElementById('f-sol-content') || {}).value || '').trim();
           const explain = (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown)
@@ -1916,6 +2038,7 @@
       setVal('f-og-image', d.og_image || '');
       setVal('f-summary', d.summary || '');
       setChk('f-short-circuit', d.short_circuit);
+      setVal('f-edit-reason', '');
       (d.authors || []).forEach(u => ensureOption(document.getElementById('f-authors'), u.id, u.username, true));
       (d.curators || []).forEach(u => ensureOption(document.getElementById('f-curators'), u.id, u.username, true));
       (d.testers || []).forEach(u => ensureOption(document.getElementById('f-testers'), u.id, u.username, true));
@@ -1934,6 +2057,12 @@
         document.querySelectorAll('#f-translations-body tr.tr-row').forEach(tr => tr.remove());
         d.translations.forEach(row => addTranslationRow(row));
       }
+      document.querySelectorAll('#lang-limit-body tr.ll-row').forEach(tr => tr.remove());
+      (d.language_limits || []).forEach(row => addLangLimitRow(row));
+      document.querySelectorAll('#template-body tr.pt-row').forEach(tr => tr.remove());
+      (d.templates || []).forEach(row => addTemplateRow(row));
+      document.querySelectorAll('#clarification-body tr.cl-row').forEach(tr => tr.remove());
+      (d.clarifications || []).forEach(row => addClarificationRow(row));
     }
 
     /* ---------- 收集 / 校验 / 保存 ---------- */
@@ -1974,6 +2103,8 @@
         data.languages = [...document.querySelectorAll('#f-langs .lang-cb:checked')].map(c => c.value);
         data.checker = (document.getElementById('tc-checker') || {}).value || '';
         data.testcases = collectTestCases();
+        data.language_limits = collectLangLimits();
+        data.templates = collectTemplates();
       }
       return data;
     }

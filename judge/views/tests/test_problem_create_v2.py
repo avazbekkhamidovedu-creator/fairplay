@@ -8,10 +8,11 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
+from reversion.models import Version
 
-from judge.models import (License, Problem, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
-                          ProblemShortAnswerConfig, ProblemTestCase, ProblemTranslation, ProblemType,
-                          Solution, problem_data_storage)
+from judge.models import (Language, LanguageLimit, License, Problem, ProblemClarification, ProblemData,
+                          ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig, ProblemTemplate,
+                          ProblemTestCase, ProblemTranslation, ProblemType, Solution, problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
@@ -324,6 +325,106 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(resp.status_code, 400)
         self.assertIn('Unsupported translation language', resp.json()['error'])
+
+    def test_create_code_persists_language_limits_templates_clarifications(self):
+        lang = Language.objects.first()
+        self.assertIsNotNone(lang)
+        self.client.force_login(self.users['staff_adder'])
+        resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'programming',
+                'name': 'Limits and templates',
+                'description': 'Wire advanced inlines.',
+                'points': 10,
+                'group_id': self.group.id,
+                'time_limit': 2,
+                'memory_limit': 256,
+                'testcases': [
+                    {'input': '1\n', 'output': '1\n', 'points': 100},
+                ],
+                'language_limits': [
+                    {'language': lang.key, 'time_limit': 3.5, 'memory_limit': 131072},
+                ],
+                'templates': [
+                    {'language': lang.key, 'code': 'print(input())\n'},
+                ],
+                'clarifications': [
+                    {'description': 'Input is a single integer.'},
+                ],
+                'edit_reason': 'Initial wiring of advanced inlines',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        problem = Problem.objects.get(code=resp.json()['code'])
+        lim = LanguageLimit.objects.get(problem=problem, language=lang)
+        self.assertEqual(lim.time_limit, 3.5)
+        self.assertEqual(lim.memory_limit, 131072)
+        tmpl = ProblemTemplate.objects.get(problem=problem, language=lang)
+        self.assertEqual(tmpl.code, 'print(input())\n')
+        clar = ProblemClarification.objects.get(problem=problem)
+        self.assertEqual(clar.description, 'Input is a single integer.')
+        versions = Version.objects.get_for_object(problem)
+        self.assertTrue(versions.exists())
+        self.assertEqual(versions[0].revision.comment, 'Initial wiring of advanced inlines')
+
+    def test_edit_clarifications_can_update_and_delete(self):
+        self.client.force_login(self.users['creator'])
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Clarify me',
+                'description': 'Has clarifications.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'clarifications': [
+                    {'description': 'Keep this'},
+                    {'description': 'Remove this'},
+                ],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+        keep = ProblemClarification.objects.get(problem=problem, description='Keep this')
+        remove = ProblemClarification.objects.get(problem=problem, description='Remove this')
+
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Clarify me',
+                'description': 'Has clarifications.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'edit_code': code,
+                'clarifications': [
+                    {'id': keep.id, 'description': 'Keep this (updated)'},
+                    {'id': remove.id, 'description': 'Remove this', 'delete': True},
+                    {'description': 'Brand new'},
+                ],
+                'edit_reason': 'Update clarifications',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        descs = list(
+            ProblemClarification.objects.filter(problem=problem).order_by('id').values_list('description', flat=True),
+        )
+        self.assertEqual(descs, ['Keep this (updated)', 'Brand new'])
+        versions = Version.objects.get_for_object(problem)
+        self.assertEqual(versions[0].revision.comment, 'Update clarifications')
 
     def test_ai_difficulty_endpoint(self):
         self.client.force_login(self.users['creator'])
