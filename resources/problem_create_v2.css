@@ -1068,8 +1068,9 @@ fieldset.module .form-content { padding: 1rem; }
 }
 .pcv2 .v2-right .pv-head,
 .pcv2 .content-preview .pv-head {
-  background: var(--oj-heading, #3b3b3b) !important;
-  color: var(--oj-heading-text, #fff) !important;
+  /* Match fieldset.module h2 — avoid --oj-heading (light grey under dark Sass theme). */
+  background: var(--admin-header, #3b3b3b) !important;
+  color: #fff !important;
   border-bottom-color: #808080 !important;
   font-size: 1.1em !important;
   font-weight: 600 !important;
@@ -1077,8 +1078,8 @@ fieldset.module .form-content { padding: 1rem; }
   letter-spacing: normal !important;
 }
 .pcv2 .tc-table th {
-  background: var(--oj-heading, #3b3b3b) !important;
-  color: var(--oj-heading-text, #fff) !important;
+  background: var(--admin-header, #3b3b3b) !important;
+  color: #fff !important;
 }
 .pcv2 .btn-mini-primary {
   background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%) !important;
@@ -1104,7 +1105,21 @@ fieldset.module .form-content { padding: 1rem; }
 
   .pcv2 fieldset.module { background: var(--card-bg); border-color: var(--admin-border); }
   .pcv2 fieldset.module h2,
-  .pcv2 .module > h2 { background: #0f0f0f; color: #eee; border-color: var(--admin-border); }
+  .pcv2 .module > h2,
+  .pcv2 .inline-group h2 { background: #0f0f0f; color: #eee; border-color: var(--admin-border); }
+  .pcv2 .inline-group { background: var(--card-bg); border-color: var(--admin-border); }
+  .pcv2 .tc-collapse,
+  .pcv2 .tc-drawer,
+  .pcv2 .score-conf { background: var(--card-bg); color: var(--text); border-color: var(--admin-border); }
+  .pcv2 .tc-collapse-summary,
+  .pcv2 .unsaved-note { color: var(--muted); }
+  .pcv2 .tc-table th { background: #0f0f0f !important; color: #eee !important; }
+  .pcv2 .v2-right .pv-head,
+  .pcv2 .content-preview .pv-head {
+    background: #0f0f0f !important;
+    color: #eee !important;
+    border-bottom-color: var(--admin-border) !important;
+  }
   .pcv2 .form-row,
   .pcv2 .type-panel { border-color: var(--admin-border); }
   .pcv2 .form-content,

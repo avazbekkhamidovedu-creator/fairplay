@@ -231,11 +231,11 @@ class Profile(models.Model):
     def resolved_ace_theme(self):
         if self.ace_theme != 'auto':
             return self.ace_theme
-        if not self.user.has_perm('judge.test_site'):
-            return settings.DMOJ_THEME_DEFAULT_ACE_THEME.get('light')
-        if self.site_theme != 'auto':
+        # Site theme explicitly light/dark → matching Ace default.
+        # Otherwise leave unset so django-ace picks via prefers-color-scheme
+        # (same path for all users; dark CSS already follows OS/browser theme).
+        if self.site_theme in ('light', 'dark'):
             return settings.DMOJ_THEME_DEFAULT_ACE_THEME.get(self.site_theme)
-        # This must be resolved client-side using prefers-color-scheme.
         return None
 
     _pp_table = [pow(settings.DMOJ_PP_STEP, i) for i in range(settings.DMOJ_PP_ENTRIES)]

@@ -104,6 +104,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
             'can_change_public': user.has_perm('judge.change_public_visibility'),
+            'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
+            'can_full_markup': user.has_perm('judge.problem_full_markup'),
             'default_group_id': default_problem_group().id,
             'save_url': reverse('problem_create_v2'),
             'ai_difficulty_url': reverse('problem_create_v2_ai_difficulty'),
@@ -516,10 +518,27 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 continue
         return ids
 
-    def _apply_advanced(self, problem, payload, request):
+    def _apply_advanced(self, problem, payload, request, *, is_create=False):
         """Persist Advanced-section fields from create_v2 JSON payload."""
-        problem.is_manually_managed = bool(payload.get('is_manually_managed'))
-        problem.is_full_markup = bool(payload.get('is_full_markup'))
+        user = request.user
+
+        # Mirror admin get_readonly_fields: only privileged users may toggle these.
+        if user.has_perm('judge.change_manually_managed'):
+            problem.is_manually_managed = bool(payload.get('is_manually_managed'))
+        elif is_create:
+            problem.is_manually_managed = False
+        elif bool(payload.get('is_manually_managed')) != bool(problem.is_manually_managed):
+            raise PermissionError(_('You do not have permission to change the manually managed flag.'))
+
+        if user.has_perm('judge.problem_full_markup'):
+            problem.is_full_markup = bool(payload.get('is_full_markup'))
+        elif is_create:
+            problem.is_full_markup = False
+        elif bool(payload.get('is_full_markup')) != bool(problem.is_full_markup):
+            raise PermissionError(_('You do not have permission to change the full markup flag.'))
+
+        # Remaining Advanced flags have no separate Django perms in classic admin
+        # advanced mode; any user who can edit the problem may set them.
         problem.view_test_cases = bool(payload.get('view_test_cases'))
         problem.view_tester = bool(payload.get('view_tester'))
         problem.ai_hints_enabled = bool(payload.get('ai_hints_enabled'))
@@ -548,24 +567,36 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
         problem.save()
 
-        author_ids = self._profile_ids(payload.get('authors'))
-        if request.profile and request.profile.id not in author_ids:
-            author_ids.append(request.profile.id)
-        if not author_ids and request.profile:
-            author_ids = [request.profile.id]
-        problem.authors.set(Profile.objects.filter(pk__in=author_ids))
-        problem.curators.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('curators'))))
-        problem.testers.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('testers'))))
-        problem.banned_users.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('banned_users'))))
+        # M2M: only sync when the client sent the key (or on create). Omitting on
+        # edit must not wipe / rewrite membership.
+        if is_create or 'authors' in payload:
+            author_ids = self._profile_ids(payload.get('authors'))
+            if is_create:
+                # New problems default to the creator; do not force-add on edit
+                # (curators/admins must be able to edit without becoming authors).
+                if request.profile and request.profile.id not in author_ids:
+                    author_ids.append(request.profile.id)
+                if not author_ids and request.profile:
+                    author_ids = [request.profile.id]
+            elif not author_ids:
+                raise ValueError(_('Please select at least one author.'))
+            problem.authors.set(Profile.objects.filter(pk__in=author_ids))
+        if is_create or 'curators' in payload:
+            problem.curators.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('curators'))))
+        if is_create or 'testers' in payload:
+            problem.testers.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('testers'))))
+        if is_create or 'banned_users' in payload:
+            problem.banned_users.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('banned_users'))))
 
-        org_ids = list(problem.organizations.values_list('id', flat=True))
-        class_ids = self._profile_ids(payload.get('classes'))  # reuse int parser
-        class_qs = Class.get_visible_classes(request.user).filter(pk__in=class_ids)
-        if org_ids:
-            class_qs = class_qs.filter(organization_id__in=org_ids)
-        else:
-            class_qs = class_qs.none()
-        problem.classes.set(class_qs)
+        if is_create or 'classes' in payload:
+            org_ids = list(problem.organizations.values_list('id', flat=True))
+            class_ids = self._profile_ids(payload.get('classes'))  # reuse int parser
+            class_qs = Class.get_visible_classes(request.user).filter(pk__in=class_ids)
+            if org_ids:
+                class_qs = class_qs.filter(organization_id__in=org_ids)
+            else:
+                class_qs = class_qs.none()
+            problem.classes.set(class_qs)
 
         # Only sync when the client explicitly sent these keys. Omitting them
         # on a partial edit must not wipe existing solution / translations.
@@ -593,14 +624,19 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
         if 'translations' in payload:
             keep_langs = set()
+            supported = dict(settings.LANGUAGES)
             for row in payload.get('translations') or []:
                 lang = (row.get('language') or '').strip()
                 name = (row.get('name') or '').strip()
                 description = (row.get('description') or '').strip()
-                if not lang or lang not in dict(settings.LANGUAGES):
-                    continue
                 if not name and not description:
                     continue
+                if not lang:
+                    raise ValueError(_('Each translation must specify a language.'))
+                if lang not in supported:
+                    raise ValueError(
+                        _('Unsupported translation language: %(lang)s') % {'lang': lang},
+                    )
                 keep_langs.add(lang)
                 ProblemTranslation.objects.update_or_create(
                     problem=problem, language=lang,
@@ -714,7 +750,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ]
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.CODE)
             else:
                 problem.submission_type = ProblemSubmissionType.CODE
@@ -730,13 +767,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_languages(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
-            self._apply_advanced(problem, payload, request)
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             checker = payload.get('checker') or ''
             if zip_upload is not None:
@@ -936,7 +972,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Single-answer questions must have exactly one correct choice.'))
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.MCQ)
             else:
                 problem.submission_type = ProblemSubmissionType.MCQ
@@ -950,12 +987,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
-            self._apply_advanced(problem, payload, request)
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             ProblemMCQConfig.objects.create(
                 problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')))
@@ -976,7 +1012,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Please choose the correct answer.'))
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.MCQ)
             else:
                 problem.submission_type = ProblemSubmissionType.MCQ
@@ -990,12 +1027,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
-            self._apply_advanced(problem, payload, request)
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             ProblemMCQConfig.objects.create(problem=problem, multiple_select=False, shuffle_options=False,
                                             is_true_false=True)
@@ -1013,7 +1049,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Please provide at least one blank answer.'))
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.FILL_BLANK)
             else:
                 problem.submission_type = ProblemSubmissionType.FILL_BLANK
@@ -1027,12 +1064,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
-            self._apply_advanced(problem, payload, request)
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             ProblemFillBlankConfig.objects.create(
                 problem=problem,
@@ -1056,7 +1092,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise PermissionError(_('You do not have permission to create this problem type.'))
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.SHORT_ANSWER)
             else:
                 problem.submission_type = ProblemSubmissionType.SHORT_ANSWER
@@ -1071,12 +1108,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
-            self._apply_advanced(problem, payload, request)
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             ProblemShortAnswerConfig.objects.create(
                 problem=problem,

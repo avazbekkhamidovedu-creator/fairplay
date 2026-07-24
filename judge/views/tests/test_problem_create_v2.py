@@ -111,7 +111,10 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_create_mcq_persists_advanced_fields(self):
-        self.client.force_login(self.users['creator'])
+        from django.contrib.auth.models import Permission
+        creator = self.users['creator']
+        creator.user_permissions.add(Permission.objects.get(codename='problem_full_markup'))
+        self.client.force_login(creator)
         curator = self.users['normal'].profile
         license_obj = License.objects.create(
             key='cc-by-sa-4.0', link='https://example.com/license', name='CC BY-SA 4.0',
@@ -222,6 +225,105 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(sol.content, 'Keep me')
         tr = ProblemTranslation.objects.get(problem=problem, language='zh-hans')
         self.assertEqual(tr.name, '保留')
+
+    def test_edit_does_not_promote_curator_to_author(self):
+        """Curators/admins editing must not be force-added to authors."""
+        curator = create_user(
+            username='mcq_curator',
+            user_permissions=('create_private_problem', 'edit_own_problem'),
+        )
+        self.client.force_login(self.users['creator'])
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Author ownership',
+                'description': 'Keep authors stable on edit.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'curators': [curator.profile.id],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+        self.assertTrue(problem.authors.filter(id=self.users['creator'].profile.id).exists())
+        self.assertFalse(problem.authors.filter(id=curator.profile.id).exists())
+
+        self.client.force_login(curator)
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Author ownership (edited)',
+                'description': 'Edited by curator.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'authors': [self.users['creator'].profile.id],
+                'curators': [curator.profile.id],
+                'edit_code': code,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        self.assertTrue(edit_resp.json()['ok'])
+        problem.refresh_from_db()
+        self.assertEqual(list(problem.authors.values_list('id', flat=True)), [self.users['creator'].profile.id])
+        self.assertTrue(problem.curators.filter(id=curator.profile.id).exists())
+
+    def test_full_markup_requires_permission(self):
+        self.client.force_login(self.users['creator'])  # no problem_full_markup
+        resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'No full markup',
+                'description': 'Should stay False.',
+                'points': 1,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'is_full_markup': True,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        problem = Problem.objects.get(code=resp.json()['code'])
+        self.assertFalse(problem.is_full_markup)
+
+    def test_unsupported_translation_language_rejected(self):
+        self.client.force_login(self.users['creator'])
+        resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Bad translation lang',
+                'description': 'Should 400.',
+                'points': 1,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'translations': [
+                    {'language': 'xx-not-a-lang', 'name': 'X', 'description': 'Y'},
+                ],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('Unsupported translation language', resp.json()['error'])
 
     def test_ai_difficulty_endpoint(self):
         self.client.force_login(self.users['creator'])
