@@ -92,8 +92,6 @@
     .tc-file-btn:hover { filter: brightness(1.08); }
     .tc-file-btn.dirty::after { content: '{{ _("· modified") }}'; color: #e65100 !important; font-size: 11px; margin-left: 0.2rem; font-weight: 600; }
     .tc-file-btn.manual { color: var(--text) !important; }
-    .tc-old-link { font-size: var(--oj-font-size-sm, 12px); margin-top: 0.55rem; }
-    .tc-old-link a { color: var(--dmoj-green-dark); }
     .tc-collapse { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: var(--card-bg, #fff); color: var(--text); }
     .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: var(--oj-font-size, 14px); list-style: none; user-select: none; color: var(--text); }
     .tc-collapse-summary::-webkit-details-marker { display: none; }
@@ -486,13 +484,6 @@
                   </thead>
                   <tbody id="tc-body"></tbody>
                 </table>
-              </div>
-              <div class="tc-old-link" id="tc-old-link">
-                {% if test_data_url %}
-                  <a href="{{ test_data_url }}" target="_blank" rel="noopener">{{ _('Open legacy test-data page (finer editing)') }}</a>
-                {% else %}
-                  <span style="color:var(--muted);">{{ _('After the problem is saved once, open the legacy test-data page here for Batch / Generator fine-tuning.') }}</span>
-                {% endif %}
               </div>
             </div>
           </details>
@@ -1184,7 +1175,6 @@
     /* ---------- 测试用例（内联录入 + ZIP 文件名模式）---------- */
     // Soft warning only: save uploads the archive as a file (same path as classic test_data).
     const TC_ZIP_WARN_TOTAL = 8 * 1024 * 1024;
-    const TEST_DATA_URL = '{{ test_data_url }}';
     let tcDrawerTarget = null; // { tr }
     let pendingZipFile = null; // original File from <input>, reused on save when unchanged
 
@@ -1363,15 +1353,6 @@
         suffix: (sum === total ? '' : interpolate(gettext(' (target %(total)s)'), {total: total}, true))
       }, true));
     }
-
-    function updateTestDataHint() {
-      const el = document.getElementById('tc-old-link');
-      if (!el) return;
-      if (TEST_DATA_URL) {
-        el.innerHTML = '<a href="' + TEST_DATA_URL + '" target="_blank" rel="noopener">' + gettext('Open legacy test-data page (finer editing)') + '</a>';
-      }
-    }
-    updateTestDataHint();
 
     function setZipStatus(msg, isError) {
       const el = document.getElementById('tc-zip-status');
