@@ -279,17 +279,18 @@
           <div class="form-row">
             <label>{{ _('Difficulty') }} <span class="req">*</span></label>
             <div class="field">
-              <div class="type-pills" id="difficulty">
-                <label class="type-pill"><input type="radio" name="difficulty" value="easy" onchange="setDifficulty('easy')"><span>{{ _('Easy') }}</span></label>
-                <label class="type-pill"><input type="radio" name="difficulty" value="medium" checked onchange="setDifficulty('medium')"><span>{{ _('Medium') }}</span></label>
-                <label class="type-pill"><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>{{ _('Hard') }}</span></label>
-                <label class="type-pill"><input type="radio" name="difficulty" value="ai" onchange="setDifficulty('ai')"><span>{{ _('AI judge') }}</span></label>
+              <div class="diff-row">
+                <div class="type-pills" id="difficulty">
+                  <label class="type-pill"><input type="radio" name="difficulty" value="easy" onchange="setDifficulty('easy')"><span>{{ _('Easy') }}</span></label>
+                  <label class="type-pill"><input type="radio" name="difficulty" value="medium" checked onchange="setDifficulty('medium')"><span>{{ _('Medium') }}</span></label>
+                  <label class="type-pill"><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>{{ _('Hard') }}</span></label>
+                </div>
+                <button type="button" class="inline-add-btn ptype-ai" id="diff-ai-btn" title="{{ _('AI recommends Easy / Medium / Hard from the statement') }}" onclick="runAIDifficulty()">🤖 AI</button>
               </div>
               <div id="diff-ai-box" style="display:none;margin-top:0.4rem;">
                 <span id="diff-ai-result"></span>
-                <a href="javascript:void(0)" id="diff-ai-rerun" onclick="runAIDifficulty()" style="display:none;font-size:12px;margin-left:0.5rem;">{{ _('Re-judge') }}</a>
               </div>
-              <div class="help">{{ _('Setting difficulty writes a problem_type tag automatically; choosing "AI judge" immediately calls AI to classify Easy / Medium / Hard from the statement') }}</div>
+              <div class="help">{{ _('Setting difficulty writes a problem_type tag automatically; click "🤖 AI" to classify Easy / Medium / Hard from the statement') }}</div>
             </div>
           </div>
           <div class="form-row">
@@ -807,31 +808,30 @@
     }
     let currentDifficulty = 'medium';
     function setDifficulty(level) {
-      currentDifficulty = level;
-      const box = document.getElementById('diff-ai-box');
       if (level === 'ai') {
-        box.style.display = 'block';
-        // 未判定前先移除难度标签，判定完成后再写入
-        document.getElementById('f-types').querySelectorAll('.ptype-tag.auto-diff').forEach(t => t.remove());
-        // 选中「AI 推荐」即直接调用，无需再点按钮
         runAIDifficulty();
-      } else {
-        box.style.display = 'none';
-        setDifficultyTag(DIFF_LABEL[level]);
+        return;
       }
+      currentDifficulty = level;
+      const radio = document.querySelector('#difficulty input[value="' + level + '"]');
+      if (radio) radio.checked = true;
+      setDifficultyTag(DIFF_LABEL[level]);
     }
     // 调用后端 AI 判定难度（judge/llm；未配置时后端回退启发式）
     function runAIDifficulty() {
       const res = document.getElementById('diff-ai-result');
-      const rerun = document.getElementById('diff-ai-rerun');
+      const box = document.getElementById('diff-ai-box');
+      const btn = document.getElementById('diff-ai-btn');
       const description = RichEditor.getMarkdown('stem');
+      if (box) box.style.display = 'block';
       if (!description.trim()) {
         res.innerHTML = '<span style="color:#c0392b;">{{ _("Please enter problem content first.") }}</span>';
-        if (rerun) rerun.style.display = 'inline';
         return;
       }
+      // Clear auto difficulty tag until the new suggestion lands.
+      document.getElementById('f-types').querySelectorAll('.ptype-tag.auto-diff').forEach(t => t.remove());
       res.innerHTML = '🤖 {{ _("Analyzing…") }}';
-      if (rerun) rerun.style.display = 'none';
+      if (btn) btn.disabled = true;
       fetch(AI_DIFFICULTY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
@@ -845,8 +845,11 @@
           res.appendChild(err);
           return;
         }
-        currentDifficulty = body.level;
-        setDifficultyTag(body.label);
+        const level = body.level || 'medium';
+        currentDifficulty = level;
+        const radio = document.querySelector('#difficulty input[value="' + level + '"]');
+        if (radio) radio.checked = true;
+        setDifficultyTag(body.label || DIFF_LABEL[level]);
         res.textContent = '';
         const wrap = document.createElement('span');
         wrap.className = 'diff-ai-result';
@@ -856,7 +859,7 @@
         wrap.appendChild(b);
         res.appendChild(wrap);
       }).catch(() => { res.innerHTML = '<span style="color:#c0392b;">{{ _("Network error") }}</span>'; })
-        .finally(() => { if (rerun) rerun.style.display = 'inline'; });
+        .finally(() => { if (btn) btn.disabled = false; });
     }
 
     /* ---------- problem_type 选择（来自数据库） ---------- */

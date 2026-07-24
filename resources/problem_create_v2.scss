@@ -531,7 +531,14 @@ fieldset.module .form-content { padding: 1rem; }
   color: var(--oj-accent, #2980B9);
   font-weight: 600;
 }
-/* Difficulty pills: one compact left-aligned row (content width only). */
+/* Difficulty pills + AI button on one compact row (match problem-type AI chrome). */
+.diff-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+}
 #difficulty {
   display: inline-flex;
   flex-wrap: nowrap;
@@ -542,6 +549,7 @@ fieldset.module .form-content { padding: 1rem; }
 }
 #difficulty > label { flex: 0 0 auto; width: auto; border: none; margin: 0; }
 #difficulty .type-pill span { display: inline-block; white-space: nowrap; padding: 0.35rem 0.7rem; }
+.diff-row .ptype-ai { flex: 0 0 auto; }
 
 /* RichEditor chrome lives in rich_editor.css (extracted reusable module). */
 
