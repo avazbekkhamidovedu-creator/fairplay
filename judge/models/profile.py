@@ -229,11 +229,12 @@ class Profile(models.Model):
 
     @cached_property
     def resolved_ace_theme(self):
+        # Site theme auto uses OS/browser dark mode for CSS; Ace must follow the
+        # same signal (django-ace prefers-color-scheme) when ace_theme is auto.
+        # Explicit ace_theme still wins. When site is forced light/dark, map Ace
+        # to the matching default if the user left Ace on auto.
         if self.ace_theme != 'auto':
             return self.ace_theme
-        # Site theme explicitly light/dark → matching Ace default.
-        # Otherwise leave unset so django-ace picks via prefers-color-scheme
-        # (same path for all users; dark CSS already follows OS/browser theme).
         if self.site_theme in ('light', 'dark'):
             return settings.DMOJ_THEME_DEFAULT_ACE_THEME.get(self.site_theme)
         return None

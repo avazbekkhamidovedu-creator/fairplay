@@ -741,8 +741,6 @@
     </div>
   </div>
 
-  {# Autoescaped JSON blob — avoid |safe for XSS-safe embedding. #}
-  <script id="current-profile-data" type="application/json">{{ current_profile|json }}</script>
   <script>
     const SAVE_URL = '{{ save_url }}';
     const PROBLEM_LIST_URL = '{{ problem_list_url }}';
@@ -759,7 +757,9 @@
     const PROFILE_SELECT2_URL = '{{ profile_select2_url }}';
     const CLASS_SELECT2_URL = '{{ class_select2_url }}';
     const SELECT2_THEME = '{{ DMOJ_SELECT2_THEME }}';
-    const CURRENT_PROFILE = JSON.parse(document.getElementById('current-profile-data').textContent);
+    {# |safe required: script data does not decode HTML entities, so autoescaped JSON breaks JSON.parse. #}
+    {# View escapes <>& to \\uXXXX so this is not a script-breakout vector. #}
+    const CURRENT_PROFILE = {{ current_profile_json|safe }};
     const JUDGE_LANGUAGES = {{ languages_json|safe }};
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
