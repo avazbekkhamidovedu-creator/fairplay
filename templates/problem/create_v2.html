@@ -179,9 +179,9 @@
     /* Preview card: match fieldset.module heading bar (dark admin header) */
     .pv-panel { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); box-shadow: var(--oj-shadow, none); }
     .v2-right .pv-head {
-      background: var(--admin-header, #3b3b3b); color: #fff; margin: 0; padding: 0.55rem 1rem;
+      background: var(--admin-header, #3b3b3b); color: var(--admin-header-text, #fff); margin: 0; padding: 0.55rem 1rem;
       font-size: 1.1em; font-weight: 600; text-transform: none; letter-spacing: normal;
-      border-bottom: 1px solid #808080; flex-shrink: 0;
+      border-bottom: 1px solid var(--admin-header-border, #808080); flex-shrink: 0;
     }
     #preview-body { padding: 1rem; overflow-y: auto; }
     @media (max-width: 900px) {
@@ -599,9 +599,15 @@
         <fieldset class="module type-panel" data-for="programming">
           <h2>{{ _('Advanced Language') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>{{ _('Allowed languages') }}</label><div class="field checkbox-list" id="f-langs" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
-              {% for l in languages %}<label><input type="checkbox" class="lang-cb" value="{{ l.key }}"> {{ l.name }}</label>{% endfor %}
-            </div><div class="help">{{ _('If none are checked, all languages are allowed by default') }}</div></div>
+            <div class="form-row">
+              <label>{{ _('Allowed languages') }}</label>
+              <div class="field">
+                <div class="checkbox-list" id="f-langs">
+                  {% for l in languages %}<label><input type="checkbox" class="lang-cb" value="{{ l.key }}"> {{ l.name }}</label>{% endfor %}
+                </div>
+                <div class="help">{{ _('If none are checked, all languages are allowed by default') }}</div>
+              </div>
+            </div>
           </div>
         </fieldset>
 

@@ -7,9 +7,12 @@
   --dmoj-green: var(--oj-btn-from, #337ab7);
   --dmoj-green-dark: var(--oj-btn-hover, #265a88);
   --admin-bg: var(--oj-bg, #f8f8f8);
-  --admin-header: var(--oj-heading, #3b3b3b);
+  /* Pin section chrome — do NOT alias --oj-heading (light grey under dark theme). */
+  --admin-header: #3b3b3b;
+  --admin-header-text: #fff;
+  --admin-header-border: #808080;
   --admin-border: var(--oj-border, #ccc);
-  --site-nav: var(--oj-heading, #3b3b3b);
+  --site-nav: #3b3b3b;
   --tab-active: var(--oj-accent, #2980B9);
   --text: var(--oj-text, #111);
   --muted: var(--oj-text-muted, #808080);
@@ -193,13 +196,13 @@ fieldset.module {
   box-shadow: var(--oj-shadow, none);
 }
 fieldset.module h2 {
-  background: var(--oj-heading, #3b3b3b);
-  color: var(--oj-heading-text, #fff);
+  background: var(--admin-header);
+  color: var(--admin-header-text);
   margin: 0;
   padding: 0.55rem 1rem;
   font-size: 1.1em;
   font-weight: 600;
-  border-bottom: 1px solid var(--oj-text-muted);
+  border-bottom: 1px solid var(--admin-header-border);
   border-radius: var(--oj-radius-md, 6px) var(--oj-radius-md, 6px) 0 0;
 }
 fieldset.module .form-content { padding: 1rem; }
@@ -211,7 +214,7 @@ fieldset.module .form-content { padding: 1rem; }
   align-items: flex-start;
 }
 .form-row:last-child { border-bottom: none; }
-.form-row label {
+.form-row > label {
   width: 160px;
   flex-shrink: 0;
   padding-top: 0.35rem;
@@ -242,7 +245,25 @@ fieldset.module .form-content { padding: 1rem; }
 .v2-left .options-list { max-width: none; width: 100%; }
 .form-row textarea { min-height: 120px; font-family: monospace; }
 .form-row .help { font-size: 12px; color: var(--muted); margin-top: 0.25rem; }
-.form-row .checkbox-list label { display: block; font-weight: normal; width: auto; }
+.form-row .checkbox-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.35rem 0.75rem;
+  align-items: start;
+}
+.form-row .checkbox-list label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: normal;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  padding-top: 0;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.form-row .checkbox-list input { margin: 0; flex-shrink: 0; }
 
 .advanced-hidden { display: none; }
 .advanced-visible .advanced-hidden { display: block; }
@@ -255,13 +276,13 @@ fieldset.module .form-content { padding: 1rem; }
   margin: 1rem 0;
 }
 .inline-group h2 {
-  background: var(--oj-heading, #3b3b3b);
-  color: var(--oj-heading-text, #fff);
+  background: var(--admin-header);
+  color: var(--admin-header-text);
   margin: 0;
   padding: 0.55rem 1rem;
   font-size: 1.1em;
   font-weight: 600;
-  border-bottom: 1px solid var(--oj-text-muted);
+  border-bottom: 1px solid var(--admin-header-border);
 }
 .inline-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .inline-table th, .inline-table td {
@@ -1093,18 +1114,17 @@ fieldset.module .form-content { padding: 1rem; }
 }
 .pcv2 .v2-right .pv-head,
 .pcv2 .content-preview .pv-head {
-  /* Match fieldset.module h2 — avoid --oj-heading (light grey under dark Sass theme). */
-  background: var(--admin-header, #3b3b3b) !important;
-  color: #fff !important;
-  border-bottom-color: #808080 !important;
+  background: var(--admin-header) !important;
+  color: var(--admin-header-text) !important;
+  border-bottom-color: var(--admin-header-border) !important;
   font-size: 1.1em !important;
   font-weight: 600 !important;
   text-transform: none !important;
   letter-spacing: normal !important;
 }
 .pcv2 .tc-table th {
-  background: var(--oj-heading, #3b3b3b) !important;
-  color: var(--oj-heading-text, #fff) !important;
+  background: var(--admin-header) !important;
+  color: var(--admin-header-text) !important;
 }
 .pcv2 .btn-mini-primary {
   background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%) !important;
@@ -1123,6 +1143,9 @@ fieldset.module .form-content { padding: 1rem; }
     --text: #eee;
     --muted: #aaa;
     --admin-border: #3b3b3b;
+    --admin-header: #0f0f0f;
+    --admin-header-text: #eee;
+    --admin-header-border: #3b3b3b;
     --pcv2-accent-soft: rgba(41, 128, 185, 0.18);
     background: var(--card-bg);
     color: var(--text);
@@ -1130,13 +1153,18 @@ fieldset.module .form-content { padding: 1rem; }
 
   .pcv2 fieldset.module { background: var(--card-bg); border-color: var(--admin-border); }
   .pcv2 fieldset.module h2,
-  .pcv2 .module > h2 { background: #0f0f0f; color: #eee; border-color: var(--admin-border); }
+  .pcv2 .module > h2,
+  .pcv2 .inline-group h2 {
+    background: var(--admin-header);
+    color: var(--admin-header-text);
+    border-bottom-color: var(--admin-header-border);
+  }
   .pcv2 .form-row,
   .pcv2 .type-panel { border-color: var(--admin-border); }
   .pcv2 .form-content,
   .pcv2 .score-conf,
   .pcv2 .form-row .field { background: var(--card-bg); }
-  .pcv2 .form-row label { background: none; color: var(--muted); }
+  .pcv2 .form-row > label { background: none; color: var(--muted); }
 
   .pcv2 .btn,
   .pcv2 .btn-mini { background: #555; color: #e0e0e0 !important; border-color: #666; }
@@ -1201,12 +1229,19 @@ fieldset.module .form-content { padding: 1rem; }
   .pcv2 .sub-q-head { background: #0f0f0f; border-color: var(--admin-border); }
 
   .pcv2 #preview-pane { background: var(--card-bg); border-color: var(--admin-border); }
-  .pcv2 #preview-pane h2 { background: var(--admin-bg); color: var(--text); }
+  .pcv2 #preview-pane h2 {
+    background: var(--admin-header);
+    color: var(--admin-header-text);
+  }
   .pcv2 .v2-right .pv-head,
   .pcv2 .content-preview .pv-head {
-    background: #0f0f0f !important;
-    color: #eee !important;
-    border-bottom-color: var(--admin-border) !important;
+    background: var(--admin-header) !important;
+    color: var(--admin-header-text) !important;
+    border-bottom-color: var(--admin-header-border) !important;
+  }
+  .pcv2 .tc-table th {
+    background: var(--admin-header) !important;
+    color: var(--admin-header-text) !important;
   }
 
   .pcv2 .blank-answers .blank-row { border-color: var(--admin-border); background: var(--card-bg); }
@@ -1228,7 +1263,7 @@ fieldset.module .form-content { padding: 1rem; }
   .pcv2 .rich-editor-markdown textarea { background: var(--card-bg) !important; color: var(--text) !important; }
 }
 
-/* ── OJ token alignment overrides (win over older green soft tints) ── */
+/* Keep accent soft-tints aligned; section headers use --admin-header above. */
 .pcv2 .sq-pill.on {
   border-color: var(--oj-accent, #2980B9) !important;
   background: var(--pcv2-accent-soft) !important;
@@ -1237,20 +1272,6 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .draft-banner {
   background: var(--pcv2-accent-soft) !important;
   border-color: var(--admin-border) !important;
-}
-.pcv2 .v2-right .pv-head,
-.pcv2 .content-preview .pv-head {
-  background: var(--oj-heading, #3b3b3b) !important;
-  color: var(--oj-heading-text, #fff) !important;
-  border-bottom-color: #808080 !important;
-  font-size: 1.1em !important;
-  font-weight: 600 !important;
-  text-transform: none !important;
-  letter-spacing: normal !important;
-}
-.pcv2 .tc-table th {
-  background: var(--oj-heading, #3b3b3b) !important;
-  color: var(--oj-heading-text, #fff) !important;
 }
 .pcv2 .btn-mini-primary {
   background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%) !important;
