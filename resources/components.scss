@@ -29,7 +29,8 @@
     white-space: nowrap;
     vertical-align: middle;
     background: transparent;
-    color: var(--oj-text);
+    /* Beat widgets.scss `.button { color: #fff !important }` on shared pages. */
+    color: var(--oj-text) !important;
 
     &:disabled,
     &[disabled] {

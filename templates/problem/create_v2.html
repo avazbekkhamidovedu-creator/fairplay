@@ -41,8 +41,7 @@
     .v2-top .note { margin: 0.55rem 0 0; }
     .v2-type-hint { font-size: var(--oj-font-size, 14px); color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
 
-    /* 隐藏添加题目页的所有使用提示（保留字段标签与必填标记） */
-    .help,
+    /* Hide noisy Basic-tab banners/hints; keep `.help` for Advanced field guidance. */
     .form-content .note,
     .blank-hints,
     .draft-banner,
@@ -56,15 +55,15 @@
 
     /* 需求8：内联测试用例 */
     .tc-table { width: 100%; border-collapse: collapse; font-size: var(--oj-font-size-sm, 12px); }
-    .tc-table th, .tc-table td { border: 1px solid #ddd; padding: 0.35rem 0.4rem; text-align: left; vertical-align: top; }
-    .tc-table th { background: var(--oj-heading, #3b3b3b); color: var(--oj-heading-text, #fff); font-weight: 600; }
+    .tc-table th, .tc-table td { border: 1px solid var(--admin-border, #ddd); padding: 0.35rem 0.4rem; text-align: left; vertical-align: top; }
+    .tc-table th { background: var(--admin-header, #3b3b3b); color: #fff; font-weight: 600; }
     .tc-table textarea { width: 100%; min-height: 64px; font-family: monospace; font-size: var(--oj-font-size-sm, 12px); resize: vertical; }
     .tc-table input[type="number"] { width: 64px; }
     .tc-toolbar {
       display: flex; flex-wrap: wrap; gap: 0.45rem 0.6rem; align-items: center;
       margin-bottom: 0.65rem; font-size: var(--oj-font-size-sm, 12px);
     }
-    .tc-toolbar .tc-sep { color: #ccc; line-height: 1; }
+    .tc-toolbar .tc-sep { color: var(--muted); line-height: 1; }
     .tc-toolbar .btn,
     .tc-toolbar label.btn {
       min-height: 28px; height: 28px; padding: 0 10px;
@@ -79,24 +78,24 @@
       width: auto; max-width: 160px; height: 28px; min-height: 28px;
       padding: 0 8px; margin: 0; font-size: var(--oj-font-size-sm, 12px);
       box-sizing: border-box; border: 1px solid var(--admin-border);
-      border-radius: var(--oj-radius, 4px); background: #fff; color: var(--text);
+      border-radius: var(--oj-radius, 4px); background: var(--card-bg, #fff); color: var(--text);
     }
     .tc-file-btn {
       display: inline-flex; align-items: center; gap: 0.25rem;
-      border: 1px solid #90a4ae !important;
-      background: #eceff1 !important;
-      color: #0d47a1 !important;
+      border: 1px solid var(--admin-border) !important;
+      background: var(--pcv2-accent-soft, #eceff1) !important;
+      color: var(--dmoj-green-dark, #0d47a1) !important;
       border-radius: var(--oj-radius, 4px); padding: 0.25rem 0.5rem; font-size: var(--oj-font-size-sm, 12px); cursor: pointer;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-width: 100%;
       font-weight: 600;
     }
-    .tc-file-btn:hover { background: #bbdefb !important; border-color: #42a5f5 !important; color: #0d47a1 !important; }
+    .tc-file-btn:hover { filter: brightness(1.08); }
     .tc-file-btn.dirty::after { content: '{{ _("· modified") }}'; color: #e65100 !important; font-size: 11px; margin-left: 0.2rem; font-weight: 600; }
-    .tc-file-btn.manual { color: #263238 !important; }
+    .tc-file-btn.manual { color: var(--text) !important; }
     .tc-old-link { font-size: var(--oj-font-size-sm, 12px); margin-top: 0.55rem; }
     .tc-old-link a { color: var(--dmoj-green-dark); }
-    .tc-collapse { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: #fff; }
-    .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: var(--oj-font-size, 14px); list-style: none; user-select: none; }
+    .tc-collapse { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: var(--card-bg, #fff); color: var(--text); }
+    .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: var(--oj-font-size, 14px); list-style: none; user-select: none; color: var(--text); }
     .tc-collapse-summary::-webkit-details-marker { display: none; }
     .tc-collapse-summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; color: var(--muted); transition: transform 0.15s; }
     .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
@@ -109,15 +108,16 @@
     .tc-drawer-mask.open { display: block; }
     .tc-drawer {
       position: fixed; top: 0; right: 0; width: min(420px, 88vw); height: 100%;
-      background: #fff; box-shadow: -8px 0 24px rgba(0,0,0,0.12); z-index: 1201;
+      background: var(--card-bg, #fff); box-shadow: -8px 0 24px rgba(0,0,0,0.12); z-index: 1201;
       transform: translateX(100%); transition: transform 0.2s ease; display: flex; flex-direction: column;
+      color: var(--text);
     }
     .tc-drawer.open { transform: translateX(0); }
     .tc-drawer-head {
       display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.75rem;
-      border-bottom: 1px solid var(--admin-border); background: #fafafa;
+      border-bottom: 1px solid var(--admin-border); background: var(--admin-bg, #fafafa);
     }
-    .tc-drawer-head strong { flex: 1; font-size: var(--oj-font-size-sm, 12px); word-break: break-all; color: #212121; }
+    .tc-drawer-head strong { flex: 1; font-size: var(--oj-font-size-sm, 12px); word-break: break-all; color: var(--text); }
     .tc-drawer-body {
       flex: 1; padding: 0.55rem 0.75rem; overflow: auto;
       display: flex; flex-direction: column; gap: 0.55rem;
@@ -130,12 +130,12 @@
     .tc-drawer-pane textarea {
       width: 100%; flex: 1; min-height: 120px; max-height: 38vh;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--oj-font-size-sm, 12px);
-      border: 1px solid #ddd; border-radius: var(--oj-radius, 4px); padding: 0.4rem; resize: vertical;
-      color: #212121; background: #fff;
+      border: 1px solid var(--admin-border, #ddd); border-radius: var(--oj-radius, 4px); padding: 0.4rem; resize: vertical;
+      color: var(--text); background: var(--card-bg, #fff);
     }
     .tc-drawer-foot {
       display: flex; justify-content: flex-end; gap: 0.5rem; padding: 0.5rem 0.75rem;
-      border-top: 1px solid var(--admin-border); background: #fafafa;
+      border-top: 1px solid var(--admin-border); background: var(--admin-bg, #fafafa);
     }
 
     .draft-banner { display: flex; align-items: center; gap: 0.5rem; background: var(--pcv2-accent-soft, rgba(41,128,185,0.12)); border: 1px solid var(--admin-border); border-radius: var(--oj-radius, 4px); padding: 0.5rem 0.75rem; font-size: var(--oj-font-size-sm, 12px); margin-bottom: 0.6rem; }
@@ -156,7 +156,9 @@
     .sub-q.collapsed .sub-q-body { display: none; }
 
     /* 需求7：部分分 / AI 判题 配置 */
-    .score-conf { margin-top: 0.5rem; padding: 0.6rem 0.75rem; background: #fafafa; border: 1px dashed var(--admin-border); border-radius: 5px; }
+    .score-conf { margin-top: 0.5rem; padding: 0.6rem 0.75rem; background: var(--admin-bg, #fafafa); border: 1px dashed var(--admin-border); border-radius: 5px; }
+    .profile-select2 + .select2-container { max-width: 500px; width: 100% !important; }
+    .unsaved-note { font-size: 12px; color: var(--muted); padding: 0.35rem 1rem 0.6rem; }
     .radio-list label { display: block; font-weight: normal; width: auto; padding: 0.2rem 0; }
     .inline-num input { width: 70px; }
 
@@ -176,10 +178,10 @@
     .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
     .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
     .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
-    /* 预览卡片：与左侧 fieldset.module 一致（白底 + 边框 + 灰色标题条） */
+    /* Preview card: match fieldset.module heading bar (dark admin header) */
     .pv-panel { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); box-shadow: var(--oj-shadow, none); }
     .v2-right .pv-head {
-      background: var(--oj-heading, #3b3b3b); color: var(--oj-heading-text, #fff); margin: 0; padding: 0.55rem 1rem;
+      background: var(--admin-header, #3b3b3b); color: #fff; margin: 0; padding: 0.55rem 1rem;
       font-size: 1.1em; font-weight: 600; text-transform: none; letter-spacing: normal;
       border-bottom: 1px solid #808080; flex-shrink: 0;
     }
@@ -247,7 +249,7 @@
                   {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
                 </select>
                 {% if can_create_organization %}
-                <button type="button" class="inline-add-btn" title="{{ _('Create organization') }}" onclick="toggleInlineAdd('org')">+ {{ _('New') }}</button>
+                <button type="button" class="inline-add-btn" title="{{ _('Create organization') }}" aria-label="{{ _('Create organization') }}" onclick="toggleInlineAdd('org')">+</button>
                 {% endif %}
               </div>
               {% if can_create_organization %}
@@ -267,7 +269,7 @@
                 <select id="f-group">
                   {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
                 </select>
-                <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+ {{ _('New') }}</button>
+                <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" aria-label="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+</button>
               </div>
               <div class="inline-add-box" id="group-add-box" style="display:none;">
                 <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
@@ -432,12 +434,13 @@
                 <div class="blank-hints">{{ _('Other type only records the statement and notes for offline/manual grading; it is not auto-judged.') }}</div>
               </div>
 
-              <!-- 解析（需求5：默认折叠） -->
-              <div class="type-panel" data-for="single,multiple,truefalse,short,blank">
+              <!-- Editorial shortcut → Advanced Solution.content -->
+              <div class="type-panel" data-for="single,multiple,truefalse,short,blank,programming">
                 <details class="explain-collapse">
-                  <summary><span class="chev">▸</span> {{ _("Explanation") }} <span style="font-weight:normal;color:var(--muted);">{{ _("(optional, collapsed by default)") }}</span></summary>
+                  <summary><span class="chev">▸</span> {{ _("Explanation") }} <span style="font-weight:normal;color:var(--muted);">{{ _("(optional; saved as Solution editorial)") }}</span></summary>
                   <div class="ec-body">
-                    <div data-rich-mount="explain" data-toolbar="mini" data-placeholder="{{ _('Enter the answer explanation…') }}"></div>
+                    <div data-rich-mount="explain" data-toolbar="mini" data-placeholder="{{ _('Enter the editorial / explanation…') }}"></div>
+                    <p class="unsaved-note">{{ _('Synced with Advanced → Solution content on save.') }}</p>
                   </div>
                 </details>
               </div>
@@ -451,10 +454,6 @@
           <details class="tc-collapse" id="tc-collapse" open>
             <summary class="tc-collapse-summary">{{ _("Test data settings (click to collapse)") }}</summary>
             <div class="tc-body-wrap">
-              <p class="tc-mode-hint">
-                {{ _('Enter input/output directly, or upload a ZIP to auto-pair cases (the table shows the file name; click it to view/edit in the side panel).') }}
-                {{ _('ZIP saves upload the archive as a file (same size limits as the legacy test-data page). Use that page for Batch / Generator / Harness fine-tuning.') }}
-              </p>
               <div class="tc-toolbar">
                 <button type="button" class="btn" onclick="addTestCase()">+ {{ _("Add case") }}</button>
                 <label class="btn" style="cursor:pointer;margin:0;">
@@ -535,20 +534,17 @@
             <div class="form-row type-panel" data-for="programming"><label>{{ _('Creation preset') }}</label><div class="field"><select id="preset" style="max-width:200px;"><option selected>{{ _('Default') }}</option><option>{{ _('Custom') }}</option></select><div class="help">{{ _('Becomes Custom after you change advanced fields') }}</div></div></div>
             <div class="form-row"><label>{{ _('Problem code') }}</label><div class="field"><input type="text" id="f-code" value="" placeholder="{{ _('Auto-generated as p000000 on save') }}" readonly><div class="help">{{ _('Unique problem code, generated by the backend') }}</div></div></div>
             <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}><div class="help">{% if can_change_public %}{{ _('Visible to everyone when no organization is selected') }}{% else %}{{ _('You cannot make problems public without organization scope') }}{% endif %}</div></div></div>
-            <div class="form-row"><label>{{ _('Is manually managed') }}</label><div class="field"><input type="checkbox" id="f-manual"><div class="help">{{ _('When checked, the test_data page cannot be used') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Is manually managed') }}</label><div class="field"><input type="checkbox" id="f-manual" {% if not can_change_manually_managed %}disabled{% endif %}><div class="help">{% if can_change_manually_managed %}{{ _('When checked, the test_data page cannot be used') }}{% else %}{{ _('You do not have permission to change this flag') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('Date') }}</label><div class="field"><input type="text" id="f-date" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"><div class="help">{{ _('Problem publish/release time') }}</div></div></div>
             <div class="form-row"><label>{{ _('Authors') }}</label><div class="field">
-              <select multiple id="f-authors" class="profile-multi" style="height:80px;width:100%;max-width:500px;"></select>
-              <input type="search" class="profile-search" data-for="f-authors" placeholder="{{ _('Search users to add…') }}" style="margin-top:0.35rem;max-width:500px;">
+              <select multiple id="f-authors" class="profile-select2" style="width:100%;max-width:500px;"></select>
             </div></div>
             <div class="form-row"><label>{{ _('Curators') }}</label><div class="field">
-              <select multiple id="f-curators" class="profile-multi" style="height:80px;width:100%;max-width:500px;"></select>
-              <input type="search" class="profile-search" data-for="f-curators" placeholder="{{ _('Search users to add…') }}" style="margin-top:0.35rem;max-width:500px;">
+              <select multiple id="f-curators" class="profile-select2" style="width:100%;max-width:500px;"></select>
               <div class="help">{{ _('Can edit but are not shown as authors') }}</div>
             </div></div>
             <div class="form-row"><label>{{ _('Testers') }}</label><div class="field">
-              <select multiple id="f-testers" class="profile-multi" style="height:80px;width:100%;max-width:500px;"></select>
-              <input type="search" class="profile-search" data-for="f-testers" placeholder="{{ _('Search users to add…') }}" style="margin-top:0.35rem;max-width:500px;">
+              <select multiple id="f-testers" class="profile-select2" style="width:100%;max-width:500px;"></select>
               <div class="help">{{ _('Can view the problem before it is public') }}</div>
             </div></div>
             <div class="form-row"><label>{{ _('Submission source visibility') }}</label><div class="field"><select id="f-src-vis">
@@ -557,7 +553,7 @@
               <option value="S">{{ _('Visible if problem solved') }}</option>
               <option value="O">{{ _('Only own submissions') }}</option>
             </select></div></div>
-            <div class="form-row"><label>{{ _('Is full markup') }}</label><div class="field"><input type="checkbox" id="f-full-markup"><div class="help">{{ _('Allow full HTML markup in the statement') }}</div></div></div>
+            <div class="form-row"><label>{{ _('Is full markup') }}</label><div class="field"><input type="checkbox" id="f-full-markup" {% if not can_full_markup %}disabled{% endif %}><div class="help">{% if can_full_markup %}{{ _('Allow full HTML markup in the statement') }}{% else %}{{ _('You do not have permission to change this flag') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('View test cases') }}</label><div class="field"><input type="checkbox" id="f-view-cases"><div class="help">{{ _('Allow contestants to download failed test samples') }}</div></div></div>
             <div class="form-row"><label>{{ _('View tester') }}</label><div class="field"><input type="checkbox" id="f-view-tester"><div class="help">{{ _('Allow downloading the tester file') }}</div></div></div>
             <div class="form-row"><label>{{ _('AI hints enabled') }}</label><div class="field"><input type="checkbox" id="f-ai-hints"><div class="help">{{ _('Allow AI hints') }}</div></div></div>
@@ -588,8 +584,7 @@
           <h2>{{ _('Classes') }}</h2>
           <div class="form-content">
             <div class="form-row"><label>{{ _('Classes') }}</label><div class="field">
-              <select multiple id="f-classes" style="height:80px;width:100%;max-width:500px;"></select>
-              <input type="search" id="f-classes-search" placeholder="{{ _('Search classes (select an organization first)…') }}" style="margin-top:0.35rem;max-width:500px;">
+              <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"></select>
               <div class="help">{{ _('Only classes belonging to the selected organization are listed') }}</div>
             </div></div>
           </div>
@@ -624,24 +619,17 @@
           <table class="inline-table">
             <thead><tr><th>{{ _('Language') }}</th><th>{{ _('Time limit (s)') }}</th><th>{{ _('Memory limit (KB)') }}</th><th>{{ _('Delete') }}</th></tr></thead>
             <tbody id="lang-limit-body">
-              <tr>
-                <td style="width:140px;"><select>{% for l in languages %}<option value="{{ l.key }}">{{ l.name }}</option>{% endfor %}</select></td>
-                <td><input type="number" step="0.1" placeholder="{{ _('Inherit global') }}" style="width:100px;"></td>
-                <td><input type="number" placeholder="{{ _('Inherit global') }}" style="width:120px;"></td>
-                <td style="width:40px;"><input type="checkbox"></td>
-              </tr>
-              <tr><td colspan="4"><a href="#" onclick="event.preventDefault();">{{ _('+ Add another Language limit') }}</a></td></tr>
+              <tr><td colspan="4"><a href="#" id="lang-limit-add" onclick="event.preventDefault(); addLangLimitRow();">{{ _('+ Add another Language limit') }}</a></td></tr>
             </tbody>
           </table>
-          <div class="help" style="padding:0.5rem 1rem;">{{ _('Override global time/memory for specific languages (legacy LanguageLimit)') }}</div>
+          <p class="unsaved-note">{{ _('Override global time/memory for specific languages (same as classic LanguageLimit).') }}</p>
         </div>
 
         <fieldset class="module">
           <h2>{{ _('Advanced Justice') }}</h2>
           <div class="form-content">
             <div class="form-row"><label>{{ _('Banned users') }}</label><div class="field">
-              <select multiple id="f-banned-users" class="profile-multi" style="height:80px;width:100%;max-width:500px;"></select>
-              <input type="search" class="profile-search" data-for="f-banned-users" placeholder="{{ _('Search users to add…') }}" style="margin-top:0.35rem;max-width:500px;">
+              <select multiple id="f-banned-users" class="profile-select2" style="width:100%;max-width:500px;"></select>
               <div class="help">{{ _('Ban selected users from submitting this problem') }}</div>
             </div></div>
           </div>
@@ -650,7 +638,10 @@
         <fieldset class="module">
           <h2>{{ _('Advanced History') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>{{ _('Edit reason') }}</label><div class="field"><input type="text" placeholder="{{ _('Describe the changes you made (optional)') }}"></div></div>
+            <div class="form-row"><label>{{ _('Edit reason') }}</label><div class="field">
+              <input type="text" id="f-edit-reason" placeholder="{{ _('Describe the changes you made (optional)') }}" maxlength="200">
+              <p class="unsaved-note">{{ _('Stored as the revision comment (same as classic admin history).') }}</p>
+            </div></div>
           </div>
         </fieldset>
 
@@ -658,29 +649,22 @@
           <h2>{{ _('Problem templates') }}</h2>
           <table class="inline-table">
             <thead><tr><th>{{ _('Language') }}</th><th>{{ _('Code template') }}</th><th>{{ _('Delete') }}</th></tr></thead>
-            <tbody>
-              <tr>
-                <td style="width:120px;"><select><option>C++17</option></select></td>
-                <td><textarea rows="2" style="font-family:monospace;">#include &lt;iostream&gt;</textarea></td>
-                <td style="width:40px;"><input type="checkbox"></td>
-              </tr>
-              <tr><td colspan="3"><a href="#">{{ _('+ Add another Problem template') }}</a></td></tr>
+            <tbody id="template-body">
+              <tr><td colspan="3"><a href="#" id="template-add" onclick="event.preventDefault(); addTemplateRow();">{{ _('+ Add another Problem template') }}</a></td></tr>
             </tbody>
           </table>
+          <p class="unsaved-note">{{ _('Starter code shown in the submit editor (same as classic ProblemTemplate).') }}</p>
         </div>
 
         <div class="inline-group">
           <h2>{{ _('Clarifications') }}</h2>
           <table class="inline-table">
             <thead><tr><th>{{ _('Description') }}</th><th>{{ _('Delete') }}</th></tr></thead>
-            <tbody>
-              <tr>
-                <td><textarea rows="2" placeholder="{{ _('In-contest clarification…') }}" style="width:100%;"></textarea></td>
-                <td style="width:40px;"><input type="checkbox"></td>
-              </tr>
-              <tr><td colspan="2"><a href="#" onclick="event.preventDefault();">{{ _('+ Add another Clarification') }}</a></td></tr>
+            <tbody id="clarification-body">
+              <tr><td colspan="2"><a href="#" id="clarification-add" onclick="event.preventDefault(); addClarificationRow();">{{ _('+ Add another Clarification') }}</a></td></tr>
             </tbody>
           </table>
+          <p class="unsaved-note">{{ _('Shown on the problem page (same as classic ProblemClarification).') }}</p>
         </div>
 
         <div class="inline-group">
@@ -689,10 +673,9 @@
             <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-sol-public"><div class="help">{{ _('Publish the solution') }}</div></div></div>
             <div class="form-row"><label>{{ _('Publish on') }}</label><div class="field"><input type="text" id="f-sol-publish" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"></div></div>
             <div class="form-row"><label>{{ _('Authors') }}</label><div class="field">
-              <select multiple id="f-sol-authors" class="profile-multi" style="height:80px;width:100%;max-width:500px;"></select>
-              <input type="search" class="profile-search" data-for="f-sol-authors" placeholder="{{ _('Search users to add…') }}" style="margin-top:0.35rem;max-width:500px;">
+              <select multiple id="f-sol-authors" class="profile-select2" style="width:100%;max-width:500px;"></select>
             </div></div>
-            <div class="form-row"><label>{{ _('Content') }}</label><div class="field"><textarea id="f-sol-content" rows="4" placeholder="{{ _('Solution body (legacy Solution inline; Explanation above is the solve-page note)') }}" style="width:100%;"></textarea></div></div>
+            <div class="form-row"><label>{{ _('Content') }}</label><div class="field"><textarea id="f-sol-content" rows="4" placeholder="{{ _('Solution / editorial body (also editable via Explanation above)') }}" style="width:100%;"></textarea></div></div>
           </div>
         </div>
 
@@ -767,6 +750,8 @@
     </div>
   </div>
 
+  {# Autoescaped JSON blob — avoid |safe for XSS-safe embedding. #}
+  <script id="current-profile-data" type="application/json">{{ current_profile|json }}</script>
   <script>
     const SAVE_URL = '{{ save_url }}';
     const PROBLEM_LIST_URL = '{{ problem_list_url }}';
@@ -782,7 +767,9 @@
     const SEARCH_USERS_URL = '{{ search_users_url }}';
     const PROFILE_SELECT2_URL = '{{ profile_select2_url }}';
     const CLASS_SELECT2_URL = '{{ class_select2_url }}';
-    const CURRENT_PROFILE = {{ current_profile_json|safe }};
+    const SELECT2_THEME = '{{ DMOJ_SELECT2_THEME }}';
+    const CURRENT_PROFILE = JSON.parse(document.getElementById('current-profile-data').textContent);
+    const JUDGE_LANGUAGES = {{ languages_json|safe }};
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
@@ -1798,9 +1785,14 @@
 
     /* ---------- Advanced: profile / class pickers ---------- */
     function selectedIds(sel) {
+      if (!sel) return [];
+      if (window.jQuery && jQuery(sel).data('select2')) {
+        return (jQuery(sel).val() || []).map(v => parseInt(v, 10)).filter(n => !Number.isNaN(n));
+      }
       return [...sel.selectedOptions].map(o => parseInt(o.value, 10)).filter(n => !Number.isNaN(n));
     }
     function ensureOption(sel, id, text, selected) {
+      if (!sel || id == null) return null;
       let opt = [...sel.options].find(o => String(o.value) === String(id));
       if (!opt) {
         opt = document.createElement('option');
@@ -1811,56 +1803,61 @@
         opt.textContent = text;
       }
       if (selected) opt.selected = true;
+      if (window.jQuery && jQuery(sel).data('select2')) {
+        jQuery(sel).trigger('change');
+      }
       return opt;
     }
-    function bindProfileSearch(input) {
-      let timer = null;
-      input.addEventListener('input', () => {
-        clearTimeout(timer);
-        const term = input.value.trim();
-        const sel = document.getElementById(input.dataset.for);
-        if (!sel || term.length < 1) return;
-        timer = setTimeout(() => {
-          fetch(PROFILE_SELECT2_URL + '?term=' + encodeURIComponent(term))
-            .then(r => r.json())
-            .then(body => {
-              (body.results || []).forEach(row => ensureOption(sel, row.id, row.text, true));
-            })
-            .catch(() => {});
-        }, 250);
+    function initSelect2Multi(sel, ajaxUrl, extraData) {
+      if (!window.jQuery || !jQuery.fn.select2 || !sel) return false;
+      const $el = jQuery(sel);
+      if ($el.data('select2')) return true;
+      $el.select2({
+        theme: SELECT2_THEME,
+        width: '100%',
+        placeholder: gettext('Search to add…'),
+        allowClear: true,
+        ajax: {
+          url: ajaxUrl,
+          dataType: 'json',
+          delay: 250,
+          data: function (params) {
+            const data = { term: params.term || '' };
+            if (typeof extraData === 'function') Object.assign(data, extraData() || {});
+            else if (extraData) Object.assign(data, extraData);
+            return data;
+          },
+          processResults: function (data) {
+            return { results: data.results || [], pagination: { more: !!data.more } };
+          },
+        },
+        minimumInputLength: 0,
       });
+      return true;
     }
     function initProfilePickers() {
-      document.querySelectorAll('.profile-search').forEach(bindProfileSearch);
-      if (CURRENT_PROFILE && CURRENT_PROFILE.id) {
+      document.querySelectorAll('.profile-select2').forEach(sel => {
+        initSelect2Multi(sel, PROFILE_SELECT2_URL);
+      });
+      // Only pre-select the current user when creating a new problem.
+      if (!EDIT_CODE && CURRENT_PROFILE && CURRENT_PROFILE.id) {
         ensureOption(document.getElementById('f-authors'), CURRENT_PROFILE.id, CURRENT_PROFILE.username, true);
       }
     }
-    function refreshClassOptions(term) {
-      const sel = document.getElementById('f-classes');
-      const org = document.getElementById('f-org').value;
-      if (!sel || !org) return;
-      const keep = new Map([...sel.selectedOptions].map(o => [o.value, o.textContent]));
-      const q = CLASS_SELECT2_URL + '?organizations=' + encodeURIComponent(org)
-        + (term ? '&term=' + encodeURIComponent(term) : '&term=');
-      fetch(q).then(r => r.json()).then(body => {
-        sel.textContent = '';
-        keep.forEach((text, id) => ensureOption(sel, id, text, true));
-        (body.results || []).forEach(row => ensureOption(sel, row.id, row.text, keep.has(String(row.id))));
-      }).catch(() => {});
-    }
     function initClassPicker() {
+      const sel = document.getElementById('f-classes');
       const org = document.getElementById('f-org');
-      const search = document.getElementById('f-classes-search');
-      if (org) org.addEventListener('change', () => {
-        document.getElementById('f-classes').textContent = '';
-        refreshClassOptions('');
+      initSelect2Multi(sel, CLASS_SELECT2_URL, () => {
+        const v = (org && org.value) || '';
+        return v ? { organizations: v } : { organizations: '' };
       });
-      if (search) {
-        let timer = null;
-        search.addEventListener('input', () => {
-          clearTimeout(timer);
-          timer = setTimeout(() => refreshClassOptions(search.value.trim()), 250);
+      if (org) {
+        org.addEventListener('change', () => {
+          if (window.jQuery && jQuery(sel).data('select2')) {
+            jQuery(sel).val(null).trigger('change');
+          } else if (sel) {
+            sel.textContent = '';
+          }
         });
       }
     }
@@ -1905,6 +1902,104 @@
         delete: tr.querySelector('.tr-del').checked,
       })).filter(row => !row.delete && (row.name || row.description));
     }
+    function judgeLangSelectHtml(selected, className) {
+      const sel = document.createElement('select');
+      sel.className = className || 'll-lang';
+      (JUDGE_LANGUAGES || []).forEach(l => {
+        const o = document.createElement('option');
+        o.value = l.key;
+        o.textContent = l.name;
+        sel.appendChild(o);
+      });
+      if (selected) sel.value = selected;
+      return sel;
+    }
+    function addLangLimitRow(data) {
+      const body = document.getElementById('lang-limit-body');
+      if (!body) return;
+      const addRow = body.querySelector('#lang-limit-add').closest('tr');
+      const tr = document.createElement('tr');
+      tr.className = 'll-row';
+      const tdLang = document.createElement('td'); tdLang.style.width = '140px';
+      tdLang.appendChild(judgeLangSelectHtml(data && data.language, 'll-lang'));
+      const tdTime = document.createElement('td');
+      const time = document.createElement('input'); time.type = 'number'; time.step = '0.1';
+      time.className = 'll-time'; time.style.width = '100px';
+      if (data && data.time_limit != null) time.value = data.time_limit;
+      else time.value = '1';
+      tdTime.appendChild(time);
+      const tdMem = document.createElement('td');
+      const mem = document.createElement('input'); mem.type = 'number';
+      mem.className = 'll-mem'; mem.style.width = '120px';
+      if (data && data.memory_limit != null) mem.value = data.memory_limit;
+      else mem.value = '262144';
+      tdMem.appendChild(mem);
+      const tdDel = document.createElement('td'); tdDel.style.width = '40px';
+      const del = document.createElement('input'); del.type = 'checkbox'; del.className = 'll-del';
+      tdDel.appendChild(del);
+      tr.appendChild(tdLang); tr.appendChild(tdTime); tr.appendChild(tdMem); tr.appendChild(tdDel);
+      body.insertBefore(tr, addRow);
+    }
+    function collectLangLimits() {
+      return [...document.querySelectorAll('#lang-limit-body tr.ll-row')].map(tr => ({
+        language: tr.querySelector('.ll-lang').value,
+        time_limit: tr.querySelector('.ll-time').value,
+        memory_limit: tr.querySelector('.ll-mem').value,
+        delete: tr.querySelector('.ll-del').checked,
+      })).filter(row => !row.delete && row.language && row.time_limit !== '' && row.memory_limit !== '');
+    }
+    function addTemplateRow(data) {
+      const body = document.getElementById('template-body');
+      if (!body) return;
+      const addRow = body.querySelector('#template-add').closest('tr');
+      const tr = document.createElement('tr');
+      tr.className = 'pt-row';
+      const tdLang = document.createElement('td'); tdLang.style.width = '120px';
+      tdLang.appendChild(judgeLangSelectHtml(data && data.language, 'pt-lang'));
+      const tdCode = document.createElement('td');
+      const code = document.createElement('textarea'); code.rows = 3; code.className = 'pt-code';
+      code.style.width = '100%'; code.style.fontFamily = 'monospace';
+      if (data && data.code != null) code.value = data.code;
+      tdCode.appendChild(code);
+      const tdDel = document.createElement('td'); tdDel.style.width = '40px';
+      const del = document.createElement('input'); del.type = 'checkbox'; del.className = 'pt-del';
+      tdDel.appendChild(del);
+      tr.appendChild(tdLang); tr.appendChild(tdCode); tr.appendChild(tdDel);
+      body.insertBefore(tr, addRow);
+    }
+    function collectTemplates() {
+      return [...document.querySelectorAll('#template-body tr.pt-row')].map(tr => ({
+        language: tr.querySelector('.pt-lang').value,
+        code: tr.querySelector('.pt-code').value,
+        delete: tr.querySelector('.pt-del').checked,
+      })).filter(row => !row.delete && row.language && (row.code || '').trim());
+    }
+    function addClarificationRow(data) {
+      const body = document.getElementById('clarification-body');
+      if (!body) return;
+      const addRow = body.querySelector('#clarification-add').closest('tr');
+      const tr = document.createElement('tr');
+      tr.className = 'cl-row';
+      if (data && data.id) tr.dataset.id = data.id;
+      const tdDesc = document.createElement('td');
+      const desc = document.createElement('textarea'); desc.rows = 2; desc.className = 'cl-desc';
+      desc.placeholder = '{{ _("In-contest / problem clarification…") }}';
+      desc.style.width = '100%';
+      if (data && data.description) desc.value = data.description;
+      tdDesc.appendChild(desc);
+      const tdDel = document.createElement('td'); tdDel.style.width = '40px';
+      const del = document.createElement('input'); del.type = 'checkbox'; del.className = 'cl-del';
+      tdDel.appendChild(del);
+      tr.appendChild(tdDesc); tr.appendChild(tdDel);
+      body.insertBefore(tr, addRow);
+    }
+    function collectClarifications() {
+      return [...document.querySelectorAll('#clarification-body tr.cl-row')].map(tr => ({
+        id: tr.dataset.id || '',
+        description: tr.querySelector('.cl-desc').value.trim(),
+        delete: tr.querySelector('.cl-del').checked,
+      })).filter(row => !row.delete && row.description);
+    }
     function collectAdvanced() {
       return {
         is_manually_managed: !!(document.getElementById('f-manual') || {}).checked,
@@ -1923,12 +2018,20 @@
         og_image: (document.getElementById('f-og-image') || {}).value || '',
         summary: (document.getElementById('f-summary') || {}).value || '',
         short_circuit: !!(document.getElementById('f-short-circuit') || {}).checked,
-        solution: {
-          is_public: !!(document.getElementById('f-sol-public') || {}).checked,
-          publish_on: (document.getElementById('f-sol-publish') || {}).value || '',
-          authors: selectedIds(document.getElementById('f-sol-authors')),
-          content: (document.getElementById('f-sol-content') || {}).value || '',
-        },
+        edit_reason: ((document.getElementById('f-edit-reason') || {}).value || '').trim(),
+        clarifications: collectClarifications(),
+        solution: (function () {
+          const ta = ((document.getElementById('f-sol-content') || {}).value || '').trim();
+          const explain = (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown)
+            ? (RichEditor.getMarkdown('explain') || '').trim() : '';
+          return {
+            is_public: !!(document.getElementById('f-sol-public') || {}).checked,
+            publish_on: (document.getElementById('f-sol-publish') || {}).value || '',
+            authors: selectedIds(document.getElementById('f-sol-authors')),
+            // Explanation editor is a shortcut into Solution.content.
+            content: ta || explain,
+          };
+        })(),
         translations: collectTranslations(),
       };
     }
@@ -1947,6 +2050,7 @@
       setVal('f-og-image', d.og_image || '');
       setVal('f-summary', d.summary || '');
       setChk('f-short-circuit', d.short_circuit);
+      setVal('f-edit-reason', '');
       (d.authors || []).forEach(u => ensureOption(document.getElementById('f-authors'), u.id, u.username, true));
       (d.curators || []).forEach(u => ensureOption(document.getElementById('f-curators'), u.id, u.username, true));
       (d.testers || []).forEach(u => ensureOption(document.getElementById('f-testers'), u.id, u.username, true));
@@ -1957,11 +2061,20 @@
         setVal('f-sol-publish', d.solution.publish_on || '');
         setVal('f-sol-content', d.solution.content || '');
         (d.solution.authors || []).forEach(u => ensureOption(document.getElementById('f-sol-authors'), u.id, u.username, true));
+        if (d.solution.content && typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
+          try { RichEditor.setMarkdown('explain', d.solution.content); } catch (e) { /* mount may lag */ }
+        }
       }
       if (d.translations && d.translations.length) {
         document.querySelectorAll('#f-translations-body tr.tr-row').forEach(tr => tr.remove());
         d.translations.forEach(row => addTranslationRow(row));
       }
+      document.querySelectorAll('#lang-limit-body tr.ll-row').forEach(tr => tr.remove());
+      (d.language_limits || []).forEach(row => addLangLimitRow(row));
+      document.querySelectorAll('#template-body tr.pt-row').forEach(tr => tr.remove());
+      (d.templates || []).forEach(row => addTemplateRow(row));
+      document.querySelectorAll('#clarification-body tr.cl-row').forEach(tr => tr.remove());
+      (d.clarifications || []).forEach(row => addClarificationRow(row));
     }
 
     /* ---------- 收集 / 校验 / 保存 ---------- */
@@ -1980,7 +2093,7 @@
         gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
         problemTypes: [...document.querySelectorAll('#f-types .ptype-tag')].map(t => t.childNodes[0].textContent.trim()),
-        description: RichEditor.getMarkdown('stem'), explanation: RichEditor.getMarkdown('explain'),
+        description: RichEditor.getMarkdown('stem'),
         ...collectAdvanced(),
       };
       if (currentType === 'single' || currentType === 'multiple') {
@@ -2002,6 +2115,8 @@
         data.languages = [...document.querySelectorAll('#f-langs .lang-cb:checked')].map(c => c.value);
         data.checker = (document.getElementById('tc-checker') || {}).value || '';
         data.testcases = collectTestCases();
+        data.language_limits = collectLangLimits();
+        data.templates = collectTemplates();
       }
       return data;
     }

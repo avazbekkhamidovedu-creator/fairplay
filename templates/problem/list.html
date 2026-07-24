@@ -38,6 +38,19 @@
         }
         .modal-list li { margin: 2px 0; }
         .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+        /* Modal sits outside the filter form; keep danger button styles. */
+        .modal-overlay .btn-danger {
+            color: var(--oj-btn-text, #fff) !important;
+            background: var(--oj-danger, #c0392b);
+            border: 1px solid var(--oj-danger, #c0392b);
+            border-radius: var(--oj-radius, 4px);
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+        .modal-overlay .btn-danger:hover {
+            background: var(--oj-danger-hover, #a93226);
+            border-color: var(--oj-danger-hover, #a93226);
+        }
     </style>
 {% endblock %}
 
@@ -92,7 +105,7 @@
                     }
                 }
 
-                // Reflect the checked knowledge points as chips + count (applied on Search).
+                // Reflect the checked knowledge points as chips + count.
                 function refreshKnowledge() {
                     var $sel = $('#knowledge-selected');
                     if (!$sel.length) return;
@@ -138,11 +151,15 @@
                     }
                 });
 
-                // Problem-type dropdown: only update the label; filter applies on Search.
-                $('#type-multi-select .multi-select-menu input[type=checkbox]').change(refreshTypeLabel);
-
-                // Difficulty dropdown: only update the label; filter applies on Search.
-                $('#difficulty-multi-select .multi-select-menu input[type=checkbox]').change(refreshDifficultyLabel);
+                // Problem-type / difficulty / knowledge: apply filters as soon as selection changes.
+                $('#type-multi-select .multi-select-menu input[type=checkbox]').change(function () {
+                    refreshTypeLabel();
+                    go();
+                });
+                $('#difficulty-multi-select .multi-select-menu input[type=checkbox]').change(function () {
+                    refreshDifficultyLabel();
+                    go();
+                });
 
                 // Knowledge-point picker.
                 $('#toggle-knowledge-picker').click(function (e) {
@@ -151,15 +168,20 @@
                     $p.prop('hidden', !$p.prop('hidden'));
                 });
                 $('#close-knowledge').click(function () { $('#knowledge-picker').prop('hidden', true); });
-                $('#knowledge-picker-body input[type=checkbox]').change(refreshKnowledge);
+                $('#knowledge-picker-body input[type=checkbox]').change(function () {
+                    refreshKnowledge();
+                    go();
+                });
                 $('#clear-knowledge').click(function () {
                     $('#knowledge-picker-body input[type=checkbox]').prop('checked', false);
                     refreshKnowledge();
+                    go();
                 });
                 $('#knowledge-selected').on('click', 'button[data-kp-remove]', function () {
                     var id = $(this).data('kp-remove');
                     $('#knowledge-picker-body input[value="' + id + '"]').prop('checked', false);
                     refreshKnowledge();
+                    go();
                 });
                 $('#knowledge-search').on('input', function () {
                     var q = $(this).val().trim().toLowerCase();
@@ -200,7 +222,7 @@
                     go();
                 });
 
-                // Filters apply only when the user clicks Search (no auto-submit).
+                // Text/number filters still apply on Search (or Enter).
 
                 // Submit on Enter inside text/number inputs.
                 $form.find('input[name=search], input[name=ac_min], input[name=ac_max]').keypress(function (e) {
@@ -634,7 +656,7 @@
                 </div>
             </section>
 
-            <section class="card table-card tags-hidden">
+            <section class="card table-card">
                 <div class="table-wrap">
                     <table class="problem-table">
                         <thead>
@@ -645,12 +667,11 @@
                             {% if request.user.is_authenticated %}
                                 <th class="col-status solved">{{ sortth('<i class="fa fa-check"></i>'|safe, sort_links.solved, sort_order.solved) }}</th>
                             {% endif %}
-                            <th class="col-code">{{ sortth(_('Problem code'), sort_links.code, sort_order.code) }}</th>
                             <th class="col-name">{{ sortth(_('Problem'), sort_links.name, sort_order.name) }}</th>
                             <th class="col-type">{{ sortth(_('Problem type'), sort_links.type, sort_order.type) }}</th>
                             <th class="col-group">{{ sortth(_('Category'), sort_links.group, sort_order.group) }}</th>
                             <th class="col-tags">
-                                <button type="button" class="btn-text btn-sm" id="toggle-tags">{{ _('Show tags') }}</button>
+                                <button type="button" class="btn-text btn-sm" id="toggle-tags">{{ _('Hide tags') }}</button>
                             </th>
                             <th class="col-diff">{{ _('Difficulty') }}</th>
                             <th class="col-ac">{{ sortth(_('AC %%'), sort_links.ac_rate, sort_order.ac_rate) }}</th>
@@ -682,9 +703,9 @@
                                         <td class="col-status" solved="1">
                                             <a href="{{ url('user_submissions', problem.code, request.user.username) }}">
                                                 {% if problem.is_public %}
-                                                    <i class="solved-problem-color fa fa-check-circle"></i>
+                                                    <i class="solved-problem-color fa fa-check-circle" title="{{ _('Solved') }}"></i>
                                                 {% else %}
-                                                    <i class="solved-problem-color fa fa-lock"></i>
+                                                    <i class="solved-problem-color fa fa-lock" title="{{ _('Solved (private)') }}"></i>
                                                 {% endif %}
                                             </a>
                                         </td>
@@ -692,23 +713,22 @@
                                         <td class="col-status" solved="0">
                                             <a href="{{ url('user_submissions', problem.code, request.user.username) }}">
                                                 {% if problem.is_public %}
-                                                    <i class="attempted-problem-color fa fa-minus-circle"></i>
+                                                    <i class="attempted-problem-color fa fa-minus-circle" title="{{ _('Attempted') }}"></i>
                                                 {% else %}
-                                                    <i class="attempted-problem-color fa fa-lock"></i>
+                                                    <i class="attempted-problem-color fa fa-lock" title="{{ _('Attempted (private)') }}"></i>
                                                 {% endif %}
                                             </a>
                                         </td>
                                     {% else %}
                                         <td class="col-status" solved="-1">
                                             {% if problem.is_public %}
-                                                <i class="unsolved-problem-color fa fa-minus-circle"></i>
+                                                <i class="unsolved-problem-color fa fa-minus-circle" title="{{ _('Unsolved') }}"></i>
                                             {% else %}
-                                                <i class="unsolved-problem-color fa fa-lock"></i>
+                                                <i class="unsolved-problem-color fa fa-lock" title="{{ _('Unsolved (private)') }}"></i>
                                             {% endif %}
                                         </td>
                                     {% endif %}
                                 {% endif %}
-                                <td class="col-code">{{ problem.code }}</td>
                                 <td class="col-name">
                                     <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>
                                 </td>

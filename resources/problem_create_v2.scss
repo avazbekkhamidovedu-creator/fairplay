@@ -1093,9 +1093,10 @@ fieldset.module .form-content { padding: 1rem; }
 }
 .pcv2 .v2-right .pv-head,
 .pcv2 .content-preview .pv-head {
-  background: var(--oj-heading, #3b3b3b) !important;
-  color: var(--oj-heading-text, #fff) !important;
-  border-bottom-color: var(--oj-text-muted) !important;
+  /* Match fieldset.module h2 — avoid --oj-heading (light grey under dark Sass theme). */
+  background: var(--admin-header, #3b3b3b) !important;
+  color: #fff !important;
+  border-bottom-color: #808080 !important;
   font-size: 1.1em !important;
   font-weight: 600 !important;
   text-transform: none !important;
