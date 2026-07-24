@@ -245,3 +245,84 @@ class ContestCloneResetsFinalizeTest(ExamContestTestMixin, TestCase):
         # The source contest is untouched.
         self.contest.refresh_from_db()
         self.assertTrue(self.contest.results_finalized)
+
+
+class FileUploadExamContestMixin(ExamContestTestMixin):
+    """Adds a manually-graded file-upload problem to the exam contest."""
+
+    @classmethod
+    def setUpTestData(self):
+        super().setUpTestData()
+        self.file_problem = create_problem(code='examfile', submission_type='F', points=100)
+        self.file_cp = create_contest_problem(
+            contest=self.contest, problem=self.file_problem, points=100, order=3)
+
+    def _ungraded_file_submission(self):
+        """A file upload awaiting manual grading (QU, no points) — how it sits during the contest."""
+        sub = Submission.objects.create(
+            user=self.participation.user, problem=self.file_problem,
+            language=Language.get_answer_language(), points=None,
+            case_points=0, case_total=0, result=None, status='QU',
+            contest_object=self.contest,
+        )
+        ContestSubmission.objects.create(
+            submission=sub, problem=self.file_cp, participation=self.participation, points=0)
+        return sub
+
+
+class FileUploadResultsHiddenTest(FileUploadExamContestMixin, TestCase):
+    def test_hidden_and_latest_by_default(self):
+        # File upload opts into the same exam policy as MCQ (hidden + latest-scored).
+        self.assertTrue(self.file_cp.results_hidden)
+        self.assertTrue(self.file_cp.score_uses_latest)
+
+    def test_ungraded_submission_masked_from_student_not_editor(self):
+        sub = self._ungraded_file_submission()
+        self.assertTrue(sub.contest_results_hidden)
+        self.assertFalse(sub.results_visible_to(self.users['normal']))
+        self.assertTrue(sub.results_visible_to(self.editor))
+        self.assertTrue(sub.results_visible_to(self.users['superuser']))
+
+    def test_hidden_until_finalized_then_scores_latest(self):
+        # Teacher grades the uploads: an earlier one 100, the latest one 60.
+        self._add_contest_submission(self.file_cp, points=100, minutes=1)
+        self._add_contest_submission(self.file_cp, points=60, minutes=2)
+
+        # While running: excluded from the visible total and marked hidden — a "submitted" marker on
+        # the scoreboard, not a 0.
+        self.participation.recompute_results()
+        self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 0)
+        self.assertTrue((self.participation.format_data or {})[str(self.file_cp.id)].get('hidden'))
+
+        # After finalize: folds in at the LATEST grade (60), not the best (100).
+        Contest.objects.filter(id=self.contest.id).update(results_finalized=True)
+        self.participation = ContestParticipation.objects.get(id=self.participation.id)
+        self.participation.recompute_results()
+        self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 60)
+        self.assertFalse((self.participation.format_data or {})[str(self.file_cp.id)].get('hidden'))
+
+
+class FileUploadDefaultFormatNotHiddenTest(CommonDataMixin, TestCase):
+    """Regression: a file-upload problem in a non-exam contest is not masked (would show its score)."""
+
+    @classmethod
+    def setUpTestData(self):
+        super().setUpTestData()
+        self.contest = create_contest(key='plainfile', format_name='default', problems=())
+        self.file_problem = create_problem(code='plainfile_p', submission_type='F', points=100)
+        self.cp = create_contest_problem(contest=self.contest, problem=self.file_problem, points=100, order=1)
+        self.participation = create_contest_participation(contest=self.contest, user=self.users['normal'].profile)
+
+    def test_not_hidden_outside_exam_format(self):
+        sub = Submission.objects.create(
+            user=self.participation.user, problem=self.file_problem,
+            language=Language.get_answer_language(), points=None,
+            case_points=0, case_total=0, result=None, status='QU',
+            contest_object=self.contest,
+        )
+        ContestSubmission.objects.create(
+            submission=sub, problem=self.cp, participation=self.participation, points=0)
+        self.assertFalse(sub.contest_results_hidden)
+        self.assertTrue(sub.results_visible_to(self.users['normal']))

@@ -20,6 +20,12 @@ class FileUploadQuestionType(QuestionType):
     routes_to_bridge = False
     is_manual = True
 
+    # In an exam-style contest, hide the (manually assigned) result from students until the contest
+    # is finalized — so an ungraded upload shows as "submitted" rather than 0 on the scoreboard —
+    # and score the student's latest upload (their final answer). Mirrors multiple-choice.
+    hide_results_in_contest = True
+    contest_score_uses_latest = True
+
     # --- authoring / menu ---------------------------------------------------
     def can_create(self, user):
         return user.has_perm('judge.create_private_problem')
