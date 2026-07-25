@@ -31,7 +31,7 @@
   <script src="{{ static('rich_editor.js') }}"></script>
   <script src="{{ static('markdown_preview.js') }}"></script>
 
-  <!-- 在 add.html（shared.css）基础上追加的少量样式，沿用 dmoj-green 主题 -->
+  <!-- Page-local layout tweaks; colours come from --oj-* / problem_create_v2.css -->
   <style>
     /* 融入站点框架（继承 base.html）：不再锁 100vh，随页面滚动 */
     .v2-main { display: block; }
@@ -39,10 +39,9 @@
     .v2-top .breadcrumb { margin: 0; }
     .v2-top h1 { margin: 0.15rem 0 0; }
     .v2-top .note { margin: 0.55rem 0 0; }
-    .v2-type-hint { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
+    .v2-type-hint { font-size: var(--oj-font-size, 14px); color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
 
-    /* 隐藏添加题目页的所有使用提示（保留字段标签与必填标记） */
-    .help,
+    /* Hide noisy Basic-tab banners/hints; keep `.help` for Advanced field guidance. */
     .form-content .note,
     .blank-hints,
     .draft-banner,
@@ -52,36 +51,49 @@
     /* 需求6：题面标签与预览标题同高，保证左右齐平 */
     .stem-block > .block-label,
     .content-preview .pv-head { height: 20px; line-height: 20px; margin-bottom: 0.6rem !important; }
-    .stem-block > .block-label { display: block; font-weight: 600; font-size: 13px; }
+    .stem-block > .block-label { display: block; font-weight: 600; font-size: var(--oj-font-size, 14px); }
 
     /* 需求8：内联测试用例 */
-    .tc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .tc-table { width: 100%; border-collapse: collapse; font-size: var(--oj-font-size-sm, 12px); }
     .tc-table th, .tc-table td { border: 1px solid var(--admin-border, #ddd); padding: 0.35rem 0.4rem; text-align: left; vertical-align: top; }
     .tc-table th { background: var(--admin-header, #3b3b3b); color: #fff; font-weight: 600; }
-    .tc-table textarea { width: 100%; min-height: 64px; font-family: monospace; font-size: 12px; resize: vertical; }
+    .tc-table textarea { width: 100%; min-height: 64px; font-family: monospace; font-size: var(--oj-font-size-sm, 12px); resize: vertical; }
     .tc-table input[type="number"] { width: 64px; }
-    .tc-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin-bottom: 0.65rem; font-size: 12px; }
-    .tc-toolbar .tc-sep { color: var(--muted); }
+    .tc-toolbar {
+      display: flex; flex-wrap: wrap; gap: 0.45rem 0.6rem; align-items: center;
+      margin-bottom: 0.65rem; font-size: var(--oj-font-size-sm, 12px);
+    }
+    .tc-toolbar .tc-sep { color: var(--muted); line-height: 1; }
+    .tc-toolbar .btn,
+    .tc-toolbar label.btn {
+      min-height: 28px; height: 28px; padding: 0 10px;
+      font-size: var(--oj-font-size-sm, 12px); line-height: 1; box-sizing: border-box;
+    }
+    .tc-toolbar .tc-checker-label {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      font-weight: 600; font-size: var(--oj-font-size-sm, 12px); color: var(--text);
+    }
+    .tc-toolbar .tc-checker-label select,
     .tc-toolbar #tc-checker {
-      background: var(--card-bg, #fff); color: var(--text); border: 1px solid var(--admin-border);
+      width: auto; max-width: 160px; height: 28px; min-height: 28px;
+      padding: 0 8px; margin: 0; font-size: var(--oj-font-size-sm, 12px);
+      box-sizing: border-box; border: 1px solid var(--admin-border);
+      border-radius: var(--oj-radius, 4px); background: var(--card-bg, #fff); color: var(--text);
     }
     .tc-file-btn {
       display: inline-flex; align-items: center; gap: 0.25rem;
       border: 1px solid var(--admin-border) !important;
       background: var(--pcv2-accent-soft, #eceff1) !important;
       color: var(--dmoj-green-dark, #0d47a1) !important;
-      border-radius: 4px; padding: 0.25rem 0.5rem; font-size: 12px; cursor: pointer;
+      border-radius: var(--oj-radius, 4px); padding: 0.25rem 0.5rem; font-size: var(--oj-font-size-sm, 12px); cursor: pointer;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-width: 100%;
       font-weight: 600;
     }
     .tc-file-btn:hover { filter: brightness(1.08); }
     .tc-file-btn.dirty::after { content: '{{ _("· modified") }}'; color: #e65100 !important; font-size: 11px; margin-left: 0.2rem; font-weight: 600; }
     .tc-file-btn.manual { color: var(--text) !important; }
-    .tc-mode-hint { font-size: 12px; color: var(--muted); margin: 0 0 0.55rem; line-height: 1.5; }
-    .tc-old-link { font-size: 12px; margin-top: 0.55rem; }
-    .tc-old-link a { color: var(--dmoj-green-dark); }
-    .tc-collapse { border: 1px solid var(--admin-border); border-radius: 6px; background: var(--card-bg, #fff); color: var(--text); }
-    .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: 13px; list-style: none; user-select: none; color: var(--text); }
+    .tc-collapse { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: var(--card-bg, #fff); color: var(--text); }
+    .tc-collapse-summary { cursor: pointer; padding: 0.6rem 0.85rem; font-weight: 600; font-size: var(--oj-font-size, 14px); list-style: none; user-select: none; color: var(--text); }
     .tc-collapse-summary::-webkit-details-marker { display: none; }
     .tc-collapse-summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; color: var(--muted); transition: transform 0.15s; }
     .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
@@ -103,7 +115,7 @@
       display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.75rem;
       border-bottom: 1px solid var(--admin-border); background: var(--admin-bg, #fafafa);
     }
-    .tc-drawer-head strong { flex: 1; font-size: 12px; word-break: break-all; color: var(--text); }
+    .tc-drawer-head strong { flex: 1; font-size: var(--oj-font-size-sm, 12px); word-break: break-all; color: var(--text); }
     .tc-drawer-body {
       flex: 1; padding: 0.55rem 0.75rem; overflow: auto;
       display: flex; flex-direction: column; gap: 0.55rem;
@@ -115,8 +127,8 @@
     }
     .tc-drawer-pane textarea {
       width: 100%; flex: 1; min-height: 120px; max-height: 38vh;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
-      border: 1px solid var(--admin-border, #ddd); border-radius: 4px; padding: 0.4rem; resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--oj-font-size-sm, 12px);
+      border: 1px solid var(--admin-border, #ddd); border-radius: var(--oj-radius, 4px); padding: 0.4rem; resize: vertical;
       color: var(--text); background: var(--card-bg, #fff);
     }
     .tc-drawer-foot {
@@ -124,17 +136,17 @@
       border-top: 1px solid var(--admin-border); background: var(--admin-bg, #fafafa);
     }
 
-    .draft-banner { display: flex; align-items: center; gap: 0.5rem; background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 4px; padding: 0.5rem 0.75rem; font-size: 12px; margin-bottom: 0.6rem; }
+    .draft-banner { display: flex; align-items: center; gap: 0.5rem; background: var(--pcv2-accent-soft, rgba(41,128,185,0.12)); border: 1px solid var(--admin-border); border-radius: var(--oj-radius, 4px); padding: 0.5rem 0.75rem; font-size: var(--oj-font-size-sm, 12px); margin-bottom: 0.6rem; }
     .draft-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: #f39c12; flex-shrink: 0; }
     .draft-banner.saved .dot { background: var(--dmoj-green); }
 
     /* 需求4：复合题子题目 */
-    .sub-q { border: 1px solid var(--admin-border); border-radius: 6px; margin-bottom: 0.75rem; overflow: hidden; background: #fff; }
+    .sub-q { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); margin-bottom: 0.75rem; overflow: hidden; background: #fff; }
     .sub-q-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.65rem; background: #f5f5f5; border-bottom: 1px solid var(--admin-border); }
-    .sub-q-head .sq-idx { font-weight: 700; color: var(--dmoj-green-dark); }
+    .sub-q-head .sq-idx { font-weight: 700; color: var(--oj-accent, #2980B9); }
     .sq-pills { display: inline-flex; gap: 0.25rem; flex-wrap: wrap; }
-    .sq-pill { border: 1px solid var(--admin-border); background: #fff; border-radius: 16px; padding: 0.1rem 0.6rem; font-size: 12px; cursor: pointer; color: var(--muted); }
-    .sq-pill.on { border-color: var(--dmoj-green); background: #e8f5e9; color: var(--dmoj-green-dark); font-weight: 600; }
+    .sq-pill { border: 1px solid var(--admin-border); background: #fff; border-radius: var(--oj-radius, 4px); padding: 0.1rem 0.6rem; font-size: var(--oj-font-size-sm, 12px); cursor: pointer; color: var(--muted); }
+    .sq-pill.on { border-color: var(--oj-accent, #2980B9); background: var(--pcv2-accent-soft, rgba(41,128,185,0.12)); color: var(--oj-accent, #2980B9); font-weight: 600; }
     .sub-q-head .sq-spacer { flex: 1; }
     .sub-q-head .sq-score { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 0.3rem; }
     .sub-q-head .sq-score input { width: 60px; }
@@ -165,11 +177,11 @@
     .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
     .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
     /* Preview card: match fieldset.module heading bar (dark admin header) */
-    .pv-panel { border: 1px solid var(--admin-border); border-radius: 4px; background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); }
+    .pv-panel { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); box-shadow: var(--oj-shadow, none); }
     .v2-right .pv-head {
-      background: var(--admin-header, #3b3b3b); color: #fff; margin: 0; padding: 0.6rem 1rem;
+      background: var(--admin-header, #3b3b3b); color: var(--admin-header-text, #fff); margin: 0; padding: 0.55rem 1rem;
       font-size: 1.1em; font-weight: 600; text-transform: none; letter-spacing: normal;
-      border-bottom: 1px solid var(--admin-border); flex-shrink: 0;
+      border-bottom: 1px solid var(--admin-header-border, #808080); flex-shrink: 0;
     }
     #preview-body { padding: 1rem; overflow-y: auto; }
     @media (max-width: 900px) {
@@ -235,7 +247,7 @@
                   {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
                 </select>
                 {% if can_create_organization %}
-                <button type="button" class="inline-add-btn" title="{{ _('Create organization') }}" onclick="toggleInlineAdd('org')">+ {{ _('New') }}</button>
+                <button type="button" class="inline-add-btn" title="{{ _('Create organization') }}" aria-label="{{ _('Create organization') }}" onclick="toggleInlineAdd('org')">+</button>
                 {% endif %}
               </div>
               {% if can_create_organization %}
@@ -255,7 +267,7 @@
                 <select id="f-group">
                   {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
                 </select>
-                <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+ {{ _('New') }}</button>
+                <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" aria-label="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+</button>
               </div>
               <div class="inline-add-box" id="group-add-box" style="display:none;">
                 <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
@@ -267,25 +279,26 @@
           <div class="form-row">
             <label>{{ _('Difficulty') }} <span class="req">*</span></label>
             <div class="field">
-              <div class="type-pills" id="difficulty">
-                <label class="type-pill"><input type="radio" name="difficulty" value="easy" onchange="setDifficulty('easy')"><span>{{ _('Easy') }}</span></label>
-                <label class="type-pill"><input type="radio" name="difficulty" value="medium" checked onchange="setDifficulty('medium')"><span>{{ _('Medium') }}</span></label>
-                <label class="type-pill"><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>{{ _('Hard') }}</span></label>
-                <label class="type-pill"><input type="radio" name="difficulty" value="ai" onchange="setDifficulty('ai')"><span>{{ _('AI judge') }}</span></label>
+              <div class="diff-row">
+                <div class="type-pills" id="difficulty">
+                  <label class="type-pill"><input type="radio" name="difficulty" value="easy" onchange="setDifficulty('easy')"><span>{{ _('Easy') }}</span></label>
+                  <label class="type-pill"><input type="radio" name="difficulty" value="medium" checked onchange="setDifficulty('medium')"><span>{{ _('Medium') }}</span></label>
+                  <label class="type-pill"><input type="radio" name="difficulty" value="hard" onchange="setDifficulty('hard')"><span>{{ _('Hard') }}</span></label>
+                </div>
+                <button type="button" class="inline-add-btn ptype-ai" id="diff-ai-btn" title="{{ _('AI recommends Easy / Medium / Hard from the statement') }}" onclick="runAIDifficulty()">🤖 AI</button>
               </div>
               <div id="diff-ai-box" style="display:none;margin-top:0.4rem;">
                 <span id="diff-ai-result"></span>
-                <a href="javascript:void(0)" id="diff-ai-rerun" onclick="runAIDifficulty()" style="display:none;font-size:12px;margin-left:0.5rem;">{{ _('Re-judge') }}</a>
               </div>
-              <div class="help">{{ _('Setting difficulty writes a problem_type tag automatically; choosing "AI judge" immediately calls AI to classify Easy / Medium / Hard from the statement') }}</div>
+              <div class="help">{{ _('Setting difficulty writes a problem_type tag automatically; click "🤖 AI" to classify Easy / Medium / Hard from the statement') }}</div>
             </div>
           </div>
           <div class="form-row">
             <label>{{ _('Problem type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="ptype-tags" id="f-types">
-                <button type="button" class="ptype-add" title="{{ _('Select from existing types / create new') }}" onclick="openTypeModal()">+</button>
-                <button type="button" class="ptype-ai" id="ptype-ai-btn" title="{{ _('AI recommends type tags from the statement') }}" onclick="runAIProblemTypeInline()">AI</button>
+                <button type="button" class="inline-add-btn ptype-add" title="{{ _('Select from existing types / create new') }}" onclick="openTypeModal()">+</button>
+                <button type="button" class="inline-add-btn ptype-ai" id="ptype-ai-btn" title="{{ _('AI recommends type tags from the statement') }}" onclick="runAIProblemTypeInline()">🤖 AI</button>
               </div>
               <div class="help">{{ _('Type and difficulty tags are written automatically; you can add more category tags. Click "🤖 AI" to recommend from the statement') }}</div>
             </div>
@@ -440,10 +453,6 @@
           <details class="tc-collapse" id="tc-collapse" open>
             <summary class="tc-collapse-summary">{{ _("Test data settings (click to collapse)") }}</summary>
             <div class="tc-body-wrap">
-              <p class="tc-mode-hint">
-                {{ _('Enter input/output directly, or upload a ZIP to auto-pair cases (the table shows the file name; click it to view/edit in the side panel).') }}
-                {{ _('ZIP saves upload the archive as a file (same size limits as the legacy test-data page). Use that page for Batch / Generator / Harness fine-tuning.') }}
-              </p>
               <div class="tc-toolbar">
                 <button type="button" class="btn" onclick="addTestCase()">+ {{ _("Add case") }}</button>
                 <label class="btn" style="cursor:pointer;margin:0;">
@@ -452,8 +461,8 @@
                 </label>
                 <button type="button" class="btn" onclick="distributeCasePoints()">{{ _("Distribute points evenly") }}</button>
                 <span class="tc-sep">|</span>
-                <label>{{ _('Checker') }}
-                  <select id="tc-checker" style="max-width:160px;margin-left:0.25rem;">
+                <label class="tc-checker-label">{{ _('Checker') }}
+                  <select id="tc-checker">
                     <option value="">{{ _('Default') }}</option>
                     {% for c in checkers %}
                       <option value="{{ c.value }}">{{ c.label }}</option>
@@ -476,13 +485,6 @@
                   </thead>
                   <tbody id="tc-body"></tbody>
                 </table>
-              </div>
-              <div class="tc-old-link" id="tc-old-link">
-                {% if test_data_url %}
-                  <a href="{{ test_data_url }}" target="_blank" rel="noopener">{{ _('Open legacy test-data page (finer editing)') }}</a>
-                {% else %}
-                  <span style="color:var(--muted);">{{ _('After the problem is saved once, open the legacy test-data page here for Batch / Generator fine-tuning.') }}</span>
-                {% endif %}
               </div>
             </div>
           </details>
@@ -598,9 +600,15 @@
         <fieldset class="module type-panel" data-for="programming">
           <h2>{{ _('Advanced Language') }}</h2>
           <div class="form-content">
-            <div class="form-row"><label>{{ _('Allowed languages') }}</label><div class="field checkbox-list" id="f-langs" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
-              {% for l in languages %}<label><input type="checkbox" class="lang-cb" value="{{ l.key }}"> {{ l.name }}</label>{% endfor %}
-            </div><div class="help">{{ _('If none are checked, all languages are allowed by default') }}</div></div>
+            <div class="form-row">
+              <label>{{ _('Allowed languages') }}</label>
+              <div class="field">
+                <div class="checkbox-list" id="f-langs">
+                  {% for l in languages %}<label><input type="checkbox" class="lang-cb" value="{{ l.key }}"> {{ l.name }}</label>{% endfor %}
+                </div>
+                <div class="help">{{ _('If none are checked, all languages are allowed by default') }}</div>
+              </div>
+            </div>
           </div>
         </fieldset>
 
@@ -756,6 +764,8 @@
     const PROFILE_SELECT2_URL = '{{ profile_select2_url }}';
     const CLASS_SELECT2_URL = '{{ class_select2_url }}';
     const SELECT2_THEME = '{{ DMOJ_SELECT2_THEME }}';
+    {# |safe required: script data does not decode HTML entities, so autoescaped JSON breaks JSON.parse. #}
+    {# View escapes <>& to \\uXXXX so this is not a script-breakout vector. #}
     const CURRENT_PROFILE = {{ current_profile_json|safe }};
     const JUDGE_LANGUAGES = {{ languages_json|safe }};
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
@@ -798,31 +808,30 @@
     }
     let currentDifficulty = 'medium';
     function setDifficulty(level) {
-      currentDifficulty = level;
-      const box = document.getElementById('diff-ai-box');
       if (level === 'ai') {
-        box.style.display = 'block';
-        // 未判定前先移除难度标签，判定完成后再写入
-        document.getElementById('f-types').querySelectorAll('.ptype-tag.auto-diff').forEach(t => t.remove());
-        // 选中「AI 判断」即直接调用，无需再点按钮
         runAIDifficulty();
-      } else {
-        box.style.display = 'none';
-        setDifficultyTag(DIFF_LABEL[level]);
+        return;
       }
+      currentDifficulty = level;
+      const radio = document.querySelector('#difficulty input[value="' + level + '"]');
+      if (radio) radio.checked = true;
+      setDifficultyTag(DIFF_LABEL[level]);
     }
     // 调用后端 AI 判定难度（judge/llm；未配置时后端回退启发式）
     function runAIDifficulty() {
       const res = document.getElementById('diff-ai-result');
-      const rerun = document.getElementById('diff-ai-rerun');
+      const box = document.getElementById('diff-ai-box');
+      const btn = document.getElementById('diff-ai-btn');
       const description = RichEditor.getMarkdown('stem');
+      if (box) box.style.display = 'block';
       if (!description.trim()) {
         res.innerHTML = '<span style="color:#c0392b;">{{ _("Please enter problem content first.") }}</span>';
-        if (rerun) rerun.style.display = 'inline';
         return;
       }
+      // Clear auto difficulty tag until the new suggestion lands.
+      document.getElementById('f-types').querySelectorAll('.ptype-tag.auto-diff').forEach(t => t.remove());
       res.innerHTML = '🤖 {{ _("Analyzing…") }}';
-      if (rerun) rerun.style.display = 'none';
+      if (btn) btn.disabled = true;
       fetch(AI_DIFFICULTY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
@@ -836,8 +845,11 @@
           res.appendChild(err);
           return;
         }
-        currentDifficulty = body.level;
-        setDifficultyTag(body.label);
+        const level = body.level || 'medium';
+        currentDifficulty = level;
+        const radio = document.querySelector('#difficulty input[value="' + level + '"]');
+        if (radio) radio.checked = true;
+        setDifficultyTag(body.label || DIFF_LABEL[level]);
         res.textContent = '';
         const wrap = document.createElement('span');
         wrap.className = 'diff-ai-result';
@@ -847,7 +859,7 @@
         wrap.appendChild(b);
         res.appendChild(wrap);
       }).catch(() => { res.innerHTML = '<span style="color:#c0392b;">{{ _("Network error") }}</span>'; })
-        .finally(() => { if (rerun) rerun.style.display = 'inline'; });
+        .finally(() => { if (btn) btn.disabled = false; });
     }
 
     /* ---------- problem_type 选择（来自数据库） ---------- */
@@ -1172,7 +1184,6 @@
     /* ---------- 测试用例（内联录入 + ZIP 文件名模式）---------- */
     // Soft warning only: save uploads the archive as a file (same path as classic test_data).
     const TC_ZIP_WARN_TOTAL = 8 * 1024 * 1024;
-    const TEST_DATA_URL = '{{ test_data_url }}';
     let tcDrawerTarget = null; // { tr }
     let pendingZipFile = null; // original File from <input>, reused on save when unchanged
 
@@ -1351,15 +1362,6 @@
         suffix: (sum === total ? '' : interpolate(gettext(' (target %(total)s)'), {total: total}, true))
       }, true));
     }
-
-    function updateTestDataHint() {
-      const el = document.getElementById('tc-old-link');
-      if (!el) return;
-      if (TEST_DATA_URL) {
-        el.innerHTML = '<a href="' + TEST_DATA_URL + '" target="_blank" rel="noopener">' + gettext('Open legacy test-data page (finer editing)') + '</a>';
-      }
-    }
-    updateTestDataHint();
 
     function setZipStatus(msg, isError) {
       const el = document.getElementById('tc-zip-status');
@@ -2468,7 +2470,7 @@
     }
 
     function runAIDecompose() {
-      const desc = getMd('stem').trim();
+      const desc = (RichEditor.getMarkdown('stem') || '').trim();
       const pts = Number(document.getElementById('f-points').value) || 1;
       if (!desc) { showToast('Please write the problem description first.', false); return; }
       const status = document.getElementById('decompose-status');

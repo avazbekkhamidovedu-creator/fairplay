@@ -127,10 +127,16 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'search_users_url': reverse('martor_search_user'),
             'profile_select2_url': reverse('profile_select2'),
             'class_select2_url': reverse('class_select2'),
-            'current_profile_json': json.dumps({
-                'id': profile.id,
-                'username': profile.username,
-            } if profile else {'id': None, 'username': ''}),
+            # Escape <>& so |safe inline JSON cannot break out of <script>.
+            'current_profile_json': (
+                json.dumps({
+                    'id': profile.id,
+                    'username': profile.username,
+                } if profile else {'id': None, 'username': ''})
+                .replace('<', '\\u003c')
+                .replace('>', '\\u003e')
+                .replace('&', '\\u0026')
+            ),
             'licenses': list(License.objects.order_by('name').values('id', 'key', 'name', 'display')),
             'ui_languages': list(settings.LANGUAGES),
             'edit_code': '',

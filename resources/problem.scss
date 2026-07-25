@@ -1,5 +1,4 @@
 @use "vars" as *;
-@use "sass:color";
 
 #problem-table {
     td, th {
@@ -347,50 +346,28 @@ ul.problem-list {
 }
 
 /* ===========================================================================
-   Redesigned problem list (ported from reference/css/redesign.css).
-   Colours are mapped onto the theme variables so light/dark themes both work;
-   layout/spacing/shape faithfully mirror the reference design.
+   Problem list (redesign layout + classic OJ tokens).
+   Local aliases point at :root --oj-* from tokens.scss so shared components
+   (.oj-ui .btn / .card / .input) and page-specific rules stay in sync.
    =========================================================================== */
 .problem-list-redesign {
-    --surface: #{$color_primary0};
-    --bg: #{$color_primary5};
-    --border: #{$color_primary25};
-    --text: #{$color_primary90};
-    --text-muted: #{$color_primary50};
-    --primary: #{$highlight_blue};
-    --primary-hover: #{color.adjust($highlight_blue, $lightness: -8%)};
-    --primary-light: #{rgba($highlight_blue, 0.1)};
-    --active-tab-bg: #{$color_primary90};
-    --radius: 10px;
-    --radius-sm: 6px;
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    --surface: var(--oj-surface);
+    --bg: var(--oj-bg);
+    --border: var(--oj-border);
+    --text: var(--oj-text);
+    --text-muted: var(--oj-text-muted);
+    --primary: var(--oj-btn-from);
+    --primary-hover: var(--oj-btn-hover);
+    --primary-light: var(--oj-accent-soft);
+    --active-tab-bg: var(--oj-heading);
+    --radius: var(--oj-radius-md);
+    --radius-sm: var(--oj-radius);
+    --shadow: var(--oj-shadow);
 
     margin-top: 0.5em;
     color: var(--text);
 
-    .card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow);
-    }
-
-    /* ── Shared controls ── */
-    .input {
-        padding: 7px 12px;
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        background: var(--surface);
-        color: var(--text);
-        font-size: 13px;
-        outline: none;
-
-        &:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px #{rgba($highlight_blue, 0.12)};
-        }
-    }
-
+    /* Sizing helpers on top of shared .oj-ui .input / .select */
     .input-wide {
         flex: 1;
         min-width: 200px;
@@ -398,70 +375,8 @@ ul.problem-list {
 
     .input-num {
         width: 72px;
-        padding: 6px 8px;
-        text-align: center;
-    }
-
-    .select {
-        padding: 7px 12px;
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        background: var(--surface);
-        color: var(--text);
-        font-size: 13px;
-        min-width: 140px;
-    }
-
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 8px 18px;
-        border: none;
-        border-radius: var(--radius-sm);
-        font-size: 13px;
-        font-weight: 500;
-        cursor: pointer;
-    }
-
-    .btn-primary {
-        background: var(--primary);
-        color: #fff;
-
-        &:hover {
-            background: var(--primary-hover);
-            color: #fff;
-            text-decoration: none;
-        }
-    }
-
-    .btn-sm {
-        padding: 5px 12px;
-        font-size: 12px;
-    }
-
-    .btn-outline {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        color: var(--text);
-
-        &:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-    }
-
-    .btn-text {
-        border: none;
-        background: none;
-        color: var(--primary);
-        font-size: 13px;
         padding: 4px 8px;
-        cursor: pointer;
-
-        &:hover {
-            text-decoration: underline;
-        }
+        text-align: center;
     }
 
     [disabled] {
@@ -483,25 +398,25 @@ ul.problem-list {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 8px 16px;
+        padding: 6px 14px;
         border: 1px solid var(--border);
-        border-radius: 999px;
+        border-radius: var(--radius-sm);
         background: var(--surface);
         color: var(--text);
-        font-size: 13px;
-        font-weight: 500;
+        font-size: var(--oj-font-size);
+        font-weight: 400;
         cursor: pointer;
-        transition: all 0.15s;
+        transition: border-color 0.15s, color 0.15s, background 0.15s;
 
         &:hover {
-            border-color: var(--primary);
-            color: var(--primary);
+            border-color: var(--oj-accent);
+            color: var(--oj-accent);
         }
 
         &.active {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: #fff;
+            background: linear-gradient(to bottom, var(--oj-btn-from) 0, var(--oj-btn-to) 100%);
+            border-color: var(--oj-btn-border);
+            color: var(--oj-btn-text);
         }
 
         .count {
@@ -534,7 +449,7 @@ ul.problem-list {
         min-width: 56px;
         font-weight: 600;
         color: var(--text-muted);
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         flex-shrink: 0;
     }
 
@@ -559,7 +474,7 @@ ul.problem-list {
     }
 
     .filter-group-label {
-        font-size: 12px;
+        font-size: var(--oj-font-size-sm);
         color: var(--text-muted);
         white-space: nowrap;
     }
@@ -572,7 +487,7 @@ ul.problem-list {
 
     .ac-range-sep,
     .ac-range-unit {
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         color: var(--text-muted);
     }
 
@@ -580,7 +495,7 @@ ul.problem-list {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         color: var(--text-muted);
         cursor: pointer;
         white-space: nowrap;
@@ -601,7 +516,7 @@ ul.problem-list {
     }
 
     .result-count {
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         color: var(--text-muted);
 
         strong {
@@ -629,19 +544,21 @@ ul.problem-list {
         gap: 8px;
         width: 100%;
         min-width: 140px;
-        padding: 7px 12px;
+        min-height: var(--oj-control-height);
+        padding: 6px 10px;
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         background: var(--surface);
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         color: var(--text);
         text-align: left;
         cursor: pointer;
+        box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.06);
     }
 
     .multi-select-trigger:hover,
     .multi-select.open .multi-select-trigger {
-        border-color: var(--primary);
+        border-color: rgba(82, 168, 236, 0.8);
     }
 
     .multi-select-label-empty {
@@ -665,7 +582,7 @@ ul.problem-list {
         background: var(--surface);
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+        box-shadow: var(--oj-shadow-dropdown);
         padding: 6px 0;
     }
 
@@ -674,7 +591,7 @@ ul.problem-list {
         align-items: center;
         gap: 8px;
         padding: 8px 12px;
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         cursor: pointer;
         user-select: none;
 
@@ -691,7 +608,7 @@ ul.problem-list {
     .multi-select-empty {
         display: block;
         padding: 8px 12px;
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         color: var(--text-muted);
     }
 }
@@ -709,19 +626,20 @@ ul.problem-list {
 
     .chip-placeholder {
         color: var(--text-muted);
-        font-size: 13px;
+        font-size: var(--oj-font-size);
     }
 
     .chip {
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        padding: 3px 10px;
+        padding: 2px 8px;
         background: var(--primary-light);
-        color: var(--primary);
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 500;
+        color: var(--oj-accent);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        font-size: var(--oj-font-size-sm);
+        font-weight: 400;
 
         button {
             border: none;
@@ -764,7 +682,7 @@ ul.problem-list {
 
     .knowledge-placeholder {
         color: var(--text-muted);
-        font-size: 13px;
+        font-size: var(--oj-font-size);
     }
 }
 
@@ -790,12 +708,13 @@ ul.problem-list {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 0 14px;
-        height: 38px;
+        padding: 0 10px;
+        height: var(--oj-control-height);
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: 999px;
+        border-radius: var(--radius-sm);
         min-width: 220px;
+        box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.06);
 
         .fa {
             color: var(--text-muted);
@@ -805,7 +724,8 @@ ul.problem-list {
         input {
             border: none;
             outline: none;
-            font-size: 13px;
+            box-shadow: none;
+            font-size: var(--oj-font-size);
             width: 100%;
             background: transparent;
             color: var(--text);
@@ -814,26 +734,26 @@ ul.problem-list {
 
     .icon-btn {
         position: relative;
-        width: 38px;
-        height: 38px;
+        width: var(--oj-control-height);
+        height: var(--oj-control-height);
         border: 1px solid var(--border);
-        border-radius: 50%;
+        border-radius: var(--radius-sm);
         background: var(--surface);
         display: flex;
         align-items: center;
         justify-content: center;
         color: var(--text-muted);
-        transition: all 0.15s;
+        transition: border-color 0.15s, color 0.15s;
         cursor: pointer;
 
         &:hover {
-            border-color: var(--primary);
-            color: var(--primary);
+            border-color: var(--oj-accent);
+            color: var(--oj-accent);
         }
     }
 
     .progress-label {
-        font-size: 12px;
+        font-size: var(--oj-font-size-sm);
         color: var(--text-muted);
         margin-right: 4px;
     }
@@ -853,8 +773,8 @@ ul.problem-list {
         min-width: 180px;
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: var(--radius);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+        border-radius: var(--radius-sm);
+        box-shadow: var(--oj-shadow-dropdown);
         padding: 6px 0;
 
         .dropdown-title {
@@ -876,7 +796,7 @@ ul.problem-list {
             justify-content: space-between;
             width: 100%;
             padding: 8px 14px;
-            font-size: 13px;
+            font-size: var(--oj-font-size);
             text-align: left;
             color: var(--text);
 
@@ -909,7 +829,7 @@ ul.problem-list {
 
         .ring-fill {
             fill: none;
-            stroke: var(--primary);
+            stroke: var(--oj-accent);
             stroke-width: 3;
             stroke-linecap: round;
             stroke-dasharray: 100 100;
@@ -933,8 +853,9 @@ ul.problem-list {
 /* ── Table ── */
 .problem-list-redesign {
     .table-card {
-        overflow: hidden;
         margin-bottom: 16px;
+        border-radius: var(--oj-radius-md);
+        overflow: hidden;
     }
 
     .table-wrap {
@@ -944,43 +865,88 @@ ul.problem-list {
     .problem-table {
         width: 100%;
         border-collapse: collapse;
+        border-spacing: 0;
 
         th {
-            padding: 12px 14px;
-            text-align: left;
-            font-size: 12px;
+            height: 2em;
+            padding: 4px 10px;
+            text-align: center;
+            vertical-align: middle;
+            font-size: 1.1em;
             font-weight: 600;
-            color: var(--text-muted);
-            background: var(--bg);
-            border-bottom: 1px solid var(--border);
+            color: var(--oj-heading-text);
+            background: var(--oj-heading);
+            border: 1px solid #{$color_primary50};
+            border-width: 1px 1px 1px 0;
             white-space: nowrap;
 
-            a {
-                color: inherit;
+            &:first-child {
+                border-left-width: 1px;
+                border-top-left-radius: var(--oj-radius-md);
+            }
 
-                &:hover {
-                    color: var(--primary);
-                    text-decoration: none;
-                }
+            &:last-child {
+                border-top-right-radius: var(--oj-radius-md);
+            }
+
+            a,
+            .sort-link,
+            .btn-text,
+            button {
+                color: var(--oj-heading-text) !important;
+                font-size: inherit;
+                font-weight: inherit;
+                line-height: inherit;
+            }
+
+            a:hover,
+            .sort-link:hover,
+            .btn-text:hover,
+            button:hover {
+                color: var(--oj-heading-text) !important;
+                text-decoration: underline;
+            }
+
+            /* Keep header controls flat on the dark bar */
+            .btn-text,
+            button.btn-text {
+                background: none !important;
+                border: none !important;
+                box-shadow: none !important;
+                padding: 0;
+                min-height: 0;
+                display: inline;
+            }
+
+            input[type=checkbox] {
+                margin: 0;
+                vertical-align: middle;
+                accent-color: #{$highlight_blue};
             }
         }
 
         td {
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border);
+            padding: 8px 12px;
+            border-color: var(--border);
+            border-style: solid;
+            border-width: 0 1px 1px 0;
             vertical-align: middle;
-            font-size: 13px;
+            font-size: var(--oj-font-size);
+
+            &:first-child {
+                border-left-width: 1px;
+            }
         }
 
         tbody tr {
             transition: background-color 0.15s;
 
-            &:hover {
-                background: var(--primary-light);
+            &:nth-child(even) {
+                background: rgba(0, 0, 0, 0.03);
             }
 
-            &:last-child td {
-                border-bottom: none;
+            &:hover {
+                background: rgba(0, 0, 0, 0.05);
             }
         }
 
@@ -991,12 +957,21 @@ ul.problem-list {
 
         .col-code {
             width: 160px;
-            font-family: $monospace-fonts;
-            font-size: 12px;
         }
 
-        .col-name a {
-            font-weight: 500;
+        /* Monospace / muted styles are body-only — must not leak onto <th> */
+        td.col-code {
+            font-family: $monospace-fonts;
+            font-size: var(--oj-font-size);
+        }
+
+        td.col-name a {
+            font-weight: 400;
+            color: var(--oj-link);
+
+            &:hover {
+                color: #{$color_link100};
+            }
         }
 
         .col-type {
@@ -1005,7 +980,6 @@ ul.problem-list {
 
         .col-diff {
             width: 72px;
-            text-align: center;
         }
 
         .col-ac {
@@ -1015,13 +989,48 @@ ul.problem-list {
         .col-date {
             width: 110px;
             white-space: nowrap;
+        }
+
+        td.col-date {
             color: var(--text-muted);
-            font-size: 12px;
+            font-size: var(--oj-font-size-sm);
         }
 
         .col-points {
             width: 64px;
-            text-align: right;
+        }
+
+        /* Force a single header typeface/size across every column */
+        thead th {
+            font-family: inherit;
+            font-size: 1.1em !important;
+            font-weight: 600 !important;
+            color: var(--oj-heading-text) !important;
+            letter-spacing: normal;
+        }
+
+        thead th .sort-link,
+        thead th .btn-text,
+        thead th button,
+        thead th a {
+            font-family: inherit !important;
+            font-size: inherit !important;
+            font-weight: inherit !important;
+            color: inherit !important;
+            letter-spacing: inherit;
+        }
+
+        thead th .sort-icon,
+        thead th .fa {
+            font-family: FontAwesome !important;
+            font-size: 0.85em !important;
+            font-weight: normal !important;
+            color: inherit !important;
+            opacity: 0.55;
+        }
+
+        thead th .sort-link.is-sorted .sort-icon {
+            opacity: 1;
         }
     }
 
@@ -1032,7 +1041,7 @@ ul.problem-list {
         margin: 1px 2px;
         background: var(--bg);
         border-radius: 4px;
-        font-size: 11px;
+        font-size: var(--oj-font-size-sm);
         color: var(--text-muted);
         white-space: nowrap;
     }
@@ -1040,12 +1049,12 @@ ul.problem-list {
     /* Knowledge-point tags (all other problem types) */
     .tag-badge {
         display: inline-block;
-        padding: 1px 9px;
+        padding: 1px 7px;
         margin: 1px 2px;
         background: var(--primary-light);
-        color: var(--primary);
-        border-radius: 999px;
-        font-size: 11px;
+        color: var(--oj-accent);
+        border-radius: var(--radius-sm);
+        font-size: var(--oj-font-size-sm);
         white-space: nowrap;
     }
 
@@ -1072,14 +1081,14 @@ ul.problem-list {
 
         .ac-bar-fill {
             height: 100%;
-            background: var(--primary);
+            background: var(--oj-accent);
             border-radius: 3px;
             transition: width 0.2s;
         }
     }
 
     .ac-text {
-        font-size: 12px;
+        font-size: var(--oj-font-size-sm);
         color: var(--text-muted);
         min-width: 42px;
         text-align: right;
@@ -1109,7 +1118,7 @@ ul.problem-list {
     }
 
     .page-info {
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         color: var(--text-muted);
     }
 
@@ -1131,20 +1140,20 @@ ul.problem-list {
             border: 1px solid var(--border);
             border-radius: var(--radius-sm);
             background: var(--surface);
-            font-size: 13px;
+            font-size: var(--oj-font-size);
             color: var(--text);
         }
 
         li a:hover {
-            border-color: var(--primary);
-            color: var(--primary);
+            border-color: var(--oj-accent);
+            color: var(--oj-accent);
             text-decoration: none;
         }
 
         li.active-page a,
         li.active-page span {
-            background: var(--primary);
-            border-color: var(--primary);
+            background: var(--oj-accent);
+            border-color: var(--oj-accent);
             color: #fff;
         }
 
@@ -1160,19 +1169,15 @@ ul.problem-list {
     /* The global `.button, button, input[type=submit]` rule forces white text with
        !important, which makes our light-background buttons invisible. Re-assert the
        intended colours with matching specificity + !important. */
+    /* Global `button` rule forces white text; re-assert variants here. */
     .group-tab { color: var(--text) !important; }
-    .group-tab:hover { color: var(--primary) !important; }
-    .group-tab.active { color: #fff !important; }
+    .group-tab:hover { color: var(--oj-accent) !important; }
+    .group-tab.active { color: var(--oj-btn-text) !important; }
     .group-tab .count { color: inherit; }
 
     .multi-select-trigger { color: var(--text) !important; }
-    .btn-primary,
-    .btn-primary:hover { color: #fff !important; }
-    .btn-outline { color: var(--text) !important; }
-    .btn-outline:hover { color: var(--primary) !important; }
-    .btn-text { color: var(--primary) !important; }
     .icon-btn { color: var(--text-muted) !important; }
-    .icon-btn:hover { color: var(--primary) !important; }
+    .icon-btn:hover { color: var(--oj-accent) !important; }
     .sort-btn { color: var(--text) !important; }
     .sort-link { color: inherit !important; }
 
@@ -1198,48 +1203,62 @@ ul.problem-list {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        height: 38px;
-        padding: 0 16px;
+        height: var(--oj-control-height);
+        padding: 0 12px;
         border: 1px solid var(--border);
-        border-radius: 999px;
+        border-radius: var(--radius-sm);
         background: var(--surface);
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         cursor: pointer;
 
         &:hover {
-            border-color: var(--primary);
+            border-color: var(--oj-accent);
         }
 
         .sort-btn-dir {
             color: var(--text-muted);
-            font-size: 11px;
+            font-size: var(--oj-font-size-sm);
         }
     }
 
-    /* Clear, always-visible sort indicators on sortable headers. */
+    /* Sort indicators — same weight/colour as plain header labels */
     .sort-link {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        justify-content: center;
+        gap: 4px;
+        color: inherit;
+        font-weight: inherit;
+        text-decoration: none !important;
 
         .sort-icon {
-            font-size: 11px;
-            color: var(--text-muted);
-            opacity: 0.5;
+            font-size: 0.85em;
+            color: inherit;
+            opacity: 0.45;
         }
 
         &:hover .sort-icon {
-            opacity: 1;
-        }
-
-        &.is-sorted {
-            color: var(--primary);
-            font-weight: 700;
+            opacity: 0.9;
         }
 
         &.is-sorted .sort-icon {
-            color: var(--primary);
             opacity: 1;
+        }
+    }
+
+    /* Body column alignment; headers stay centered like classic .table */
+    .problem-table {
+        td.col-code,
+        td.col-name,
+        td.col-type,
+        td.col-group,
+        td.col-tags {
+            text-align: left;
+        }
+
+        td.col-points,
+        td.col-actions {
+            text-align: right;
         }
     }
 }
@@ -1290,24 +1309,24 @@ ul.problem-list {
     .knowledge-tag {
         display: inline-flex;
         align-items: center;
-        padding: 4px 12px;
+        padding: 4px 10px;
         border: 1px solid var(--border);
-        border-radius: 999px;
+        border-radius: var(--radius-sm);
         background: var(--bg);
-        font-size: 12px;
+        font-size: var(--oj-font-size-sm);
         color: var(--text) !important;
         cursor: pointer;
         user-select: none;
 
         &:hover {
-            border-color: var(--primary);
-            color: var(--primary) !important;
+            border-color: var(--oj-accent);
+            color: var(--oj-accent) !important;
         }
 
         &.active {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: #fff !important;
+            background: linear-gradient(to bottom, var(--oj-btn-from) 0, var(--oj-btn-to) 100%);
+            border-color: var(--oj-btn-border);
+            color: var(--oj-btn-text) !important;
         }
 
         .badge {
@@ -1319,7 +1338,7 @@ ul.problem-list {
 
     .knowledge-empty {
         color: var(--text-muted);
-        font-size: 13px;
+        font-size: var(--oj-font-size);
         margin: 0;
     }
 
@@ -1333,7 +1352,7 @@ ul.problem-list {
 
         span:first-child {
             margin-right: auto;
-            font-size: 12px;
+            font-size: var(--oj-font-size-sm);
             color: var(--text-muted);
         }
     }
