@@ -1,7 +1,6 @@
 import json
-import logging
-import threading
 from collections import namedtuple
+from datetime import timedelta
 from itertools import groupby
 from operator import attrgetter
 
@@ -174,28 +173,17 @@ def group_test_cases(cases):
 
 class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
     template_name = 'submission/status.html'
+    # If a submission stays Queued this long with no judge pickup, finalize as Aborted
+    # so the student sees a terminal result and can resubmit. No background requeue —
+    # page GETs must not spawn judge threads (race / duplicate grading).
+    QU_TIMEOUT_SECONDS = 40
 
     def get_context_data(self, **kwargs):
         context = super(SubmissionStatus, self).get_context_data(**kwargs)
         submission = self.object
         context['last_msg'] = event.last()
 
-        # QU stuck recovery: daemon thread may die on process restart.
-        # Phase 1 (20–40 s): retry once in background.
-        # Phase 2 (> 40 s): give up, mark AB so student can resubmit.
-        if submission.status == 'QU' and submission.judged_date is None:
-            qu_age = (timezone.now() - submission.date).total_seconds()
-            if qu_age > 40:
-                submission.status = 'AB'
-                submission.save(update_fields=['status'])
-                submission.update_contest()
-            elif qu_age > 20:
-                threading.Thread(
-                    target=self._requeue_grading,
-                    args=(submission,),
-                    daemon=True,
-                ).start()
-                context['qu_retrying'] = True
+        self._finalize_queued_timeout(submission)
 
         context['batches'], statuses, context['max_execution_time'] = group_test_cases(submission.test_cases.all())
         context['statuses'] = combine_statuses(statuses, submission)
@@ -248,17 +236,33 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
         context['comment_form'] = form
         return self.render_to_response(context)
 
-    @staticmethod
-    def _requeue_grading(submission):
-        """Retry a stuck QU submission in a background daemon thread."""
-        try:
-            submission.judge(force_judge=True)
-        except Exception:
-            logger = logging.getLogger(__name__)
-            logger.exception('QU recovery re-grade failed for submission %d', submission.id)
-            submission.status = 'AB'
-            submission.save(update_fields=['status'])
-            submission.update_contest()
+    def _finalize_queued_timeout(self, submission):
+        """If still Queued past QU_TIMEOUT_SECONDS, mark Aborted (timeout judgment).
+
+        Uses a conditional UPDATE so concurrent status-page loads only win once;
+        no daemon threads / force_judge from the request path.
+        """
+        if submission.status != 'QU' or submission.judged_date is not None:
+            return
+        cutoff = timezone.now() - timedelta(seconds=self.QU_TIMEOUT_SECONDS)
+        if submission.date > cutoff:
+            return
+        updated = Submission.objects.filter(
+            id=submission.id,
+            status='QU',
+            judged_date__isnull=True,
+            date__lte=cutoff,
+        ).update(status='AB', result='AB', points=0)
+        if not updated:
+            return
+        submission.refresh_from_db(fields=['status', 'result', 'points'])
+        submission.update_contest()
+        event.post('sub_%s' % submission.id_secret, {
+            'type': 'grading-end',
+            'result': 'AB',
+            'points': 0,
+            'total': float(submission.problem.points or 0),
+        })
 
 
 class SubmissionTestCaseQuery(SubmissionStatus):

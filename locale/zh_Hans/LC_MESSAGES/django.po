@@ -2586,6 +2586,10 @@ msgstr "短路"
 msgid "Aborted"
 msgstr "中止"
 
+#: templates/submission/status-testcases.html
+msgid "Judging timed out before a judge picked up this submission. Please resubmit."
+msgstr "判题超时：在裁判机接手前未能开始评测，请重新提交。"
+
 #: judge/models/submission.py:39 judge/models/submission.py:60
 msgid "Queued"
 msgstr "等待中"
