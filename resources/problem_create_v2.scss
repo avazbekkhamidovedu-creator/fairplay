@@ -7,7 +7,7 @@
   --dmoj-green: var(--oj-btn-from, #337ab7);
   --dmoj-green-dark: var(--oj-btn-hover, #265a88);
   --admin-bg: var(--oj-bg, #f8f8f8);
-  /* Pin section chrome — do NOT alias --oj-heading (light grey under dark theme). */
+  /* Pin section chrome to classic admin grey — same in light/dark (do NOT use --oj-heading). */
   --admin-header: #3b3b3b;
   --admin-header-text: #fff;
   --admin-header-border: #808080;
@@ -16,6 +16,7 @@
   --tab-active: var(--oj-accent, #2980B9);
   --text: var(--oj-text, #111);
   --muted: var(--oj-text-muted, #808080);
+  /* Light: white panels on grey page. Dark media / dark/*.css remap to surface-soft. */
   --card-bg: var(--oj-surface, #fff);
   --danger: var(--oj-danger, #d64545);
   --success: var(--oj-success, #2d7a2d);
@@ -268,12 +269,15 @@ fieldset.module .form-content { padding: 1rem; }
 .advanced-hidden { display: none; }
 .advanced-visible .advanced-hidden { display: block; }
 
-/* Inline tables */
+/* Inline tables — same chrome as fieldset.module (Language limits / Clarifications / …) */
 .inline-group {
   background: var(--card-bg);
   border: 1px solid var(--admin-border);
-  border-radius: 4px;
+  border-radius: var(--oj-radius-md, 6px);
   margin: 1rem 0;
+  padding: 0;
+  box-shadow: var(--oj-shadow, none);
+  overflow: hidden;
 }
 .inline-group h2 {
   background: var(--admin-header);
@@ -283,6 +287,7 @@ fieldset.module .form-content { padding: 1rem; }
   font-size: 1.1em;
   font-weight: 600;
   border-bottom: 1px solid var(--admin-header-border);
+  border-radius: var(--oj-radius-md, 6px) var(--oj-radius-md, 6px) 0 0;
 }
 .inline-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .inline-table th, .inline-table td {
@@ -1143,35 +1148,53 @@ fieldset.module .form-content { padding: 1rem; }
   background: var(--oj-btn-hover, #265a88) !important;
 }
 
-/* --- dark theme overrides (MR31 / feature/frontend-redesign) --- */
+/* --- dark theme overrides ---
+   Classic OJ loads resources/dark/*.css (vars-dark) via media query in base.html.
+   create_v2 now does the same for problem_create_v2.css / rich_editor.css.
+   Keep this block as a safety net when only the light sheet is present: remap
+   page tokens, but keep --admin-header on classic #3b3b3b so module / inline-group
+   / Preview headers stay one chrome (the old #0f0f0f header made panels look split).
+*/
 @media (prefers-color-scheme: dark) {
   .pcv2 {
-    --admin-bg: #0f0f0f;
-    --card-bg: #181818;
-    --text: #eee;
-    --muted: #aaa;
-    --admin-border: #3b3b3b;
-    --admin-header: #0f0f0f;
-    --admin-header-text: #eee;
-    --admin-header-border: #3b3b3b;
+    --admin-bg: var(--oj-bg, #111);
+    --card-bg: var(--oj-surface-soft, #181818);
+    --text: var(--oj-text, #eee);
+    --muted: var(--oj-text-secondary, #aaa);
+    --admin-border: var(--oj-border, #3b3b3b);
+    --admin-header: #3b3b3b;
+    --admin-header-text: #fff;
+    --admin-header-border: #808080;
     --pcv2-accent-soft: rgba(41, 128, 185, 0.18);
-    background: var(--card-bg);
+    background: var(--admin-bg);
     color: var(--text);
   }
 
-  .pcv2 fieldset.module { background: var(--card-bg); border-color: var(--admin-border); }
+  .pcv2 fieldset.module,
+  .pcv2 .inline-group,
+  .pcv2 .pv-panel,
+  .pcv2 #preview-pane {
+    background: var(--card-bg);
+    border-color: var(--admin-border);
+  }
   .pcv2 fieldset.module h2,
   .pcv2 .module > h2,
-  .pcv2 .inline-group h2 {
-    background: var(--admin-header);
-    color: var(--admin-header-text);
-    border-bottom-color: var(--admin-header-border);
+  .pcv2 .inline-group h2,
+  .pcv2 .pv-head,
+  .pcv2 .v2-right .pv-head,
+  .pcv2 .content-preview .pv-head,
+  .pcv2 #preview-pane h2 {
+    background: var(--admin-header) !important;
+    color: var(--admin-header-text) !important;
+    border-bottom-color: var(--admin-header-border) !important;
   }
   .pcv2 .form-row,
   .pcv2 .type-panel { border-color: var(--admin-border); }
   .pcv2 .form-content,
   .pcv2 .score-conf,
-  .pcv2 .form-row .field { background: var(--card-bg); }
+  .pcv2 .form-row .field,
+  .pcv2 .inline-group .form-content,
+  .pcv2 #preview-body { background: var(--card-bg); }
   .pcv2 .form-row > label { background: none; color: var(--muted); }
 
   .pcv2 .btn,
@@ -1232,25 +1255,13 @@ fieldset.module .form-content { padding: 1rem; }
 
   .pcv2 .tc-table th,
   .pcv2 .inline-table th,
-  .pcv2 .data-table th { background: #0f0f0f; color: var(--muted); border-color: var(--admin-border); }
+  .pcv2 .data-table th {
+    background: var(--admin-header) !important;
+    color: var(--admin-header-text) !important;
+    border-color: var(--admin-border);
+  }
   .pcv2 .data-table tr:hover { background: #111; }
-  .pcv2 .sub-q-head { background: #0f0f0f; border-color: var(--admin-border); }
-
-  .pcv2 #preview-pane { background: var(--card-bg); border-color: var(--admin-border); }
-  .pcv2 #preview-pane h2 {
-    background: var(--admin-header);
-    color: var(--admin-header-text);
-  }
-  .pcv2 .v2-right .pv-head,
-  .pcv2 .content-preview .pv-head {
-    background: var(--admin-header) !important;
-    color: var(--admin-header-text) !important;
-    border-bottom-color: var(--admin-header-border) !important;
-  }
-  .pcv2 .tc-table th {
-    background: var(--admin-header) !important;
-    color: var(--admin-header-text) !important;
-  }
+  .pcv2 .sub-q-head { background: var(--admin-bg); border-color: var(--admin-border); }
 
   .pcv2 .blank-answers .blank-row { border-color: var(--admin-border); background: var(--card-bg); }
   .pcv2 .tf-choices label { background: #3b3b3b; border-color: #555; color: #eee; }

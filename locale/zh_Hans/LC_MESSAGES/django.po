@@ -302,6 +302,26 @@ msgstr "分类"
 msgid "Points"
 msgstr "分数"
 
+#: templates/problem/create_v2.html
+msgid "Weight"
+msgstr "权重"
+
+#: templates/problem/create_v2.html
+msgid "Partial"
+msgstr "部分分"
+
+#: templates/problem/create_v2.html
+msgid "If enabled, score = passed weights / total weights × problem Points. If disabled, only a full AC earns points."
+msgstr "开启后，得分 = 通过权重 / 总权重 × 题目分数；关闭时只有全部通过才得分。"
+
+#: templates/problem/create_v2.html
+msgid "Case weights are relative. With Partial on, score scales by passed/total weights; with Partial off, only full AC earns problem Points."
+msgstr "用例权重是相对比例。开启部分分时按通过/总权重折算题目分；关闭时只有全部通过才得到题目分数。"
+
+#: templates/problem/create_v2.html
+msgid "Case weights are relative for partial scoring; they do not need to sum to the problem Points."
+msgstr "用例权重用于部分分的相对比例，不必加总等于题目分数。"
+
 #: judge/admin/problem.py:134
 msgid "Limits"
 msgstr "限制"

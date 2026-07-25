@@ -425,6 +425,10 @@ msgstr "本站题目描述使用 Markdown。完整语法见"
 msgid "Programming partial score = sum of points from passed cases; set points per case in the Test cases table (Batch subtasks supported)."
 msgstr "编程题部分分 = 通过测试点的分值之和；在“测试用例”表逐点设置分值即可（支持 Batch 子任务打包）。"
 
+#: problem create_v2
+msgid "Programming partial score uses relative case weights (passed / total). Set Weight per case below; they need not sum to problem Points. Batch subtasks supported."
+msgstr "编程题部分分按用例相对权重计算（通过权重 / 总权重）。请在下方设置各用例权重；不必加总等于题目分数。支持 Batch 子任务。"
+
 #: problem create_v2 / rich_editor i18n
 msgid "Proportional credit: score = full points × (correct − wrong) / number of correct options, minimum 0"
 msgstr "比例给分：得分 = 满分 ×（选对数 − 选错数）/ 正确项数，最低 0 分"
@@ -452,6 +456,10 @@ msgstr "富文本"
 #: problem create_v2 / rich_editor i18n
 msgid "Score is the sum of points from passed test cases (configure points per case in the test-case table)"
 msgstr "按通过的测试点分值累加得分（在测试用例表逐点配置分值）"
+
+#: problem create_v2
+msgid "Partial score uses relative case weights (passed / total); weights need not equal problem Points"
+msgstr "部分分按用例相对权重计算（通过 / 总计）；权重不必等于题目分数"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Search failed"
