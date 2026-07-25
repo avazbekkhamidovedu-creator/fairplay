@@ -8,9 +8,11 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
+from reversion.models import Version
 
-from judge.models import (Problem, ProblemData, ProblemFillBlankConfig, ProblemMCQConfig,
-                          ProblemShortAnswerConfig, ProblemTestCase, problem_data_storage)
+from judge.models import (Language, LanguageLimit, License, Problem, ProblemClarification, ProblemData,
+                          ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig, ProblemTemplate,
+                          ProblemTestCase, ProblemTranslation, ProblemType, Solution, problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
@@ -29,7 +31,8 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
             'staff_adder': create_user(
                 username='code_creator',
                 is_staff=True,
-                user_permissions=('add_problem', 'create_private_problem', 'change_public_visibility'),
+                user_permissions=('add_problem', 'create_private_problem', 'change_public_visibility',
+                                  'edit_own_problem'),
             ),
         })
 
@@ -95,9 +98,9 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_rejects_unimplemented_type(self):
         self.client.force_login(self.users['creator'])
         payload = {
-            'type': 'blank',
-            'name': 'Fill',
-            'description': 'Fill {{blank}}',
+            'type': 'compound',
+            'name': 'Compound',
+            'description': 'Not implemented yet',
             'points': 1,
             'group_id': self.group.id,
         }
@@ -107,6 +110,321 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
             content_type='application/json',
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_create_mcq_persists_advanced_fields(self):
+        from django.contrib.auth.models import Permission
+        creator = self.users['creator']
+        creator.user_permissions.add(Permission.objects.get(codename='problem_full_markup'))
+        self.client.force_login(creator)
+        curator = self.users['normal'].profile
+        license_obj = License.objects.create(
+            key='cc-by-sa-4.0', link='https://example.com/license', name='CC BY-SA 4.0',
+            display='CC BY-SA 4.0', text='license text',
+        )
+        payload = {
+            'type': 'single',
+            'name': 'Advanced wired',
+            'description': 'Authors and license should persist.',
+            'points': 5,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+            'curators': [curator.id],
+            'license_id': license_obj.id,
+            'is_full_markup': True,
+            'view_test_cases': True,
+            'summary': 'short summary',
+            'submission_source_visibility_mode': 'S',
+            'solution': {
+                'is_public': True,
+                'publish_on': '2030-01-02 15:30',
+                'content': 'Official solution body',
+                'authors': [self.users['creator'].profile.id],
+            },
+            'translations': [
+                {'language': 'zh-hans', 'name': '进阶题', 'description': '中文描述'},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        problem = Problem.objects.get(code=body['code'])
+        self.assertTrue(problem.authors.filter(id=self.users['creator'].profile.id).exists())
+        self.assertTrue(problem.curators.filter(id=curator.id).exists())
+        self.assertEqual(problem.license_id, license_obj.id)
+        self.assertTrue(problem.is_full_markup)
+        self.assertTrue(problem.view_test_cases)
+        self.assertEqual(problem.summary, 'short summary')
+        self.assertEqual(problem.submission_source_visibility_mode, 'S')
+        sol = Solution.objects.get(problem=problem)
+        self.assertTrue(sol.is_public)
+        self.assertEqual(sol.content, 'Official solution body')
+        self.assertTrue(sol.authors.filter(id=self.users['creator'].profile.id).exists())
+        tr = ProblemTranslation.objects.get(problem=problem, language='zh-hans')
+        self.assertEqual(tr.name, '进阶题')
+        self.assertEqual(tr.description, '中文描述')
+
+    def test_edit_omitting_solution_and_translations_keeps_them(self):
+        """Partial edit payloads must not wipe Advanced solution/translations."""
+        self.client.force_login(self.users['creator'])
+        create_payload = {
+            'type': 'single',
+            'name': 'Keep advanced',
+            'description': 'Has solution and translation.',
+            'points': 5,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+            'solution': {
+                'is_public': True,
+                'content': 'Keep me',
+                'authors': [self.users['creator'].profile.id],
+            },
+            'translations': [
+                {'language': 'zh-hans', 'name': '保留', 'description': '保留描述'},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+
+        edit_payload = {
+            'type': 'single',
+            'name': 'Keep advanced (renamed)',
+            'description': 'Updated description only.',
+            'points': 5,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+            'edit_code': code,
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200)
+        self.assertTrue(edit_resp.json()['ok'])
+        problem = Problem.objects.get(code=code)
+        self.assertEqual(problem.name, 'Keep advanced (renamed)')
+        sol = Solution.objects.get(problem=problem)
+        self.assertEqual(sol.content, 'Keep me')
+        tr = ProblemTranslation.objects.get(problem=problem, language='zh-hans')
+        self.assertEqual(tr.name, '保留')
+
+    def test_edit_does_not_promote_curator_to_author(self):
+        """Curators/admins editing must not be force-added to authors."""
+        curator = create_user(
+            username='mcq_curator',
+            user_permissions=('create_private_problem', 'edit_own_problem'),
+        )
+        self.client.force_login(self.users['creator'])
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Author ownership',
+                'description': 'Keep authors stable on edit.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'curators': [curator.profile.id],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+        self.assertTrue(problem.authors.filter(id=self.users['creator'].profile.id).exists())
+        self.assertFalse(problem.authors.filter(id=curator.profile.id).exists())
+
+        self.client.force_login(curator)
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Author ownership (edited)',
+                'description': 'Edited by curator.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'authors': [self.users['creator'].profile.id],
+                'curators': [curator.profile.id],
+                'edit_code': code,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        self.assertTrue(edit_resp.json()['ok'])
+        problem.refresh_from_db()
+        self.assertEqual(list(problem.authors.values_list('id', flat=True)), [self.users['creator'].profile.id])
+        self.assertTrue(problem.curators.filter(id=curator.profile.id).exists())
+
+    def test_full_markup_requires_permission(self):
+        self.client.force_login(self.users['creator'])  # no problem_full_markup
+        resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'No full markup',
+                'description': 'Should stay False.',
+                'points': 1,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'is_full_markup': True,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        problem = Problem.objects.get(code=resp.json()['code'])
+        self.assertFalse(problem.is_full_markup)
+
+    def test_unsupported_translation_language_rejected(self):
+        self.client.force_login(self.users['creator'])
+        resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Bad translation lang',
+                'description': 'Should 400.',
+                'points': 1,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'translations': [
+                    {'language': 'xx-not-a-lang', 'name': 'X', 'description': 'Y'},
+                ],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('Unsupported translation language', resp.json()['error'])
+
+    def test_create_code_persists_language_limits_templates_clarifications(self):
+        lang = Language.objects.first()
+        self.assertIsNotNone(lang)
+        self.client.force_login(self.users['staff_adder'])
+        resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'programming',
+                'name': 'Limits and templates',
+                'description': 'Wire advanced inlines.',
+                'points': 10,
+                'group_id': self.group.id,
+                'time_limit': 2,
+                'memory_limit': 256,
+                'testcases': [
+                    {'input': '1\n', 'output': '1\n', 'points': 100},
+                ],
+                'language_limits': [
+                    {'language': lang.key, 'time_limit': 3.5, 'memory_limit': 131072},
+                ],
+                'templates': [
+                    {'language': lang.key, 'code': 'print(input())\n'},
+                ],
+                'clarifications': [
+                    {'description': 'Input is a single integer.'},
+                ],
+                'edit_reason': 'Initial wiring of advanced inlines',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        problem = Problem.objects.get(code=resp.json()['code'])
+        lim = LanguageLimit.objects.get(problem=problem, language=lang)
+        self.assertEqual(lim.time_limit, 3.5)
+        self.assertEqual(lim.memory_limit, 131072)
+        tmpl = ProblemTemplate.objects.get(problem=problem, language=lang)
+        self.assertEqual(tmpl.code, 'print(input())\n')
+        clar = ProblemClarification.objects.get(problem=problem)
+        self.assertEqual(clar.description, 'Input is a single integer.')
+        versions = Version.objects.get_for_object(problem)
+        self.assertTrue(versions.exists())
+        self.assertEqual(versions[0].revision.comment, 'Initial wiring of advanced inlines')
+
+    def test_edit_clarifications_can_update_and_delete(self):
+        self.client.force_login(self.users['creator'])
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Clarify me',
+                'description': 'Has clarifications.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'clarifications': [
+                    {'description': 'Keep this'},
+                    {'description': 'Remove this'},
+                ],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+        keep = ProblemClarification.objects.get(problem=problem, description='Keep this')
+        remove = ProblemClarification.objects.get(problem=problem, description='Remove this')
+
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Clarify me',
+                'description': 'Has clarifications.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'edit_code': code,
+                'clarifications': [
+                    {'id': keep.id, 'description': 'Keep this (updated)'},
+                    {'id': remove.id, 'description': 'Remove this', 'delete': True},
+                    {'description': 'Brand new'},
+                ],
+                'edit_reason': 'Update clarifications',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        descs = list(
+            ProblemClarification.objects.filter(problem=problem).order_by('id').values_list('description', flat=True),
+        )
+        self.assertEqual(descs, ['Keep this (updated)', 'Brand new'])
+        versions = Version.objects.get_for_object(problem)
+        self.assertEqual(versions[0].revision.comment, 'Update clarifications')
 
     def test_ai_difficulty_endpoint(self):
         self.client.force_login(self.users['creator'])
@@ -234,6 +552,109 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['suggestions'])
+
+    def test_save_creates_missing_problem_types_and_lists_them(self):
+        """AI / free-text tags that are not in the DB yet must be created and attached on save."""
+        label = 'Brand New Algorithm Tag'
+        self.assertFalse(ProblemType.objects.filter(full_name=label).exists())
+
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Typed MCQ',
+            'description': 'A problem with a novel knowledge tag.',
+            'points': 5,
+            'group_id': self.group.id,
+            'problemTypes': [label],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+
+        ptype = ProblemType.objects.get(full_name=label)
+        self.assertIn(ptype, list(problem.types.all()))
+
+        # Problem list surfaces knowledge filters from ProblemType rows.
+        list_response = self.client.get(reverse('problem_list'))
+        self.assertEqual(list_response.status_code, 200)
+        knowledge_names = {t.full_name for t in list_response.context['knowledge_types']}
+        self.assertIn(label, knowledge_names)
+
+    def test_save_reuses_existing_problem_type_without_duplicating(self):
+        existing = ProblemType.objects.create(name='graph', full_name='Graph Theory')
+        before = ProblemType.objects.count()
+
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Existing type',
+            'description': 'reuse',
+            'points': 3,
+            'group_id': self.group.id,
+            'problemTypes': ['Graph Theory'],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertEqual(ProblemType.objects.count(), before)
+        self.assertEqual(list(problem.types.all()), [existing])
+
+    def test_edit_code_keeps_testcases_when_payload_omits_them(self):
+        self.client.force_login(self.users['staff_adder'])
+        create_payload = {
+            'type': 'programming',
+            'name': 'Keep Cases',
+            'description': 'has cases',
+            'points': 10,
+            'group_id': self.group.id,
+            'testcases': [
+                {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+        self.assertEqual(problem.cases.count(), 1)
+
+        edit_payload = {
+            'type': 'programming',
+            'name': 'Keep Cases Edited',
+            'description': 'still has cases',
+            'points': 10,
+            'group_id': self.group.id,
+            'edit_code': code,
+            # intentionally omit testcases
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200)
+        problem.refresh_from_db()
+        self.assertEqual(problem.name, 'Keep Cases Edited')
+        self.assertEqual(problem.cases.count(), 1)
 
 
 class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):

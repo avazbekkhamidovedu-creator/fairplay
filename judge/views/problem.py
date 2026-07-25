@@ -25,6 +25,7 @@ from django.urls import reverse
 from django.utils import timezone, translation
 from django.utils.functional import cached_property
 from django.utils.html import escape, format_html
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy
@@ -958,6 +959,12 @@ class ProblemBulkDelete(LoginRequiredMixin, View):
 
     def post(self, request, *args, **kwargs):
         redirect_to = request.POST.get('next') or reverse('problem_list')
+        if not url_has_allowed_host_and_scheme(
+            url=redirect_to,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            redirect_to = reverse('problem_list')
         codes = [c for c in request.POST.getlist('codes') if c]
         if not codes:
             messages.error(request, _('No problems selected.'))

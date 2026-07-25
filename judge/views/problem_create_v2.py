@@ -20,8 +20,10 @@ the classic admin test_data page. Responses are JSON ``{ok, redirect}`` or ``{er
 import json
 import os
 import re
+from datetime import datetime
 from zipfile import BadZipfile, ZipFile
 
+from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.files.base import ContentFile
 from django.db import transaction
@@ -29,15 +31,19 @@ from django.db.models import Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.decorators import method_decorator
 from django.utils.text import slugify
 from django.utils.translation import gettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
+from reversion import revisions
 
-from judge.models import (Language, Organization, Problem, ProblemBlank, ProblemFillBlankConfig, ProblemGroup,
-                          ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
-                          ProblemType)
+from judge.models import (Class, Language, LanguageLimit, License, Organization, Problem, ProblemBlank,
+                          ProblemClarification, ProblemFillBlankConfig, ProblemGroup, ProblemMCQConfig,
+                          ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType, ProblemTemplate,
+                          ProblemTranslation, ProblemType, Profile, Solution, SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
@@ -91,6 +97,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'organizations': orgs,
             'groups': list(ProblemGroup.objects.order_by('full_name', 'name').values('id', 'full_name', 'name')),
             'languages': list(Language.objects.order_by('name', 'key').values('id', 'key', 'name')),
+            'languages_json': json.dumps([
+                {'key': lang['key'], 'name': lang['name']}
+                for lang in Language.objects.order_by('name', 'key').values('key', 'name')
+            ]),
             'problem_types': list(ProblemType.objects.order_by('full_name', 'name').values('id', 'full_name', 'name')),
             'problem_types_json': json.dumps([
                 {'name': t['name'], 'full': t['full_name'] or t['name']}
@@ -99,6 +109,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
             'can_change_public': user.has_perm('judge.change_public_visibility'),
+            'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
+            'can_full_markup': user.has_perm('judge.problem_full_markup'),
             'default_group_id': default_problem_group().id,
             'save_url': reverse('problem_create_v2'),
             'ai_difficulty_url': reverse('problem_create_v2_ai_difficulty'),
@@ -113,6 +125,20 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'problem_preview_batch_url': reverse('problem_preview_batch'),
             'image_upload_url': reverse('martor_image_uploader'),
             'search_users_url': reverse('martor_search_user'),
+            'profile_select2_url': reverse('profile_select2'),
+            'class_select2_url': reverse('class_select2'),
+            # Escape <>& so |safe inline JSON cannot break out of <script>.
+            'current_profile_json': (
+                json.dumps({
+                    'id': profile.id,
+                    'username': profile.username,
+                } if profile else {'id': None, 'username': ''})
+                .replace('<', '\\u003c')
+                .replace('>', '\\u003e')
+                .replace('&', '\\u0026')
+            ),
+            'licenses': list(License.objects.order_by('name').values('id', 'key', 'name', 'display')),
+            'ui_languages': list(settings.LANGUAGES),
             'edit_code': '',
             'edit_data_json': 'null',
             'test_data_url': '',
@@ -160,9 +186,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
         # When ``edit_code`` is present we update the existing problem in place (keeping its code/URL)
         # instead of creating a new one; this powers "Save and continue editing".
+        # Prefer body ``edit_code``; fall back to the URL kwarg used by problem_edit_v2.
         existing = None
-        edit_code = (payload.get('edit_code') or '').strip()
+        edit_code = (payload.get('edit_code') or kwargs.get('problem') or '').strip()
         if edit_code:
+            payload['edit_code'] = edit_code
             try:
                 existing = self._get_editable_problem(request, edit_code)
             except PermissionError as e:
@@ -171,19 +199,30 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 return JsonResponse({'error': _('Problem not found.')}, status=404)
 
         try:
-            if qtype == 'programming':
-                problem = self._create_code(request, payload, name, problem=existing,
-                                            zip_upload=zip_upload)
-            elif qtype in ('single', 'multiple'):
-                problem = self._create_mcq(request, payload, name, multiple=(qtype == 'multiple'), problem=existing)
-            elif qtype == 'truefalse':
-                problem = self._create_truefalse(request, payload, name, problem=existing)
-            elif qtype == 'blank':
-                problem = self._create_fill_blank(request, payload, name, problem=existing)
-            elif qtype == 'short':
-                problem = self._create_short_answer(request, payload, name, problem=existing)
-            else:
-                return JsonResponse({'error': _('Unknown question type.')}, status=400)
+            # Mirror classic VersionAdmin: store an optional edit-reason comment on the revision.
+            with revisions.create_revision(atomic=True):
+                if qtype == 'programming':
+                    problem = self._create_code(request, payload, name, problem=existing,
+                                                zip_upload=zip_upload)
+                elif qtype in ('single', 'multiple'):
+                    problem = self._create_mcq(request, payload, name, multiple=(qtype == 'multiple'),
+                                               problem=existing)
+                elif qtype == 'truefalse':
+                    problem = self._create_truefalse(request, payload, name, problem=existing)
+                elif qtype == 'blank':
+                    problem = self._create_fill_blank(request, payload, name, problem=existing)
+                elif qtype == 'short':
+                    problem = self._create_short_answer(request, payload, name, problem=existing)
+                else:
+                    return JsonResponse({'error': _('Unknown question type.')}, status=400)
+                revisions.set_user(request.user)
+                reason = (payload.get('edit_reason') or '').strip()
+                if reason:
+                    revisions.set_comment(reason)
+                elif existing:
+                    revisions.set_comment(_('Edited from create_v2'))
+                else:
+                    revisions.set_comment(_('Created from create_v2'))
         except PermissionError as e:
             return JsonResponse({'error': str(e)}, status=403)
         except ValueError as e:
@@ -214,15 +253,20 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise PermissionError(_('You do not have permission to edit this problem.'))
         return problem
 
-    def _clear_type_children(self, problem):
+    def _clear_type_children(self, problem, *, clear_cases=True):
         """Remove every question-type-specific child before repopulating on edit (also handles a
-        type switch, e.g. single -> programming)."""
+        type switch, e.g. single -> programming).
+
+        ``clear_cases`` is False when editing a code problem without a ``testcases`` payload so
+        cases managed on the embedded test_data page are not wiped accidentally.
+        """
         ProblemMCQOption.objects.filter(problem=problem).delete()
         ProblemMCQConfig.objects.filter(problem=problem).delete()
         ProblemBlank.objects.filter(problem=problem).delete()
         ProblemFillBlankConfig.objects.filter(problem=problem).delete()
         ProblemShortAnswerConfig.objects.filter(problem=problem).delete()
-        problem.cases.all().delete()
+        if clear_cases:
+            problem.cases.all().delete()
 
     def _build_edit_data(self, problem):
         """Serialize an existing problem into the shape the add-page JS expects (see collectData)."""
@@ -291,6 +335,63 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['gradingTable'] = config.grading_table if config else None
         else:
             data['type'] = 'single'
+
+        from django.db.models import F as DbF
+        data['authors'] = list(problem.authors.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['curators'] = list(problem.curators.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['testers'] = list(problem.testers.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['banned_users'] = list(
+            problem.banned_users.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['classes'] = list(problem.classes.values('id', 'name'))
+        data['license_id'] = problem.license_id or ''
+        data['is_manually_managed'] = problem.is_manually_managed
+        data['date'] = timezone.localtime(problem.date).strftime('%Y-%m-%d %H:%M') if problem.date else ''
+        data['submission_source_visibility_mode'] = problem.submission_source_visibility_mode
+        data['is_full_markup'] = problem.is_full_markup
+        data['view_test_cases'] = problem.view_test_cases
+        data['view_tester'] = problem.view_tester
+        data['ai_hints_enabled'] = problem.ai_hints_enabled
+        data['og_image'] = problem.og_image or ''
+        data['summary'] = problem.summary or ''
+        data['short_circuit'] = problem.short_circuit
+        try:
+            sol = problem.solution
+        except Solution.DoesNotExist:
+            sol = None
+        if sol:
+            data['solution'] = {
+                'is_public': sol.is_public,
+                'publish_on': timezone.localtime(sol.publish_on).strftime('%Y-%m-%d %H:%M') if sol.publish_on else '',
+                'content': sol.content or '',
+                'authors': list(sol.authors.annotate(username=DbF('user__username')).values('id', 'username')),
+            }
+        else:
+            data['solution'] = {'is_public': False, 'publish_on': '', 'content': '', 'authors': []}
+        data['translations'] = list(
+            problem.translations.values('language', 'name', 'description'))
+        data['language_limits'] = [
+            {
+                'language': lim.language.key,
+                'time_limit': lim.time_limit,
+                'memory_limit': lim.memory_limit,  # KB (same as classic admin)
+            }
+            for lim in problem.language_limits.select_related('language').order_by('language__key')
+        ]
+        data['templates'] = [
+            {
+                'language': tmpl.language.key,
+                'code': tmpl.code or '',
+            }
+            for tmpl in problem.templates.select_related('language').order_by('language__key')
+        ]
+        data['clarifications'] = [
+            {
+                'id': clar.id,
+                'description': clar.description or '',
+                'date': timezone.localtime(clar.date).strftime('%Y-%m-%d %H:%M') if clar.date else '',
+            }
+            for clar in ProblemClarification.objects.filter(problem=problem).order_by('-date', '-id')
+        ]
         return data
 
     def _read_testcases(self, problem):
@@ -391,17 +492,299 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise PermissionError(_('You do not have permission to make this problem public.'))
         return True
 
+    def _resolve_problem_type(self, label):
+        """Match an existing ProblemType by name/full_name, or create one (AI / free-text tags)."""
+        label = (label or '').strip()
+        if not label:
+            return None
+        existing = ProblemType.objects.filter(Q(full_name=label) | Q(name=label)).first()
+        if existing is None:
+            existing = ProblemType.objects.filter(Q(full_name__iexact=label) | Q(name__iexact=label)).first()
+        if existing is not None:
+            return existing
+
+        code = _problem_type_code(label)[:20]
+        if ProblemType.objects.filter(name=code).exists():
+            # Same slug, different display name — keep the code unique with a numeric suffix.
+            base = code[:16]
+            for i in range(2, 100):
+                candidate = ('%s-%d' % (base, i))[:20]
+                if not ProblemType.objects.filter(name=candidate).exists():
+                    code = candidate
+                    break
+            else:
+                return None
+
+        return ProblemType.objects.create(name=code, full_name=label[:100])
+
     def _attach_types(self, problem, payload):
-        names = [n for n in (payload.get('problemTypes') or []) if n]
-        types = list(ProblemType.objects.filter(Q(full_name__in=names) | Q(name__in=names))) if names else []
-        if types:
-            problem.types.set(types)
+        labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+        resolved = []
+        seen = set()
+        for label in labels:
+            ptype = self._resolve_problem_type(label)
+            if ptype is None or ptype.pk in seen:
+                continue
+            seen.add(ptype.pk)
+            resolved.append(ptype)
+        if resolved:
+            problem.types.set(resolved)
         elif not problem.types.exists():
             problem.types.add(default_problem_type())
 
     def _attach_orgs(self, problem, payload):
         ids = payload.get('organizations') or []
         problem.organizations.set(Organization.objects.filter(pk__in=ids))
+
+    def _parse_local_dt(self, value):
+        text = (value or '').strip()
+        if not text:
+            return None
+        dt = parse_datetime(text.replace(' ', 'T', 1) if 'T' not in text and ' ' in text else text)
+        if dt is None:
+            for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+                try:
+                    dt = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+        if dt is None:
+            return None
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+        return dt
+
+    def _profile_ids(self, raw):
+        ids = []
+        for item in raw or []:
+            try:
+                ids.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return ids
+
+    def _apply_advanced(self, problem, payload, request, *, is_create=False):
+        """Persist Advanced-section fields from create_v2 JSON payload."""
+        user = request.user
+
+        # Mirror admin get_readonly_fields: only privileged users may toggle these.
+        if user.has_perm('judge.change_manually_managed'):
+            problem.is_manually_managed = bool(payload.get('is_manually_managed'))
+        elif is_create:
+            problem.is_manually_managed = False
+        elif bool(payload.get('is_manually_managed')) != bool(problem.is_manually_managed):
+            raise PermissionError(_('You do not have permission to change the manually managed flag.'))
+
+        if user.has_perm('judge.problem_full_markup'):
+            problem.is_full_markup = bool(payload.get('is_full_markup'))
+        elif is_create:
+            problem.is_full_markup = False
+        elif bool(payload.get('is_full_markup')) != bool(problem.is_full_markup):
+            raise PermissionError(_('You do not have permission to change the full markup flag.'))
+
+        # Remaining Advanced flags have no separate Django perms in classic admin
+        # advanced mode; any user who can edit the problem may set them.
+        problem.view_test_cases = bool(payload.get('view_test_cases'))
+        problem.view_tester = bool(payload.get('view_tester'))
+        problem.ai_hints_enabled = bool(payload.get('ai_hints_enabled'))
+        problem.short_circuit = bool(payload.get('short_circuit'))
+        problem.og_image = (payload.get('og_image') or '')[:150]
+        problem.summary = (payload.get('summary') or '')[:300]
+
+        mode = payload.get('submission_source_visibility_mode') or SubmissionSourceAccess.FOLLOW
+        valid_modes = {c[0] for c in Problem.SUBMISSION_SOURCE_ACCESS}
+        if mode not in valid_modes:
+            mode = SubmissionSourceAccess.FOLLOW
+        problem.submission_source_visibility_mode = mode
+
+        date_val = self._parse_local_dt(payload.get('date'))
+        if date_val is not None:
+            problem.date = date_val
+
+        license_id = payload.get('license_id')
+        if license_id in ('', None):
+            problem.license = None
+        else:
+            try:
+                problem.license = License.objects.get(pk=int(license_id))
+            except (TypeError, ValueError, License.DoesNotExist):
+                problem.license = None
+
+        problem.save()
+
+        # M2M: only sync when the client sent the key (or on create). Omitting on
+        # edit must not wipe / rewrite membership.
+        if is_create or 'authors' in payload:
+            author_ids = self._profile_ids(payload.get('authors'))
+            if is_create:
+                # New problems default to the creator; do not force-add on edit
+                # (curators/admins must be able to edit without becoming authors).
+                if request.profile and request.profile.id not in author_ids:
+                    author_ids.append(request.profile.id)
+                if not author_ids and request.profile:
+                    author_ids = [request.profile.id]
+            elif not author_ids:
+                raise ValueError(_('Please select at least one author.'))
+            problem.authors.set(Profile.objects.filter(pk__in=author_ids))
+        if is_create or 'curators' in payload:
+            problem.curators.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('curators'))))
+        if is_create or 'testers' in payload:
+            problem.testers.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('testers'))))
+        if is_create or 'banned_users' in payload:
+            problem.banned_users.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('banned_users'))))
+
+        if is_create or 'classes' in payload:
+            org_ids = list(problem.organizations.values_list('id', flat=True))
+            class_ids = self._profile_ids(payload.get('classes'))  # reuse int parser
+            class_qs = Class.get_visible_classes(request.user).filter(pk__in=class_ids)
+            if org_ids:
+                class_qs = class_qs.filter(organization_id__in=org_ids)
+            else:
+                class_qs = class_qs.none()
+            problem.classes.set(class_qs)
+
+        # Only sync when the client explicitly sent these keys. Omitting them
+        # on a partial edit must not wipe existing solution / translations.
+        if 'solution' in payload:
+            sol = payload.get('solution') or {}
+            sol_content = (sol.get('content') or '').strip()
+            sol_publish = self._parse_local_dt(sol.get('publish_on'))
+            if sol_content or sol.get('is_public') or sol_publish or sol.get('authors'):
+                if sol_publish is None:
+                    sol_publish = timezone.now()
+                solution, _created = Solution.objects.update_or_create(
+                    problem=problem,
+                    defaults={
+                        'is_public': bool(sol.get('is_public')),
+                        'publish_on': sol_publish,
+                        'content': sol_content,
+                    },
+                )
+                solution.authors.set(Profile.objects.filter(pk__in=self._profile_ids(sol.get('authors'))))
+            elif hasattr(problem, 'solution'):
+                try:
+                    problem.solution.delete()
+                except Solution.DoesNotExist:
+                    pass
+
+        if 'translations' in payload:
+            keep_langs = set()
+            supported = dict(settings.LANGUAGES)
+            for row in payload.get('translations') or []:
+                lang = (row.get('language') or '').strip()
+                name = (row.get('name') or '').strip()
+                description = (row.get('description') or '').strip()
+                if not name and not description:
+                    continue
+                if not lang:
+                    raise ValueError(_('Each translation must specify a language.'))
+                if lang not in supported:
+                    raise ValueError(
+                        _('Unsupported translation language: %(lang)s') % {'lang': lang},
+                    )
+                keep_langs.add(lang)
+                ProblemTranslation.objects.update_or_create(
+                    problem=problem, language=lang,
+                    defaults={'name': name or problem.name, 'description': description or ''},
+                )
+            problem.translations.exclude(language__in=keep_langs).delete()
+
+        # Same omit-safe rule as solution/translations: only sync when the client sent the key.
+        if 'language_limits' in payload:
+            self._sync_language_limits(problem, payload.get('language_limits') or [])
+        if 'templates' in payload:
+            self._sync_templates(problem, payload.get('templates') or [])
+        if 'clarifications' in payload:
+            self._sync_clarifications(problem, payload.get('clarifications') or [])
+
+    def _sync_language_limits(self, problem, rows):
+        """Replace LanguageLimit rows (classic admin LanguageLimitInline)."""
+        keep_lang_ids = set()
+        seen_keys = set()
+        for row in rows:
+            if row.get('delete'):
+                continue
+            lang_key = (row.get('language') or '').strip()
+            if not lang_key:
+                continue
+            if lang_key in seen_keys:
+                raise ValueError(_('Duplicate language limit for %(lang)s.') % {'lang': lang_key})
+            seen_keys.add(lang_key)
+            lang = Language.objects.filter(key=lang_key).first()
+            if lang is None:
+                raise ValueError(_('Unknown language: %(lang)s') % {'lang': lang_key})
+            try:
+                time_limit = float(row.get('time_limit'))
+                memory_limit = int(float(row.get('memory_limit')))
+            except (TypeError, ValueError):
+                raise ValueError(_('Invalid language limit values for %(lang)s.') % {'lang': lang_key})
+            if not (settings.DMOJ_PROBLEM_MIN_TIME_LIMIT <= time_limit <= settings.DMOJ_PROBLEM_MAX_TIME_LIMIT):
+                raise ValueError(_('Time limit out of range for %(lang)s.') % {'lang': lang_key})
+            if not (settings.DMOJ_PROBLEM_MIN_MEMORY_LIMIT <= memory_limit <= settings.DMOJ_PROBLEM_MAX_MEMORY_LIMIT):
+                raise ValueError(_('Memory limit out of range for %(lang)s.') % {'lang': lang_key})
+            LanguageLimit.objects.update_or_create(
+                problem=problem, language=lang,
+                defaults={'time_limit': time_limit, 'memory_limit': memory_limit},
+            )
+            keep_lang_ids.add(lang.id)
+        problem.language_limits.exclude(language_id__in=keep_lang_ids).delete()
+
+    def _sync_templates(self, problem, rows):
+        """Replace ProblemTemplate rows (classic admin ProblemTemplateInline)."""
+        keep_lang_ids = set()
+        seen_keys = set()
+        for row in rows:
+            if row.get('delete'):
+                continue
+            lang_key = (row.get('language') or '').strip()
+            code = row.get('code')
+            if code is None:
+                code = ''
+            else:
+                code = str(code)
+            if not lang_key:
+                continue
+            # Empty template rows are ignored (same as leaving an unused inline blank).
+            if not code.strip():
+                continue
+            if lang_key in seen_keys:
+                raise ValueError(_('Duplicate problem template for %(lang)s.') % {'lang': lang_key})
+            seen_keys.add(lang_key)
+            lang = Language.objects.filter(key=lang_key).first()
+            if lang is None:
+                raise ValueError(_('Unknown language: %(lang)s') % {'lang': lang_key})
+            ProblemTemplate.objects.update_or_create(
+                problem=problem, language=lang,
+                defaults={'code': code},
+            )
+            keep_lang_ids.add(lang.id)
+        problem.templates.exclude(language_id__in=keep_lang_ids).delete()
+
+    def _sync_clarifications(self, problem, rows):
+        """Replace ProblemClarification rows (classic admin ProblemClarificationInline)."""
+        keep_ids = set()
+        for row in rows:
+            if row.get('delete'):
+                continue
+            description = (row.get('description') or '').strip()
+            if not description:
+                continue
+            clar_id = row.get('id')
+            if clar_id not in (None, ''):
+                try:
+                    clar_id = int(clar_id)
+                except (TypeError, ValueError):
+                    clar_id = None
+            if clar_id is not None:
+                updated = ProblemClarification.objects.filter(problem=problem, pk=clar_id).update(
+                    description=description,
+                )
+                if updated:
+                    keep_ids.add(clar_id)
+                    continue
+            obj = ProblemClarification.objects.create(problem=problem, description=description)
+            keep_ids.add(obj.id)
+        ProblemClarification.objects.filter(problem=problem).exclude(id__in=keep_ids).delete()
 
     # ------------------------------------------------------------------ code problem
     @staticmethod
@@ -496,23 +879,25 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if not (user.is_staff and user.has_perm('judge.add_problem')):
             raise PermissionError(_('You do not have permission to create code problems.'))
 
-        # Inline test cases on the create page: optional on create, always synced on edit when
-        # the payload includes ``testcases`` (empty list clears Normal cases written here).
+        # Inline test cases: sync only when the client sends ``testcases`` (or a ZIP upload).
+        # Omitting the key must not wipe cases; empty list on edit clears Normal cases written here.
         # A multipart ``testcase_zip`` uses the same archive path as classic test_data.
-        testcases = payload.get('testcases') if 'testcases' in payload else None
+        sync_cases = 'testcases' in payload or zip_upload is not None
         cleaned_cases = None
-        if testcases is not None:
+        if sync_cases:
+            testcases = payload.get('testcases') or []
             cleaned_cases = [
                 tc for tc in testcases
                 if (tc.get('input') or tc.get('output') or tc.get('input_file') or tc.get('output_file'))
             ]
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.CODE)
             else:
                 problem.submission_type = ProblemSubmissionType.CODE
-                self._clear_type_children(problem)
+                self._clear_type_children(problem, clear_cases=sync_cases)
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
@@ -524,12 +909,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_languages(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             checker = payload.get('checker') or ''
             if zip_upload is not None:
@@ -538,9 +923,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     meta_cases=cleaned_cases if cleaned_cases is not None else [],
                     checker=checker,
                 )
-            elif cleaned_cases is not None:
-                if cleaned_cases or payload.get('edit_code'):
-                    self._save_testcases(problem, cleaned_cases, checker=checker)
+            elif sync_cases and (cleaned_cases or payload.get('edit_code')):
+                self._save_testcases(problem, cleaned_cases or [], checker=checker)
         return problem
 
     def _attach_languages(self, problem, payload):
@@ -730,7 +1114,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Single-answer questions must have exactly one correct choice.'))
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.MCQ)
             else:
                 problem.submission_type = ProblemSubmissionType.MCQ
@@ -744,11 +1129,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             ProblemMCQConfig.objects.create(
                 problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')))
@@ -769,7 +1154,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Please choose the correct answer.'))
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.MCQ)
             else:
                 problem.submission_type = ProblemSubmissionType.MCQ
@@ -783,11 +1169,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             ProblemMCQConfig.objects.create(problem=problem, multiple_select=False, shuffle_options=False,
                                             is_true_false=True)
@@ -805,7 +1191,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise ValueError(_('Please provide at least one blank answer.'))
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.FILL_BLANK)
             else:
                 problem.submission_type = ProblemSubmissionType.FILL_BLANK
@@ -819,11 +1206,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             ProblemFillBlankConfig.objects.create(
                 problem=problem,
@@ -847,7 +1234,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             raise PermissionError(_('You do not have permission to create this problem type.'))
 
         with transaction.atomic():
-            if problem is None:
+            is_create = problem is None
+            if is_create:
                 problem = Problem(submission_type=ProblemSubmissionType.SHORT_ANSWER)
             else:
                 problem.submission_type = ProblemSubmissionType.SHORT_ANSWER
@@ -862,11 +1250,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            problem.authors.add(request.profile)
             self._attach_types(problem, payload)
             self._attach_orgs(problem, payload)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request, is_create=is_create)
 
             ProblemShortAnswerConfig.objects.create(
                 problem=problem,

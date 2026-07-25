@@ -10,35 +10,47 @@
     {% endif %}
     <style>
         .problem-table th.col-select, .problem-table td.col-select { width: 32px; text-align: center; }
-        .problem-table th.col-actions, .problem-table td.col-actions { white-space: nowrap; text-align: right; }
+        .problem-table th.col-actions, .problem-table td.col-actions { white-space: nowrap; }
         .problem-table td.col-actions .row-action {
             display: inline-block; margin-left: 12px; font-size: 15px; cursor: pointer;
-            background: none; border: none; padding: 0; color: var(--primary) !important;
+            background: none; border: none; padding: 0; color: var(--oj-link) !important;
         }
         .problem-table td.col-actions .row-action:hover { opacity: 0.75; }
-        .problem-table td.col-actions .row-action.row-action-danger { color: #d64545 !important; }
-        /* Bulk-delete button: same pill shape as the sort button, greyed while empty. */
+        .problem-table td.col-actions .row-action.row-action-danger { color: var(--oj-danger) !important; }
         .toolbar .bulk-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .toolbar .bulk-delete-btn:not(:disabled):hover { border-color: #d64545; color: #d64545 !important; }
+        .toolbar .bulk-delete-btn:not(:disabled):hover { border-color: var(--oj-danger); color: var(--oj-danger) !important; }
         .toolbar .bulk-delete-btn .fa { color: inherit; }
-        .btn-danger { background: #d64545; border-color: #d64545; color: #fff; }
-        .btn-danger:hover { background: #c53030; border-color: #c53030; }
         .modal-overlay {
             position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
             display: flex; align-items: center; justify-content: center; z-index: 1000;
         }
         .modal-overlay[hidden] { display: none; }
         .modal-box {
-            background: #fff; width: 460px; max-width: 92vw; border-radius: 8px;
-            padding: 1.25rem 1.5rem; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+            background: var(--oj-surface, #fff); width: 460px; max-width: 92vw;
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: var(--oj-radius-lg, 8px);
+            padding: 1.25rem 1.5rem; box-shadow: var(--oj-shadow-modal);
         }
         .modal-title { margin: 0 0 0.5rem; font-size: 1.1rem; }
-        .modal-desc { margin: 0 0 0.75rem; color: #555; font-size: 13px; }
+        .modal-desc { margin: 0 0 0.75rem; color: var(--oj-text-muted, #555); font-size: 13px; }
         .modal-list {
             margin: 0 0 1rem; padding-left: 1.1rem; max-height: 220px; overflow: auto; font-size: 13px;
         }
         .modal-list li { margin: 2px 0; }
         .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+        /* Modal sits outside the filter form; keep danger button styles. */
+        .modal-overlay .btn-danger {
+            color: var(--oj-btn-text, #fff) !important;
+            background: var(--oj-danger, #c0392b);
+            border: 1px solid var(--oj-danger, #c0392b);
+            border-radius: var(--oj-radius, 4px);
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+        .modal-overlay .btn-danger:hover {
+            background: var(--oj-danger-hover, #a93226);
+            border-color: var(--oj-danger-hover, #a93226);
+        }
     </style>
 {% endblock %}
 
@@ -93,7 +105,7 @@
                     }
                 }
 
-                // Reflect the checked knowledge points as chips + count (applied on Search).
+                // Reflect the checked knowledge points as chips + count.
                 function refreshKnowledge() {
                     var $sel = $('#knowledge-selected');
                     if (!$sel.length) return;
@@ -139,11 +151,15 @@
                     }
                 });
 
-                // Problem-type dropdown: only update the label; filter applies on Search.
-                $('#type-multi-select .multi-select-menu input[type=checkbox]').change(refreshTypeLabel);
-
-                // Difficulty dropdown: only update the label; filter applies on Search.
-                $('#difficulty-multi-select .multi-select-menu input[type=checkbox]').change(refreshDifficultyLabel);
+                // Problem-type / difficulty / knowledge: apply filters as soon as selection changes.
+                $('#type-multi-select .multi-select-menu input[type=checkbox]').change(function () {
+                    refreshTypeLabel();
+                    go();
+                });
+                $('#difficulty-multi-select .multi-select-menu input[type=checkbox]').change(function () {
+                    refreshDifficultyLabel();
+                    go();
+                });
 
                 // Knowledge-point picker.
                 $('#toggle-knowledge-picker').click(function (e) {
@@ -152,15 +168,20 @@
                     $p.prop('hidden', !$p.prop('hidden'));
                 });
                 $('#close-knowledge').click(function () { $('#knowledge-picker').prop('hidden', true); });
-                $('#knowledge-picker-body input[type=checkbox]').change(refreshKnowledge);
+                $('#knowledge-picker-body input[type=checkbox]').change(function () {
+                    refreshKnowledge();
+                    go();
+                });
                 $('#clear-knowledge').click(function () {
                     $('#knowledge-picker-body input[type=checkbox]').prop('checked', false);
                     refreshKnowledge();
+                    go();
                 });
                 $('#knowledge-selected').on('click', 'button[data-kp-remove]', function () {
                     var id = $(this).data('kp-remove');
                     $('#knowledge-picker-body input[value="' + id + '"]').prop('checked', false);
                     refreshKnowledge();
+                    go();
                 });
                 $('#knowledge-search').on('input', function () {
                     var q = $(this).val().trim().toLowerCase();
@@ -201,7 +222,7 @@
                     go();
                 });
 
-                // Filters apply only when the user clicks Search (no auto-submit).
+                // Text/number filters still apply on Search (or Enter).
 
                 // Submit on Enter inside text/number inputs.
                 $form.find('input[name=search], input[name=ac_min], input[name=ac_max]').keypress(function (e) {
@@ -388,10 +409,11 @@
         {% endif %}
     {% else %}
         {# Redesigned problem list. #}
-        <form id="filter-form" name="form" action="" method="get" class="problem-list-redesign">
+        <form id="filter-form" name="form" action="" method="get" class="problem-list-redesign oj-ui">
             <input type="hidden" name="category" id="category-input" value="{{ category if category is not none else '' }}">
             {# Marker that the form was actually submitted, so checkbox defaults (e.g. search_full) can be applied only on first visit. #}
             <input type="hidden" name="filtered" value="1">
+            {% set difficulty_labels = {'easy': _('Easy'), 'medium': _('Medium'), 'hard': _('Hard')} %}
 
             <div class="group-tabs" role="tablist">
                 <button type="button" class="group-tab{% if category is none %} active{% endif %}" data-category="">
@@ -442,7 +464,7 @@
                                     <span id="difficulty-multi-label" data-empty-label="{{ _('All difficulties') }}"
                                           class="multi-select-text {% if not selected_difficulty_types %}multi-select-label-empty{% endif %}">
                                         {% if selected_difficulty_types %}
-                                            {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}{{ user_trans(type.full_name) }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
+                                            {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}{{ difficulty_labels.get(type.name, type.full_name) }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
                                         {% else %}
                                             {{ _('All difficulties') }}
                                         {% endif %}
@@ -454,7 +476,7 @@
                                         <label class="multi-select-option">
                                             <input type="checkbox" name="type" value="{{ type.id }}"
                                                    {% if type.id in selected_difficulty_types %}checked{% endif %}>
-                                            <span>{{ user_trans(type.full_name) }}</span>
+                                            <span>{{ difficulty_labels.get(type.name, type.full_name) }}</span>
                                         </label>
                                     {% else %}
                                         <span class="multi-select-empty">{{ _('No difficulties yet.') }}</span>
@@ -559,7 +581,10 @@
                         {% for f in format_types %}{% if f.code in selected_formats %}
                             <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
-                        {% for type in problem_types %}{% if type.id in selected_types %}
+                        {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}
+                            <span class="chip">{{ difficulty_labels.get(type.name, type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
+                        {% endif %}{% endfor %}
+                        {% for type in knowledge_types %}{% if type.id in selected_knowledge_types %}
                             <span class="chip">{{ user_trans(type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
                         {% if problem_status == 'solved' %}
@@ -631,7 +656,7 @@
                 </div>
             </section>
 
-            <section class="card table-card tags-hidden">
+            <section class="card table-card">
                 <div class="table-wrap">
                     <table class="problem-table">
                         <thead>
@@ -642,12 +667,11 @@
                             {% if request.user.is_authenticated %}
                                 <th class="col-status solved">{{ sortth('<i class="fa fa-check"></i>'|safe, sort_links.solved, sort_order.solved) }}</th>
                             {% endif %}
-                            <th class="col-code">{{ sortth(_('Problem code'), sort_links.code, sort_order.code) }}</th>
                             <th class="col-name">{{ sortth(_('Problem'), sort_links.name, sort_order.name) }}</th>
                             <th class="col-type">{{ sortth(_('Problem type'), sort_links.type, sort_order.type) }}</th>
                             <th class="col-group">{{ sortth(_('Category'), sort_links.group, sort_order.group) }}</th>
                             <th class="col-tags">
-                                <button type="button" class="btn-text btn-sm" id="toggle-tags">{{ _('Show tags') }}</button>
+                                <button type="button" class="btn-text btn-sm" id="toggle-tags">{{ _('Hide tags') }}</button>
                             </th>
                             <th class="col-diff">{{ _('Difficulty') }}</th>
                             <th class="col-ac">{{ sortth(_('AC %%'), sort_links.ac_rate, sort_order.ac_rate) }}</th>
@@ -679,9 +703,9 @@
                                         <td class="col-status" solved="1">
                                             <a href="{{ url('user_submissions', problem.code, request.user.username) }}">
                                                 {% if problem.is_public %}
-                                                    <i class="solved-problem-color fa fa-check-circle"></i>
+                                                    <i class="solved-problem-color fa fa-check-circle" title="{{ _('Solved') }}"></i>
                                                 {% else %}
-                                                    <i class="solved-problem-color fa fa-lock"></i>
+                                                    <i class="solved-problem-color fa fa-lock" title="{{ _('Solved (private)') }}"></i>
                                                 {% endif %}
                                             </a>
                                         </td>
@@ -689,23 +713,22 @@
                                         <td class="col-status" solved="0">
                                             <a href="{{ url('user_submissions', problem.code, request.user.username) }}">
                                                 {% if problem.is_public %}
-                                                    <i class="attempted-problem-color fa fa-minus-circle"></i>
+                                                    <i class="attempted-problem-color fa fa-minus-circle" title="{{ _('Attempted') }}"></i>
                                                 {% else %}
-                                                    <i class="attempted-problem-color fa fa-lock"></i>
+                                                    <i class="attempted-problem-color fa fa-lock" title="{{ _('Attempted (private)') }}"></i>
                                                 {% endif %}
                                             </a>
                                         </td>
                                     {% else %}
                                         <td class="col-status" solved="-1">
                                             {% if problem.is_public %}
-                                                <i class="unsolved-problem-color fa fa-minus-circle"></i>
+                                                <i class="unsolved-problem-color fa fa-minus-circle" title="{{ _('Unsolved') }}"></i>
                                             {% else %}
-                                                <i class="unsolved-problem-color fa fa-lock"></i>
+                                                <i class="unsolved-problem-color fa fa-lock" title="{{ _('Unsolved (private)') }}"></i>
                                             {% endif %}
                                         </td>
                                     {% endif %}
                                 {% endif %}
-                                <td class="col-code">{{ problem.code }}</td>
                                 <td class="col-name">
                                     <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>
                                 </td>
