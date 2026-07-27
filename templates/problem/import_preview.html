@@ -23,6 +23,21 @@
         .mcq-option-table td, .fb-blank-table td { padding: 4px; vertical-align: top; }
         .mcq-option-text, .fb-blank-label, .fb-blank-answers { box-sizing: border-box; width: 100%; }
         .preview-drag-handle { color: #888; cursor: move; padding: 6px; }
+        .import-preview-layout { display: grid; gap: 1.25em; grid-template-columns: minmax(13rem, 22rem) minmax(0, 1fr); }
+        .import-problem-list { align-self: start; background: #f4efe4; border: 1px solid #d9d5c9; padding: 0.8em; position: sticky; top: 1em; }
+        .import-problem-list h3 { margin-top: 0; }
+        .import-problem-nav { display: grid; gap: 0.35em; margin: 0.8em 0; }
+        .import-problem-nav a { box-sizing: border-box; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+        .import-problem-nav a.is-active { background: #d48b31; color: #fff; }
+        #create-all-problems { background: #23733f; border-color: #1b5a31; color: #fff; width: 100%; }
+        #create-all-problems:hover, #create-all-problems:focus { background: #1b5a31; color: #fff; }
+        .import-preview-panel .import-preview-card { display: none; margin-top: 0; }
+        .import-preview-panel .import-preview-card.is-active { display: block; }
+        .import-preview-panel .import-preview-card:target { display: block; }
+        @media (max-width: 760px) {
+            .import-preview-layout { grid-template-columns: 1fr; }
+            .import-problem-list { position: static; }
+        }
     </style>
 {% endblock %}
 
@@ -30,7 +45,10 @@
     <script>
         $(function () {
             function csrfToken() { return $('input[name="csrfmiddlewaretoken"]').first().val() || ''; }
-            function updateType(card) { card.attr('data-type', card.find('[name="question_type"]').val()); }
+            function updateType(card) {
+                var type = card.find('[name="question_type"]').val();
+                if (type) card.attr('data-type', type);
+            }
             function syncMcq(card) {
                 var options = [], answers = [];
                 card.find('.mcq-option-row:visible').each(function (index) {
@@ -91,7 +109,35 @@
                 if (item.preview_options) renderMcqRows(card, item.preview_options);
                 if (item.preview_blanks) renderBlankRows(card, item.preview_blanks);
             }
+            function selectCard(itemId) {
+                $('.import-preview-card').removeClass('is-active');
+                $('.import-problem-nav a').removeClass('is-active');
+                $('.import-preview-card[data-item-id="' + itemId + '"]').addClass('is-active');
+                $('.import-problem-nav a[data-item-id="' + itemId + '"]').addClass('is-active');
+            }
+            async function saveAllDrafts() {
+                var forms = $('.import-preview-card form');
+                for (var index = 0; index < forms.length; index += 1) {
+                    var form = $(forms[index]), card = form.closest('.import-preview-card');
+                    syncEditor(card);
+                    var response = await fetch(form.attr('action'), {
+                        method: 'POST',
+                        headers: {'X-CSRFToken': csrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
+                        body: new FormData(form.get(0)),
+                    });
+                    var payload;
+                    try { payload = await response.json(); }
+                    catch (error) { throw new Error('{{ _("Request failed.")|escapejs }}'); }
+                    if (!response.ok || !payload.ok) {
+                        selectCard(card.data('item-id'));
+                        setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true);
+                        throw new Error(payload.message || 'save failed');
+                    }
+                }
+            }
             $('.import-preview-card').each(function () { updateType($(this)); });
+            selectCard($('.import-preview-card').first().data('item-id'));
+            $('.import-problem-nav a').on('click', function () { selectCard($(this).attr('data-item-id')); });
             $('.import-preview-card [name="question_type"]').on('change', function () { updateType($(this).closest('.import-preview-card')); });
             $('.import-preview-card').on('click', '.remove-option', function (event) {
                 event.preventDefault(); $(this).closest('.mcq-option-row').remove();
@@ -104,16 +150,40 @@
                 button.prop('disabled', true); setStatus(card, '{{ _("Working...")|escapejs }}', false);
                 try {
                     syncEditor(card);
-                    var response = await fetch(button.data('url'), {method: 'POST', headers: {'X-CSRFToken': csrfToken()}, body: new FormData(form.get(0))});
+                    var response = await fetch(button.data('url'), {
+                        method: 'POST',
+                        headers: {'X-CSRFToken': csrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
+                        body: new FormData(form.get(0)),
+                    });
                     var payload = await response.json();
                     if (!response.ok || !payload.ok) { setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true); return; }
                     if (payload.item) updateFields(card, payload.item);
                     if (payload.edit_url) {
-                        setStatus(card, payload.message + ' ', false);
-                        card.find('.import-preview-status').append($('<a>').attr('href', payload.edit_url).text('{{ _("Edit problem")|escapejs }}'));
+                        window.location.reload();
                     } else setStatus(card, payload.message || '{{ _("Saved.")|escapejs }}', false);
                 } catch (error) { setStatus(card, '{{ _("Request failed.")|escapejs }}', true); }
                 finally { button.prop('disabled', false); }
+            });
+            $('#create-all-problems').on('click', async function (event) {
+                event.preventDefault();
+                var button = $(this), status = $('#create-all-status');
+                button.prop('disabled', true); status.removeClass('error').text('{{ _("Saving drafts...")|escapejs }}');
+                try {
+                    await saveAllDrafts();
+                    status.text('{{ _("Creating problems...")|escapejs }}');
+                    var response = await fetch(button.data('url'), {
+                        method: 'POST',
+                        headers: {'X-CSRFToken': csrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
+                    });
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) {
+                        status.text(payload.message || '{{ _("Request failed.")|escapejs }}').addClass('error');
+                        return;
+                    }
+                    window.location.href = payload.redirect_url || '{{ url("problem_list") }}';
+                } catch (error) {
+                    status.text(error.message || '{{ _("Request failed.")|escapejs }}').addClass('error');
+                } finally { button.prop('disabled', false); }
             });
         });
     </script>
@@ -123,8 +193,21 @@
     <div class="content-body">
         <p>{{ _('Review each question before creating it. Multiple-choice rows with consecutive A., B., C. option lines are formatted locally on upload; their answer always comes from the Excel answer column. Use “LLM format question” only when that result needs revision.') }}</p>
         {% if feedback %}<p class="import-preview-status{% if feedback_error %} error{% else %} success{% endif %}">{{ feedback }}</p>{% endif %}
-        {% for item in items %}
-            <section id="import-item-{{ item.pk }}" class="import-preview-card" data-type="{{ item.submission_type }}">
+        <div class="import-preview-layout">
+            <aside class="import-problem-list">
+                <h3>{{ _('Problems') }}</h3>
+                <div class="import-problem-nav">
+                    {% for item in items %}<a class="button" href="#import-item-{{ item.pk }}" data-item-id="{{ item.pk }}">{{ item.name }}</a>{% endfor %}
+                </div>
+                <form id="create-all-form" method="post" action="{{ url('problem_import_create_all', draft.pk) }}">
+                    {% csrf_token %}
+                    <button id="create-all-problems" type="submit" class="button" data-url="{{ url('problem_import_create_all', draft.pk) }}">{{ _('Create all') }}</button>
+                </form>
+                <span id="create-all-status" class="import-preview-status"></span>
+            </aside>
+            <div class="import-preview-panel">
+            {% for item in items %}
+            <section id="import-item-{{ item.pk }}" class="import-preview-card" data-item-id="{{ item.pk }}" data-type="{{ item.submission_type }}">
                 <h3>{{ _('Row') }} {{ item.row_number }}: {{ item.name }}</h3>
                 {% if item.created_problem %}
                     <div class="import-preview-actions"><a class="button" href="{{ url('problem_detail', item.created_problem.code) }}">{{ _('Created') }}</a></div>
@@ -164,6 +247,8 @@
                 </form>
                 {% endif %}
             </section>
-        {% endfor %}
+            {% endfor %}
+            </div>
+        </div>
     </div>
 {% endblock %}

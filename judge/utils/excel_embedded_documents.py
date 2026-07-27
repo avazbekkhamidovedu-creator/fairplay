@@ -6,21 +6,25 @@ owns each attachment, so an embedded document can safely augment that row's
 ``description`` field. ZIP files are retained for code-problem test data.
 """
 import io
-import os
 import posixpath
 import re
 import struct
 import uuid
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List
 from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
 
-from django.conf import settings
-from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
-
 from judge.utils import simple_xlsx
+
+
+@dataclass
+class EmbeddedImage:
+    """A DOCX image retained in memory until its import draft is valid."""
+    token: str
+    filename: str
+    content: bytes
 
 
 @dataclass
@@ -29,6 +33,7 @@ class EmbeddedFile:
     filename: str
     content: bytes
     text: str = ''
+    images: List[EmbeddedImage] = field(default_factory=list)
 
 
 def read_xlsx_rows_with_embedded_files(file_obj):
@@ -59,11 +64,13 @@ def read_xlsx_rows_with_embedded_files(file_obj):
                 raise ValueError('An embedded file is not attached to a worksheet row.')
             payload = simple_xlsx._safe_archive_read(archive, target)
             filename, content = _extract_embedded_file(payload)
-            text = (
+            text, images = (
                 _description_text(filename, content)
-                if filename.lower().endswith(('.docx', '.md', '.markdown')) else ''
+                if filename.lower().endswith(('.docx', '.md', '.markdown')) else ('', [])
             )
-            attachments.append(EmbeddedFile(row_number=row_number, filename=filename, content=content, text=text))
+            attachments.append(EmbeddedFile(
+                row_number=row_number, filename=filename, content=content, text=text, images=images,
+            ))
     return rows, attachments
 
 
@@ -175,7 +182,8 @@ def _description_text(filename, payload):
                 root = ET.fromstring(archive.read('word/document.xml'))
                 image_relationships = _docx_image_relationships(archive)
                 paragraphs = []
-                image_urls = {}
+                images = []
+                image_tokens = {}
                 for paragraph in root.iter():
                     if paragraph.tag.endswith('}p'):
                         parts = []
@@ -188,18 +196,26 @@ def _description_text(filename, payload):
                                 image_path = image_relationships.get(relationship_id)
                                 if not image_path:
                                     raise ValueError('The embedded DOCX has an invalid image reference.')
-                                if relationship_id not in image_urls:
-                                    image_urls[relationship_id] = _store_docx_image(
-                                        posixpath.basename(image_path), archive.read(image_path))
-                                parts.append('\n\n![]({})\n\n'.format(image_urls[relationship_id]))
+                                if relationship_id not in image_tokens:
+                                    image = EmbeddedImage(
+                                        token=str(uuid.uuid4()),
+                                        filename=posixpath.basename(image_path),
+                                        content=archive.read(image_path),
+                                    )
+                                    validate_docx_image(image.filename, image.content)
+                                    image_tokens[relationship_id] = image.token
+                                    images.append(image)
+                                parts.append('\n\n![]({})\n\n'.format(
+                                    image_placeholder(image_tokens[relationship_id]),
+                                ))
                         text = ''.join(parts).strip()
                         if text:
                             paragraphs.append(text)
-                return '\n\n'.join(paragraphs)
+                return '\n\n'.join(paragraphs), images
         except (KeyError, ET.ParseError, zipfile.BadZipFile) as error:
             raise ValueError('The embedded DOCX file is invalid.') from error
     try:
-        return payload.decode('utf-8-sig').replace('\r\n', '\n').replace('\r', '\n')
+        return payload.decode('utf-8-sig').replace('\r\n', '\n').replace('\r', '\n'), []
     except UnicodeDecodeError as error:
         raise ValueError('Embedded Markdown must use UTF-8 encoding.') from error
 
@@ -225,19 +241,36 @@ def _docx_image_relationships(archive):
     return result
 
 
-def _store_docx_image(filename, payload):
-    """Store a DOCX figure beside regular Markdown uploads and return its public URL."""
+def image_placeholder(token):
+    """A marker replaced with a draft-only image URL after row validation."""
+    return '[[excel-docx-image:{}]]'.format(token)
+
+
+def store_docx_image(filename, payload):
+    """Store a confirmed DOCX figure and return its storage name and public URL."""
+    import os
+
+    from django.conf import settings
+    from django.core.files.base import ContentFile
+    from django.core.files.storage import default_storage
+
+    validate_docx_image(filename, payload)
     extension = os.path.splitext(filename)[1].lower()
     if extension == '.jpeg':
         extension = '.jpg'
-    if extension not in {'.jpg', '.png', '.gif'}:
-        raise ValueError('Embedded DOCX figures must be PNG, JPG, or GIF images.')
-    if not payload or len(payload) > 10 * 1024 * 1024:
-        raise ValueError('Each embedded DOCX figure must be no larger than 10 MB.')
     name = '{}{}'.format(uuid.uuid4(), extension)
     saved_name = default_storage.save(os.path.join(settings.MARTOR_UPLOAD_MEDIA_DIR, name), ContentFile(payload))
     url_base = getattr(settings, 'MARTOR_UPLOAD_URL_PREFIX',
                        urljoin(settings.MEDIA_URL, settings.MARTOR_UPLOAD_MEDIA_DIR))
     if not url_base.endswith('/'):
         url_base += '/'
-    return urljoin(url_base, os.path.basename(saved_name))
+    return saved_name, urljoin(url_base, os.path.basename(saved_name))
+
+
+def validate_docx_image(filename, payload):
+    """Reject unsupported or oversized figures before they enter a preview draft."""
+    extension = posixpath.splitext(filename)[1].lower()
+    if extension not in {'.jpg', '.jpeg', '.png', '.gif'}:
+        raise ValueError('Embedded DOCX figures must be PNG, JPG, or GIF images.')
+    if not payload or len(payload) > 10 * 1024 * 1024:
+        raise ValueError('Each embedded DOCX figure must be no larger than 10 MB.')

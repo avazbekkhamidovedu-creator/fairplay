@@ -2,8 +2,10 @@
 import errno
 import io
 import json
+import mimetypes
 import os
 import re
+import uuid
 import zipfile
 from urllib.parse import urlencode
 from xml.etree import ElementTree as ET
@@ -11,8 +13,9 @@ from xml.etree import ElementTree as ET
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.db import transaction
-from django.http import Http404, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -22,9 +25,10 @@ from django.views import View
 from judge import llm
 from judge.llm import LLMError
 from judge.models import Language, Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, ProblemImportDraft, \
-    ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemSubmissionType, ProblemTestCase, ProblemType, \
-    Solution, problem_data_storage
-from judge.utils.excel_embedded_documents import read_xlsx_rows_with_embedded_files
+    ProblemImportImage, ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemSubmissionType, \
+    ProblemTestCase, ProblemType, Solution, problem_data_storage
+from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
+    store_docx_image
 from judge.utils.language_matching import matching_languages
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type
 from judge.utils.problem_data import ProblemDataCompiler
@@ -62,6 +66,52 @@ def _require_creator(request):
 def _draft_for(request, draft_id):
     _require_creator(request)
     return get_object_or_404(ProblemImportDraft, pk=draft_id, owner=request.user.profile)
+
+
+def _draft_image_url(draft_id, token):
+    # XLSX parsing uses UUID hex strings; the URL converter requires the canonical form.
+    return reverse('problem_import_image', args=(draft_id, uuid.UUID(str(token))))
+
+
+def _store_draft_images(item, documents):
+    """Persist validated figures with the draft, never in public media storage."""
+    images = [image for document in documents for image in document.images]
+    if not images:
+        return
+    for image in images:
+        ProblemImportImage.objects.create(
+            item=item, token=image.token, filename=image.filename, content=image.content,
+        )
+        item.description = item.description.replace(
+            image_placeholder(image.token), _draft_image_url(item.draft_id, image.token),
+        )
+    item.save(update_fields=['description', 'updated_at'])
+
+
+def _promote_draft_images(item, description):
+    """Replace still-used private preview URLs with permanent Markdown image URLs."""
+    stored_names = []
+    try:
+        for image in item.images.all():
+            preview_url = _draft_image_url(item.draft_id, image.token)
+            if preview_url not in description:
+                continue
+            stored_name, public_url = store_docx_image(image.filename, bytes(image.content))
+            stored_names.append(stored_name)
+            description = description.replace(preview_url, public_url)
+    except Exception:
+        _delete_stored_images(stored_names)
+        raise
+    return description, stored_names
+
+
+def _delete_stored_images(names):
+    """Best-effort cleanup if a transaction cannot create its problem."""
+    for name in names:
+        try:
+            default_storage.delete(name)
+        except OSError:
+            pass
 
 
 def _normalise_type(value):
@@ -353,7 +403,7 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                                 except ValueError:
                                     # Keep the answer cell editable when it does not yet match the extracted options.
                                     correct_options = ''
-                    ProblemImportItem.objects.create(
+                    item = ProblemImportItem.objects.create(
                         draft=draft,
                         row_number=row_number,
                         name=name,
@@ -372,6 +422,7 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                         test_data_zip=test_data_zip,
                         source_label=', '.join(document.filename for document in attachments),
                     )
+                    _store_draft_images(item, description_files)
                     count += 1
         except ValueError as error:
             return JsonResponse({'ok': False, 'message': str(error)}, status=400)
@@ -404,6 +455,15 @@ class ProblemImportPreviewView(LoginRequiredMixin, View):
             'feedback': request.GET.get('feedback', ''),
             'feedback_error': request.GET.get('feedback_error') == '1',
         })
+
+
+class ProblemImportImageView(LoginRequiredMixin, View):
+    """Serve an unconfirmed DOCX figure only to the owner of its import draft."""
+    def get(self, request, draft, token):
+        draft = _draft_for(request, draft)
+        image = get_object_or_404(ProblemImportImage, item__draft=draft, token=token)
+        content_type, _encoding = mimetypes.guess_type(image.filename)
+        return HttpResponse(bytes(image.content), content_type=content_type or 'application/octet-stream')
 
 
 class ProblemImportItemActionView(LoginRequiredMixin, View):
@@ -510,6 +570,60 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         item.save()
         return _item_payload(item)
 
+
+class ProblemImportCreateAllView(LoginRequiredMixin, View):
+    """Create every remaining reviewed item as one all-or-nothing database operation."""
+    def post(self, request, draft):
+        draft = _draft_for(request, draft)
+        promoted_images = []
+        completed = False
+        try:
+            with transaction.atomic():
+                items = list(draft.items.select_for_update().filter(created_problem__isnull=True))
+                if not items:
+                    return self._success_response(request, _('All problems have already been created.'), 0)
+                for item in items:
+                    problem = _create_problem(request, item, promoted_images)
+                    item.created_problem = problem
+                    item.save(update_fields=['created_problem', 'updated_at'])
+            completed = True
+        except ValueError as error:
+            return self._error_response(request, draft, str(error), status=400)
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.ENOENT, errno.EROFS):
+                raise
+            return self._error_response(
+                request, draft,
+                _(
+                    'Cannot write code-problem test data. An administrator must create and grant write access to '
+                    '%(path)s for the web service.',
+                ) % {'path': '/mnt/problems'},
+                status=500,
+            )
+        finally:
+            if not completed:
+                _delete_stored_images(promoted_images)
+        return self._success_response(request, _('Created %(count)d problems.') % {'count': len(items)}, len(items))
+
+    @staticmethod
+    def _wants_json(request):
+        return request.headers.get('x-requested-with') == 'XMLHttpRequest'
+
+    def _success_response(self, request, message, count):
+        if not self._wants_json(request):
+            return redirect('problem_list')
+        return JsonResponse({
+            'ok': True,
+            'message': message,
+            'count': count,
+            'redirect_url': reverse('problem_list'),
+        })
+
+    def _error_response(self, request, draft, message, status):
+        if not self._wants_json(request):
+            query = urlencode({'feedback': message, 'feedback_error': '1'})
+            return redirect('{}?{}'.format(reverse('problem_import_preview', args=(draft.pk,)), query))
+        return JsonResponse({'ok': False, 'message': message}, status=status)
 
 def _format_with_llm(item):
     type_name = dict(ProblemImportItem.TYPE_CHOICES)[item.submission_type]
@@ -731,12 +845,26 @@ def _add_test_cases(problem, item):
     ProblemDataCompiler.generate(problem, data, created_cases, valid_files)
 
 
-def _create_problem(request, item):
+def _create_problem(request, item, promoted_images=None):
     if item.created_problem_id:
         return item.created_problem
     if not item.name or not item.description:
         raise ValueError('A name and description are required.')
-    description = item.description
+    stored_images = []
+    try:
+        description, stored_images = _promote_draft_images(item, item.description)
+        problem = _create_problem_records(request, item, description)
+        # The BinaryField data is no longer needed once every referenced image is public.
+        item.images.all().delete()
+        if promoted_images is not None:
+            promoted_images.extend(stored_images)
+        return problem
+    except Exception:
+        _delete_stored_images(stored_images)
+        raise
+
+
+def _create_problem_records(request, item, description):
     signed_blanks = []
     if item.submission_type == ProblemSubmissionType.FILL_BLANK:
         if item.blanks.strip():

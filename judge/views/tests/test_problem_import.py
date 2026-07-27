@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from judge.llm.base import LLMResult
-from judge.models import Problem, ProblemImportDraft, Solution
+from judge.models import Problem, ProblemImportDraft, ProblemImportImage, Solution
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type, create_user
 from judge.utils.simple_xlsx import build_xlsx_workbook
 
@@ -125,3 +125,56 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
             {'import-type', 'number_theory', 'primes', 'hard'},
         )
         self.assertEqual(Solution.objects.get(problem=problem).content, '5 is the only prime option.')
+
+    @mock.patch('judge.views.problem_import.store_docx_image')
+    def test_docx_figure_is_private_in_preview_then_promoted_on_create(self, store_docx_image):
+        self.upload([
+            ['name', 'question_type', 'description'],
+            ['Figure question', 'multiple_choice', 'Choose the figure.'],
+        ])
+        draft = ProblemImportDraft.objects.get(owner=self.creator.profile)
+        item = draft.items.get()
+        image = ProblemImportImage.objects.create(item=item, filename='figure.png', content=b'png-data')
+        image_url = reverse('problem_import_image', args=(draft.pk, image.token))
+        item.description = 'Choose the figure.\n\n![]({})'.format(image_url)
+        item.save(update_fields=['description'])
+
+        preview = self.client.get(image_url)
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.content, b'png-data')
+
+        store_docx_image.return_value = ('martor/final.png', '/media/martor/final.png')
+        response = self.client.post(reverse('problem_import_item_action', args=(draft.pk, item.pk, 'create')), {
+            'name': item.name,
+            'question_type': 'M',
+            'description': item.description,
+            'answer': 'A',
+            'options': 'first\nsecond',
+            'correct_options': '1',
+            'blanks': '',
+        })
+
+        self.assertTrue(response.json()['ok'])
+        problem = Problem.objects.get(name='Figure question')
+        self.assertIn('/media/martor/final.png', problem.description)
+        self.assertFalse(ProblemImportImage.objects.filter(pk=image.pk).exists())
+        store_docx_image.assert_called_once_with('figure.png', b'png-data')
+
+    def test_create_all_creates_all_reviewed_items(self):
+        self.upload([
+            ['name', 'question_type', 'description', 'answer'],
+            ['Prime check', 'multiple_choice', 'Which is prime?\nA. 4\nB. 5', 'B'],
+            ['Capital', 'fill_blank', 'The capital of France is [[blank]].', 'Paris'],
+        ])
+        draft = ProblemImportDraft.objects.get(owner=self.creator.profile)
+
+        response = self.client.post(
+            reverse('problem_import_create_all', args=(draft.pk,)),
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['ok'])
+        self.assertEqual(response.json()['count'], 2)
+        self.assertEqual(draft.items.filter(created_problem__isnull=False).count(), 2)
+        self.assertEqual(Problem.objects.filter(name__in=['Prime check', 'Capital']).count(), 2)

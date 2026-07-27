@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 from django.db.models import CASCADE
 from django.utils.translation import gettext_lazy as _
@@ -6,7 +8,7 @@ from judge.models.problem import Problem
 
 __all__ = [
     'ProblemMCQOption', 'ProblemMCQConfig', 'ProblemBlank', 'ProblemFillBlankConfig',
-    'ProblemImportDraft', 'ProblemImportItem',
+    'ProblemImportDraft', 'ProblemImportItem', 'ProblemImportImage',
 ]
 
 
@@ -54,6 +56,18 @@ class ProblemImportItem(models.Model):
         ordering = ('row_number', 'pk')
         verbose_name = _('problem import item')
         verbose_name_plural = _('problem import items')
+
+
+class ProblemImportImage(models.Model):
+    """A DOCX figure kept with its editable import draft until problem creation."""
+    item = models.ForeignKey(ProblemImportItem, related_name='images', on_delete=CASCADE)
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    filename = models.CharField(max_length=255)
+    content = models.BinaryField()
+
+    class Meta:
+        verbose_name = _('problem import image')
+        verbose_name_plural = _('problem import images')
 
 
 class ProblemMCQOption(models.Model):

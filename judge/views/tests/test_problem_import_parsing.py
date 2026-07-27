@@ -1,19 +1,74 @@
 import io
 import zipfile
+from types import SimpleNamespace
+from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase
 
-from judge.utils.excel_embedded_documents import read_xlsx_rows_with_embedded_files
+from judge.utils.excel_embedded_documents import _description_text, image_placeholder, read_xlsx_rows_with_embedded_files
 from judge.utils.simple_xlsx import build_xlsx_workbook
 from judge.views.problem_import import (
     _extract_labeled_multiple_choice_options, _fill_blanks_from_signs, _header_name, _multiple_choice_answer_indices,
-    _parse_fill_blanks, _parse_text_test_data,
-    _parse_zip_test_data, _remove_multiple_choice_option_block, _serialize_fill_blanks,
+    _draft_image_url, _parse_fill_blanks, _parse_text_test_data,
+    _parse_zip_test_data, _promote_draft_images, _remove_multiple_choice_option_block, _serialize_fill_blanks,
 )
 
 
 class ProblemImportTestDataParsingTestCase(SimpleTestCase):
+    def test_docx_images_remain_in_memory_until_a_draft_is_created(self):
+        document = io.BytesIO()
+        with zipfile.ZipFile(document, 'w') as archive:
+            archive.writestr('word/document.xml', '''
+                <w:document xmlns:w="urn:w" xmlns:a="urn:a" xmlns:r="urn:r">
+                  <w:body><w:p><w:r><w:t>Figure:</w:t></w:r>
+                  <w:r><a:blip r:embed="rId1" /></w:r></w:p></w:body>
+                </w:document>
+            ''')
+            archive.writestr('word/_rels/document.xml.rels', '''
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+                    Target="media/figure.png" />
+                </Relationships>
+            ''')
+            archive.writestr('word/media/figure.png', b'png-data')
+
+        text, images = _description_text('question.docx', document.getvalue())
+
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0].filename, 'figure.png')
+        self.assertEqual(images[0].content, b'png-data')
+        self.assertIn(image_placeholder(images[0].token), text)
+
+    def test_draft_image_url_accepts_compact_uuid_tokens_from_existing_drafts(self):
+        self.assertEqual(
+            _draft_image_url(7, 'e46f2ff7126a4bed8d5f80c12a37c6ca'),
+            '/problems/import-excel/7/images/e46f2ff7-126a-4bed-8d5f-80c12a37c6ca/',
+        )
+
+    @mock.patch('judge.views.problem_import.default_storage.delete')
+    @mock.patch('judge.views.problem_import.store_docx_image')
+    def test_cleans_up_partially_promoted_images_after_storage_error(self, store_docx_image, delete):
+        first = SimpleNamespace(token='00000000-0000-0000-0000-000000000001', filename='first.png', content=b'first')
+        second = SimpleNamespace(token='00000000-0000-0000-0000-000000000002', filename='second.png', content=b'second')
+        item = SimpleNamespace(
+            draft_id=7,
+            images=SimpleNamespace(all=lambda: [first, second]),
+        )
+        description = (
+            '![](/problems/import-excel/7/images/00000000-0000-0000-0000-000000000001/) '
+            '![](/problems/import-excel/7/images/00000000-0000-0000-0000-000000000002/)'
+        )
+        store_docx_image.side_effect = [
+            ('martor/first.png', '/media/martor/first.png'),
+            OSError('storage failed'),
+        ]
+
+        with self.assertRaises(OSError):
+            _promote_draft_images(item, description)
+
+        delete.assert_called_once_with('martor/first.png')
+
     def test_reads_the_problems_sheet_when_instructions_come_first(self):
         workbook = build_xlsx_workbook([
             ('Instructions', [['Import Instructions']]),

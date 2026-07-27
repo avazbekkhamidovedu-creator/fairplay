@@ -109,8 +109,12 @@ urlpatterns = [
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
     path('problems/new/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_create'),
     path('problems/import-excel/', problem_import.ProblemImportUploadView.as_view(), name='problem_import_upload'),
+    path('problems/import-excel/<int:draft>/images/<uuid:token>/', problem_import.ProblemImportImageView.as_view(),
+         name='problem_import_image'),
     path('problems/import-excel/<int:draft>/', problem_import.ProblemImportPreviewView.as_view(),
          name='problem_import_preview'),
+    path('problems/import-excel/<int:draft>/create-all/', problem_import.ProblemImportCreateAllView.as_view(),
+         name='problem_import_create_all'),
     path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
          problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 
