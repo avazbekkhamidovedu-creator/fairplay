@@ -23,6 +23,14 @@ class SimpleXlsxTestCase(SimpleTestCase):
 
         self.assertEqual(rows, [['name', 'description'], ['A', 'B']])
 
+    def test_read_rejects_missing_requested_sheet(self):
+        payload = build_xlsx_workbook([
+            ('Instructions', [['Use the Problems sheet.']]),
+        ])
+
+        with self.assertRaisesMessage(ValueError, 'sheet named "Problems"'):
+            read_xlsx_rows(io.BytesIO(payload), sheet_name='Problems')
+
     def test_build_writes_list_validation_for_select_column(self):
         payload = build_xlsx_workbook([
             (

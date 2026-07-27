@@ -1,4 +1,5 @@
 import io
+import json
 import zipfile
 from types import SimpleNamespace
 from unittest import mock
@@ -12,7 +13,7 @@ from judge.utils.excel_embedded_documents import (
 from judge.utils.simple_xlsx import build_xlsx_workbook
 from judge.views.problem_import import (
     _auto_fill_blank_config, _draft_image_url, _extract_labeled_multiple_choice_options, _fill_blanks_from_signs,
-    _header_name,
+    _format_with_llm, _header_name,
     _multiple_choice_answer_indices, _parse_fill_blanks, _parse_text_test_data,
     _parse_zip_test_data, _promote_draft_images, _remove_multiple_choice_option_block, _serialize_fill_blanks,
 )
@@ -128,6 +129,17 @@ class ProblemImportTestDataParsingTestCase(SimpleTestCase):
         blanks = _auto_fill_blank_config('', 'Read the attachment: [[blank]].', 'answer')
 
         self.assertEqual(_parse_fill_blanks(blanks), [('Blank 1', 'answer')])
+
+    @mock.patch('judge.views.problem_import.llm.chat')
+    def test_rejects_non_string_multiple_choice_option_text_from_llm(self, chat):
+        chat.return_value = SimpleNamespace(text=json.dumps({
+            'options': [{'text': 1}],
+            'option_block': 'A. 1',
+        }))
+        item = SimpleNamespace(submission_type='M', description='Question', answer='A')
+
+        with self.assertRaisesMessage(ValueError, 'invalid multiple-choice options'):
+            _format_with_llm(item)
 
     def test_rejects_mismatched_blank_sign_answers(self):
         with self.assertRaisesMessage(ValueError, 'separated by |'):

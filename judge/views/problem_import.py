@@ -661,7 +661,10 @@ def _format_with_llm(item):
         raise ValueError('The LLM returned an invalid question format.')
     if item.submission_type == ProblemSubmissionType.MCQ:
         options = payload.get('options', [])
-        if not isinstance(options, list) or any(not isinstance(option, dict) for option in options):
+        if not isinstance(options, list) or any(
+            not isinstance(option, dict) or not isinstance(option.get('text'), str)
+            for option in options
+        ):
             raise ValueError('The LLM returned invalid multiple-choice options.')
         if not isinstance(payload.get('option_block', ''), str):
             raise ValueError('The LLM returned an invalid multiple-choice option block.')

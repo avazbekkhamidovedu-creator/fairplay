@@ -251,8 +251,10 @@ def _find_sheet_path(archive, sheet_name=None):
         sheet = next(
             (candidate for candidate in workbook.findall('x:sheets/x:sheet', namespace)
              if candidate.attrib.get('name', '').casefold() == expected_name),
-            first_sheet,
+            None,
         )
+        if sheet is None:
+            raise ValueError('Workbook does not contain a sheet named "{}".'.format(sheet_name))
 
     rel_id = sheet.attrib.get('{%s}id' % REL_NS)
     for relation in rels.findall('pr:Relationship', namespace):
