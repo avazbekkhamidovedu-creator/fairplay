@@ -281,6 +281,22 @@ def _fill_blanks_from_signs(description, answer):
     return cleaned_description, [('Blank {}'.format(index), value) for index, value in enumerate(answers, start=1)]
 
 
+def _auto_fill_blank_config(existing_blanks, description, answer):
+    """Build the editable blank configuration from every description source."""
+    if existing_blanks:
+        return existing_blanks
+    try:
+        _description, signed_blanks = _fill_blanks_from_signs(description, answer)
+    except ValueError:
+        signed_blanks = []
+    if signed_blanks:
+        return _serialize_fill_blanks([
+            {'label': label, 'answers': [accepted]}
+            for label, accepted in signed_blanks
+        ])
+    return answer
+
+
 def _multiple_choice_answer_indices(answer, options):
     """Resolve Excel answer values without asking the LLM to infer correctness."""
     result = []
@@ -370,21 +386,11 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                         # Validate the archive before storing it in the review draft.
                         _parse_zip_test_data(ContentFile(zip_attachment.content, name=zip_attachment.filename))
                         test_data_zip = ContentFile(zip_attachment.content, name=zip_attachment.filename)
+                    item_description = '\n\n'.join(parts)
                     answer = _value(row, headers, 'answer')
                     blanks = _value(row, headers, 'blanks')
-                    if question_type == ProblemSubmissionType.FILL_BLANK and not blanks:
-                        try:
-                            _description, signed_blanks = _fill_blanks_from_signs(description, answer)
-                        except ValueError:
-                            signed_blanks = []
-                        if signed_blanks:
-                            blanks = _serialize_fill_blanks([
-                                {'label': label, 'answers': [accepted]}
-                                for label, accepted in signed_blanks
-                            ])
-                        else:
-                            blanks = answer
-                    item_description = '\n\n'.join(parts)
+                    if question_type == ProblemSubmissionType.FILL_BLANK:
+                        blanks = _auto_fill_blank_config(blanks, item_description, answer)
                     options = _value(row, headers, 'options')
                     correct_options = _value(row, headers, 'correct_options')
                     if question_type == ProblemSubmissionType.MCQ and not options:
@@ -624,6 +630,7 @@ class ProblemImportCreateAllView(LoginRequiredMixin, View):
             query = urlencode({'feedback': message, 'feedback_error': '1'})
             return redirect('{}?{}'.format(reverse('problem_import_preview', args=(draft.pk,)), query))
         return JsonResponse({'ok': False, 'message': message}, status=status)
+
 
 def _format_with_llm(item):
     type_name = dict(ProblemImportItem.TYPE_CHOICES)[item.submission_type]

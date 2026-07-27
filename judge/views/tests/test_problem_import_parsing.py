@@ -6,11 +6,14 @@ from unittest import mock
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase
 
-from judge.utils.excel_embedded_documents import _description_text, image_placeholder, read_xlsx_rows_with_embedded_files
+from judge.utils.excel_embedded_documents import (
+    _description_text, image_placeholder, read_xlsx_rows_with_embedded_files,
+)
 from judge.utils.simple_xlsx import build_xlsx_workbook
 from judge.views.problem_import import (
-    _extract_labeled_multiple_choice_options, _fill_blanks_from_signs, _header_name, _multiple_choice_answer_indices,
-    _draft_image_url, _parse_fill_blanks, _parse_text_test_data,
+    _auto_fill_blank_config, _draft_image_url, _extract_labeled_multiple_choice_options, _fill_blanks_from_signs,
+    _header_name,
+    _multiple_choice_answer_indices, _parse_fill_blanks, _parse_text_test_data,
     _parse_zip_test_data, _promote_draft_images, _remove_multiple_choice_option_block, _serialize_fill_blanks,
 )
 
@@ -19,18 +22,19 @@ class ProblemImportTestDataParsingTestCase(SimpleTestCase):
     def test_docx_images_remain_in_memory_until_a_draft_is_created(self):
         document = io.BytesIO()
         with zipfile.ZipFile(document, 'w') as archive:
-            archive.writestr('word/document.xml', '''
+            archive.writestr('word/document.xml', """
                 <w:document xmlns:w="urn:w" xmlns:a="urn:a" xmlns:r="urn:r">
                   <w:body><w:p><w:r><w:t>Figure:</w:t></w:r>
                   <w:r><a:blip r:embed="rId1" /></w:r></w:p></w:body>
                 </w:document>
-            ''')
-            archive.writestr('word/_rels/document.xml.rels', '''
+            """)
+            archive.writestr('word/_rels/document.xml.rels', """
                 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+                  <Relationship Id="rId1"
+                    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
                     Target="media/figure.png" />
                 </Relationships>
-            ''')
+            """)
             archive.writestr('word/media/figure.png', b'png-data')
 
         text, images = _description_text('question.docx', document.getvalue())
@@ -119,6 +123,11 @@ class ProblemImportTestDataParsingTestCase(SimpleTestCase):
         )
         self.assertEqual(description, 'The capital is **[Blank 1]** and 2 + 2 = **[Blank 2]**.')
         self.assertEqual(blanks, [('Blank 1', 'Paris'), ('Blank 2', '4')])
+
+    def test_auto_maps_blank_signs_from_embedded_description_content(self):
+        blanks = _auto_fill_blank_config('', 'Read the attachment: [[blank]].', 'answer')
+
+        self.assertEqual(_parse_fill_blanks(blanks), [('Blank 1', 'answer')])
 
     def test_rejects_mismatched_blank_sign_answers(self):
         with self.assertRaisesMessage(ValueError, 'separated by |'):
