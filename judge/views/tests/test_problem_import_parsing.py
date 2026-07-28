@@ -14,8 +14,10 @@ from judge.utils.simple_xlsx import build_xlsx_workbook
 from judge.views.problem_import import (
     _auto_fill_blank_config, _draft_image_url, _extract_labeled_multiple_choice_options, _fill_blanks_from_signs,
     _format_with_llm, _header_name,
-    _multiple_choice_answer_indices, _parse_fill_blanks, _parse_text_test_data,
+    _import_problem_name, _import_question_type, _multiple_choice_answer_indices, _normalise_type, _parse_fill_blanks,
+    _parse_text_test_data,
     _parse_zip_test_data, _promote_draft_images, _remove_multiple_choice_option_block, _serialize_fill_blanks,
+    _validate_problem_import_item,
 )
 
 
@@ -82,8 +84,23 @@ class ProblemImportTestDataParsingTestCase(SimpleTestCase):
 
         rows, attachments = read_xlsx_rows_with_embedded_files(io.BytesIO(workbook))
 
-        self.assertEqual(rows[0], ['name*', 'problem_type*', 'description*'])
+        self.assertEqual(rows[0], ['name', 'question_type', 'description'])
         self.assertEqual(rows[1], ['Example', 'code', 'Body'])
+        self.assertEqual(attachments, [])
+
+    def test_merges_every_recognized_problem_sheet_and_aligns_headers(self):
+        workbook = build_xlsx_workbook([
+            ('Question Bank A', [['Title', 'Problem Type', 'Content'], ['First', 'Coding', 'One']]),
+            ('Question Bank B', [['Description', 'Name', 'Question Type'], ['Two', 'Second', 'Cloze']]),
+        ])
+
+        rows, attachments = read_xlsx_rows_with_embedded_files(io.BytesIO(workbook))
+
+        self.assertEqual(rows, [
+            ['name', 'question_type', 'description'],
+            ['First', 'Coding', 'One'],
+            ['Second', 'Cloze', 'Two'],
+        ])
         self.assertEqual(attachments, [])
 
     def test_normalizes_new_template_column_headers(self):
@@ -94,6 +111,35 @@ class ProblemImportTestDataParsingTestCase(SimpleTestCase):
 
     def test_maps_multiple_choice_excel_answers_without_llm_correctness(self):
         self.assertEqual(_multiple_choice_answer_indices('B|3', ['one', 'two', 'three']), [2, 3])
+
+    def test_matches_common_teacher_question_type_names(self):
+        self.assertEqual(_normalise_type('Programming Problem'), 'C')
+        self.assertEqual(_normalise_type('Single Choice Question'), 'M')
+        self.assertEqual(_normalise_type('Fill-in-the-Blank'), 'B')
+
+    def test_keeps_unrecognized_question_type_editable_in_preview(self):
+        question_type, warning = _import_question_type('Written response')
+
+        self.assertEqual(question_type, 'C')
+        self.assertIn('Written response', warning)
+
+    def test_generates_a_reviewable_name_for_a_problem_without_one(self):
+        name, needs_review = _import_problem_name('', 7)
+
+        self.assertEqual(name, 'Missing name problem 7')
+        self.assertTrue(needs_review)
+
+    def test_requires_question_type_confirmation_before_batch_creation(self):
+        item = SimpleNamespace(name_needs_review=False, type_needs_review=True)
+
+        with self.assertRaisesMessage(ValueError, 'Select or confirm'):
+            _validate_problem_import_item(item)
+
+    def test_requires_a_replacement_for_a_generated_missing_name(self):
+        item = SimpleNamespace(name_needs_review=True)
+
+        with self.assertRaisesMessage(ValueError, 'missing-name placeholder'):
+            _validate_problem_import_item(item)
 
     def test_extracts_consecutive_lettered_multiple_choice_options(self):
         options, block = _extract_labeled_multiple_choice_options(

@@ -49,6 +49,8 @@ class ProblemImportItem(models.Model):
     correct_options = models.TextField(blank=True)
     blanks = models.TextField(blank=True)
     formatting_error = models.TextField(blank=True)
+    type_needs_review = models.BooleanField(default=False)
+    name_needs_review = models.BooleanField(default=False)
     created_problem = models.ForeignKey(Problem, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
     updated_at = models.DateTimeField(auto_now=True)
 

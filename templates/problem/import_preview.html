@@ -8,6 +8,9 @@
         .import-preview-field label { display: block; font-weight: bold; margin-bottom: 0.25em; }
         .import-preview-field input, .import-preview-field textarea, .import-preview-field select { box-sizing: border-box; max-width: 100%; width: 100%; }
         .import-preview-field textarea { min-height: 7em; font-family: monospace; }
+        .question-type-confirmation { background: #fff2e5; border-left: 3px solid #d48b31; padding: 0.6em 0.75em; }
+        .question-type-confirmation label { align-items: center; display: inline-flex; font-weight: normal; gap: 0.5em; margin: 0; }
+        .question-type-confirmation input { margin: 0; max-width: none; width: auto; }
         .import-preview-source { color: #776f61; font-size: 0.9em; }
         .import-preview-actions { display: flex; flex-wrap: wrap; gap: 0.6em; margin-top: 1em; }
         .import-preview-status { display: block; margin-top: 0.65em; min-height: 1.2em; }
@@ -29,6 +32,7 @@
         .import-problem-nav { display: grid; gap: 0.35em; margin: 0.8em 0; }
         .import-problem-nav a { box-sizing: border-box; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
         .import-problem-nav a.is-active { background: #d48b31; color: #fff; }
+        .import-problem-nav a.has-error, .import-problem-nav a.has-error.is-active { background: #a63c32; border-color: #842d25; color: #fff; }
         #create-all-problems { background: #23733f; border-color: #1b5a31; color: #fff; width: 100%; }
         #create-all-problems:hover, #create-all-problems:focus { background: #1b5a31; color: #fff; }
         .import-preview-panel .import-preview-card { display: none; margin-top: 0; }
@@ -131,7 +135,13 @@
                     if (!response.ok || !payload.ok) {
                         selectCard(card.data('item-id'));
                         setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true);
+                        $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]').addClass('has-error');
                         throw new Error(payload.message || 'save failed');
+                    }
+                    if (payload.item) {
+                        var navButton = $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]');
+                        navButton.toggleClass('has-error', payload.item.name_needs_review || payload.item.type_needs_review);
+                        card.attr('data-name-needs-review', payload.item.name_needs_review ? '1' : '0');
                     }
                 }
             }
@@ -139,6 +149,12 @@
             selectCard($('.import-preview-card').first().data('item-id'));
             $('.import-problem-nav a').on('click', function () { selectCard($(this).attr('data-item-id')); });
             $('.import-preview-card [name="question_type"]').on('change', function () { updateType($(this).closest('.import-preview-card')); });
+            $('.import-preview-card [name="confirm_question_type"]').on('change', function () {
+                var card = $(this).closest('.import-preview-card');
+                if (this.checked && card.attr('data-name-needs-review') !== '1') {
+                    $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]').removeClass('has-error');
+                }
+            });
             $('.import-preview-card').on('click', '.remove-option', function (event) {
                 event.preventDefault(); $(this).closest('.mcq-option-row').remove();
             }).on('click', '.remove-blank', function (event) {
@@ -156,8 +172,17 @@
                         body: new FormData(form.get(0)),
                     });
                     var payload = await response.json();
-                    if (!response.ok || !payload.ok) { setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true); return; }
+                    if (!response.ok || !payload.ok) {
+                        setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true);
+                        $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]').addClass('has-error');
+                        return;
+                    }
                     if (payload.item) updateFields(card, payload.item);
+                    if (payload.item) {
+                        var navButton = $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]');
+                        navButton.toggleClass('has-error', payload.item.name_needs_review || payload.item.type_needs_review);
+                        card.attr('data-name-needs-review', payload.item.name_needs_review ? '1' : '0');
+                    }
                     if (payload.edit_url) {
                         window.location.reload();
                     } else setStatus(card, payload.message || '{{ _("Saved.")|escapejs }}', false);
@@ -177,6 +202,16 @@
                     });
                     var payload = await response.json();
                     if (!response.ok || !payload.ok) {
+                        if (payload.errors && payload.errors.length) {
+                            payload.errors.forEach(function (error) {
+                                var errorCard = $('.import-preview-card[data-item-id="' + error.item_id + '"]');
+                                $('.import-problem-nav a[data-item-id="' + error.item_id + '"]').addClass('has-error');
+                                setStatus(errorCard, error.message, true);
+                            });
+                            var firstError = payload.errors[0];
+                            var firstCard = $('.import-preview-card[data-item-id="' + firstError.item_id + '"]');
+                            selectCard(firstError.item_id);
+                        }
                         status.text(payload.message || '{{ _("Request failed.")|escapejs }}').addClass('error');
                         return;
                     }
@@ -197,7 +232,7 @@
             <aside class="import-problem-list">
                 <h3>{{ _('Problems') }}</h3>
                 <div class="import-problem-nav">
-                    {% for item in items %}<a class="button" href="#import-item-{{ item.pk }}" data-item-id="{{ item.pk }}">{{ item.name }}</a>{% endfor %}
+                    {% for item in items %}<a class="button{% if item.formatting_error or item.type_needs_review or item.name_needs_review %} has-error{% endif %}" href="#import-item-{{ item.pk }}" data-item-id="{{ item.pk }}">{{ item.name }}</a>{% endfor %}
                 </div>
                 <form id="create-all-form" method="post" action="{{ url('problem_import_create_all', draft.pk) }}">
                     {% csrf_token %}
@@ -207,7 +242,7 @@
             </aside>
             <div class="import-preview-panel">
             {% for item in items %}
-            <section id="import-item-{{ item.pk }}" class="import-preview-card" data-item-id="{{ item.pk }}" data-type="{{ item.submission_type }}">
+            <section id="import-item-{{ item.pk }}" class="import-preview-card" data-item-id="{{ item.pk }}" data-type="{{ item.submission_type }}" data-name-needs-review="{% if item.name_needs_review %}1{% else %}0{% endif %}">
                 <h3>{{ _('Row') }} {{ item.row_number }}: {{ item.name }}</h3>
                 {% if item.created_problem %}
                     <div class="import-preview-actions"><a class="button" href="{{ url('problem_detail', item.created_problem.code) }}">{{ _('Created') }}</a></div>
@@ -216,8 +251,9 @@
                     {% csrf_token %}
                     <input type="hidden" name="native_submit" value="1">
                     {% if item.source_label %}<p class="import-preview-source">{{ _('Embedded source:') }} {{ item.source_label }}</p>{% endif %}
-                    <div class="import-preview-field"><label>{{ _('Name') }}</label><input name="name" value="{{ item.name }}"></div>
+                    <div class="import-preview-field"><label>{{ _('Name') }}</label><input name="name" value="{{ item.name }}">{% if item.name_needs_review %}<small class="error">{{ _('Replace this generated placeholder with the problem name.') }}</small>{% endif %}</div>
                     <div class="import-preview-field"><label>{{ _('Question type') }}</label><select name="question_type">{% for value, label in type_choices %}<option value="{{ value }}"{% if item.submission_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+                    {% if item.type_needs_review %}<div class="import-preview-field question-type-confirmation"><label><input type="checkbox" name="confirm_question_type" value="1"> {{ _('Confirm the selected question type') }}</label></div>{% endif %}
                     <div class="import-preview-field"><label>{{ _('Description') }}</label><textarea name="description">{{ item.description }}</textarea></div>
                     <div class="import-preview-field not-for-blank not-for-mcq"><label>{{ _('Answer key / notes for LLM') }}</label><textarea name="answer">{{ item.answer }}</textarea></div>
                     <div class="mcq-field import-type-fields for-mcq">
@@ -240,6 +276,7 @@
                     {% if item.test_data_zip %}<div class="import-preview-field import-type-fields for-code"><label>{{ _('Embedded test data ZIP') }}</label><div>{{ item.test_data_zip.name }}</div><small>{{ _('Imported from the Excel object and used in preference to text test data.') }}</small></div>{% endif %}
                     <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Options, one per line') }}</label><textarea name="options">{{ item.options }}</textarea></div>
                     <div class="import-preview-actions">
+                        <button type="submit" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}">{{ _('Save draft') }}</button>
                         <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}">{{ _('LLM format question') }}</button>
                         <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}">{{ _('Create problem') }}</button>
                     </div>

@@ -1,4 +1,5 @@
 import io
+import re
 import zipfile
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
@@ -12,6 +13,15 @@ MAX_XLSX_TOTAL_UNCOMPRESSED_BYTES = 8 * 1024 * 1024
 MAX_XLSX_XML_PART_BYTES = 4 * 1024 * 1024
 MAX_XLSX_COMPRESSION_RATIO = 100
 MAX_XLSX_COLUMNS = 16384
+PROBLEM_NAME_HEADERS = {
+    'name', 'title', 'problem_name', 'problem_title', 'question', 'question_name', 'question_title',
+}
+PROBLEM_TYPE_HEADERS = {
+    'type', 'problem_type', 'question_type', 'question_category', 'question_kind',
+}
+PROBLEM_DESCRIPTION_HEADERS = {
+    'content', 'description', 'problem_description', 'question_description', 'question_text', 'statement',
+}
 
 
 def _excel_column_name(index):
@@ -268,6 +278,77 @@ def _find_sheet_path(archive, sheet_name=None):
 
 def _find_first_sheet_path(archive):
     return _find_sheet_path(archive)
+
+
+def _problem_header_key(value):
+    text = re.sub(r'\s+', ' ', str(value or '').replace('*', '').strip().casefold())
+    text = re.split(r'[（(]', text, maxsplit=1)[0].strip()
+    return re.sub(r'[^a-z0-9]+', '_', text).strip('_')
+
+
+def _problem_header_score(row):
+    headers = {_problem_header_key(value) for value in row if _problem_header_key(value)}
+    has_name = bool(headers & PROBLEM_NAME_HEADERS)
+    has_type = bool(headers & PROBLEM_TYPE_HEADERS)
+    if not has_name or not has_type:
+        return 0
+    return 8 + int(bool(headers & PROBLEM_DESCRIPTION_HEADERS))
+
+
+def canonical_problem_header(value):
+    """Normalize synonymous problem-table headings before multiple sheets are merged."""
+    key = _problem_header_key(value)
+    if key in PROBLEM_NAME_HEADERS:
+        return 'name'
+    if key in PROBLEM_TYPE_HEADERS:
+        return 'question_type'
+    if key in PROBLEM_DESCRIPTION_HEADERS:
+        return 'description'
+    return key
+
+
+def _xlsx_sheet_names(file_obj):
+    file_obj.seek(0)
+    validate_xlsx_upload(file_obj)
+    with zipfile.ZipFile(file_obj) as archive:
+        _validate_archive_members(archive)
+        workbook = ET.fromstring(_safe_archive_read(archive, 'xl/workbook.xml'))
+    namespace = {'x': MAIN_NS}
+    names = [sheet.attrib.get('name', '') for sheet in workbook.findall('x:sheets/x:sheet', namespace)]
+    if not names:
+        raise ValueError('Workbook does not contain any sheets.')
+    return names
+
+
+def read_problem_xlsx_sheets(file_obj):
+    """Return every worksheet with a recognizable problem table, starting at its header."""
+    candidates = []
+    for sheet_index, sheet_name in enumerate(_xlsx_sheet_names(file_obj)):
+        rows = read_xlsx_rows(file_obj, sheet_name=sheet_name)
+        best_header = None
+        for row_index, row in enumerate(rows[:25]):
+            score = _problem_header_score(row)
+            if score:
+                candidate = (score, -row_index)
+                if best_header is None or candidate > best_header[0]:
+                    best_header = (candidate, row_index)
+        if best_header is not None:
+            candidates.append((sheet_index, sheet_name, best_header[1], rows))
+    if not candidates:
+        raise ValueError(
+            'Workbook does not contain a recognizable problem sheet with name/title and question type columns.',
+        )
+    return [(sheet_name, header_index, rows[header_index:])
+            for _sheet_index, sheet_name, header_index, rows in candidates]
+
+
+def read_problem_xlsx_rows(file_obj):
+    """Return the preferred recognized problem table for callers that need one sheet."""
+    sheets = read_problem_xlsx_sheets(file_obj)
+    sheet_name, header_index, rows = next(
+        (sheet for sheet in sheets if sheet[0].casefold() == 'problems'), sheets[0],
+    )
+    return rows, sheet_name, header_index
 
 
 def _cell_column_index(cell_ref):

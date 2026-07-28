@@ -46,6 +46,25 @@ QUESTION_TYPE_MAP = {
     'fill in the blank': ProblemSubmissionType.FILL_BLANK,
     'fill-in-the-blank': ProblemSubmissionType.FILL_BLANK,
     'b': ProblemSubmissionType.FILL_BLANK,
+    'programming': ProblemSubmissionType.CODE,
+    'programming_problem': ProblemSubmissionType.CODE,
+    'code_problem': ProblemSubmissionType.CODE,
+    'coding': ProblemSubmissionType.CODE,
+    'coding_problem': ProblemSubmissionType.CODE,
+    'algorithm': ProblemSubmissionType.CODE,
+    'algorithmic': ProblemSubmissionType.CODE,
+    'choice': ProblemSubmissionType.MCQ,
+    'single_choice': ProblemSubmissionType.MCQ,
+    'multiple_choice_question': ProblemSubmissionType.MCQ,
+    'multiple_choice_problem': ProblemSubmissionType.MCQ,
+    'single_choice_question': ProblemSubmissionType.MCQ,
+    'multiple_selection': ProblemSubmissionType.MCQ,
+    'single_selection': ProblemSubmissionType.MCQ,
+    'fill_blank_question': ProblemSubmissionType.FILL_BLANK,
+    'fill_in_blank': ProblemSubmissionType.FILL_BLANK,
+    'fill_in_blanks': ProblemSubmissionType.FILL_BLANK,
+    'blank_filling': ProblemSubmissionType.FILL_BLANK,
+    'cloze': ProblemSubmissionType.FILL_BLANK,
 }
 
 BLANK_SIGN_RE = re.compile(r'\[\[blank\]\]', re.IGNORECASE)
@@ -54,6 +73,22 @@ HEADER_ALIASES = {
     'explanation': 'solution',
     'problem_type': 'question_type',
     'tag': 'tags',
+    'title': 'name',
+    'problem_name': 'name',
+    'problem_title': 'name',
+    'question': 'name',
+    'question_name': 'name',
+    'question_title': 'name',
+    'type': 'question_type',
+    'question_category': 'question_type',
+    'question_kind': 'question_type',
+    'content': 'description',
+    'problem_description': 'description',
+    'question_description': 'description',
+    'question_text': 'description',
+    'statement': 'description',
+    'answer_key': 'answer',
+    'correct_answer': 'answer',
 }
 DIFFICULTY_VALUES = {'0': 'easy', '1': 'medium', '2': 'hard'}
 
@@ -115,11 +150,44 @@ def _delete_stored_images(names):
 
 
 def _normalise_type(value):
-    key = re.sub(r'\s+', ' ', str(value or '').strip().lower().replace('-', '_'))
+    key = re.sub(r'[^a-z0-9]+', '_', str(value or '').strip().casefold()).strip('_')
     try:
         return QUESTION_TYPE_MAP[key]
     except KeyError:
+        if any(token in key for token in ('code', 'coding', 'programming', 'algorithm')):
+            return ProblemSubmissionType.CODE
+        if any(token in key for token in ('choice', 'select', 'selection', 'multiple_answer', 'single_answer')):
+            return ProblemSubmissionType.MCQ
+        if any(token in key for token in ('blank', 'cloze', 'fill')):
+            return ProblemSubmissionType.FILL_BLANK
         raise ValueError('question_type must be code, multiple_choice, or fill_blank.')
+
+
+def _import_question_type(value):
+    """Keep an unrecognized row editable instead of rejecting the whole workbook."""
+    try:
+        return _normalise_type(value), ''
+    except ValueError:
+        return ProblemSubmissionType.CODE, _(
+            'Question type "%(value)s" was not recognized. It is shown as Code; select the correct type before '
+            'creating the problem.',
+        ) % {'value': value or _('empty')}
+
+
+def _import_problem_name(value, row_number):
+    name = str(value or '').strip()
+    if name:
+        return name, False
+    return 'Missing name problem {}'.format(row_number), True
+
+
+def _review_message(item):
+    messages = []
+    if item.name_needs_review:
+        messages.append(_('Replace the generated missing-name placeholder before creating this problem.'))
+    if item.type_needs_review:
+        messages.append(_('Select or confirm the question type before creating this problem.'))
+    return '\n'.join(messages)
 
 
 def _value(row, headers, name):
@@ -355,17 +423,21 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                 draft = ProblemImportDraft.objects.create(owner=request.user.profile)
                 count = 0
                 for row_number, row in enumerate(rows[1:], start=2):
-                    name = _value(row, headers, 'name')
+                    source_name = _value(row, headers, 'name')
+                    name, name_needs_review = _import_problem_name(source_name, row_number)
                     type_value = _value(row, headers, 'question_type')
                     description = _value(row, headers, 'description')
                     attachments = files_by_row.get(row_number, [])
                     description_files = [document for document in attachments if document.text]
                     zip_files = [document for document in attachments if document.filename.lower().endswith('.zip')]
-                    if not any((name, type_value, description, attachments)):
+                    if not any((source_name, type_value, description, attachments)):
                         continue
-                    if not name:
-                        raise ValueError('Row {} is missing "name".'.format(row_number))
-                    question_type = _normalise_type(type_value)
+                    question_type, type_error = _import_question_type(type_value)
+                    review_messages = [message for message in (
+                        type_error,
+                        _('Replace the generated missing-name placeholder before creating this problem.')
+                        if name_needs_review else '',
+                    ) if message]
                     parts = [description] if description else []
                     parts.extend(document.text for document in description_files)
                     if not parts:
@@ -427,6 +499,9 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                         blanks=blanks or (answer if question_type == ProblemSubmissionType.FILL_BLANK else ''),
                         test_data_zip=test_data_zip,
                         source_label=', '.join(document.filename for document in attachments),
+                        formatting_error='\n'.join(review_messages),
+                        type_needs_review=bool(type_error),
+                        name_needs_review=name_needs_review,
                     )
                     _store_draft_images(item, description_files)
                     count += 1
@@ -484,7 +559,13 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         except ValueError as error:
             return self._error_response(request, draft, item, str(error))
         if action == 'save':
-            return self._success_response(request, draft, item, _('Draft saved.'))
+            try:
+                _validate_problem_import_item(item)
+            except ValueError as error:
+                return self._error_response(request, draft, item, str(error))
+            item.formatting_error = ''
+            item.save(update_fields=['formatting_error', 'updated_at'])
+            return self._success_response(request, draft, item, _('Draft saved.'), _item_payload(item))
         if action == 'format':
             if not llm.is_configured():
                 return self._error_response(request, draft, item, _('LiteLLM is not configured.'), status=503)
@@ -541,6 +622,8 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         return JsonResponse({'ok': False, 'message': message}, status=status)
 
     def _save_item(self, item, data, files):
+        previous_type = item.submission_type
+        previous_name = item.name
         try:
             item.submission_type = _normalise_type(data.get('question_type', item.submission_type))
         except ValueError as error:
@@ -554,7 +637,17 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
                 setattr(item, field, (data.get(field, '') or '').strip())
         if files.get('test_data_zip'):
             raise ValueError('Test data ZIP files must be embedded as an Excel object.')
-        item.formatting_error = ''
+        if (
+            item.type_needs_review and item.submission_type == previous_type
+            and data.get('confirm_question_type') != '1'
+        ):
+            # Background draft saves must not silently accept an unknown imported type.
+            pass
+        else:
+            item.type_needs_review = False
+        if item.name_needs_review and item.name != previous_name:
+            item.name_needs_review = False
+        item.formatting_error = _review_message(item)
         item.save()
 
     def _format(self, item):
@@ -588,6 +681,13 @@ class ProblemImportCreateAllView(LoginRequiredMixin, View):
                 items = list(draft.items.select_for_update().filter(created_problem__isnull=True))
                 if not items:
                     return self._success_response(request, _('All problems have already been created.'), 0)
+                errors = self._validation_errors(items)
+                if errors:
+                    return self._error_response(
+                        request, draft,
+                        _('Fix %(count)d problem(s) before creating all.') % {'count': len(errors)},
+                        status=400, errors=errors,
+                    )
                 for item in items:
                     problem = _create_problem(request, item, promoted_images)
                     item.created_problem = problem
@@ -625,11 +725,33 @@ class ProblemImportCreateAllView(LoginRequiredMixin, View):
             'redirect_url': reverse('problem_list'),
         })
 
-    def _error_response(self, request, draft, message, status):
+    @staticmethod
+    def _validation_errors(items):
+        errors = []
+        for item in items:
+            try:
+                _validate_problem_import_item(item)
+            except ValueError as error:
+                message = str(error)
+                if item.formatting_error != message:
+                    item.formatting_error = message
+                    item.save(update_fields=['formatting_error', 'updated_at'])
+                errors.append({
+                    'item_id': item.pk,
+                    'row_number': item.row_number,
+                    'name': item.name,
+                    'message': message,
+                })
+        return errors
+
+    def _error_response(self, request, draft, message, status, errors=None):
         if not self._wants_json(request):
             query = urlencode({'feedback': message, 'feedback_error': '1'})
             return redirect('{}?{}'.format(reverse('problem_import_preview', args=(draft.pk,)), query))
-        return JsonResponse({'ok': False, 'message': message}, status=status)
+        payload = {'ok': False, 'message': message}
+        if errors:
+            payload['errors'] = errors
+        return JsonResponse(payload, status=status)
 
 
 def _format_with_llm(item):
@@ -682,6 +804,8 @@ def _item_payload(item):
         field: getattr(item, field)
         for field in ('description', 'tags', 'difficulty', 'options', 'correct_options', 'blanks')
     }
+    payload['name_needs_review'] = item.name_needs_review
+    payload['type_needs_review'] = item.type_needs_review
     payload['preview_options'] = _preview_options(item)
     payload['preview_blanks'] = _preview_blanks(item)
     return payload
@@ -731,22 +855,29 @@ def _resolve_allowed_languages(raw_value):
     return resolved
 
 
-def _resolve_import_tags(raw_value):
+def _validate_import_tags(raw_value):
     tags = _split_lines(raw_value)
     if len(tags) > 5:
         raise ValueError('Use at most five tags per problem.')
-    resolved = []
-    seen = set()
     for tag in tags:
         if len(tag) > 20:
             raise ValueError('Each tag must be at most 20 characters.')
+        identifier = re.sub(r'[^a-z0-9]+', '_', tag.casefold()).strip('_')
+        if not identifier or len(identifier) > 20:
+            raise ValueError('Each tag must contain letters or numbers and be at most 20 characters.')
+    return tags
+
+
+def _resolve_import_tags(raw_value):
+    tags = _validate_import_tags(raw_value)
+    resolved = []
+    seen = set()
+    for tag in tags:
         existing = ProblemType.objects.filter(name__iexact=tag).first()
         if existing is None:
             existing = ProblemType.objects.filter(full_name__iexact=tag).first()
         if existing is None:
             identifier = re.sub(r'[^a-z0-9]+', '_', tag.casefold()).strip('_')
-            if not identifier or len(identifier) > 20:
-                raise ValueError('Each tag must contain letters or numbers and be at most 20 characters.')
             existing, _created = ProblemType.objects.get_or_create(
                 name=identifier,
                 defaults={'full_name': tag},
@@ -757,13 +888,20 @@ def _resolve_import_tags(raw_value):
     return resolved
 
 
-def _resolve_import_difficulty(raw_value):
+def _validate_import_difficulty(raw_value):
     value = str(raw_value or '').strip().casefold()
     if not value:
         return None
     name = DIFFICULTY_VALUES.get(value, value)
     if name not in Problem.DIFFICULTY_TYPE_NAMES:
         raise ValueError('Difficulty must be 0 (easy), 1 (medium), or 2 (hard).')
+    return name
+
+
+def _resolve_import_difficulty(raw_value):
+    name = _validate_import_difficulty(raw_value)
+    if name is None:
+        return None
     difficulty, _created = ProblemType.objects.get_or_create(
         name=name,
         defaults={'full_name': name.title()},
@@ -829,6 +967,41 @@ def _parse_zip_test_data(uploaded):
     if not cases:
         raise ValueError('The test data ZIP does not contain any .in/.out test pairs.')
     return payload, cases
+
+
+def _validate_problem_import_item(item):
+    """Check every condition that can be evaluated before problem creation writes data."""
+    if item.name_needs_review:
+        raise ValueError('Replace the generated missing-name placeholder before creating this problem.')
+    if item.type_needs_review:
+        raise ValueError('Select or confirm the question type before creating this problem.')
+    if not item.name or not item.description:
+        raise ValueError('A name and description are required.')
+    _validate_import_tags(item.tags)
+    _validate_import_difficulty(item.difficulty)
+    if item.submission_type == ProblemSubmissionType.CODE:
+        languages = _resolve_allowed_languages(item.allowed_languages)
+        if not languages:
+            raise ValueError('At least one programming language is required for a code problem.')
+        if item.test_data_zip:
+            item.test_data_zip.open('rb')
+            _parse_zip_test_data(item.test_data_zip)
+        elif item.test_data.strip():
+            _parse_text_test_data(item.test_data)
+    elif item.submission_type == ProblemSubmissionType.MCQ:
+        options = _split_lines(item.options)
+        correct = set(_multiple_choice_answer_indices(item.answer, options))
+        if len(options) < 2:
+            raise ValueError('Multiple-choice questions need at least two options.')
+        if not correct or any(index < 1 or index > len(options) for index in correct):
+            raise ValueError('Mark at least one valid correct option.')
+    elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
+        signed_blanks = []
+        if not item.blanks.strip():
+            _description, signed_blanks = _fill_blanks_from_signs(item.description, item.answer)
+        blanks = _parse_fill_blanks(item.blanks or item.answer) or signed_blanks
+        if not blanks:
+            raise ValueError('Fill-in-the-blank questions need at least one blank with an accepted answer.')
 
 
 def _add_test_cases(problem, item):

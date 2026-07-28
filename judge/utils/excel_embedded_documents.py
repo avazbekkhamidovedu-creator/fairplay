@@ -37,41 +37,74 @@ class EmbeddedFile:
 
 
 def read_xlsx_rows_with_embedded_files(file_obj):
-    """Return first-sheet rows and row-anchored DOCX, Markdown, or ZIP attachments."""
-    rows = simple_xlsx.read_xlsx_rows(file_obj, sheet_name='Problems')
+    """Return merged problem-sheet rows and row-anchored DOCX, Markdown, or ZIP attachments."""
+    problem_sheets = simple_xlsx.read_problem_xlsx_sheets(file_obj)
+    rows, sheet_offsets = _merge_problem_sheets(problem_sheets)
     file_obj.seek(0)
     with zipfile.ZipFile(file_obj) as archive:
         simple_xlsx._validate_archive_members(archive)
-        sheet_path = simple_xlsx._find_sheet_path(archive, sheet_name='Problems')
-        sheet = ET.fromstring(simple_xlsx._safe_archive_read(archive, sheet_path))
-        rels = _relationship_map(archive, sheet_path)
-        anchors = _shape_rows(archive, sheet, rels)
         attachments = []
-        # Modern Excel wraps OLE objects in mc:AlternateContent; iterating also
-        # supports the older direct-child layout. Choice/Fallback duplicates use
-        # the same relationship, so process each embedded package only once.
-        seen_objects = set()
-        for ole in (node for node in sheet.iter() if node.tag.endswith('}oleObject')):
-            relation_id = ole.attrib.get('{%s}id' % simple_xlsx.REL_NS)
-            shape_id = ole.attrib.get('shapeId', '')
-            object_key = (relation_id, shape_id)
-            if object_key in seen_objects:
-                continue
-            seen_objects.add(object_key)
-            target = rels.get(relation_id)
-            row_number = anchors.get(shape_id)
-            if not target or row_number is None:
-                raise ValueError('An embedded file is not attached to a worksheet row.')
-            payload = simple_xlsx._safe_archive_read(archive, target)
-            filename, content = _extract_embedded_file(payload)
-            text, images = (
-                _description_text(filename, content)
-                if filename.lower().endswith(('.docx', '.md', '.markdown')) else ('', [])
-            )
-            attachments.append(EmbeddedFile(
-                row_number=row_number, filename=filename, content=content, text=text, images=images,
-            ))
+        for sheet_name, _header_index, _sheet_rows in problem_sheets:
+            sheet_path = simple_xlsx._find_sheet_path(archive, sheet_name=sheet_name)
+            sheet = ET.fromstring(simple_xlsx._safe_archive_read(archive, sheet_path))
+            rels = _relationship_map(archive, sheet_path)
+            anchors = _shape_rows(archive, sheet, rels)
+            # Modern Excel wraps OLE objects in mc:AlternateContent; iterating also
+            # supports the older direct-child layout. Choice/Fallback duplicates use
+            # the same relationship, so process each embedded package only once.
+            seen_objects = set()
+            for ole in (node for node in sheet.iter() if node.tag.endswith('}oleObject')):
+                relation_id = ole.attrib.get('{%s}id' % simple_xlsx.REL_NS)
+                shape_id = ole.attrib.get('shapeId', '')
+                object_key = (relation_id, shape_id)
+                if object_key in seen_objects:
+                    continue
+                seen_objects.add(object_key)
+                target = rels.get(relation_id)
+                row_number = anchors.get(shape_id)
+                if row_number is not None:
+                    row_number += sheet_offsets[sheet_name]
+                if not target or row_number is None:
+                    raise ValueError('An embedded file is not attached to a worksheet row.')
+                payload = simple_xlsx._safe_archive_read(archive, target)
+                filename, content = _extract_embedded_file(payload)
+                text, images = (
+                    _description_text(filename, content)
+                    if filename.lower().endswith(('.docx', '.md', '.markdown')) else ('', [])
+                )
+                attachments.append(EmbeddedFile(
+                    row_number=row_number, filename=filename, content=content, text=text, images=images,
+                ))
     return rows, attachments
+
+
+def _merge_problem_sheets(problem_sheets):
+    """Align synonymous headers and append data rows from every recognized sheet."""
+    headers = []
+    for _sheet_name, _header_index, rows in problem_sheets:
+        for value in rows[0]:
+            header = simple_xlsx.canonical_problem_header(value)
+            if header and header not in headers:
+                headers.append(header)
+
+    merged_rows = [headers]
+    sheet_offsets = {}
+    next_row_number = 2
+    for sheet_name, header_index, rows in problem_sheets:
+        sheet_offsets[sheet_name] = next_row_number - header_index - 2
+        positions = {
+            simple_xlsx.canonical_problem_header(value): index
+            for index, value in enumerate(rows[0])
+            if simple_xlsx.canonical_problem_header(value)
+        }
+        for source_row in rows[1:]:
+            values = []
+            for header in headers:
+                position = positions.get(header)
+                values.append(source_row[position] if position is not None and position < len(source_row) else '')
+            merged_rows.append(values)
+        next_row_number += len(rows) - 1
+    return merged_rows, sheet_offsets
 
 
 # Retain the old name for callers outside this import flow.
