@@ -14,7 +14,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -1058,7 +1058,7 @@ def _create_problem_records(request, item, description):
             description, signed_blanks = _fill_blanks_from_signs(item.description, item.answer)
     problem = Problem(name=item.name, description=description, submission_type=item.submission_type, points=10)
     apply_simple_problem_defaults(problem)
-    problem.save()
+    _save_problem_with_unique_code(problem)
     problem.types.add(default_problem_type())
     problem.types.add(*_resolve_import_tags(item.tags))
     difficulty = _resolve_import_difficulty(item.difficulty)
@@ -1101,6 +1101,23 @@ def _create_problem_records(request, item, description):
         for index, (label, answers) in enumerate(blanks):
             ProblemBlank.objects.create(problem=problem, order=index, label=label, answers=answers)
     return problem
+
+
+def _save_problem_with_unique_code(problem):
+    """Retry only a generated-code collision before any problem side effects are written."""
+    for attempt in range(3):
+        try:
+            # The caller may already be atomic; a savepoint keeps that transaction usable after a collision.
+            with transaction.atomic():
+                problem.save()
+            return
+        except IntegrityError:
+            if not Problem.objects.filter(code=problem.code).exists():
+                raise
+            if attempt == 2:
+                raise ValueError('Could not allocate a unique problem code. Please try creating the problem again.')
+            problem.code = ''
+            apply_simple_problem_defaults(problem)
 
 
 def _edit_url(problem):
