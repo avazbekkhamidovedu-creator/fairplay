@@ -16,8 +16,8 @@ from judge.views.problem_import import (
     _format_with_llm, _header_name,
     _import_problem_name, _import_question_type, _multiple_choice_answer_indices, _normalise_type, _parse_fill_blanks,
     _parse_text_test_data,
-    _parse_zip_test_data, _promote_draft_images, _remove_multiple_choice_option_block, _serialize_fill_blanks,
-    _validate_problem_import_item,
+    _parse_zip_test_data, _promote_draft_images, _read_test_data_zip, _remove_multiple_choice_option_block,
+    _serialize_fill_blanks, _validate_problem_import_item,
 )
 
 
@@ -236,6 +236,21 @@ class ProblemImportTestDataParsingTestCase(SimpleTestCase):
 
         self.assertEqual(archive_payload, payload.getvalue())
         self.assertEqual(cases, [('sample.in', b'1 2', 'sample.out', b'3')])
+
+    def test_reads_draft_zip_in_a_context_manager(self):
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, 'w') as archive:
+            archive.writestr('sample.in', '1 2')
+            archive.writestr('sample.out', '3')
+        uploaded = SimpleUploadedFile('tests.zip', payload.getvalue(), content_type='application/zip')
+        draft_zip = mock.MagicMock()
+        draft_zip.open.return_value.__enter__.return_value = uploaded
+        item = SimpleNamespace(test_data_zip=draft_zip)
+
+        _read_test_data_zip(item)
+
+        draft_zip.open.assert_called_once_with('rb')
+        draft_zip.open.return_value.__exit__.assert_called_once()
 
     def test_rejects_unpaired_zip_test_data(self):
         payload = io.BytesIO()

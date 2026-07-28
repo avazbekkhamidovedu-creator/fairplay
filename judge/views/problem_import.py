@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import uuid
 import zipfile
 from urllib.parse import urlencode
@@ -574,11 +575,14 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
             except (LLMError, ValueError) as error:
                 return self._error_response(request, draft, item, str(error))
             return self._success_response(request, draft, item, _('Question formatted.'), payload)
+        created_data_directories = []
+        completed = False
         try:
             with transaction.atomic():
-                problem = _create_problem(request, item)
+                problem = _create_problem(request, item, created_data_directories=created_data_directories)
                 item.created_problem = problem
                 item.save(update_fields=['created_problem', 'updated_at'])
+            completed = True
         except ValueError as error:
             return self._error_response(request, draft, item, str(error))
         except OSError as error:
@@ -589,6 +593,9 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
                 _('Cannot write code-problem test data. An administrator must create and grant write access to '
                   '%(path)s for the web service.') % {'path': '/mnt/problems'},
             )
+        finally:
+            if not completed:
+                _delete_problem_data_directories(created_data_directories)
         return self._success_response(
             request, draft, item, _('Created %(name)s.') % {'name': problem.name},
             edit_url=_edit_url(problem),
@@ -675,6 +682,7 @@ class ProblemImportCreateAllView(LoginRequiredMixin, View):
     def post(self, request, draft):
         draft = _draft_for(request, draft)
         promoted_images = []
+        created_data_directories = []
         completed = False
         try:
             with transaction.atomic():
@@ -689,7 +697,7 @@ class ProblemImportCreateAllView(LoginRequiredMixin, View):
                         status=400, errors=errors,
                     )
                 for item in items:
-                    problem = _create_problem(request, item, promoted_images)
+                    problem = _create_problem(request, item, promoted_images, created_data_directories)
                     item.created_problem = problem
                     item.save(update_fields=['created_problem', 'updated_at'])
             completed = True
@@ -709,6 +717,7 @@ class ProblemImportCreateAllView(LoginRequiredMixin, View):
         finally:
             if not completed:
                 _delete_stored_images(promoted_images)
+                _delete_problem_data_directories(created_data_directories)
         return self._success_response(request, _('Created %(count)d problems.') % {'count': len(items)}, len(items))
 
     @staticmethod
@@ -969,6 +978,12 @@ def _parse_zip_test_data(uploaded):
     return payload, cases
 
 
+def _read_test_data_zip(item):
+    """Read and validate a draft ZIP without leaving its storage file open."""
+    with item.test_data_zip.open('rb') as uploaded:
+        return _parse_zip_test_data(uploaded)
+
+
 def _validate_problem_import_item(item):
     """Check every condition that can be evaluated before problem creation writes data."""
     if item.name_needs_review:
@@ -984,8 +999,7 @@ def _validate_problem_import_item(item):
         if not languages:
             raise ValueError('At least one programming language is required for a code problem.')
         if item.test_data_zip:
-            item.test_data_zip.open('rb')
-            _parse_zip_test_data(item.test_data_zip)
+            _read_test_data_zip(item)
         elif item.test_data.strip():
             _parse_text_test_data(item.test_data)
     elif item.submission_type == ProblemSubmissionType.MCQ:
@@ -1004,14 +1018,15 @@ def _validate_problem_import_item(item):
             raise ValueError('Fill-in-the-blank questions need at least one blank with an accepted answer.')
 
 
-def _add_test_cases(problem, item):
+def _add_test_cases(problem, item, created_data_directories=None):
     if item.test_data_zip:
-        item.test_data_zip.open('rb')
-        payload, cases = _parse_zip_test_data(item.test_data_zip)
+        payload, cases = _read_test_data_zip(item)
+        _track_problem_data_directory(problem.code, created_data_directories)
         data = ProblemData.objects.create(problem=problem)
         data.zipfile.save('test_data.zip', ContentFile(payload), save=True)
     elif item.test_data.strip():
         cases = _parse_text_test_data(item.test_data)
+        _track_problem_data_directory(problem.code, created_data_directories)
         data = ProblemData.objects.create(problem=problem)
         for input_name, input_data, output_name, output_data in cases:
             problem_data_storage.save('{}/{}'.format(problem.code, input_name), ContentFile(input_data))
@@ -1028,26 +1043,43 @@ def _add_test_cases(problem, item):
     ProblemDataCompiler.generate(problem, data, created_cases, valid_files)
 
 
-def _create_problem(request, item, promoted_images=None):
+def _track_problem_data_directory(problem_code, directories):
+    if directories is not None and problem_code not in directories:
+        directories.append(problem_code)
+
+
+def _delete_problem_data_directories(problem_codes):
+    """Remove test data written by an import transaction that did not commit."""
+    for problem_code in set(problem_codes):
+        directory = problem_data_storage.path(problem_code)
+        if os.path.isdir(directory):
+            shutil.rmtree(directory)
+
+
+def _create_problem(request, item, promoted_images=None, created_data_directories=None):
     if item.created_problem_id:
         return item.created_problem
     if not item.name or not item.description:
         raise ValueError('A name and description are required.')
     stored_images = []
+    item_data_directories = []
     try:
         description, stored_images = _promote_draft_images(item, item.description)
-        problem = _create_problem_records(request, item, description)
+        problem = _create_problem_records(request, item, description, item_data_directories)
         # The BinaryField data is no longer needed once every referenced image is public.
         item.images.all().delete()
         if promoted_images is not None:
             promoted_images.extend(stored_images)
+        if created_data_directories is not None:
+            created_data_directories.extend(item_data_directories)
         return problem
     except Exception:
         _delete_stored_images(stored_images)
+        _delete_problem_data_directories(item_data_directories)
         raise
 
 
-def _create_problem_records(request, item, description):
+def _create_problem_records(request, item, description, created_data_directories=None):
     signed_blanks = []
     if item.submission_type == ProblemSubmissionType.FILL_BLANK:
         if item.blanks.strip():
@@ -1078,7 +1110,7 @@ def _create_problem_records(request, item, description):
         if not languages:
             raise ValueError('At least one programming language is required for a code problem.')
         problem.allowed_languages.set(languages)
-        _add_test_cases(problem, item)
+        _add_test_cases(problem, item, created_data_directories)
     elif item.submission_type == ProblemSubmissionType.MCQ:
         options = _split_lines(item.options)
         correct = set(_multiple_choice_answer_indices(item.answer, options))

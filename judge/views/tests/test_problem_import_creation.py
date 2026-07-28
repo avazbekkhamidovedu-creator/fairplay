@@ -6,7 +6,7 @@ from django.db import IntegrityError
 from django.test import SimpleTestCase
 
 from judge.utils.problem_create import generate_problem_code
-from judge.views.problem_import import _save_problem_with_unique_code
+from judge.views.problem_import import _delete_problem_data_directories, _save_problem_with_unique_code
 
 
 class ProblemImportCreationTestCase(SimpleTestCase):
@@ -36,3 +36,15 @@ class ProblemImportCreationTestCase(SimpleTestCase):
         self.assertEqual(problem.code, 'p000001')
         self.assertEqual(problem.save.call_count, 2)
         defaults.assert_called_once_with(problem)
+
+    @mock.patch('judge.views.problem_import.shutil.rmtree')
+    @mock.patch('judge.views.problem_import.os.path.isdir', return_value=True)
+    @mock.patch('judge.views.problem_import.problem_data_storage.path')
+    def test_removes_each_failed_import_data_directory_once(self, storage_path, isdir, rmtree):
+        storage_path.side_effect = lambda code: '/mnt/problems/{}'.format(code)
+
+        _delete_problem_data_directories(['p000001', 'p000002', 'p000001'])
+
+        self.assertEqual(storage_path.call_count, 2)
+        self.assertEqual(isdir.call_count, 2)
+        self.assertEqual(rmtree.call_count, 2)
