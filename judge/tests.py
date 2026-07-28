@@ -1,5 +1,6 @@
 import io
 import zipfile
+from xml.etree import ElementTree as ET
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
@@ -8,6 +9,7 @@ from django.utils import timezone
 
 from judge.models import Class, Contest, ContestProblem, Language, Organization, Problem
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type, create_user
+from judge.utils import simple_xlsx
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 
 
@@ -308,6 +310,12 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         )
         with zipfile.ZipFile(io.BytesIO(response.content)) as workbook:
             self.assertIn('xl/embeddings/Microsoft_Word_Document.docx', workbook.namelist())
+
+            reference_sheet = ET.fromstring(workbook.read('xl/worksheets/sheet2.xml'))
+            namespace = {'x': simple_xlsx.MAIN_NS}
+            references = [cell.attrib['r'] for cell in reference_sheet.findall('.//x:c', namespace)]
+            self.assertEqual(reference_sheet.find('x:dimension', namespace).attrib['ref'], 'A1:D15')
+            self.assertTrue({'A3', 'B3', 'C3', 'D3'}.issubset(references))
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(

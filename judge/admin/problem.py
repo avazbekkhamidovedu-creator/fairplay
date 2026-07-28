@@ -1025,7 +1025,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                     '{%s}row' % simple_xlsx.MAIN_NS,
                     {'r': str(row_index), 'spans': '1:{}'.format(max_columns)},
                 )
-                for column_index, value in enumerate(row):
+                for column_index, value in enumerate(row, start=1):
                     if value is None or value == '':
                         continue
                     cell = ET.SubElement(
@@ -1040,7 +1040,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
 
             dimension = reference_sheet.find('x:dimension', namespace)
             dimension.set('ref', 'A1:{}{}'.format(
-                simple_xlsx._excel_column_name(max_columns - 1), len(reference_rows),
+                simple_xlsx._excel_column_name(max_columns), len(reference_rows),
             ))
             string_count = int(shared_strings.attrib.get('count', 0))
             shared_strings.set('count', str(string_count - old_string_cells + new_string_cells))
