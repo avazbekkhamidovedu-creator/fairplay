@@ -2,6 +2,7 @@ import io
 import zipfile
 from xml.etree import ElementTree as ET
 
+from django.contrib import admin
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -326,8 +327,18 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             reference_path = target.lstrip('/') if target.startswith('/') else 'xl/{}'.format(target)
             reference_sheet = ET.fromstring(workbook.read(reference_path))
             references = [cell.attrib['r'] for cell in reference_sheet.findall('.//x:c', namespace)]
-            self.assertEqual(reference_sheet.find('x:dimension', namespace).attrib['ref'], 'A1:D15')
-            self.assertTrue({'A3', 'B3', 'C3', 'D3'}.issubset(references))
+            reference_rows = admin.site._registry[Problem]._excel_reference_rows(response.wsgi_request)
+            max_columns = max(len(row) for row in reference_rows)
+            self.assertEqual(
+                reference_sheet.find('x:dimension', namespace).attrib['ref'],
+                'A1:{}{}'.format(simple_xlsx._excel_column_name(max_columns), len(reference_rows)),
+            )
+            expected_header_cells = {
+                '{}3'.format(simple_xlsx._excel_column_name(column_index))
+                for column_index, value in enumerate(reference_rows[2], start=1)
+                if value not in (None, '')
+            }
+            self.assertTrue(expected_header_cells.issubset(references))
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(

@@ -528,6 +528,10 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
             except (LLMError, ValueError) as error:
                 return self._error_response(request, draft, item, str(error))
             return self._success_response(request, draft, item, _('Question formatted.'), payload)
+        try:
+            _validate_problem_import_item(item)
+        except ValueError as error:
+            return self._error_response(request, draft, item, str(error))
         created_data_directories = []
         completed = False
         try:
@@ -1040,7 +1044,7 @@ def _create_problem_records(request, item, description, created_data_directories
             description = BLANK_SIGN_RE.sub(
                 lambda _match: '**[Blank {}]**'.format(next(counter)), description)
         else:
-            description, signed_blanks = _fill_blanks_from_signs(item.description, item.answer)
+            description, signed_blanks = _fill_blanks_from_signs(description, item.answer)
     problem = Problem(name=item.name, description=description, submission_type=item.submission_type, points=10)
     apply_simple_problem_defaults(problem)
     _save_problem_with_unique_code(problem)

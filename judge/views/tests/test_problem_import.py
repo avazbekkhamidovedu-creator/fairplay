@@ -126,6 +126,28 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(Solution.objects.get(problem=problem).content, '5 is the only prime option.')
 
+    def test_single_create_rejects_an_unconfirmed_question_type(self):
+        self.upload([
+            ['name', 'question_type', 'description'],
+            ['Review type', 'Written response', 'Confirm the imported type before creating.'],
+        ])
+        draft = ProblemImportDraft.objects.get(owner=self.creator.profile)
+        item = draft.items.get()
+
+        response = self.client.post(reverse('problem_import_item_action', args=(draft.pk, item.pk, 'create')), {
+            'name': item.name,
+            'question_type': item.submission_type,
+            'description': item.description,
+            'answer': '',
+            'options': '',
+            'correct_options': '',
+            'blanks': '',
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Select or confirm', response.json()['message'])
+        self.assertFalse(Problem.objects.filter(name='Review type').exists())
+
     @mock.patch('judge.views.problem_import.store_docx_image')
     def test_docx_figure_is_private_in_preview_then_promoted_on_create(self, store_docx_image):
         self.upload([
@@ -159,6 +181,36 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         self.assertIn('/media/martor/final.png', problem.description)
         self.assertFalse(ProblemImportImage.objects.filter(pk=image.pk).exists())
         store_docx_image.assert_called_once_with('figure.png', b'png-data')
+
+    @mock.patch('judge.views.problem_import.store_docx_image')
+    def test_fill_blank_creation_keeps_promoted_docx_image_urls(self, store_docx_image):
+        self.upload([
+            ['name', 'question_type', 'description', 'answer'],
+            ['Figure blank', 'fill_blank', 'The figure shows [[blank]].', 'a triangle'],
+        ])
+        draft = ProblemImportDraft.objects.get(owner=self.creator.profile)
+        item = draft.items.get()
+        image = ProblemImportImage.objects.create(item=item, filename='figure.png', content=b'png-data')
+        image_url = reverse('problem_import_image', args=(draft.pk, image.token))
+        item.description = 'The figure shows [[blank]].\n\n![]({})'.format(image_url)
+        item.blanks = ''
+        item.save(update_fields=['description', 'blanks'])
+        store_docx_image.return_value = ('martor/final.png', '/media/martor/final.png')
+
+        response = self.client.post(reverse('problem_import_item_action', args=(draft.pk, item.pk, 'create')), {
+            'name': item.name,
+            'question_type': 'B',
+            'description': item.description,
+            'answer': item.answer,
+            'options': '',
+            'correct_options': '',
+            'blanks': '',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(name='Figure blank')
+        self.assertIn('/media/martor/final.png', problem.description)
+        self.assertNotIn(image_url, problem.description)
 
     def test_create_all_creates_all_reviewed_items(self):
         self.upload([
