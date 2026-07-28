@@ -149,14 +149,10 @@ class ProblemImportTestDataParsingTestCase(SimpleTestCase):
         self.assertEqual(options, ['4', '5', '6'])
         self.assertEqual(block, 'A. 4\nB. 5\nC. 6')
 
-    def test_extracts_unlabeled_options_when_answer_uses_letter_indexes(self):
-        options, block = _extract_labeled_multiple_choice_options(
-            'What is 1 + 2?\n\n2\n\n3\n\n4\n\n5\n\nHere is a figure:',
-            'B|C',
-        )
+    def test_does_not_treat_unlabeled_paragraphs_as_options(self):
+        description = 'What is 1 + 2?\n\n2\n\n3\n\n4\n\n5\n\nThis explains the calculation.'
 
-        self.assertEqual(options, ['2', '3', '4', '5'])
-        self.assertEqual(block, '2\n\n3\n\n4\n\n5')
+        self.assertEqual(_extract_labeled_multiple_choice_options(description), ([], ''))
 
     def test_does_not_extract_incomplete_lettered_multiple_choice_options(self):
         self.assertEqual(

@@ -311,8 +311,20 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         with zipfile.ZipFile(io.BytesIO(response.content)) as workbook:
             self.assertIn('xl/embeddings/Microsoft_Word_Document.docx', workbook.namelist())
 
-            reference_sheet = ET.fromstring(workbook.read('xl/worksheets/sheet2.xml'))
             namespace = {'x': simple_xlsx.MAIN_NS}
+            workbook_xml = ET.fromstring(workbook.read('xl/workbook.xml'))
+            relationships = ET.fromstring(workbook.read('xl/_rels/workbook.xml.rels'))
+            instruction_sheet = next(
+                sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
+                if sheet.attrib['name'] in ('Instructions', 'Reference')
+            )
+            relationship_id = instruction_sheet.attrib['{%s}id' % simple_xlsx.REL_NS]
+            target = next(
+                relationship.attrib['Target'] for relationship in relationships
+                if relationship.attrib['Id'] == relationship_id
+            )
+            reference_path = target.lstrip('/') if target.startswith('/') else 'xl/{}'.format(target)
+            reference_sheet = ET.fromstring(workbook.read(reference_path))
             references = [cell.attrib['r'] for cell in reference_sheet.findall('.//x:c', namespace)]
             self.assertEqual(reference_sheet.find('x:dimension', namespace).attrib['ref'], 'A1:D15')
             self.assertTrue({'A3', 'B3', 'C3', 'D3'}.issubset(references))

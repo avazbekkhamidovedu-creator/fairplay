@@ -270,8 +270,8 @@ def _remove_multiple_choice_option_block(description, option_block):
     return result.strip()
 
 
-def _extract_labeled_multiple_choice_options(description, answer=''):
-    """Extract a complete labeled block, or answer-constrained unlabeled option paragraphs."""
+def _extract_labeled_multiple_choice_options(description):
+    """Extract only a complete, explicitly labeled multiple-choice option block."""
     lines = (description or '').splitlines()
     for start, line in enumerate(lines):
         first = MCQ_OPTION_LINE_RE.match(line)
@@ -288,52 +288,7 @@ def _extract_labeled_multiple_choice_options(description, answer=''):
             end += 1
         if len(options) >= 2:
             return options, '\n'.join(lines[start:end])
-    required_options = _maximum_answer_index(answer)
-    if not required_options:
-        return [], ''
-    paragraphs = []
-    paragraph_lines = []
-    paragraph_start = 0
-    for line_number, line in enumerate(lines + ['']):
-        if line.strip():
-            if not paragraph_lines:
-                paragraph_start = line_number
-            paragraph_lines.append(line)
-            continue
-        if paragraph_lines:
-            paragraphs.append((paragraph_start, line_number, paragraph_lines))
-            paragraph_lines = []
-    candidates = []
-    for start, end, paragraph in paragraphs:
-        text = '\n'.join(paragraph).strip()
-        if len(paragraph) != 1 or len(text) > 120 or text.endswith(('?', ':')) or text.startswith(('#', '![')):
-            if len(candidates) >= required_options:
-                option_start = candidates[0][0]
-                option_end = candidates[-1][1]
-                options = ['\n'.join(value).strip() for _start, _end, value in candidates]
-                return options, '\n'.join(lines[option_start:option_end])
-            candidates = []
-            continue
-        candidates.append((start, end, paragraph))
-    if len(candidates) >= required_options:
-        option_start = candidates[0][0]
-        option_end = candidates[-1][1]
-        options = ['\n'.join(value).strip() for _start, _end, value in candidates]
-        return options, '\n'.join(lines[option_start:option_end])
     return [], ''
-
-
-def _maximum_answer_index(answer):
-    maximum = 0
-    for token in _split_lines(answer):
-        value = token.strip().strip('()[]').rstrip('.)').strip()
-        if value.isdigit():
-            maximum = max(maximum, int(value))
-        elif re.fullmatch(r'[A-Za-z]', value):
-            maximum = max(maximum, ord(value.upper()) - ord('A') + 1)
-        else:
-            return 0
-    return maximum
 
 
 def _fill_blanks_from_signs(description, answer):
@@ -467,9 +422,7 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                     options = _value(row, headers, 'options')
                     correct_options = _value(row, headers, 'correct_options')
                     if question_type == ProblemSubmissionType.MCQ and not options:
-                        extracted_options, option_block = _extract_labeled_multiple_choice_options(
-                            item_description, answer,
-                        )
+                        extracted_options, option_block = _extract_labeled_multiple_choice_options(item_description)
                         if extracted_options:
                             cleaned_description = _remove_multiple_choice_option_block(item_description, option_block)
                             if cleaned_description:
