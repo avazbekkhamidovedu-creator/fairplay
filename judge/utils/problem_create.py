@@ -11,9 +11,10 @@ from judge.models import Problem, ProblemGroup, ProblemType
 
 
 def generate_problem_code():
+    existing_codes = set(Problem.objects.values_list('code', flat=True))
     for index in range(1000000):
         code = 'p{:06d}'.format(index)
-        if not Problem.objects.filter(code=code).exists():
+        if code not in existing_codes:
             return code
     return 'mcq{}'.format(str(int(timezone.now().timestamp()))[-6:])
 

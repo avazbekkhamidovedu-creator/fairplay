@@ -1,4 +1,5 @@
 import io
+import re
 import zipfile
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
@@ -12,6 +13,15 @@ MAX_XLSX_TOTAL_UNCOMPRESSED_BYTES = 8 * 1024 * 1024
 MAX_XLSX_XML_PART_BYTES = 4 * 1024 * 1024
 MAX_XLSX_COMPRESSION_RATIO = 100
 MAX_XLSX_COLUMNS = 16384
+PROBLEM_NAME_HEADERS = {
+    'name', 'title', 'problem_name', 'problem_title', 'question', 'question_name', 'question_title',
+}
+PROBLEM_TYPE_HEADERS = {
+    'type', 'problem_type', 'question_type', 'question_category', 'question_kind',
+}
+PROBLEM_DESCRIPTION_HEADERS = {
+    'content', 'description', 'problem_description', 'question_description', 'question_text', 'statement',
+}
 
 
 def _excel_column_name(index):
@@ -23,7 +33,7 @@ def _excel_column_name(index):
     return result
 
 
-def _sheet_xml(rows, shared_string_lookup):
+def _sheet_xml(rows, shared_string_lookup, validations=()):
     sheet_rows = []
     for row_index, row in enumerate(rows, start=1):
         cells = []
@@ -35,12 +45,29 @@ def _sheet_xml(rows, shared_string_lookup):
             ref = '{}{}'.format(_excel_column_name(col_index), row_index)
             cells.append('<c r="{ref}" t="s"><v>{idx}</v></c>'.format(ref=ref, idx=string_index))
         sheet_rows.append('<row r="{idx}">{cells}</row>'.format(idx=row_index, cells=''.join(cells)))
+    validation_xml = []
+    for validation in validations:
+        values = validation.get('values', ())
+        sqref = validation.get('sqref', '')
+        if not values or not sqref:
+            continue
+        formula = '"{}"'.format(','.join(str(value) for value in values))
+        validation_xml.append(
+            '<dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="{sqref}">'
+            '<formula1>{formula}</formula1></dataValidation>'.format(
+                sqref=escape(sqref), formula=escape(formula),
+            ),
+        )
+    validation_block = ''
+    if validation_xml:
+        validation_block = '<dataValidations count="{count}">{items}</dataValidations>'.format(
+            count=len(validation_xml), items=''.join(validation_xml),
+        )
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<worksheet xmlns="{main}">'
-        '<sheetData>{rows}</sheetData>'
+        '<worksheet xmlns="{main}"><sheetData>{rows}</sheetData>{validations}'
         '</worksheet>'
-    ).format(main=MAIN_NS, rows=''.join(sheet_rows))
+    ).format(main=MAIN_NS, rows=''.join(sheet_rows), validations=validation_block)
 
 
 def build_xlsx_workbook(sheets):
@@ -48,7 +75,8 @@ def build_xlsx_workbook(sheets):
     shared_string_lookup = {}
     total_string_count = 0
 
-    for _, rows in sheets:
+    for sheet in sheets:
+        _, rows = sheet[:2]
         for row in rows:
             for value in row:
                 if value is None or value == '':
@@ -80,7 +108,8 @@ def build_xlsx_workbook(sheets):
         'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>',
     ]
 
-    for index, (sheet_name, _) in enumerate(sheets, start=1):
+    for index, sheet in enumerate(sheets, start=1):
+        sheet_name, _ = sheet[:2]
         workbook_sheets.append(
             '<sheet name="{name}" sheetId="{idx}" r:id="rId{idx}"/>'.format(
                 name=escape(sheet_name),
@@ -159,8 +188,13 @@ def build_xlsx_workbook(sheets):
         archive.writestr('xl/_rels/workbook.xml.rels', workbook_rels_xml)
         archive.writestr('xl/styles.xml', styles_xml)
         archive.writestr('xl/sharedStrings.xml', shared_strings_xml)
-        for index, (_, rows) in enumerate(sheets, start=1):
-            archive.writestr('xl/worksheets/sheet{}.xml'.format(index), _sheet_xml(rows, shared_string_lookup))
+        for index, sheet in enumerate(sheets, start=1):
+            _, rows = sheet[:2]
+            validations = sheet[2] if len(sheet) > 2 else ()
+            archive.writestr(
+                'xl/worksheets/sheet{}.xml'.format(index),
+                _sheet_xml(rows, shared_string_lookup, validations),
+            )
     return output.getvalue()
 
 
@@ -213,7 +247,7 @@ def _load_shared_strings(archive):
     return result
 
 
-def _find_first_sheet_path(archive):
+def _find_sheet_path(archive, sheet_name=None):
     workbook = ET.fromstring(_safe_archive_read(archive, 'xl/workbook.xml'))
     rels = ET.fromstring(_safe_archive_read(archive, 'xl/_rels/workbook.xml.rels'))
     namespace = {'x': MAIN_NS, 'r': REL_NS, 'pr': PKG_REL_NS}
@@ -221,7 +255,18 @@ def _find_first_sheet_path(archive):
     if first_sheet is None:
         raise ValueError('Workbook does not contain any sheets.')
 
-    rel_id = first_sheet.attrib.get('{%s}id' % REL_NS)
+    sheet = first_sheet
+    if sheet_name:
+        expected_name = str(sheet_name).casefold()
+        sheet = next(
+            (candidate for candidate in workbook.findall('x:sheets/x:sheet', namespace)
+             if candidate.attrib.get('name', '').casefold() == expected_name),
+            None,
+        )
+        if sheet is None:
+            raise ValueError('Workbook does not contain a sheet named "{}".'.format(sheet_name))
+
+    rel_id = sheet.attrib.get('{%s}id' % REL_NS)
     for relation in rels.findall('pr:Relationship', namespace):
         if relation.attrib.get('Id') == rel_id:
             target = relation.attrib.get('Target', '')
@@ -229,6 +274,81 @@ def _find_first_sheet_path(archive):
                 return target.lstrip('/')
             return 'xl/{}'.format(target.lstrip('/'))
     raise ValueError('Workbook sheet relationship is missing.')
+
+
+def _find_first_sheet_path(archive):
+    return _find_sheet_path(archive)
+
+
+def _problem_header_key(value):
+    text = re.sub(r'\s+', ' ', str(value or '').replace('*', '').strip().casefold())
+    text = re.split(r'[（(]', text, maxsplit=1)[0].strip()
+    return re.sub(r'[^a-z0-9]+', '_', text).strip('_')
+
+
+def _problem_header_score(row):
+    headers = {_problem_header_key(value) for value in row if _problem_header_key(value)}
+    has_name = bool(headers & PROBLEM_NAME_HEADERS)
+    has_type = bool(headers & PROBLEM_TYPE_HEADERS)
+    if not has_name or not has_type:
+        return 0
+    return 8 + int(bool(headers & PROBLEM_DESCRIPTION_HEADERS))
+
+
+def canonical_problem_header(value):
+    """Normalize synonymous problem-table headings before multiple sheets are merged."""
+    key = _problem_header_key(value)
+    if key in PROBLEM_NAME_HEADERS:
+        return 'name'
+    if key in PROBLEM_TYPE_HEADERS:
+        return 'question_type'
+    if key in PROBLEM_DESCRIPTION_HEADERS:
+        return 'description'
+    return key
+
+
+def _xlsx_sheet_names(file_obj):
+    file_obj.seek(0)
+    validate_xlsx_upload(file_obj)
+    with zipfile.ZipFile(file_obj) as archive:
+        _validate_archive_members(archive)
+        workbook = ET.fromstring(_safe_archive_read(archive, 'xl/workbook.xml'))
+    namespace = {'x': MAIN_NS}
+    names = [sheet.attrib.get('name', '') for sheet in workbook.findall('x:sheets/x:sheet', namespace)]
+    if not names:
+        raise ValueError('Workbook does not contain any sheets.')
+    return names
+
+
+def read_problem_xlsx_sheets(file_obj):
+    """Return every worksheet with a recognizable problem table, starting at its header."""
+    candidates = []
+    for sheet_index, sheet_name in enumerate(_xlsx_sheet_names(file_obj)):
+        rows = read_xlsx_rows(file_obj, sheet_name=sheet_name)
+        best_header = None
+        for row_index, row in enumerate(rows[:25]):
+            score = _problem_header_score(row)
+            if score:
+                candidate = (score, -row_index)
+                if best_header is None or candidate > best_header[0]:
+                    best_header = (candidate, row_index)
+        if best_header is not None:
+            candidates.append((sheet_index, sheet_name, best_header[1], rows))
+    if not candidates:
+        raise ValueError(
+            'Workbook does not contain a recognizable problem sheet with name/title and question type columns.',
+        )
+    return [(sheet_name, header_index, rows[header_index:])
+            for _sheet_index, sheet_name, header_index, rows in candidates]
+
+
+def read_problem_xlsx_rows(file_obj):
+    """Return the preferred recognized problem table for callers that need one sheet."""
+    sheets = read_problem_xlsx_sheets(file_obj)
+    sheet_name, header_index, rows = next(
+        (sheet for sheet in sheets if sheet[0].casefold() == 'problems'), sheets[0],
+    )
+    return rows, sheet_name, header_index
 
 
 def _cell_column_index(cell_ref):
@@ -261,12 +381,12 @@ def _cell_value(cell, shared_strings, namespace):
     return raw_value or ''
 
 
-def read_xlsx_rows(file_obj):
+def read_xlsx_rows(file_obj, sheet_name=None):
     validate_xlsx_upload(file_obj)
     with zipfile.ZipFile(file_obj) as archive:
         _validate_archive_members(archive)
         shared_strings = _load_shared_strings(archive)
-        sheet_path = _find_first_sheet_path(archive)
+        sheet_path = _find_sheet_path(archive, sheet_name)
         sheet = ET.fromstring(_safe_archive_read(archive, sheet_path))
 
     namespace = {'x': MAIN_NS}

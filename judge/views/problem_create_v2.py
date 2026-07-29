@@ -108,6 +108,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ]),
             'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
+            'can_import_excel_problems': user.has_perm('judge.create_private_problem'),
             'can_change_public': user.has_perm('judge.change_public_visibility'),
             'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
             'can_full_markup': user.has_perm('judge.problem_full_markup'),

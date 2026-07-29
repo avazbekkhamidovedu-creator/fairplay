@@ -614,7 +614,7 @@ CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 WEBAUTHN_RP_ID = None
 
 # LLM access layer (judge.llm). Supported: 'azure', 'litellm'
-LLM_PROVIDER = 'azure'
+LLM_PROVIDER = 'litellm'
 
 # Azure OpenAI for AI hints
 AZURE_OPENAI_ENDPOINT = None       # e.g. 'https://myinstance.openai.azure.com/'
@@ -638,7 +638,14 @@ AZURE_PROFILES = {}
 
 DMOJ_AI_HINT_DAILY_LIMIT = 5
 
-LITELLM_PROFILES = {}
+LITELLM_PROFILES = {
+    # The importer deliberately uses a named profile so an installation can route
+    # document formatting to a different LiteLLM model without changing code.
+    'question_import': {
+        'temperature': 0,
+        'max_tokens': 2000,
+    },
+}
 
 try:
     with open(os.path.join(os.path.dirname(__file__), 'local_settings.py')) as f:
@@ -646,7 +653,7 @@ try:
 except IOError:
     pass
 
-# Ensure grading/decompose profiles exist (setdefault preserves
+# Ensure grading/decompose/import profiles exist (setdefault preserves
 # any values already set by local_settings.py).
 LITELLM_PROFILES.setdefault('grading', {
     'model': 'GRADING@DKUOJ',
@@ -659,6 +666,10 @@ LITELLM_PROFILES.setdefault('decompose', {
     'temperature': 0,
     'max_tokens': 1024,
     'response_format': {'type': 'json_object'},
+})
+LITELLM_PROFILES.setdefault('question_import', {
+    'temperature': 0,
+    'max_tokens': 2000,
 })
 
 

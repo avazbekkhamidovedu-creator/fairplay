@@ -234,6 +234,49 @@ textarea:focus {
                 cursor: default;
             }
         }
+
+        /* Add-problem tab: New problem / Import Excel dropdown. */
+        &.add-problem-menu {
+            position: relative;
+
+            .add-problem-dropdown {
+                display: none;
+                position: absolute;
+                right: 0;
+                top: 100%;
+                z-index: 1000;
+                list-style: none;
+                margin: 0;
+                padding: 0.35em 0;
+                min-width: 180px;
+                background: #fff;
+                border: 1px solid $color_primary25;
+                border-radius: 0 0 $widget_border_radius $widget_border_radius;
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            }
+
+            &:hover .add-problem-dropdown,
+            &:focus-within .add-problem-dropdown {
+                display: block;
+            }
+
+            .add-problem-dropdown li a {
+                display: block;
+                padding: 0.45em 1em;
+                white-space: nowrap;
+                color: $color_primary100 !important;
+                background: transparent !important;
+                border: none !important;
+                border-radius: 0 !important;
+                font-weight: normal;
+                line-height: 1.4;
+            }
+
+            .add-problem-dropdown li a:hover {
+                background: $color_primary5 !important;
+                color: $color_primary100 !important;
+            }
+        }
     }
 
     h2 {

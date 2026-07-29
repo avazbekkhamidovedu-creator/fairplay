@@ -47,6 +47,57 @@
             padding: 6px 12px;
             cursor: pointer;
         }
+        .excel-import-modal {
+            align-items: center; background: rgba(0, 0, 0, 0.45); display: none;
+            inset: 0; justify-content: center; padding: 1.25rem; position: fixed; z-index: 3000;
+        }
+        .excel-import-modal[aria-hidden="false"] { display: flex; }
+        .excel-import-dialog {
+            background: var(--oj-surface, #fff); border: 1px solid var(--oj-border, #ccc);
+            border-radius: var(--oj-radius-lg, 8px); box-shadow: var(--oj-shadow-modal);
+            max-width: 38rem; padding: 1.5rem 1.75rem; position: relative; width: 100%;
+        }
+        .excel-import-kicker {
+            color: var(--oj-text-muted, #666); font-size: 0.75rem; font-weight: bold;
+            letter-spacing: 0.08em; margin-bottom: 0.5rem; text-transform: uppercase;
+        }
+        .excel-import-dialog h3 { color: var(--oj-text, #222); font-size: 1.25rem; margin: 0 2.5rem 0.5rem 0; }
+        .excel-import-intro { color: var(--oj-text-muted, #555); line-height: 1.55; margin: 0 0 1.1rem; }
+        .excel-import-dropzone {
+            align-items: center; background: var(--oj-bg, #fafafa); border: 1px dashed var(--oj-border, #ccc);
+            border-radius: var(--oj-radius, 4px); cursor: pointer; display: flex; flex-direction: column;
+            padding: 1.35rem 1.15rem; text-align: center;
+        }
+        .excel-import-dropzone:hover { border-color: var(--oj-link, #2980b9); }
+        .excel-import-dropzone > .fa { color: var(--oj-link, #2980b9); font-size: 2rem; margin-bottom: 0.55rem; }
+        .excel-import-file-title { color: var(--oj-text, #222); font-weight: bold; }
+        .excel-import-file-help {
+            color: var(--oj-text-muted, #666); font-size: 0.87rem; line-height: 1.45;
+            margin-top: 0.4rem; max-width: 28rem;
+        }
+        .excel-import-dropzone input[type="file"] { font-size: 0.85rem; margin-top: 0.85rem; max-width: 100%; }
+        .excel-import-template {
+            align-items: flex-start; background: var(--oj-bg, #f5f5f5); border-radius: var(--oj-radius, 4px);
+            color: var(--oj-text-muted, #555); display: flex; font-size: 0.9rem; gap: 0.55rem;
+            line-height: 1.45; margin-top: 1rem; padding: 0.75rem 0.85rem;
+        }
+        .excel-import-template .fa { color: var(--oj-link, #2980b9); margin-top: 0.1rem; }
+        .excel-import-template a { font-weight: bold; }
+        .excel-import-actions {
+            border-top: 1px solid var(--oj-border, #e0e0e0); display: flex; gap: 0.6rem;
+            justify-content: flex-end; margin-top: 1.25rem; padding-top: 1rem;
+        }
+        .excel-import-close {
+            background: transparent; border: 0; color: var(--oj-text-muted, #777); cursor: pointer;
+            font-size: 1.7rem; line-height: 1; padding: 0.2rem; position: absolute; right: 0.9rem; top: 0.75rem;
+        }
+        .excel-import-actions .excel-import-close { font-size: inherit; position: static; }
+        .excel-import-status { color: var(--oj-danger, #c0392b); display: block; font-size: 0.9rem; margin-top: 0.75rem; min-height: 1.25em; }
+        @media (max-width: 520px) {
+            .excel-import-dialog { padding: 1.25rem; }
+            .excel-import-actions { align-items: stretch; flex-direction: column-reverse; }
+            .excel-import-actions .button { text-align: center; }
+        }
         .modal-overlay .btn-danger:hover {
             background: var(--oj-danger-hover, #a93226);
             border-color: var(--oj-danger-hover, #a93226);
@@ -58,6 +109,13 @@
     {% compress js %}
         <script type="text/javascript">
             $(function () {
+                if (new URLSearchParams(window.location.search).get('import') === 'excel') {
+                    var importModal = document.getElementById('excel-import-modal');
+                    if (importModal) {
+                        importModal.setAttribute('aria-hidden', 'false');
+                    }
+                }
+
                 var $form = $('#filter-form');
                 if (!$form.length) return;
 
@@ -350,6 +408,35 @@
 {% block title_row %}
     {% set tab = 'list' %}
     {% include "problem/problem-list-tabs.html" %}
+    {% if can_import_excel_problems %}
+        <div class="excel-import-modal" id="excel-import-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="excel-import-title"
+             onclick="if (event.target === this) this.setAttribute('aria-hidden', 'true');">
+            <form class="excel-import-dialog" id="excel-import-form" action="{{ url('problem_import_upload') }}" method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+                <button type="button" class="excel-import-close" aria-label="{{ _('Close') }}"
+                        onclick="document.getElementById('excel-import-modal').setAttribute('aria-hidden', 'true');">&times;</button>
+                <div class="excel-import-kicker"><i class="fa fa-table"></i> {{ _('Question import') }}</div>
+                <h3 id="excel-import-title">{{ _('Build questions from an Excel workbook') }}</h3>
+                <p class="excel-import-intro">{{ _('Upload one workbook, review every question, then use AI formatting only where it is useful.') }}</p>
+                <label class="excel-import-dropzone" for="excel-import-file">
+                    <i class="fa fa-file-excel-o"></i>
+                    <span class="excel-import-file-title">{{ _('Choose an .xlsx file') }}</span>
+                    <span class="excel-import-file-help">{{ _('Include name and question_type. Description may be text or an embedded DOCX/Markdown file; DOCX figures are imported into the description. Embed a ZIP object in a code-problem row for test data.') }}</span>
+                    <input id="excel-import-file" name="excel_file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+                </label>
+                <div class="excel-import-template">
+                    <i class="fa fa-lightbulb-o"></i>
+                    <span>{{ _('First time importing?') }} <a href="{{ url('admin:judge_problem_download_excel_template') }}">{{ _('Download the Excel template') }}</a></span>
+                </div>
+                <div class="excel-import-actions">
+                    <button type="button" class="button excel-import-close"
+                            onclick="document.getElementById('excel-import-modal').setAttribute('aria-hidden', 'true');">{{ _('Cancel') }}</button>
+                    <button type="submit" class="button"><i class="fa fa-arrow-right"></i> {{ _('Upload and preview') }}</button>
+                </div>
+                <span class="excel-import-status" aria-live="polite"></span>
+            </form>
+        </div>
+    {% endif %}
 {% endblock %}
 
 {% block body %}

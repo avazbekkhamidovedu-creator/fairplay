@@ -85,16 +85,12 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['creator'])
         self.assertEqual(self.client.get(reverse('problem_mcq_create')).status_code, 200)
 
-    def test_create_page_shows_excel_actions(self):
+    def test_create_page_hides_excel_actions(self):
         self.client.force_login(self.users['creator'])
         response = self.client.get(reverse('problem_mcq_create'))
-        self.assertContains(response, 'Download Excel Template', html=False)
-        self.assertContains(response, 'Upload Excel', html=False)
-        self.assertContains(response, 'id="mcq-excel-input"', html=False)
-        self.assertContains(response, 'function setStatusText(message, isError)', html=False)
-        self.assertContains(response, 'setStatusText(data.message || ', html=False)
-        self.assertContains(response, 'function escapeHtml(value)', html=False)
-        self.assertContains(response, "var summary = escapeHtml(data.message || '');", html=False)
+        self.assertNotContains(response, 'Download Excel Template', html=False)
+        self.assertNotContains(response, 'Upload Excel', html=False)
+        self.assertNotContains(response, 'id="mcq-excel-input"', html=False)
 
     def test_excel_actions_require_same_permission_as_create_page(self):
         restricted_creator = create_user(
