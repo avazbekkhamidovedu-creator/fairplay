@@ -7,20 +7,20 @@
     {% endif %}
     {% if perms.judge.create_private_problem or perms.judge.add_problem %}
         <li class="tab tab-cta add-problem-menu{% if tab == 'add' %} active{% endif %}">
-            <a href="#" class="add-problem-toggle" onclick="return false;">
-                <i class="tab-icon fa fa-plus"></i> {{ _('Add problem') }} &#9662;
+            <a href="#" class="add-problem-toggle" role="button" aria-haspopup="true" aria-expanded="false"
+               onclick="return window.dkuojToggleAddProblemMenu(event, this);">
+                <i class="tab-icon fa fa-plus"></i> {{ _('Add problem') }}
+                <i class="fa fa-caret-down" style="margin-left:0.35em;"></i>
             </a>
-            <ul class="add-problem-dropdown">
-                <li><a href="{{ url('problem_create_v2') }}">{{ _('New problem') }}</a></li>
+            <div class="add-problem-dropdown" hidden>
+                <a href="{{ url('problem_create_v2') }}">{{ _('New problem') }}</a>
                 {% if can_import_excel_problems %}
-                    <li>
-                        <a href="{{ url('problem_list') }}?import=excel" class="excel-import-open"
-                           onclick="var m = document.getElementById('excel-import-modal'); if (m) { m.setAttribute('aria-hidden', 'false'); return false; }">
-                            {{ _('Import Excel') }}
-                        </a>
-                    </li>
+                    <a href="{{ url('problem_list') }}?import=excel" class="excel-import-open"
+                       onclick="event.stopPropagation(); var m = document.getElementById('excel-import-modal'); if (m) { m.setAttribute('aria-hidden', 'false'); if (window.dkuojCloseAddProblemMenus) window.dkuojCloseAddProblemMenus(); return false; }">
+                        {{ _('Import Excel') }}
+                    </a>
                 {% endif %}
-            </ul>
+            </div>
         </li>
     {% endif %}
 {% endblock %}
