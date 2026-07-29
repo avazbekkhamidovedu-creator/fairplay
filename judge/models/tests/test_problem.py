@@ -471,10 +471,13 @@ class ProblemDifficultyPropertiesTestCase(CommonDataMixin, TestCase):
         self.assertIsNone(self.untagged_difficulty.difficulty)
         self.assertEqual(self.multi_difficulty.difficulty, 'easy')
 
-    def test_difficulty_label_uses_type_full_name(self):
+    def test_difficulty_label_uses_canonical_gettext_msgid(self):
+        # Labels come from DIFFICULTY_LABELS (Easy/Medium/Hard), not DB full_name.
         self.assertEqual(self.easy_problem.difficulty_label, 'Easy')
         self.assertEqual(self.hard_problem.difficulty_label, 'Hard')
         self.assertIsNone(self.untagged_difficulty.difficulty_label)
+        self.assertEqual(Problem.difficulty_display('medium'), 'Medium')
+        self.assertIsNone(Problem.difficulty_display(None))
 
     def test_format_types_list_excludes_difficulty_and_knowledge(self):
         self.assertEqual(self.easy_problem.format_types_list, ['Code'])

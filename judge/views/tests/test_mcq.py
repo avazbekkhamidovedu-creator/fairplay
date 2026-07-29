@@ -61,27 +61,23 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         })
 
     def test_add_menu_reflects_permissions(self):
-        mcq_url = reverse('problem_mcq_create').encode()
-        code_url = reverse('admin:judge_problem_add').encode()
+        v2_url = reverse('problem_create_v2').encode()
+        contest_url = reverse('admin:judge_contest_add').encode()
 
-        # create_private_problem -> MCQ in the menu, but not Code (admin add).
         self.client.force_login(self.users['creator'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertIn(b'Add new problem', content)
-        self.assertIn(mcq_url, content)
-        self.assertNotIn(code_url, content)
+        self.assertIn(b'Add problem', content)
+        self.assertIn(v2_url, content)
+        self.assertNotIn(contest_url, content)
 
-        # staff with add_problem -> Code as well.
         self.client.force_login(self.users['staff_adder'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertIn(mcq_url, content)
-        self.assertIn(code_url, content)
+        self.assertIn(v2_url, content)
 
-        # normal user -> no menu at all.
         self.client.force_login(self.users['normal'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertNotIn(b'Add new problem', content)
-        self.assertNotIn(mcq_url, content)
+        self.assertNotIn(b'Add problem', content)
+        self.assertNotIn(v2_url, content)
 
     def test_create_requires_permission(self):
         self.client.force_login(self.users['normal'])

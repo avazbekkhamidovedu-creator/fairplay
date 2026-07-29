@@ -55,16 +55,17 @@ class FillBlankAuthoringViewTestCase(CommonDataMixin, TestCase):
         })
 
     def test_add_menu_reflects_permissions(self):
-        fb_url = reverse('problem_fillblank_create').encode()
+        # The add-problem entry point is now the unified create-v2 tab, not a per-type link.
+        v2_url = reverse('problem_create_v2').encode()
 
         self.client.force_login(self.users['creator'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertIn(b'Add new problem', content)
-        self.assertIn(fb_url, content)
+        self.assertIn(b'Add problem', content)
+        self.assertIn(v2_url, content)
 
         self.client.force_login(self.users['normal'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertNotIn(fb_url, content)
+        self.assertNotIn(v2_url, content)
 
     def test_create_requires_permission(self):
         self.client.force_login(self.users['normal'])

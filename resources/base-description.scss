@@ -132,11 +132,19 @@
         text-decoration: none;
     }
 
+    // Highlight is background-only (not emphasis). Neutralize nested <em>/<i>
+    // so toolbar highlight never looks italic on problem pages.
     mark {
-        background: #ff0;
-        color: #000;
-        font-style: italic;
-        font-weight: bold;
+        background: #fde68a;
+        color: inherit;
+        font-style: normal !important;
+        font-weight: inherit;
+        padding: 0 2px;
+        border-radius: 2px;
+
+        em, i {
+            font-style: normal;
+        }
     }
 
     sub {

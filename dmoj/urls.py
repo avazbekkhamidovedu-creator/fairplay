@@ -17,6 +17,12 @@ from judge.views import (
     mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission, register,
     stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
+from judge.views.problem_create_v2 import (
+    ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
+    ProblemCreateV2AIProblemTypeView, ProblemCreateV2OrganizationView,
+    ProblemCreateV2ProblemGroupView, ProblemCreateV2ProblemTypeView,
+    ProblemCreateV2View,
+)
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView
@@ -105,9 +111,23 @@ urlpatterns = [
     path('', include('social_django.urls')),
 
     path('problems/', problem.ProblemList.as_view(), name='problem_list'),
+    path('problems/delete/', problem.ProblemBulkDelete.as_view(), name='problem_bulk_delete'),
     path('problems/random/', problem.RandomProblem.as_view(), name='problem_random'),
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
     path('problems/new/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_create'),
+    path('problems/new/', ProblemCreateV2View.as_view(), name='problem_create_v2'),
+    path('problems/edit/<str:problem>/', ProblemCreateV2View.as_view(), name='problem_edit_v2'),
+    path('problems/new/ai-difficulty/', ProblemCreateV2AIDifficultyView.as_view(),
+         name='problem_create_v2_ai_difficulty'),
+    path('problems/new/problem-type/', ProblemCreateV2ProblemTypeView.as_view(), name='problem_create_v2_problem_type'),
+    path('problems/new/problem-group/', ProblemCreateV2ProblemGroupView.as_view(),
+         name='problem_create_v2_problem_group'),
+    path('problems/new/organization/', ProblemCreateV2OrganizationView.as_view(),
+         name='problem_create_v2_organization'),
+    path('problems/new/ai-problem-type/', ProblemCreateV2AIProblemTypeView.as_view(),
+         name='problem_create_v2_ai_problem_type'),
+    path('problems/new/ai-decompose/', ProblemCreateV2AIDecomposeView.as_view(),
+         name='problem_create_v2_ai_decompose'),
     path('problems/import-excel/', problem_import.ProblemImportUploadView.as_view(), name='problem_import_upload'),
     path('problems/import-excel/<int:draft>/images/<uuid:token>/', problem_import.ProblemImportImageView.as_view(),
          name='problem_import_image'),
@@ -341,6 +361,8 @@ urlpatterns = [
         path('preview/', include([
             path('default', preview.DefaultMarkdownPreviewView.as_view(), name='default_preview'),
             path('problem', preview.ProblemMarkdownPreviewView.as_view(), name='problem_preview'),
+            path('problem/batch', preview.ProblemMarkdownBatchPreviewView.as_view(),
+                 name='problem_preview_batch'),
             path('blog', preview.BlogMarkdownPreviewView.as_view(), name='blog_preview'),
             path('contest', preview.ContestMarkdownPreviewView.as_view(), name='contest_preview'),
             path('comment', preview.CommentMarkdownPreviewView.as_view(), name='comment_preview'),

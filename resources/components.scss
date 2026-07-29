@@ -1,0 +1,221 @@
+@use "vars" as *;
+
+// =============================================================================
+// DKUOJ shared UI components
+//
+// Prefer `.oj-*` classes on new pages. Inside `.oj-ui` or `.problem-list-redesign`,
+// short aliases (`.btn`, `.card`, `.input`, `.select`) resolve to the same styles.
+// =============================================================================
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.oj-btn,
+.oj-ui .btn,
+.problem-list-redesign .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 12px;
+    min-height: var(--oj-control-height);
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    border-radius: var(--oj-radius);
+    font-size: var(--oj-font-size);
+    font-weight: 400;
+    line-height: 1.4;
+    cursor: pointer;
+    text-decoration: none !important;
+    white-space: nowrap;
+    vertical-align: middle;
+    background: transparent;
+    /* Beat widgets.scss `.button { color: #fff !important }` on shared pages. */
+    color: var(--oj-text) !important;
+
+    &:disabled,
+    &[disabled] {
+        opacity: 0.55;
+        cursor: not-allowed;
+    }
+}
+
+.oj-btn-primary,
+.oj-ui .btn-primary,
+.problem-list-redesign .btn-primary {
+    color: var(--oj-btn-text) !important;
+    background: linear-gradient(to bottom, var(--oj-btn-from) 0, var(--oj-btn-to) 100%) repeat-x;
+    border-color: var(--oj-btn-border);
+
+    &:hover:not(:disabled):not([disabled]) {
+        background: var(--oj-btn-hover);
+        color: var(--oj-btn-text) !important;
+        text-decoration: none;
+    }
+
+    &:active:not(:disabled):not([disabled]) {
+        background: var(--oj-btn-hover);
+        border-color: var(--oj-btn-border);
+    }
+}
+
+.oj-btn-outline,
+.oj-ui .btn-outline,
+.problem-list-redesign .btn-outline {
+    background: var(--oj-surface);
+    border-color: var(--oj-border);
+    color: var(--oj-text) !important;
+
+    &:hover:not(:disabled):not([disabled]) {
+        border-color: var(--oj-accent);
+        color: var(--oj-accent) !important;
+    }
+}
+
+.oj-btn-text,
+.oj-ui .btn-text,
+.problem-list-redesign .btn-text {
+    border: none;
+    background: none;
+    color: var(--oj-link) !important;
+    padding: 4px 8px;
+    min-height: 0;
+    font-size: var(--oj-font-size);
+
+    &:hover:not(:disabled):not([disabled]) {
+        text-decoration: underline;
+    }
+}
+
+.oj-btn-danger,
+.oj-ui .btn-danger,
+.problem-list-redesign .btn-danger {
+    color: var(--oj-btn-text) !important;
+    background: var(--oj-danger);
+    border-color: var(--oj-danger);
+
+    &:hover:not(:disabled):not([disabled]) {
+        background: var(--oj-danger-hover);
+        border-color: var(--oj-danger-hover);
+        color: var(--oj-btn-text) !important;
+    }
+}
+
+.oj-btn-sm,
+.oj-ui .btn-sm,
+.problem-list-redesign .btn-sm {
+    padding: 4px 10px;
+    min-height: 28px;
+    font-size: var(--oj-font-size-sm);
+}
+
+/* ── Card / panel ────────────────────────────────────────────────────────── */
+
+.oj-card,
+.oj-ui .card,
+.problem-list-redesign .card {
+    background: var(--oj-surface);
+    border: 1px solid var(--oj-border);
+    border-radius: var(--oj-radius-md);
+    box-shadow: var(--oj-shadow);
+}
+
+/* ── Form controls ───────────────────────────────────────────────────────── */
+
+.oj-input,
+.oj-select,
+.oj-ui .input,
+.oj-ui .select,
+.problem-list-redesign .input,
+.problem-list-redesign .select {
+    padding: 6px 10px;
+    min-height: var(--oj-control-height);
+    box-sizing: border-box;
+    border: 1px solid var(--oj-border);
+    border-radius: var(--oj-radius);
+    background: var(--oj-surface);
+    color: var(--oj-text);
+    font-size: var(--oj-font-size);
+    outline: none;
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.06);
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+
+    &:hover {
+        border-color: rgba(82, 168, 236, 0.8);
+    }
+
+    &:focus {
+        border-color: rgba(82, 168, 236, 0.8);
+        box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075), 0 0 6px rgba(82, 168, 236, 0.55);
+        outline: 0;
+    }
+}
+
+.oj-select,
+.oj-ui .select,
+.problem-list-redesign .select {
+    min-width: 140px;
+}
+
+/* ── Classic dark table header helper ────────────────────────────────────── */
+
+.oj-table {
+    width: 100%;
+    border-collapse: collapse;
+    border-spacing: 0;
+
+    th {
+        height: 2em;
+        padding: 6px 10px;
+        color: var(--oj-heading-text);
+        background: var(--oj-heading);
+        border: 1px solid var(--oj-border);
+        border-color: #{$color_primary50};
+        font-weight: 600;
+        font-size: 1.1em;
+        white-space: nowrap;
+        text-align: left;
+        vertical-align: middle;
+
+        a {
+            color: inherit;
+
+            &:hover {
+                color: inherit;
+                text-decoration: underline;
+            }
+        }
+    }
+
+    td {
+        padding: 8px 10px;
+        border: 1px solid var(--oj-border);
+        border-width: 0 1px 1px 0;
+        vertical-align: middle;
+        font-size: var(--oj-font-size);
+    }
+
+    th:first-child,
+    td:first-child {
+        border-left-width: 1px;
+    }
+
+    tr:first-child th {
+        border-top-width: 1px;
+    }
+
+    tr:first-child th:first-child {
+        border-top-left-radius: var(--oj-radius-md);
+    }
+
+    tr:first-child th:last-child {
+        border-top-right-radius: var(--oj-radius-md);
+    }
+
+    tbody tr:nth-child(even) {
+        background: rgba(0, 0, 0, 0.03);
+    }
+
+    tbody tr:hover {
+        background: rgba(0, 0, 0, 0.05);
+    }
+}
