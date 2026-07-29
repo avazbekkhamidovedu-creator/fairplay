@@ -1,5 +1,8 @@
 import io
+import zipfile
+from xml.etree import ElementTree as ET
 
+from django.contrib import admin
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -7,6 +10,7 @@ from django.utils import timezone
 
 from judge.models import Class, Contest, ContestProblem, Language, Organization, Problem
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type, create_user
+from judge.utils import simple_xlsx
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 
 
@@ -65,17 +69,14 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, 'name="translations-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'name="templates-TOTAL_FORMS"', html=False)
         self.assertContains(response, 'id="problem-markdown-import-input"', html=False)
-        self.assertContains(response, 'id="problem-markdown-batch-import-input"', html=False)
-        self.assertContains(response, 'id="problem-excel-import-input"', html=False)
         self.assertContains(response, 'id="problem-markdown-import-status"', html=False)
         self.assertContains(response, reverse('admin:judge_problem_import_markdown'), html=False)
-        self.assertContains(response, reverse('admin:judge_problem_batch_create_markdown'), html=False)
-        self.assertContains(response, reverse('admin:judge_problem_batch_create_excel'), html=False)
-        self.assertContains(response, reverse('admin:judge_problem_download_excel_template'), html=False)
         self.assertContains(response, 'Upload Markdown', html=False)
-        self.assertContains(response, 'Batch Upload Markdown', html=False)
-        self.assertContains(response, 'Upload Excel', html=False)
-        self.assertContains(response, 'Download Excel Template', html=False)
+        self.assertNotContains(response, 'id="problem-markdown-batch-import-input"', html=False)
+        self.assertNotContains(response, 'id="problem-excel-import-input"', html=False)
+        self.assertNotContains(response, 'Batch Upload Markdown', html=False)
+        self.assertNotContains(response, 'Upload Excel', html=False)
+        self.assertNotContains(response, 'Download Excel Template', html=False)
         self.assertContains(response, 'function escapeHtml(value)', html=False)
         self.assertContains(response, 'var summary = escapeHtml(data.message || ', html=False)
 
@@ -298,11 +299,46 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         )
         self.assertIn('problem_batch_upload_template.xlsx', response['Content-Disposition'])
 
-        rows = read_xlsx_rows(io.BytesIO(response.content))
+        rows = read_xlsx_rows(io.BytesIO(response.content), sheet_name='Problems')
         self.assertEqual(
             rows[0],
-            ['name', 'description', 'organizations', 'classes', 'allowed_languages'],
+            [
+                'name*', 'problem_type*', 'description*', 'answer*', 'organizations*',
+                'tag（less than 20 characters, spaced with commas)',
+                'difficulty\n(easy:0; medium:1; difficult:2)', 'explanation',
+                'allowed_languages(support multiple languages, spaced with commas)', 'test_data',
+            ],
         )
+        with zipfile.ZipFile(io.BytesIO(response.content)) as workbook:
+            self.assertIn('xl/embeddings/Microsoft_Word_Document.docx', workbook.namelist())
+
+            namespace = {'x': simple_xlsx.MAIN_NS}
+            workbook_xml = ET.fromstring(workbook.read('xl/workbook.xml'))
+            relationships = ET.fromstring(workbook.read('xl/_rels/workbook.xml.rels'))
+            instruction_sheet = next(
+                sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
+                if sheet.attrib['name'] in ('Instructions', 'Reference')
+            )
+            relationship_id = instruction_sheet.attrib['{%s}id' % simple_xlsx.REL_NS]
+            target = next(
+                relationship.attrib['Target'] for relationship in relationships
+                if relationship.attrib['Id'] == relationship_id
+            )
+            reference_path = target.lstrip('/') if target.startswith('/') else 'xl/{}'.format(target)
+            reference_sheet = ET.fromstring(workbook.read(reference_path))
+            references = [cell.attrib['r'] for cell in reference_sheet.findall('.//x:c', namespace)]
+            reference_rows = admin.site._registry[Problem]._excel_reference_rows(response.wsgi_request)
+            max_columns = max(len(row) for row in reference_rows)
+            self.assertEqual(
+                reference_sheet.find('x:dimension', namespace).attrib['ref'],
+                'A1:{}{}'.format(simple_xlsx._excel_column_name(max_columns), len(reference_rows)),
+            )
+            expected_header_cells = {
+                '{}3'.format(simple_xlsx._excel_column_name(column_index))
+                for column_index, value in enumerate(reference_rows[2], start=1)
+                if value not in (None, '')
+            }
+            self.assertTrue(expected_header_cells.issubset(references))
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(
@@ -337,13 +373,13 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
         visible_class.admins.add(scoped_admin.profile)
 
         response = self.client.get(reverse('admin:judge_problem_download_excel_template'))
-        rows = read_xlsx_rows(io.BytesIO(response.content))
-        flattened = '\n'.join(' | '.join(row) for row in rows)
+        with zipfile.ZipFile(io.BytesIO(response.content)) as workbook:
+            shared_strings = workbook.read('xl/sharedStrings.xml').decode('utf-8')
 
-        self.assertIn('visible-org', flattened)
-        self.assertIn('visible-class', flattened)
-        self.assertNotIn('hidden-org', flattened)
-        self.assertNotIn('hidden-class', flattened)
+        self.assertIn('visible-org', shared_strings)
+        self.assertIn('visible-class', shared_strings)
+        self.assertNotIn('hidden-org', shared_strings)
+        self.assertNotIn('hidden-class', shared_strings)
 
     def test_admin_excel_batch_create_rejects_organization_outside_visible_scope(self):
         scoped_admin = create_user(

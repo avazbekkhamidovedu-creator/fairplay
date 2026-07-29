@@ -731,6 +731,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
 
         from judge.question_types import creatable_types
         context['creatable_problem_types'] = creatable_types(self.request.user)
+        context['can_import_excel_problems'] = self.request.user.has_perm('judge.create_private_problem')
         context['ac_min'] = self.ac_min if self.ac_min is not None else ''
         context['ac_max'] = self.ac_max if self.ac_max is not None else ''
         context['problem_status'] = self.problem_status

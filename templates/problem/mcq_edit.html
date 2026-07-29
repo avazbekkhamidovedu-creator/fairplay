@@ -10,9 +10,6 @@
         .mcq-option-row .drag-handle { cursor: move; padding: 6px; color: #888; }
         .option-text { width: 100%; }
         .mcq-correct-cell { white-space: nowrap; text-align: center; }
-        .mcq-import-status { margin-top: 1em; font-size: 0.95em; line-height: 1.5; }
-        .mcq-import-status.is-success { color: #2d7a2d; }
-        .mcq-import-status.is-error { color: #b93a32; }
     </style>
 {% endblock %}
 
@@ -22,68 +19,6 @@
         $(function () {
             var rows = $('#mcq-option-rows');
             var totalForms = $('#id_options-TOTAL_FORMS');
-            var $status = $('#mcq-import-status');
-            var fallbackRedirectUrl = "{{ url('problem_list')|escapejs }}";
-
-            function getCsrfToken() {
-                return $('input[name="csrfmiddlewaretoken"]').first().val() || '';
-            }
-
-            function setStatusText(message, isError) {
-                $status
-                    .text(message || '')
-                    .removeClass('is-success is-error')
-                    .addClass(message ? (isError ? 'is-error' : 'is-success') : '');
-            }
-
-            function setStatusHtml(message, isError) {
-                $status
-                    .html(message || '')
-                    .removeClass('is-success is-error')
-                    .addClass(message ? (isError ? 'is-error' : 'is-success') : '');
-            }
-
-            function escapeHtml(value) {
-                return $('<div>').text(value || '').html();
-            }
-
-            async function uploadExcel(file) {
-                var formData = new FormData();
-                formData.append('excel_file', file);
-                setStatusText('{{ _("Creating multiple-choice problems from Excel...")|escapejs }}', false);
-                try {
-                    var response = await fetch(window.location.href, {
-                        method: 'POST',
-                        headers: {
-                            'X-CSRFToken': getCsrfToken(),
-                            'X-Requested-With': 'XMLHttpRequest'
-                        },
-                        body: formData
-                    });
-                    var data = await response.json();
-                    if (!response.ok || !data.ok) {
-                        setStatusText(data.message || '{{ _("Upload failed.")|escapejs }}', true);
-                        return;
-                    }
-                    var links = (data.created || []).map(function (item) {
-                        var name = item.name || item.code || '';
-                        return '<a href="' + escapeHtml(item.edit_url || '#') + '">' +
-                            escapeHtml(name) + '</a>';
-                    });
-                    var summary = escapeHtml(data.message || '');
-                    if (links.length) {
-                        summary += '<br>' + links.join('<br>');
-                    }
-                    summary += '<br>{{ _("Redirecting...")|escapejs }}';
-                    setStatusHtml(summary, false);
-                    window.setTimeout(function () {
-                        window.location.href = data.redirect_url || fallbackRedirectUrl;
-                    }, 1200);
-                } catch (error) {
-                    setStatusText('{{ _("Upload failed.")|escapejs }}', true);
-                }
-            }
-
             function renumber() {
                 rows.children('.mcq-option-row').each(function (i) {
                     $(this).find('input.option-order').val(i);
@@ -130,19 +65,6 @@
             renumber();
             enforceSingleSelect();
 
-            $('#mcq-excel-upload-button').click(function (e) {
-                e.preventDefault();
-                $('#mcq-excel-input').trigger('click');
-            });
-
-            $('#mcq-excel-input').on('change', function () {
-                var file = this.files && this.files[0];
-                if (!file) {
-                    return;
-                }
-                uploadExcel(file);
-                this.value = '';
-            });
         });
     </script>
 {% endblock %}
@@ -253,16 +175,6 @@
 
         <div class="submit-bar">
             <input type="submit" value="{{ _('Save') }}" class="button">
-            {% if creating %}
-                <a href="?download_excel_template=1" class="button">{{ _('Download Excel Template') }}</a>
-                <a href="#" id="mcq-excel-upload-button" class="button">{{ _('Upload Excel') }}</a>
-                <input id="mcq-excel-input" type="file"
-                       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                       style="display:none;">
-            {% endif %}
         </div>
-        {% if creating %}
-            <div id="mcq-import-status" class="mcq-import-status" aria-live="polite"></div>
-        {% endif %}
     </form>
 {% endblock %}

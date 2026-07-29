@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.conf.urls.static import static as static_files
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.contrib.sitemaps.views import sitemap
@@ -11,9 +12,11 @@ from django.views.generic import RedirectView
 
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
-from judge.views import TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, \
-    language, license, mailgun, mcq, organization, preview, problem, problem_manage, ranked_submission, register, \
-    stats, status, submission, tasks, ticket, two_factor, user, widgets
+from judge.views import (
+    TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, language, license,
+    mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission, register,
+    stats, status, submission, tasks, ticket, two_factor, user, widgets,
+)
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView
@@ -105,6 +108,15 @@ urlpatterns = [
     path('problems/random/', problem.RandomProblem.as_view(), name='problem_random'),
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
     path('problems/new/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_create'),
+    path('problems/import-excel/', problem_import.ProblemImportUploadView.as_view(), name='problem_import_upload'),
+    path('problems/import-excel/<int:draft>/images/<uuid:token>/', problem_import.ProblemImportImageView.as_view(),
+         name='problem_import_image'),
+    path('problems/import-excel/<int:draft>/', problem_import.ProblemImportPreviewView.as_view(),
+         name='problem_import_preview'),
+    path('problems/import-excel/<int:draft>/create-all/', problem_import.ProblemImportCreateAllView.as_view(),
+         name='problem_import_create_all'),
+    path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
+         problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 
     path('problem/<str:problem>', include([
         path('', problem.ProblemDetail.as_view(), name='problem_detail'),
@@ -417,6 +429,11 @@ for favicon in favicon_paths:
 handler404 = 'judge.views.error.error404'
 handler403 = 'judge.views.error.error403'
 handler500 = 'judge.views.error.error500'
+
+# Production deployments should serve MEDIA_URL directly through Nginx. This
+# fallback makes uploaded Markdown and DOCX figures visible in local DEBUG runs.
+if settings.DEBUG:
+    urlpatterns += static_files(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 if 'newsletter' in settings.INSTALLED_APPS:
     urlpatterns.append(path('newsletter/', include('newsletter.urls')))

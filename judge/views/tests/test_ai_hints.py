@@ -5,12 +5,13 @@ from django.core.cache import cache
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from judge import ai_hints
+from judge import ai_hints, llm
 from judge.models import Language, Problem, Submission, SubmissionSource
 from judge.models.ai_hints import AIHintLog
 from judge.models.tests.util import create_problem, create_user
 
 AZURE_SETTINGS = {
+    'LLM_PROVIDER': 'azure',
     'AZURE_OPENAI_ENDPOINT': 'https://example.openai.azure.com/',
     'AZURE_OPENAI_API_KEY': 'test-key',
     'AZURE_OPENAI_DEPLOYMENT': 'gpt-test',
@@ -31,6 +32,8 @@ class AIHintViewTestCase(TestCase):
         SubmissionSource.objects.create(submission=cls.submission, source='print(1)')
 
     def setUp(self):
+        llm._backend = None
+        self.addCleanup(setattr, llm, '_backend', None)
         cache.clear()
         self.client = Client()
         self.client.force_login(self.user)

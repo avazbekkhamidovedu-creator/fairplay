@@ -1,10 +1,75 @@
+import uuid
+
 from django.db import models
 from django.db.models import CASCADE
 from django.utils.translation import gettext_lazy as _
 
 from judge.models.problem import Problem
 
-__all__ = ['ProblemMCQOption', 'ProblemMCQConfig', 'ProblemBlank', 'ProblemFillBlankConfig']
+__all__ = [
+    'ProblemMCQOption', 'ProblemMCQConfig', 'ProblemBlank', 'ProblemFillBlankConfig',
+    'ProblemImportDraft', 'ProblemImportItem', 'ProblemImportImage',
+]
+
+
+class ProblemImportDraft(models.Model):
+    """A server-side Excel import preview owned by one teacher."""
+    owner = models.ForeignKey('judge.Profile', related_name='problem_import_drafts', on_delete=CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('-updated_at',)
+        verbose_name = _('problem import draft')
+        verbose_name_plural = _('problem import drafts')
+
+
+class ProblemImportItem(models.Model):
+    """One editable row in an Excel import preview."""
+    TYPE_CHOICES = (
+        ('C', _('Code')),
+        ('M', _('Multiple choice')),
+        ('B', _('Fill in the blank')),
+    )
+
+    draft = models.ForeignKey(ProblemImportDraft, related_name='items', on_delete=CASCADE)
+    row_number = models.PositiveIntegerField()
+    name = models.CharField(max_length=200)
+    submission_type = models.CharField(max_length=1, choices=TYPE_CHOICES)
+    description = models.TextField(blank=True)
+    answer = models.TextField(blank=True)
+    solution = models.TextField(blank=True)
+    tags = models.TextField(blank=True)
+    difficulty = models.CharField(max_length=10, blank=True)
+    allowed_languages = models.TextField(blank=True)
+    test_data = models.TextField(blank=True)
+    test_data_zip = models.FileField(upload_to='problem_import_test_data/', blank=True)
+    source_label = models.CharField(max_length=255, blank=True)
+    options = models.TextField(blank=True)
+    correct_options = models.TextField(blank=True)
+    blanks = models.TextField(blank=True)
+    formatting_error = models.TextField(blank=True)
+    type_needs_review = models.BooleanField(default=False)
+    name_needs_review = models.BooleanField(default=False)
+    created_problem = models.ForeignKey(Problem, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('row_number', 'pk')
+        verbose_name = _('problem import item')
+        verbose_name_plural = _('problem import items')
+
+
+class ProblemImportImage(models.Model):
+    """A DOCX figure kept with its editable import draft until problem creation."""
+    item = models.ForeignKey(ProblemImportItem, related_name='images', on_delete=CASCADE)
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    filename = models.CharField(max_length=255)
+    content = models.BinaryField()
+
+    class Meta:
+        verbose_name = _('problem import image')
+        verbose_name_plural = _('problem import images')
 
 
 class ProblemMCQOption(models.Model):

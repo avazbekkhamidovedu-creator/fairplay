@@ -53,3 +53,4 @@ pypandoc
 
 # This is for the AI hint function
 openai
+olefile
