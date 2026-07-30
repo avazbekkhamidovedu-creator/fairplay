@@ -196,7 +196,12 @@ class ProblemSolution(
 
 class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
     context_object_name = 'problem'
-    template_name = 'problem/problem.html'
+    template_name = 'problem/workspace.html'
+
+    def get_template_names(self):
+        if self.request.GET.get('legacy') == '1':
+            return ['problem/problem.html']
+        return [self.template_name]
 
     def get_comment_page(self):
         return 'p:%s' % self.object.code
@@ -214,6 +219,19 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             else get_contest_problem(self.object, user.profile)
         )
         context['contest_problem'] = contest_problem
+        context['workspace_mode'] = 'assignment' if contest_problem else 'practice'
+        if contest_problem:
+            context['workspace_problems'] = ContestProblem.objects.filter(
+                contest=contest_problem.contest,
+            ).select_related('problem').order_by('order')
+            context['workspace_context_name'] = contest_problem.contest.name
+            context['workspace_return_url'] = reverse('contest_view', args=[contest_problem.contest.key])
+            context['workspace_current_order'] = contest_problem.order
+        else:
+            context['workspace_problems'] = Problem.get_visible_problems(user).order_by('code')[:250]
+            context['workspace_context_name'] = _('Problem list')
+            context['workspace_return_url'] = reverse('problem_list')
+            context['workspace_current_order'] = None
         if contest_problem:
             clarifications = self.object.clarifications
             context['has_clarifications'] = clarifications.count() > 0
@@ -283,6 +301,11 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['prev_contest_problem'] = cp_qs.filter(order__lt=contest_problem.order).order_by('-order').first()
 
         context['submission_type'] = self.object.submission_type
+        context['workspace_submissions'] = (
+            Submission.objects.filter(user=self.request.profile, problem=self.object)
+            .select_related('language').order_by('-date')[:20]
+            if authed else []
+        )
         if self.request.user.is_authenticated:
             from judge.question_types import get_grader
             grader = get_grader(self.object.submission_type)
@@ -1176,8 +1199,14 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         return form
 
     def get_success_url(self):
-        return reverse('submission_status', args=(self.new_submission.id,))
+        if self.request.POST.get('workspace') == '1':
+            return '%s?submission=%d' % (
+                reverse('problem_detail', args=(self.object.code,)), self.new_submission.id,
+            )
 
+
+
+        return reverse('submission_status', args=(self.new_submission.id,))
     def _submission_blocked_response(self):
         """Pre-submit guards shared by every question type. Returns a response if blocked."""
         if (
@@ -1637,3 +1666,25 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
                     'Failed to copy init.yml. You may need to regenerate it manually.',
                 ),
             )
+
+
+class ProblemWorkspaceRun(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, View):
+    """Run code in the existing isolated IDE sandbox, never against this problem."""
+
+    http_method_names = ['post']
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        from judge.question_types import get_grader
+        if not get_grader(self.object.submission_type).routes_to_bridge:
+            return JsonResponse({'error': _('Run is available only for programming problems.')}, status=400)
+        if self.object.banned_users.filter(id=request.profile.id).exists() and not request.user.is_superuser:
+            return JsonResponse({'error': _('You are banned from submitting to this problem.')}, status=403)
+        if not self.object.usable_languages.filter(id=request.POST.get('language')).exists():
+            return JsonResponse({'error': _('This language is not allowed for this problem.')}, status=400)
+        if request.profile.current_contest and not get_contest_problem(self.object, request.profile):
+            return JsonResponse({'error': _('This problem is not in your active assignment.')}, status=403)
+        # idepractice owns rate limiting, source/input limits, output protection
+        # and the bridge protocol. It creates no ContestSubmission.
+        from judge.views.ide import IDESubmitView
+        return IDESubmitView().post(request)
