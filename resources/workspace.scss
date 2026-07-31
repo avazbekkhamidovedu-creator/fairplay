@@ -112,3 +112,11 @@
   .ws-toolbar .ctx-label { max-width: 9rem; }
   .ws-filter-panel, .tc-pair { grid-template-columns: 1fr; }
 }
+
+/* The site navigation is fixed. Reserve its measured desktop height so the
+   Workspace toolbar is visible directly below it instead of behind it. */
+.workspace-page #page-container { padding-top: 64px; }
+.workspace-page .ws-pane-right.ws-pane-answer { background: var(--oj-surface); }
+@media (max-width: 800px) {
+  .workspace-page #page-container { padding-top: 54px; }
+}
