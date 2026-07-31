@@ -13,7 +13,9 @@ from markupsafe import Markup
 
 from judge.highlight_code import highlight_code
 from judge.jinja2.markdown.lazy_load import lazy_load as lazy_load_processor
-from judge.jinja2.markdown.math import MathInlineGrammar, MathInlineLexer, MathRenderer
+from judge.jinja2.markdown.math import (
+    MathInlineGrammar, MathInlineLexer, MathRenderer, normalize_latex_display_math,
+)
 from judge.utils.camo import client as camo_client
 from judge.utils.texoid import TEXOID_ENABLED, TexoidRenderer
 from .bleach_whitelist import all_styles, mathml_attrs, mathml_tags
@@ -183,7 +185,7 @@ def markdown(value, style, math_engine=None, lazy_load=False, strip_paragraphs=F
                                math=math and math_engine is not None, math_engine=math_engine)
     markdown = mistune.Markdown(renderer=renderer, inline=AwesomeInlineLexer,
                                 parse_block_html=1, parse_inline_html=1)
-    result = markdown(value)
+    result = markdown(normalize_latex_display_math(value or ''))
 
     if post_processors or strip_paragraphs:
         tree = fragments_to_tree(result)

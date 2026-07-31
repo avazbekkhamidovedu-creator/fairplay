@@ -8,6 +8,7 @@ from judge.utils.simple_xlsx import (
     MAX_XLSX_UPLOAD_BYTES,
     MAX_XLSX_XML_PART_BYTES,
     build_xlsx_workbook,
+    read_problem_xlsx_rows,
     read_xlsx_rows,
     validate_xlsx_upload,
 )
@@ -22,6 +23,44 @@ class SimpleXlsxTestCase(SimpleTestCase):
         rows = read_xlsx_rows(io.BytesIO(payload))
 
         self.assertEqual(rows, [['name', 'description'], ['A', 'B']])
+
+    def test_read_rejects_missing_requested_sheet(self):
+        payload = build_xlsx_workbook([
+            ('Instructions', [['Use the Problems sheet.']]),
+        ])
+
+        with self.assertRaisesMessage(ValueError, 'sheet named "Problems"'):
+            read_xlsx_rows(io.BytesIO(payload), sheet_name='Problems')
+
+    def test_finds_problem_sheet_by_headers_when_its_name_is_not_problems(self):
+        payload = build_xlsx_workbook([
+            ('Instructions', [['Complete the question bank sheet.']]),
+            (
+                'Question Bank',
+                [['Course questions'], ['Title', 'Problem Type', 'Content'], ['Sum', 'Programming Problem', 'Add.']],
+            ),
+        ])
+
+        rows, sheet_name, header_index = read_problem_xlsx_rows(io.BytesIO(payload))
+
+        self.assertEqual(sheet_name, 'Question Bank')
+        self.assertEqual(header_index, 1)
+        self.assertEqual(rows, [['Title', 'Problem Type', 'Content'], ['Sum', 'Programming Problem', 'Add.']])
+
+    def test_build_writes_list_validation_for_select_column(self):
+        payload = build_xlsx_workbook([
+            (
+                'Problems', [['question_type'], ['code']],
+                [{'sqref': 'A2:A1000', 'values': ('code', 'multiple_choice', 'fill_blank')}],
+            ),
+        ])
+
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            sheet = archive.read('xl/worksheets/sheet1.xml').decode()
+
+        self.assertIn('dataValidation type="list"', sheet)
+        self.assertIn('sqref="A2:A1000"', sheet)
+        self.assertIn('"code,multiple_choice,fill_blank"', sheet)
 
     def test_validate_xlsx_upload_rejects_oversized_file(self):
         uploaded = SimpleUploadedFile(

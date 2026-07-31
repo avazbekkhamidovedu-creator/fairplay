@@ -13,6 +13,7 @@ from judge.models.tests.util import (
     create_problem_group,
     create_problem_type,
     create_solution,
+    create_user,
 )
 from judge.question_types import all_types
 from judge.views.problem import ProblemList
@@ -385,11 +386,15 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         difficulty_names = {t.name for t in context['difficulty_types']}
         knowledge_names = {t.name for t in context['knowledge_types']}
         # Format options come from the registered question types (submission_type), exposed as
-        # {'code', 'label'} dicts, not from the ProblemType taxonomy.
+        # {'code', 'label'} dicts, not from the ProblemType taxonomy. MCQ is additionally broken
+        # down into single / multiple / true-false pseudo-codes on top of the whole-MCQ option.
         format_codes = {f['code'] for f in context['format_types']}
 
         self.assertEqual(difficulty_names, {'easy', 'medium', 'hard'})
-        self.assertEqual(format_codes, {t.submission_type for t in all_types()})
+        self.assertEqual(
+            format_codes,
+            {t.submission_type for t in all_types()} | {'single', 'multiple', 'truefalse'},
+        )
         self.assertIn('dp', knowledge_names)
         self.assertIn('greedy', knowledge_names)
         # Format- and difficulty-named ProblemTypes are not surfaced as knowledge points.
@@ -617,3 +622,36 @@ class ProblemDetailDifficultyTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('problem_detail', args=[problem.code]))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, 'class="difficulty-badge', html=False)
+
+
+class ProblemBulkDeleteRedirectTestCase(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(
+            username='bulk_del_editor',
+            is_staff=True,
+            user_permissions=('edit_own_problem', 'edit_all_problem'),
+        )
+        cls.problem = create_problem(code='bulk-del-safe', is_public=True, authors=('bulk_del_editor',))
+
+    def test_rejects_external_next_redirect(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(reverse('problem_bulk_delete'), {
+            'codes': [self.problem.code],
+            'next': 'https://evil.example/phish',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('problem_list'))
+        self.assertFalse(Problem.objects.filter(code='bulk-del-safe').exists())
+
+    def test_allows_same_host_relative_next(self):
+        keep = create_problem(code='bulk-del-keep', is_public=True, authors=('bulk_del_editor',))
+        self.client.force_login(self.editor)
+        response = self.client.post(reverse('problem_bulk_delete'), {
+            'codes': [keep.code],
+            'next': '/problems/?category=1',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, '/problems/?category=1')
+        self.assertFalse(Problem.objects.filter(code='bulk-del-keep').exists())

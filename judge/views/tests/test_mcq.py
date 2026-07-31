@@ -61,27 +61,23 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         })
 
     def test_add_menu_reflects_permissions(self):
-        mcq_url = reverse('problem_mcq_create').encode()
-        code_url = reverse('admin:judge_problem_add').encode()
+        v2_url = reverse('problem_create_v2').encode()
+        contest_url = reverse('admin:judge_contest_add').encode()
 
-        # create_private_problem -> MCQ in the menu, but not Code (admin add).
         self.client.force_login(self.users['creator'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertIn(b'Add new problem', content)
-        self.assertIn(mcq_url, content)
-        self.assertNotIn(code_url, content)
+        self.assertIn(b'Add problem', content)
+        self.assertIn(v2_url, content)
+        self.assertNotIn(contest_url, content)
 
-        # staff with add_problem -> Code as well.
         self.client.force_login(self.users['staff_adder'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertIn(mcq_url, content)
-        self.assertIn(code_url, content)
+        self.assertIn(v2_url, content)
 
-        # normal user -> no menu at all.
         self.client.force_login(self.users['normal'])
         content = self.client.get(reverse('problem_list')).content
-        self.assertNotIn(b'Add new problem', content)
-        self.assertNotIn(mcq_url, content)
+        self.assertNotIn(b'Add problem', content)
+        self.assertNotIn(v2_url, content)
 
     def test_create_requires_permission(self):
         self.client.force_login(self.users['normal'])
@@ -89,16 +85,12 @@ class MCQAuthoringViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['creator'])
         self.assertEqual(self.client.get(reverse('problem_mcq_create')).status_code, 200)
 
-    def test_create_page_shows_excel_actions(self):
+    def test_create_page_hides_excel_actions(self):
         self.client.force_login(self.users['creator'])
         response = self.client.get(reverse('problem_mcq_create'))
-        self.assertContains(response, 'Download Excel Template', html=False)
-        self.assertContains(response, 'Upload Excel', html=False)
-        self.assertContains(response, 'id="mcq-excel-input"', html=False)
-        self.assertContains(response, 'function setStatusText(message, isError)', html=False)
-        self.assertContains(response, 'setStatusText(data.message || ', html=False)
-        self.assertContains(response, 'function escapeHtml(value)', html=False)
-        self.assertContains(response, "var summary = escapeHtml(data.message || '');", html=False)
+        self.assertNotContains(response, 'Download Excel Template', html=False)
+        self.assertNotContains(response, 'Upload Excel', html=False)
+        self.assertNotContains(response, 'id="mcq-excel-input"', html=False)
 
     def test_excel_actions_require_same_permission_as_create_page(self):
         restricted_creator = create_user(

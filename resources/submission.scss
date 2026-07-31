@@ -348,3 +348,61 @@ label[for="language"], label[for="status"] {
         color: $color_primary50;
     }
 }
+
+/* --- AI Grading Result Table --- */
+.ai-grading-result {
+    width: 100%; border-collapse: collapse; margin-top: 0.5em;
+    border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden;
+    font-size: 13px;
+}
+.ai-grading-result th,
+.ai-grading-result td { padding: 20px 18px; border-bottom: 1px solid #eee; }
+.ai-grading-result th { text-align: center; background: #f8f8f8; font-weight: 600; color: #555; border-bottom: 2px solid #e0e0e0; font-size: 13px; }
+.ai-grading-result td { vertical-align: middle; font-size: 14px; line-height: 1.6; }
+.ai-grading-result .ac { text-align: center; }
+.ai-grading-row { transition: background 0.15s; cursor: pointer; }
+.ai-grading-row:hover { background: #fafafa; }
+.ai-sq-name { font-weight: 500; color: #333; }
+.ai-sq-score { font-family: monospace; font-size: 13px; }
+.ai-sq-status { font-size: 13px; padding: 4px 12px; border-radius: 3px; }
+.ai-sq-feedback { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #666; }
+/* Chevron rotation on toggle */
+.ai-chevron { font-size: 12px; color: #888; margin-right: 2px; transition: transform 0.2s; }
+.ai-grading-row.open .ai-chevron { transform: rotate(90deg); }
+.ai-grading-total td { background: #f5f5f5; font-size: 14px; font-weight: 600; border-top: 2px solid #e0e0e0; padding: 16px 18px; }
+.ai-feedback-box { padding: 10px 14px; background: #f0f8ff; border-left: 4px solid #4a90d9;
+    margin: 4px 0; border-radius: 0 4px 4px 0; }
+.ai-feedback-box strong { font-size: 12px; color: #4a90d9; }
+.ai-feedback-box p { margin: 6px 0 0; font-size: 13px; color: #333; line-height: 1.5; }
+
+/* --- AI grading loading spinner --- */
+.ai-grading-loading {
+    text-align: center; padding: 3em 1em;
+}
+.ai-grading-spinner {
+    width: 48px; height: 48px;
+    margin: 0 auto 1.5em;
+    border: 4px solid #e0e0e0;
+    border-top-color: #3b7630;
+    border-radius: 50%;
+    animation: ai-spin 0.8s linear infinite;
+}
+@keyframes ai-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* --- dark mode overrides --- */
+@media (prefers-color-scheme: dark) {
+  .ai-grading-result                    { border-color: #3b3b3b; }
+  .ai-grading-result th                 { background: #0f0f0f; border-color: #3b3b3b; color: #aaa; }
+  .ai-grading-result td                 { border-color: #222; color: #eee; }
+  .ai-grading-row:hover                 { background: #111; }
+  .ai-sq-name                           { color: #eee; }
+  .ai-sq-feedback                       { color: #aaa; }
+  .ai-grading-total td                  { background: #0f0f0f; border-color: #3b3b3b; color: #eee; }
+  .ai-feedback-box                      { background: #1a2a3a; border-left-color: #4a90d9; }
+  .ai-feedback-box p                    { color: #ccc; }
+  .ai-grading-spinner                 { border-color: #3b3b3b; border-top-color: #3b7630; }
+  .ai-grading-loading h4              { color: #aaa; }
+  .ai-chevron                         { color: #aaa; }
+}

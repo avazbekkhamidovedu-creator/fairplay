@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.conf.urls.static import static as static_files
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.contrib.sitemaps.views import sitemap
@@ -11,9 +12,17 @@ from django.views.generic import RedirectView
 
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
-from judge.views import TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, \
-    language, license, mailgun, mcq, organization, preview, problem, problem_manage, ranked_submission, register, \
-    stats, status, submission, tasks, ticket, two_factor, user, widgets
+from judge.views import (
+    TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, language, license,
+    mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission, register,
+    stats, status, submission, tasks, ticket, two_factor, user, widgets,
+)
+from judge.views.problem_create_v2 import (
+    ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
+    ProblemCreateV2AIProblemTypeView, ProblemCreateV2OrganizationView,
+    ProblemCreateV2ProblemGroupView, ProblemCreateV2ProblemTypeView,
+    ProblemCreateV2View,
+)
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView
@@ -102,9 +111,32 @@ urlpatterns = [
     path('', include('social_django.urls')),
 
     path('problems/', problem.ProblemList.as_view(), name='problem_list'),
+    path('problems/delete/', problem.ProblemBulkDelete.as_view(), name='problem_bulk_delete'),
     path('problems/random/', problem.RandomProblem.as_view(), name='problem_random'),
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
     path('problems/new/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_create'),
+    path('problems/new/', ProblemCreateV2View.as_view(), name='problem_create_v2'),
+    path('problems/edit/<str:problem>/', ProblemCreateV2View.as_view(), name='problem_edit_v2'),
+    path('problems/new/ai-difficulty/', ProblemCreateV2AIDifficultyView.as_view(),
+         name='problem_create_v2_ai_difficulty'),
+    path('problems/new/problem-type/', ProblemCreateV2ProblemTypeView.as_view(), name='problem_create_v2_problem_type'),
+    path('problems/new/problem-group/', ProblemCreateV2ProblemGroupView.as_view(),
+         name='problem_create_v2_problem_group'),
+    path('problems/new/organization/', ProblemCreateV2OrganizationView.as_view(),
+         name='problem_create_v2_organization'),
+    path('problems/new/ai-problem-type/', ProblemCreateV2AIProblemTypeView.as_view(),
+         name='problem_create_v2_ai_problem_type'),
+    path('problems/new/ai-decompose/', ProblemCreateV2AIDecomposeView.as_view(),
+         name='problem_create_v2_ai_decompose'),
+    path('problems/import-excel/', problem_import.ProblemImportUploadView.as_view(), name='problem_import_upload'),
+    path('problems/import-excel/<int:draft>/images/<uuid:token>/', problem_import.ProblemImportImageView.as_view(),
+         name='problem_import_image'),
+    path('problems/import-excel/<int:draft>/', problem_import.ProblemImportPreviewView.as_view(),
+         name='problem_import_preview'),
+    path('problems/import-excel/<int:draft>/create-all/', problem_import.ProblemImportCreateAllView.as_view(),
+         name='problem_import_create_all'),
+    path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
+         problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 
     path('problem/<str:problem>', include([
         path('', problem.ProblemDetail.as_view(), name='problem_detail'),
@@ -329,6 +361,8 @@ urlpatterns = [
         path('preview/', include([
             path('default', preview.DefaultMarkdownPreviewView.as_view(), name='default_preview'),
             path('problem', preview.ProblemMarkdownPreviewView.as_view(), name='problem_preview'),
+            path('problem/batch', preview.ProblemMarkdownBatchPreviewView.as_view(),
+                 name='problem_preview_batch'),
             path('blog', preview.BlogMarkdownPreviewView.as_view(), name='blog_preview'),
             path('contest', preview.ContestMarkdownPreviewView.as_view(), name='contest_preview'),
             path('comment', preview.CommentMarkdownPreviewView.as_view(), name='comment_preview'),
@@ -417,6 +451,11 @@ for favicon in favicon_paths:
 handler404 = 'judge.views.error.error404'
 handler403 = 'judge.views.error.error403'
 handler500 = 'judge.views.error.error500'
+
+# Production deployments should serve MEDIA_URL directly through Nginx. This
+# fallback makes uploaded Markdown and DOCX figures visible in local DEBUG runs.
+if settings.DEBUG:
+    urlpatterns += static_files(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 if 'newsletter' in settings.INSTALLED_APPS:
     urlpatterns.append(path('newsletter/', include('newsletter.urls')))

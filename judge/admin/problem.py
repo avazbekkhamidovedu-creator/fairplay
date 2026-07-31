@@ -1,4 +1,6 @@
+import io
 import json
+import os
 import re
 import zipfile
 from operator import attrgetter
@@ -20,6 +22,8 @@ from reversion.admin import VersionAdmin
 from judge.models import Class, Language, LanguageLimit, Organization, Problem, ProblemClarification, ProblemGroup, \
     ProblemPointsVote, ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution, \
     SubmissionSourceAccess
+from judge.utils import simple_xlsx
+from judge.utils.language_matching import matching_languages
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, AdminSelect2MultipleWidget, \
@@ -780,6 +784,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 lambda qs, token: list(qs.filter(common_name=token)),
                 lambda qs, token: list(qs.filter(name=token)),
                 lambda qs, token: list(qs.filter(pk=int(token))) if token.isdigit() else [],
+                matching_languages,
             ),
         )
 
@@ -842,6 +847,13 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return problem
 
     def _excel_headers(self):
+        return [
+            'name', 'problem_type', 'description', 'answer', 'organizations', 'tag', 'difficulty', 'explanation',
+            'allowed_languages', 'test_data',
+        ]
+
+    def _legacy_excel_headers(self):
+        """Keep the retired direct-create endpoint compatible with existing API clients."""
         return ['name', 'description', 'organizations', 'classes', 'allowed_languages']
 
     def _visible_excel_organizations(self, user):
@@ -860,16 +872,19 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         languages = self.get_default_languages()
         language_sample = ' | '.join(lang.key for lang in languages[:2]) if languages else 'PY3'
         org = self._visible_excel_organizations(request.user).first()
-        visible_classes = self._visible_excel_classes(request.user)
-        klass = visible_classes.first()
         return [
             self._excel_headers(),
             [
                 'Sample Problem',
+                'code',
                 'Write the full problem statement here. You can use multiple lines.',
+                '',
                 org.slug if org else '',
-                klass.slug if klass else '',
+                'implementation',
+                '1',
+                'Explain the intended solution here.',
                 language_sample,
+                'input data 1: 2 3\noutput data 1: 5',
             ],
         ]
 
@@ -884,9 +899,28 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             Language.objects.order_by('key').values_list('key', flat=True)[:8],
         ) or 'PY3'
         return [
+            ['Import Instructions', '', '', ''],
+            ['Fill the Problems sheet and follow the specification for each field.', '', '', ''],
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Problem title.', 'Two Sum'],
-            ['description', 'yes', 'Problem statement markdown/plain text.', '# Two Sum\n\nDescribe the task.'],
+            [
+                'problem_type', 'yes', 'Choose code, multiple_choice, or fill_blank from the Excel dropdown.',
+                'multiple_choice',
+            ],
+            [
+                'description', 'no',
+                'Plain-text description. It may be supplemented by an embedded DOCX or Markdown file. PNG, JPG, '
+                'and GIF figures inside DOCX are uploaded and inserted in place. For fill_blank, use [[blank]] for '
+                'each input.',
+                'The capital of France is [[blank]] and 2 + 2 = [[blank]].',
+            ],
+            [
+                'answer', 'MCQ / fill_blank',
+                'For MCQ use an option letter, number, or exact option text; separate multiple correct answers '
+                'with |. For fill_blank use one answer per [[blank]] in order, separated with |. LLM never '
+                'changes this cell.',
+                'B  or  Paris|4',
+            ],
             [
                 'organizations', 'no',
                 'Separate multiple values with "|" or ",". Use organization slug/name/id.',
@@ -898,20 +932,150 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 class_names,
             ],
             [
+                'tag', 'no',
+                'Separate up to five knowledge tags with commas. Each tag must be at most 20 characters.',
+                'calculation, physics',
+            ],
+            [
+                'difficulty', 'no',
+                'Use 0 for easy, 1 for medium, or 2 for hard.',
+                '1',
+            ],
+            ['explanation', 'no', 'Editorial content. It is added to the problem solution section.', 'Use addition.'],
+            [
                 'allowed_languages', 'no',
-                'Separate multiple values with "|" or ",". Use language key/name/id.',
+                'Separate full language names with "|" or ",". Names must match exactly.',
                 language_keys,
             ],
+            [
+                'test_data', 'code only',
+                'Use input data N: followed by output data N:. Repeat N = 1, 2, ... for multiple cases. For '
+                '.in/.out files, embed one ZIP object in the same Excel row; preview uploads are not accepted.',
+                'input data 1: 2 3\noutput data 1: 5\n\ninput data 2: 4 6\noutput data 2: 10',
+            ],
+            [
+                'embedded DOCX / Markdown', 'optional',
+                'Use Excel Insert -> Object -> Create from File, without Link. Leave Display as icon unchecked '
+                'to preview the Word document in Excel and double-click it to revise. Keep the object on the '
+                'same row as the question.',
+                'The Word object on the sample MCQ row.',
+            ],
         ]
+
+    def _template_with_current_references(self, request, sample_path):
+        """Keep the sample's Word object while replacing permission-scoped references."""
+        reference_rows = self._excel_reference_rows(request)
+        strings_path = 'xl/sharedStrings.xml'
+        namespace = {'x': simple_xlsx.MAIN_NS}
+
+        with zipfile.ZipFile(sample_path) as source:
+            workbook = ET.fromstring(source.read('xl/workbook.xml'))
+            relationships = ET.fromstring(source.read('xl/_rels/workbook.xml.rels'))
+            relation_targets = {
+                relation.attrib.get('Id'): relation.attrib.get('Target', '')
+                for relation in relationships
+            }
+            reference_sheet_path = ''
+            for sheet_name in ('Instructions', 'Reference'):
+                sheet = next(
+                    (item for item in workbook.iter() if item.tag.endswith('}sheet')
+                     and item.attrib.get('name') == sheet_name),
+                    None,
+                )
+                if sheet is None:
+                    continue
+                target = relation_targets.get(sheet.attrib.get('{%s}id' % simple_xlsx.REL_NS), '')
+                reference_sheet_path = target.lstrip('/') if target.startswith('/') else 'xl/{}'.format(target)
+                break
+            if not reference_sheet_path:
+                raise ValueError('The Excel template must contain an Instructions or Reference worksheet.')
+            shared_strings = ET.fromstring(source.read(strings_path))
+            reference_sheet = ET.fromstring(source.read(reference_sheet_path))
+            old_string_cells = len(reference_sheet.findall('.//x:c[@t="s"]', namespace))
+            string_lookup = {}
+            string_items = shared_strings.findall('x:si', namespace)
+            for index, item in enumerate(string_items):
+                value = ''.join(node.text or '' for node in item.iterfind('.//x:t', namespace))
+                string_lookup.setdefault(value, index)
+
+            new_string_cells = 0
+            next_string_index = len(string_items)
+            for row in reference_rows:
+                for value in row:
+                    if value is None or value == '':
+                        continue
+                    new_string_cells += 1
+                    value = str(value)
+                    if value in string_lookup:
+                        continue
+                    string_lookup[value] = next_string_index
+                    next_string_index += 1
+                    item = ET.SubElement(shared_strings, '{%s}si' % simple_xlsx.MAIN_NS)
+                    text = ET.SubElement(item, '{%s}t' % simple_xlsx.MAIN_NS)
+                    if value != value.strip():
+                        text.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+                    text.text = value
+
+            sheet_data = reference_sheet.find('x:sheetData', namespace)
+            sheet_data.clear()
+            max_columns = max(len(row) for row in reference_rows)
+            for row_index, row in enumerate(reference_rows, start=1):
+                row_element = ET.SubElement(
+                    sheet_data,
+                    '{%s}row' % simple_xlsx.MAIN_NS,
+                    {'r': str(row_index), 'spans': '1:{}'.format(max_columns)},
+                )
+                for column_index, value in enumerate(row, start=1):
+                    if value is None or value == '':
+                        continue
+                    cell = ET.SubElement(
+                        row_element,
+                        '{%s}c' % simple_xlsx.MAIN_NS,
+                        {
+                            'r': '{}{}'.format(simple_xlsx._excel_column_name(column_index), row_index),
+                            't': 's',
+                        },
+                    )
+                    ET.SubElement(cell, '{%s}v' % simple_xlsx.MAIN_NS).text = str(string_lookup[str(value)])
+
+            dimension = reference_sheet.find('x:dimension', namespace)
+            dimension.set('ref', 'A1:{}{}'.format(
+                simple_xlsx._excel_column_name(max_columns), len(reference_rows),
+            ))
+            string_count = int(shared_strings.attrib.get('count', 0))
+            shared_strings.set('count', str(string_count - old_string_cells + new_string_cells))
+            shared_strings.set('uniqueCount', str(next_string_index))
+            ET.register_namespace('', simple_xlsx.MAIN_NS)
+
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as target:
+                for info in source.infolist():
+                    if info.filename == strings_path:
+                        content = ET.tostring(shared_strings, encoding='utf-8', xml_declaration=True)
+                    elif info.filename == reference_sheet_path:
+                        content = ET.tostring(reference_sheet, encoding='utf-8', xml_declaration=True)
+                    else:
+                        content = source.read(info.filename)
+                    target.writestr(info, content)
+        return output.getvalue()
 
     def download_excel_template_view(self, request):
         if not request.user.has_perm('judge.edit_own_problem'):
             raise PermissionDenied
 
-        payload = build_xlsx_workbook([
-            ('Problems', self._excel_template_rows(request)),
-            ('Reference', self._excel_reference_rows(request)),
-        ])
+        # This example retains a real Excel Word object so teachers can see
+        # exactly how embedded DOCX descriptions and their figures are imported.
+        sample_path = os.path.join(settings.BASE_DIR, 'resources', 'problem_batch_upload_template.xlsx')
+        if os.path.isfile(sample_path):
+            payload = self._template_with_current_references(request, sample_path)
+        else:
+            payload = build_xlsx_workbook([
+                (
+                    'Problems', self._excel_template_rows(request),
+                    [{'sqref': 'B2:B1000', 'values': ('code', 'multiple_choice', 'fill_blank')}],
+                ),
+                ('Reference', self._excel_reference_rows(request)),
+            ])
         response = HttpResponse(
             payload,
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1024,7 +1188,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             return JsonResponse({'ok': False, 'message': gettext('The Excel file is empty.')}, status=400)
 
         header_row = [str(cell).strip().lower() for cell in rows[0]]
-        required_headers = self._excel_headers()
+        required_headers = self._legacy_excel_headers()
         missing_headers = [header for header in required_headers if header not in header_row]
         if missing_headers:
             return JsonResponse({
