@@ -731,6 +731,21 @@ if not DEBUG:
                 'DMOJ_BACKUP_MIRROR_ENABLED is on but DMOJ_BOX_KNOWN_HOSTS is not a readable '
                 'file; without pinned host keys the SFTP backup is exposed to a first-connect '
                 'MITM. Point it at a known_hosts file for sftp.services.box.com.')
+        # A file that exists but lacks an entry for the Box host is no protection at all,
+        # so check the contents too. paramiko is only imported here (mirror on => it is
+        # installed) and handles hashed |1|... entries a substring check would miss.
+        from paramiko.hostkeys import HostKeys
+
+        # Same key form as judge.storage.box.host_key_name(), spelled out rather than
+        # imported: pulling judge code into settings at load time invites circular imports.
+        _box_host_key = (DMOJ_BOX_SFTP_HOST if DMOJ_BOX_SFTP_PORT == 22
+                         else f'[{DMOJ_BOX_SFTP_HOST}]:{DMOJ_BOX_SFTP_PORT}')
+        if not HostKeys(DMOJ_BOX_KNOWN_HOSTS).lookup(_box_host_key):
+            raise ImproperlyConfigured(
+                f'DMOJ_BOX_KNOWN_HOSTS ({DMOJ_BOX_KNOWN_HOSTS}) contains no host key for '
+                f'{_box_host_key}, so the first connection would have nothing to pin '
+                f'against. Populate it with: '
+                f'ssh-keyscan -p {DMOJ_BOX_SFTP_PORT} {DMOJ_BOX_SFTP_HOST}')
 
 assert DMOJ_PROBLEM_MIN_USER_POINTS_VOTE >= DMOJ_PROBLEM_MIN_PROBLEM_POINTS
 
