@@ -1,19 +1,26 @@
 import hashlib
+import os
 import shutil
 import tempfile
 from datetime import timedelta
+from io import StringIO
 from unittest import mock
 
+import paramiko
 from botocore.exceptions import ClientError, EndpointConnectionError
+from django.contrib.admin.sites import AdminSite
+from django.core.exceptions import ImproperlyConfigured
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 
+from judge.admin.stored_file import StoredFileRecordAdmin
 from judge.models import StoredFileRecord
 from judge.storage import generate_submission_key
+from judge.storage.box import BoxSFTPStorage
 from judge.storage.mirror import MirrorTerminalError, mirror_record, verify_record
 from judge.storage.resilient import ResilientStorage, StorageUnavailableError
 from judge.tasks import mirror_to_backup
@@ -36,6 +43,15 @@ class FlakyStorage(FileSystemStorage):
 
     def exists(self, name):
         self._fail()
+
+
+class CorruptingStorage(FileSystemStorage):
+    """Stores something other than what it was handed — a botched restore write."""
+
+    corrupt = True
+
+    def _save(self, name, content):
+        return super()._save(name, ContentFile(b'garbage') if self.corrupt else content)
 
 
 class ClientErrorStorage(FileSystemStorage):
@@ -293,6 +309,41 @@ class SweepCommandTestCase(StorageTestCase):
         record.refresh_from_db()
         self.assertEqual(record.attempts, attempts)  # not re-attempted
 
+    def test_sweep_limit_leaves_the_remainder_for_the_next_run(self):
+        for i in range(3):
+            name = f'submissions/2026/07/6/l{i}.bin'
+            self.primary.save(name, ContentFile(PAYLOAD))
+            record = StoredFileRecord.objects.create(path=name, sha256=PAYLOAD_SHA,
+                                                     size=len(PAYLOAD))
+            StoredFileRecord.objects.filter(id=record.id).update(
+                created_on=timezone.now() - timedelta(hours=1))
+
+        out = StringIO()
+        with self.settings(DMOJ_BACKUP_MIRROR_ENABLED=True):
+            call_command('storage_mirror_sweep', '--limit', '2', stdout=out)
+        self.assertEqual(
+            StoredFileRecord.objects.filter(status=StoredFileRecord.STATUS_MIRRORED).count(), 2)
+        self.assertIn('1 record(s) still due', out.getvalue())
+
+        with self.settings(DMOJ_BACKUP_MIRROR_ENABLED=True):
+            call_command('storage_mirror_sweep', '--limit', '2')
+        self.assertEqual(
+            StoredFileRecord.objects.filter(status=StoredFileRecord.STATUS_MIRRORED).count(), 3)
+
+    def test_sweep_abandons_a_record_past_max_attempts(self):
+        record = StoredFileRecord.objects.create(path='submissions/2026/07/6/stuck.bin',
+                                                 sha256=PAYLOAD_SHA, size=len(PAYLOAD),
+                                                 status=StoredFileRecord.STATUS_FAILED,
+                                                 attempts=20)
+        with self.settings(DMOJ_BACKUP_MIRROR_ENABLED=True):
+            with self.assertRaises(CommandError):
+                call_command('storage_mirror_sweep', '--max-attempts', '20', stderr=StringIO())
+
+        record.refresh_from_db()
+        self.assertEqual(record.status, StoredFileRecord.STATUS_ABANDONED)
+        self.assertEqual(record.attempts, 20)  # given up on, not attempted once more
+        self.assertIn('abandoned after 20', record.last_error)
+
     def test_sweep_verify_requeues_corrupt_backup(self):
         # Primary intact, backup corrupt -> record queued back to PENDING for re-mirror.
         name = 'submissions/2026/07/4/heal.bin'
@@ -309,6 +360,46 @@ class SweepCommandTestCase(StorageTestCase):
 
 
 class RestoreCommandTestCase(StorageTestCase):
+    def setUp(self):
+        super().setUp()
+        self.use_primary(self.primary)
+
+    def use_primary(self, primary):
+        """Point the restore command at a storage built on `primary`.
+
+        The command binds submission_storage at import time and the module stays in
+        sys.modules between tests, so the module attribute is what has to be patched.
+        """
+        storage = ResilientStorage(primary=primary, backup=self.backup, mirror_enabled=True)
+        patcher = mock.patch(
+            'judge.management.commands.storage_restore_backup.submission_storage',
+            return_value=storage)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return storage
+
+    def test_failed_restore_leaves_no_corrupt_object_behind(self):
+        # A restore that writes the wrong bytes must remove what it wrote: an object
+        # that exists but is corrupt would be silently skipped by every later run.
+        name = 'submissions/2026/07/5/rc.bin'
+        self.primary.save(name, ContentFile(PAYLOAD))
+        record = StoredFileRecord.objects.create(path=name, sha256=PAYLOAD_SHA, size=len(PAYLOAD))
+        mirror_record(record, self.primary, self.backup)
+        self.primary.delete(name)  # primary object lost — this is what restore is for
+
+        broken = CorruptingStorage(location=self.primary_root)
+        self.use_primary(broken)
+        with self.settings(DMOJ_BACKUP_MIRROR_ENABLED=True):
+            with self.assertRaises(CommandError):
+                call_command('storage_restore_backup', stderr=StringIO())
+        self.assertFalse(broken.exists(name))
+
+        broken.corrupt = False
+        with self.settings(DMOJ_BACKUP_MIRROR_ENABLED=True):
+            call_command('storage_restore_backup', stdout=StringIO())
+        with self.primary.open(name, 'rb') as f:
+            self.assertEqual(f.read(), PAYLOAD)
+
     def test_force_restore_preserves_primary_when_backup_corrupt(self):
         name = 'submissions/2026/07/5/rf.bin'
         self.primary.save(name, ContentFile(PAYLOAD))
@@ -325,6 +416,154 @@ class RestoreCommandTestCase(StorageTestCase):
         self.assertTrue(self.primary.exists(name))
         with self.primary.open(name, 'rb') as f:
             self.assertEqual(f.read(), PAYLOAD)
+
+
+class BoxHostKeyTestCase(TestCase):
+    """The backup mirror must never trust an unpinned SFTP host."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.key = paramiko.RSAKey.generate(2048)
+
+    def write_known_hosts(self, hosts):
+        fd, path = tempfile.mkstemp()
+        with os.fdopen(fd, 'w') as f:
+            for host in hosts:
+                f.write(f'{host} {self.key.get_name()} {self.key.get_base64()}\n')
+        self.addCleanup(os.unlink, path)
+        return path
+
+    def make_storage(self, known_host_file, port=22):
+        return BoxSFTPStorage(host='sftp.services.box.com', known_host_file=known_host_file,
+                              params={'port': port, 'username': 'u', 'password': 'p'})
+
+    def test_connect_refuses_without_a_known_hosts_file(self):
+        with self.assertRaises(ImproperlyConfigured):
+            self.make_storage(None)._connect()
+
+    def test_connect_refuses_when_the_host_is_not_pinned(self):
+        path = self.write_known_hosts(['someone.else.example'])
+        with self.assertRaises(ImproperlyConfigured):
+            self.make_storage(path)._connect()
+
+    def test_pinned_host_connects_under_reject_policy(self):
+        path = self.write_known_hosts(['sftp.services.box.com'])
+        storage = self.make_storage(path)
+        with mock.patch.object(paramiko.SSHClient, 'connect') as connect:
+            storage._connect()
+        connect.assert_called_once()
+        self.assertIsInstance(storage._ssh._policy, paramiko.RejectPolicy)
+
+    def test_non_default_port_looks_up_the_bracketed_entry(self):
+        storage = self.make_storage(self.write_known_hosts(['sftp.services.box.com']), port=2222)
+        with self.assertRaises(ImproperlyConfigured):
+            storage._connect()  # plain entry does not pin [host]:2222
+
+        storage = self.make_storage(self.write_known_hosts(['[sftp.services.box.com]:2222']),
+                                    port=2222)
+        with mock.patch.object(paramiko.SSHClient, 'connect'):
+            storage._connect()
+
+
+class BoxReconnectTestCase(TestCase):
+    """Box drops idle sessions; one reconnect-and-retry keeps a cached storage usable."""
+
+    def make_storage(self):
+        return BoxSFTPStorage(host='sftp.services.box.com', known_host_file=None,
+                              params={'port': 22})
+
+    def test_retry_once_reconnects_and_succeeds(self):
+        storage = self.make_storage()
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) == 1:
+                raise paramiko.SSHException('session went away')
+            return 'ok'
+
+        with mock.patch.object(BoxSFTPStorage, 'close') as close:
+            self.assertEqual(storage._retry_once(flaky), 'ok')
+        self.assertEqual(len(calls), 2)
+        close.assert_called_once()
+
+    def test_retry_once_gives_up_after_a_single_reconnect(self):
+        storage = self.make_storage()
+        calls = []
+
+        def broken():
+            calls.append(1)
+            raise paramiko.SSHException('host is down')
+
+        with mock.patch.object(BoxSFTPStorage, 'close'):
+            with self.assertRaises(paramiko.SSHException):
+                storage._retry_once(broken)
+        self.assertEqual(len(calls), 2)
+
+    def test_missing_file_is_not_retried(self):
+        # A missing object is an answer, not a broken session — and ResilientStorage
+        # relies on FileNotFoundError to keep 404 semantics.
+        storage = self.make_storage()
+        calls = []
+
+        def missing():
+            calls.append(1)
+            raise FileNotFoundError('no such file')
+
+        with self.assertRaises(FileNotFoundError):
+            storage._retry_once(missing)
+        self.assertEqual(len(calls), 1)
+
+
+class StoredFileAdminTestCase(StorageTestCase):
+    def setUp(self):
+        super().setUp()
+        self.admin = StoredFileRecordAdmin(StoredFileRecord, AdminSite())
+        self.request = RequestFactory().post('/')
+
+    def run_action(self, action, queryset):
+        with mock.patch.object(StoredFileRecordAdmin, 'message_user'), \
+                mock.patch('judge.tasks.mirror_to_backup.delay') as delay:
+            action(self.request, queryset)
+        return [call.args[0] for call in delay.call_args_list]
+
+    def make_record(self, name, status):
+        return StoredFileRecord.objects.create(path=name, sha256=PAYLOAD_SHA, size=len(PAYLOAD),
+                                               status=status, mirrored_at=timezone.now(),
+                                               attempts=3, last_error='boom')
+
+    def test_retry_skips_records_the_task_would_ignore(self):
+        mirrored = self.make_record('submissions/2026/07/7/m.bin',
+                                    StoredFileRecord.STATUS_MIRRORED)
+        pending = self.make_record('submissions/2026/07/7/p.bin',
+                                   StoredFileRecord.STATUS_PENDING)
+        self.make_record('submissions/2026/07/7/d.bin', StoredFileRecord.STATUS_DELETED)
+
+        queued = self.run_action(self.admin.retry_mirror, StoredFileRecord.objects.all())
+        self.assertEqual(queued, [pending.id])
+        mirrored.refresh_from_db()
+        self.assertEqual(mirrored.status, StoredFileRecord.STATUS_MIRRORED)
+
+    def test_force_remirror_resets_and_queues(self):
+        mirrored = self.make_record('submissions/2026/07/7/fm.bin',
+                                    StoredFileRecord.STATUS_MIRRORED)
+        abandoned = self.make_record('submissions/2026/07/7/fa.bin',
+                                     StoredFileRecord.STATUS_ABANDONED)
+        deleted = self.make_record('submissions/2026/07/7/fd.bin',
+                                   StoredFileRecord.STATUS_DELETED)
+
+        queued = self.run_action(self.admin.force_remirror, StoredFileRecord.objects.all())
+        self.assertCountEqual(queued, [mirrored.id, abandoned.id])
+        for record in (mirrored, abandoned):
+            record.refresh_from_db()
+            self.assertEqual(record.status, StoredFileRecord.STATUS_PENDING)
+            self.assertIsNone(record.mirrored_at)
+            self.assertEqual(record.attempts, 0)
+            self.assertEqual(record.last_error, '')
+
+        deleted.refresh_from_db()
+        self.assertEqual(deleted.status, StoredFileRecord.STATUS_DELETED)
 
 
 class KeySchemeTestCase(TestCase):
