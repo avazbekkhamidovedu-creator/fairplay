@@ -1,7 +1,17 @@
+import logging
+
 import paramiko
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from storages.backends.sftpstorage import SFTPStorage
+from storages.utils import is_seekable
+
+logger = logging.getLogger('judge.storage')
+
+#: Failures that can mean "the cached session died", so one reconnect is worth trying.
+#: FileNotFoundError is deliberately handled before these: a missing object is an
+#: answer, not a broken connection.
+RECONNECT_ERRORS = (paramiko.SSHException, EOFError, OSError)
 
 
 def host_key_name(host, port):
@@ -64,7 +74,61 @@ class BoxSFTPStorage(SFTPStorage):
         if ssh.get_transport():
             self._sftp = ssh.open_sftp()
 
+    # -- stale-session recovery ----------------------------------------------------
+    #
+    # submission_storage() caches one instance per process, and Box drops idle
+    # sessions. The upstream `sftp` property only reconnects when the transport is
+    # *known* dead, so a half-open session looks fine and fails on first use. Every
+    # remote call therefore gets exactly one reconnect-and-retry; a genuine outage
+    # still surfaces to the mirror task's retry policy or to ResilientStorage.
+
+    def _drop_session(self):
+        try:
+            self.close()
+        except Exception:
+            logger.debug('error closing stale Box SFTP session', exc_info=True)
+        self._ssh = self._sftp = None
+
+    def _retry_once(self, call, *args, **kwargs):
+        try:
+            return call(*args, **kwargs)
+        except FileNotFoundError:
+            raise
+        except RECONNECT_ERRORS as e:
+            logger.warning('Box SFTP call failed (%s); reconnecting and retrying once',
+                           type(e).__name__)
+            self._drop_session()
+            return call(*args, **kwargs)
+
     def open_stream(self, name):
         """Raw paramiko SFTPFile for a read — a true file-like object FileResponse can
         stream in chunks without buffering the whole file in memory."""
-        return self.sftp.open(self._remote_path(name), 'rb')
+        return self._retry_once(lambda: self.sftp.open(self._remote_path(name), 'rb'))
+
+    def _read(self, name):
+        return self._retry_once(super()._read, name)
+
+    def _save(self, name, content):
+        if not is_seekable(content):
+            # Replaying the upload would resend from wherever the first attempt
+            # stopped, so let the caller's retry deal with it instead.
+            return super()._save(name, content)
+        return self._retry_once(super()._save, name, content)
+
+    def exists(self, name):
+        return self._retry_once(super().exists, name)
+
+    def size(self, name):
+        return self._retry_once(super().size, name)
+
+    def delete(self, name):
+        # Upstream swallows every OSError here, which turns a dead session into a
+        # silent no-op that leaves a partial backup copy in place. Keep the
+        # missing-file tolerance, surface everything else.
+        def remove():
+            try:
+                self.sftp.remove(self._remote_path(name))
+            except FileNotFoundError:
+                pass
+
+        self._retry_once(remove)
