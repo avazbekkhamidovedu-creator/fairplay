@@ -23,9 +23,10 @@
 }
 
 .ws-toolbar { display: flex; align-items: center; gap: .45rem; min-height: var(--ws-toolbar-height); padding: .65rem 1.2rem; border-bottom: 1px solid var(--oj-border); background: var(--oj-surface); }
-.ws-toolbar .tool-btn, .ws-toolbar .layout-toggle { min-height: 34px; border: 1px solid var(--oj-border); border-radius: 4px; background: var(--oj-surface); color: var(--oj-text); padding: .35rem .7rem; }
-.ws-toolbar .tool-btn:hover, .ws-toolbar .layout-toggle:hover { border-color: var(--oj-accent); color: var(--oj-accent); }
-.ws-toolbar .tool-btn.is-active, .ws-toolbar .submit-btn { border-color: var(--oj-btn); background: var(--oj-btn); color: #fff; }
+.ws-app .ws-toolbar .tool-btn, .ws-app .ws-toolbar .layout-toggle { min-height: 34px; border: 1px solid var(--oj-border); border-radius: 4px; background: var(--oj-surface); color: var(--oj-text) !important; padding: .35rem .7rem; }
+.ws-app .ws-toolbar .tool-btn:hover, .ws-app .ws-toolbar .layout-toggle:hover { border-color: var(--oj-accent); color: var(--oj-accent) !important; }
+.ws-app .ws-toolbar .tool-btn.is-active, .ws-app .ws-toolbar .submit-btn { border-color: var(--oj-btn); background: var(--oj-btn); color: #fff !important; }
+.ws-app .ws-toolbar .tool-btn i, .ws-app .ws-toolbar .layout-toggle i { color: inherit !important; }
 .ws-toolbar .icon-only { width: 34px; padding: 0; }
 .ws-toolbar .ctx-label { color: var(--oj-text); font-size: 1.05rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-toolbar .nav-arrows { display: inline-flex; gap: .25rem; }
@@ -59,9 +60,9 @@
 .ws-meta span:last-child { border-right: 0; }
 .content-description { line-height: 1.7; }
 
-.ws-drawer-backdrop { display: none; position: absolute; inset: 0; z-index: 9; background: rgba(0, 0, 0, .28); }
+.ws-drawer-backdrop { display: none; position: absolute; inset: 0; z-index: 9; background: transparent; }
 .ws-drawer-backdrop.open { display: block; }
-.ws-drawer { position: absolute; z-index: 10; top: 0; bottom: 0; left: 0; width: min(26rem, 88vw); transform: translateX(-101%); transition: transform .18s ease; overflow: auto; border-right: 1px solid var(--oj-border); background: var(--oj-surface); box-shadow: 8px 0 20px rgba(0,0,0,.12); }
+.ws-drawer { position: absolute; z-index: 10; top: 0; bottom: 0; left: 0; width: min(22rem, 88vw); transform: translateX(-101%); transition: transform .18s ease; overflow: auto; border-right: 1px solid var(--oj-border); background: var(--oj-surface); box-shadow: 8px 0 20px rgba(0,0,0,.12); }
 .ws-drawer.open { transform: translateX(0); }
 .ws-drawer-summary, .ws-drawer-progress, .ws-drawer-toolbar { padding: .8rem; border-bottom: 1px solid var(--oj-border); }
 .ws-drawer-summary, .ws-drawer-toolbar { display: flex; gap: .5rem; align-items: center; }
@@ -111,6 +112,7 @@
   .ws-toolbar { padding-inline: .6rem; }
   .ws-toolbar .ctx-label { max-width: 9rem; }
   .ws-filter-panel, .tc-pair { grid-template-columns: 1fr; }
+  .ws-drawer-backdrop { background: rgba(0, 0, 0, .28); }
 }
 
 /* The site navigation is fixed. Reserve its measured desktop height so the
