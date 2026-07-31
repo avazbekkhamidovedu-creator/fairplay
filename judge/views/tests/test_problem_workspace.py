@@ -61,3 +61,18 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'id="submitted-source"')
         self.assertContains(response, 'print(42)')
         self.assertNotContains(response, 'functools.partial')
+
+    def test_workspace_submit_returns_json_and_status_for_own_submission(self):
+        with mock.patch.object(Submission, 'judge'):
+            response = self.client.post(
+                reverse('problem_submit', args=[self.problem.code]),
+                {'workspace': '1', 'source': 'print(1)', 'language': self.language.id, 'judge': ''},
+                HTTP_X_WORKSPACE_SUBMIT='1',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        submission = Submission.objects.get(id=payload['submission_id'])
+        self.assertEqual(submission.problem, self.problem)
+        status = self.client.get(payload['status_url'])
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()['id'], submission.id)

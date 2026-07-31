@@ -1241,6 +1241,16 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
 
         return reverse('submission_status', args=(self.new_submission.id,))
+    def _workspace_success_response(self, form):
+        if self.request.POST.get('workspace') == '1' and self.request.headers.get('X-Workspace-Submit') == '1':
+            return JsonResponse({
+                'submission_id': self.new_submission.id,
+                'status': self.new_submission.status,
+                'result': self.new_submission.result,
+                'status_url': reverse('problem_workspace_submission_status', args=(self.object.code, self.new_submission.id)),
+            })
+        return super().form_valid(form)
+
     def _submission_blocked_response(self):
         """Pre-submit guards shared by every question type. Returns a response if blocked."""
         if (
@@ -1325,7 +1335,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         self.new_submission.source = source
         self.new_submission.judge(force_judge=True, judge_id=form.cleaned_data['judge'])
 
-        return super().form_valid(form)
+        return self._workspace_success_response(form)
 
     def _noncode_form_valid(self, form):
         with transaction.atomic():
@@ -1350,7 +1360,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         else:
             self.new_submission.judge(force_judge=True)
 
-        return super().form_valid(form)
+        return self._workspace_success_response(form)
 
     def _needs_ai_grading(self):
         """Return True if this submission type requires an LLM call (and thus
@@ -1722,3 +1732,20 @@ class ProblemWorkspaceRun(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, V
         # and the bridge protocol. It creates no ContestSubmission.
         from judge.views.ide import IDESubmitView
         return IDESubmitView().post(request)
+
+class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, View):
+    """Status JSON for the current user's formal Workspace submission."""
+
+    http_method_names = ['get']
+
+    def get(self, request, *args, **kwargs):
+        problem = self.get_object()
+        submission = get_object_or_404(Submission, id=kwargs['submission'], problem=problem, user=request.profile)
+        return JsonResponse({
+            'id': submission.id,
+            'status': submission.status,
+            'result': submission.result,
+            'points': submission.points,
+            'time': submission.time,
+            'memory': submission.memory,
+        })

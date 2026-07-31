@@ -143,3 +143,19 @@
 @media (max-width: 800px) {
   .workspace-page #page-container { padding-top: 54px; }
 }
+
+/* Programming pane: only the editor is dark; unused pane space must remain surface-colored. */
+.ws-app .ws-pane-right, .ws-app #right-programming { background: var(--oj-surface); }
+.ws-app .ide-bottom-tabs { min-height: 3.35rem; }
+.ws-app .ide-bottom-tabs .run-btn, .ws-app .submit-btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border: 1px solid var(--oj-btn-border, var(--oj-btn)); border-radius: 4px; background: var(--oj-btn); color: #fff !important; font-weight: 700; box-shadow: 0 1px 2px rgba(0,0,0,.16); }
+.ws-app .ide-bottom-tabs .run-btn { min-height: 2.15rem; padding: .35rem .85rem; }
+.ws-app .submit-btn { min-height: 2.35rem; padding: .45rem 1rem; }
+.workspace-run-output { min-height: 6rem; margin: .7rem 0 0; padding: .65rem; border: 1px solid var(--oj-border); border-radius: 4px; background: var(--oj-code-bg, #f7f7f7); color: var(--oj-text); white-space: pre-wrap; }
+.ws-app .ws-drawer-pagination { position: sticky; bottom: 0; align-items: center; border-top: 1px solid var(--oj-border); background: var(--oj-surface); }
+.ws-app .ws-drawer-pagination button { width: 2rem; height: 2rem; margin-left: .25rem; border: 1px solid var(--oj-border); border-radius: 4px; background: var(--oj-surface); color: var(--oj-text) !important; }
+.ws-app .ws-drawer-pagination button:hover:not(:disabled) { border-color: var(--oj-accent); color: var(--oj-accent) !important; }
+.ws-app .ws-drawer-pagination button:disabled { opacity: .38; }
+.ws-problem-head h2 { font-size: 1.28rem; }
+.ws-badges { margin: .35rem 0 .55rem; }
+.ws-meta { margin: .65rem 0; }
+.ws-problem-actions { margin: .55rem 0 .8rem; }

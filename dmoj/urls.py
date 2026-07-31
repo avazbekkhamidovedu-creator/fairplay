@@ -146,6 +146,7 @@ urlpatterns = [
         path('/clone', problem.ProblemClone.as_view(), name='problem_clone'),
         path('/submit', problem.ProblemSubmit.as_view(), name='problem_submit'),
         path('/workspace/run', problem.ProblemWorkspaceRun.as_view(), name='problem_workspace_run'),
+        path('/workspace/submission/<int:submission>', problem.ProblemWorkspaceSubmissionStatus.as_view(), name='problem_workspace_submission_status'),
         path('/resubmit/<int:submission>', problem.ProblemSubmit.as_view(), name='problem_submit'),
         path('/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_edit'),
         path('/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_edit'),
