@@ -47,3 +47,17 @@ class ProblemWorkspaceTestCase(TestCase):
         run = Submission.objects.get(id=response.json()['submission_id'])
         self.assertEqual(run.problem.code, 'idepractice')
         self.assertFalse(hasattr(run, 'contest_submission'))
+
+    def test_selected_own_submission_exposes_result_and_source_for_editor_restore(self):
+        from judge.models import SubmissionSource
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=self.problem, language=self.language,
+            result='AC', points=100,
+        )
+        SubmissionSource.objects.create(submission=submission, source='print(42)')
+        response = self.client.get(
+            reverse('problem_detail', args=[self.problem.code]) + '?submission=%d' % submission.id,
+        )
+        self.assertContains(response, 'id="submitted-source"')
+        self.assertContains(response, 'print(42)')
+        self.assertNotContains(response, 'functools.partial')

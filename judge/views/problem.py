@@ -301,6 +301,40 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['prev_contest_problem'] = cp_qs.filter(order__lt=contest_problem.order).order_by('-order').first()
 
         context['submission_type'] = self.object.submission_type
+        from judge.question_types import all_types, get_grader
+        workspace_grader = get_grader(self.object.submission_type)
+        context['workspace_is_code'] = workspace_grader.routes_to_bridge
+        context['workspace_submission_type_label'] = str(workspace_grader.label)
+        context['workspace_groups'] = ProblemGroup.objects.order_by('full_name')
+        context['workspace_format_options'] = [
+            {'code': grader.submission_type, 'label': str(grader.label)} for grader in all_types()
+        ]
+        context['workspace_timer_seconds'] = 0
+        if contest_problem and self.request.participation.end_time:
+            context['workspace_timer_seconds'] = max(
+                0, int(self.request.participation.time_remaining.total_seconds()),
+            )
+        context['workspace_submission'] = None
+        selected_submission_id = self.request.GET.get('submission')
+        if authed and selected_submission_id and selected_submission_id.isdigit():
+            selected_submission = Submission.objects.select_related('source').filter(
+                id=int(selected_submission_id), problem=self.object,
+            ).first()
+            if selected_submission is not None and selected_submission.can_see_detail(user):
+                selected_source = None
+                if selected_submission.user_id == self.request.profile.id:
+                    try:
+                        selected_source = selected_submission.source.source
+                    except ObjectDoesNotExist:
+                        pass
+                context['workspace_submission'] = {
+                    'id': selected_submission.id,
+                    'result': selected_submission.result,
+                    'points': selected_submission.points,
+                    'time': selected_submission.time,
+                    'memory': selected_submission.memory,
+                    'source': selected_source,
+                }
         context['workspace_submissions'] = (
             Submission.objects.filter(user=self.request.profile, problem=self.object)
             .select_related('language').order_by('-date')[:20]
