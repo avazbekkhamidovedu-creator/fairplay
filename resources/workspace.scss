@@ -100,6 +100,27 @@
 .answer-form { min-height: 100%; padding: 1rem; background: var(--oj-surface); color: var(--oj-text); }
 .answer-form .submit-btn { border: 1px solid var(--oj-btn); border-radius: 4px; background: var(--oj-btn); color: #fff; padding: .45rem .8rem; }
 
+/* Scoped overrides are intentional: the legacy theme makes button text white with !important. */
+.ws-app .ws-tabs button, .ws-app .sub-tabs button, .ws-app .sub-tabs a, .ws-app .ide-bottom-tabs button { color: var(--oj-text-muted) !important; }
+.ws-app .ws-tabs button:hover, .ws-app .ws-tabs button.active, .ws-app .sub-tabs button.active, .ws-app .ide-bottom-tabs button.active { color: var(--oj-accent) !important; }
+.ws-app .ide-bottom-tabs .run-btn { color: #fff !important; }
+.ws-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: .8rem; border-bottom: 1px solid var(--oj-border); color: var(--oj-text); }
+.ws-drawer-head strong { font-size: 1rem; }
+.ws-app .ws-drawer .close-btn { width: 2rem; height: 2rem; border: 1px solid var(--oj-border); border-radius: 4px; background: var(--oj-surface); color: var(--oj-text) !important; }
+.ws-drawer-progress { color: var(--oj-text-muted); font-size: .88rem; }
+.ws-filter-panel { margin: 0; padding: .8rem; border-bottom: 1px solid var(--oj-border); }
+.drawer-problem { min-height: 3.1rem; align-items: center; }
+.drawer-problem-code { color: var(--oj-text-muted); font-family: monospace; font-size: .83rem; }
+.drawer-problem.active { box-shadow: inset 3px 0 0 var(--oj-accent); }
+.ws-problem-actions { display: flex; flex-wrap: wrap; gap: .55rem; margin: .8rem 0 1rem; }
+.ws-problem-actions a { border: 1px solid var(--oj-border); border-radius: 4px; color: var(--oj-text) !important; padding: .35rem .55rem; text-decoration: none; }
+.ws-problem-actions a:hover { border-color: var(--oj-accent); color: var(--oj-accent) !important; }
+.ws-problem-info { margin-top: 1.5rem; border-top: 1px solid var(--oj-border); padding-top: .8rem; color: var(--oj-text); }
+.ws-problem-info h3 { margin: 0 0 .6rem; font-size: 1rem; }
+.ws-problem-info > div { margin: .45rem 0; }
+.ws-problem-info i { color: var(--oj-text-muted); width: 1.25rem; }
+.ws-license { margin: 1rem 0; }
+
 @media (prefers-color-scheme: dark) {
   .workspace-page .ws-app, .workspace-page .ws-pane, .workspace-page .ws-toolbar, .workspace-page .ws-drawer, .workspace-page .ide-head, .workspace-page .ide-bottom, .workspace-page .answer-form { background: var(--oj-surface); color: var(--oj-text); }
   .workspace-page .ws-filter-panel input, .workspace-page .ws-filter-panel select, .workspace-page .ws-drawer-summary select, .workspace-page .ide-head select, .workspace-page .tc-block textarea, .workspace-page .tc-block pre { background: var(--oj-surface); color: var(--oj-text); }

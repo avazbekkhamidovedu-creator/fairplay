@@ -26,11 +26,10 @@
   <div class="ws-body layout-lr" id="ws-body">
     <div class="ws-drawer-backdrop" id="drawer-backdrop"></div>
     <aside class="ws-drawer" id="ws-drawer" aria-label="{{ _('Problem set') }}">
+      <div class="ws-drawer-head"><strong><i class="fa fa-list"></i> {{ _('Problem list') }}</strong><button class="close-btn" id="drawer-close" type="button" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button></div>
       {% if workspace_mode == 'practice' %}
-        <div class="ws-drawer-progress"><button class="close-btn" id="drawer-close" type="button" aria-label="{{ _('Close') }}">×</button><span id="drawer-solved"></span></div>
-        <div class="ws-drawer-toolbar">
-          <div class="ws-drawer-search"><i class="fa fa-search"></i><input id="drawer-q" type="search" placeholder="{{ _('Search problems') }}"></div>
-        </div>
+        <div class="ws-drawer-progress"><span id="drawer-solved"></span></div>
+        <div class="ws-drawer-toolbar"><div class="ws-drawer-search"><i class="fa fa-search"></i><input id="drawer-q" type="search" placeholder="{{ _('Search problems') }}"></div></div>
         <div class="ws-filter-panel">
           <div class="filter-block"><label for="fp-status">{{ _('Status') }}</label><select id="fp-status"><option value="">{{ _('All') }}</option><option value="solved">{{ _('Solved') }}</option><option value="attempted">{{ _('Attempted') }}</option><option value="unsolved">{{ _('Unsolved') }}</option></select></div>
           <div class="filter-block"><label for="fp-type">{{ _('Problem type') }}</label><select id="fp-type"><option value="">{{ _('All') }}</option>{% for option in workspace_format_options %}<option value="{{ option.code }}">{{ option.label }}</option>{% endfor %}</select></div>
@@ -38,7 +37,7 @@
           <div class="filter-block"><label for="fp-ac-min">{{ _('AC rate') }}</label><div class="filter-inline"><input id="fp-ac-min" type="number" min="0" max="100" placeholder="{{ _('Min') }}"><span>~</span><input id="fp-ac-max" type="number" min="0" max="100" placeholder="{{ _('Max') }}"></div></div>
         </div>
       {% else %}
-        <div class="ws-drawer-summary"><button class="close-btn" id="drawer-close" type="button" aria-label="{{ _('Close') }}">×</button><span id="drawer-progress"></span><select id="drawer-filter-status"><option value="">{{ _('All') }}</option><option value="answered">{{ _('Answered') }}</option><option value="unanswered">{{ _('Unanswered') }}</option></select></div>
+        <div class="ws-drawer-summary"><span id="drawer-progress"></span><select id="drawer-filter-status"><option value="">{{ _('All') }}</option><option value="answered">{{ _('Answered') }}</option><option value="unanswered">{{ _('Unanswered') }}</option></select></div>
       {% endif %}
       <div class="ws-drawer-body" id="drawer-problems">
         {% for item in workspace_problems %}
@@ -62,7 +61,21 @@
         <button data-tab="editorial" type="button"{% if contest_problem %} class="tab-hidden"{% endif %}>{{ _('Editorial') }}</button><button data-tab="subs" type="button">{{ _('Submissions') }}</button>
       </div>
       <div class="ws-tab-panels">
-        <div class="ws-tab-panel active" id="panel-desc"><div class="ws-problem-head"><i class="title-state fa fa-circle-o"></i><h2>{{ problem.code }} · {{ title }}</h2></div><div class="ws-badges"><span class="ws-badge">{{ workspace_submission_type_label }}</span>{% if contest_problem %}<span class="ws-badge">{{ contest_problem.points }} {{ _('points') }}</span>{% endif %}</div><div class="ws-meta"><span>{{ problem.time_limit }}s</span><span>{{ problem.memory_limit|kbsimpleformat }}</span>{% if submissions_left is defined %}<span>{{ _('Submissions left: %(count)s', count=submissions_left) }}</span>{% endif %}</div><div class="content-description">{{ description|markdown('default') }}</div></div>
+        <div class="ws-tab-panel active" id="panel-desc">
+          <header class="ws-problem-head"><i class="title-state fa fa-circle-o"></i><div><h2>{{ problem.code }} · {{ title }}</h2><div class="ws-badges"><span class="ws-badge">{{ workspace_submission_type_label }}</span>{% if problem.difficulty %}<span class="ws-badge difficulty-badge diff-{{ problem.difficulty }}">{{ problem.difficulty_label }}</span>{% endif %}{% if contest_problem %}<span class="ws-badge">{{ contest_problem.points }} {{ _('points') }}</span>{% endif %}</div></div></header>
+          <div class="ws-meta"><span><i class="fa fa-clock-o"></i> {{ problem.time_limit }}s</span><span><i class="fa fa-server"></i> {{ problem.memory_limit|kbsimpleformat }}</span><span><i class="fa fa-star-o"></i> {% if contest_problem %}{{ contest_problem.points }}{% if contest_problem.partial %} {{ _('(partial)') }}{% endif %}{% else %}{{ problem.points|floatformat }}{% if problem.partial %} {{ _('(partial)') }}{% endif %}{% endif %}</span>{% if submissions_left is defined %}<span>{{ _('Submissions left: %(count)s', count=submissions_left) }}</span>{% endif %}</div>
+          <div class="ws-problem-actions">
+            {% if vote_perm.can_view() %}{% if vote_perm.can_vote() %}<a href="#" data-featherlight="{{ url('problem_vote', problem.code) }}"><i class="fa fa-star"></i> {% if vote is none %}{{ _('Vote on problem points') }}{% else %}{{ _('Edit points vote (%(points)d)', points=vote.points) }}{% endif %}</a>{% endif %}<a href="#" data-featherlight="{{ url('problem_vote_stats', problem.code) }}"><i class="fa fa-bar-chart"></i> {{ _('Voting statistics') }}</a>{% endif %}
+            {% if can_edit_problem %}{% if problem.submission_type == 'M' %}<a href="{{ url('problem_mcq_edit', problem.code) }}"><i class="fa fa-pencil"></i> {{ _('Edit question') }}</a>{% elif problem.submission_type == 'B' %}<a href="{{ url('problem_fillblank_edit', problem.code) }}"><i class="fa fa-pencil"></i> {{ _('Edit question') }}</a>{% else %}<a href="{{ url('admin:judge_problem_change', problem.id) }}"><i class="fa fa-pencil"></i> {{ _('Edit problem') }}</a>{% endif %}{% endif %}
+          </div>
+          <div class="content-description">{{ description|markdown(problem.markdown_style, MATH_ENGINE)|reference|str|safe }}</div>
+          {% with license=problem.license %}{% if license %}<p class="ws-license"><a href="{{ url('license', license.key) }}">{{ license.display or license.name }}</a></p>{% endif %}{% endwith %}
+          <section class="ws-problem-info" aria-label="{{ _('Problem information') }}"><h3>{{ _('Problem information') }}</h3>
+            {% if not contest_problem or not contest_problem.contest.hide_problem_authors %}{% with authors=problem.authors.all() %}{% if authors %}<div><i class="fa fa-pencil-square-o"></i> <b>{% trans trimmed count=authors|length %}Author:{% pluralize count %}Authors:{% endtrans %}</b> {{ link_users(authors) }}</div>{% endif %}{% endwith %}{% endif %}
+            {% if not contest_problem or not contest_problem.contest.hide_problem_tags %}{% with types=problem.types_list %}{% if types %}<div><i class="fa fa-tags"></i> <b>{{ _('Problem types:') }}</b> {{ types|join(', ') }}</div>{% endif %}{% endwith %}{% endif %}
+            {% if show_languages %}<div><i class="fa fa-code"></i> <b>{{ _('Allowed languages') }}:</b> {{ problem.languages_list()|join(', ') }}</div>{% endif %}
+          </section>
+        </div>
         <div class="ws-tab-panel" id="panel-ai"><div class="alert alert-info">{{ _('Use these hints to guide your thinking. They do not reveal an answer or source code.') }}</div><ul><li>{{ _('Identify the input-output relation and edge cases.') }}</li><li>{{ _('Set a complexity budget before writing code.') }}</li><li>{{ _('Validate the smallest counterexample before submitting.') }}</li></ul></div>
         <div class="ws-tab-panel" id="panel-result">{% if workspace_submission %}<div class="result-actions">{% if workspace_submission.source %}<button class="tool-btn" id="btn-load-editor" type="button">{{ _('Load into editor') }}</button>{% endif %}</div><h3>{{ _('Execution results') }}</h3><p><b>{{ _('Result') }}:</b> {{ workspace_submission.result }}{% if workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}</p><p><b>{{ _('Resources') }}:</b> {{ workspace_submission.time|default(0) }}s, {{ workspace_submission.memory|default(0) }}KB</p>{% if workspace_submission.source %}<pre class="result-source" id="submitted-source">{{ workspace_submission.source }}</pre>{% endif %}{% else %}<p>{{ _('No submission has been selected.') }}</p>{% endif %}</div>
         <div class="ws-tab-panel" id="panel-editorial">{% if contest_problem %}<div class="editorial-locked"><i class="fa fa-lock"></i> {{ _('Editorial is locked during this assignment.') }}</div>{% elif editorial %}<div class="editorial-body">{{ editorial.content|markdown('default') }}</div>{% else %}<p>{{ _('No editorial is available.') }}</p>{% endif %}</div>
@@ -82,4 +95,7 @@
   </div>
 </div>
 {% endblock %}
-{% block bodyend %}<script src="{{ static('workspace.js') }}"></script>{% endblock %}
+{% block bodyend %}
+  {% if vote_perm.can_view() %}<script src="{{ static('libs/chart.js/Chart.js') }}"></script><script src="{{ static('problem-vote.js') }}"></script>{% endif %}
+  <script src="{{ static('workspace.js') }}"></script>
+{% endblock %}
