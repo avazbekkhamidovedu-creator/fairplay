@@ -30,11 +30,12 @@ class FileUploadQuestionType(QuestionType):
     def can_create(self, user):
         return user.has_perm('judge.create_private_problem')
 
+    # File-upload problems are authored/edited through the unified create_v2 page.
     def create_url(self):
-        return reverse('problem_file_create')
+        return reverse('problem_create_v2')
 
     def edit_url(self, problem):
-        return reverse('problem_file_edit', args=(problem.code,))
+        return reverse('problem_edit_v2', args=(problem.code,))
 
     # --- student submission -------------------------------------------------
     def build_form(self, problem, profile, data=None, files=None, initial=None):
