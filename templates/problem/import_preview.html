@@ -22,9 +22,9 @@
         .import-preview-card[data-type="M"] .not-for-mcq { display: none; }
         .mcq-field, .fb-field { margin: 1em 0; }
         .mcq-field label, .fb-field label { display: block; font-weight: bold; margin-bottom: 0.3em; }
-        .mcq-option-table, .fb-blank-table { border-collapse: collapse; width: 100%; }
-        .mcq-option-table td, .fb-blank-table td { padding: 4px; vertical-align: top; }
-        .mcq-option-text, .fb-blank-label, .fb-blank-answers { box-sizing: border-box; width: 100%; }
+        .fb-blank-table { border-collapse: collapse; width: 100%; }
+        .fb-blank-table td { padding: 4px; vertical-align: top; }
+        .fb-blank-label, .fb-blank-answers { box-sizing: border-box; width: 100%; }
         .preview-drag-handle { color: #888; cursor: move; padding: 6px; }
         .import-preview-layout { display: grid; gap: 1.25em; grid-template-columns: minmax(13rem, 22rem) minmax(0, 1fr); }
         .import-problem-list { align-self: start; background: #f4efe4; border: 1px solid #d9d5c9; padding: 0.8em; position: sticky; top: 1em; }
@@ -53,17 +53,6 @@
                 var type = card.find('[name="question_type"]').val();
                 if (type) card.attr('data-type', type);
             }
-            function syncMcq(card) {
-                var options = [], answers = [];
-                card.find('.mcq-option-row:visible').each(function (index) {
-                    var text = $(this).find('.mcq-option-text').val().trim();
-                    if (!text) return;
-                    options.push(text);
-                    if ($(this).find('.mcq-is-correct').is(':checked')) answers.push(options.length);
-                });
-                card.find('[name="options"]').val(options.join('\n'));
-                card.find('[name="answer"]').val(answers.join('|'));
-            }
             function syncBlanks(card) {
                 var blocks = [];
                 card.find('.fb-blank-row:visible').each(function (index) {
@@ -78,15 +67,7 @@
                 card.find('[name="blanks"]').val(blocks.join('\n---\n'));
             }
             function syncEditor(card) {
-                if (card.attr('data-type') === 'M') syncMcq(card);
                 if (card.attr('data-type') === 'B') syncBlanks(card);
-            }
-            function addMcqRow(card, option) {
-                var template = card.find('.empty-mcq-row').get(0);
-                var row = $($(template.content).children().first().cloneNode(true));
-                row.find('.mcq-option-text').val(option && option.text || '');
-                row.find('.mcq-is-correct').prop('checked', !!(option && option.is_correct));
-                card.find('.mcq-option-rows').append(row);
             }
             function addBlankRow(card, blank) {
                 var template = card.find('.empty-blank-row').get(0);
@@ -94,10 +75,6 @@
                 row.find('.fb-blank-label').val(blank && blank.label || '');
                 row.find('.fb-blank-answers').val(blank && blank.answers || '');
                 card.find('.fb-blank-rows').append(row);
-            }
-            function renderMcqRows(card, options) {
-                card.find('.mcq-option-rows').empty();
-                (options || []).forEach(function (option) { addMcqRow(card, option); });
             }
             function renderBlankRows(card, blanks) {
                 card.find('.fb-blank-rows').empty();
@@ -110,7 +87,6 @@
                 ['description', 'solution', 'tags', 'difficulty', 'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks'].forEach(function (name) {
                     if (Object.prototype.hasOwnProperty.call(item, name)) card.find('[name="' + name + '"]').val(item[name]);
                 });
-                if (item.preview_options) renderMcqRows(card, item.preview_options);
                 if (item.preview_blanks) renderBlankRows(card, item.preview_blanks);
             }
             function selectCard(itemId) {
@@ -155,9 +131,7 @@
                     $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]').removeClass('has-error');
                 }
             });
-            $('.import-preview-card').on('click', '.remove-option', function (event) {
-                event.preventDefault(); $(this).closest('.mcq-option-row').remove();
-            }).on('click', '.remove-blank', function (event) {
+            $('.import-preview-card').on('click', '.remove-blank', function (event) {
                 event.preventDefault(); $(this).closest('.fb-blank-row').remove();
             });
             $('.import-action').on('click', async function (event) {
@@ -257,10 +231,12 @@
                     <div class="import-preview-field"><label>{{ _('Description') }}</label><textarea name="description">{{ item.description }}</textarea></div>
                     <div class="import-preview-field not-for-blank not-for-mcq"><label>{{ _('Answer key / notes for LLM') }}</label><textarea name="answer">{{ item.answer }}</textarea></div>
                     <div class="mcq-field import-type-fields for-mcq">
-                        <input type="hidden" name="answer" value="{{ item.answer }}"><textarea name="options" hidden>{{ item.options }}</textarea>
-                        <label>{{ _('Choices') }}</label>
-                        <table class="mcq-option-table"><thead><tr><th></th><th>{{ _('Choice') }}</th><th>{{ _('Correct') }}</th><th></th></tr></thead><tbody class="mcq-option-rows">{% for option in item.preview_options %}<tr class="mcq-option-row"><td class="preview-drag-handle">&#9776;</td><td><textarea rows="2" class="mcq-option-text">{{ option.text }}</textarea></td><td><input type="checkbox" class="mcq-is-correct"{% if option.is_correct %} checked{% endif %}></td><td><a href="#" class="remove-option">{{ _('Remove') }}</a></td></tr>{% endfor %}</tbody></table>
-                        <template class="empty-mcq-row"><tr class="mcq-option-row"><td class="preview-drag-handle">&#9776;</td><td><textarea rows="2" class="mcq-option-text"></textarea></td><td><input type="checkbox" class="mcq-is-correct"></td><td><a href="#" class="remove-option">{{ _('Remove') }}</a></td></tr></template>
+                        <label>{{ _('Choices') }}</label><textarea name="options">{{ item.options }}</textarea>
+                        <small>{{ _('Enter one choice per line. This remains editable when automatic recognition finds no choices.') }}</small>
+                    </div>
+                    <div class="mcq-field import-type-fields for-mcq">
+                        <label>{{ _('Correct answer') }}</label><input name="answer" value="{{ item.answer }}">
+                        <small>{{ _('Use a choice letter, number, or exact choice text. Separate multiple correct answers with |.') }}</small>
                     </div>
                     <div class="fb-field import-type-fields for-blank">
                         <input type="hidden" name="answer" value="{{ item.answer }}"><textarea name="blanks" hidden>{{ item.blanks }}</textarea>
@@ -274,7 +250,6 @@
                     <div class="import-preview-field import-type-fields for-code"><label>{{ _('Allowed languages') }}</label><textarea name="allowed_languages" rows="2">{{ item.allowed_languages }}</textarea><small>{{ _('Separate full names with | or commas. C++11 also matches CPP11.') }}</small></div>
                     <div class="import-preview-field import-type-fields for-code"><label>{{ _('Test data') }}</label><textarea name="test_data" rows="7" placeholder="input data 1: 2 3&#10;output data 1: 5">{{ item.test_data }}</textarea><small>{{ _('Use input data N: and output data N: pairs. Multi-line values are supported.') }}</small></div>
                     {% if item.test_data_zip %}<div class="import-preview-field import-type-fields for-code"><label>{{ _('Embedded test data ZIP') }}</label><div>{{ item.test_data_zip.name }}</div><small>{{ _('Imported from the Excel object and used in preference to text test data.') }}</small></div>{% endif %}
-                    <div class="import-preview-field import-type-fields for-mcq"><label>{{ _('Options, one per line') }}</label><textarea name="options">{{ item.options }}</textarea></div>
                     <div class="import-preview-actions">
                         <button type="submit" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}">{{ _('Save draft') }}</button>
                         <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}">{{ _('LLM format question') }}</button>
