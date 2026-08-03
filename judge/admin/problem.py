@@ -904,7 +904,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Problem title.', 'Two Sum'],
             [
-                'problem_type', 'yes', 'Choose code, multiple_choice, or fill_blank from the Excel dropdown.',
+                'problem_type', 'yes',
+                'Choose code, multiple_choice, fill_blank, true_false, or short_answer from the Excel dropdown.',
                 'multiple_choice',
             ],
             [
@@ -976,6 +977,14 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 for relation in relationships
             }
             reference_sheet_path = ''
+            problems_sheet_path = ''
+            for sheet in workbook.iter():
+                if not sheet.tag.endswith('}sheet'):
+                    continue
+                target = relation_targets.get(sheet.attrib.get('{%s}id' % simple_xlsx.REL_NS), '')
+                path = target.lstrip('/') if target.startswith('/') else 'xl/{}'.format(target)
+                if sheet.attrib.get('name') == 'Problems':
+                    problems_sheet_path = path
             for sheet_name in ('Instructions', 'Reference'):
                 sheet = next(
                     (item for item in workbook.iter() if item.tag.endswith('}sheet')
@@ -989,8 +998,17 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 break
             if not reference_sheet_path:
                 raise ValueError('The Excel template must contain an Instructions or Reference worksheet.')
+            if not problems_sheet_path:
+                raise ValueError('The Excel template must contain a Problems worksheet.')
             shared_strings = ET.fromstring(source.read(strings_path))
             reference_sheet = ET.fromstring(source.read(reference_sheet_path))
+            problems_sheet = ET.fromstring(source.read(problems_sheet_path))
+            for validation in problems_sheet.findall('x:dataValidations/x:dataValidation', namespace):
+                if validation.attrib.get('sqref') != 'B2:B1000':
+                    continue
+                formula = validation.find('x:formula1', namespace)
+                if formula is not None:
+                    formula.text = '"code,multiple_choice,fill_blank,true_false,short_answer"'
             old_string_cells = len(reference_sheet.findall('.//x:c[@t="s"]', namespace))
             string_lookup = {}
             string_items = shared_strings.findall('x:si', namespace)
@@ -1054,6 +1072,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                         content = ET.tostring(shared_strings, encoding='utf-8', xml_declaration=True)
                     elif info.filename == reference_sheet_path:
                         content = ET.tostring(reference_sheet, encoding='utf-8', xml_declaration=True)
+                    elif info.filename == problems_sheet_path:
+                        content = ET.tostring(problems_sheet, encoding='utf-8', xml_declaration=True)
                     else:
                         content = source.read(info.filename)
                     target.writestr(info, content)
@@ -1072,7 +1092,9 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             payload = build_xlsx_workbook([
                 (
                     'Problems', self._excel_template_rows(request),
-                    [{'sqref': 'B2:B1000', 'values': ('code', 'multiple_choice', 'fill_blank')}],
+                    [{'sqref': 'B2:B1000', 'values': (
+                        'code', 'multiple_choice', 'fill_blank', 'true_false', 'short_answer',
+                    )}],
                 ),
                 ('Reference', self._excel_reference_rows(request)),
             ])

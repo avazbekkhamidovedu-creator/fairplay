@@ -346,6 +346,28 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             }
             self.assertTrue(expected_header_cells.issubset(references))
 
+            problems_sheet = next(
+                sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
+                if sheet.attrib['name'] == 'Problems'
+            )
+            problems_relationship_id = problems_sheet.attrib['{%s}id' % simple_xlsx.REL_NS]
+            problems_target = next(
+                relationship.attrib['Target'] for relationship in relationships
+                if relationship.attrib['Id'] == problems_relationship_id
+            )
+            problems_path = (
+                problems_target.lstrip('/') if problems_target.startswith('/') else 'xl/{}'.format(problems_target)
+            )
+            problems_xml = ET.fromstring(workbook.read(problems_path))
+            type_validation = next(
+                validation for validation in problems_xml.findall('x:dataValidations/x:dataValidation', namespace)
+                if validation.attrib.get('sqref') == 'B2:B1000'
+            )
+            self.assertEqual(
+                type_validation.find('x:formula1', namespace).text,
+                '"code,multiple_choice,fill_blank,true_false,short_answer"',
+            )
+
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(
             username='scoped_admin',

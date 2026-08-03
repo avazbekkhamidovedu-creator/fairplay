@@ -27,13 +27,14 @@ from judge import llm
 from judge.llm import LLMError
 from judge.models import Language, Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, ProblemImportDraft, \
     ProblemImportImage, ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemSubmissionType, \
-    ProblemTestCase, ProblemType, Solution, problem_data_storage
+    ProblemShortAnswerConfig, ProblemTestCase, ProblemType, Solution, problem_data_storage
 from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
     store_docx_image
 from judge.utils.language_matching import matching_languages
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type
 from judge.utils.problem_data import ProblemDataCompiler
 from judge.utils.simple_xlsx import validate_xlsx_upload
+from judge.views.problem_create_v2 import ProblemCreateV2View
 
 
 QUESTION_TYPE_MAP = {
@@ -66,6 +67,19 @@ QUESTION_TYPE_MAP = {
     'fill_in_blanks': ProblemSubmissionType.FILL_BLANK,
     'blank_filling': ProblemSubmissionType.FILL_BLANK,
     'cloze': ProblemSubmissionType.FILL_BLANK,
+    'short_answer': ProblemSubmissionType.SHORT_ANSWER,
+    's': ProblemSubmissionType.SHORT_ANSWER,
+    'short answer': ProblemSubmissionType.SHORT_ANSWER,
+    'short_response': ProblemSubmissionType.SHORT_ANSWER,
+    'short response': ProblemSubmissionType.SHORT_ANSWER,
+    'open_response': ProblemSubmissionType.SHORT_ANSWER,
+    'open response': ProblemSubmissionType.SHORT_ANSWER,
+    'essay': ProblemSubmissionType.SHORT_ANSWER,
+    'true_false': ProblemSubmissionType.MCQ,
+    'true false': ProblemSubmissionType.MCQ,
+    'truefalse': ProblemSubmissionType.MCQ,
+    'tf': ProblemSubmissionType.MCQ,
+    'boolean': ProblemSubmissionType.MCQ,
 }
 
 BLANK_SIGN_RE = re.compile(r'\[\[blank\]\]', re.IGNORECASE)
@@ -90,8 +104,15 @@ HEADER_ALIASES = {
     'statement': 'description',
     'answer_key': 'answer',
     'correct_answer': 'answer',
+    'ai_rubric': 'rubric',
+    'grading_rubric': 'rubric',
+    'grading_table_json': 'grading_table',
 }
 DIFFICULTY_VALUES = {'0': 'easy', '1': 'medium', '2': 'hard'}
+IMPORT_COLUMNS = {
+    'name', 'question_type', 'description', 'answer', 'solution', 'tags', 'difficulty', 'allowed_languages',
+    'test_data', 'options', 'correct_options', 'blanks', 'rubric', 'grading_table',
+}
 
 
 def _require_creator(request):
@@ -161,7 +182,14 @@ def _normalise_type(value):
             return ProblemSubmissionType.MCQ
         if any(token in key for token in ('blank', 'cloze', 'fill')):
             return ProblemSubmissionType.FILL_BLANK
-        raise ValueError('question_type must be code, multiple_choice, or fill_blank.')
+        if any(token in key for token in ('short_answer', 'short_response', 'open_response', 'essay')):
+            return ProblemSubmissionType.SHORT_ANSWER
+        raise ValueError('question_type must be code, multiple_choice, fill_blank, or short_answer.')
+
+
+def _is_true_false_type(value):
+    key = re.sub(r'[^a-z0-9]+', '_', str(value or '').strip().casefold()).strip('_')
+    return key in ('true_false', 'truefalse', 'tf', 'boolean')
 
 
 def _import_question_type(value):
@@ -188,6 +216,10 @@ def _review_message(item):
         messages.append(_('Replace the generated missing-name placeholder before creating this problem.'))
     if item.type_needs_review:
         messages.append(_('Select or confirm the question type before creating this problem.'))
+    if item.data_needs_review:
+        messages.append(_('Review the test-data loading warning before creating this problem.'))
+    if item.config_needs_review:
+        messages.append(_('Review and confirm the unrecognized imported configuration before creating this problem.'))
     return '\n'.join(messages)
 
 
@@ -218,6 +250,122 @@ def _serialize_fill_blanks(blanks):
         lines.extend(answers)
         blocks.append('\n'.join(lines))
     return '\n---\n'.join(blocks)
+
+
+def _serialize_editor_testcases(testcases):
+    """Convert the unified editor's inline cases back to the Excel text representation."""
+    lines = []
+    for index, testcase in enumerate(testcases, start=1):
+        if not isinstance(testcase, dict):
+            continue
+        input_data = str(testcase.get('input') or '')
+        output_data = str(testcase.get('output') or '')
+        if not input_data and not output_data:
+            continue
+        lines.append('input data {}: {}'.format(index, input_data))
+        lines.append('output data {}: {}'.format(index, output_data))
+    return '\n'.join(lines)
+
+
+def _safe_json(value):
+    """Serialize inline editor data without allowing it to escape a script tag."""
+    return json.dumps(value).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+
+
+def _editor_data_for_item(item):
+    """Return an import item in the exact shape consumed by create_v2's loadEditData."""
+    if item.editor_data:
+        return item.editor_data
+
+    data = {
+        'name': item.name,
+        'description': item.description,
+        'points': 10,
+        'is_public': False,
+        'partial': False,
+        'organizations': [],
+        'group_id': '',
+        'difficulty': DIFFICULTY_VALUES.get(item.difficulty, item.difficulty) or 'medium',
+        'problemTypes': _split_lines(item.tags),
+        'solution': {'is_public': False, 'publish_on': '', 'content': item.solution, 'authors': []},
+        'authors': [],
+        'curators': [],
+        'testers': [],
+        'banned_users': [],
+        'classes': [],
+        'language_limits': [],
+        'templates': [],
+        'clarifications': [],
+        'translations': [],
+    }
+    if item.submission_type == ProblemSubmissionType.CODE:
+        data.update({
+            'type': 'programming',
+            'time_limit': 1,
+            'memory_limit': 256,
+            'languages': _preview_language_keys(item),
+            'checker': '',
+            'testcases': _editor_testcases_for_item(item),
+        })
+    elif item.submission_type == ProblemSubmissionType.MCQ:
+        if item.is_true_false:
+            data.update({'type': 'truefalse', 'tfAnswer': 'true' if item.answer == '1' else 'false'})
+        else:
+            options = _preview_options(item)
+            data.update({
+                'type': 'multiple' if sum(option['is_correct'] for option in options) > 1 else 'single',
+                'options': [{'text': option['text'], 'correct': option['is_correct']} for option in options],
+            })
+    elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
+        data.update({
+            'type': 'blank',
+            'blanks': ['\n'.join(answers) for _label, answers in _preview_blanks(item)],
+            'rubric': item.rubric,
+            'gradingTable': _grading_table_value(item.grading_table),
+            'ai': bool(item.rubric or item.grading_table),
+            'trimWhitespace': True,
+            'caseSensitive': False,
+        })
+    else:
+        data.update({
+            'type': 'short',
+            'shortAnswer': item.answer,
+            'rubric': item.rubric,
+            'gradingTable': _grading_table_value(item.grading_table),
+            'ai': True,
+        })
+    return data
+
+
+def _grading_table_value(value):
+    try:
+        parsed = json.loads(value) if value else []
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _editor_testcases_for_item(item):
+    try:
+        if item.test_data_zip:
+            _payload, cases = _read_test_data_zip(item)
+            return [
+                {
+                    'input': input_data.decode('utf-8', 'replace'),
+                    'output': output_data.decode('utf-8', 'replace'),
+                    'input_file': input_name,
+                    'output_file': output_name,
+                    'points': 1,
+                    'pretest': False,
+                }
+                for input_name, input_data, output_name, output_data in cases
+            ]
+        return [
+            {'input': input_data, 'output': output_data, 'points': 1, 'pretest': False}
+            for _input_name, input_data, _output_name, output_data in _parse_text_test_data(item.test_data)
+        ]
+    except ValueError:
+        return []
 
 
 def _parse_fill_blanks(value):
@@ -380,6 +528,12 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                 count = 0
                 for row_number, row in enumerate(rows[1:], start=2):
                     source_name = _value(row, headers, 'name')
+                    unrecognized_configurations = [
+                        {'column': str(header).strip(), 'value': str(row[index]).strip()}
+                        for index, header in enumerate(rows[0])
+                        if _header_name(header) not in IMPORT_COLUMNS
+                        and index < len(row) and row[index] is not None and str(row[index]).strip()
+                    ]
                     name, name_needs_review = _import_problem_name(source_name, row_number)
                     type_value = _value(row, headers, 'question_type')
                     description = _value(row, headers, 'description')
@@ -389,11 +543,19 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                     if not any((source_name, type_value, description, attachments)):
                         continue
                     question_type, type_error = _import_question_type(type_value)
+                    is_true_false = _is_true_false_type(type_value)
                     review_messages = [message for message in (
                         type_error,
                         _('Replace the generated missing-name placeholder before creating this problem.')
                         if name_needs_review else '',
                     ) if message]
+                    if unrecognized_configurations:
+                        review_messages.append(
+                            _(
+                                'Review and confirm the unrecognized imported configuration before creating this '
+                                'problem.',
+                            ),
+                        )
                     parts = [description] if description else []
                     parts.extend(document.text for document in description_files)
                     if not parts:
@@ -409,18 +571,30 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                     if len(zip_files) > 1:
                         raise ValueError('Row {} has more than one embedded test data ZIP.'.format(row_number))
                     test_data_zip = None
+                    data_load_error = ''
                     if zip_files:
                         zip_attachment = zip_files[0]
-                        # Validate the archive before storing it in the review draft.
-                        _parse_zip_test_data(ContentFile(zip_attachment.content, name=zip_attachment.filename))
+                        # Keep a failed archive reviewable instead of rejecting the whole workbook.
+                        try:
+                            _parse_zip_test_data(ContentFile(zip_attachment.content, name=zip_attachment.filename))
+                        except ValueError as error:
+                            data_load_error = str(error)
                         test_data_zip = ContentFile(zip_attachment.content, name=zip_attachment.filename)
                     item_description = '\n\n'.join(parts)
                     answer = _value(row, headers, 'answer')
+                    if is_true_false:
+                        normalized_answer = answer.casefold()
+                        if normalized_answer in ('true', 't', 'yes', '1'):
+                            answer = '1'
+                        elif normalized_answer in ('false', 'f', 'no', '2'):
+                            answer = '2'
                     blanks = _value(row, headers, 'blanks')
                     if question_type == ProblemSubmissionType.FILL_BLANK:
                         blanks = _auto_fill_blank_config(blanks, item_description, answer)
                     options = _value(row, headers, 'options')
                     correct_options = _value(row, headers, 'correct_options')
+                    if is_true_false and not options:
+                        options = '{}\n{}'.format(_('True'), _('False'))
                     if question_type == ProblemSubmissionType.MCQ and not options:
                         extracted_options, option_block = _extract_labeled_multiple_choice_options(item_description)
                         if extracted_options:
@@ -435,6 +609,12 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                                 except ValueError:
                                     # Keep the answer cell editable when it does not yet match the extracted options.
                                     correct_options = ''
+                    test_data = _value(row, headers, 'test_data')
+                    if question_type == ProblemSubmissionType.CODE and test_data and not data_load_error:
+                        try:
+                            _parse_text_test_data(test_data)
+                        except ValueError as error:
+                            data_load_error = str(error)
                     item = ProblemImportItem.objects.create(
                         draft=draft,
                         row_number=row_number,
@@ -443,20 +623,32 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                         description=item_description,
                         answer=answer,
                         solution=_value(row, headers, 'solution'),
-                        tags=_value(row, headers, 'tags'),
+                        tags=_serialize_import_tags(_value(row, headers, 'tags')),
                         difficulty=_value(row, headers, 'difficulty'),
                         allowed_languages=_value(row, headers, 'allowed_languages'),
-                        test_data=_value(row, headers, 'test_data'),
+                        test_data=test_data,
                         options=options,
                         correct_options=correct_options,
                         # A fill-blank row can use its answer cell when no separate blanks column exists.
                         blanks=blanks or (answer if question_type == ProblemSubmissionType.FILL_BLANK else ''),
+                        rubric=_value(row, headers, 'rubric'),
+                        grading_table=_value(row, headers, 'grading_table'),
+                        is_true_false=is_true_false,
+                        data_needs_review=bool(data_load_error),
+                        data_load_error=data_load_error,
+                        config_needs_review=bool(unrecognized_configurations),
+                        unrecognized_configurations=unrecognized_configurations,
                         test_data_zip=test_data_zip,
                         source_label=', '.join(document.filename for document in attachments),
                         formatting_error='\n'.join(review_messages),
                         type_needs_review=bool(type_error),
                         name_needs_review=name_needs_review,
                     )
+                    if _refresh_configuration_review(item):
+                        item.formatting_error = _review_message(item)
+                        item.save(update_fields=[
+                            'config_needs_review', 'unrecognized_configurations', 'formatting_error', 'updated_at',
+                        ])
                     _store_draft_images(item, description_files)
                     count += 1
         except ValueError as error:
@@ -478,18 +670,75 @@ class ProblemImportPreviewView(LoginRequiredMixin, View):
     def get(self, request, draft):
         draft = _draft_for(request, draft)
         items = list(draft.items.select_related('created_problem'))
+        selected_item = None
+        selected_id = request.GET.get('item')
+        if selected_id:
+            try:
+                selected_item = next(item for item in items if item.pk == int(selected_id))
+            except (StopIteration, TypeError, ValueError):
+                selected_item = None
+        if selected_item is None and items:
+            selected_item = items[0]
+        languages = list(Language.objects.order_by('name', 'key'))
         for item in items:
+            if not item.data_needs_review:
+                data_load_error = _test_data_load_error(item)
+                if data_load_error:
+                    item.data_needs_review = True
+                    item.data_load_error = data_load_error
+                    item.formatting_error = _review_message(item)
+                    item.save(update_fields=['data_needs_review', 'data_load_error', 'formatting_error', 'updated_at'])
+            if _refresh_configuration_review(item):
+                item.formatting_error = _review_message(item)
+                item.save(update_fields=[
+                    'config_needs_review', 'unrecognized_configurations', 'formatting_error', 'updated_at',
+                ])
             item.preview_options = _preview_options(item)
             item.preview_blanks = _preview_blanks(item)
+            item.preview_language_keys = _preview_language_keys(item)
         return render(request, self.template_name, {
             'draft': draft,
             'items': items,
+            'selected_item': selected_item,
             'type_choices': ProblemImportItem.TYPE_CHOICES,
+            'languages': languages,
+            'image_upload_url': reverse('martor_image_uploader'),
             'title': _('Excel import preview'),
             'content_title': _('Excel import preview'),
             'feedback': request.GET.get('feedback', ''),
             'feedback_error': request.GET.get('feedback_error') == '1',
         })
+
+
+class ProblemImportItemEditorView(ProblemCreateV2View):
+    """Render the unified problem editor against one import-draft item."""
+    def get(self, request, draft, item, *args, **kwargs):
+        draft = _draft_for(request, draft)
+        item = get_object_or_404(draft.items, pk=item)
+        context = self.get_context(request)
+        context.update({
+            'title': _('Excel import preview'),
+            'edit_data_json': _safe_json(_editor_data_for_item(item)),
+            'save_url': reverse('problem_import_item_action', args=(draft.pk, item.pk, 'editor')),
+            'import_format_url': reverse('problem_import_item_action', args=(draft.pk, item.pk, 'format')),
+            'import_create_url': reverse('problem_import_item_action', args=(draft.pk, item.pk, 'create')),
+            'import_editor_mode': True,
+            'import_item_id': item.pk,
+            'import_type_needs_review': item.type_needs_review,
+            'import_name_needs_review': item.name_needs_review,
+            'import_data_needs_review': item.data_needs_review,
+            'import_data_load_error': item.data_load_error,
+            'import_config_needs_review': item.config_needs_review,
+            'import_unrecognized_configurations': item.unrecognized_configurations,
+            'edit_code': '',
+            'edit_detail_url': '',
+        })
+        return render(request, self.template_name, context)
+
+    def post(self, request, draft, item, *args, **kwargs):
+        # The editor URL is also the draft-save URL.  Do not inherit create_v2.post(),
+        # which would create a real problem instead of updating the import draft.
+        return ProblemImportItemActionView().post(request, draft, item, 'editor')
 
 
 class ProblemImportImageView(LoginRequiredMixin, View):
@@ -506,8 +755,15 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
     def post(self, request, draft, item, action):
         draft = _draft_for(request, draft)
         item = get_object_or_404(draft.items, pk=item)
-        if action not in ('save', 'format', 'create'):
+        if action not in ('save', 'format', 'create', 'editor'):
             raise Http404()
+        if action == 'editor':
+            try:
+                payload, zip_upload = self._parse_editor_request(request)
+                self._save_editor_item(item, payload, zip_upload)
+            except ValueError as error:
+                return self._error_response(request, draft, item, str(error))
+            return JsonResponse({'ok': True, 'message': _('Draft saved.'), 'item': _item_payload(item)})
         try:
             self._save_item(item, request.POST, request.FILES)
         except ValueError as error:
@@ -595,10 +851,11 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         for field in (
             'name', 'description', 'answer', 'solution', 'tags', 'difficulty', 'allowed_languages', 'test_data',
             'options',
-            'correct_options', 'blanks',
+            'correct_options', 'blanks', 'rubric', 'grading_table',
         ):
             if field in data:
                 setattr(item, field, (data.get(field, '') or '').strip())
+        item.tags = _serialize_import_tags(item.tags)
         if files.get('test_data_zip'):
             raise ValueError('Test data ZIP files must be embedded as an Excel object.')
         if (
@@ -614,14 +871,147 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         item.formatting_error = _review_message(item)
         item.save()
 
+    @staticmethod
+    def _parse_editor_request(request):
+        content_type = (request.content_type or '').split(';')[0].strip().lower()
+        if content_type == 'multipart/form-data':
+            raw = request.POST.get('payload')
+            zip_upload = request.FILES.get('testcase_zip')
+        else:
+            raw = request.body.decode('utf-8')
+            zip_upload = None
+        try:
+            payload = json.loads(raw or '')
+        except (TypeError, ValueError, UnicodeDecodeError) as error:
+            raise ValueError(_('Invalid editor draft data.')) from error
+        if not isinstance(payload, dict):
+            raise ValueError(_('Invalid editor draft data.'))
+        return payload, zip_upload
+
+    def _save_editor_item(self, item, payload, zip_upload):
+        editor_type = payload.get('type')
+        type_map = {
+            'programming': ProblemSubmissionType.CODE,
+            'single': ProblemSubmissionType.MCQ,
+            'multiple': ProblemSubmissionType.MCQ,
+            'truefalse': ProblemSubmissionType.MCQ,
+            'blank': ProblemSubmissionType.FILL_BLANK,
+            'short': ProblemSubmissionType.SHORT_ANSWER,
+        }
+        if editor_type not in type_map:
+            raise ValueError(_('Select a supported question type.'))
+        raw_name = payload.get('name') or ''
+        raw_description = payload.get('description') or ''
+        solution = payload.get('solution') or {}
+        if not isinstance(raw_name, str) or not isinstance(raw_description, str) or not isinstance(solution, dict):
+            raise ValueError(_('Invalid editor draft data.'))
+        name = raw_name.strip()
+        description = raw_description.strip()
+        if not name or not description:
+            raise ValueError(_('A name and description are required.'))
+
+        item.submission_type = type_map[editor_type]
+        item.is_true_false = editor_type == 'truefalse'
+        item.name = name
+        item.description = description
+        item.solution = str(solution.get('content') or '').strip()
+        problem_types = payload.get('problemTypes') or []
+        languages = payload.get('languages') or []
+        if not isinstance(problem_types, list) or not isinstance(languages, list):
+            raise ValueError(_('Invalid editor draft data.'))
+        item.tags = _serialize_import_tags(problem_types)
+        item.difficulty = str(payload.get('difficulty') or '').strip()
+        item.allowed_languages = '|'.join(
+            str(key).strip() for key in languages if str(key).strip()
+        )
+
+        if editor_type in ('single', 'multiple'):
+            options = payload.get('options') or []
+            if not isinstance(options, list):
+                raise ValueError(_('Choices must be a list.'))
+            texts = [str(option.get('text') or '').strip() for option in options if isinstance(option, dict)]
+            item.options = '\n'.join(text for text in texts if text)
+            correct = [str(index) for index, option in enumerate(options, start=1)
+                       if isinstance(option, dict) and option.get('correct') and str(option.get('text') or '').strip()]
+            item.answer = '|'.join(correct)
+            item.correct_options = '\n'.join(correct)
+        elif editor_type == 'truefalse':
+            item.options = 'True\nFalse'
+            item.answer = '1' if payload.get('tfAnswer', 'true') == 'true' else '2'
+        elif editor_type == 'blank':
+            blanks = payload.get('blanks') or []
+            if not isinstance(blanks, list):
+                raise ValueError(_('Blank answers must be a list.'))
+            item.blanks = _serialize_fill_blanks([
+                {'label': '', 'answers': _split_lines(str(answer or '').replace('|', '\n'))}
+                for answer in blanks if str(answer or '').strip()
+            ])
+            item.rubric = (payload.get('rubric') or '').strip()
+            item.grading_table = json.dumps(payload.get('gradingTable')) if payload.get('gradingTable') else ''
+        elif editor_type == 'short':
+            item.answer = (payload.get('shortAnswer') or '').strip()
+            item.rubric = (payload.get('rubric') or '').strip()
+            item.grading_table = json.dumps(payload.get('gradingTable')) if payload.get('gradingTable') else ''
+        elif editor_type == 'programming':
+            testcases = payload.get('testcases') or []
+            if not isinstance(testcases, list):
+                raise ValueError(_('Test cases must be a list.'))
+            existing_data_error = item.data_load_error or _test_data_load_error(item)
+            if existing_data_error and not testcases and zip_upload is None and payload.get('confirm_data_load') != '1':
+                # The editor cannot render unreadable data. Keep it until the teacher explicitly confirms removal.
+                item.data_load_error = existing_data_error
+                item.data_needs_review = True
+            else:
+                item.test_data = _serialize_editor_testcases(testcases)
+                item.data_load_error = ''
+                item.data_needs_review = False
+            if zip_upload is not None:
+                _parse_zip_test_data(zip_upload)
+                zip_upload.seek(0)
+                item.test_data_zip.save(zip_upload.name or 'test_data.zip', zip_upload, save=False)
+
+            if not item.data_needs_review:
+                item.data_load_error = _test_data_load_error(item)
+            if item.data_load_error and payload.get('confirm_data_load') == '1':
+                # Confirmation explicitly means create this code problem without the unreadable test data.
+                if item.test_data_zip:
+                    item.test_data_zip.delete(save=False)
+                item.test_data = ''
+                item.data_load_error = ''
+            item.data_needs_review = bool(item.data_load_error)
+        else:
+            item.data_needs_review = False
+            item.data_load_error = ''
+
+        previous_type_needs_review = item.type_needs_review
+        if previous_type_needs_review and payload.get('confirm_question_type') != '1':
+            pass
+        else:
+            item.type_needs_review = False
+        if item.name_needs_review and name:
+            item.name_needs_review = False
+        _refresh_configuration_review(
+            item,
+            confirm=payload.get('confirm_unrecognized_configurations') == '1',
+        )
+        item.editor_data = payload
+        item.formatting_error = _review_message(item)
+        item.save()
+
     def _format(self, item):
         payload = _format_with_llm(item)
         if item.submission_type == ProblemSubmissionType.MCQ:
             options = payload.get('options', [])
             option_texts = [option['text'].strip() for option in options if option.get('text', '').strip()]
             item.options = '\n'.join(option_texts)
-            item.correct_options = '\n'.join(str(index) for index in _multiple_choice_answer_indices(
-                item.answer, option_texts))
+            try:
+                answer_indices = _multiple_choice_answer_indices(item.answer, option_texts)
+            except ValueError:
+                # The Excel answer remains authoritative. Let the preview flag an unmatched
+                # answer for revision instead of discarding a useful LLM option extraction.
+                item.correct_options = ''
+            else:
+                item.correct_options = '\n'.join(str(index) for index in answer_indices)
             item.description = _remove_multiple_choice_option_block(
                 item.description, payload.get('option_block', ''))
         elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
@@ -630,6 +1020,10 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         else:
             item.description = payload.get('description', item.description).strip()
         item.formatting_error = ''
+        _refresh_configuration_review(item)
+        item.formatting_error = _review_message(item)
+        # Formatting changes the legacy import fields, so rebuild the unified-editor payload on reload.
+        item.editor_data = {}
         item.save()
         return _item_payload(item)
 
@@ -768,12 +1162,18 @@ def _format_with_llm(item):
 def _item_payload(item):
     payload = {
         field: getattr(item, field)
-        for field in ('description', 'tags', 'difficulty', 'options', 'correct_options', 'blanks')
+        for field in ('name', 'description', 'tags', 'difficulty', 'options', 'correct_options', 'blanks',
+                      'rubric', 'grading_table', 'formatting_error')
     }
     payload['name_needs_review'] = item.name_needs_review
     payload['type_needs_review'] = item.type_needs_review
+    payload['data_needs_review'] = item.data_needs_review
+    payload['data_load_error'] = item.data_load_error
+    payload['config_needs_review'] = item.config_needs_review
+    payload['unrecognized_configurations'] = item.unrecognized_configurations
     payload['preview_options'] = _preview_options(item)
     payload['preview_blanks'] = _preview_blanks(item)
+    payload['preview_language_keys'] = _preview_language_keys(item)
     return payload
 
 
@@ -795,6 +1195,16 @@ def _preview_blanks(item):
         {'label': label, 'answers': answers}
         for label, answers in blanks
     ]
+
+
+def _preview_language_keys(item):
+    """Keep an invalid Excel language value editable instead of failing the preview page."""
+    if not item.allowed_languages.strip():
+        return []
+    try:
+        return [language.key for language in _resolve_allowed_languages(item.allowed_languages)]
+    except ValueError:
+        return []
 
 
 def _split_lines(value):
@@ -821,8 +1231,28 @@ def _resolve_allowed_languages(raw_value):
     return resolved
 
 
+def _normalise_import_tags(raw_value):
+    values = _split_lines(raw_value) if isinstance(raw_value, str) else [
+        part
+        for value in raw_value or []
+        for part in _split_lines(str(value))
+    ]
+    tags = []
+    seen = set()
+    for value in values:
+        key = value.casefold()
+        if key not in seen:
+            tags.append(value)
+            seen.add(key)
+    return tags
+
+
+def _serialize_import_tags(raw_value):
+    return '|'.join(_normalise_import_tags(raw_value))
+
+
 def _validate_import_tags(raw_value):
-    tags = _split_lines(raw_value)
+    tags = _normalise_import_tags(raw_value)
     if len(tags) > 5:
         raise ValueError('Use at most five tags per problem.')
     for tag in tags:
@@ -873,6 +1303,78 @@ def _resolve_import_difficulty(raw_value):
         defaults={'full_name': name.title()},
     )
     return difficulty
+
+
+def _configuration_review_items(item):
+    """Describe recognized columns whose values still cannot be safely imported."""
+    issues = []
+
+    def add(column, value, error):
+        issues.append({
+            'kind': 'validation',
+            'column': str(column),
+            'value': str(value or ''),
+            'reason': str(error),
+        })
+
+    try:
+        _validate_import_tags(item.tags)
+    except ValueError as error:
+        add(_('Tags'), item.tags, error)
+    try:
+        _validate_import_difficulty(item.difficulty)
+    except ValueError as error:
+        add(_('Difficulty'), item.difficulty, error)
+
+    if item.submission_type == ProblemSubmissionType.CODE:
+        try:
+            _resolve_allowed_languages(item.allowed_languages)
+        except ValueError as error:
+            add(_('Allowed languages'), item.allowed_languages, error)
+    elif item.submission_type == ProblemSubmissionType.MCQ:
+        options = _split_lines(item.options)
+        if len(options) < 2:
+            add(_('Choices'), item.options, _('At least two choices are required.'))
+        else:
+            try:
+                _multiple_choice_answer_indices(item.answer, options)
+            except ValueError as error:
+                add(_('Correct answer'), item.answer, error)
+    elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
+        try:
+            blanks = _parse_fill_blanks(item.blanks or item.answer)
+            if not blanks:
+                raise ValueError(_('At least one blank answer is required.'))
+        except ValueError as error:
+            add(_('Blanks'), item.blanks or item.answer, error)
+    elif item.submission_type == ProblemSubmissionType.SHORT_ANSWER:
+        if not item.answer.strip():
+            add(_('Reference answer'), '', _('A reference answer is required.'))
+        if item.grading_table.strip():
+            try:
+                table = json.loads(item.grading_table)
+                if not isinstance(table, list):
+                    raise ValueError(_('The grading table must be a JSON list.'))
+            except (TypeError, ValueError) as error:
+                add(_('Grading table'), item.grading_table, error)
+    return issues
+
+
+def _refresh_configuration_review(item, *, confirm=False):
+    """Require valid recognized values before confirming and dropping unknown columns."""
+    preserved = [
+        entry for entry in item.unrecognized_configurations or []
+        if isinstance(entry, dict) and entry.get('kind') != 'validation'
+    ]
+    validation_issues = _configuration_review_items(item)
+    if confirm and not validation_issues:
+        # A teacher may discard Excel-only values only after every mappable value is valid.
+        preserved = []
+    configurations = preserved + validation_issues
+    item.unrecognized_configurations = configurations
+    item.config_review_signature = ''
+    item.config_needs_review = bool(configurations)
+    return validation_issues
 
 
 def _parse_text_test_data(value):
@@ -941,12 +1443,30 @@ def _read_test_data_zip(item):
         return _parse_zip_test_data(uploaded)
 
 
+def _test_data_load_error(item):
+    """Return a user-facing error when draft test data cannot be shown in the editor."""
+    if item.submission_type != ProblemSubmissionType.CODE:
+        return ''
+    try:
+        if item.test_data_zip:
+            _read_test_data_zip(item)
+        elif item.test_data.strip():
+            _parse_text_test_data(item.test_data)
+    except ValueError as error:
+        return str(error)
+    return ''
+
+
 def _validate_problem_import_item(item):
     """Check every condition that can be evaluated before problem creation writes data."""
     if item.name_needs_review:
         raise ValueError('Replace the generated missing-name placeholder before creating this problem.')
     if item.type_needs_review:
         raise ValueError('Select or confirm the question type before creating this problem.')
+    if item.data_needs_review:
+        raise ValueError('Review and confirm the test-data loading warning before creating this problem.')
+    if item.config_needs_review:
+        raise ValueError('Review and confirm the unrecognized imported configuration before creating this problem.')
     if not item.name or not item.description:
         raise ValueError('A name and description are required.')
     _validate_import_tags(item.tags)
@@ -973,6 +1493,16 @@ def _validate_problem_import_item(item):
         blanks = _parse_fill_blanks(item.blanks or item.answer) or signed_blanks
         if not blanks:
             raise ValueError('Fill-in-the-blank questions need at least one blank with an accepted answer.')
+    elif item.submission_type == ProblemSubmissionType.SHORT_ANSWER:
+        if not item.answer.strip():
+            raise ValueError('Short-answer questions need a reference answer.')
+        if item.grading_table.strip():
+            try:
+                table = json.loads(item.grading_table)
+            except (TypeError, ValueError) as error:
+                raise ValueError('Short-answer grading table must be valid JSON.') from error
+            if not isinstance(table, list):
+                raise ValueError('Short-answer grading table must be a JSON list.')
 
 
 def _add_test_cases(problem, item, created_data_directories=None):
@@ -1079,7 +1609,9 @@ def _create_problem_records(request, item, description, created_data_directories
             multiple_select = True
         else:
             multiple_select = False
-        ProblemMCQConfig.objects.create(problem=problem, multiple_select=multiple_select)
+        ProblemMCQConfig.objects.create(
+            problem=problem, multiple_select=multiple_select, is_true_false=item.is_true_false,
+        )
         for index, text in enumerate(options, start=1):
             ProblemMCQOption.objects.create(problem=problem, order=index - 1, text=text, is_correct=index in correct)
     elif item.submission_type == ProblemSubmissionType.FILL_BLANK:
@@ -1089,7 +1621,66 @@ def _create_problem_records(request, item, description, created_data_directories
         ProblemFillBlankConfig.objects.create(problem=problem)
         for index, (label, answers) in enumerate(blanks):
             ProblemBlank.objects.create(problem=problem, order=index, label=label, answers=answers)
+    elif item.submission_type == ProblemSubmissionType.SHORT_ANSWER:
+        grading_table = json.loads(item.grading_table) if item.grading_table.strip() else None
+        ProblemShortAnswerConfig.objects.create(
+            problem=problem,
+            reference_answer=item.answer,
+            ai_rubric=item.rubric,
+            grading_table=grading_table,
+        )
+    _apply_editor_configuration(request, item, problem)
     return problem
+
+
+def _apply_editor_configuration(request, item, problem):
+    """Apply the unified editor's common and advanced fields after import-specific records exist."""
+    if not item.editor_data:
+        return
+    payload = dict(item.editor_data)
+    # The legacy importer has already promoted private DOCX-image URLs and normalized blank markers.
+    payload['description'] = problem.description
+    editor = ProblemCreateV2View()
+    problem.name = (payload.get('name') or problem.name).strip()
+    problem.description = payload.get('description') or problem.description
+    problem.points = editor._num(payload.get('points'), problem.points)
+    problem.partial = bool(payload.get('partial'))
+    if item.submission_type == ProblemSubmissionType.CODE:
+        problem.time_limit = editor._num(payload.get('time_limit'), problem.time_limit)
+        problem.memory_limit = int(editor._num(payload.get('memory_limit'), problem.memory_limit / 1024) * 1024)
+    problem.group = editor._resolve_group(payload)
+    problem.is_public = editor._resolve_public(request.user, bool(payload.get('is_public')), payload)
+    problem.save()
+    editor._attach_types(problem, payload)
+    editor._attach_orgs(problem, payload)
+    if item.submission_type == ProblemSubmissionType.CODE:
+        editor._attach_languages(problem, payload)
+    problem.is_organization_private = problem.organizations.exists()
+    problem.save(update_fields=['is_organization_private'])
+    editor._apply_advanced(problem, payload, request, is_create=True)
+    if item.submission_type == ProblemSubmissionType.CODE:
+        _apply_editor_testcase_configuration(problem, payload)
+
+
+def _apply_editor_testcase_configuration(problem, payload):
+    """Keep the unified editor's checker, case weights, and pretest flags on imported code problems."""
+    try:
+        data = problem.data_files
+    except ProblemData.DoesNotExist:
+        data = None
+    if data is not None:
+        data.checker = str(payload.get('checker') or '').strip()
+        data.save(update_fields=['checker'])
+    testcases = payload.get('testcases') or []
+    for case, editor_case in zip(problem.cases.order_by('order'), testcases):
+        if not isinstance(editor_case, dict):
+            continue
+        try:
+            case.points = float(editor_case.get('points', case.points))
+        except (TypeError, ValueError):
+            pass
+        case.is_pretest = bool(editor_case.get('pretest'))
+        case.save(update_fields=['points', 'is_pretest'])
 
 
 def _save_problem_with_unique_code(problem):
@@ -1114,4 +1705,6 @@ def _edit_url(problem):
         return reverse('problem_mcq_edit', args=(problem.code,))
     if problem.submission_type == ProblemSubmissionType.FILL_BLANK:
         return reverse('problem_fillblank_edit', args=(problem.code,))
+    if problem.submission_type == ProblemSubmissionType.SHORT_ANSWER:
+        return reverse('problem_edit_v2', args=(problem.code,))
     return reverse('admin:judge_problem_change', args=(problem.pk,))

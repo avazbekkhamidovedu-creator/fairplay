@@ -2,45 +2,26 @@
 
 {% block media %}
     <style>
-        .import-preview-card { border: 1px solid #d9d5c9; border-left: 4px solid #d48b31; margin: 1.25em 0; padding: 1.25em; background: #fffdf8; }
-        .import-preview-card h3 { margin-top: 0; }
-        .import-preview-field { margin: 0.8em 0; }
-        .import-preview-field label { display: block; font-weight: bold; margin-bottom: 0.25em; }
-        .import-preview-field input, .import-preview-field textarea, .import-preview-field select { box-sizing: border-box; max-width: 100%; width: 100%; }
-        .import-preview-field textarea { min-height: 7em; font-family: monospace; }
-        .question-type-confirmation { background: #fff2e5; border-left: 3px solid #d48b31; padding: 0.6em 0.75em; }
-        .question-type-confirmation label { align-items: center; display: inline-flex; font-weight: normal; gap: 0.5em; margin: 0; }
-        .question-type-confirmation input { margin: 0; max-width: none; width: auto; }
-        .import-preview-source { color: #776f61; font-size: 0.9em; }
-        .import-preview-actions { display: flex; flex-wrap: wrap; gap: 0.6em; margin-top: 1em; }
-        .import-preview-status { display: block; margin-top: 0.65em; min-height: 1.2em; }
-        .import-preview-status.error { color: #a32b20; }
-        .import-preview-status.success { color: #23733f; }
-        .import-type-fields { display: none; }
-        .import-preview-card[data-type="C"] .for-code, .import-preview-card[data-type="M"] .for-mcq, .import-preview-card[data-type="B"] .for-blank { display: block; }
-        .import-preview-card[data-type="B"] .not-for-blank { display: none; }
-        .import-preview-card[data-type="M"] .not-for-mcq { display: none; }
-        .mcq-field, .fb-field { margin: 1em 0; }
-        .mcq-field label, .fb-field label { display: block; font-weight: bold; margin-bottom: 0.3em; }
-        .fb-blank-table { border-collapse: collapse; width: 100%; }
-        .fb-blank-table td { padding: 4px; vertical-align: top; }
-        .fb-blank-label, .fb-blank-answers { box-sizing: border-box; width: 100%; }
-        .preview-drag-handle { color: #888; cursor: move; padding: 6px; }
         .import-preview-layout { display: grid; gap: 1.25em; grid-template-columns: minmax(13rem, 22rem) minmax(0, 1fr); }
-        .import-problem-list { align-self: start; background: #f4efe4; border: 1px solid #d9d5c9; padding: 0.8em; position: sticky; top: 1em; }
-        .import-problem-list h3 { margin-top: 0; }
+        .import-problem-list { align-self: start; position: sticky; top: 1em; }
+        .import-problem-list h2 { margin-top: 0; }
         .import-problem-nav { display: grid; gap: 0.35em; margin: 0.8em 0; }
         .import-problem-nav a { box-sizing: border-box; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
-        .import-problem-nav a.is-active { background: #d48b31; color: #fff; }
-        .import-problem-nav a.has-error, .import-problem-nav a.has-error.is-active { background: #a63c32; border-color: #842d25; color: #fff; }
-        #create-all-problems { background: #23733f; border-color: #1b5a31; color: #fff; width: 100%; }
-        #create-all-problems:hover, #create-all-problems:focus { background: #1b5a31; color: #fff; }
-        .import-preview-panel .import-preview-card { display: none; margin-top: 0; }
-        .import-preview-panel .import-preview-card.is-active { display: block; }
-        .import-preview-panel .import-preview-card:target { display: block; }
+        .import-problem-entry { min-width: 0; }
+        .import-problem-issues { display: flex; flex-wrap: wrap; gap: 0.3em; margin: 0.3em 0.4em 0.5em; }
+        .import-problem-issues .tag-type { font-size: 0.8em; }
+        .import-problem-nav a.is-active { font-weight: 700; text-decoration: underline; }
+        .import-problem-nav a.has-error { font-weight: 700; }
+        .import-preview-panel { min-width: 0; }
+        .import-editor-frame { border: 0; box-sizing: border-box; display: block; min-height: 78vh; width: 100%; }
+        .import-created-panel { margin: 0; }
+        .import-created-panel .tag-type { margin-right: 0.45em; }
+        #create-all-problems { width: 100%; }
+        .import-preview-status { display: block; margin-top: 0.65em; min-height: 1.2em; }
         @media (max-width: 760px) {
             .import-preview-layout { grid-template-columns: 1fr; }
             .import-problem-list { position: static; }
+            .import-editor-frame { min-height: 90vh; }
         }
     </style>
 {% endblock %}
@@ -48,219 +29,189 @@
 {% block js_media %}
     <script>
         $(function () {
+            var activeItemId = null;
+            var isSwitchingItem = false;
+            var frame = $('#import-editor-frame');
+            var status = $('#import-editor-status');
+
             function csrfToken() { return $('input[name="csrfmiddlewaretoken"]').first().val() || ''; }
-            function updateType(card) {
-                var type = card.find('[name="question_type"]').val();
-                if (type) card.attr('data-type', type);
+            function navButton(itemId) { return $('.import-problem-nav a[data-item-id="' + itemId + '"]'); }
+            function reviewLabels(item) {
+                var labels = [];
+                if (item.name_needs_review) labels.push('{{ _("Name")|escapejs }}');
+                if (item.type_needs_review) labels.push('{{ _("Question type")|escapejs }}');
+                if (item.data_needs_review) labels.push('{{ _("Test data")|escapejs }}');
+                if (item.config_needs_review) labels.push('{{ _("Configuration")|escapejs }}');
+                return labels;
             }
-            function syncBlanks(card) {
-                var blocks = [];
-                card.find('.fb-blank-row:visible').each(function (index) {
-                    var label = $(this).find('.fb-blank-label').val().trim();
-                    var answers = $(this).find('.fb-blank-answers').val().trim();
-                    if (!answers) return;
-                    var block = ['[blank ' + (index + 1) + ']'];
-                    if (label) block.push('label: ' + label);
-                    block.push('answers:');
-                    blocks.push(block.concat(answers.split(/\r?\n/)).join('\n'));
+            function updateReviewState(itemId, item) {
+                var button = navButton(itemId);
+                var entry = button.closest('.import-problem-entry');
+                var labels = reviewLabels(item);
+                button.toggleClass('has-error error', labels.length > 0);
+                entry.find('.import-problem-issues').remove();
+                if (!labels.length) return;
+                var issues = $('<div>', {
+                    'class': 'import-problem-issues',
+                    'aria-label': '{{ _("This problem needs review")|escapejs }}',
                 });
-                card.find('[name="blanks"]').val(blocks.join('\n---\n'));
-            }
-            function syncEditor(card) {
-                if (card.attr('data-type') === 'B') syncBlanks(card);
-            }
-            function addBlankRow(card, blank) {
-                var template = card.find('.empty-blank-row').get(0);
-                var row = $($(template.content).children().first().cloneNode(true));
-                row.find('.fb-blank-label').val(blank && blank.label || '');
-                row.find('.fb-blank-answers').val(blank && blank.answers || '');
-                card.find('.fb-blank-rows').append(row);
-            }
-            function renderBlankRows(card, blanks) {
-                card.find('.fb-blank-rows').empty();
-                (blanks || []).forEach(function (blank) { addBlankRow(card, blank); });
-            }
-            function setStatus(card, text, error) {
-                card.find('.import-preview-status').text(text || '').toggleClass('error', !!error).toggleClass('success', !!text && !error);
-            }
-            function updateFields(card, item) {
-                ['description', 'solution', 'tags', 'difficulty', 'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks'].forEach(function (name) {
-                    if (Object.prototype.hasOwnProperty.call(item, name)) card.find('[name="' + name + '"]').val(item[name]);
+                labels.forEach(function (label) {
+                    $('<span>', {'class': 'tag-type regular', text: label}).appendTo(issues);
                 });
-                if (item.preview_blanks) renderBlankRows(card, item.preview_blanks);
+                issues.appendTo(entry);
             }
-            function selectCard(itemId) {
-                $('.import-preview-card').removeClass('is-active');
+            function refreshLeftItem(itemId, item) {
+                var button = navButton(itemId);
+                if (item.name) {
+                    button.text(item.name).data('name', item.name);
+                }
+                button.attr('title', item.formatting_error || '');
+                updateReviewState(itemId, item);
+            }
+            function setStatus(message, error) {
+                status.text(message || '').toggleClass('error', !!error).toggleClass('success', !!message && !error);
+            }
+            function selectItem(itemId, editorUrl, name, createdUrl) {
+                if (!frame.length) {
+                    window.location.href = window.location.pathname + '?item=' + encodeURIComponent(itemId);
+                    return;
+                }
+                activeItemId = String(itemId);
                 $('.import-problem-nav a').removeClass('is-active');
-                $('.import-preview-card[data-item-id="' + itemId + '"]').addClass('is-active');
-                $('.import-problem-nav a[data-item-id="' + itemId + '"]').addClass('is-active');
-            }
-            async function saveAllDrafts() {
-                var forms = $('.import-preview-card form');
-                for (var index = 0; index < forms.length; index += 1) {
-                    var form = $(forms[index]), card = form.closest('.import-preview-card');
-                    syncEditor(card);
-                    var response = await fetch(form.attr('action'), {
-                        method: 'POST',
-                        headers: {'X-CSRFToken': csrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
-                        body: new FormData(form.get(0)),
-                    });
-                    var payload;
-                    try { payload = await response.json(); }
-                    catch (error) { throw new Error('{{ _("Request failed.")|escapejs }}'); }
-                    if (!response.ok || !payload.ok) {
-                        selectCard(card.data('item-id'));
-                        setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true);
-                        $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]').addClass('has-error');
-                        throw new Error(payload.message || 'save failed');
-                    }
-                    if (payload.item) {
-                        var navButton = $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]');
-                        navButton.toggleClass('has-error', payload.item.name_needs_review || payload.item.type_needs_review);
-                        card.attr('data-name-needs-review', payload.item.name_needs_review ? '1' : '0');
-                    }
+                navButton(activeItemId).addClass('is-active');
+                $('#import-editor-name').text(name);
+                setStatus('', false);
+                if (createdUrl) {
+                    window.location.href = window.location.pathname + '?item=' + encodeURIComponent(itemId);
+                    return;
                 }
+                frame.show().attr('src', editorUrl);
             }
-            $('.import-preview-card').each(function () { updateType($(this)); });
-            selectCard($('.import-preview-card').first().data('item-id'));
-            $('.import-problem-nav a').on('click', function () { selectCard($(this).attr('data-item-id')); });
-            $('.import-preview-card [name="question_type"]').on('change', function () { updateType($(this).closest('.import-preview-card')); });
-            $('.import-preview-card [name="confirm_question_type"]').on('change', function () {
-                var card = $(this).closest('.import-preview-card');
-                if (this.checked && card.attr('data-name-needs-review') !== '1') {
-                    $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]').removeClass('has-error');
-                }
-            });
-            $('.import-preview-card').on('click', '.remove-blank', function (event) {
-                event.preventDefault(); $(this).closest('.fb-blank-row').remove();
-            });
-            $('.import-action').on('click', async function (event) {
+            function saveActiveEditor() {
+                return new Promise(function (resolve, reject) {
+                    if (!activeItemId || frame.is(':hidden')) { resolve(); return; }
+                    var timeout = window.setTimeout(function () { reject(new Error('{{ _("Draft save timed out.")|escapejs }}')); }, 15000);
+                    function receive(event) {
+                        if (event.origin !== window.location.origin || !event.data) return;
+                        if (event.data.kind === 'problem-import-save-error') {
+                            window.removeEventListener('message', receive);
+                            window.clearTimeout(timeout);
+                            reject(new Error(event.data.message || '{{ _("Draft could not be saved.")|escapejs }}'));
+                            return;
+                        }
+                        if (event.data.kind !== 'problem-import-saved') return;
+                        window.removeEventListener('message', receive);
+                        window.clearTimeout(timeout);
+                        var item = event.data.item || {};
+                        refreshLeftItem(activeItemId, item);
+                        resolve(item);
+                    }
+                    window.addEventListener('message', receive);
+                    frame.get(0).contentWindow.postMessage({kind: 'problem-import-save'}, window.location.origin);
+                });
+            }
+            $('.import-problem-nav a').on('click', async function (event) {
                 event.preventDefault();
-                var button = $(this), card = button.closest('.import-preview-card'), form = card.find('form');
-                button.prop('disabled', true); setStatus(card, '{{ _("Working...")|escapejs }}', false);
+                var button = $(this);
+                var nextItemId = String(button.data('item-id'));
+                if (isSwitchingItem || nextItemId === activeItemId) return;
+                isSwitchingItem = true;
                 try {
-                    syncEditor(card);
-                    var response = await fetch(button.data('url'), {
-                        method: 'POST',
-                        headers: {'X-CSRFToken': csrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
-                        body: new FormData(form.get(0)),
-                    });
-                    var payload = await response.json();
-                    if (!response.ok || !payload.ok) {
-                        setStatus(card, payload.message || '{{ _("Request failed.")|escapejs }}', true);
-                        $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]').addClass('has-error');
-                        return;
+                    if (activeItemId && !frame.is(':hidden')) {
+                        setStatus('{{ _("Saving current draft...")|escapejs }}', false);
+                        await saveActiveEditor();
                     }
-                    if (payload.item) updateFields(card, payload.item);
-                    if (payload.item) {
-                        var navButton = $('.import-problem-nav a[data-item-id="' + card.data('item-id') + '"]');
-                        navButton.toggleClass('has-error', payload.item.name_needs_review || payload.item.type_needs_review);
-                        card.attr('data-name-needs-review', payload.item.name_needs_review ? '1' : '0');
-                    }
-                    if (payload.edit_url) {
-                        window.location.reload();
-                    } else setStatus(card, payload.message || '{{ _("Saved.")|escapejs }}', false);
-                } catch (error) { setStatus(card, '{{ _("Request failed.")|escapejs }}', true); }
-                finally { button.prop('disabled', false); }
+                    selectItem(nextItemId, button.data('editor-url'), button.data('name'), button.data('created-url'));
+                } catch (error) {
+                    setStatus(error.message || '{{ _("Draft could not be saved.")|escapejs }}', true);
+                } finally {
+                    isSwitchingItem = false;
+                }
             });
             $('#create-all-problems').on('click', async function (event) {
                 event.preventDefault();
-                var button = $(this), status = $('#create-all-status');
-                button.prop('disabled', true); status.removeClass('error').text('{{ _("Saving drafts...")|escapejs }}');
+                var button = $(this), allStatus = $('#create-all-status');
+                button.prop('disabled', true); allStatus.removeClass('error').text('{{ _("Saving active draft...")|escapejs }}');
                 try {
-                    await saveAllDrafts();
-                    status.text('{{ _("Creating problems...")|escapejs }}');
+                    await saveActiveEditor();
+                    allStatus.text('{{ _("Creating problems...")|escapejs }}');
                     var response = await fetch(button.data('url'), {
                         method: 'POST',
                         headers: {'X-CSRFToken': csrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
                     });
                     var payload = await response.json();
                     if (!response.ok || !payload.ok) {
-                        if (payload.errors && payload.errors.length) {
-                            payload.errors.forEach(function (error) {
-                                var errorCard = $('.import-preview-card[data-item-id="' + error.item_id + '"]');
-                                $('.import-problem-nav a[data-item-id="' + error.item_id + '"]').addClass('has-error');
-                                setStatus(errorCard, error.message, true);
-                            });
-                            var firstError = payload.errors[0];
-                            var firstCard = $('.import-preview-card[data-item-id="' + firstError.item_id + '"]');
-                            selectCard(firstError.item_id);
-                        }
-                        status.text(payload.message || '{{ _("Request failed.")|escapejs }}').addClass('error');
+                        (payload.errors || []).forEach(function (error) { navButton(error.item_id).addClass('has-error error'); });
+                        allStatus.text(payload.message || '{{ _("Request failed.")|escapejs }}').addClass('error');
                         return;
                     }
                     window.location.href = payload.redirect_url || '{{ url("problem_list") }}';
                 } catch (error) {
-                    status.text(error.message || '{{ _("Request failed.")|escapejs }}').addClass('error');
+                    allStatus.text(error.message || '{{ _("Request failed.")|escapejs }}').addClass('error');
                 } finally { button.prop('disabled', false); }
             });
+            window.addEventListener('message', function (event) {
+                if (event.origin !== window.location.origin || !event.data) return;
+                if (event.data.kind !== 'problem-import-saved') return;
+                var item = event.data.item || {};
+                refreshLeftItem(activeItemId, item);
+                setStatus('{{ _("Draft saved.")|escapejs }}', false);
+            });
+            if (frame.length) {
+                var initialButton = $('.import-problem-nav a.is-active').first();
+                if (!initialButton.length) initialButton = $('.import-problem-nav a').first();
+                initialButton.trigger('click');
+            }
         });
     </script>
 {% endblock %}
 
 {% block body %}
     <div class="content-body">
-        <p>{{ _('Review each question before creating it. Multiple-choice rows with consecutive A., B., C. option lines are formatted locally on upload; their answer always comes from the Excel answer column. Use “LLM format question” only when that result needs revision.') }}</p>
+        <p>{{ _('Select an uploaded problem on the left. Its configuration uses the same unified editor as Add problem, and Save draft keeps every setting for Create problem or Create all.') }}</p>
         {% if feedback %}<p class="import-preview-status{% if feedback_error %} error{% else %} success{% endif %}">{{ feedback }}</p>{% endif %}
         <div class="import-preview-layout">
-            <aside class="import-problem-list">
-                <h3>{{ _('Problems') }}</h3>
+            <aside class="import-problem-list module">
+                <h2>{{ _('Uploaded problems') }}</h2>
                 <div class="import-problem-nav">
-                    {% for item in items %}<a class="button{% if item.formatting_error or item.type_needs_review or item.name_needs_review %} has-error{% endif %}" href="#import-item-{{ item.pk }}" data-item-id="{{ item.pk }}">{{ item.name }}</a>{% endfor %}
+                    {% for item in items %}
+                    <div class="import-problem-entry">
+                        <a class="button{% if item.pk == selected_item.pk %} is-active{% endif %}{% if item.formatting_error or item.type_needs_review or item.name_needs_review or item.data_needs_review or item.config_needs_review %} has-error error{% endif %}" href="?item={{ item.pk }}" data-item-id="{{ item.pk }}" data-name="{{ item.name }}" data-editor-url="{{ url('problem_import_item_editor', draft.pk, item.pk) }}"{% if item.created_problem %} data-created-url="{{ url('problem_detail', item.created_problem.code) }}"{% endif %}{% if item.formatting_error %} title="{{ item.formatting_error }}"{% endif %}>{{ item.name }}</a>
+                        {% if item.name_needs_review or item.type_needs_review or item.data_needs_review or item.config_needs_review %}
+                        <div class="import-problem-issues" aria-label="{{ _('This problem needs review') }}">
+                            {% if item.name_needs_review %}<span class="tag-type regular">{{ _('Name') }}</span>{% endif %}
+                            {% if item.type_needs_review %}<span class="tag-type regular">{{ _('Question type') }}</span>{% endif %}
+                            {% if item.data_needs_review %}<span class="tag-type regular">{{ _('Test data') }}</span>{% endif %}
+                            {% if item.config_needs_review %}<span class="tag-type regular">{{ _('Configuration') }}</span>{% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
                 </div>
-                <form id="create-all-form" method="post" action="{{ url('problem_import_create_all', draft.pk) }}">
+                <form method="post" action="{{ url('problem_import_create_all', draft.pk) }}">
                     {% csrf_token %}
                     <button id="create-all-problems" type="submit" class="button" data-url="{{ url('problem_import_create_all', draft.pk) }}">{{ _('Create all') }}</button>
                 </form>
                 <span id="create-all-status" class="import-preview-status"></span>
             </aside>
-            <div class="import-preview-panel">
-            {% for item in items %}
-            <section id="import-item-{{ item.pk }}" class="import-preview-card" data-item-id="{{ item.pk }}" data-type="{{ item.submission_type }}" data-name-needs-review="{% if item.name_needs_review %}1{% else %}0{% endif %}">
-                <h3>{{ _('Row') }} {{ item.row_number }}: {{ item.name }}</h3>
-                {% if item.created_problem %}
-                    <div class="import-preview-actions"><a class="button" href="{{ url('problem_detail', item.created_problem.code) }}">{{ _('Created') }}</a></div>
+            <section class="import-preview-panel">
+                {% if selected_item %}
+                {% if selected_item.created_problem %}
+                <div class="module import-created-panel">
+                    <h2><span class="tag-type regular">{{ _('Created') }}</span>{{ selected_item.name }}</h2>
+                    <div class="form-content">
+                        <p>{{ _('This problem has already been created and can no longer be edited in this import draft.') }}</p>
+                        <a class="button" href="{{ url('problem_detail', selected_item.created_problem.code) }}">{{ _('View problem') }}</a>
+                    </div>
+                </div>
                 {% else %}
-                <form method="post" action="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}" enctype="multipart/form-data">
-                    {% csrf_token %}
-                    <input type="hidden" name="native_submit" value="1">
-                    {% if item.source_label %}<p class="import-preview-source">{{ _('Embedded source:') }} {{ item.source_label }}</p>{% endif %}
-                    <div class="import-preview-field"><label>{{ _('Name') }}</label><input name="name" value="{{ item.name }}">{% if item.name_needs_review %}<small class="error">{{ _('Replace this generated placeholder with the problem name.') }}</small>{% endif %}</div>
-                    <div class="import-preview-field"><label>{{ _('Question type') }}</label><select name="question_type">{% for value, label in type_choices %}<option value="{{ value }}"{% if item.submission_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
-                    {% if item.type_needs_review %}<div class="import-preview-field question-type-confirmation"><label><input type="checkbox" name="confirm_question_type" value="1"> {{ _('Confirm the selected question type') }}</label></div>{% endif %}
-                    <div class="import-preview-field"><label>{{ _('Description') }}</label><textarea name="description">{{ item.description }}</textarea></div>
-                    <div class="import-preview-field not-for-blank not-for-mcq"><label>{{ _('Answer key / notes for LLM') }}</label><textarea name="answer">{{ item.answer }}</textarea></div>
-                    <div class="mcq-field import-type-fields for-mcq">
-                        <label>{{ _('Choices') }}</label><textarea name="options">{{ item.options }}</textarea>
-                        <small>{{ _('Enter one choice per line. This remains editable when automatic recognition finds no choices.') }}</small>
-                    </div>
-                    <div class="mcq-field import-type-fields for-mcq">
-                        <label>{{ _('Correct answer') }}</label><input name="answer" value="{{ item.answer }}">
-                        <small>{{ _('Use a choice letter, number, or exact choice text. Separate multiple correct answers with |.') }}</small>
-                    </div>
-                    <div class="fb-field import-type-fields for-blank">
-                        <input type="hidden" name="answer" value="{{ item.answer }}"><textarea name="blanks" hidden>{{ item.blanks }}</textarea>
-                        <label>{{ _('Blanks') }}</label><p>{{ _('One accepted answer per line; any of them counts as correct.') }}</p>
-                        <table class="fb-blank-table"><thead><tr><th></th><th>{{ _('Label (optional)') }}</th><th>{{ _('Accepted answers') }}</th><th></th></tr></thead><tbody class="fb-blank-rows">{% for blank in item.preview_blanks %}<tr class="fb-blank-row"><td class="preview-drag-handle">&#9776;</td><td><input class="fb-blank-label" value="{{ blank.label }}"></td><td><textarea rows="2" class="fb-blank-answers">{{ blank.answers }}</textarea></td><td><a href="#" class="remove-blank">{{ _('Remove') }}</a></td></tr>{% endfor %}</tbody></table>
-                        <template class="empty-blank-row"><tr class="fb-blank-row"><td class="preview-drag-handle">&#9776;</td><td><input class="fb-blank-label"></td><td><textarea rows="2" class="fb-blank-answers"></textarea></td><td><a href="#" class="remove-blank">{{ _('Remove') }}</a></td></tr></template>
-                    </div>
-                    <div class="import-preview-field"><label>{{ _('Solution / editorial') }}</label><textarea name="solution">{{ item.solution }}</textarea></div>
-                    <div class="import-preview-field"><label>{{ _('Tags') }}</label><input name="tags" value="{{ item.tags }}"><small>{{ _('Separate up to five tags with commas. Each tag can have at most 20 characters.') }}</small></div>
-                    <div class="import-preview-field"><label>{{ _('Difficulty') }}</label><select name="difficulty"><option value="">{{ _('Not set') }}</option><option value="0"{% if item.difficulty == '0' or item.difficulty == 'easy' %} selected{% endif %}>{{ _('Easy (0)') }}</option><option value="1"{% if item.difficulty == '1' or item.difficulty == 'medium' %} selected{% endif %}>{{ _('Medium (1)') }}</option><option value="2"{% if item.difficulty == '2' or item.difficulty == 'hard' %} selected{% endif %}>{{ _('Hard (2)') }}</option></select></div>
-                    <div class="import-preview-field import-type-fields for-code"><label>{{ _('Allowed languages') }}</label><textarea name="allowed_languages" rows="2">{{ item.allowed_languages }}</textarea><small>{{ _('Separate full names with | or commas. C++11 also matches CPP11.') }}</small></div>
-                    <div class="import-preview-field import-type-fields for-code"><label>{{ _('Test data') }}</label><textarea name="test_data" rows="7" placeholder="input data 1: 2 3&#10;output data 1: 5">{{ item.test_data }}</textarea><small>{{ _('Use input data N: and output data N: pairs. Multi-line values are supported.') }}</small></div>
-                    {% if item.test_data_zip %}<div class="import-preview-field import-type-fields for-code"><label>{{ _('Embedded test data ZIP') }}</label><div>{{ item.test_data_zip.name }}</div><small>{{ _('Imported from the Excel object and used in preference to text test data.') }}</small></div>{% endif %}
-                    <div class="import-preview-actions">
-                        <button type="submit" class="button import-action" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'save') }}">{{ _('Save draft') }}</button>
-                        <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'format') }}">{{ _('LLM format question') }}</button>
-                        <button type="submit" class="button import-action" formaction="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}" data-url="{{ url('problem_import_item_action', draft.pk, item.pk, 'create') }}">{{ _('Create problem') }}</button>
-                    </div>
-                    <span class="import-preview-status{% if item.formatting_error %} error{% endif %}">{{ item.formatting_error }}</span>
-                </form>
+                <iframe id="import-editor-frame" class="import-editor-frame" title="{{ _('Problem configuration') }}" src="{{ url('problem_import_item_editor', draft.pk, selected_item.pk) }}"></iframe>
                 {% endif %}
+                {% else %}
+                <p>{{ _('No problems were found in this draft.') }}</p>
+                {% endif %}
+                <span id="import-editor-status" class="import-preview-status"></span>
             </section>
-            {% endfor %}
-            </div>
         </div>
     </div>
 {% endblock %}
