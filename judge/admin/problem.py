@@ -1003,12 +1003,27 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             shared_strings = ET.fromstring(source.read(strings_path))
             reference_sheet = ET.fromstring(source.read(reference_sheet_path))
             problems_sheet = ET.fromstring(source.read(problems_sheet_path))
-            for validation in problems_sheet.findall('x:dataValidations/x:dataValidation', namespace):
-                if validation.attrib.get('sqref') != 'B2:B1000':
-                    continue
-                formula = validation.find('x:formula1', namespace)
-                if formula is not None:
-                    formula.text = '"code,multiple_choice,fill_blank,true_false,short_answer"'
+            validations = problems_sheet.find('x:dataValidations', namespace)
+            if validations is None:
+                validations = ET.SubElement(problems_sheet, '{%s}dataValidations' % simple_xlsx.MAIN_NS)
+            type_validation = next(
+                (
+                    validation for validation in validations.findall('x:dataValidation', namespace)
+                    if validation.attrib.get('sqref') == 'B2:B1000'
+                ),
+                None,
+            )
+            if type_validation is None:
+                type_validation = ET.SubElement(
+                    validations,
+                    '{%s}dataValidation' % simple_xlsx.MAIN_NS,
+                    {'type': 'list', 'allowBlank': '1', 'showErrorMessage': '1', 'sqref': 'B2:B1000'},
+                )
+            formula = type_validation.find('x:formula1', namespace)
+            if formula is None:
+                formula = ET.SubElement(type_validation, '{%s}formula1' % simple_xlsx.MAIN_NS)
+            formula.text = '"code,multiple_choice,fill_blank,true_false,short_answer"'
+            validations.set('count', str(len(validations.findall('x:dataValidation', namespace))))
             old_string_cells = len(reference_sheet.findall('.//x:c[@t="s"]', namespace))
             string_lookup = {}
             string_items = shared_strings.findall('x:si', namespace)
@@ -1043,7 +1058,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                     '{%s}row' % simple_xlsx.MAIN_NS,
                     {'r': str(row_index), 'spans': '1:{}'.format(max_columns)},
                 )
-                for column_index, value in enumerate(row, start=1):
+                for column_index, value in enumerate(row):
                     if value is None or value == '':
                         continue
                     cell = ET.SubElement(
@@ -1058,7 +1073,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
 
             dimension = reference_sheet.find('x:dimension', namespace)
             dimension.set('ref', 'A1:{}{}'.format(
-                simple_xlsx._excel_column_name(max_columns), len(reference_rows),
+                simple_xlsx._excel_column_name(max_columns - 1), len(reference_rows),
             ))
             string_count = int(shared_strings.attrib.get('count', 0))
             shared_strings.set('count', str(string_count - old_string_cells + new_string_cells))

@@ -304,7 +304,9 @@ def canonical_problem_header(value):
         return 'question_type'
     if key in PROBLEM_DESCRIPTION_HEADERS:
         return 'description'
-    return key
+    # Keep unrecognized headings human-readable for the preview's configuration
+    # review. The importer still normalizes them internally for comparisons.
+    return key.replace('_', ' ')
 
 
 def _xlsx_sheet_names(file_obj):

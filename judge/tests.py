@@ -337,11 +337,11 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             max_columns = max(len(row) for row in reference_rows)
             self.assertEqual(
                 reference_sheet.find('x:dimension', namespace).attrib['ref'],
-                'A1:{}{}'.format(simple_xlsx._excel_column_name(max_columns), len(reference_rows)),
+                'A1:{}{}'.format(simple_xlsx._excel_column_name(max_columns - 1), len(reference_rows)),
             )
             expected_header_cells = {
                 '{}3'.format(simple_xlsx._excel_column_name(column_index))
-                for column_index, value in enumerate(reference_rows[2], start=1)
+                for column_index, value in enumerate(reference_rows[2])
                 if value not in (None, '')
             }
             self.assertTrue(expected_header_cells.issubset(references))
