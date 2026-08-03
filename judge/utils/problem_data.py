@@ -263,10 +263,10 @@ class ProblemDataCompiler(object):
         try:
             from judge.judgeapi import update_problems
             update_problems()
-        except OSError as error:
+        except OSError:
             logger.warning(
-                'Problem data for %s was saved, but judges could not be notified: %s',
-                self.problem.code, error,
+                'Problem data for %s was saved, but judges could not be notified because the bridge is unavailable.',
+                self.problem.code,
             )
         except Exception:
             logger.exception('Failed to notify judges of problem data update for %s', self.problem.code)

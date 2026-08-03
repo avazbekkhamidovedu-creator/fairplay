@@ -26,8 +26,8 @@ from django.views import View
 from judge import llm
 from judge.llm import LLMError
 from judge.models import Language, Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, ProblemImportDraft, \
-    ProblemImportImage, ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemSubmissionType, \
-    ProblemShortAnswerConfig, ProblemTestCase, ProblemType, Solution, problem_data_storage
+    ProblemImportImage, ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, \
+    ProblemSubmissionType, ProblemTestCase, ProblemType, Solution, problem_data_storage
 from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
     store_docx_image
 from judge.utils.language_matching import matching_languages
