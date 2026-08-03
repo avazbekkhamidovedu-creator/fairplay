@@ -126,6 +126,32 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(Solution.objects.get(problem=problem).content, '5 is the only prime option.')
 
+    def test_can_manually_save_unrecognized_multiple_choice_options_and_answer(self):
+        self.upload([
+            ['name', 'question_type', 'description', 'answer'],
+            ['Manual MCQ', 'multiple_choice', 'Choose the correct value.', ''],
+        ])
+        draft = ProblemImportDraft.objects.get(owner=self.creator.profile)
+        item = draft.items.get()
+        preview = self.client.get(reverse('problem_import_preview', args=(draft.pk,)))
+        self.assertContains(preview, 'name="options"', html=False)
+        self.assertContains(preview, 'Correct answer', html=False)
+
+        response = self.client.post(reverse('problem_import_item_action', args=(draft.pk, item.pk, 'save')), {
+            'name': item.name,
+            'question_type': 'M',
+            'description': item.description,
+            'answer': 'B',
+            'options': 'first value\nsecond value',
+            'correct_options': '',
+            'blanks': '',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        item.refresh_from_db()
+        self.assertEqual(item.options, 'first value\nsecond value')
+        self.assertEqual(item.answer, 'B')
+
     def test_single_create_rejects_an_unconfirmed_question_type(self):
         self.upload([
             ['name', 'question_type', 'description'],
