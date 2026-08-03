@@ -52,10 +52,10 @@ class FileUploadBase(CommonDataMixin, TestCase):
 
 class FileUploadAuthoringTestCase(FileUploadBase):
     def test_create_menu_and_page_permission(self):
-        # In the "Add new problem" menu for a user who can create private problems.
+        # The redesigned "Add problem" menu no longer iterates the question-type registry, so this
+        # page is reachable by URL but is not linked from anywhere. Authoring moves onto the
+        # unified create_v2 page in a follow-up.
         self.client.force_login(self.users['creator'])
-        content = self.client.get(reverse('problem_list')).content
-        self.assertIn(reverse('problem_file_create').encode(), content)
         self.assertEqual(self.client.get(reverse('problem_file_create')).status_code, 200)
 
         # Not available to a user without the permission.
