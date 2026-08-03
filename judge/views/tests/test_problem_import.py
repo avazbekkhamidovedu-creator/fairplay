@@ -431,7 +431,7 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         ])
         draft = ProblemImportDraft.objects.get(owner=self.creator.profile)
         item = draft.items.get()
-        self.assertEqual(item.tags, 'Programming|Hard')
+        self.assertEqual(item.tags, 'Programming, Hard')
 
         payload = {
             'type': 'single',
@@ -456,7 +456,7 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 200)
         item.refresh_from_db()
-        self.assertEqual(item.tags, 'Programming|Hard')
+        self.assertEqual(item.tags, 'Programming, Hard')
 
     def test_invalid_recognized_configuration_is_shown_for_revision(self):
         self.upload([

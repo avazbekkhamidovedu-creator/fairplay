@@ -769,12 +769,6 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         except ValueError as error:
             return self._error_response(request, draft, item, str(error))
         if action == 'save':
-            try:
-                _validate_problem_import_item(item)
-            except ValueError as error:
-                return self._error_response(request, draft, item, str(error))
-            item.formatting_error = ''
-            item.save(update_fields=['formatting_error', 'updated_at'])
             return self._success_response(request, draft, item, _('Draft saved.'), _item_payload(item))
         if action == 'format':
             if not llm.is_configured():
@@ -868,6 +862,10 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
             item.type_needs_review = False
         if item.name_needs_review and item.name != previous_name:
             item.name_needs_review = False
+        _refresh_configuration_review(
+            item,
+            confirm=data.get('confirm_unrecognized_configurations') == '1',
+        )
         item.formatting_error = _review_message(item)
         item.save()
 
@@ -1248,7 +1246,7 @@ def _normalise_import_tags(raw_value):
 
 
 def _serialize_import_tags(raw_value):
-    return '|'.join(_normalise_import_tags(raw_value))
+    return ', '.join(_normalise_import_tags(raw_value))
 
 
 def _validate_import_tags(raw_value):
