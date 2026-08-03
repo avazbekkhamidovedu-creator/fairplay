@@ -1,4 +1,4 @@
-{# Fill-in-the-blank submission UI: one text input per blank. #}
+{# Short-answer submission UI: a single free-text response, graded by AI. #}
 <br>
 {% if request.in_contest and submission_limit %}
     {% if submissions_left > 0 %}
@@ -21,14 +21,9 @@
 <form id="problem_submit" action="{{ submit_url|default('') }}" method="post" class="form-area">
     {% csrf_token %}
     {{ form.non_field_errors() }}
-    <div id="fill-blank-fields" class="fill-blank-fields">
-        {% for field in form %}
-            <div class="fill-blank-field" style="margin-bottom: 0.8em;">
-                <label for="{{ field.id_for_label }}" style="display:block; font-weight:bold;">{{ field.label }}</label>
-                {{ field.errors }}
-                {{ field }}
-            </div>
-        {% endfor %}
+    <div class="short-answer-field">
+        {{ form.answer.errors }}
+        {{ form.answer }}
     </div>
 
     <hr>

@@ -8,12 +8,117 @@
             }
         </style>
     {% endif %}
+    <style>
+        .problem-table th.col-select, .problem-table td.col-select { width: 32px; text-align: center; }
+        .problem-table th.col-actions, .problem-table td.col-actions { white-space: nowrap; }
+        .problem-table td.col-actions .row-action {
+            display: inline-block; margin-left: 12px; font-size: 15px; cursor: pointer;
+            background: none; border: none; padding: 0; color: var(--oj-link) !important;
+        }
+        .problem-table td.col-actions .row-action:hover { opacity: 0.75; }
+        .problem-table td.col-actions .row-action.row-action-danger { color: var(--oj-danger) !important; }
+        .toolbar .bulk-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .toolbar .bulk-delete-btn:not(:disabled):hover { border-color: var(--oj-danger); color: var(--oj-danger) !important; }
+        .toolbar .bulk-delete-btn .fa { color: inherit; }
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
+            display: flex; align-items: center; justify-content: center; z-index: 1000;
+        }
+        .modal-overlay[hidden] { display: none; }
+        .modal-box {
+            background: var(--oj-surface, #fff); width: 460px; max-width: 92vw;
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: var(--oj-radius-lg, 8px);
+            padding: 1.25rem 1.5rem; box-shadow: var(--oj-shadow-modal);
+        }
+        .modal-title { margin: 0 0 0.5rem; font-size: 1.1rem; }
+        .modal-desc { margin: 0 0 0.75rem; color: var(--oj-text-muted, #555); font-size: 13px; }
+        .modal-list {
+            margin: 0 0 1rem; padding-left: 1.1rem; max-height: 220px; overflow: auto; font-size: 13px;
+        }
+        .modal-list li { margin: 2px 0; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+        /* Modal sits outside the filter form; keep danger button styles. */
+        .modal-overlay .btn-danger {
+            color: var(--oj-btn-text, #fff) !important;
+            background: var(--oj-danger, #c0392b);
+            border: 1px solid var(--oj-danger, #c0392b);
+            border-radius: var(--oj-radius, 4px);
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+    </style>
+    {% include "problem/add-problem-menu-assets.html" %}
+    <style>
+        .excel-import-modal {
+            align-items: center; background: rgba(0, 0, 0, 0.45); display: none;
+            inset: 0; justify-content: center; padding: 1.25rem; position: fixed; z-index: 3000;
+        }
+        .excel-import-modal[aria-hidden="false"] { display: flex; }
+        .excel-import-dialog {
+            background: var(--oj-surface, #fff); border: 1px solid var(--oj-border, #ccc);
+            border-radius: var(--oj-radius-lg, 8px); box-shadow: var(--oj-shadow-modal);
+            max-width: 38rem; padding: 1.5rem 1.75rem; position: relative; width: 100%;
+        }
+        .excel-import-kicker {
+            color: var(--oj-text-muted, #666); font-size: 0.75rem; font-weight: bold;
+            letter-spacing: 0.08em; margin-bottom: 0.5rem; text-transform: uppercase;
+        }
+        .excel-import-dialog h3 { color: var(--oj-text, #222); font-size: 1.25rem; margin: 0 2.5rem 0.5rem 0; }
+        .excel-import-intro { color: var(--oj-text-muted, #555); line-height: 1.55; margin: 0 0 1.1rem; }
+        .excel-import-dropzone {
+            align-items: center; background: var(--oj-bg, #fafafa); border: 1px dashed var(--oj-border, #ccc);
+            border-radius: var(--oj-radius, 4px); cursor: pointer; display: flex; flex-direction: column;
+            padding: 1.35rem 1.15rem; text-align: center;
+        }
+        .excel-import-dropzone:hover { border-color: var(--oj-link, #2980b9); }
+        .excel-import-dropzone > .fa { color: var(--oj-link, #2980b9); font-size: 2rem; margin-bottom: 0.55rem; }
+        .excel-import-file-title { color: var(--oj-text, #222); font-weight: bold; }
+        .excel-import-file-help {
+            color: var(--oj-text-muted, #666); font-size: 0.87rem; line-height: 1.45;
+            margin-top: 0.4rem; max-width: 28rem;
+        }
+        .excel-import-dropzone input[type="file"] { font-size: 0.85rem; margin-top: 0.85rem; max-width: 100%; }
+        .excel-import-template {
+            align-items: flex-start; background: var(--oj-bg, #f5f5f5); border-radius: var(--oj-radius, 4px);
+            color: var(--oj-text-muted, #555); display: flex; font-size: 0.9rem; gap: 0.55rem;
+            line-height: 1.45; margin-top: 1rem; padding: 0.75rem 0.85rem;
+        }
+        .excel-import-template .fa { color: var(--oj-link, #2980b9); margin-top: 0.1rem; }
+        .excel-import-template a { font-weight: bold; }
+        .excel-import-actions {
+            border-top: 1px solid var(--oj-border, #e0e0e0); display: flex; gap: 0.6rem;
+            justify-content: flex-end; margin-top: 1.25rem; padding-top: 1rem;
+        }
+        .excel-import-close {
+            background: transparent; border: 0; color: var(--oj-text-muted, #777); cursor: pointer;
+            font-size: 1.7rem; line-height: 1; padding: 0.2rem; position: absolute; right: 0.9rem; top: 0.75rem;
+        }
+        .excel-import-actions .excel-import-close { font-size: inherit; position: static; }
+        .excel-import-status { color: var(--oj-danger, #c0392b); display: block; font-size: 0.9rem; margin-top: 0.75rem; min-height: 1.25em; }
+        @media (max-width: 520px) {
+            .excel-import-dialog { padding: 1.25rem; }
+            .excel-import-actions { align-items: stretch; flex-direction: column-reverse; }
+            .excel-import-actions .button { text-align: center; }
+        }
+        .modal-overlay .btn-danger:hover {
+            background: var(--oj-danger-hover, #a93226);
+            border-color: var(--oj-danger-hover, #a93226);
+        }
+    </style>
 {% endblock %}
 
 {% block js_media %}
     {% compress js %}
         <script type="text/javascript">
             $(function () {
+                if (new URLSearchParams(window.location.search).get('import') === 'excel') {
+                    var importModal = document.getElementById('excel-import-modal');
+                    if (importModal) {
+                        importModal.setAttribute('aria-hidden', 'false');
+                    }
+                }
+
                 var $form = $('#filter-form');
                 if (!$form.length) return;
 
@@ -61,7 +166,7 @@
                     }
                 }
 
-                // Reflect the checked knowledge points as chips + count (applied on Search).
+                // Reflect the checked knowledge points as chips + count.
                 function refreshKnowledge() {
                     var $sel = $('#knowledge-selected');
                     if (!$sel.length) return;
@@ -107,11 +212,15 @@
                     }
                 });
 
-                // Problem-type dropdown: only update the label; filter applies on Search.
-                $('#type-multi-select .multi-select-menu input[type=checkbox]').change(refreshTypeLabel);
-
-                // Difficulty dropdown: only update the label; filter applies on Search.
-                $('#difficulty-multi-select .multi-select-menu input[type=checkbox]').change(refreshDifficultyLabel);
+                // Problem-type / difficulty / knowledge: apply filters as soon as selection changes.
+                $('#type-multi-select .multi-select-menu input[type=checkbox]').change(function () {
+                    refreshTypeLabel();
+                    go();
+                });
+                $('#difficulty-multi-select .multi-select-menu input[type=checkbox]').change(function () {
+                    refreshDifficultyLabel();
+                    go();
+                });
 
                 // Knowledge-point picker.
                 $('#toggle-knowledge-picker').click(function (e) {
@@ -120,15 +229,20 @@
                     $p.prop('hidden', !$p.prop('hidden'));
                 });
                 $('#close-knowledge').click(function () { $('#knowledge-picker').prop('hidden', true); });
-                $('#knowledge-picker-body input[type=checkbox]').change(refreshKnowledge);
+                $('#knowledge-picker-body input[type=checkbox]').change(function () {
+                    refreshKnowledge();
+                    go();
+                });
                 $('#clear-knowledge').click(function () {
                     $('#knowledge-picker-body input[type=checkbox]').prop('checked', false);
                     refreshKnowledge();
+                    go();
                 });
                 $('#knowledge-selected').on('click', 'button[data-kp-remove]', function () {
                     var id = $(this).data('kp-remove');
                     $('#knowledge-picker-body input[value="' + id + '"]').prop('checked', false);
                     refreshKnowledge();
+                    go();
                 });
                 $('#knowledge-search').on('input', function () {
                     var q = $(this).val().trim().toLowerCase();
@@ -169,7 +283,7 @@
                     go();
                 });
 
-                // Filters apply only when the user clicks Search (no auto-submit).
+                // Text/number filters still apply on Search (or Enter).
 
                 // Submit on Enter inside text/number inputs.
                 $form.find('input[name=search], input[name=ac_min], input[name=ac_max]').keypress(function (e) {
@@ -197,6 +311,64 @@
                 refreshTypeLabel();
                 refreshDifficultyLabel();
                 refreshKnowledge();
+            });
+
+            // Problem management: per-row + bulk delete with a confirmation modal.
+            $(function () {
+                var $delForm = $('#problem-delete-form');
+                if (!$delForm.length) return;
+                var $codes = $('#problem-delete-codes');
+                var $modal = $('#delete-modal');
+                var $list = $('#delete-modal-list');
+                var pending = [];
+
+                function openModal(items) {
+                    if (!items.length) return;
+                    pending = items;
+                    $list.empty();
+                    items.forEach(function (it) {
+                        $list.append($('<li>').text(it.code + (it.name ? '  ·  ' + it.name : '')));
+                    });
+                    $modal.prop('hidden', false);
+                }
+                function closeModal() { $modal.prop('hidden', true); pending = []; }
+
+                function refreshBulk() {
+                    var total = $('.problem-select').length;
+                    var n = $('.problem-select:checked').length;
+                    $('#bulk-count').text(n);
+                    $('#bulk-delete-btn').prop('disabled', n === 0);
+                    $('#select-all-problems').prop('checked', total > 0 && n === total);
+                }
+
+                $('.js-del-one').click(function () {
+                    openModal([{ code: $(this).data('code'), name: '' + $(this).data('name') }]);
+                });
+
+                $('.problem-select').change(refreshBulk);
+                $('#select-all-problems').change(function () {
+                    $('.problem-select').prop('checked', $(this).prop('checked'));
+                    refreshBulk();
+                });
+                $('#bulk-delete-btn').click(function () {
+                    openModal($('.problem-select:checked').map(function () {
+                        return { code: $(this).data('code'), name: '' + $(this).data('name') };
+                    }).get());
+                });
+
+                $('#delete-cancel').click(closeModal);
+                $modal.click(function (e) { if (e.target === this) closeModal(); });
+                $(document).keydown(function (e) { if (e.key === 'Escape' && !$modal.prop('hidden')) closeModal(); });
+                $('#delete-confirm').click(function () {
+                    if (!pending.length) return closeModal();
+                    $codes.empty();
+                    pending.forEach(function (it) {
+                        $('<input>', { type: 'hidden', name: 'codes', value: it.code }).appendTo($codes);
+                    });
+                    $delForm.trigger('submit');
+                });
+
+                refreshBulk();
             });
         </script>
     {% endcompress %}
@@ -239,26 +411,34 @@
 {% block title_row %}
     {% set tab = 'list' %}
     {% include "problem/problem-list-tabs.html" %}
-    {% if creatable_problem_types %}
-        <div class="add-problem-menu">
-            <a href="#" class="button add-problem-toggle" onclick="return false;">{{ _('Add new problem') }} &#9662;</a>
-            <ul class="add-problem-dropdown">
-                {% for type in creatable_problem_types %}
-                    <li><a href="{{ type.create_url() }}">{{ type.label }}</a></li>
-                {% endfor %}
-            </ul>
+    {% if can_import_excel_problems %}
+        <div class="excel-import-modal" id="excel-import-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="excel-import-title"
+             onclick="if (event.target === this) this.setAttribute('aria-hidden', 'true');">
+            <form class="excel-import-dialog" id="excel-import-form" action="{{ url('problem_import_upload') }}" method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+                <button type="button" class="excel-import-close" aria-label="{{ _('Close') }}"
+                        onclick="document.getElementById('excel-import-modal').setAttribute('aria-hidden', 'true');">&times;</button>
+                <div class="excel-import-kicker"><i class="fa fa-table"></i> {{ _('Question import') }}</div>
+                <h3 id="excel-import-title">{{ _('Build questions from an Excel workbook') }}</h3>
+                <p class="excel-import-intro">{{ _('Upload one workbook, review every question, then use AI formatting only where it is useful.') }}</p>
+                <label class="excel-import-dropzone" for="excel-import-file">
+                    <i class="fa fa-file-excel-o"></i>
+                    <span class="excel-import-file-title">{{ _('Choose an .xlsx file') }}</span>
+                    <span class="excel-import-file-help">{{ _('Include name and question_type. Description may be text or an embedded DOCX/Markdown file; DOCX figures are imported into the description. Embed a ZIP object in a code-problem row for test data.') }}</span>
+                    <input id="excel-import-file" name="excel_file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+                </label>
+                <div class="excel-import-template">
+                    <i class="fa fa-lightbulb-o"></i>
+                    <span>{{ _('First time importing?') }} <a href="{{ url('admin:judge_problem_download_excel_template') }}">{{ _('Download the Excel template') }}</a></span>
+                </div>
+                <div class="excel-import-actions">
+                    <button type="button" class="button excel-import-close"
+                            onclick="document.getElementById('excel-import-modal').setAttribute('aria-hidden', 'true');">{{ _('Cancel') }}</button>
+                    <button type="submit" class="button"><i class="fa fa-arrow-right"></i> {{ _('Upload and preview') }}</button>
+                </div>
+                <span class="excel-import-status" aria-live="polite"></span>
+            </form>
         </div>
-        <style>
-            .add-problem-menu { display: inline-block; position: relative; margin-left: 0.5em; }
-            .add-problem-menu .add-problem-dropdown {
-                display: none; position: absolute; z-index: 1000; list-style: none;
-                margin: 0; padding: 0.3em 0; min-width: 180px; background: #fff;
-                border: 1px solid #ccc; box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-            }
-            .add-problem-menu:hover .add-problem-dropdown { display: block; }
-            .add-problem-menu .add-problem-dropdown li a { display: block; padding: 0.4em 1em; white-space: nowrap; }
-            .add-problem-menu .add-problem-dropdown li a:hover { background: #f0f0f0; }
-        </style>
     {% endif %}
 {% endblock %}
 
@@ -319,10 +499,11 @@
         {% endif %}
     {% else %}
         {# Redesigned problem list. #}
-        <form id="filter-form" name="form" action="" method="get" class="problem-list-redesign">
+        <form id="filter-form" name="form" action="" method="get" class="problem-list-redesign oj-ui">
             <input type="hidden" name="category" id="category-input" value="{{ category if category is not none else '' }}">
             {# Marker that the form was actually submitted, so checkbox defaults (e.g. search_full) can be applied only on first visit. #}
             <input type="hidden" name="filtered" value="1">
+            {% set difficulty_labels = {'easy': _('Easy'), 'medium': _('Medium'), 'hard': _('Hard')} %}
 
             <div class="group-tabs" role="tablist">
                 <button type="button" class="group-tab{% if category is none %} active{% endif %}" data-category="">
@@ -373,7 +554,7 @@
                                     <span id="difficulty-multi-label" data-empty-label="{{ _('All difficulties') }}"
                                           class="multi-select-text {% if not selected_difficulty_types %}multi-select-label-empty{% endif %}">
                                         {% if selected_difficulty_types %}
-                                            {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}{{ user_trans(type.full_name) }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
+                                            {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}{{ difficulty_labels.get(type.name, type.full_name) }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}
                                         {% else %}
                                             {{ _('All difficulties') }}
                                         {% endif %}
@@ -385,7 +566,7 @@
                                         <label class="multi-select-option">
                                             <input type="checkbox" name="type" value="{{ type.id }}"
                                                    {% if type.id in selected_difficulty_types %}checked{% endif %}>
-                                            <span>{{ user_trans(type.full_name) }}</span>
+                                            <span>{{ difficulty_labels.get(type.name, type.full_name) }}</span>
                                         </label>
                                     {% else %}
                                         <span class="multi-select-empty">{{ _('No difficulties yet.') }}</span>
@@ -490,7 +671,10 @@
                         {% for f in format_types %}{% if f.code in selected_formats %}
                             <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
-                        {% for type in problem_types %}{% if type.id in selected_types %}
+                        {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}
+                            <span class="chip">{{ difficulty_labels.get(type.name, type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
+                        {% endif %}{% endfor %}
+                        {% for type in knowledge_types %}{% if type.id in selected_knowledge_types %}
                             <span class="chip">{{ user_trans(type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
                         {% if problem_status == 'solved' %}
@@ -546,6 +730,11 @@
                             </ul>
                         </div>
                     </div>
+                    {% if can_manage_problems %}
+                        <button type="button" class="sort-btn bulk-delete-btn" id="bulk-delete-btn" disabled>
+                            <i class="fa fa-trash"></i> {{ _('Delete selected') }} (<span id="bulk-count">0</span>)
+                        </button>
+                    {% endif %}
                 </div>
                 <div class="toolbar-right">
                     {% if request.user.is_authenticated %}
@@ -557,43 +746,56 @@
                 </div>
             </section>
 
-            <section class="card table-card tags-hidden">
+            <section class="card table-card">
                 <div class="table-wrap">
                     <table class="problem-table">
                         <thead>
                         <tr>
+                            {% if can_manage_problems %}
+                                <th class="col-select"><input type="checkbox" id="select-all-problems" title="{{ _('Select all') }}"></th>
+                            {% endif %}
                             {% if request.user.is_authenticated %}
                                 <th class="col-status solved">{{ sortth('<i class="fa fa-check"></i>'|safe, sort_links.solved, sort_order.solved) }}</th>
                             {% endif %}
-                            <th class="col-code">{{ sortth(_('Problem code'), sort_links.code, sort_order.code) }}</th>
                             <th class="col-name">{{ sortth(_('Problem'), sort_links.name, sort_order.name) }}</th>
                             <th class="col-type">{{ sortth(_('Problem type'), sort_links.type, sort_order.type) }}</th>
                             <th class="col-group">{{ sortth(_('Category'), sort_links.group, sort_order.group) }}</th>
                             <th class="col-tags">
-                                <button type="button" class="btn-text btn-sm" id="toggle-tags">{{ _('Show tags') }}</button>
+                                <button type="button" class="btn-text btn-sm" id="toggle-tags">{{ _('Hide tags') }}</button>
                             </th>
                             <th class="col-diff">{{ _('Difficulty') }}</th>
                             <th class="col-ac">{{ sortth(_('AC %%'), sort_links.ac_rate, sort_order.ac_rate) }}</th>
                             <th class="col-date">{{ sortth(_('Date added'), sort_links.date, sort_order.date) }}</th>
                             <th class="col-points">{{ sortth(_('Points'), sort_links.points, sort_order.points) }}</th>
+                            {% if can_manage_problems %}
+                                <th class="col-actions">{{ _('Actions') }}</th>
+                            {% endif %}
                         </tr>
                         </thead>
                         <tbody>
                         {% if not problems %}
                             <tr class="empty-row">
-                                <td colspan="10">{{ _('No problems match your filters.') }}</td>
+                                <td colspan="12">{{ _('No problems match your filters.') }}</td>
                             </tr>
                         {% endif %}
                         {% for problem in problems %}
                             <tr>
+                                {% if can_manage_problems %}
+                                    <td class="col-select">
+                                        {% if problem.id in editable_problem_ids %}
+                                            <input type="checkbox" class="problem-select" data-code="{{ problem.code }}"
+                                                   data-name="{{ problem.i18n_name or problem.name }}">
+                                        {% endif %}
+                                    </td>
+                                {% endif %}
                                 {% if request.user.is_authenticated %}
                                     {% if problem.id in completed_problem_ids %}
                                         <td class="col-status" solved="1">
                                             <a href="{{ url('user_submissions', problem.code, request.user.username) }}">
                                                 {% if problem.is_public %}
-                                                    <i class="solved-problem-color fa fa-check-circle"></i>
+                                                    <i class="solved-problem-color fa fa-check-circle" title="{{ _('Solved') }}"></i>
                                                 {% else %}
-                                                    <i class="solved-problem-color fa fa-lock"></i>
+                                                    <i class="solved-problem-color fa fa-lock" title="{{ _('Solved (private)') }}"></i>
                                                 {% endif %}
                                             </a>
                                         </td>
@@ -601,25 +803,22 @@
                                         <td class="col-status" solved="0">
                                             <a href="{{ url('user_submissions', problem.code, request.user.username) }}">
                                                 {% if problem.is_public %}
-                                                    <i class="attempted-problem-color fa fa-minus-circle"></i>
+                                                    <i class="attempted-problem-color fa fa-minus-circle" title="{{ _('Attempted') }}"></i>
                                                 {% else %}
-                                                    <i class="attempted-problem-color fa fa-lock"></i>
+                                                    <i class="attempted-problem-color fa fa-lock" title="{{ _('Attempted (private)') }}"></i>
                                                 {% endif %}
                                             </a>
                                         </td>
                                     {% else %}
                                         <td class="col-status" solved="-1">
                                             {% if problem.is_public %}
-                                                <i class="unsolved-problem-color fa fa-minus-circle"></i>
+                                                <i class="unsolved-problem-color fa fa-minus-circle" title="{{ _('Unsolved') }}"></i>
                                             {% else %}
-                                                <i class="unsolved-problem-color fa fa-lock"></i>
+                                                <i class="unsolved-problem-color fa fa-lock" title="{{ _('Unsolved (private)') }}"></i>
                                             {% endif %}
                                         </td>
                                     {% endif %}
                                 {% endif %}
-                                <td class="col-code">
-                                    <a href="{{ url('problem_detail', problem.code) }}">{{ problem.code }}</a>
-                                </td>
                                 <td class="col-name">
                                     <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>
                                 </td>
@@ -655,6 +854,20 @@
                                 </td>
                                 <td class="col-date">{{ problem.date.strftime('%Y-%m-%d') if problem.date else '—' }}</td>
                                 <td class="col-points p">{{ problem.points|floatformat }}{% if problem.partial %}p{% endif %}</td>
+                                {% if can_manage_problems %}
+                                    <td class="col-actions">
+                                        {% if problem.id in editable_problem_ids %}
+                                            <a class="row-action" href="{{ url('problem_edit_v2', problem.code) }}"
+                                               title="{{ _('Edit') }}" aria-label="{{ _('Edit') }}"><i class="fa fa-pencil"></i></a>
+                                            <button type="button" class="row-action row-action-danger js-del-one"
+                                                    data-code="{{ problem.code }}"
+                                                    data-name="{{ problem.i18n_name or problem.name }}"
+                                                    title="{{ _('Delete') }}" aria-label="{{ _('Delete') }}"><i class="fa fa-trash"></i></button>
+                                        {% else %}
+                                            <span class="tag-placeholder">&mdash;</span>
+                                        {% endif %}
+                                    </td>
+                                {% endif %}
                             </tr>
                         {% endfor %}
                         </tbody>
@@ -670,5 +883,25 @@
                 </footer>
             </section>
         </form>
+
+        {% if can_manage_problems %}
+            <form id="problem-delete-form" method="post" action="{{ url('problem_bulk_delete') }}" style="display:none;">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path() }}">
+                <span id="problem-delete-codes"></span>
+            </form>
+
+            <div class="modal-overlay" id="delete-modal" hidden>
+                <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+                    <h3 class="modal-title" id="delete-modal-title">{{ _('Delete problem(s)?') }}</h3>
+                    <p class="modal-desc">{{ _('This permanently deletes the following problem(s) and all related data (submissions, test data). This cannot be undone.') }}</p>
+                    <ul class="modal-list" id="delete-modal-list"></ul>
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-outline" id="delete-cancel">{{ _('Cancel') }}</button>
+                        <button type="button" class="btn btn-danger" id="delete-confirm">{{ _('Delete') }}</button>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
     {% endif %}
 {% endblock %}

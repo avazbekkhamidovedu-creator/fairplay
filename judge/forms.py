@@ -258,6 +258,15 @@ class FileSubmitForm(Form):
         return upload
 
 
+class ShortAnswerSubmitForm(Form):
+    """Student-facing short-answer form: a single free-text response."""
+    answer = CharField(label='', required=True, strip=True,
+                       widget=forms.Textarea(attrs={'rows': 6, 'class': 'short-answer-input'}))
+
+    def __init__(self, *args, problem=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
 class EditOrganizationForm(ModelForm):
     class Meta:
         model = Organization

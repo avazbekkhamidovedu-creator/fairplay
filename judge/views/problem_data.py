@@ -182,6 +182,14 @@ class ProblemSubmissionDiff(TitleMixin, ProblemMixin, DetailView):
 class ProblemDataView(TitleMixin, ProblemManagerMixin):
     template_name = 'problem/data.html'
 
+    def dispatch(self, request, *args, **kwargs):
+        response = super().dispatch(request, *args, **kwargs)
+        # Allow the create_v2 problem editor to embed this page in a same-origin iframe.
+        # The global middleware otherwise sends X-Frame-Options: DENY, blocking the frame.
+        if request.GET.get('embed'):
+            response['X-Frame-Options'] = 'SAMEORIGIN'
+        return response
+
     def get_title(self):
         return _('Editing data for {0}').format(self.object.name)
 
@@ -210,14 +218,31 @@ class ProblemDataView(TitleMixin, ProblemManagerMixin):
     def get_valid_files(self, data, post=False) -> List[str]:
         try:
             if post and 'problem-data-zipfile-clear' in self.request.POST:
-                return []
+                return self._loose_case_files()
             elif post and 'problem-data-zipfile' in self.request.FILES:
                 return ZipFile(self.request.FILES['problem-data-zipfile']).namelist()
             elif data.zipfile:
                 return ZipFile(data.zipfile.path).namelist()
         except BadZipfile:
             raise
-        return []
+        return self._loose_case_files()
+
+    def _loose_case_files(self) -> List[str]:
+        """Include loose .in/.out/.ans written by create-v2 so they are not marked bad-file."""
+        import os
+
+        from judge.models import problem_data_storage
+
+        root = getattr(problem_data_storage, 'location', None) or ''
+        problem_dir = os.path.join(root, self.object.code) if root else ''
+        if not problem_dir or not os.path.isdir(problem_dir):
+            return []
+        names = []
+        for name in sorted(os.listdir(problem_dir)):
+            lower = name.lower()
+            if lower.endswith('.in') or lower.endswith('.out') or lower.endswith('.ans'):
+                names.append(name)
+        return names
 
     def get_context_data(self, **kwargs):
         context = super(ProblemDataView, self).get_context_data(**kwargs)
@@ -247,6 +272,11 @@ class ProblemDataView(TitleMixin, ProblemManagerMixin):
         context['language_ace_map'] = mark_safe(json.dumps({
             lang['id']: lang['ace'] for lang in harness_languages
         }))
+
+        # Chrome-less rendering when embedded inside the create_v2 problem editor (iframe).
+        context['embed'] = embed = bool(self.request.GET.get('embed'))
+        context['layout'] = 'problem/data_embed_base.html' if embed else 'base.html'
+        context['problem_points'] = self.object.points
 
         return context
 

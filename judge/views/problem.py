@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 from datetime import timedelta
 from operator import itemgetter
 from random import randrange
@@ -24,6 +25,7 @@ from django.urls import reverse
 from django.utils import timezone, translation
 from django.utils.functional import cached_property
 from django.utils.html import escape, format_html
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy
@@ -466,7 +468,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
     title = gettext_lazy('Problems')
     context_object_name = 'problems'
     template_name = 'problem/list.html'
-    paginate_by = 50
+    paginate_by = 20
     sql_sort = frozenset(('points', 'ac_rate', 'user_count', 'code', 'date'))
     manual_sort = frozenset(('name', 'group', 'solved', 'type', 'editorial'))
     all_sorts = sql_sort | manual_sort
@@ -583,6 +585,16 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         return queryset.search(query, queryset.BOOLEAN).extra(order_by=['-relevance'])
 
     def get_visible_problems_filter(self):
+        user = self.request.user
+        # Users who may see private problems (or edit everything) get the full set on the front-end
+        # list too — mirroring Problem.get_visible_problems and the Django admin. Without this an
+        # admin who did not author a private problem could not find it here (nor filter by its
+        # group / type), even though it shows up in the admin site.
+        if user.is_authenticated and (
+            user.has_perm('judge.see_private_problem')
+            or (user.has_perm('judge.edit_own_problem') and user.has_perm('judge.edit_all_problem'))
+        ):
+            return Q()
         filter = Q(is_public=True)
         if not self.request.user.has_perm('judge.see_organization_problem'):
             org_filter = Q(is_organization_private=False)
@@ -602,9 +614,37 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 )
         return filter
 
+    def get_format_options(self):
+        """Answer-format filter options as ``(code, label, Q)`` tuples.
+
+        MCQ is a single ``submission_type`` but authored as single / multiple / true-false, so it is
+        expanded here (via ``mcq_config``) into three distinct, filterable options.
+        """
+        from judge.models import ProblemSubmissionType
+        from judge.question_types import all_types
+        options = []
+        for t in all_types():
+            if t.submission_type == ProblemSubmissionType.MCQ:
+                # Whole-MCQ option: matches any MCQ, including legacy ones without an mcq_config row.
+                options.append((ProblemSubmissionType.MCQ, str(t.label),
+                                Q(submission_type=ProblemSubmissionType.MCQ)))
+                # Plus the finer single / multiple / true-false breakdown.
+                options.append(('single', _('Single choice'),
+                                Q(submission_type=ProblemSubmissionType.MCQ,
+                                  mcq_config__is_true_false=False, mcq_config__multiple_select=False)))
+                options.append(('multiple', _('Multiple choice'),
+                                Q(submission_type=ProblemSubmissionType.MCQ,
+                                  mcq_config__is_true_false=False, mcq_config__multiple_select=True)))
+                options.append(('truefalse', _('True/False'),
+                                Q(submission_type=ProblemSubmissionType.MCQ, mcq_config__is_true_false=True)))
+            else:
+                options.append((t.submission_type, str(t.label), Q(submission_type=t.submission_type)))
+        return options
+
     def get_normal_queryset(self):
         filter = self.get_visible_problems_filter()
-        queryset = Problem.objects.filter(filter).select_related('group').defer('description', 'summary')
+        queryset = (Problem.objects.filter(filter).select_related('group', 'mcq_config')
+                    .defer('description', 'summary'))
         if self.profile is not None and self.hide_solved:
             queryset = queryset.exclude(
                 id__in=Submission.objects.filter(
@@ -650,7 +690,13 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             if selected_difficulty:
                 queryset = queryset.filter(types__in=selected_difficulty)
         if self.selected_formats:
-            queryset = queryset.filter(submission_type__in=self.selected_formats)
+            qmap = {code: q for code, label, q in self.get_format_options()}
+            fmt_q = Q()
+            for code in self.selected_formats:
+                if code in qmap:
+                    fmt_q |= qmap[code]
+            if fmt_q:
+                queryset = queryset.filter(fmt_q)
         if 'search' in self.request.GET:
             self.search_query = query = ' '.join(self.request.GET.getlist('search')).strip()
             if query:
@@ -719,18 +765,35 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 i for i in self.selected_types
                 if i not in difficulty_ids and i not in format_type_ids
             ]
-            # The answer format is driven by the authoritative submission_type discriminator;
-            # offer the question types the system actually supports end-to-end.
-            from judge.question_types import all_types
-            context['format_types'] = [{'code': t.submission_type, 'label': t.label} for t in all_types()]
+            # The answer format is driven by the authoritative submission_type discriminator
+            # (MCQ expanded into single / multiple / true-false); offer the question types the
+            # system actually supports end-to-end.
+            context['format_types'] = [{'code': code, 'label': label}
+                                       for code, label, q in self.get_format_options()]
             context['selected_formats'] = self.selected_formats
         context['has_fts'] = settings.ENABLE_FTS
         context['search_query'] = self.search_query
         context['completed_problem_ids'] = self.get_completed_problems()
         context['attempted_problems'] = self.get_attempted_problems()
 
+        # Editing/deleting controls: expose which problems on this page the current user may
+        # manage, so the list can render per-row edit/delete and bulk delete. Each id is
+        # re-checked server-side on delete, so this is purely for showing the right controls.
+        user = self.request.user
+        can_manage = user.is_authenticated and user.has_perm('judge.edit_own_problem')
+        editable_ids = set()
+        if can_manage and not self.in_contest:
+            page_problems = context.get('problems') or []
+            if user.has_perm('judge.edit_all_problem'):
+                editable_ids = {p.id for p in page_problems}
+            else:
+                editable_ids = {p.id for p in page_problems if p.is_editable_by(user)}
+        context['can_manage_problems'] = can_manage and not self.in_contest
+        context['editable_problem_ids'] = editable_ids
+
         from judge.question_types import creatable_types
         context['creatable_problem_types'] = creatable_types(self.request.user)
+        context['can_import_excel_problems'] = self.request.user.has_perm('judge.create_private_problem')
         context['ac_min'] = self.ac_min if self.ac_min is not None else ''
         context['ac_max'] = self.ac_max if self.ac_max is not None else ''
         context['problem_status'] = self.problem_status
@@ -856,8 +919,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             except ValueError:
                 pass
         if 'format' in request.GET:
-            from judge.question_types import all_types
-            valid_formats = {t.submission_type for t in all_types()}
+            valid_formats = {code for code, label, q in self.get_format_options()}
             self.selected_formats = [c for c in request.GET.getlist('format') if c in valid_formats]
 
         self.point_start = safe_float_or_none(request.GET.get('point_start'))
@@ -886,6 +948,46 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             else:
                 request.session.pop(key, None)
         return HttpResponseRedirect(request.get_full_path())
+
+
+class ProblemBulkDelete(LoginRequiredMixin, View):
+    """POST-only endpoint to delete one or more problems from the problem list.
+
+    The per-row delete submits a single ``codes`` value; the bulk toolbar submits several.
+    Every problem is re-checked with ``is_editable_by`` here, so a user can only ever delete
+    problems they are allowed to edit, regardless of what the form posted.
+    """
+
+    def post(self, request, *args, **kwargs):
+        redirect_to = request.POST.get('next') or reverse('problem_list')
+        if not url_has_allowed_host_and_scheme(
+            url=redirect_to,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            redirect_to = reverse('problem_list')
+        codes = [c for c in request.POST.getlist('codes') if c]
+        if not codes:
+            messages.error(request, _('No problems selected.'))
+            return HttpResponseRedirect(redirect_to)
+
+        deleted = denied = 0
+        with transaction.atomic():
+            for problem in Problem.objects.filter(code__in=codes):
+                if problem.is_editable_by(request.user):
+                    problem.delete()
+                    deleted += 1
+                else:
+                    denied += 1
+
+        if deleted:
+            messages.success(request, _('Deleted %(count)d problem(s).') % {'count': deleted})
+        if denied:
+            messages.error(
+                request,
+                _('Skipped %(count)d problem(s) you are not allowed to delete.') % {'count': denied},
+            )
+        return HttpResponseRedirect(redirect_to)
 
 
 class LanguageTemplateAjax(View):
@@ -1173,10 +1275,48 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             self._attach_contest(self.new_submission)
             self.grader.store_answer(self.new_submission, form.cleaned_data)
 
-        # Routes to grade_internally() via Submission.judge() (non-code never hits the bridge).
-        self.new_submission.judge(force_judge=True)
+        # Defer AI grading to a background thread so the submission page
+        # loads immediately with a spinner; the websocket event fires when
+        # grading completes and the page updates in-place.
+        if self._needs_ai_grading():
+            self.new_submission.status = 'QU'
+            self.new_submission.save(update_fields=['status'])
+            threading.Thread(
+                target=self._grade_in_background,
+                args=(self.new_submission,),
+                daemon=True,
+            ).start()
+        else:
+            self.new_submission.judge(force_judge=True)
 
         return super().form_valid(form)
+
+    def _needs_ai_grading(self):
+        """Return True if this submission type requires an LLM call (and thus
+        synchronous grading would block the submit response)."""
+        from judge.models import ProblemSubmissionType
+        st = self.object.submission_type
+        if st == ProblemSubmissionType.SHORT_ANSWER:
+            return True
+        if st == ProblemSubmissionType.FILL_BLANK:
+            from judge.models.question import GRADE_AI
+            try:
+                config = self.object.fill_blank_config
+            except Exception:
+                return False
+            return config.grading_mode == GRADE_AI
+        return False
+
+    @staticmethod
+    def _grade_in_background(submission):
+        """Called from a daemon thread to grade the submission and fire the
+        websocket event so the status page updates."""
+        try:
+            submission.judge(force_judge=True)
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.exception('Background AI grading failed for submission %d',
+                             submission.id)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

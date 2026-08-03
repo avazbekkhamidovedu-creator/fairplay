@@ -8,7 +8,7 @@ import judge.storage
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('judge', '0169_stored_file_abandoned_status'),
+        ('judge', '0179_merge_stored_file'),
     ]
 
     operations = [

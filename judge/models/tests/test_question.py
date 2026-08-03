@@ -3,7 +3,7 @@ import json
 from django.test import TestCase
 
 from judge.models import ContestSubmission, Language, ProblemBlank, ProblemFillBlankConfig, ProblemMCQConfig, \
-    ProblemMCQOption, Submission, SubmissionSource, SubmissionTestCase
+    ProblemMCQOption, ProblemShortAnswerConfig, Submission, SubmissionSource, SubmissionTestCase
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
 from judge.question_types import get_grader
@@ -197,6 +197,25 @@ class FillBlankGradingTestCase(CommonDataMixin, TestCase):
         self.assertEqual(sub.points, 5)
 
 
+class ShortAnswerGradingTestCase(CommonDataMixin, TestCase):
+    def test_ai_unavailable_returns_ir_not_wa(self):
+        """When the AI grader is unavailable, mark IR so graders do not read it as a wrong answer."""
+        problem = create_problem(code='sair', submission_type='S', points=10, is_public=True)
+        ProblemShortAnswerConfig.objects.create(
+            problem=problem, reference_answer='handshake', ai_rubric='mention three steps')
+        sub = Submission.objects.create(
+            user=self.users['normal'].profile, problem=problem,
+            language=Language.get_answer_language(),
+        )
+        SubmissionSource.objects.create(submission=sub, source=json.dumps({'text': 'SYN SYN-ACK ACK'}))
+        grade_internally(sub)
+        sub.refresh_from_db()
+        self.assertEqual(sub.result, 'IR')
+        self.assertEqual(sub.points, 0)
+        case = SubmissionTestCase.objects.get(submission=sub)
+        self.assertEqual(case.status, 'IR')
+
+
 class MCQContestPartialTestCase(CommonDataMixin, TestCase):
     """The per-contest ``partial`` setting must override the problem-level one.
 
@@ -295,14 +314,15 @@ class GraderRegistryTestCase(TestCase):
         self.assertFalse(grader.routes_to_bridge)
         self.assertFalse(grader.is_manual)
 
-    def test_fill_blank_does_not_route_to_bridge(self):
-        grader = get_grader('B')
-        self.assertFalse(grader.routes_to_bridge)
-        self.assertFalse(grader.is_manual)
+    def test_fill_blank_and_short_answer_registered(self):
+        for submission_type in ('B', 'S'):
+            grader = get_grader(submission_type)
+            self.assertFalse(grader.routes_to_bridge)
+            self.assertFalse(grader.is_manual)
 
     def test_unregistered_type_raises(self):
         # A submission_type with no registered grader must fail clearly rather than with a bare
-        # KeyError. ('Z' is not a defined type; C/M/B/F are all registered.)
+        # KeyError. ('Z' is not a defined type; C/M/B/S/F are all registered.)
         for submission_type in ('Z',):
             with self.assertRaises(NotImplementedError):
                 get_grader(submission_type)

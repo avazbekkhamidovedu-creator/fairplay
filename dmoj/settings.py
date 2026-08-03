@@ -632,7 +632,7 @@ CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 WEBAUTHN_RP_ID = None
 
 # LLM access layer (judge.llm). Supported: 'azure', 'litellm'
-LLM_PROVIDER = 'azure'
+LLM_PROVIDER = 'litellm'
 
 # Azure OpenAI for AI hints
 AZURE_OPENAI_ENDPOINT = None       # e.g. 'https://myinstance.openai.azure.com/'
@@ -654,15 +654,41 @@ LITELLM_TIMEOUT = 120              # seconds
 # The optional 'default' key serves as a base inherited by all profiles.
 AZURE_PROFILES = {}
 
-LITELLM_PROFILES = {}
+DMOJ_AI_HINT_DAILY_LIMIT = 5
 
-DMOJ_AI_HINT_DAILY_LIMIT = 5      # max AI hint requests per user per day
+LITELLM_PROFILES = {
+    # The importer deliberately uses a named profile so an installation can route
+    # document formatting to a different LiteLLM model without changing code.
+    'question_import': {
+        'temperature': 0,
+        'max_tokens': 2000,
+    },
+}
 
 try:
     with open(os.path.join(os.path.dirname(__file__), 'local_settings.py')) as f:
         exec(f.read(), globals())
 except IOError:
     pass
+
+# Ensure grading/decompose/import profiles exist (setdefault preserves
+# any values already set by local_settings.py).
+LITELLM_PROFILES.setdefault('grading', {
+    'model': 'GRADING@DKUOJ',
+    'temperature': 0,
+    'max_tokens': 2048,
+    'response_format': {'type': 'json_object'},
+})
+LITELLM_PROFILES.setdefault('decompose', {
+    'model': 'qwen3.6-27B-FP8',
+    'temperature': 0,
+    'max_tokens': 1024,
+    'response_format': {'type': 'json_object'},
+})
+LITELLM_PROFILES.setdefault('question_import', {
+    'temperature': 0,
+    'max_tokens': 2000,
+})
 
 
 # Check settings are consistent
@@ -705,6 +731,21 @@ if not DEBUG:
                 'DMOJ_BACKUP_MIRROR_ENABLED is on but DMOJ_BOX_KNOWN_HOSTS is not a readable '
                 'file; without pinned host keys the SFTP backup is exposed to a first-connect '
                 'MITM. Point it at a known_hosts file for sftp.services.box.com.')
+        # A file that exists but lacks an entry for the Box host is no protection at all,
+        # so check the contents too. paramiko is only imported here (mirror on => it is
+        # installed) and handles hashed |1|... entries a substring check would miss.
+        from paramiko.hostkeys import HostKeys
+
+        # Same key form as judge.storage.box.host_key_name(), spelled out rather than
+        # imported: pulling judge code into settings at load time invites circular imports.
+        _box_host_key = (DMOJ_BOX_SFTP_HOST if DMOJ_BOX_SFTP_PORT == 22
+                         else f'[{DMOJ_BOX_SFTP_HOST}]:{DMOJ_BOX_SFTP_PORT}')
+        if not HostKeys(DMOJ_BOX_KNOWN_HOSTS).lookup(_box_host_key):
+            raise ImproperlyConfigured(
+                f'DMOJ_BOX_KNOWN_HOSTS ({DMOJ_BOX_KNOWN_HOSTS}) contains no host key for '
+                f'{_box_host_key}, so the first connection would have nothing to pin '
+                f'against. Populate it with: '
+                f'ssh-keyscan -p {DMOJ_BOX_SFTP_PORT} {DMOJ_BOX_SFTP_HOST}')
 
 assert DMOJ_PROBLEM_MIN_USER_POINTS_VOTE >= DMOJ_PROBLEM_MIN_PROBLEM_POINTS
 
