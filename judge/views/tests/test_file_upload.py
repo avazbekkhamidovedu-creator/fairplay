@@ -59,7 +59,9 @@ class FileUploadAuthoringTestCase(FileUploadBase):
         self.client.force_login(self.users['creator'])
         response = self.client.get(reverse('problem_create_v2'))
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'value="file"', response.content)
+        self.assertIn(b'value="file"', response.content)          # the type pill
+        self.assertIn(b'data-for="file"', response.content)       # its author-config panel
+        self.assertIn(b'f-file-ext', response.content)
 
         # Not available to a user without the permission.
         self.client.force_login(self.users['normal'])
