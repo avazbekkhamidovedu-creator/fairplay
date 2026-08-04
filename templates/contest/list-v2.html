@@ -366,6 +366,7 @@
                             </div>
                             <div class="cl-actions">
                                 {% if contest.is_editable_by(request.user) %}
+                                    <a class="button slim" href="{{ url('contest_grade', contest.key) }}">{{ _('Grade') }}</a>
                                     <a class="button slim" href="{{ url('contest_edit', contest.key) }}">{{ _('Edit') }}</a>
                                 {% endif %}
                                 {% if contest.can_see_own_scoreboard(request.user) %}
@@ -439,6 +440,7 @@
                                 </form>
                             {% endif %}
                             {% if contest.is_editable_by(request.user) %}
+                                <a class="button slim" href="{{ url('contest_grade', contest.key) }}">{{ _('Grade') }}</a>
                                 <a class="button slim" href="{{ url('contest_edit', contest.key) }}">{{ _('Edit') }}</a>
                             {% endif %}
                         </div>
@@ -485,6 +487,7 @@
                         <div class="cl-users">—</div>
                         <div class="cl-actions">
                             {% if contest.is_editable_by(request.user) %}
+                                <a class="button slim" href="{{ url('contest_grade', contest.key) }}">{{ _('Grade') }}</a>
                                 <a class="button slim" href="{{ url('contest_edit', contest.key) }}">{{ _('Edit') }}</a>
                             {% else %}
                                 <button type="button" class="button ghost" disabled>{{ _('Remind') }}</button>
@@ -554,6 +557,7 @@
                                 {% endif %}
                             {% endif %}
                             {% if contest.is_editable_by(request.user) %}
+                                <a class="button slim" href="{{ url('contest_grade', contest.key) }}">{{ _('Grade') }}</a>
                                 <a class="button slim" href="{{ url('contest_edit', contest.key) }}">{{ _('Edit') }}</a>
                             {% endif %}
                         </div>

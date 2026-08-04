@@ -28,6 +28,123 @@
 
 {% block content_media %}
     {% include "comments/media-css.html" %}
+
+    {# Contest detail redesign — reference design on --oj-* tokens (dark-mode aware) #}
+    <style>
+        /* Banner: centered countdown + time + details */
+        #banner {
+            margin-bottom: 1.15rem;
+        }
+        #banner .date {
+            display: block;
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--oj-link);
+            text-align: center;
+        }
+        #banner #time {
+            margin-top: 0.35rem;
+            color: var(--oj-text-muted);
+            font-size: 13px;
+            line-height: 1.55;
+            text-align: center;
+        }
+        #banner #details {
+            margin-top: 0.85rem;
+            font-size: 13px;
+        }
+        #banner #details ul {
+            margin: 0.35rem 0 0;
+            padding-left: 1.2rem;
+        }
+
+        /* Description card */
+        .content-description {
+            background: var(--oj-surface);
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius-md);
+            padding: 0.9rem 1rem;
+            line-height: 1.65;
+            min-height: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        /* Stat cards (Problems / Participants / Submissions / Released) */
+        .contest-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+        .contest-stat-card {
+            background: var(--oj-surface);
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius-md);
+            padding: 0.75rem 0.85rem;
+        }
+        .contest-stat-card .label {
+            font-size: 11px;
+            color: var(--oj-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .contest-stat-card .value {
+            margin-top: 0.25rem;
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--oj-heading);
+        }
+        @media (max-width: 760px) {
+            .contest-stat-grid { grid-template-columns: 1fr 1fr; }
+        }
+
+        /* Problems table card */
+        .contest-problems-wrap {
+            margin-top: 1rem;
+            background: var(--oj-surface);
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius-md);
+            overflow: hidden;
+        }
+        .contest-problems-wrap > h2 {
+            margin: 0;
+            padding: 0.55rem 1rem;
+            font-size: 1.1em;
+            font-weight: 600;
+            background: var(--admin-header, #3b3b3b);
+            color: var(--admin-header-text, #fff);
+            border-bottom: 1px solid var(--admin-header-border, #808080);
+        }
+        .contest-problems-wrap table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .contest-problems-wrap th,
+        .contest-problems-wrap td {
+            border-bottom: 1px solid var(--oj-border);
+            padding: 0.65rem 0.8rem;
+            text-align: left;
+            vertical-align: top;
+        }
+        .contest-problems-wrap th {
+            background: var(--oj-bg);
+            color: var(--oj-text-muted);
+            font-size: 12px;
+        }
+        .contest-problems-wrap tr:last-child td { border-bottom: none; }
+        .contest-problems-wrap tr:hover td { background: var(--oj-hover-overlay); }
+
+        /* Export controls row */
+        .contest-export-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+    </style>
 {% endblock %}
 
 {% block body %}
@@ -239,7 +356,7 @@
                         </li>
                     </ul>
                 </div>
-                <p style="color: #666; font-size: 14px; margin-top: 8px;">
+                <p style="color: var(--oj-text-muted); font-size: 14px; margin-top: 8px;">
                     {{ _('Including Contest Description and Problem Details') }}
                 </p>
                 <!-- 用于生成 PDF/Word 的表单容器 -->
@@ -260,8 +377,8 @@
                     display: inline-block;
                 }
                 .dropdown-toggle {
-                    background-color: #f5f5f5;
-                    border: 1px solid #ccc;
+                    background-color: var(--oj-surface, #f5f5f5);
+                    border: 1px solid var(--oj-border, #ccc);
                     border-radius: 4px;
                     padding: 6px 12px;
                     cursor: pointer;
@@ -269,6 +386,7 @@
                     line-height: 1.42857143;
                     text-align: center;
                     white-space: nowrap;
+                    color: var(--oj-text, #333);
                 }
                 .dropdown-toggle .caret {
                     display: inline-block;
@@ -293,11 +411,11 @@
                     font-size: 14px;
                     text-align: left;
                     list-style: none;
-                    background-color: #fff;
+                    background-color: var(--oj-surface, #fff);
                     background-clip: padding-box;
-                    border: 1px solid #ccc;
+                    border: 1px solid var(--oj-border, #ccc);
                     border-radius: 4px;
-                    box-shadow: 0 6px 12px rgba(0,0,0,.175);
+                    box-shadow: var(--oj-shadow-dropdown, 0 6px 12px rgba(0,0,0,.175));
                 }
                 .dropdown-menu li a {
                     display: block;
@@ -305,13 +423,13 @@
                     clear: both;
                     font-weight: normal;
                     line-height: 1.42857143;
-                    color: #333;
+                    color: var(--oj-text, #333);
                     white-space: nowrap;
                     text-decoration: none;
                 }
                 .dropdown-menu li a:hover {
-                    background-color: #e6e6e6;
-                    color: #262626;
+                    background-color: var(--oj-accent-soft, #e6e6e6);
+                    color: var(--oj-accent, #262626);
                 }
                 .dropdown.open .dropdown-menu {
                     display: block;
@@ -368,18 +486,38 @@
         <!-- {% endif %} -->
 
         {% if can_edit %}
-            <div style="margin-bottom: 1em; text-align: right;">
-                <a href="{{ url('contest_export_scores', contest.key) }}" class="button" style="display: inline-block; width: auto; margin-right: 5px;"><i class="fa fa-download"></i> {{ _('Export Scores') }}</a>
+            <div class="contest-export-bar">
+                <a href="{{ url('contest_export_scores', contest.key) }}" class="button" style="display: inline-block; width: auto;"><i class="fa fa-download"></i> {{ _('Export Scores') }}</a>
                 <a href="{{ url('contest_export_submissions', contest.key) }}" class="button" style="display: inline-block; width: auto;"><i class="fa fa-file-archive-o"></i> {{ _('Export Submissions') }}</a>
             </div>
         {% endif %}
     </div>
 
-    {% if contest.ended or request.user.is_superuser or is_editor or is_tester or (is_spectator and contest.started) or is_org_admin %}
-        <hr>
-        <div class="contest-problems">
-            <h2 style="margin-bottom: 0.2em"><i class="fa fa-fw fa-question-circle"></i>{{ _('Problems') }} </h2>
-            <table class="table striped">
+    {% if contest.started or request.user.is_superuser or is_editor or is_tester or is_spectator or is_org_admin %}
+        <div class="contest-stat-grid">
+            <div class="contest-stat-card">
+                <div class="label">{{ _('Problems') }}</div>
+                <div class="value">{{ metadata.problem_count or contest_problems|length }}</div>
+            </div>
+            <div class="contest-stat-card">
+                <div class="label">{{ _('Participants') }}</div>
+                <div class="value">{{ contest.user_count }}</div>
+            </div>
+            <div class="contest-stat-card">
+                <div class="label">{{ _('Format') }}</div>
+                <div class="value" style="font-size:1rem;">{{ contest.format.name }}</div>
+            </div>
+            <div class="contest-stat-card">
+                <div class="label">{{ _('Rated') }}</div>
+                <div class="value" style="font-size:1rem;">
+                    {% if contest.is_rated %}{{ _('Yes') }}{% else %}{{ _('No') }}{% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="contest-problems-wrap">
+            <h2><i class="fa fa-fw fa-question-circle"></i>{{ _('Problems') }}</h2>
+            <table>
                 <thead>
                 <tr>
                     <th>{{ _('Problem') }}</th>
@@ -395,7 +533,7 @@
                 {% for problem in contest_problems %}
                     <tr>
                         <td>
-                            {% if problem.is_public or request.user.is_superuser or is_editor %}
+                            {% if problem.is_public or request.user.is_superuser or is_editor or (has_joined and not contest.ended) %}
                                 <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>
                             {% else %}
                                 {{ problem.i18n_name or problem.name }}

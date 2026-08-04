@@ -1349,6 +1349,114 @@ ContestRankingProfile = namedtuple(
 BestSolutionData = namedtuple('BestSolutionData', 'code points time state is_pretested')
 
 
+class ContestGrade(TitleMixin, ContestMixin, DetailView):
+    """Teacher-side grading workspace for a contest — mirrors the grading.html reference."""
+    template_name = 'contest/grade.html'
+
+    def get_title(self):
+        return _('%s Grade') % self.object.name
+
+    def dispatch(self, request, *args, **kwargs):
+        # Teacher gate: only editors / edit-all-contest holders may grade.
+        if not request.user.is_authenticated:
+            return redirect_to_login(self.request.get_full_path())
+        self.object = self.get_object()
+        if not self.object.is_editable_by(request.user):
+            raise Http404()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        contest = self.object
+        submissions = (
+            Submission.objects.filter(contest_object=contest)
+            .select_related('user__user', 'problem', 'language')
+            .prefetch_related('test_cases')
+            .order_by('-date')
+        )
+        context['grade_submissions'] = submissions
+        context['grade_problems'] = list(
+            contest.contest_problems.order_by('order').select_related('problem')
+            .values_list('problem__code', 'problem__name'),
+        )
+
+        payload = []
+        for sub in submissions:
+            try:
+                source = sub.source.source
+            except Submission.source.RelatedObjectDoesNotExist:
+                source = ''
+            payload.append({
+                'id': sub.id,
+                'user': sub.user.user.username,
+                'problem': sub.problem.code,
+                'lang': sub.language.short_name or sub.language.key,
+                'date': sub.date.strftime('%Y-%m-%d %H:%M'),
+                'result': sub.short_status,
+                'points': sub.points,
+                'total': sub.case_total or sub.problem.points,
+                'time': sub.time,
+                'memory': sub.memory,
+                'source': source,
+                'test_cases': [
+                    {
+                        'case': tc.case,
+                        'status': tc.status,
+                        'time': tc.time,
+                        'memory': tc.memory,
+                        'points': tc.points,
+                    } for tc in sub.test_cases.all()
+                ],
+            })
+        # Pass Python objects; the template serializes with |tojson (htmlsafe JSON,
+        # escapes `<`/`>`/`&`/`'`) so student-controlled source can never break out
+        # of the <script> block via `</script>`.
+        context['grade_submissions_json'] = payload
+        context['grade_problems_json'] = context['grade_problems']
+        return context
+
+
+class ContestGradeSave(ContestMixin, DetailView):
+    """Save a manual score for a submission (teacher-side)."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        self.object = self.get_object()
+        if not self.object.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        raise Http404()
+
+    def post(self, request, *args, **kwargs):
+        try:
+            submission_id = int(request.POST.get('submission'))
+            score = float(request.POST.get('score') or 0)
+        except (TypeError, ValueError):
+            return JsonResponse({'error': _('Invalid input.')}, status=400)
+        try:
+            submission = Submission.objects.get(
+                id=submission_id, contest_object=self.object,
+            )
+        except Submission.DoesNotExist:
+            return JsonResponse({'error': _('Submission not found.')}, status=404)
+
+        total = submission.case_total or submission.problem.points
+        score = min(max(score, 0), total)
+        submission.points = score
+        submission.save(update_fields=['points'])
+        return JsonResponse({
+            'ok': True,
+            'submission': submission_id,
+            'score': score,
+            'total': total,
+        })
+
+
+
+
 def make_contest_ranking_profile(contest, participation, contest_problems):
     def display_user_problem(contest_problem):
         # When the contest format is changed, `format_data` might be invalid.

@@ -1,0 +1,398 @@
+{% extends "base.html" %}
+
+{% block title %}{{ _('Grade') }} — {{ contest.name }}{% endblock %}
+{% block title_ruler %}{% endblock %}
+
+{% block title_row %}
+    {% set tab = 'grade' %}
+    {% set title = contest.name %}
+    {% include "contest/contest-tabs.html" %}
+{% endblock %}
+
+{% block media %}
+    <style>
+        /* Grade workspace — mirrors the grading.html reference on --oj-* tokens (dark-aware) */
+        .grade-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            margin-bottom: 0.9rem;
+        }
+        .grade-head h1 {
+            font-size: 1.85rem;
+            font-weight: 700;
+            line-height: 1.1;
+            color: var(--oj-heading, #222);
+            margin: 0;
+        }
+        .grade-head .sub {
+            color: var(--oj-text-muted);
+            font-size: 13px;
+            margin-top: 0.25rem;
+        }
+        .grade-head .head-actions {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .grade-layout {
+            display: grid;
+            grid-template-columns: minmax(340px, 0.92fr) 1.35fr;
+            gap: 1rem;
+            align-items: start;
+        }
+        @media (max-width: 980px) {
+            .grade-layout { grid-template-columns: 1fr; }
+        }
+
+        .grade-panel {
+            background: var(--oj-surface);
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius-md);
+            overflow: visible;
+        }
+
+        .grade-filters {
+            padding: 0.85rem 0.95rem;
+            border-bottom: 1px solid var(--oj-border);
+            background: var(--oj-bg);
+        }
+        .grade-filter-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.6rem;
+        }
+        .grade-filter-grid .wide { grid-column: 1 / -1; }
+        .grade-filter-grid label {
+            display: block;
+            margin-bottom: 0.18rem;
+            font-size: 11px;
+            color: var(--oj-text-muted);
+        }
+        .grade-filter-grid select,
+        .grade-filter-grid input {
+            width: 100%;
+            height: 32px;
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius);
+            padding: 0 0.45rem;
+            font-size: 13px;
+            box-sizing: border-box;
+            background: var(--oj-surface);
+            color: var(--oj-text);
+        }
+        .grade-filter-grid select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            padding: 0 34px 0 0.45rem;
+            background-color: var(--oj-surface);
+            background-image:
+                linear-gradient(45deg, transparent 50%, var(--oj-text-muted) 50%),
+                linear-gradient(135deg, var(--oj-text-muted) 50%, transparent 50%);
+            background-position:
+                calc(100% - 18px) calc(50% - 2px),
+                calc(100% - 13px) calc(50% - 2px);
+            background-size: 5px 5px;
+            background-repeat: no-repeat;
+        }
+
+        .grade-submission-list { background: var(--oj-surface); }
+        .grade-submission-row {
+            display: flex;
+            border-top: 1px solid var(--oj-border);
+            transition: background-color linear 0.15s;
+            cursor: pointer;
+        }
+        .grade-submission-row:first-child { border-top: none; }
+        .grade-submission-row:hover { background: var(--oj-hover-overlay); }
+        .grade-submission-row.active { background: var(--oj-accent-soft); }
+        .grade-submission-row > div {
+            padding: 7px 5px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border-bottom: 1px solid var(--oj-border);
+        }
+        .gs-result {
+            min-width: 82px;
+            width: 82px;
+            text-align: center;
+            border-right: 1px solid var(--oj-border);
+        }
+        .gs-result .score { font-size: 1.25em; color: var(--oj-text); }
+        .gs-result .state { font-size: 0.72em; font-weight: 700; padding-top: 0.45em; }
+        .gs-main {
+            display: flex;
+            flex: 1;
+            flex-direction: row;
+            place-items: center;
+            justify-content: space-between;
+            padding-left: 16px;
+            gap: 0.6rem;
+            min-width: 0;
+        }
+        .gs-info { flex: 1; word-break: break-word; }
+        .gs-info .name { font-weight: 700; font-size: 1.05em; color: var(--oj-text); }
+        .gs-info .time { color: var(--oj-text-muted); font-size: 12px; }
+        .gs-usage {
+            min-width: 72px;
+            width: 72px;
+            white-space: nowrap;
+            text-align: center;
+            border-left: 1px solid var(--oj-border);
+        }
+        .gs-usage .time { font-weight: 700; }
+
+        .grade-detail {
+            padding: 0.95rem 1rem 1.1rem;
+            min-height: 34rem;
+        }
+        .gd-top {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            align-items: flex-start;
+        }
+        .gd-top h3 { margin: 0; font-size: 1.05rem; color: var(--oj-text); }
+        .muted { color: var(--oj-text-muted); font-size: 12px; }
+        .gd-meta { margin-top: 0.3rem; font-size: 12px; color: var(--oj-text-muted); line-height: 1.6; }
+        .gd-section {
+            margin-top: 1rem;
+            border-top: 1px solid var(--oj-border);
+            padding-top: 0.9rem;
+        }
+        .gd-section h4 {
+            margin: 0 0 0.55rem;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: var(--oj-text-muted);
+        }
+        .gd-section-card {
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius);
+            background: var(--oj-bg);
+            padding: 0.75rem 0.85rem;
+            color: var(--oj-text);
+            font-size: 13px;
+        }
+        .gd-source {
+            background: #111827;
+            color: #e5e7eb;
+            border-radius: var(--oj-radius);
+            padding: 0.8rem 0.9rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            overflow: auto;
+        }
+        .gd-score-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+        .gd-score-row input[type="number"] {
+            height: 32px;
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius);
+            padding: 0 0.45rem;
+            font-size: 13px;
+            background: var(--oj-surface);
+            color: var(--oj-text);
+        }
+        .gd-empty { color: var(--oj-text-muted); padding: 2rem 1rem; text-align: center; }
+        .gd-testcases { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .gd-testcases th, .gd-testcases td {
+            border-bottom: 1px solid var(--oj-border);
+            padding: 0.3rem 0.45rem;
+            text-align: left;
+        }
+        .gd-testcases th { color: var(--oj-text-muted); font-weight: 600; }
+        .gd-testcases tr:last-child td { border-bottom: none; }
+    </style>
+{% endblock %}
+
+{% block js_media %}
+    <script type="text/javascript">
+        $(function () {
+            var submissions = {{ grade_submissions_json|tojson }};
+            var problems = {{ grade_problems_json|tojson }};
+            var saveUrl = {{ url('contest_grade_save', contest.key)|tojson }};
+            var selectedId = null;
+
+            function esc(s) {
+                return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+                    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+                });
+            }
+
+            function problemName(code) {
+                for (var i = 0; i < problems.length; i++) {
+                    if (problems[i][0] === code) return problems[i][1];
+                }
+                return code;
+            }
+
+            function filtered() {
+                var q = $('#f-queue').val();
+                var problem = $('#f-problem').val();
+                var user = $('#f-user').val().trim().toLowerCase();
+                return submissions.filter(function (s) {
+                    if (problem && s.problem !== problem) return false;
+                    if (user && (s.user || '').toLowerCase().indexOf(user) < 0) return false;
+                    if (q === 'graded' && s.points == null) return false;
+                    if (q === 'ungraded' && s.points != null) return false;
+                    return true;
+                });
+            }
+
+            function renderList() {
+                var rows = filtered();
+                $('#left-summary').text(rows.length + ' rows');
+                if (!selectedId && rows.length) selectedId = rows[0].id;
+                $('#submission-list').html(rows.map(function (s) {
+                    var score = s.points != null ? s.points + ' / ' + (s.total || '—') : '— / ' + (s.total || '—');
+                    return '<div class="grade-submission-row' + (s.id === selectedId ? ' active' : '') + '" data-id="' + s.id + '">' +
+                        '<div class="gs-result">' +
+                            '<div class="score">' + esc(score) + '</div>' +
+                            '<div class="state">' + esc(s.result || '—') + ' | ' + esc(s.lang || '—') + '</div>' +
+                        '</div>' +
+                        '<div class="gs-main">' +
+                            '<div class="gs-info">' +
+                                '<div class="name">' + esc(problemName(s.problem)) + '</div>' +
+                                '<div class="time">' + esc(s.user) + ' · ' + esc(s.date) + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="gs-usage">' +
+                            '<div class="time">' + (s.time != null ? Number(s.time).toFixed(2) + 's' : '---') + '</div>' +
+                            '<div class="memory">' + (s.memory != null ? esc(s.memory) : '---') + '</div>' +
+                        '</div>' +
+                    '</div>';
+                }).join('') || '<div class="gd-empty">No submissions.</div>');
+
+                $('#submission-list .grade-submission-row[data-id]').off('click').on('click', function () {
+                    selectedId = parseInt($(this).attr('data-id'), 10);
+                    renderList();
+                    renderDetail();
+                });
+            }
+
+            function renderDetail() {
+                var box = $('#detail');
+                var s = null;
+                for (var i = 0; i < submissions.length; i++) {
+                    if (submissions[i].id === selectedId) { s = submissions[i]; break; }
+                }
+                if (!s) {
+                    box.html('<div class="gd-empty">Select a submission on the left to start grading.</div>');
+                    return;
+                }
+                box.html(
+                    '<div class="gd-top">' +
+                        '<div><h3>#' + s.id + ' · ' + esc(s.user) + ' · ' + esc(problemName(s.problem)) + '</h3>' +
+                        '<div class="muted">' + esc(s.date) + '</div></div>' +
+                    '</div>' +
+                    '<div class="gd-section"><h4>Source</h4><div class="gd-source">' + esc(s.source || 'No source.') + '</div></div>' +
+                    '<div class="gd-section"><h4>Manual score</h4><div class="gd-section-card">' +
+                        '<div class="gd-score-row">' +
+                            '<label>Score</label>' +
+                            '<input type="number" id="g-score" min="0" max="' + (s.total || 0) + '" value="' + (s.points != null ? s.points : 0) + '" step="0.01">' +
+                            '<span>/ ' + (s.total || 0) + '</span>' +
+                            '<button type="button" class="btn btn-primary" id="btn-save-score">' + 'Save score' + '</button>' +
+                        '</div>' +
+                    '</div></div>'
+                );
+                if (s.test_cases && s.test_cases.length) {
+                    box.append('<div class="gd-section"><h4>Test cases</h4><div class="gd-section-card">' +
+                        '<table class="gd-testcases"><thead><tr><th>#</th><th>Result</th><th>Time</th><th>Memory</th><th>Points</th></tr></thead><tbody>' +
+                        s.test_cases.map(function (tc) {
+                            return '<tr><td>' + tc.case + '</td><td>' + esc(tc.status) + '</td><td>' +
+                                (tc.time != null ? Number(tc.time).toFixed(2) + 's' : '—') + '</td><td>' +
+                                (tc.memory != null ? esc(tc.memory) : '—') + '</td><td>' +
+                                (tc.points != null ? tc.points : '—') + '</td></tr>';
+                        }).join('') +
+                        '</tbody></table></div></div>');
+                }
+                $('#btn-save-score').on('click', function () {
+                    $.post(saveUrl, {
+                        submission: s.id,
+                        score: $('#g-score').val()
+                    }).done(function (res) {
+                        if (!res.ok) { alert(res.error || 'Failed to save'); return; }
+                        for (var i = 0; i < submissions.length; i++) {
+                            if (submissions[i].id === res.submission) {
+                                submissions[i].points = res.score;
+                                submissions[i].total = res.total;
+                            }
+                        }
+                        renderList();
+                        renderDetail();
+                    }).fail(function () { alert('Failed to save score'); });
+                });
+            }
+
+            $('#f-queue, #f-problem').on('change', function () {
+                selectedId = null;
+                renderList();
+                renderDetail();
+            });
+            $('#f-user').on('input', function () {
+                selectedId = null;
+                renderList();
+                renderDetail();
+            });
+
+            renderList();
+            renderDetail();
+        });
+    </script>
+{% endblock %}
+
+{% block body %}
+    <div class="grade-head">
+        <div>
+            <h1>{{ _('Grade') }} — {{ contest.name }}</h1>
+            <div class="sub">{{ _('Assignment grading workspace') }}</div>
+        </div>
+    </div>
+
+    <div class="grade-layout">
+        <div class="grade-panel">
+            <div class="grade-filters">
+                <div class="grade-filter-grid">
+                    <div>
+                        <label>{{ _('Queue') }}</label>
+                        <select id="f-queue" data-oj-select>
+                            <option value="all">{{ _('All submissions') }}</option>
+                            <option value="ungraded">{{ _('Ungraded') }}</option>
+                            <option value="graded">{{ _('Graded') }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>{{ _('Problem') }}</label>
+                        <select id="f-problem" data-oj-select>
+                            <option value="">{{ _('All problems') }}</option>
+                            {% for code, name in grade_problems %}
+                                <option value="{{ code }}">{{ name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="wide">
+                        <label>{{ _('User') }}</label>
+                        <input id="f-user" placeholder="{{ _('Search user') }}">
+                    </div>
+                    <div class="wide muted" id="left-summary"></div>
+                </div>
+            </div>
+            <div class="grade-submission-list" id="submission-list"></div>
+        </div>
+
+        <div class="grade-panel">
+            <div class="grade-detail" id="detail">
+                <div class="gd-empty">{{ _('Select a submission on the left to start grading.') }}</div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
