@@ -11,11 +11,9 @@
             var state = {
                 org: [],
                 cls: [],
-                time: '{{ request.GET.status or '' }}',
                 tags: [],
                 q: '{{ search_query or '' }}',
-                sort: '{{ sort_by or '-start_time' }}',
-                layout: '{{ layout or 'status' }}'
+                sort: '{{ sort_by or '-start_time' }}'
             };
 
             // ── Multi-select toggle ──
@@ -87,18 +85,15 @@
             window.applyFilters = function() {
                 state.org = checkedValues('#org-multi-select');
                 state.cls = checkedValues('#class-multi-select');
-                state.time = document.getElementById('time-filter').value;
                 state.tags = checkedValues('#tag-multi-select');
                 state.q = document.getElementById('f-q').value.trim();
 
                 var params = new URLSearchParams();
                 if (state.org.length) params.set('org', state.org.join(','));
                 if (state.cls.length) params.set('class', state.cls.join(','));
-                if (state.time) params.set('status', state.time);
                 if (state.tags.length) params.set('tag', state.tags.join(','));
                 if (state.q) params.set('search', state.q);
                 if (state.sort !== '-start_time') params.set('sort', state.sort);
-                if (state.layout !== 'status') params.set('layout', state.layout);
 
                 var newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
                 window.location.href = newUrl;
@@ -109,12 +104,11 @@
                 document.querySelectorAll('#filter-form .multi-select input[type=checkbox]').forEach(function(c) {
                     c.checked = false;
                 });
-                document.getElementById('time-filter').value = '';
                 document.getElementById('f-q').value = '';
                 refreshOrgLabel();
                 refreshClassLabel();
                 refreshTagLabel();
-                state = { org: [], cls: [], time: '', tags: [], q: '', sort: state.sort, layout: state.layout };
+                state = { org: [], cls: [], tags: [], q: '', sort: state.sort };
                 applyFilters();
             };
 
@@ -126,17 +120,6 @@
                     document.getElementById('sort-menu').hidden = true;
                     applyFilters();
                 });
-            });
-
-            // ── Layout switch ──
-            document.getElementById('layout-switch').addEventListener('click', function(e) {
-                var btn = e.target.closest('button[data-layout]');
-                if (!btn) return;
-                state.layout = btn.dataset.layout;
-                document.querySelectorAll('#layout-switch button').forEach(function(b) {
-                    b.classList.toggle('active', b === btn);
-                });
-                applyFilters();
             });
 
             // ── Initialize labels from URL params ──
@@ -230,18 +213,6 @@
                         </div>
                     </div>
 
-                    {# Status select #}
-                    <div class="filter-group">
-                        <span class="filter-group-label">{{ _('Status') }}</span>
-                        <select id="time-filter" class="select" data-oj-select>
-                            <option value="">{{ _('All') }}</option>
-                            <option value="mine" {% if request.GET.status == 'mine' %}selected{% endif %}>{{ _('My active') }}</option>
-                            <option value="ongoing" {% if request.GET.status == 'ongoing' %}selected{% endif %}>{{ _('Ongoing') }}</option>
-                            <option value="upcoming" {% if request.GET.status == 'upcoming' %}selected{% endif %}>{{ _('Upcoming') }}</option>
-                            <option value="past" {% if request.GET.status == 'past' %}selected{% endif %}>{{ _('Past') }}</option>
-                        </select>
-                    </div>
-
                     {# Tag multi-select #}
                     <div class="filter-group">
                         <span class="filter-group-label">{{ _('Tag') }}</span>
@@ -301,13 +272,6 @@
                         </ul>
                     </div>
                 </div>
-                <span style="font-size:12px;color:var(--oj-text-muted);margin-left:0.25rem;">{{ _('Layout') }}</span>
-                <div class="cl-layout-switch" id="layout-switch" role="group" aria-label="{{ _('Layout') }}">
-                    <button type="button" class="{% if not layout or layout == 'status' %}active{% endif %}" data-layout="status">{{ _('By status') }}</button>
-                    <button type="button" class="{% if layout == 'flat' %}active{% endif %}" data-layout="flat">{{ _('Flat list') }}</button>
-                    <button type="button" class="{% if layout == 'org' %}active{% endif %}" data-layout="org">{{ _('By org') }}</button>
-                </div>
-            </div>
             <div class="toolbar-right">
                 <span class="progress-label">{{ total_count }} {{ _('contests') }}</span>
             </div>
@@ -424,7 +388,11 @@
                             <span class="lbl">{{ _('Users') }}</span>
                         </div>
                         <div class="cl-actions">
-                            {% if contest.is_live_joinable_by(request.user) %}
+                            {% if not request.user.is_authenticated %}
+                                {# Anonymous: still surface a Join entry so the card is not
+                                   empty — clicking it sends the user through login first. #}
+                                <a class="button" href="{{ url('auth_login') }}?next={{ url('contest_view', contest.key) }}">{{ _('Join') }}</a>
+                            {% elif contest.is_live_joinable_by(request.user) %}
                                 <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
                                     {% csrf_token %}
                                     <button type="submit" class="button">{{ _('Join') }}</button>
