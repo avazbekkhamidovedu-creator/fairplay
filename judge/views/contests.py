@@ -1471,8 +1471,6 @@ class ContestGradeSave(ContestMixin, DetailView):
         })
 
 
-
-
 def make_contest_ranking_profile(contest, participation, contest_problems):
     def display_user_problem(contest_problem):
         # When the contest format is changed, `format_data` might be invalid.
