@@ -48,8 +48,9 @@ from judge.utils.stats import get_bar_chart, get_pie_chart
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
 
-__all__ = ['ContestList', 'ContestListV2', 'ContestDetail', 'ContestRanking', 'ContestJoin', 'ContestLeave', 'ContestCalendar',
-           'ContestClone', 'ContestStats', 'ContestMossView', 'ContestMossDelete', 'contest_ranking_ajax',
+__all__ = ['ContestList', 'ContestListV2', 'ContestDetail', 'ContestRanking', 'ContestJoin',
+           'ContestLeave', 'ContestCalendar', 'ContestClone', 'ContestStats', 'ContestMossView',
+           'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
            'ContestSEBConfig', 'SEBQuit']
@@ -158,8 +159,6 @@ class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestL
         context.update(self.get_sort_context())
         context.update(self.get_sort_paginate_context())
         return context
-
-
 
 
 class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestListMixin, ListView):

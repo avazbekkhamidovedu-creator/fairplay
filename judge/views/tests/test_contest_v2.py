@@ -1,11 +1,10 @@
-import json
 from datetime import timedelta
 
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestTag, Organization
+from judge.models import ContestTag
 from judge.models.tests.util import CommonDataMixin, create_contest, create_user
 
 
@@ -84,5 +83,3 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
     def test_sort(self):
         response = self.client.get(reverse('contest_list') + '?sort=name')
         self.assertEqual(response.status_code, 200)
-
-
