@@ -294,7 +294,6 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['tags'] = ContestTag.objects.all()
         context['total_count'] = self._apply_filters(self._get_queryset()).count()
         context['sort_by'] = self.request.GET.get('sort', self.default_sort)
-        context['layout'] = self.request.GET.get('layout', 'status')
 
         context.update(self.get_sort_context())
         context.update(self.get_sort_paginate_context())

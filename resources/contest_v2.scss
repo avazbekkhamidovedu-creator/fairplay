@@ -381,6 +381,13 @@
             cursor: not-allowed;
         }
 
+        &.primary {
+            /* Emphasis marker matching the list-v2 mockup's primary action.
+               The base .button already uses the blue gradient, so this only
+               tightens the border to signal the primary affordance. */
+            border-color: var(--oj-accent);
+        }
+
         &.ghost {
             background: var(--oj-surface);
             border-color: var(--oj-border);
