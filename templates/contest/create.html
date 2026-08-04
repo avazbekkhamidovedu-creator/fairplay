@@ -259,6 +259,53 @@
         // datetime-local -> UTC conversion on submit; defaults to the profile
         // timezone, overridden by the temporary ?tz= picker next to Validity.
         window.DMOJ_EDIT_TZ = {{ user_timezone|tojson }};
+
+        // ── Temporary timezone picker (no page reload) ──────────────────────
+        // Switching the timezone must NOT reload the page (that would discard
+        // unsaved form input). Instead we: recompute the wall-clock values of
+        // every datetime-local field from their cached UTC instants, update the
+        // label, and persist the choice to the session via a tiny AJAX call.
+        function dkuojUtcToWallClock(iso, tz) {
+            // UTC ISO -> wall clock "YYYY-MM-DDTHH:MM" in the given IANA zone.
+            if (!iso) return '';
+            var d = new Date(iso);
+            if (isNaN(d)) return '';
+            var fmt = new Intl.DateTimeFormat('en-US', {
+                timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', hour12: false,
+            });
+            var o = {};
+            fmt.formatToParts(d).forEach(function (x) { if (x.type !== 'literal') o[x.type] = x.value; });
+            var hh = (+o.hour) % 24;  // Intl may emit "24" for midnight
+            return o.year + '-' + o.month + '-' + o.day + 'T' + String(hh).padStart(2, '0') + ':' + o.minute;
+        }
+
+        window.onEditorTZChange = function (tz) {
+            if (!tz) return;
+            // Validate the zone name before touching anything.
+            try { Intl.DateTimeFormat('en-US', { timeZone: tz }); } catch (e) { return; }
+
+            ['id_start_time', 'id_end_time', 'id_locked_after'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && el.dataset.utc) el.value = dkuojUtcToWallClock(el.dataset.utc, tz);
+            });
+            window.DMOJ_EDIT_TZ = tz;
+
+            var label = document.querySelector('.tz-current');
+            if (label) {
+                var gettextFn = window.gettext || function (s) { return s; };
+                label.textContent = gettextFn('Times above shown in %(tz)s').replace('%(tz)s', tz);
+            }
+
+            // Persist to the session without a reload (best-effort; a failed
+            // write only affects the next visit's default zone, not this save).
+            var form = document.getElementById('contest-form');
+            var token = form ? (form.querySelector('input[name="csrfmiddlewaretoken"]') || {}).value : '';
+            var fd = new FormData();
+            fd.append('tz', tz);
+            if (token) fd.append('csrfmiddlewaretoken', token);
+            fetch('{{ url("contest_tz_preference") }}', { method: 'POST', body: fd, credentials: 'same-origin' });
+        };
         document.addEventListener('DOMContentLoaded', function () {
             var form = document.getElementById('contest-form');
             if (!form) return;
@@ -344,6 +391,13 @@
                 if (!m) return null;
                 return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
             }
+
+            // Cache the current wall-clock values as UTC instants so the timezone
+            // picker can re-render them in another zone without a page reload.
+            ['id_start_time', 'id_end_time', 'id_locked_after'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && el.value) el.dataset.utc = wallClockToUtcIso(el.value, window.DMOJ_EDIT_TZ);
+            });
 
             // --- Duration + validity ---
             var startInput = document.getElementById('id_start_time');
@@ -808,7 +862,7 @@
                                         <span class="tz-label"><i class="fa fa-clock-o"></i> {{ _('Timezone') }}:</span>
                                         <span class="oj-single-select tz-drop">
                                             <select id="id_tmp_timezone" name="tmp_timezone" data-oj-select
-                                                    onchange="var tz=this.value;if(!tz)return;var q=window.location.search.replace(/(?:[?&]tz=)[^&]*/,'');var sep=(q&&q!=='?')?'&':'?';window.location.href=window.location.pathname+q+sep+'tz='+encodeURIComponent(tz);">
+                                                    onchange="onEditorTZChange(this.value);">
                                                 {% for tz_name, tz_label in tz_options %}
                                                     <option value="{{ tz_name }}"{% if tz_name == user_timezone %} selected{% endif %}>{{ tz_label }}</option>
                                                 {% endfor %}
