@@ -259,6 +259,17 @@
         // datetime-local -> UTC conversion on submit; defaults to the profile
         // timezone, overridden by the temporary ?tz= picker next to Validity.
         window.DMOJ_EDIT_TZ = {{ user_timezone|tojson }};
+
+        // HTML-escape a string for safe interpolation into innerHTML. Problem
+        // names come from the database (teachers can create/import them with
+        // arbitrary text, e.g. <img onerror=...>) — they must never be inserted
+        // into markup unescaped, or a malicious name becomes stored XSS.
+        function esc(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+                return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+            });
+        }
+
         document.addEventListener('DOMContentLoaded', function () {
             var form = document.getElementById('contest-form');
             if (!form) return;
@@ -674,7 +685,7 @@
                             r.className = 'cp-row';
                             r.dataset.pid = pid;
                             r.innerHTML = '<span></span><span class="label-letter">' + String.fromCharCode(64 + existingIds.length) + '</span>' +
-                                '<span class="pname">' + (row.dataset.name || 'Problem ' + pid) + '</span>' +
+                                '<span class="pname">' + esc(row.dataset.name || 'Problem ' + pid) + '</span>' +
                                 '<span><input type="number" value="100" style="width:48px"></span>' +
                                 '<span>—</span>' +
                                 '<span class="cp-actions"><button type="button" class="btn-icon danger" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button></span>';
