@@ -60,6 +60,15 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestSEBConfig', 'SEBQuit']
 
 
+def _valid_tz(name):
+    """Return ``name`` when it is a valid IANA timezone, else ''."""
+    try:
+        ZoneInfo(name)
+        return name
+    except (KeyError, ValueError):
+        return ''
+
+
 def _find_contest(request, key, private_check=True):
     try:
         contest = Contest.objects.get(key=key)
@@ -285,7 +294,6 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['tags'] = ContestTag.objects.all()
         context['total_count'] = self._apply_filters(self._get_queryset()).count()
         context['sort_by'] = self.request.GET.get('sort', self.default_sort)
-        context['layout'] = self.request.GET.get('layout', 'status')
 
         context.update(self.get_sort_context())
         context.update(self.get_sort_paginate_context())
@@ -612,13 +620,6 @@ class ContestCreate(LoginRequiredMixin, View):
         profile_tz_name = getattr(getattr(self.request, 'profile', None), 'timezone', '') \
             or settings.DEFAULT_USER_TIME_ZONE
 
-        def _valid_tz(name):
-            try:
-                ZoneInfo(name)
-                return name
-            except (KeyError, ValueError):
-                return ''
-
         user_tz_name = _valid_tz(self.request.GET.get('tz', '').strip()) \
             or _valid_tz(self.request.session.get('contest_editor_tz', '')) \
             or profile_tz_name
@@ -764,6 +765,22 @@ class ContestCreate(LoginRequiredMixin, View):
         if current:
             ordered.insert(0, (current, _('%(tz)s (current)') % {'tz': current}))
         return ordered
+
+
+class ContestTZPreference(LoginRequiredMixin, View):
+    """Persist the editor's temporary timezone to the session (AJAX, no reload).
+
+    The create/edit form switches timezone locally in JS; this endpoint stores
+    the choice so reopening the form later keeps the same wall-clock timezone,
+    without a full page round-trip that would discard unsaved input.
+    """
+
+    def post(self, request, *args, **kwargs):
+        tz = _valid_tz(request.POST.get('tz', '').strip())
+        if not tz:
+            return JsonResponse({'error': _('Invalid timezone.')}, status=400)
+        request.session['contest_editor_tz'] = tz
+        return JsonResponse({'ok': True, 'tz': tz})
 
 
 class PrivateContestError(Exception):
