@@ -1,0 +1,573 @@
+{% extends "common-content.html" %}
+
+{% block meta %}
+    <meta name="description" content="The {{ SITE_NAME }}'s contest list - past, present, and future.">
+{% endblock %}
+
+{% block js_media %}
+    <script type="text/javascript">
+        document.addEventListener('DOMContentLoaded', function() {
+            // ── Filter state ──
+            var state = {
+                org: [],
+                cls: [],
+                time: '{{ request.GET.status or '' }}',
+                tags: [],
+                q: '{{ search_query or '' }}',
+                sort: '{{ sort_by or '-start_time' }}',
+                layout: '{{ layout or 'status' }}'
+            };
+
+            // ── Multi-select toggle ──
+            window.toggleMenu = function(id) {
+                document.querySelectorAll('.multi-select').forEach(function(el) {
+                    if (el.id !== id) {
+                        el.classList.remove('open');
+                        var m = el.querySelector('.multi-select-menu');
+                        if (m) m.hidden = true;
+                    }
+                });
+                var root = document.getElementById(id);
+                var menu = root.querySelector('.multi-select-menu');
+                var open = root.classList.toggle('open');
+                menu.hidden = !open;
+            };
+
+            // Close dropdowns on outside click
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.multi-select')) {
+                    document.querySelectorAll('.multi-select').forEach(function(el) {
+                        el.classList.remove('open');
+                        var m = el.querySelector('.multi-select-menu');
+                        if (m) m.hidden = true;
+                    });
+                }
+                if (!e.target.closest('#sort-dropdown')) {
+                    var menu = document.getElementById('sort-menu');
+                    if (menu) menu.hidden = true;
+                }
+            });
+
+            // ── Refresh multi-select labels ──
+            function refreshMultiLabel(selectId, labelId) {
+                var labels = Array.from(document.querySelectorAll('#' + selectId + ' .multi-select-option input:checked'))
+                    .map(function(i) {
+                        var spans = i.closest('label').querySelectorAll('span');
+                        return spans[spans.length - 1].textContent.trim();
+                    });
+                var label = document.getElementById(labelId);
+                if (labels.length) {
+                    var text = labels.length === 1 ? labels[0] : (labels[0] + ' +' + (labels.length - 1));
+                    label.textContent = text;
+                    label.title = labels.join(', ');
+                    label.classList.remove('multi-select-label-empty');
+                } else {
+                    label.textContent = label.dataset.emptyLabel;
+                    label.classList.add('multi-select-label-empty');
+                    label.title = '';
+                }
+            }
+
+            window.refreshOrgLabel = function() { refreshMultiLabel('org-multi-select', 'org-multi-label'); };
+            window.refreshClassLabel = function() { refreshMultiLabel('class-multi-select', 'class-multi-label'); };
+            window.refreshTagLabel = function() { refreshMultiLabel('tag-multi-select', 'tag-multi-label'); };
+
+            // ── Sort dropdown ──
+            window.toggleSort = function() {
+                var menu = document.getElementById('sort-menu');
+                menu.hidden = !menu.hidden;
+            };
+
+            // ── Get checked values ──
+            function checkedValues(sel) {
+                return Array.from(document.querySelectorAll(sel + ' input:checked')).map(function(i) { return i.value; });
+            }
+
+            // ── Apply filters (submit as GET) ──
+            window.applyFilters = function() {
+                state.org = checkedValues('#org-multi-select');
+                state.cls = checkedValues('#class-multi-select');
+                state.time = document.getElementById('time-filter').value;
+                state.tags = checkedValues('#tag-multi-select');
+                state.q = document.getElementById('f-q').value.trim();
+
+                var params = new URLSearchParams();
+                if (state.org.length) params.set('org', state.org.join(','));
+                if (state.cls.length) params.set('class', state.cls.join(','));
+                if (state.time) params.set('status', state.time);
+                if (state.tags.length) params.set('tag', state.tags.join(','));
+                if (state.q) params.set('search', state.q);
+                if (state.sort !== '-start_time') params.set('sort', state.sort);
+                if (state.layout !== 'status') params.set('layout', state.layout);
+
+                var newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+                window.location.href = newUrl;
+            };
+
+            // ── Clear all filters ──
+            window.clearFilters = function() {
+                document.querySelectorAll('#filter-form .multi-select input[type=checkbox]').forEach(function(c) {
+                    c.checked = false;
+                });
+                document.getElementById('time-filter').value = '';
+                document.getElementById('f-q').value = '';
+                refreshOrgLabel();
+                refreshClassLabel();
+                refreshTagLabel();
+                state = { org: [], cls: [], time: '', tags: [], q: '', sort: state.sort, layout: state.layout };
+                applyFilters();
+            };
+
+            // ── Sort button clicks ──
+            document.querySelectorAll('#sort-menu button[data-sort]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    state.sort = btn.dataset.sort;
+                    document.getElementById('sort-label').textContent = btn.textContent.trim();
+                    document.getElementById('sort-menu').hidden = true;
+                    applyFilters();
+                });
+            });
+
+            // ── Layout switch ──
+            document.getElementById('layout-switch').addEventListener('click', function(e) {
+                var btn = e.target.closest('button[data-layout]');
+                if (!btn) return;
+                state.layout = btn.dataset.layout;
+                document.querySelectorAll('#layout-switch button').forEach(function(b) {
+                    b.classList.toggle('active', b === btn);
+                });
+                applyFilters();
+            });
+
+            // ── Initialize labels from URL params ──
+            {% if request.GET.org %}
+                var orgVals = '{{ request.GET.org }}'.split(',');
+                orgVals.forEach(function(v) {
+                    var cb = document.querySelector('#org-multi-select input[value="' + v + '"]');
+                    if (cb) cb.checked = true;
+                });
+                refreshOrgLabel();
+            {% endif %}
+            {% if request.GET.class %}
+                var classVals = '{{ request.GET.class }}'.split(',');
+                classVals.forEach(function(v) {
+                    var cb = document.querySelector('#class-multi-select input[value="' + v + '"]');
+                    if (cb) cb.checked = true;
+                });
+                refreshClassLabel();
+            {% endif %}
+            {% if request.GET.tag %}
+                var tagVals = '{{ request.GET.tag }}'.split(',');
+                tagVals.forEach(function(v) {
+                    var cb = document.querySelector('#tag-multi-select input[value="' + v + '"]');
+                    if (cb) cb.checked = true;
+                });
+                refreshTagLabel();
+            {% endif %}
+
+            // ── Pagination preserves filter params ──
+            document.querySelectorAll('.paginate-link').forEach(function(link) {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    var search = window.location.search.replace(/[\?&]page=\d+/g, '');
+                    var sep = search ? '&' : '?';
+                    window.location.href = window.location.pathname + search + sep + 'page=' + this.dataset.page + '#past-contests';
+                });
+            });
+        });
+    </script>
+{% endblock %}
+
+{% block title_ruler %}{% endblock %}
+
+{% block title_row %}
+    {% set tab = 'list' %}
+    {% include "contest/contest-list-tabs.html" %}
+{% endblock %}
+
+{% block body %}
+    <form id="filter-form" class="contest-list-redesign problem-list-redesign oj-ui" onsubmit="event.preventDefault(); applyFilters();">
+        {# ── Filter Card ── #}
+        <section class="card filter-card">
+            <div class="filter-row filter-row-conditions">
+                <label class="filter-label">{{ _('Filters') }}</label>
+                <div class="filter-controls">
+                    {# Organization multi-select #}
+                    <div class="filter-group">
+                        <span class="filter-group-label">{{ _('Organization') }}</span>
+                        <div class="multi-select" id="org-multi-select">
+                            <button type="button" class="multi-select-trigger" onclick="toggleMenu('org-multi-select')">
+                                <span id="org-multi-label" class="multi-select-text multi-select-label-empty" data-empty-label="{{ _('All organizations') }}">{{ _('All organizations') }}</span>
+                                <span class="multi-select-caret">▾</span>
+                            </button>
+                            <div class="multi-select-menu" hidden>
+                                {% for org in organizations %}
+                                    <label class="multi-select-option">
+                                        <input type="checkbox" value="{{ org.name }}" onchange="refreshOrgLabel()">
+                                        <span>{{ org.name }}</span>
+                                    </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    {# Class multi-select #}
+                    <div class="filter-group">
+                        <span class="filter-group-label">{{ _('Class') }}</span>
+                        <div class="multi-select" id="class-multi-select">
+                            <button type="button" class="multi-select-trigger" onclick="toggleMenu('class-multi-select')">
+                                <span id="class-multi-label" class="multi-select-text multi-select-label-empty" data-empty-label="{{ _('All classes') }}">{{ _('All classes') }}</span>
+                                <span class="multi-select-caret">▾</span>
+                            </button>
+                            <div class="multi-select-menu" hidden>
+                                {% for cls in classes %}
+                                    <label class="multi-select-option">
+                                        <input type="checkbox" value="{{ cls.name }}" onchange="refreshClassLabel()">
+                                        <span>{{ cls.name }}</span>
+                                    </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    {# Status select #}
+                    <div class="filter-group">
+                        <span class="filter-group-label">{{ _('Status') }}</span>
+                        <select id="time-filter" class="select" data-oj-select>
+                            <option value="">{{ _('All') }}</option>
+                            <option value="mine" {% if request.GET.status == 'mine' %}selected{% endif %}>{{ _('My active') }}</option>
+                            <option value="ongoing" {% if request.GET.status == 'ongoing' %}selected{% endif %}>{{ _('Ongoing') }}</option>
+                            <option value="upcoming" {% if request.GET.status == 'upcoming' %}selected{% endif %}>{{ _('Upcoming') }}</option>
+                            <option value="past" {% if request.GET.status == 'past' %}selected{% endif %}>{{ _('Past') }}</option>
+                        </select>
+                    </div>
+
+                    {# Tag multi-select #}
+                    <div class="filter-group">
+                        <span class="filter-group-label">{{ _('Tag') }}</span>
+                        <div class="multi-select" id="tag-multi-select">
+                            <button type="button" class="multi-select-trigger" onclick="toggleMenu('tag-multi-select')">
+                                <span id="tag-multi-label" class="multi-select-text multi-select-label-empty" data-empty-label="{{ _('All tags') }}">{{ _('All tags') }}</span>
+                                <span class="multi-select-caret">▾</span>
+                            </button>
+                            <div class="multi-select-menu" hidden id="tag-menu">
+                                {% for tag in tags %}
+                                    <label class="multi-select-option">
+                                        <input type="checkbox" value="{{ tag.name }}" onchange="refreshTagLabel()">
+                                        <span class="swatch" style="background:{{ tag.color }}"></span>
+                                        <span>{{ tag.name }}</span>
+                                    </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="filter-row">
+                <label class="filter-label">{{ _('Keyword') }}</label>
+                <input type="text" id="f-q" class="input input-wide" placeholder="{{ _('Search by contest name, key…') }}" value="{{ search_query or '' }}">
+            </div>
+
+            <div class="filter-row selected-row">
+                <span class="filter-label">{{ _('Selected') }}</span>
+                <div class="chip-list" id="active-filters">
+                    <span class="chip-placeholder">{{ _('No filters applied') }}</span>
+                </div>
+                <a class="btn-text" href="javascript:clearFilters()">{{ _('Clear filters') }}</a>
+            </div>
+
+            <div class="filter-footer">
+                <span class="result-count">{{ _('%(count)d results', count=total_count) }}</span>
+                <button type="submit" class="btn btn-primary"><i class="fa fa-search"></i> {{ _('Search') }}</button>
+            </div>
+        </section>
+
+        {# ── Toolbar ── #}
+        <section class="toolbar">
+            <div class="toolbar-left">
+                <div class="dropdown" id="sort-dropdown">
+                    <button type="button" class="sort-btn" onclick="toggleSort()">
+                        <i class="fa fa-sort"></i> <span id="sort-label">{{ _('Sort:') }} {{ _('Start time') }} ↓</span>
+                    </button>
+                    <div class="dropdown-menu" id="sort-menu" hidden>
+                        <div class="dropdown-title">{{ _('Sort by') }}</div>
+                        <ul>
+                            <li><button type="button" data-sort="-start_time">{{ _('Start time') }} ↓</button></li>
+                            <li><button type="button" data-sort="start_time">{{ _('Start time') }} ↑</button></li>
+                            <li><button type="button" data-sort="-end_time">{{ _('End time') }} ↓</button></li>
+                            <li><button type="button" data-sort="name">{{ _('Name') }} A–Z</button></li>
+                            <li><button type="button" data-sort="-user_count">{{ _('Participants') }} ↓</button></li>
+                        </ul>
+                    </div>
+                </div>
+                <span style="font-size:12px;color:var(--oj-text-muted);margin-left:0.25rem;">{{ _('Layout') }}</span>
+                <div class="cl-layout-switch" id="layout-switch" role="group" aria-label="{{ _('Layout') }}">
+                    <button type="button" class="{% if not layout or layout == 'status' %}active{% endif %}" data-layout="status">{{ _('By status') }}</button>
+                    <button type="button" class="{% if layout == 'flat' %}active{% endif %}" data-layout="flat">{{ _('Flat list') }}</button>
+                    <button type="button" class="{% if layout == 'org' %}active{% endif %}" data-layout="org">{{ _('By org') }}</button>
+                </div>
+            </div>
+            <div class="toolbar-right">
+                <span class="progress-label">{{ total_count }} {{ _('contests') }}</span>
+            </div>
+        </section>
+    </form>
+
+    {# ── Contest List ── #}
+    <div class="cl-list" id="contest-list">
+        {# Active participations (user's current contests) #}
+        {% if active_participations %}
+            <div class="cl-section">
+                <div class="cl-group-head">
+                    <span><i class="fa fa-play-circle"></i> {{ _('Active assignments') }}</span>
+                    <small>{{ active_participations|length }} {{ _('items') }}</small>
+                </div>
+                {% for participation in active_participations %}
+                    {% with contest=participation.contest %}
+                        <article class="cl-row" data-key="{{ contest.key }}">
+                            <div>
+                                <div class="cl-primary-line">
+                                    <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+                                    <span class="cl-code">/{{ contest.key }}</span>
+                                </div>
+                                <div class="cl-subline">{{ _('Participating now') }}</div>
+                                <div class="cl-course-line">
+                                    {% for org in contest.organizations.all() %}
+                                        <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
+                                    {% endfor %}
+                                    {% for cls in contest.classes.all() %}
+                                        <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
+                                    {% endfor %}
+                                </div>
+                                <div class="cl-meta">
+                                    <span class="badge badge-st-mine">{{ _('Active') }}</span>
+                                    {% for tag in contest.tags.all() %}
+                                        <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
+                                    {% endfor %}
+                                </div>
+                                <div class="cl-time">
+                                    {% if contest.time_limit %}
+                                        <span class="emph">{{ _('Window ends in %(countdown)s', countdown=as_countdown(participation.time_remaining)) }}</span>
+                                    {% elif contest.time_before_end %}
+                                        <span class="emph">{{ _('Ends in %(countdown)s', countdown=as_countdown(contest.time_before_end)) }}</span>
+                                    {% endif %}
+                                    <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
+                                    <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
+                                </div>
+                            </div>
+                            <div class="cl-users">
+                                {% if contest.can_see_own_scoreboard(request.user) %}
+                                    <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
+                                {% else %}
+                                    {{ contest.user_count }}
+                                {% endif %}
+                                <span class="lbl">{{ _('Users') }}</span>
+                            </div>
+                            <div class="cl-actions">
+                                {% if contest.can_see_own_scoreboard(request.user) %}
+                                    <a class="button" href="{{ url('contest_ranking', contest.key) }}">{{ _('Rankings') }}</a>
+                                {% endif %}
+                            </div>
+                        </article>
+                    {% endwith %}
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {# Ongoing contests #}
+        {% if current_contests %}
+            <div class="cl-section">
+                <div class="cl-group-head">
+                    <span><i class="fa fa-bolt"></i> {{ _('Ongoing') }}</span>
+                    <small>{{ current_contests|length }} {{ _('items') }}</small>
+                </div>
+                {% for contest in current_contests %}
+                    <article class="cl-row" data-key="{{ contest.key }}">
+                        <div>
+                            <div class="cl-primary-line">
+                                <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+                                <span class="cl-code">/{{ contest.key }}</span>
+                            </div>
+                            <div class="cl-subline">{{ _('Ongoing now') }}</div>
+                            <div class="cl-course-line">
+                                {% for org in contest.organizations.all() %}
+                                    <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
+                                {% endfor %}
+                                {% for cls in contest.classes.all() %}
+                                    <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
+                                {% endfor %}
+                            </div>
+                            <div class="cl-meta">
+                                <span class="badge badge-st-ongoing">{{ _('Ongoing') }}</span>
+                                {% if contest.is_rated %}
+                                    <span class="badge badge-rated">{{ _('rated') }}</span>
+                                {% endif %}
+                                {% for tag in contest.tags.all() %}
+                                    <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
+                                {% endfor %}
+                            </div>
+                            <div class="cl-time">
+                                {% if contest.time_before_end %}
+                                    <span class="emph">{{ _('Ends in %(countdown)s', countdown=as_countdown(contest.time_before_end)) }}</span>
+                                {% endif %}
+                                <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
+                                <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
+                            </div>
+                        </div>
+                        <div class="cl-users">
+                            {% if contest.can_see_own_scoreboard(request.user) %}
+                                <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
+                            {% else %}
+                                {{ contest.user_count }}
+                            {% endif %}
+                            <span class="lbl">{{ _('Users') }}</span>
+                        </div>
+                        <div class="cl-actions">
+                            {% if contest.is_live_joinable_by(request.user) %}
+                                <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
+                                    {% csrf_token %}
+                                    <button type="submit" class="button">{{ _('Join') }}</button>
+                                </form>
+                            {% elif contest.is_spectatable_by(request.user) %}
+                                <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
+                                    {% csrf_token %}
+                                    <button type="submit" class="button">{{ _('Spectate') }}</button>
+                                </form>
+                            {% endif %}
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {# Upcoming contests #}
+        {% if future_contests %}
+            <div class="cl-section">
+                <div class="cl-group-head">
+                    <span><i class="fa fa-clock-o"></i> {{ _('Upcoming') }}</span>
+                    <small>{{ future_contests|length }} {{ _('items') }}</small>
+                </div>
+                {% for contest in future_contests %}
+                    <article class="cl-row" data-key="{{ contest.key }}">
+                        <div>
+                            <div class="cl-primary-line">
+                                <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+                                <span class="cl-code">/{{ contest.key }}</span>
+                            </div>
+                            <div class="cl-subline">{{ _('Not started') }}</div>
+                            <div class="cl-course-line">
+                                {% for org in contest.organizations.all() %}
+                                    <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
+                                {% endfor %}
+                                {% for cls in contest.classes.all() %}
+                                    <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
+                                {% endfor %}
+                            </div>
+                            <div class="cl-meta">
+                                <span class="badge badge-st-upcoming">{{ _('Upcoming') }}</span>
+                                {% for tag in contest.tags.all() %}
+                                    <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
+                                {% endfor %}
+                            </div>
+                            <div class="cl-time">
+                                <span class="emph warn">{{ _('Starting in %(countdown)s', countdown=as_countdown(contest.time_before_start)) }}</span>
+                                <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
+                                <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
+                            </div>
+                        </div>
+                        <div class="cl-users">—</div>
+                        <div class="cl-actions">
+                                <button type="button" class="button ghost" disabled>{{ _('Remind') }}</button>
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {# Past contests #}
+        <div class="cl-section">
+            <div class="cl-group-head">
+                <span><i class="fa fa-check-circle-o"></i> {{ _('Past') }}</span>
+                <small>{{ past_contests|length }} {{ _('items') }}</small>
+            </div>
+            {% if past_contests %}
+                {% for contest in past_contests %}
+                    <article class="cl-row" data-key="{{ contest.key }}">
+                        <div>
+                            <div class="cl-primary-line">
+                                <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+                                <span class="cl-code">/{{ contest.key }}</span>
+                            </div>
+                            <div class="cl-subline">{{ _('Ended') }}</div>
+                            <div class="cl-course-line">
+                                {% for org in contest.organizations.all() %}
+                                    <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
+                                {% endfor %}
+                                {% for cls in contest.classes.all() %}
+                                    <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
+                                {% endfor %}
+                            </div>
+                            <div class="cl-meta">
+                                <span class="badge badge-st-past">{{ _('Past') }}</span>
+                                {% if contest.is_rated %}
+                                    <span class="badge badge-rated">{{ _('rated') }}</span>
+                                {% endif %}
+                                {% if not contest.is_visible %}
+                                    <span class="badge badge-st-past"><i class="fa fa-eye-slash"></i> {{ _('hidden') }}</span>
+                                {% endif %}
+                                {% for tag in contest.tags.all() %}
+                                    <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
+                                {% endfor %}
+                            </div>
+                            <div class="cl-time">
+                                <span class="emph muted">{{ _('Ended') }}</span>
+                                <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
+                                <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
+                            </div>
+                        </div>
+                        <div class="cl-users">
+                            {% if contest.can_see_own_scoreboard(request.user) %}
+                                <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
+                            {% else %}
+                                {{ contest.user_count }}
+                            {% endif %}
+                            <span class="lbl">{{ _('Users') }}</span>
+                        </div>
+                        <div class="cl-actions">
+                            {% if not request.in_contest %}
+                                {% if contest.allow_virtual_participation %}
+                                    <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
+                                        {% csrf_token %}
+                                        <button type="submit" class="button ghost">{{ _('Virtual') }}</button>
+                                    </form>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                    </article>
+                {% endfor %}
+
+                {# Pagination #}
+                {% if page_obj and page_obj.has_other_pages() %}
+                    <div class="cl-pagination">
+                        {% if page_obj.has_previous() %}
+                            <a href="#" data-page="{{ page_obj.previous_page_number() }}" class="btn btn-outline btn-sm paginate-link">
+                                <i class="fa fa-chevron-left"></i> {{ _('Previous') }}
+                            </a>
+                        {% endif %}
+                        <span class="page-info">
+                            {{ _('Page %(current)s of %(total)s', current=page_obj.number, total=page_obj.paginator.num_pages) }}
+                        </span>
+                        {% if page_obj.has_next() %}
+                            <a href="#" data-page="{{ page_obj.next_page_number() }}" class="btn btn-outline btn-sm paginate-link">
+                                {{ _('Next') }} <i class="fa fa-chevron-right"></i>
+                            </a>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            {% else %}
+                <div class="cl-empty">{{ _('There are no past assignments.') }}</div>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

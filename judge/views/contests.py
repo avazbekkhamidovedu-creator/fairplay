@@ -37,6 +37,7 @@ from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
 from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestTag, \
     Problem, Profile, Submission
+from judge.models.profile import Class, Organization
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
@@ -47,7 +48,7 @@ from judge.utils.stats import get_bar_chart, get_pie_chart
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
 
-__all__ = ['ContestList', 'ContestDetail', 'ContestRanking', 'ContestJoin', 'ContestLeave', 'ContestCalendar',
+__all__ = ['ContestList', 'ContestListV2', 'ContestDetail', 'ContestRanking', 'ContestJoin', 'ContestLeave', 'ContestCalendar',
            'ContestClone', 'ContestStats', 'ContestMossView', 'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
@@ -154,6 +155,133 @@ class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestL
         context['first_page_href'] = '.'
         context['page_suffix'] = '#past-contests'
         context['search_query'] = self.search_query
+        context.update(self.get_sort_context())
+        context.update(self.get_sort_paginate_context())
+        return context
+
+
+
+
+class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestListMixin, ListView):
+    """Redesigned contest list with filters, sorting, and layout options."""
+    model = Contest
+    paginate_by = 20
+    template_name = 'contest/list-v2.html'
+    title = gettext_lazy('Assignments')
+    context_object_name = 'past_contests'
+    all_sorts = frozenset(('name', 'user_count', 'start_time', 'end_time'))
+    default_desc = frozenset(('name', 'user_count'))
+    default_sort = '-start_time'
+
+    @cached_property
+    def _now(self):
+        return timezone.now()
+
+    def _get_queryset(self):
+        queryset = super().get_queryset().prefetch_related(
+            'tags',
+            'organizations',
+            'authors',
+            'curators',
+            'testers',
+            'spectators',
+            'classes',
+        )
+
+        profile = self.request.profile
+        if not profile:
+            return queryset
+
+        return queryset.annotate(
+            editor_or_tester=Exists(Contest.authors.through.objects.filter(contest=OuterRef('pk'), profile=profile)) |
+            Exists(Contest.curators.through.objects.filter(contest=OuterRef('pk'), profile=profile)) |
+            Exists(Contest.testers.through.objects.filter(contest=OuterRef('pk'), profile=profile)),
+            completed_contest=Exists(ContestParticipation.objects.filter(contest=OuterRef('pk'), user=profile,
+                                                                         virtual=ContestParticipation.LIVE)),
+        )
+
+    def _apply_filters(self, queryset):
+        """Apply org, class, tag, and search filters from GET params."""
+        org_filter = self.request.GET.get('org', '')
+        if org_filter:
+            org_names = [n.strip() for n in org_filter.split(',') if n.strip()]
+            if org_names:
+                queryset = queryset.filter(organizations__name__in=org_names)
+
+        class_filter = self.request.GET.get('class', '')
+        if class_filter:
+            class_names = [n.strip() for n in class_filter.split(',') if n.strip()]
+            if class_names:
+                queryset = queryset.filter(classes__name__in=class_names)
+
+        tag_filter = self.request.GET.get('tag', '')
+        if tag_filter:
+            tag_names = [n.strip() for n in tag_filter.split(',') if n.strip()]
+            if tag_names:
+                queryset = queryset.filter(tags__name__in=tag_names)
+
+        self.search_query = None
+        if 'search' in self.request.GET:
+            self.search_query = ' '.join(self.request.GET.getlist('search')).strip()
+            if self.search_query:
+                queryset = queryset.filter(
+                    Q(key__icontains=self.search_query) | Q(name__icontains=self.search_query),
+                )
+
+        return queryset.distinct()
+
+    def get_queryset(self):
+        queryset = self._get_queryset().order_by(self.order, 'key').filter(end_time__lt=self._now)
+        return self._apply_filters(queryset)
+
+    def get_paginator(self, queryset, per_page, orphans=0, allow_empty_first_page=True, **kwargs):
+        return super().get_paginator(queryset, per_page, orphans, allow_empty_first_page,
+                                     count=self.get_queryset().values('id').count(), **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super(ContestListV2, self).get_context_data(**kwargs)
+        present, active, future = [], [], []
+        finished = set()
+        for contest in self._get_queryset().exclude(end_time__lt=self._now):
+            if contest.start_time > self._now:
+                future.append(contest)
+            else:
+                present.append(contest)
+
+        if self.request.user.is_authenticated:
+            for participation in (
+                ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=present)
+                .select_related('contest')
+                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators')
+                .annotate(key=F('contest__key'))
+            ):
+                if participation.ended:
+                    finished.add(participation.contest.key)
+                else:
+                    active.append(participation)
+                    present.remove(participation.contest)
+
+        active.sort(key=attrgetter('end_time', 'key'))
+        present.sort(key=attrgetter('end_time', 'key'))
+        future.sort(key=attrgetter('start_time'))
+
+        context['active_participations'] = active
+        context['current_contests'] = present
+        context['future_contests'] = future
+        context['finished_contests'] = finished
+        context['now'] = self._now
+        context['first_page_href'] = '.'
+        context['page_suffix'] = '#past-contests'
+        context['search_query'] = self.search_query
+
+        # Additional context for v2
+        context['organizations'] = Organization.objects.all()
+        context['classes'] = Class.objects.all()
+        context['tags'] = ContestTag.objects.all()
+        context['total_count'] = self._apply_filters(self._get_queryset()).count()
+        context['sort_by'] = self.request.GET.get('sort', self.default_sort)
+        context['layout'] = self.request.GET.get('layout', 'status')
+
         context.update(self.get_sort_context())
         context.update(self.get_sort_paginate_context())
         return context
@@ -728,7 +856,7 @@ class ContestStats(TitleMixin, ContestMixin, DetailView):
             ),
         }
 
-        context['stats'] = mark_safe(json.dumps(stats))
+        context['stats'] = mark_safe(json.dumps(stats).replace('</', '<\\/'))
 
         return context
 
