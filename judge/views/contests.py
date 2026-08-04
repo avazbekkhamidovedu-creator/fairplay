@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from calendar import Calendar, SUNDAY
 from collections import defaultdict, namedtuple
@@ -6,13 +7,15 @@ from datetime import date, datetime, time, timedelta
 from functools import partial
 from itertools import chain
 from operator import attrgetter, itemgetter
+from zoneinfo import ZoneInfo
 
 import markdown
 from django import forms
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
-from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
-from django.db import IntegrityError
+from django.contrib.auth.views import redirect_to_login
+from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, PermissionDenied, ValidationError
+from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Case, Count, F, FloatField, IntegerField, Max, Min, Q, Sum, Value, When
 from django.db.models.expressions import CombinedExpression, Exists, OuterRef
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest, HttpResponseRedirect, JsonResponse
@@ -48,7 +51,9 @@ from judge.utils.stats import get_bar_chart, get_pie_chart
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
 
-__all__ = ['ContestList', 'ContestListV2', 'ContestDetail', 'ContestRanking', 'ContestJoin', 'ContestLeave', 'ContestCalendar',
+logger = logging.getLogger(__name__)
+
+__all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'ContestRanking', 'ContestJoin', 'ContestLeave', 'ContestCalendar',
            'ContestClone', 'ContestStats', 'ContestMossView', 'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
@@ -285,6 +290,480 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context.update(self.get_sort_context())
         context.update(self.get_sort_paginate_context())
         return context
+
+
+class ContestCreate(LoginRequiredMixin, View):
+    """Create or edit a contest with the split layout form.
+
+    ``/contests/create/`` (add) and ``/contests/<key>/edit/`` (edit) share this
+    view and the same template; only the title and pre-fill differ.
+
+    Every field below maps 1:1 onto the ``Contest`` model — i.e. a column of
+    the ``judge_contest`` table — so "registering" a field in one of the
+    ``_*_fields`` tuples is all it takes for the frontend editor to read/write
+    it, staying in sync with the Django admin's contest editor.
+    """
+    template_name = 'contest/create.html'
+
+    # Scalar fields handled generically from the JSON payload.
+    _bool_fields = (
+        'is_visible', 'is_rated', 'use_clarifications', 'hide_problem_tags',
+        'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
+        'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
+        'show_short_display', 'is_private', 'is_organization_private',
+        'limit_join_organizations', 'seb_required',
+    )
+    _text_fields = (
+        'name', 'description', 'access_code', 'problem_label_script',
+        'og_image', 'logo_override_image', 'summary',
+        'seb_browser_exam_keys', 'seb_config_keys', 'seb_quit_url',
+    )
+    _int_fields = ('points_precision', 'rating_floor', 'rating_ceiling', 'performance_ceiling_override')
+    _m2m_fields = (
+        'curators', 'testers', 'spectators', 'rate_exclude',
+        'view_contest_scoreboard', 'view_contest_submissions', 'banned_users',
+        'organizations', 'classes', 'join_organizations', 'tags', 'private_contestants',
+    )
+
+    def dispatch(self, request, *args, **kwargs):
+        """Route to create or edit mode and enforce the matching permission.
+
+        - Create mode (no ``contest`` kwarg) requires ``judge.edit_all_contest``.
+        - Edit mode (``contest`` kwarg) requires ``is_editable_by``, which also
+          admits ``edit_own_contest`` holders who are curators of the contest.
+        """
+        self.contest = None
+        if 'contest' in kwargs:
+            self.contest = get_object_or_404(Contest, key=kwargs['contest'])
+            if not request.user.is_authenticated:
+                return redirect_to_login(request.get_full_path())
+            if not self.contest.is_editable_by(request.user):
+                raise PermissionDenied
+        else:
+            if not request.user.is_authenticated:
+                return redirect_to_login(request.get_full_path())
+            if not request.user.has_perm('judge.edit_all_contest'):
+                raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        context = self.get_context_data()
+        return render(request, self.template_name, context)
+
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': _('Invalid request.')}, status=400)
+        if self.contest is None:
+            return self._create(request, payload)
+        return self._update(request, payload)
+
+    # ── payload → model helpers ─────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_datetime(payload, field):
+        """Parse an ISO-8601 payload value into an aware UTC datetime.
+
+        The frontend always sends UTC strings ending in ``Z`` (from
+        ``Date.toISOString()``); naive local strings are also accepted and
+        interpreted as UTC to match ``settings.TIME_ZONE``. Returns ``None``
+        when the field is blank. Raises ``ValidationError`` on bad input.
+        """
+        value = payload.get(field)
+        if not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        except ValueError:
+            raise ValidationError(_('Invalid date format for "%(field)s".') % {'field': field})
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.utc)
+        return dt
+
+    @staticmethod
+    def _parse_duration(payload):
+        """Convert the frontend's hours/minutes inputs into a ``timedelta``.
+
+        A blank or zero duration means "no time limit" (``time_limit`` = None).
+        """
+        if not (payload.get('duration_hours') or payload.get('duration_minutes')):
+            return None
+        hours = int(payload.get('duration_hours', 0) or 0)
+        minutes = int(payload.get('duration_minutes', 0) or 0)
+        if not (hours or minutes):
+            return None
+        return timedelta(hours=hours, minutes=minutes)
+
+    def _apply_payload(self, contest, payload):
+        """Copy every supported field from the payload onto the contest object.
+
+        Only assigns attributes — it never calls ``save()``. Shared by the
+        create and update flows so the two modes cannot drift apart. Raises
+        ``ValidationError`` (→ HTTP 400) for invalid dates or format JSON.
+        """
+        # Plain scalars: booleans, text, and nullable integers.
+        for field in self._bool_fields:
+            # The JS layer already converts checkboxes to real booleans.
+            setattr(contest, field, bool(payload.get(field, False)))
+        for field in self._text_fields:
+            setattr(contest, field, payload.get(field, ''))
+        for field in self._int_fields:
+            value = payload.get(field)
+            try:
+                parsed = int(value) if value not in (None, '') else None
+            except (TypeError, ValueError):
+                parsed = None
+            if parsed is None:
+                # Fall back to the model's default: points_precision is NOT NULL
+                # (default 3), the rating bounds are nullable (default None).
+                parsed = contest._meta.get_field(field).get_default()
+            setattr(contest, field, parsed)
+
+        # Format: a plain choice plus an optional JSON config blob.
+        contest.format_name = payload.get('format_name', 'default')
+        format_config = payload.get('format_config')
+        if format_config is not None and str(format_config).strip():
+            try:
+                contest.format_config = json.loads(format_config)
+            except ValueError:
+                raise ValidationError(_('Invalid contest format configuration JSON.'))
+        elif format_config is not None:
+            contest.format_config = None
+
+        # Schedule: start/end are required and must be ordered; lock is optional.
+        start_time = self._parse_datetime(payload, 'start_time')
+        end_time = self._parse_datetime(payload, 'end_time')
+        if start_time is None or end_time is None:
+            raise ValidationError(_('Start and end time are required.'))
+        if start_time >= end_time:
+            raise ValidationError(_('Start time must be before end time.'))
+        contest.start_time = start_time
+        contest.end_time = end_time
+        contest.locked_after = self._parse_datetime(payload, 'locked_after')
+
+        # Duration: the frontend edits hours+minutes, the model stores a timedelta.
+        contest.time_limit = self._parse_duration(payload)
+        return contest
+
+    def _save_m2m(self, contest, payload):
+        """Fully replace each submitted many-to-many field with the given ids.
+
+        Only fields present in the payload are touched: Django's ``.set()`` is
+        atomic, so an omitted field keeps its current rows and an empty list
+        clears them.
+        """
+        for field in self._m2m_fields:
+            if field not in payload:
+                continue
+            values = payload[field]
+            if isinstance(values, str):
+                values = [values] if values else []
+            try:
+                ids = [int(v) for v in values if str(v)]
+            except (TypeError, ValueError):
+                raise ValidationError(_('Invalid value for "%(field)s".') % {'field': field})
+            getattr(contest, field).set(ids)
+
+    @staticmethod
+    def _sync_problems(contest, payload):
+        """Replace the contest's problem list with the submitted selection.
+
+        Accepts either a list of ``{id, points}`` dicts (the frontend sends the
+        editable per-row points) or a plain list of ids (points default to 100).
+        Called on create (initial add) and on edit (full replace, mirroring the
+        frontend's problem library). No-op when the payload carries no problem
+        data, so existing problems are preserved unless explicitly edited.
+        """
+        problems = payload.get('problems')
+        if problems is None:
+            problems = payload.get('problem_ids')
+        if problems is None:
+            return
+        if isinstance(problems, str):
+            problems = [problems]
+        ContestProblem.objects.filter(contest=contest).delete()
+        order = 1
+        for item in problems:
+            if isinstance(item, dict):
+                pid = item.get('id')
+                raw_points = item.get('points', 100)
+            else:
+                pid = item
+                raw_points = 100
+            try:
+                problem = Problem.objects.get(pk=int(pid))
+            except (TypeError, ValueError, Problem.DoesNotExist):
+                continue
+            try:
+                points = int(raw_points) if raw_points not in (None, '') else 100
+            except (TypeError, ValueError):
+                points = 100
+            ContestProblem.objects.create(
+                contest=contest, problem=problem, points=points, order=order,
+            )
+            order += 1
+
+    # ── create / update ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _error_response(exception):
+        """Map a save failure to a JSON error response.
+
+        Validation errors (bad dates/JSON/user input) return their message
+        with HTTP 400; anything else is logged and reported generically so
+        internal details never reach the browser.
+        """
+        if isinstance(exception, ValidationError):
+            return JsonResponse({'error': str(exception)}, status=400)
+        logger.exception('Contest save failed: %s', exception)
+        return JsonResponse({'error': _('Failed to save contest.')}, status=500)
+
+    def _create(self, request, payload):
+        """Validate identity, insert a new ``judge_contest`` row, return redirect."""
+        # Basic identity checks: both name and key are mandatory.
+        for field in ('name', 'key'):
+            if not payload.get(field):
+                return JsonResponse({'error': _('Missing required field: %s') % field}, status=400)
+        key = payload.get('key', '')
+        if not re.match(r'^[a-z0-9]+$', key):
+            return JsonResponse({'error': _('Contest key must contain only lowercase letters and numbers.')},
+                                status=400)
+        if Contest.objects.filter(key=key).exists():
+            return JsonResponse({'error': _('A contest with this key already exists.')}, status=400)
+
+        try:
+            with transaction.atomic():
+                contest = Contest(key=key)
+                self._apply_payload(contest, payload)
+                contest.save()
+                self._save_m2m(contest, payload)
+                contest.authors.add(request.profile)  # the creator becomes an author
+                self._sync_problems(contest, payload)
+                return JsonResponse({'ok': True, 'redirect': reverse('contest_view', args=[contest.key])})
+        except Exception as e:
+            return self._error_response(e)
+
+    def _update(self, request, payload):
+        """Update an existing contest row (and optionally its key) in place."""
+        contest = self.contest
+        try:
+            with transaction.atomic():
+                # Renaming the key (the URL slug) needs a uniqueness check that
+                # excludes this very contest.
+                new_key = payload.get('key') or contest.key
+                if new_key != contest.key:
+                    if not re.match(r'^[a-z0-9]+$', new_key):
+                        return JsonResponse(
+                            {'error': _('Contest key must contain only lowercase letters and numbers.')},
+                            status=400,
+                        )
+                    if Contest.objects.filter(key=new_key).exclude(pk=contest.pk).exists():
+                        return JsonResponse({'error': _('A contest with this key already exists.')}, status=400)
+                    contest.key = new_key
+
+                self._apply_payload(contest, payload)
+                contest.save()
+                self._save_m2m(contest, payload)
+                # Authors are only editable here; create auto-adds the current user.
+                if 'authors' in payload:
+                    values = payload['authors']
+                    if isinstance(values, str):
+                        values = [values] if values else []
+                    try:
+                        contest.authors.set([int(v) for v in values if str(v)])
+                    except (TypeError, ValueError):
+                        raise ValidationError(_('Invalid value for "authors".'))
+                self._sync_problems(contest, payload)
+                return JsonResponse({'ok': True, 'redirect': reverse('contest_view', args=[contest.key])})
+        except Exception as e:
+            return self._error_response(e)
+
+    # ── template context ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _local_input(dt, tz):
+        """Format a stored UTC datetime in the given user timezone.
+
+        The editor stores UTC; this renders the value back in the *user's* own
+        timezone (not the site's), so a teacher who typed 10:00 in UTC+8 sees
+        10:00 again when reopening the form instead of the raw 02:00 UTC.
+        """
+        if not dt:
+            return ''
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.utc)
+        return dt.astimezone(tz).strftime('%Y-%m-%dT%H:%M')
+
+    def get_context_data(self):
+        """Build the template context, pre-filling every field in edit mode.
+
+        Add mode ships sensible defaults (e.g. virtual participation on,
+        ``vis_mode`` = hidden); edit mode overwrites them from the stored row.
+        """
+        contest = self.contest
+        # Temporary timezone for this editor, remembered per-browser-session so
+        # the choice survives page reloads / reopening the form, while the
+        # profile's saved timezone is never touched (a teacher abroad can plan
+        # an assignment in Beijing time without changing their account).
+        # Resolution order: ?tz= (explicit, also persists) > session > profile.
+        profile_tz_name = getattr(getattr(self.request, 'profile', None), 'timezone', '') \
+            or settings.DEFAULT_USER_TIME_ZONE
+
+        def _valid_tz(name):
+            try:
+                ZoneInfo(name)
+                return name
+            except (KeyError, ValueError):
+                return ''
+
+        user_tz_name = _valid_tz(self.request.GET.get('tz', '').strip()) \
+            or _valid_tz(self.request.session.get('contest_editor_tz', '')) \
+            or profile_tz_name
+        if not _valid_tz(user_tz_name):
+            user_tz_name = 'UTC'
+        # Remember an explicitly selected ?tz= for the rest of the session.
+        explicit_tz = _valid_tz(self.request.GET.get('tz', '').strip())
+        if explicit_tz and explicit_tz != self.request.session.get('contest_editor_tz'):
+            self.request.session['contest_editor_tz'] = explicit_tz
+        try:
+            user_tz = ZoneInfo(user_tz_name)
+        except (KeyError, ValueError):
+            user_tz = ZoneInfo('UTC')
+        prefill = {
+            'name': '', 'key': '', 'description': '', 'summary': '', 'og_image': '',
+            'logo_override_image': '', 'access_code': '', 'problem_label_script': '',
+            'format_config': '', 'format_name': 'default', 'scoreboard_visibility': 'V',
+            'points_precision': 3, 'rating_floor': '', 'rating_ceiling': '',
+            'performance_ceiling_override': '', 'start_time': '', 'end_time': '',
+            'locked_after': '', 'duration_hours': 0, 'duration_minutes': 0,
+            'seb_browser_exam_keys': '', 'seb_config_keys': '', 'seb_quit_url': '',
+            'is_visible': False, 'is_rated': False, 'use_clarifications': True,
+            'hide_problem_tags': False, 'hide_problem_authors': False,
+            'allow_virtual_participation': True, 'run_pretests_only': False,
+            'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': False,
+            'show_short_display': False, 'is_private': False, 'is_organization_private': False,
+            'limit_join_organizations': False, 'seb_required': False,
+            'vis_mode': 'hidden', 'cheat_level': 'medium', 'problems': [],
+        }
+        for field in self._m2m_fields:
+            prefill[field] = []
+        prefill['authors'] = []
+
+        if contest is not None:
+            total = int(contest.time_limit.total_seconds()) if contest.time_limit else 0
+            prefill.update({
+                'name': contest.name,
+                'key': contest.key,
+                'description': contest.description,
+                'summary': contest.summary,
+                'og_image': contest.og_image,
+                'logo_override_image': contest.logo_override_image,
+                'access_code': contest.access_code,
+                'problem_label_script': contest.problem_label_script,
+                'format_config': json.dumps(contest.format_config, ensure_ascii=False) if contest.format_config else '',
+                'format_name': contest.format_name,
+                'scoreboard_visibility': contest.scoreboard_visibility,
+                'points_precision': contest.points_precision,
+                'rating_floor': contest.rating_floor if contest.rating_floor is not None else '',
+                'rating_ceiling': contest.rating_ceiling if contest.rating_ceiling is not None else '',
+                'performance_ceiling_override': (contest.performance_ceiling_override
+                                                 if contest.performance_ceiling_override is not None else ''),
+                'start_time': self._local_input(contest.start_time, user_tz),
+                'end_time': self._local_input(contest.end_time, user_tz),
+                'locked_after': self._local_input(contest.locked_after, user_tz),
+                'duration_hours': total // 3600 if total else 0,
+                'duration_minutes': (total % 3600) // 60 if total else 0,
+                'seb_browser_exam_keys': contest.seb_browser_exam_keys,
+                'seb_config_keys': contest.seb_config_keys,
+                'seb_quit_url': contest.seb_quit_url,
+            })
+            for field in self._bool_fields:
+                prefill[field] = getattr(contest, field)
+            # Profile M2M → (id, username); organization/class/tag M2M → (id, name).
+            for field in self._m2m_fields:
+                related = getattr(contest, field)
+                if field in ('organizations', 'join_organizations', 'classes'):
+                    prefill[field] = [(o.id, o.name) for o in related.all()]
+                elif field == 'tags':
+                    prefill[field] = [(t.id, t.name) for t in related.all()]
+                else:
+                    prefill[field] = [(p.id, p.user.username) for p in related.all()]
+            prefill['authors'] = [(p.id, p.user.username) for p in contest.authors.all()]
+            # Problems currently attached to the contest, in display order.
+            prefill['problems'] = [
+                {
+                    'id': cp.problem_id,
+                    'code': cp.problem.code,
+                    'name': cp.problem.name,
+                    'points': cp.points,
+                    'letter': chr(65 + idx),
+                }
+                for idx, cp in enumerate(contest.contest_problems.all().order_by('order'))
+            ]
+
+            # Reconstruct UI-only controls from the stored flags.
+            # Anti-cheat level: SEB + access code → custom; SEB → high; code → medium.
+            if contest.seb_required and contest.access_code:
+                prefill['cheat_level'] = 'custom'
+            elif contest.seb_required:
+                prefill['cheat_level'] = 'high'
+            elif contest.access_code:
+                prefill['cheat_level'] = 'medium'
+            else:
+                prefill['cheat_level'] = 'low'
+            # List visibility radio: org-private > user-private > hidden.
+            if contest.is_organization_private or contest.organizations.exists() or contest.classes.exists():
+                prefill['vis_mode'] = 'org'
+            elif contest.is_private or contest.private_contestants.exists():
+                prefill['vis_mode'] = 'private'
+            else:
+                prefill['vis_mode'] = 'hidden'
+
+        return {
+            'title': _('Edit Contest') if contest else _('Add Contest'),
+            'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
+            'now': timezone.now(),
+            'organizations': Organization.objects.all(),
+            'classes': Class.objects.all(),
+            'tags': ContestTag.objects.all(),
+            'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
+            'problems': Problem.objects.order_by('-date'),
+            'contest': contest,
+            'user_timezone': user_tz_name,
+            'tz_options': self._tz_options(user_tz_name),
+            'is_edit': contest is not None,
+            'prefill': prefill,
+        }
+
+    @staticmethod
+    def _tz_options(current):
+        """Curated timezone list for the temporary form-timezone selector.
+
+        Kept small on purpose — a sprawling optgroup tree is worse than a
+        focused set of zones teachers actually cross timezones between (the
+        site default + common CN/US/EU zones). ``current`` is placed first
+        (labelled "current") so the selector always shows the active zone.
+        """
+        zones = [
+            ('Asia/Shanghai', _('China (Beijing) UTC+8')),
+            ('America/New_York', _('US Eastern UTC-5')),
+            ('America/Chicago', _('US Central UTC-6')),
+            ('America/Denver', _('US Mountain UTC-7')),
+            ('America/Los_Angeles', _('US Pacific UTC-8')),
+            ('America/Toronto', _('Canada Eastern UTC-5')),
+            ('Europe/London', _('UK (London) UTC+0')),
+            ('Europe/Paris', _('France (Paris) UTC+1')),
+            ('Europe/Berlin', _('Germany (Berlin) UTC+1')),
+            ('Europe/Moscow', _('Russia (Moscow) UTC+3')),
+            ('UTC', _('UTC')),
+        ]
+        ordered = [(name, label) for name, label in zones if name != current]
+        if current:
+            ordered.insert(0, (current, _('%(tz)s (current)') % {'tz': current}))
+        return ordered
 
 
 class PrivateContestError(Exception):

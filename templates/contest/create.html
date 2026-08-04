@@ -1,0 +1,1373 @@
+{% extends "base.html" %}
+
+{% block title %}{{ _('Edit Assignment') if contest else _('Add Assignment') }}{% endblock %}
+
+{# Same pattern as the problem list page: show List / Calendar / Add Assignment tabs at top (Add Assignment highlighted), content below #}
+{% block title_row %}
+    {% set tab = 'create' %}
+    {% set content_title = _('Edit Assignment') if contest else _('Add Assignment') %}
+    {% include "contest/contest-list-tabs.html" %}
+{% endblock %}
+{% block title_ruler %}{% endblock %}
+
+{% block media %}
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
+    {# Same pattern as base.html DARK_STYLE_CSS: rebuild page styles with vars-dark. #}
+    <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}" media="(prefers-color-scheme: dark)">
+
+    <!-- Page-local layout tweaks; colours come from --oj-* / problem_create_v2.css tokens -->
+    <style>
+        /* Integrated into the site shell (extends base.html): no 100vh lock, scrolls with the page */
+        .v2-main { display: block; }
+        .v2-top {
+            padding: 0.55rem 1.5rem 0.75rem;
+            border-bottom: 1px solid var(--admin-border);
+            background: var(--admin-bg, #f8f8f8);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .v2-top .crumb { margin: 0; font-size: 12px; color: var(--muted); }
+        .v2-top .crumb a { color: var(--pcv2-link, var(--oj-link)); }
+        .v2-top .sp-layout-switch { margin-left: auto; }
+
+        /* Two-column split: the left column scrolls with the page, the right preview is a card sticky to the viewport */
+        /* overflow must stay visible: .sp-split sets overflow:hidden which would break the sticky preview. */
+        .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; overflow: visible; }
+        .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
+        .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
+        /* Preview card: match fieldset.module heading bar (dark admin header) */
+        .pv-panel {
+            border: 1px solid var(--admin-border);
+            border-radius: var(--oj-radius-md, 6px);
+            background: var(--card-bg);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 80px);
+            box-shadow: var(--oj-shadow, none);
+        }
+        .v2-right .pv-head {
+            background: var(--admin-header, #3b3b3b);
+            color: var(--admin-header-text, #fff);
+            margin: 0;
+            padding: 0.55rem 1rem;
+            font-size: 1.1em;
+            font-weight: 600;
+            text-transform: none;
+            letter-spacing: normal;
+            border-bottom: 1px solid var(--admin-header-border, #808080);
+            flex-shrink: 0;
+        }
+        #pv-body { padding: 1rem; overflow-y: auto; flex: 1; min-height: 0; }
+
+        /* Top-bottom layout (layout switch) */
+        .v2-split.layout-tb { grid-template-columns: 1fr; }
+        .v2-split.layout-tb .v2-right { position: static; padding-left: 1.5rem; max-height: none; }
+        .v2-split.layout-tb .pv-panel { max-height: none; }
+
+        @media (max-width: 900px) {
+            .v2-split { grid-template-columns: 1fr; }
+            .v2-right { position: static; padding: 0 1.5rem 3rem; }
+            .pv-panel { max-height: none; }
+        }
+
+        /* Advanced sub-section fold headers -> same dark admin bar as fieldset.module h2 */
+        .pcv2 .adv-sub {
+            border: 1px solid var(--admin-border);
+            border-radius: var(--pcv2-radius);
+            margin-bottom: 0.65rem;
+            overflow: visible;
+            background: var(--card-bg);
+        }
+        .pcv2 .adv-sub > summary {
+            list-style: none;
+            cursor: pointer;
+            padding: 0.5rem 0.75rem;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--admin-header, #3b3b3b);
+            color: var(--admin-header-text, #fff);
+        }
+        .pcv2 .adv-sub > summary::-webkit-details-marker { display: none; }
+        .pcv2 .adv-sub > summary .chev::before {
+            content: '\f078';
+            font-family: FontAwesome;
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        .pcv2 .adv-sub[open] > summary .chev::before { content: '\f077'; }
+        .pcv2 .adv-sub .fold-body { padding: 0.65rem 0.75rem; background: var(--card-bg); }
+
+        /* Inline form controls: keep contest_v2 semantics, adapt to full-width .form-row inputs */
+        .v2-left .form-row .field.ac-inline input[type="number"] { width: 64px; max-width: 64px; }
+        .v2-left .form-row .field .validity-compact input[type="datetime-local"] {
+            width: auto;
+            max-width: 12.5rem;
+            min-width: 11.5rem;
+            flex: 1 1 auto;
+        }
+        .v2-left .form-row .field.ac-inline .unit { color: var(--muted); font-size: 12px; }
+        .pcv2 .ac-help { font-size: 11px; color: var(--muted); margin-top: 0.25rem; }
+
+        /* Temporary timezone picker: lets a teacher view/enter Validity times
+           in a different zone than their account default, without changing
+           their profile. Only affects how this form echoes UTC back. */
+        .tz-selector {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.6rem;
+            padding-top: 0.6rem;
+            border-top: 1px dashed var(--oj-border, #ccc);
+            font-size: 12px;
+        }
+        .tz-selector .tz-label {
+            color: var(--muted);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            white-space: nowrap;
+        }
+        .tz-selector .tz-drop {
+            min-width: 220px;
+            max-width: 260px;
+            flex: 0 1 auto;
+        }
+        .tz-selector .tz-current {
+            color: var(--muted);
+            font-style: italic;
+        }
+        .tz-selector .tz-current::before {
+            content: '· ';
+        }
+
+        /* SEB card: visually consistent with fieldset.module */
+        .pcv2 .ac-card {
+            background: var(--card-bg);
+            border: 1px solid var(--admin-border);
+            border-radius: var(--oj-radius-md, 6px);
+            padding: 0.85rem 1rem;
+            margin-top: 0.75rem;
+        }
+
+        /* Advanced collapsed by default, click to expand -- same style as the fieldset.module title bar */
+        .pcv2 .ac-advanced {
+            background: var(--card-bg);
+            border: 1px solid var(--admin-border);
+            border-radius: var(--oj-radius-md, 6px);
+            margin-bottom: 1rem;
+            padding: 0;
+            box-shadow: var(--oj-shadow, none);
+            overflow: visible;
+        }
+        .pcv2 .ac-advanced > summary {
+            list-style: none;
+            cursor: pointer;
+            background: var(--admin-header, #3b3b3b);
+            color: var(--admin-header-text, #fff);
+            margin: 0;
+            padding: 0.55rem 1rem;
+            font-size: 1.1em;
+            font-weight: 600;
+            border-bottom: 1px solid var(--admin-header-border, #808080);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+        }
+        .pcv2 .ac-advanced > summary::-webkit-details-marker { display: none; }
+        .pcv2 .ac-advanced > summary .chev::before {
+            content: '\f078';
+            font-family: FontAwesome;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        .pcv2 .ac-advanced[open] > summary .chev::before { content: '\f077'; }
+        .pcv2 .ac-advanced .fold-body { padding: 1rem; }
+
+        /* Error toast: must not intercept button clicks (it used to cover the Create button) */
+        #toast {
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        /* Field-label help tooltip: a small "?" that reveals a hint on hover/focus. */
+        .oj-tip {
+            position: relative;
+            display: inline-flex;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--oj-text-muted);
+            color: var(--oj-surface);
+            font-size: 10px;
+            font-weight: 700;
+            align-items: center;
+            justify-content: center;
+            cursor: help;
+            margin-left: 0.3rem;
+            vertical-align: middle;
+            user-select: none;
+        }
+        .oj-tip .oj-tip-pop {
+            position: absolute;
+            bottom: calc(100% + 6px);
+            left: 50%;
+            transform: translateX(-50%);
+            width: 230px;
+            padding: 8px 10px;
+            background: var(--oj-surface);
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius-md, 6px);
+            box-shadow: var(--oj-shadow-dropdown, 2px 2px 4px rgba(0, 0, 0, 0.15));
+            font-size: 12px;
+            font-weight: normal;
+            color: var(--oj-text);
+            text-align: left;
+            line-height: 1.5;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.15s ease-in-out, visibility 0.15s ease-in-out;
+            z-index: 80;
+            pointer-events: none;
+        }
+        .oj-tip:hover .oj-tip-pop,
+        .oj-tip:focus .oj-tip-pop {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Native datetime picker in dark mode */
+        @media (prefers-color-scheme: dark) {
+            .pcv2 input[type="datetime-local"],
+            .pcv2 input[type="date"] { color-scheme: dark; }
+        }
+    </style>
+{% endblock %}
+
+{% block js_media %}
+    <script type="text/javascript">
+        // Timezone whose wall clock the teacher is currently editing. Drives the
+        // datetime-local -> UTC conversion on submit; defaults to the profile
+        // timezone, overridden by the temporary ?tz= picker next to Validity.
+        window.DMOJ_EDIT_TZ = {{ user_timezone|tojson }};
+        document.addEventListener('DOMContentLoaded', function () {
+            var form = document.getElementById('contest-form');
+            if (!form) return;
+
+            // --- Preview sync ---
+            var preview = document.getElementById('pv-body');
+            function syncPreview() {
+                var fd = new FormData(form);
+                var name = fd.get('name') || {{ _('Untitled assignment')|htmltojs }};
+                var key = fd.get('key') || {{ _('—')|htmltojs }};
+                var vis = document.getElementById('id_is_visible');
+                var rated = document.getElementById('id_is_rated');
+                var fmt = document.getElementById('id_format_name');
+                var start = fd.get('start_time') || '';
+                var end = fd.get('end_time') || '';
+                var desc = fd.get('description') || '';
+
+                var titleEl = document.getElementById('pv-title');
+                if (titleEl) titleEl.textContent = name;
+
+                var keyEl = document.getElementById('pv-key');
+                if (keyEl) keyEl.textContent = key;
+
+                var timeEl = document.getElementById('pv-time');
+                if (timeEl) {
+                    timeEl.textContent = start && end
+                        ? start.replace('T', ' ') + ' — ' + end.replace('T', ' ')
+                        : {{ _('—')|htmltojs }};
+                }
+
+                var visEl = document.getElementById('pv-visibility');
+                if (visEl) {
+                    if (vis && vis.checked) {
+                        visEl.textContent = {{ _('Public')|htmltojs }};
+                        visEl.className = 'badge badge-st-ongoing';
+                    } else {
+                        visEl.textContent = {{ _('Hidden')|htmltojs }};
+                        visEl.className = 'badge badge-st-past';
+                    }
+                }
+
+                var ratedEl = document.getElementById('pv-rated');
+                if (ratedEl) {
+                    ratedEl.style.display = (rated && rated.checked) ? 'inline-block' : 'none';
+                }
+
+                var fmtEl = document.getElementById('pv-format');
+                if (fmtEl && fmt) fmtEl.textContent = fmt.options[fmt.selectedIndex].text;
+
+                var descEl = document.getElementById('pv-desc');
+                if (descEl) descEl.textContent = desc || {{ _('No description yet.')|htmltojs }};
+            }
+
+            form.addEventListener('input', syncPreview);
+            form.addEventListener('change', syncPreview);
+            syncPreview();
+
+            // --- Auto-generate key from name ---
+            // Backend requires the key to be lowercase letters/digits only (^[a-z0-9]+$), no hyphens.
+            var nameInput = document.getElementById('id_name');
+            var keyInput = document.getElementById('id_key');
+            if (nameInput && keyInput) {
+                nameInput.addEventListener('input', function () {
+                    if (!keyInput.value || keyInput.dataset.autoGen === '1') {
+                        var slug = this.value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+                        keyInput.value = slug.substring(0, 20);
+                        keyInput.dataset.autoGen = '1';
+                    }
+                });
+                keyInput.addEventListener('input', function () {
+                    this.dataset.autoGen = '0';
+                });
+            }
+
+            // --- Date helpers: datetime-local inputs are wall-clock local time; toISOString() would shift to UTC ---
+            function pad2(n) { return (n < 10 ? '0' : '') + n; }
+            function toLocalInput(d) {
+                return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
+                       'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+            }
+            function parseLocalInput(v) {
+                var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v || '');
+                if (!m) return null;
+                return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+            }
+
+            // --- Duration + validity ---
+            var startInput = document.getElementById('id_start_time');
+            var endInput = document.getElementById('id_end_time');
+            var durH = document.getElementById('id_duration_hours');
+            var durM = document.getElementById('id_duration_minutes');
+            if (startInput && endInput && durH && durM) {
+                function calcEnd() {
+                    var s = parseLocalInput(startInput.value);
+                    var h = parseInt(durH.value || 0, 10);
+                    var m = parseInt(durM.value || 0, 10);
+                    if (s && (h > 0 || m > 0)) {
+                        s.setHours(s.getHours() + h);
+                        s.setMinutes(s.getMinutes() + m);
+                        endInput.value = toLocalInput(s);
+                    }
+                }
+                startInput.addEventListener('change', calcEnd);
+                durH.addEventListener('input', calcEnd);
+                durM.addEventListener('input', calcEnd);
+
+                // Default validity: tomorrow -> tomorrow + 3h (initial Range-mode values)
+                if (!startInput.value && !endInput.value) {
+                    var def = new Date();
+                    def.setDate(def.getDate() + 1);
+                    var defEnd = new Date(def.getTime());
+                    defEnd.setHours(defEnd.getHours() + 3);
+                    startInput.value = toLocalInput(def);
+                    endInput.value = toLocalInput(defEnd);
+                }
+            }
+
+            // --- Layout toggle ---
+            var splitEl = document.querySelector('.sp-split');
+            document.querySelectorAll('.sp-layout-switch button').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var active = document.querySelector('.sp-layout-switch .active');
+                    if (active) active.classList.remove('active');
+                    this.classList.add('active');
+                    if (splitEl) {
+                        splitEl.className = 'v2-split sp-split ' + this.dataset.layout;
+                    }
+                });
+            });
+
+            // --- Visibility segmented control ---
+            document.querySelectorAll('#vis-seg input[type=radio]').forEach(function (radio) {
+                radio.addEventListener('change', syncPreview);
+            });
+
+            // --- Toast ---
+            var toastEl = document.getElementById('toast');
+            function showToast(msg, isError) {
+                if (!toastEl) return;
+                toastEl.textContent = msg;
+                toastEl.className = isError ? 'err' : '';
+                toastEl.style.display = 'block';
+                setTimeout(function () { toastEl.style.display = 'none'; }, 2500);
+            }
+
+            // --- Form submission ---
+            form.addEventListener('submit', function (e) {
+                e.preventDefault();
+                var fd = new FormData(form);
+                var data = {};
+                fd.forEach(function (v, k) { data[k] = v; });
+                // Checkboxes → booleans (keep in sync with ContestCreate._bool_fields)
+                ['is_visible', 'is_rated', 'use_clarifications', 'hide_problem_tags',
+                 'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
+                 'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
+                 'show_short_display', 'is_private', 'is_organization_private',
+                 'limit_join_organizations', 'seb_required'].forEach(function(f) {
+                    data[f] = fd.has(f);
+                });
+
+                // Single-select M2M fields — wrap value in array for backend
+                ['organizations', 'classes', 'join_organizations'].forEach(function(f) {
+                    var v = fd.get(f);
+                    if (v && v !== '') data[f] = [v];
+                    else delete data[f];
+                });
+                // Multi-select (select2 + native multiple) M2M fields — filter empty
+                ['tags', 'private_contestants', 'curators', 'testers', 'spectators',
+                 'rate_exclude', 'view_contest_scoreboard', 'view_contest_submissions',
+                 'banned_users', 'authors'].forEach(function(f) {
+                    var vals = fd.getAll(f).filter(function(v) { return v !== ''; });
+                    if (vals.length) data[f] = vals;
+                    else delete data[f];
+                });
+                // format_config is JSON text; empty means "no config"
+                if (data.format_config === undefined || !data.format_config.trim()) delete data.format_config;
+
+                // Problems: collect id + per-row points from the list
+                var problems = [];
+                document.querySelectorAll('.cp-list .cp-row[data-pid]').forEach(function(r) {
+                    var ptsInput = r.querySelector('input[type=number]');
+                    problems.push({ id: r.dataset.pid, points: ptsInput ? ptsInput.value : 100 });
+                });
+                if (problems.length) data.problems = problems;
+
+                // Dates: datetime-local is local wall-clock -> convert to UTC ISO before submitting.
+                // The backend TIME_ZONE=UTC; sending raw local time would store it as UTC and show 8h off later.
+                // NB: the wall clock the teacher edits is NOT the browser's local time when the
+                // temporary timezone picker is used — it is the *selected* timezone's wall clock.
+                // Interpreting it as browser-local would shift the stored instant by the offset
+                // difference (e.g. 12h when planning Beijing time from the US East Coast).
+                function wallClockToUtcIso(v, tz) {
+                    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v || '');
+                    if (!m) return '';
+                    var y = +m[1], mo = +m[2] - 1, d = +m[3], h = +m[4], mi = +m[5];
+                    var target = Date.UTC(y, mo, d, h, mi);
+                    var fmt = new Intl.DateTimeFormat('en-US', {
+                        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit', hour12: false,
+                    });
+                    function parts(ts) {
+                        var p = fmt.formatToParts(new Date(ts));
+                        var o = {};
+                        p.forEach(function (x) { if (x.type !== 'literal') o[x.type] = x.value; });
+                        return o;
+                    }
+                    // Iterate: format an estimate, measure the wall-clock error, correct, re-check.
+                    var ts = target;
+                    for (var i = 0; i < 2; i++) {
+                        var o = parts(ts);
+                        var got = Date.UTC(+o.year, +o.month - 1, +o.day, +o.hour % 24, +o.minute);
+                        ts += (target - got);
+                    }
+                    return new Date(ts).toISOString();
+                }
+                function toUtcIso(v) {
+                    var tz = window.DMOJ_EDIT_TZ || 'UTC';
+                    return wallClockToUtcIso(v, tz);
+                }
+
+                // Permanent mode: the backend still requires start_time/end_time -- auto-fill "now -> +100 years"
+                var validityType = document.querySelector('input[name="validity_type"]:checked');
+                if (validityType && validityType.value === 'permanent') {
+                    if (!data.start_time) {
+                        data.start_time = toLocalInput(new Date());
+                    }
+                    if (!data.end_time) {
+                        var far = new Date();
+                        far.setFullYear(far.getFullYear() + 100);
+                        data.end_time = toLocalInput(far);
+                    }
+                }
+                if (data.start_time) data.start_time = toUtcIso(data.start_time);
+                if (data.end_time) data.end_time = toUtcIso(data.end_time);
+                // locked_after is also a datetime-local -> convert to UTC ISO; omit when empty
+                if (data.locked_after) data.locked_after = toUtcIso(data.locked_after);
+                else delete data.locked_after;
+                // Empty optional numeric fields must be omitted (backend turns missing into None)
+                ['rating_floor', 'rating_ceiling', 'performance_ceiling_override'].forEach(function(f) {
+                    if (!data[f] || data[f] === '') delete data[f];
+                });
+
+                fetch(form.action, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': fd.get('csrfmiddlewaretoken') || ''
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (res.ok) {
+                        window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
+                    } else {
+                        showToast(res.error || {{ _("Failed to save contest")|htmltojs }}, true);
+                    }
+                })
+                .catch(function () {
+                    showToast({{ _("An error occurred while saving")|htmltojs }}, true);
+                })
+                .finally(function () {
+                    // common.js disables every submit button on any form submit to prevent
+                    // double submission; since we keep the page (fetch + preventDefault),
+                    // re-enable the buttons so the user can retry after an error.
+                    var btns = form.querySelectorAll('button[type=submit]');
+                    for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+                });
+            });
+
+            // --- Generate access code ---
+            var genBtn = document.getElementById('gen-access-code');
+            var codeInput = document.getElementById('id_access_code');
+            if (genBtn && codeInput) {
+                genBtn.addEventListener('click', function () {
+                    var chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+                    var code = '';
+                    for (var i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+                    codeInput.value = code;
+                    showToast({{ _("Access code generated")|htmltojs }});
+                });
+            }
+
+            // --- Validity toggle (Range / Permanent) ---
+            // The backend always requires start_time/end_time; Permanent mode auto-fills "now -> +100 years" on submit.
+            // So here we only toggle visibility of the date pickers, not the required flag.
+            var validityRadios = document.querySelectorAll('input[name="validity_type"]');
+            var validityRange = document.getElementById('validity-range');
+            if (validityRadios.length && validityRange) {
+                validityRadios.forEach(function(r) {
+                    r.addEventListener('change', function() {
+                        validityRange.style.display = this.value === 'range' ? '' : 'none';
+                    });
+                });
+            }
+
+            // --- Tag pills ---
+            var tagSelect = document.getElementById('id_tags');
+            var tagPills = document.getElementById('tag-pills');
+            var tagSuggest = document.getElementById('tag-suggest');
+            var tagAddBtn = document.getElementById('tag-add-btn');
+            function syncTagPills() {
+                if (!tagPills || !tagSelect) return;
+                tagPills.innerHTML = '';
+                Array.from(tagSelect.selectedOptions).forEach(function(opt) {
+                    var pill = document.createElement('span');
+                    pill.className = 'tag-pill';
+                    pill.textContent = opt.text;
+                    var x = document.createElement('button');
+                    x.type = 'button';
+                    x.className = 'x';
+                    x.textContent = '×';
+                    x.addEventListener('click', function() {
+                        opt.selected = false;
+                        syncTagPills();
+                    });
+                    pill.appendChild(x);
+                    tagPills.appendChild(pill);
+                });
+            }
+            if (tagSuggest && tagAddBtn) {
+                tagAddBtn.addEventListener('click', function() {
+                    tagSuggest.classList.toggle('open');
+                });
+                tagSuggest.querySelectorAll('button').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        var opt = tagSelect.querySelector('option[value="' + this.dataset.id + '"]');
+                        if (opt) { opt.selected = true; syncTagPills(); }
+                        tagSuggest.classList.remove('open');
+                    });
+                });
+                document.addEventListener('click', function(e) {
+                    if (!e.target.closest('.tag-add-wrap')) tagSuggest.classList.remove('open');
+                });
+                tagSelect.addEventListener('change', syncTagPills);
+                syncTagPills();
+            }
+
+            // --- Anti-cheat seg control: toggle fields by level ---
+            var cheatRadios = document.querySelectorAll('input[name="cheat_level"]');
+            var accessCodeRow = document.getElementById('cheat-accesscode-row');
+            var sebSection = document.getElementById('cheat-seb-section');
+            function updateCheatFields() {
+                var level = document.querySelector('input[name="cheat_level"]:checked');
+                if (!level) return;
+                var v = level.value;
+                if (accessCodeRow) accessCodeRow.style.display = (v === 'medium' || v === 'custom') ? '' : 'none';
+                if (sebSection) sebSection.style.display = (v === 'high' || v === 'custom') ? '' : 'none';
+                // Keep the SEB-required checkbox in sync with the seg control
+                var sebReq = document.getElementById('id_seb_required');
+                if (sebReq) sebReq.checked = (v === 'high' || v === 'custom');
+            }
+            cheatRadios.forEach(function(r) { r.addEventListener('change', updateCheatFields); });
+            updateCheatFields();
+
+            // --- From library button ---
+            var libBtn = document.querySelector('.btn-soft:not(.alt)');
+            var slideover = document.getElementById('problem-library');
+            if (libBtn && slideover) {
+                libBtn.addEventListener('click', function () {
+                    slideover.classList.add('open');
+                });
+                slideover.querySelector('.so-mask').addEventListener('click', function () {
+                    slideover.classList.remove('open');
+                });
+                slideover.querySelector('.so-close').addEventListener('click', function () {
+                    slideover.classList.remove('open');
+                });
+                // Search filter
+                var libSearch = document.getElementById('lib-search');
+                if (libSearch) {
+                    libSearch.addEventListener('input', function() {
+                        var q = this.value.toLowerCase();
+                        document.querySelectorAll('#lib-results tr').forEach(function(row) {
+                            var name = (row.dataset.name || '').toLowerCase();
+                            var code = (row.dataset.code || '').toLowerCase();
+                            row.style.display = (!q || name.includes(q) || code.includes(q)) ? '' : 'none';
+                        });
+                    });
+                }
+                // Click to select rows
+                slideover.querySelector('#lib-results').addEventListener('click', function(e) {
+                    var row = e.target.closest('tr[data-pid]');
+                    if (row) row.classList.toggle('picked');
+                });
+
+                // +Add button: add picked problems to contest
+                slideover.querySelector('.so-foot .btn-primary').addEventListener('click', function() {
+                    var picked = slideover.querySelectorAll('#lib-results tr.picked');
+                    if (!picked.length) return showToast({{ _("No problems selected.")|htmltojs }});
+
+                    var ids = [];
+                    var cpList = document.querySelector('.cp-list');
+                    var cpEmpty = document.querySelector('.cp-empty');
+                    var cpCount = document.querySelector('.cp-toolbar .count');
+                    var hiddenIds = document.getElementById('problem-ids');
+
+                    // Build or update the problem list
+                    if (cpList) cpList.style.display = '';
+                    if (cpEmpty) cpEmpty.style.display = 'none';
+
+                    var existingIds = (hiddenIds.value || '').split(',').filter(Boolean);
+
+                    picked.forEach(function(row) {
+                        var pid = row.dataset.pid;
+                        if (existingIds.includes(pid)) return;
+                        existingIds.push(pid);
+                        ids.push(pid);
+
+                        // Add row to the problem list
+                        if (cpList) {
+                            var r = document.createElement('div');
+                            r.className = 'cp-row';
+                            r.dataset.pid = pid;
+                            r.innerHTML = '<span></span><span class="label-letter">' + String.fromCharCode(64 + existingIds.length) + '</span>' +
+                                '<span class="pname">' + (row.dataset.name || 'Problem ' + pid) + '</span>' +
+                                '<span><input type="number" value="100" style="width:48px"></span>' +
+                                '<span>—</span>' +
+                                '<span class="cp-actions"><button type="button" class="btn-icon danger" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button></span>';
+                            cpList.appendChild(r);
+                        }
+                    });
+
+                    hiddenIds.value = existingIds.join(',');
+                    if (cpCount) cpCount.textContent = existingIds.length + {{ _(" problems")|htmltojs }};
+
+                    slideover.classList.remove('open');
+                    showToast(existingIds.length + {{ _(" problems added")|htmltojs }});
+                });
+
+                window.updateProblemIds = function() {
+                    var ids = [];
+                    document.querySelectorAll('.cp-list .cp-row').forEach(function(r) {
+                        if (r.dataset.pid) ids.push(r.dataset.pid);
+                    });
+                    document.getElementById('problem-ids').value = ids.join(',');
+                    var cnt = document.querySelector('.cp-toolbar .count');
+                    if (cnt) cnt.textContent = ids.length + {{ _(" problems")|htmltojs }};
+                    if (!ids.length) {
+                        document.querySelector('.cp-list').style.display = 'none';
+                        document.querySelector('.cp-empty').style.display = '';
+                    }
+                };
+            }
+
+            // --- Create new problem button ---
+            var newBtn = document.querySelector('.btn-soft.alt');
+            if (newBtn) {
+                newBtn.addEventListener('click', function () {
+                    window.open('{{ url("admin:judge_problem_add") }}', '_blank');
+                });
+            }
+
+            // --- Profile multi-selects: select2 user search (reuses the profile_select2 data source) ---
+            if (window.jQuery && jQuery.fn.select2) {
+                document.querySelectorAll('.profile-select2').forEach(function (sel) {
+                    jQuery(sel).select2({
+                        theme: '{{ DMOJ_SELECT2_THEME }}',
+                        width: '100%',
+                        placeholder: {{ _('Type to search users...')|tojson }},
+                        allowClear: true,
+                        ajax: {
+                            url: {{ url('profile_select2')|tojson }},
+                            dataType: 'json',
+                            delay: 250,
+                            data: function (params) {
+                                return { term: params.term || '' };
+                            },
+                            processResults: function (data) {
+                                return { results: data.results || [], pagination: { more: !!data.more } };
+                            }
+                        },
+                        minimumInputLength: 0
+                    });
+                });
+            }
+        });
+    </script>
+{% endblock %}
+
+{% block body %}
+    {% macro tip(text) -%}
+        <span class="oj-tip" tabindex="0" role="tooltip" aria-label="{{ text }}">?<span class="oj-tip-pop">{{ text }}</span></span>
+    {%- endmacro %}
+    <div class="pcv2">
+        <main class="v2-main" id="content-main">
+            <div class="v2-top">
+                <span class="crumb">
+                    <a href="{{ url('contest_list') }}">{{ _('Assignments') }}</a>
+                    {% if contest %} / <a href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a> / {% endif %}
+                    / {{ _('Edit Assignment') if contest else _('Add Assignment') }}
+                </span>
+                <div class="sp-layout-switch">
+                    <button class="active" data-layout="layout-lr">{{ _('左右') }}</button>
+                    <button data-layout="layout-tb">{{ _('上下') }}</button>
+                </div>
+            </div>
+
+            <div class="v2-split sp-split layout-lr">
+                <form id="contest-form" class="v2-left" method="post" action="{{ save_url }}" novalidate>
+                    {% csrf_token %}
+                    <input type="hidden" name="problem_ids" id="problem-ids" value="{% for p in prefill.problems %}{{ p.id }}{% if not loop.last %},{% endif %}{% endfor %}">
+
+                    <!-- ① Basic information -->
+                    <fieldset class="module">
+                        <h2>{{ _('Basic information') }}</h2>
+                        <div class="form-content">
+                            <div class="form-row">
+                                <label>{{ _('Name') }} <span class="req">*</span></label>
+                                <div class="field">
+                                    <input type="text" id="id_name" name="name" required
+                                           placeholder="{{ _('Contest name') }}" maxlength="100"
+                                           value="{{ prefill.name or '' }}">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Duration') }}</label>
+                                <div class="field ac-inline">
+                                    <input type="number" id="id_duration_hours" name="duration_hours"
+                                           min="0" max="1000" value="{{ prefill.duration_hours if contest else 0 }}">
+                                    <span class="unit">{{ _('h') }}</span>
+                                    <input type="number" id="id_duration_minutes" name="duration_minutes"
+                                           min="0" max="59" value="{{ prefill.duration_minutes if contest else 0 }}">
+                                    <span class="unit">{{ _('min') }}</span>
+                                    <span class="unit" style="margin-left:0.5rem;">{{ _('No limit') }}</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time.', tz=user_timezone)) }}</label>
+                                <div class="field">
+                                    <div class="seg" style="margin-bottom:0.45rem;">
+                                        <label><input type="radio" name="validity_type" value="range" hidden checked><span>{{ _('Range') }}</span></label>
+                                        <label><input type="radio" name="validity_type" value="permanent" hidden><span>{{ _('Permanent') }}</span></label>
+                                    </div>
+                                    <div class="validity-compact" id="validity-range">
+                                        <div class="ac-inline">
+                                            <input type="datetime-local" id="id_start_time" name="start_time" required
+                                                   value="{{ prefill.start_time or '' }}">
+                                            <span>—</span>
+                                            <input type="datetime-local" id="id_end_time" name="end_time" required
+                                                   value="{{ prefill.end_time or '' }}">
+                                        </div>
+                                    </div>
+                                    <div class="tz-selector">
+                                        <span class="tz-label"><i class="fa fa-clock-o"></i> {{ _('Timezone') }}:</span>
+                                        <span class="oj-single-select tz-drop">
+                                            <select id="id_tmp_timezone" name="tmp_timezone" data-oj-select
+                                                    onchange="var tz=this.value;if(!tz)return;var q=window.location.search.replace(/(?:[?&]tz=)[^&]*/,'');var sep=(q&&q!=='?')?'&':'?';window.location.href=window.location.pathname+q+sep+'tz='+encodeURIComponent(tz);">
+                                                {% for tz_name, tz_label in tz_options %}
+                                                    <option value="{{ tz_name }}"{% if tz_name == user_timezone %} selected{% endif %}>{{ tz_label }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </span>
+                                        <span class="tz-current">{{ _('Times above shown in %(tz)s', tz=user_timezone) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Organization') }}</label>
+                                <div class="field">
+                                    <select id="id_organizations" name="organizations" data-oj-select>
+                                        <option value="">{{ _('— Public —') }}</option>
+                                        {% set prefill_org_ids = (prefill.organizations or []) | map(attribute=0) | list %}
+                                        {% for org in organizations %}
+                                            <option value="{{ org.id }}"{% if org.id in prefill_org_ids %} selected{% endif %}>{{ org.name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Class') }}{{ tip(_('Options depend on the selected organization.')) }}</label>
+                                <div class="field">
+                                    <select id="id_classes" name="classes" data-oj-select>
+                                        <option value="">{{ _('Select organization first') }}</option>
+                                        {% set prefill_class_ids = (prefill.classes or []) | map(attribute=0) | list %}
+                                        {% for cls in classes %}
+                                            <option value="{{ cls.id }}"{% if cls.id in prefill_class_ids %} selected{% endif %}>{{ cls.name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Tags') }}</label>
+                                <div class="field">
+                                    <div class="tag-row">
+                                        <div class="tag-pills" id="tag-pills"></div>
+                                        <div class="tag-add-wrap">
+                                            <button type="button" class="tag-add" id="tag-add-btn">+ {{ _('Add') }}</button>
+                                            <div class="tag-suggest" id="tag-suggest">
+                                                {% for tag in tags %}
+                                                <button type="button" data-id="{{ tag.id }}" data-color="{{ tag.color }}">{{ tag.name }}</button>
+                                                {% endfor %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <select id="id_tags" name="tags" multiple hidden>
+                                        {% set prefill_tag_ids = (prefill.tags or []) | map(attribute=0) | list %}
+                                        {% for tag in tags %}
+                                            <option value="{{ tag.id }}"{% if tag.id in prefill_tag_ids %} selected{% endif %}>{{ tag.name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('List visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Off = visible only to editors; on = listed for students. This is separate from privacy: an on-list assignment can still be restricted to specific users or organizations.')) }}</label>
+                                <div class="field">
+                                    <div class="seg" id="vis-seg">
+                                        <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
+                                        <label><input type="radio" name="vis_mode" value="public"{% if prefill.vis_mode == 'public' %} checked{% endif %}><span>{{ _('Public') }}</span></label>
+                                        <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Org') }}</span></label>
+                                        <label><input type="radio" name="vis_mode" value="private"{% if prefill.vis_mode == 'private' %} checked{% endif %}><span>{{ _('Private') }}</span></label>
+                                    </div>
+                                    <div style="margin-top:0.45rem;">
+                                        <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+                                            <input type="checkbox" id="id_is_visible" name="is_visible"{% if prefill.is_visible %} checked{% endif %}> {{ _('Publicly visible') }}
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Description') }}</label>
+                                <div class="field">
+                                    <textarea id="id_description" name="description" rows="3"
+                                              placeholder="{{ _('Contest description (supports Markdown)') }}"></textarea>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- ② Problems -->
+                    <fieldset class="module">
+                        <h2>{{ _('Problems') }}</h2>
+                        <div class="form-content">
+                            <div class="cp-toolbar">
+                                <button type="button" class="btn-soft"><i class="fa fa-search"></i> {{ _('From library') }}</button>
+                                <button type="button" class="btn-soft alt"><i class="fa fa-plus"></i> {{ _('Create new') }}</button>
+                                <span class="spacer"></span>
+                                <span class="count">{{ prefill.problems|length if prefill.problems else 0 }} {{ _('problems') }}</span>
+                            </div>
+                            <div class="cp-list"{% if not prefill.problems %} style="display:none;"{% endif %}>
+                                <div class="cp-row cp-row-head">
+                                    <span></span><span></span>
+                                    <span class="pname">{{ _('Problem') }}</span>
+                                    <span>{{ _('Pts') }}</span>
+                                    <span>{{ _('Max') }}</span>
+                                    <span></span>
+                                </div>
+                                {% for p in prefill.problems %}
+                                <div class="cp-row" data-pid="{{ p.id }}">
+                                    <span></span><span class="label-letter">{{ p.letter }}</span>
+                                    <span class="pname">{{ p.name }}</span>
+                                    <span><input type="number" value="{{ p.points }}" style="width:48px"></span>
+                                    <span>—</span>
+                                    <span class="cp-actions"><button type="button" class="btn-icon danger" onclick="this.closest('.cp-row').remove();updateProblemIds()">&times;</button></span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            <div class="cp-empty"{% if prefill.problems %} style="display:none;"{% endif %}>{{ _('No problems yet. Hover between rows to insert.') }}</div>
+                        </div>
+                    </fieldset>
+
+                    <!-- ③ Anti-cheating -->
+                    <fieldset class="module">
+                        <h2>{{ _('Anti-cheating') }}</h2>
+                        <div class="form-content">
+                            <div class="seg" style="margin-bottom:0.6rem;">
+                                <label><input type="radio" name="cheat_level" value="high" hidden{% if prefill.cheat_level == 'high' %} checked{% endif %}><span>{{ _('High') }}</span></label>
+                                <label><input type="radio" name="cheat_level" value="medium" hidden{% if prefill.cheat_level == 'medium' %} checked{% endif %}><span>{{ _('Medium') }}</span></label>
+                                <label><input type="radio" name="cheat_level" value="low" hidden{% if prefill.cheat_level == 'low' %} checked{% endif %}><span>{{ _('Low') }}</span></label>
+                                <label><input type="radio" name="cheat_level" value="custom" hidden{% if prefill.cheat_level == 'custom' %} checked{% endif %}><span>{{ _('Custom') }}</span></label>
+                            </div>
+                            <div class="ac-help" style="margin-bottom:0.75rem;">
+                                {{ _('High ≈ SEB exam · Medium ≈ classroom quiz (access code) · Low ≈ open practice') }}
+                            </div>
+                            <div class="form-row" id="cheat-accesscode-row">
+                                <label>{{ _('Access code') }}</label>
+                                <div class="field ac-inline">
+                                    <input type="text" id="id_access_code" name="access_code"
+                                           placeholder="{{ _('Optional') }}">
+                                    <button type="button" id="gen-access-code" class="btn-soft">{{ _('Generate') }}</button>
+                                </div>
+                            </div>
+                            <div class="ac-help">{{ _('Students must enter a code before joining.') }}</div>
+
+                            <div class="ac-card" id="cheat-seb-section">
+                                <div class="form-row">
+                                    <label>{{ _('SEB') }}</label>
+                                    <div class="field">
+                                        <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.4rem;">
+                                            <input type="checkbox" id="id_seb_required" name="seb_required"{% if prefill.seb_required %} checked{% endif %}> {{ _('Require Safe Exam Browser') }}
+                                        </label>
+                                        <div class="ac-help" style="margin-bottom:0.4rem;">
+                                            {{ _('Staff always bypass. At least one Browser Exam Key hash is required when SEB is on.') }}
+                                        </div>
+                                        <div class="form-row" style="margin-bottom:0.4rem;">
+                                            <label style="width:100px;">{{ _('Browser keys') }}</label>
+                                            <div class="field">
+                                                <textarea name="seb_browser_exam_keys" rows="2" placeholder="{{ _('One 64-char hash per line') }}">{{ prefill.seb_browser_exam_keys or '' }}</textarea>
+                                            </div>
+                                        </div>
+                                        <div class="form-row" style="margin-bottom:0.4rem;">
+                                            <label style="width:100px;">{{ _('Config keys') }}</label>
+                                            <div class="field">
+                                                <textarea name="seb_config_keys" rows="2" placeholder="{{ _('One 64-char hash per line (macOS)') }}">{{ prefill.seb_config_keys or '' }}</textarea>
+                                            </div>
+                                        </div>
+                                        <div class="form-row" style="margin-bottom:0.4rem;">
+                                            <label style="width:100px;">{{ _('Quit URL') }}</label>
+                                            <div class="field">
+                                                <input type="text" name="seb_quit_url" placeholder="{{ _('https://...') }}" value="{{ prefill.seb_quit_url or '' }}">
+                                            </div>
+                                        </div>
+                                        {% if contest and contest.seb_config_file %}
+                                        <div class="form-row">
+                                            <label style="width:100px;">{{ _('Config file') }}{{ tip(_('Replace the .seb file in the Django admin (Access → Safe Exam Browser).')) }}</label>
+                                            <div class="field">
+                                                <a href="{{ contest.seb_config_file.url }}" target="_blank">{{ contest.seb_config_file.name }}</a>
+                                            </div>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- ④ Advanced (collapsed by default, click to expand) -->
+                    <details class="ac-advanced">
+                        <summary>{{ _('Advanced') }} <span class="chev"></span></summary>
+                        <div class="fold-body">
+                            <!-- Key -->
+                            <details class="adv-sub" open>
+                                <summary>{{ _('Key') }} <span class="chev"></span></summary>
+                                <div class="fold-body">
+                                    <div class="form-row">
+                                        <label>{{ tip(_('Unique contest ID, lowercase letters and numbers only. Avoid collision with existing contests.')) }}</label>
+                                        <div class="field">
+                                            <input type="text" id="id_key" name="key" required
+                                                   placeholder="{{ _('Auto-generated from name') }}"
+                                                   pattern="[a-z0-9]+" maxlength="20"
+                                                   value="{{ prefill.key or '' }}">
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Format & scoreboard -->
+                            <details class="adv-sub" open>
+                                <summary>{{ _('Format & scoreboard') }} <span class="chev"></span></summary>
+                                <div class="fold-body">
+                                    <div class="form-row">
+                                        <label>{{ _('Format') }}</label>
+                                        <div class="field">
+                                            <select id="id_format_name" name="format_name" data-oj-select>
+                                                <option value="default"{% if prefill.format_name == 'default' %} selected{% endif %}>{{ _('Default') }}</option>
+                                                <option value="exam"{% if prefill.format_name == 'exam' %} selected{% endif %}>{{ _('Exam') }}</option>
+                                                <option value="icpc"{% if prefill.format_name == 'icpc' %} selected{% endif %}>{{ _('ICPC') }}</option>
+                                                <option value="ioi"{% if prefill.format_name == 'ioi' %} selected{% endif %}>{{ _('IOI') }}</option>
+                                                <option value="atcoder"{% if prefill.format_name == 'atcoder' %} selected{% endif %}>{{ _('AtCoder') }}</option>
+                                                <option value="ecoo"{% if prefill.format_name == 'ecoo' %} selected{% endif %}>{{ _('ECOO') }}</option>
+                                            </select>
+                                            {{ tip(_('Default cumulative points.')) }}
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Format config') }}</label>
+                                        <div class="field">
+                                            <textarea id="id_format_config" name="format_config" rows="3"
+                                                      placeholder='{{ _('Optional JSON, e.g. {"points": [100, 100, 150]}') }}'>{{ prefill.format_config or '' }}</textarea>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Scoreboard') }}</label>
+                                        <div class="field">
+                                            <select id="id_scoreboard_visibility" name="scoreboard_visibility" data-oj-select>
+                                                <option value="V"{% if prefill.scoreboard_visibility == 'V' %} selected{% endif %}>{{ _('Visible during contest') }}</option>
+                                                <option value="C"{% if prefill.scoreboard_visibility == 'C' %} selected{% endif %}>{{ _('Hidden for duration of contest') }}</option>
+                                                <option value="P"{% if prefill.scoreboard_visibility == 'P' %} selected{% endif %}>{{ _('Hidden for duration of participation') }}</option>
+                                                <option value="H"{% if prefill.scoreboard_visibility == 'H' %} selected{% endif %}>{{ _('Hidden permanently') }}</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Precision') }}</label>
+                                        <div class="field ac-inline">
+                                            <input type="number" id="id_points_precision" name="points_precision"
+                                                   value="{{ prefill.points_precision or 3 }}" min="0" max="10">
+                                            <span class="unit">{{ _('decimal digits') }}</span>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Label script') }}</label>
+                                        <div class="field">
+                                            <textarea id="id_problem_label_script" name="problem_label_script" rows="3"
+                                                      placeholder="{{ _('Custom Lua function for problem labels') }}">{{ prefill.problem_label_script or '' }}</textarea>
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Visibility & access -->
+                            <details class="adv-sub">
+                                <summary>{{ _('Visibility & access') }} <span class="chev"></span></summary>
+                                <div class="fold-body">
+                                    <div class="form-row">
+                                        <label>{{ _('Private users') }}</label>
+                                        <div class="field">
+                                            <select id="id_private_contestants" name="private_contestants"
+                                                    multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.private_contestants or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            {{ tip(_('Non-empty → the assignment is private to exactly these users.')) }}
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Join orgs') }}</label>
+                                        <div class="field">
+                                            <select id="id_join_organizations" name="join_organizations" data-oj-select>
+                                                <option value="">{{ _('— No extra limit —') }}</option>
+                                                {% set join_org_ids = (prefill.join_organizations or []) | map(attribute=0) | list %}
+                                                {% for org in organizations %}
+                                                    <option value="{{ org.id }}"{% if org.id in join_org_ids %} selected{% endif %}>{{ org.name }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            {{ tip(_('Who may join — separate from who may see the assignment.')) }}
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Org / class privacy') }}</label>
+                                        <div class="field">
+                                            <div class="check-grid">
+                                                <label><input type="checkbox" id="id_is_private" name="is_private"{% if prefill.is_private %} checked{% endif %}> {{ _('Private to listed users') }}</label>
+                                                <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to organizations / classes') }}</label>
+                                                <label><input type="checkbox" id="id_limit_join_organizations" name="limit_join_organizations"{% if prefill.limit_join_organizations %} checked{% endif %}> {{ _('Limit who may join (join orgs)') }}</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('View scoreboard') }}</label>
+                                        <div class="field">
+                                            <select name="view_contest_scoreboard" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.view_contest_scoreboard or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('View submissions') }}</label>
+                                        <div class="field">
+                                            <select name="view_contest_submissions" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.view_contest_submissions or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Contest behavior -->
+                            <details class="adv-sub">
+                                <summary>{{ _('Contest behavior') }} <span class="chev"></span></summary>
+                                <div class="fold-body">
+                                    <div class="check-grid">
+                                        <label><input type="checkbox" id="id_allow_virtual_participation" name="allow_virtual_participation"{% if prefill.allow_virtual_participation %} checked{% endif %}> {{ _('Allow virtual after end') }}</label>
+                                        <label><input type="checkbox" id="id_use_clarifications" name="use_clarifications"{% if prefill.use_clarifications %} checked{% endif %}> {{ _('Use clarifications (no comments)') }}</label>
+                                        <label><input type="checkbox" id="id_hide_problem_tags" name="hide_problem_tags"{% if prefill.hide_problem_tags %} checked{% endif %}> {{ _('Hide problem tags') }}</label>
+                                        <label><input type="checkbox" id="id_hide_problem_authors" name="hide_problem_authors"{% if prefill.hide_problem_authors %} checked{% endif %}> {{ _('Hide problem authors') }}</label>
+                                        <label><input type="checkbox" id="id_run_pretests_only" name="run_pretests_only"{% if prefill.run_pretests_only %} checked{% endif %}> {{ _('Run pretests only') }}</label>
+                                        <label><input type="checkbox" id="id_tester_see_submissions" name="tester_see_submissions"{% if prefill.tester_see_submissions %} checked{% endif %}> {{ _('Testers see submissions') }}</label>
+                                        <label><input type="checkbox" id="id_tester_see_scoreboard" name="tester_see_scoreboard"{% if prefill.tester_see_scoreboard %} checked{% endif %}> {{ _('Testers see scoreboard') }}</label>
+                                        <label><input type="checkbox" id="id_show_short_display" name="show_short_display"{% if prefill.show_short_display %} checked{% endif %}> {{ _('Show short settings on contest page') }}</label>
+                                    </div>
+                                    <div class="form-row" style="margin-top:0.65rem;">
+                                        <label>{{ _('Lock after') }}</label>
+                                        <div class="field">
+                                            <input type="datetime-local" id="id_locked_after" name="locked_after"
+                                                   value="{{ prefill.locked_after or '' }}">
+                                            {{ tip(_('Prevent rejudging contest submissions after this time. Blank = unlocked.')) }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Rating (optional) -->
+                            <details class="adv-sub">
+                                <summary>{{ _('Rating (optional)') }} <span class="chev"></span></summary>
+                                <div class="fold-body">
+                                    <div class="check-grid">
+                                        <label><input type="checkbox" id="id_is_rated" name="is_rated"{% if prefill.is_rated %} checked{% endif %}> {{ _('Contest rated') }}</label>
+                                        <label><input type="checkbox" id="id_rate_all" name="rate_all"{% if prefill.rate_all %} checked{% endif %}> {{ _('Rate users with no submissions') }}</label>
+                                    </div>
+                                    <div class="form-row" style="margin-top:0.5rem;">
+                                        <label>{{ _('Floor / ceil') }}</label>
+                                        <div class="field ac-inline">
+                                            <input type="number" id="id_rating_floor" name="rating_floor" placeholder="—" style="width:70px;" value="{{ prefill.rating_floor or '' }}">
+                                            <span>—</span>
+                                            <input type="number" id="id_rating_ceiling" name="rating_ceiling" placeholder="—" style="width:70px;" value="{{ prefill.rating_ceiling or '' }}">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Perf. ceil') }}</label>
+                                        <div class="field">
+                                            <input type="number" id="id_performance_ceiling_override" name="performance_ceiling_override" placeholder="{{ _('Auto') }}" value="{{ prefill.performance_ceiling_override or '' }}">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Exclude from ratings') }}</label>
+                                        <div class="field">
+                                            <select name="rate_exclude" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.rate_exclude or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Details / branding -->
+                            <details class="adv-sub">
+                                <summary>{{ _('Details / branding') }} <span class="chev"></span></summary>
+                                <div class="fold-body">
+                                    <div class="form-row">
+                                        <label>{{ _('Summary') }}</label>
+                                        <div class="field">
+                                            <textarea id="id_summary" name="summary" rows="2"
+                                                      placeholder="{{ _('Short summary shown in lists') }}">{{ prefill.summary or '' }}</textarea>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('OG image') }}</label>
+                                        <div class="field">
+                                            <input type="text" id="id_og_image" name="og_image" placeholder="{{ _('URL of social preview image') }}" value="{{ prefill.og_image or '' }}">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Logo') }}</label>
+                                        <div class="field">
+                                            <input type="text" id="id_logo_override_image" name="logo_override_image" placeholder="{{ _('URL of contest logo override') }}" value="{{ prefill.logo_override_image or '' }}">
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Roles -->
+                            <details class="adv-sub">
+                                <summary>{{ _('Roles') }} <span class="chev"></span></summary>
+                                <div class="fold-body">
+                                    <div class="form-row">
+                                        <label>{{ _('Authors') }}</label>
+                                        <div class="field">
+                                            <select name="authors" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.authors or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            {{ tip(_('May edit the contest. On create, you are the author.')) }}
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Curators') }}</label>
+                                        <div class="field">
+                                            <select name="curators" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.curators or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            {{ tip(_('May edit the contest, but are not listed as authors.')) }}
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Testers') }}</label>
+                                        <div class="field">
+                                            <select name="testers" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.testers or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            {{ tip(_('May view the contest, but not edit it.')) }}
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Spectators') }}</label>
+                                        <div class="field">
+                                            <select name="spectators" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.spectators or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Justice -->
+                            <details class="adv-sub">
+                                <summary>{{ _('Justice') }} <span class="chev"></span></summary>
+                                <div class="fold-body">
+                                    <div class="form-row">
+                                        <label>{{ _('Banned users') }}</label>
+                                        <div class="field">
+                                            <select name="banned_users" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.banned_users or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            {{ tip(_('Bans the selected users from joining this contest.')) }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+                    </details>
+
+                    <div id="bottombar">
+                        <button type="submit" class="btn btn-primary">{{ _('Save assignment') if contest else _('Create assignment') }}</button>
+                        <button type="button" class="btn btn-cancel" onclick="window.location.href='{{ url('contest_list') }}'">{{ _('Cancel') }}</button>
+                    </div>
+                </form>
+
+                <aside class="v2-right">
+                    <div class="pv-panel">
+                        <div class="pv-head">{{ _('Student view preview') }}</div>
+                        <div id="pv-body">
+                            <div id="banner">
+                                <span class="date" id="pv-time">{{ _('—') }}</span>
+                            </div>
+
+                            <h2 class="pv-contest-title" id="pv-title">{{ _('Untitled assignment') }}</h2>
+
+                            <div class="pv-tags">
+                                <span id="pv-visibility" class="badge badge-st-past">{{ _('Hidden') }}</span>
+                                <span id="pv-rated" class="badge badge-rated" style="display:none;">{{ _('Rated') }}</span>
+                                <span id="pv-format" class="badge badge-org">default</span>
+                            </div>
+
+                            <div class="pv-desc" id="pv-desc">{{ _('No description yet.') }}</div>
+
+                            <table class="pv-problems">
+                                <thead>
+                                    <tr><th>#</th><th>{{ _('Problem') }}</th><th>{{ _('Points') }}</th></tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="3" style="text-align:center;color:var(--muted);">{{ _('No problems added yet.') }}</td></tr>
+                                </tbody>
+                            </table>
+
+                            <a class="pv-join" href="#">{{ _('Join assignment') }}</a>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </main>
+
+        <!-- Toast -->
+        <div id="toast"></div>
+
+        <!-- Problem library slideover -->
+        <div class="slideover" id="problem-library">
+            <div class="so-mask"></div>
+            <div class="so-panel">
+                <div class="so-head">
+                    <h2>{{ _('Add from library') }}</h2>
+                    <button type="button" class="so-close">&times;</button>
+                </div>
+                <div class="so-toolbar">
+                    <div class="so-search">
+                        <i class="fa fa-search"></i>
+                        <input type="text" id="lib-search" placeholder="{{ _('Search problems...') }}">
+                    </div>
+                </div>
+                <div class="so-body">
+                    <table class="so-table">
+                        <thead>
+                            <tr><th>ID</th><th>{{ _('Title') }}</th><th>{{ _('Type') }}</th><th>{{ _('Diff') }}</th><th>AC%</th></tr>
+                        </thead>
+                        <tbody id="lib-results">
+                            {% for problem in problems %}
+                            <tr data-pid="{{ problem.id }}" data-code="{{ problem.code }}" data-name="{{ problem.name }}">
+                                <td>{{ problem.id }}</td>
+                                <td>{{ problem.name }}</td>
+                                <td>{{ problem.types_list.0 or '—' }}</td>
+                                <td>—</td>
+                                <td>—</td>
+                            </tr>
+                            {% endfor %}
+                            {% if not problems %}
+                            <tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="so-foot">
+                    <span id="lib-count">{{ _('Selected 0 · Showing 0') }}</span>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn-primary">{{ _('+ Add') }}</button>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}

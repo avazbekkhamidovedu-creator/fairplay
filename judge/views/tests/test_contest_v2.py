@@ -86,3 +86,238 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class ContestCreateViewTestCase(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.users.update({
+            'staff_contest_edit_all': create_user(
+                username='staff_contest_edit_all',
+                is_staff=True,
+                user_permissions=('edit_own_contest', 'edit_all_contest'),
+            ),
+            'normal_user': create_user(username='normal_user'),
+        })
+
+        cls.organization = Organization.objects.create(name='Test Org', slug='test-org')
+        cls.tag = ContestTag.objects.create(name='test-tag', color='#0000ff')
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_get_status_code(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_template(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        response = self.client.get(reverse('contest_create'))
+        self.assertTemplateUsed(response, 'contest/create.html')
+
+    def test_get_unauthorized(self):
+        self.client.force_login(self.users['normal_user'])
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_post_success(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        now = timezone.now()
+        data = {
+            'name': 'New Contest',
+            'key': 'newcontest',
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+            'description': 'A test contest',
+            'is_visible': True,
+            'is_rated': False,
+            'format_name': 'default',
+            'scoreboard_visibility': 'V',
+            'use_clarifications': True,
+            'allow_virtual_participation': True,
+            'points_precision': 3,
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertTrue(result['ok'])
+        self.assertIn('redirect', result)
+
+        contest = Contest.objects.get(key='newcontest')
+        self.assertEqual(contest.name, 'New Contest')
+        self.assertTrue(contest.is_visible)
+        self.assertEqual(contest.authors.count(), 1)
+
+    def test_post_missing_fields(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        data = {'name': 'Incomplete Contest'}
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_invalid_key(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        now = timezone.now()
+        data = {
+            'name': 'Invalid Key Contest',
+            'key': 'INVALID-KEY!',
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('lowercase', response.json()['error'])
+
+    def test_post_duplicate_key(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        create_contest(
+            key='existingcontest',
+            start_time=timezone.now() - timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=1),
+            authors=('superuser',),
+        )
+
+        now = timezone.now()
+        data = {
+            'name': 'Duplicate',
+            'key': 'existingcontest',
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already exists', response.json()['error'])
+
+    def test_post_invalid_dates(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        now = timezone.now()
+        data = {
+            'name': 'Bad Dates',
+            'key': 'baddates',
+            'start_time': (now + timedelta(hours=3)).isoformat(),
+            'end_time': (now + timedelta(hours=1)).isoformat(),
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('before end time', response.json()['error'])
+
+    def test_post_unauthorized(self):
+        self.client.force_login(self.users['normal_user'])
+        now = timezone.now()
+        data = {
+            'name': 'Unauthorized',
+            'key': 'unauthorized',
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_post_with_duration(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        now = timezone.now()
+        data = {
+            'name': 'Duration Contest',
+            'key': 'durationcontest',
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+            'duration_hours': 2,
+            'duration_minutes': 30,
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        contest = Contest.objects.get(key='durationcontest')
+        self.assertEqual(contest.time_limit, timedelta(hours=2, minutes=30))
+
+    def test_post_with_organizations(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        now = timezone.now()
+        data = {
+            'name': 'Org Contest',
+            'key': 'orgcontest',
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+            'organizations': [self.organization.id],
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        contest = Contest.objects.get(key='orgcontest')
+        self.assertIn(self.organization, contest.organizations.all())
+
+    def test_post_with_tags(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        now = timezone.now()
+        data = {
+            'name': 'Tagged Contest',
+            'key': 'taggedcontest',
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+            'tags': [self.tag.id],
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        contest = Contest.objects.get(key='taggedcontest')
+        self.assertIn(self.tag, contest.tags.all())
+
+    def test_post_author_set(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        now = timezone.now()
+        data = {
+            'name': 'Author Test',
+            'key': 'authortest',
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+        }
+
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(data),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        contest = Contest.objects.get(key='authortest')
+        self.assertEqual(contest.authors.first(), self.users['staff_contest_edit_all'].profile)
