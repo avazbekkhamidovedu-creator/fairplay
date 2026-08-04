@@ -9,80 +9,6 @@
 
 /* ── Tabbar (replaces tabs-base.html .tabs) ─────────────────────────────── */
 
-.contest-v2-tabbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1rem;
-    margin-left: calc(50% - 50vw);
-    margin-right: calc(50% - 50vw);
-    padding: 0.4rem calc(50vw - 50%);
-    border-bottom: 1px solid var(--oj-border);
-
-    .tabbar-links {
-        display: flex;
-        gap: 0.15rem;
-    }
-
-    .tabbar-link {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        padding: 0.4rem 0.85rem;
-        border-radius: var(--oj-radius) var(--oj-radius) 0 0;
-        font-size: 13px;
-        color: var(--oj-text-muted);
-        text-decoration: none;
-        border: 1px solid transparent;
-        border-bottom: none;
-
-        &:hover {
-            color: var(--oj-accent);
-            background: var(--oj-accent-soft);
-            text-decoration: none;
-        }
-
-        &.active {
-            color: var(--oj-accent);
-            background: var(--oj-surface);
-            border-color: var(--oj-border);
-            position: relative;
-
-            &::after {
-                content: '';
-                position: absolute;
-                bottom: -1px;
-                left: 0;
-                right: 0;
-                height: 2px;
-                background: var(--oj-surface);
-            }
-
-            &:hover {
-                background: var(--oj-surface);
-            }
-        }
-    }
-
-    .tabbar-cta {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        padding: 0.4rem 1rem;
-        border-radius: var(--oj-radius);
-        font-size: 13px;
-        font-weight: 600;
-        background: var(--oj-accent);
-        color: #fff;
-        text-decoration: none;
-
-        &:hover {
-            background: var(--oj-accent-hover);
-            color: #fff;
-            text-decoration: none;
-        }
-    }
-}
 
 /* ── Contest list: layout switch, sections, rows ───────────────────────────── */
 
@@ -121,36 +47,6 @@
 }
 
 /* Layout switch (inline segmented control) */
-.cl-layout-switch {
-    display: inline-flex;
-    border: 1px solid var(--oj-border);
-    border-radius: var(--oj-radius);
-    overflow: hidden;
-
-    button {
-        border: none;
-        background: var(--oj-bg);
-        padding: 0.35rem 0.7rem;
-        cursor: pointer;
-        font-size: 12px;
-        color: var(--oj-text);
-        border-right: 1px solid var(--oj-border);
-
-        &:last-child {
-            border-right: none;
-        }
-
-        &.active {
-            background: var(--oj-accent);
-            color: #fff;
-            font-weight: 600;
-        }
-
-        &:hover:not(.active) {
-            background: var(--oj-bg);
-        }
-    }
-}
 
 /* Section titles (Ongoing, Past, etc.) */
 .cl-section-title {
@@ -1812,9 +1708,5 @@
     .sp-left input[type="text"]:-webkit-autofill {
         -webkit-box-shadow: 0 0 0 30px var(--oj-surface) inset !important;
         -webkit-text-fill-color: var(--oj-text) !important;
-    }
-
-    .cl-layout-switch button {
-        color: var(--oj-text-muted);
     }
 }
