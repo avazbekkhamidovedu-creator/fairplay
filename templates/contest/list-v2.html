@@ -329,6 +329,7 @@
                                 <span class="lbl">{{ _('Users') }}</span>
                             </div>
                             <div class="cl-actions">
+                                <a class="button primary" href="{{ url('contest_view', contest.key) }}">{{ _('Enter') }}</a>
                                 {% if contest.can_see_own_scoreboard(request.user) %}
                                     <a class="button" href="{{ url('contest_ranking', contest.key) }}">{{ _('Rankings') }}</a>
                                 {% endif %}
@@ -395,7 +396,7 @@
                             {% elif contest.is_live_joinable_by(request.user) %}
                                 <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
                                     {% csrf_token %}
-                                    <button type="submit" class="button">{{ _('Join') }}</button>
+                                    <button type="submit" class="button primary">{{ _('Join') }}</button>
                                 </form>
                             {% elif contest.is_spectatable_by(request.user) %}
                                 <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
