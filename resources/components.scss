@@ -25,12 +25,12 @@
     font-weight: 400;
     line-height: 1.4;
     cursor: pointer;
-    text-decoration: none !important;
+    text-decoration: none;
     white-space: nowrap;
     vertical-align: middle;
     background: transparent;
-    /* Beat widgets.scss `.button { color: #fff !important }` on shared pages. */
-    color: var(--oj-text) !important;
+    /* Class selectors naturally outrank the `button` type selector. */
+    color: var(--oj-text);
 
     &:disabled,
     &[disabled] {
@@ -42,13 +42,13 @@
 .oj-btn-primary,
 .oj-ui .btn-primary,
 .problem-list-redesign .btn-primary {
-    color: var(--oj-btn-text) !important;
+    color: var(--oj-btn-text);
     background: linear-gradient(to bottom, var(--oj-btn-from) 0, var(--oj-btn-to) 100%) repeat-x;
     border-color: var(--oj-btn-border);
 
     &:hover:not(:disabled):not([disabled]) {
         background: var(--oj-btn-hover);
-        color: var(--oj-btn-text) !important;
+        color: var(--oj-btn-text);
         text-decoration: none;
     }
 
@@ -63,11 +63,11 @@
 .problem-list-redesign .btn-outline {
     background: var(--oj-surface);
     border-color: var(--oj-border);
-    color: var(--oj-text) !important;
+    color: var(--oj-text);
 
     &:hover:not(:disabled):not([disabled]) {
         border-color: var(--oj-accent);
-        color: var(--oj-accent) !important;
+        color: var(--oj-accent);
     }
 }
 
@@ -76,7 +76,7 @@
 .problem-list-redesign .btn-text {
     border: none;
     background: none;
-    color: var(--oj-link) !important;
+    color: var(--oj-link);
     padding: 4px 8px;
     min-height: 0;
     font-size: var(--oj-font-size);
@@ -89,14 +89,14 @@
 .oj-btn-danger,
 .oj-ui .btn-danger,
 .problem-list-redesign .btn-danger {
-    color: var(--oj-btn-text) !important;
+    color: var(--oj-btn-text);
     background: var(--oj-danger);
     border-color: var(--oj-danger);
 
     &:hover:not(:disabled):not([disabled]) {
         background: var(--oj-danger-hover);
         border-color: var(--oj-danger-hover);
-        color: var(--oj-btn-text) !important;
+        color: var(--oj-btn-text);
     }
 }
 
