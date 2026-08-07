@@ -985,7 +985,6 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
     def _template_with_current_references(self, request, sample_path):
         """Keep the protected sample worksheet while creating a clean Problems worksheet."""
         reference_rows = self._excel_reference_rows(request)
-        problem_rows = [self._excel_headers()]
         strings_path = 'xl/sharedStrings.xml'
         content_types_path = '[Content_Types].xml'
         app_properties_path = 'docProps/app.xml'
@@ -1096,10 +1095,18 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             reference_sheet = ET.fromstring(source.read(reference_sheet_path))
             old_string_cells = len(reference_sheet.findall('.//x:c[@t="s"]', namespace))
             string_lookup = {}
+            shared_string_values = []
             string_items = shared_strings.findall('x:si', namespace)
             for index, item in enumerate(string_items):
                 value = ''.join(node.text or '' for node in item.iterfind('.//x:t', namespace))
                 string_lookup.setdefault(value, index)
+                shared_string_values.append(value)
+
+            example_header = example_sheet.find('x:sheetData/x:row', namespace)
+            problem_rows = [[
+                shared_string_values[int(cell.find('x:v', namespace).text)]
+                for cell in example_header.findall('x:c', namespace)
+            ]]
 
             new_string_cells = 0
             next_string_index = len(string_items)
@@ -1127,7 +1134,6 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 }:
                     problems_sheet.remove(child)
             problem_sheet_data = problems_sheet.find('x:sheetData', namespace)
-            example_header = example_sheet.find('x:sheetData/x:row', namespace)
             problem_sheet_data.clear()
             header = deepcopy(example_header)
             header.attrib['r'] = '1'
