@@ -1683,7 +1683,17 @@ def _apply_editor_configuration(request, item, problem):
     """Apply the unified editor's common and advanced fields after import-specific records exist."""
     if not item.editor_data:
         return
-    payload = dict(item.editor_data)
+    saved_payload = item.editor_data
+    if 'type' not in saved_payload:
+        # Excel parsing can prefill only organizations. Apply those explicit
+        # fields without treating the partial payload as a complete editor save.
+        if 'organizations' in saved_payload:
+            ProblemCreateV2View()._attach_orgs(problem, saved_payload)
+            problem.is_organization_private = problem.organizations.exists()
+            problem.save(update_fields=['is_organization_private'])
+        return
+
+    payload = _editor_data_for_item(item)
     # The legacy importer has already promoted private DOCX-image URLs and normalized blank markers.
     payload['description'] = problem.description
     editor = ProblemCreateV2View()

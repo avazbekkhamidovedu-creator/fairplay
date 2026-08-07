@@ -6,8 +6,8 @@ from django.test import TestCase
 from django.urls import reverse
 
 from judge.llm.base import LLMResult
-from judge.models import Organization, Problem, ProblemImportDraft, ProblemImportImage, ProblemShortAnswerConfig, \
-    Solution
+from judge.models import Language, Organization, Problem, ProblemImportDraft, ProblemImportImage, \
+    ProblemShortAnswerConfig, Solution
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type, create_user
 from judge.utils.simple_xlsx import build_xlsx_workbook
 
@@ -20,7 +20,8 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         create_problem_type(name='import-type')
         cls.creator = create_user(
             username='import_creator',
-            user_permissions=('create_private_problem',),
+            is_staff=True,
+            user_permissions=('add_problem', 'create_private_problem'),
         )
 
     def setUp(self):
@@ -97,6 +98,33 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
             set(Problem.objects.get(name='Organization scope').organizations.values_list('pk', flat=True)),
             {organization.pk},
         )
+
+    def test_partial_organization_draft_keeps_imported_code_languages(self):
+        organization = Organization.objects.create(
+            name='CS 201', slug='cs201', short_name='CS201', about='',
+        )
+        self.creator.profile.organizations.add(organization)
+        language = Language.objects.exclude(key='ANSWER').first()
+        response = self.upload([
+            ['name', 'question_type', 'description', 'organizations', 'allowed_languages'],
+            ['Language scope', 'code', 'Print the input.', 'cs201', language.key],
+        ])
+
+        self.assertEqual(response.status_code, 200)
+        item = ProblemImportDraft.objects.get(owner=self.creator.profile).items.get()
+        self.assertEqual(item.editor_data, {'organizations': [organization.pk]})
+
+        response = self.client.post(
+            reverse('problem_import_item_action', args=(item.draft_id, item.pk, 'create')),
+            {
+                'name': item.name,
+                'question_type': item.submission_type,
+                'description': item.description,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(name='Language scope')
+        self.assertEqual(list(problem.allowed_languages.values_list('key', flat=True)), [language.key])
 
     @mock.patch('judge.views.problem_import.llm.chat')
     @mock.patch('judge.views.problem_import.llm.is_configured', return_value=True)
