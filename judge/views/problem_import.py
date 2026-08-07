@@ -25,7 +25,8 @@ from django.views import View
 
 from judge import llm
 from judge.llm import LLMError
-from judge.models import Language, Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, ProblemImportDraft, \
+from judge.models import Language, Organization, Problem, ProblemBlank, ProblemData, ProblemFillBlankConfig, \
+    ProblemImportDraft, \
     ProblemImportImage, ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, \
     ProblemSubmissionType, ProblemTestCase, ProblemType, Solution, problem_data_storage
 from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
@@ -110,8 +111,8 @@ HEADER_ALIASES = {
 }
 DIFFICULTY_VALUES = {'0': 'easy', '1': 'medium', '2': 'hard'}
 IMPORT_COLUMNS = {
-    'name', 'question_type', 'description', 'answer', 'solution', 'tags', 'difficulty', 'allowed_languages',
-    'test_data', 'options', 'correct_options', 'blanks', 'rubric', 'grading_table',
+    'name', 'question_type', 'description', 'answer', 'solution', 'tags', 'difficulty', 'organizations',
+    'allowed_languages', 'test_data', 'options', 'correct_options', 'blanks', 'rubric', 'grading_table',
 }
 
 
@@ -274,9 +275,6 @@ def _safe_json(value):
 
 def _editor_data_for_item(item):
     """Return an import item in the exact shape consumed by create_v2's loadEditData."""
-    if item.editor_data:
-        return item.editor_data
-
     data = {
         'name': item.name,
         'description': item.description,
@@ -334,6 +332,8 @@ def _editor_data_for_item(item):
             'gradingTable': _grading_table_value(item.grading_table),
             'ai': True,
         })
+    # Upload parsing may prefill only organizations; preserve the complete editor shape.
+    data.update(item.editor_data or {})
     return data
 
 
@@ -534,6 +534,11 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                         if _header_name(header) not in IMPORT_COLUMNS
                         and index < len(row) and row[index] is not None and str(row[index]).strip()
                     ]
+                    organization_ids, organization_issues = _resolve_import_organizations(
+                        request,
+                        _value(row, headers, 'organizations'),
+                    )
+                    unrecognized_configurations.extend(organization_issues)
                     name, name_needs_review = _import_problem_name(source_name, row_number)
                     type_value = _value(row, headers, 'question_type')
                     description = _value(row, headers, 'description')
@@ -638,6 +643,7 @@ class ProblemImportUploadView(LoginRequiredMixin, View):
                         data_load_error=data_load_error,
                         config_needs_review=bool(unrecognized_configurations),
                         unrecognized_configurations=unrecognized_configurations,
+                        editor_data={'organizations': organization_ids} if organization_ids else {},
                         test_data_zip=test_data_zip,
                         source_label=', '.join(document.filename for document in attachments),
                         formatting_error='\n'.join(review_messages),
@@ -1207,6 +1213,44 @@ def _preview_language_keys(item):
 
 def _split_lines(value):
     return [part.strip() for part in re.split(r'[\n,;|]+', value or '') if part.strip()]
+
+
+def _resolve_import_organizations(request, raw_value):
+    """Resolve one Excel organization to the organization selector's visible ID."""
+    tokens = _split_lines(raw_value)
+    if not tokens:
+        return [], []
+    if len(tokens) > 1:
+        return [], [{
+            'column': 'Organizations',
+            'value': raw_value,
+            'reason': _('The preview editor currently supports one organization per problem.'),
+        }]
+
+    profile = getattr(request, 'profile', None)
+    queryset = profile.organizations.all() if profile is not None else Organization.objects.none()
+    token = tokens[0]
+    matches = list(queryset.filter(slug__iexact=token))
+    matches.extend(queryset.filter(short_name__iexact=token))
+    matches.extend(queryset.filter(name__iexact=token))
+    if token.isdigit():
+        matches.extend(queryset.filter(pk=int(token)))
+    unique_matches = {organization.pk: organization for organization in matches}
+    if len(unique_matches) == 1:
+        return [next(iter(unique_matches))], []
+
+    reason = (
+        _('matches multiple organizations available to you.') if unique_matches else
+        _('was not found among organizations available to you.')
+    )
+    return [], [{
+        'column': 'Organizations',
+        'value': raw_value,
+        'reason': _('Organization "%(organization)s" %(reason)s') % {
+            'organization': token,
+            'reason': reason,
+        },
+    }]
 
 
 def _resolve_allowed_languages(raw_value):

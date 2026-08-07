@@ -6,7 +6,8 @@ from django.test import TestCase
 from django.urls import reverse
 
 from judge.llm.base import LLMResult
-from judge.models import Problem, ProblemImportDraft, ProblemImportImage, ProblemShortAnswerConfig, Solution
+from judge.models import Organization, Problem, ProblemImportDraft, ProblemImportImage, ProblemShortAnswerConfig, \
+    Solution
 from judge.models.tests.util import CommonDataMixin, create_problem_group, create_problem_type, create_user
 from judge.utils.simple_xlsx import build_xlsx_workbook
 
@@ -65,6 +66,37 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(draft.items.get(name='Prime check').correct_options, '2')
         self.assertEqual(draft.items.get(name='Greeting').solution, 'Use the familiar greeting.')
         self.assertEqual(self.client.get(payload['preview_url']).status_code, 200)
+
+    def test_upload_matches_organization_slug_and_applies_it_on_create(self):
+        organization = Organization.objects.create(
+            name='CS 201', slug='cs201', short_name='CS201', about='',
+        )
+        self.creator.profile.organizations.add(organization)
+        response = self.upload([
+            ['name', 'question_type', 'description', 'organizations', 'options', 'answer'],
+            ['Organization scope', 'multiple_choice', 'Choose the prime.', 'cs201', '4\n5', '2'],
+        ])
+
+        self.assertEqual(response.status_code, 200)
+        item = ProblemImportDraft.objects.get(owner=self.creator.profile).items.get()
+        self.assertFalse(item.config_needs_review)
+        self.assertEqual(item.editor_data, {'organizations': [organization.pk]})
+
+        response = self.client.post(
+            reverse('problem_import_item_action', args=(item.draft_id, item.pk, 'create')),
+            {
+                'name': item.name,
+                'question_type': item.submission_type,
+                'description': item.description,
+                'answer': item.answer,
+                'options': item.options,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertSetEqual(
+            set(Problem.objects.get(name='Organization scope').organizations.values_list('pk', flat=True)),
+            {organization.pk},
+        )
 
     @mock.patch('judge.views.problem_import.llm.chat')
     @mock.patch('judge.views.problem_import.llm.is_configured', return_value=True)
