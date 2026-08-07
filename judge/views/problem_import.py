@@ -1431,7 +1431,7 @@ def _parse_text_test_data(value):
             key = int(number)
             if key < 1 or (key, kind.lower()) in cases:
                 raise ValueError('Each input data/output data number must appear only once.')
-            cases[key, kind.lower()] = [first_line]
+            cases[key, kind.lower()] = [first_line] if first_line else []
             current = cases[key, kind.lower()]
         elif current is not None:
             current.append(line)
@@ -1444,6 +1444,10 @@ def _parse_text_test_data(value):
         output_lines = cases.get((number, 'output'))
         if input_lines is None or output_lines is None:
             raise ValueError('Test data {} needs both input and output.'.format(number))
+        if input_lines and not input_lines[0].strip():
+            input_lines = input_lines[1:]
+        if output_lines and not output_lines[0].strip():
+            output_lines = output_lines[1:]
         result.append(('case{:03d}.in'.format(number), '\n'.join(input_lines),
                        'case{:03d}.out'.format(number), '\n'.join(output_lines)))
     return result

@@ -5,8 +5,8 @@ from unittest import TestCase as StdlibTestCase
 from unittest import mock
 from xml.etree import ElementTree as ET
 
-from django.contrib import admin
 from django.conf import settings
+from django.contrib import admin
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -351,6 +351,10 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
                 sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
                 if sheet.attrib['name'] == 'Problems'
             )
+            example_sheet = next(
+                sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
+                if sheet.attrib['name'] == 'Example Problems'
+            )
             problems_relationship_id = problems_sheet.attrib['{%s}id' % simple_xlsx.REL_NS]
             problems_target = next(
                 relationship.attrib['Target'] for relationship in relationships
@@ -368,6 +372,16 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
                 type_validation.find('x:formula1', namespace).text,
                 '"code,multiple_choice,fill_blank,true_false,short_answer"',
             )
+            example_relationship_id = example_sheet.attrib['{%s}id' % simple_xlsx.REL_NS]
+            example_target = next(
+                relationship.attrib['Target'] for relationship in relationships
+                if relationship.attrib['Id'] == example_relationship_id
+            )
+            example_path = (
+                example_target.lstrip('/') if example_target.startswith('/') else 'xl/{}'.format(example_target)
+            )
+            example_xml = ET.fromstring(workbook.read(example_path))
+            self.assertIsNotNone(example_xml.find('x:sheetProtection', namespace))
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(

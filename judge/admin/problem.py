@@ -904,7 +904,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         ) or 'PY3'
         return [
             ['Import Instructions', '', '', ''],
-            ['Fill the Problems sheet and follow the specification for each field.', '', '', ''],
+            ['Fill the editable Problems sheet; Example Problems is protected and ignored during import.', '', '', ''],
             ['field', 'required', 'how_to_fill', 'example'],
             ['name', 'yes', 'Problem title.', 'Two Sum'],
             [
@@ -968,28 +968,33 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         ]
 
     def _template_with_current_references(self, request, sample_path):
-        """Keep the sample's Word object while replacing permission-scoped references."""
+        """Keep the protected sample worksheet while creating a clean Problems worksheet."""
         reference_rows = self._excel_reference_rows(request)
+        problem_rows = [self._excel_headers()]
         strings_path = 'xl/sharedStrings.xml'
+        content_types_path = '[Content_Types].xml'
         namespace = {'x': simple_xlsx.MAIN_NS}
         question_type_range = _excel_template_question_type_range()
 
         with zipfile.ZipFile(sample_path) as source:
             workbook = ET.fromstring(source.read('xl/workbook.xml'))
             relationships = ET.fromstring(source.read('xl/_rels/workbook.xml.rels'))
+            content_types = ET.fromstring(source.read(content_types_path))
             relation_targets = {
                 relation.attrib.get('Id'): relation.attrib.get('Target', '')
                 for relation in relationships
             }
             reference_sheet_path = ''
-            problems_sheet_path = ''
+            example_sheet_path = ''
+            example_sheet_entry = None
             for sheet in workbook.iter():
                 if not sheet.tag.endswith('}sheet'):
                     continue
                 target = relation_targets.get(sheet.attrib.get('{%s}id' % simple_xlsx.REL_NS), '')
                 path = target.lstrip('/') if target.startswith('/') else 'xl/{}'.format(target)
                 if sheet.attrib.get('name') == 'Problems':
-                    problems_sheet_path = path
+                    example_sheet_path = path
+                    example_sheet_entry = sheet
             for sheet_name in ('Instructions', 'Reference'):
                 sheet = next(
                     (item for item in workbook.iter() if item.tag.endswith('}sheet')
@@ -1003,32 +1008,62 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 break
             if not reference_sheet_path:
                 raise ValueError('The Excel template must contain an Instructions or Reference worksheet.')
-            if not problems_sheet_path:
+            if not example_sheet_path or example_sheet_entry is None:
                 raise ValueError('The Excel template must contain a Problems worksheet.')
+
+            sheets = workbook.find('x:sheets', namespace)
+            if sheets is None:
+                raise ValueError('The Excel template must contain a sheet list.')
+            example_sheet_entry.set('name', 'Example Problems')
+            example_sheet = ET.fromstring(source.read(example_sheet_path))
+            protection = example_sheet.find('x:sheetProtection', namespace)
+            if protection is None:
+                protection = ET.Element(
+                    '{%s}sheetProtection' % simple_xlsx.MAIN_NS,
+                    {'sheet': '1', 'objects': '1', 'scenarios': '1'},
+                )
+                sheet_data_index = list(example_sheet).index(example_sheet.find('x:sheetData', namespace))
+                example_sheet.insert(sheet_data_index + 1, protection)
+
+            relationship_numbers = [
+                int(match.group(1))
+                for relationship in relationships
+                for match in [re.match(r'rId(\d+)$', relationship.attrib.get('Id', ''))]
+                if match
+            ]
+            relationship_id = 'rId{}'.format(max(relationship_numbers, default=0) + 1)
+            sheet_ids = [int(sheet.attrib.get('sheetId', 0)) for sheet in sheets]
+            sheet_id = max(sheet_ids, default=0) + 1
+            problems_sheet_path = 'xl/worksheets/import_problems.xml'
+            ET.SubElement(
+                relationships,
+                '{%s}Relationship' % simple_xlsx.PKG_REL_NS,
+                {
+                    'Id': relationship_id,
+                    'Type': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet',
+                    'Target': 'worksheets/import_problems.xml',
+                },
+            )
+            problems_sheet_entry = ET.Element(
+                '{%s}sheet' % simple_xlsx.MAIN_NS,
+                {
+                    'name': 'Problems',
+                    'sheetId': str(sheet_id),
+                    '{%s}id' % simple_xlsx.REL_NS: relationship_id,
+                },
+            )
+            sheets.insert(list(sheets).index(example_sheet_entry), problems_sheet_entry)
+            ET.SubElement(
+                content_types,
+                '{http://schemas.openxmlformats.org/package/2006/content-types}Override',
+                {
+                    'PartName': '/{}'.format(problems_sheet_path),
+                    'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
+                },
+            )
+
             shared_strings = ET.fromstring(source.read(strings_path))
             reference_sheet = ET.fromstring(source.read(reference_sheet_path))
-            problems_sheet = ET.fromstring(source.read(problems_sheet_path))
-            validations = problems_sheet.find('x:dataValidations', namespace)
-            if validations is None:
-                validations = ET.SubElement(problems_sheet, '{%s}dataValidations' % simple_xlsx.MAIN_NS)
-            type_validation = next(
-                (
-                    validation for validation in validations.findall('x:dataValidation', namespace)
-                    if validation.attrib.get('sqref') == question_type_range
-                ),
-                None,
-            )
-            if type_validation is None:
-                type_validation = ET.SubElement(
-                    validations,
-                    '{%s}dataValidation' % simple_xlsx.MAIN_NS,
-                    {'type': 'list', 'allowBlank': '1', 'showErrorMessage': '1', 'sqref': question_type_range},
-                )
-            formula = type_validation.find('x:formula1', namespace)
-            if formula is None:
-                formula = ET.SubElement(type_validation, '{%s}formula1' % simple_xlsx.MAIN_NS)
-            formula.text = '"code,multiple_choice,fill_blank,true_false,short_answer"'
-            validations.set('count', str(len(validations.findall('x:dataValidation', namespace))))
             old_string_cells = len(reference_sheet.findall('.//x:c[@t="s"]', namespace))
             string_lookup = {}
             string_items = shared_strings.findall('x:si', namespace)
@@ -1038,7 +1073,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
 
             new_string_cells = 0
             next_string_index = len(string_items)
-            for row in reference_rows:
+            for row in reference_rows + problem_rows:
                 for value in row:
                     if value is None or value == '':
                         continue
@@ -1053,6 +1088,15 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                     if value != value.strip():
                         text.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
                     text.text = value
+
+            problems_sheet = ET.fromstring(simple_xlsx._sheet_xml(
+                problem_rows,
+                string_lookup,
+                [{
+                    'sqref': question_type_range,
+                    'values': ('code', 'multiple_choice', 'fill_blank', 'true_false', 'short_answer'),
+                }],
+            ))
 
             sheet_data = reference_sheet.find('x:sheetData', namespace)
             sheet_data.clear()
@@ -1090,13 +1134,23 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 for info in source.infolist():
                     if info.filename == strings_path:
                         content = ET.tostring(shared_strings, encoding='utf-8', xml_declaration=True)
+                    elif info.filename == content_types_path:
+                        content = ET.tostring(content_types, encoding='utf-8', xml_declaration=True)
+                    elif info.filename == 'xl/workbook.xml':
+                        content = ET.tostring(workbook, encoding='utf-8', xml_declaration=True)
+                    elif info.filename == 'xl/_rels/workbook.xml.rels':
+                        content = ET.tostring(relationships, encoding='utf-8', xml_declaration=True)
                     elif info.filename == reference_sheet_path:
                         content = ET.tostring(reference_sheet, encoding='utf-8', xml_declaration=True)
-                    elif info.filename == problems_sheet_path:
-                        content = ET.tostring(problems_sheet, encoding='utf-8', xml_declaration=True)
+                    elif info.filename == example_sheet_path:
+                        content = ET.tostring(example_sheet, encoding='utf-8', xml_declaration=True)
                     else:
                         content = source.read(info.filename)
                     target.writestr(info, content)
+                target.writestr(
+                    problems_sheet_path,
+                    ET.tostring(problems_sheet, encoding='utf-8', xml_declaration=True),
+                )
         return output.getvalue()
 
     def download_excel_template_view(self, request):
@@ -1111,11 +1165,12 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         else:
             payload = build_xlsx_workbook([
                 (
-                    'Problems', self._excel_template_rows(request),
+                    'Problems', [self._excel_headers()],
                     [{'sqref': _excel_template_question_type_range(), 'values': (
                         'code', 'multiple_choice', 'fill_blank', 'true_false', 'short_answer',
                     )}],
                 ),
+                ('Example Problems', self._excel_template_rows(request), (), True),
                 ('Reference', self._excel_reference_rows(request)),
             ])
         response = HttpResponse(
