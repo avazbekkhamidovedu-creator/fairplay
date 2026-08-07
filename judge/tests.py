@@ -321,7 +321,11 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
 
             namespace = {'x': simple_xlsx.MAIN_NS}
             workbook_xml = ET.fromstring(workbook.read('xl/workbook.xml'))
+            workbook_text = workbook.read('xl/workbook.xml').decode('utf-8')
             relationships = ET.fromstring(workbook.read('xl/_rels/workbook.xml.rels'))
+            self.assertNotIn('ns1:Ignorable', workbook_text)
+            self.assertIn('xmlns:mc=', workbook_text)
+            self.assertIn('xmlns:x15=', workbook_text)
             instruction_sheet = next(
                 sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
                 if sheet.attrib['name'] in ('Instructions', 'Reference')
@@ -364,6 +368,10 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
                 problems_target.lstrip('/') if problems_target.startswith('/') else 'xl/{}'.format(problems_target)
             )
             problems_xml = ET.fromstring(workbook.read(problems_path))
+            self.assertIsNotNone(problems_xml.find('x:cols', namespace))
+            self.assertIsNotNone(problems_xml.find('x:sheetViews', namespace))
+            self.assertIsNone(problems_xml.find('x:sheetProtection', namespace))
+            self.assertIsNone(problems_xml.find('x:oleObjects', namespace))
             type_validation = next(
                 validation for validation in problems_xml.findall('x:dataValidations/x:dataValidation', namespace)
                 if validation.attrib.get('sqref') == 'B2:B{}'.format(settings.PROBLEM_EXCEL_TEMPLATE_MAX_ROW)
@@ -382,6 +390,20 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             )
             example_xml = ET.fromstring(workbook.read(example_path))
             self.assertIsNotNone(example_xml.find('x:sheetProtection', namespace))
+            self.assertIsNotNone(example_xml.find('x:oleObjects', namespace))
+            app_properties = ET.fromstring(workbook.read('docProps/app.xml'))
+            app_namespace = {
+                'a': 'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties',
+                'vt': 'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes',
+            }
+            self.assertEqual(
+                app_properties.find('a:HeadingPairs/vt:vector/vt:variant/vt:i4', app_namespace).text,
+                '3',
+            )
+            self.assertEqual(
+                [title.text for title in app_properties.findall('a:TitlesOfParts/vt:vector/vt:lpstr', app_namespace)],
+                ['Instructions', 'Problems', 'Example Problems'],
+            )
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(

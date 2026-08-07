@@ -3,6 +3,7 @@ import json
 import os
 import re
 import zipfile
+from copy import deepcopy
 from operator import attrgetter
 from xml.etree import ElementTree as ET
 
@@ -32,6 +33,20 @@ from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, Ad
 
 MARKDOWN_UPLOAD_EXTENSIONS = ('.md', '.markdown', '.mdown', '.txt')
 EXCEL_UPLOAD_EXTENSIONS = ('.xlsx',)
+WORKBOOK_EXTENSION_NAMESPACES = {
+    'mc': 'http://schemas.openxmlformats.org/markup-compatibility/2006',
+    'x14': 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main',
+    'x14ac': 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac',
+    'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
+    'x15': 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/main',
+    'x15ac': 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac',
+    'xr': 'http://schemas.microsoft.com/office/spreadsheetml/2014/revision',
+    'xr2': 'http://schemas.microsoft.com/office/spreadsheetml/2015/revision2',
+    'xr6': 'http://schemas.microsoft.com/office/spreadsheetml/2016/revision6',
+    'xr10': 'http://schemas.microsoft.com/office/spreadsheetml/2016/revision10',
+}
+APP_PROPERTIES_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties'
+DOC_PROPERTIES_VT_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes'
 
 
 def _excel_template_question_type_range():
@@ -973,6 +988,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         problem_rows = [self._excel_headers()]
         strings_path = 'xl/sharedStrings.xml'
         content_types_path = '[Content_Types].xml'
+        app_properties_path = 'docProps/app.xml'
         namespace = {'x': simple_xlsx.MAIN_NS}
         question_type_range = _excel_template_question_type_range()
 
@@ -980,6 +996,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             workbook = ET.fromstring(source.read('xl/workbook.xml'))
             relationships = ET.fromstring(source.read('xl/_rels/workbook.xml.rels'))
             content_types = ET.fromstring(source.read(content_types_path))
+            app_properties = ET.fromstring(source.read(app_properties_path))
             relation_targets = {
                 relation.attrib.get('Id'): relation.attrib.get('Target', '')
                 for relation in relationships
@@ -1024,6 +1041,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 )
                 sheet_data_index = list(example_sheet).index(example_sheet.find('x:sheetData', namespace))
                 example_sheet.insert(sheet_data_index + 1, protection)
+            # x14 is referenced only by mc:Choice, so ElementTree would otherwise omit its declaration.
+            example_sheet.set('xmlns:x14', WORKBOOK_EXTENSION_NAMESPACES['x14'])
 
             relationship_numbers = [
                 int(match.group(1))
@@ -1061,6 +1080,17 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                     'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
                 },
             )
+            app_namespace = {'a': APP_PROPERTIES_NS, 'vt': DOC_PROPERTIES_VT_NS}
+            worksheet_count = app_properties.find('a:HeadingPairs/vt:vector/vt:variant/vt:i4', app_namespace)
+            titles = app_properties.find('a:TitlesOfParts/vt:vector', app_namespace)
+            if worksheet_count is not None:
+                worksheet_count.text = '3'
+            if titles is not None:
+                titles.clear()
+                titles.set('size', '3')
+                titles.set('baseType', 'lpstr')
+                for name in ('Instructions', 'Problems', 'Example Problems'):
+                    ET.SubElement(titles, '{%s}lpstr' % DOC_PROPERTIES_VT_NS).text = name
 
             shared_strings = ET.fromstring(source.read(strings_path))
             reference_sheet = ET.fromstring(source.read(reference_sheet_path))
@@ -1089,14 +1119,44 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                         text.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
                     text.text = value
 
-            problems_sheet = ET.fromstring(simple_xlsx._sheet_xml(
-                problem_rows,
-                string_lookup,
-                [{
-                    'sqref': question_type_range,
-                    'values': ('code', 'multiple_choice', 'fill_blank', 'true_false', 'short_answer'),
-                }],
+            # Reuse the example worksheet's layout while leaving the user-facing page editable and empty.
+            problems_sheet = deepcopy(example_sheet)
+            for child in list(problems_sheet):
+                if child.tag.rsplit('}', 1)[-1] in {
+                    'sheetProtection', 'dataValidations', 'drawing', 'legacyDrawing', 'oleObjects', 'pageSetup',
+                }:
+                    problems_sheet.remove(child)
+            problem_sheet_data = problems_sheet.find('x:sheetData', namespace)
+            example_header = example_sheet.find('x:sheetData/x:row', namespace)
+            problem_sheet_data.clear()
+            header = deepcopy(example_header)
+            header.attrib['r'] = '1'
+            header_cells = header.findall('x:c', namespace)
+            for column_index, value in enumerate(problem_rows[0]):
+                cell = header_cells[column_index]
+                cell.attrib['r'] = '{}1'.format(simple_xlsx._excel_column_name(column_index))
+                cell.attrib['t'] = 's'
+                cell.find('x:v', namespace).text = str(string_lookup[str(value)])
+            problem_sheet_data.append(header)
+            problem_dimension = problems_sheet.find('x:dimension', namespace)
+            problem_dimension.set('ref', 'A1:{}1'.format(
+                simple_xlsx._excel_column_name(len(problem_rows[0]) - 1),
             ))
+            validations = ET.Element('{%s}dataValidations' % simple_xlsx.MAIN_NS, {'count': '1'})
+            validation = ET.SubElement(
+                validations,
+                '{%s}dataValidation' % simple_xlsx.MAIN_NS,
+                {'type': 'list', 'allowBlank': '1', 'showErrorMessage': '1', 'sqref': question_type_range},
+            )
+            ET.SubElement(validation, '{%s}formula1' % simple_xlsx.MAIN_NS).text = (
+                '"code,multiple_choice,fill_blank,true_false,short_answer"'
+            )
+            phonetic = problems_sheet.find('x:phoneticPr', namespace)
+            validation_index = (
+                list(problems_sheet).index(phonetic) + 1 if phonetic is not None
+                else list(problems_sheet).index(problem_sheet_data) + 1
+            )
+            problems_sheet.insert(validation_index, validations)
 
             sheet_data = reference_sheet.find('x:sheetData', namespace)
             sheet_data.clear()
@@ -1128,6 +1188,11 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             shared_strings.set('count', str(string_count - old_string_cells + new_string_cells))
             shared_strings.set('uniqueCount', str(next_string_index))
             ET.register_namespace('', simple_xlsx.MAIN_NS)
+            ET.register_namespace('r', simple_xlsx.REL_NS)
+            for prefix, uri in WORKBOOK_EXTENSION_NAMESPACES.items():
+                ET.register_namespace(prefix, uri)
+            # x15 is referenced only by mc:Ignorable, so ElementTree would otherwise omit its declaration.
+            workbook.set('xmlns:x15', WORKBOOK_EXTENSION_NAMESPACES['x15'])
 
             output = io.BytesIO()
             with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as target:
@@ -1136,6 +1201,8 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                         content = ET.tostring(shared_strings, encoding='utf-8', xml_declaration=True)
                     elif info.filename == content_types_path:
                         content = ET.tostring(content_types, encoding='utf-8', xml_declaration=True)
+                    elif info.filename == app_properties_path:
+                        content = ET.tostring(app_properties, encoding='utf-8', xml_declaration=True)
                     elif info.filename == 'xl/workbook.xml':
                         content = ET.tostring(workbook, encoding='utf-8', xml_declaration=True)
                     elif info.filename == 'xl/_rels/workbook.xml.rels':
