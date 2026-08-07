@@ -34,6 +34,10 @@ MARKDOWN_UPLOAD_EXTENSIONS = ('.md', '.markdown', '.mdown', '.txt')
 EXCEL_UPLOAD_EXTENSIONS = ('.xlsx',)
 
 
+def _excel_template_question_type_range():
+    return 'B2:B{}'.format(settings.PROBLEM_EXCEL_TEMPLATE_MAX_ROW)
+
+
 def decode_markdown_upload(uploaded_file):
     raw_bytes = uploaded_file.read()
     try:
@@ -968,6 +972,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         reference_rows = self._excel_reference_rows(request)
         strings_path = 'xl/sharedStrings.xml'
         namespace = {'x': simple_xlsx.MAIN_NS}
+        question_type_range = _excel_template_question_type_range()
 
         with zipfile.ZipFile(sample_path) as source:
             workbook = ET.fromstring(source.read('xl/workbook.xml'))
@@ -1009,7 +1014,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             type_validation = next(
                 (
                     validation for validation in validations.findall('x:dataValidation', namespace)
-                    if validation.attrib.get('sqref') == 'B2:B1000'
+                    if validation.attrib.get('sqref') == question_type_range
                 ),
                 None,
             )
@@ -1017,7 +1022,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 type_validation = ET.SubElement(
                     validations,
                     '{%s}dataValidation' % simple_xlsx.MAIN_NS,
-                    {'type': 'list', 'allowBlank': '1', 'showErrorMessage': '1', 'sqref': 'B2:B1000'},
+                    {'type': 'list', 'allowBlank': '1', 'showErrorMessage': '1', 'sqref': question_type_range},
                 )
             formula = type_validation.find('x:formula1', namespace)
             if formula is None:
@@ -1107,7 +1112,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             payload = build_xlsx_workbook([
                 (
                     'Problems', self._excel_template_rows(request),
-                    [{'sqref': 'B2:B1000', 'values': (
+                    [{'sqref': _excel_template_question_type_range(), 'values': (
                         'code', 'multiple_choice', 'fill_blank', 'true_false', 'short_answer',
                     )}],
                 ),

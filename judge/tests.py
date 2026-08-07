@@ -6,6 +6,7 @@ from unittest import mock
 from xml.etree import ElementTree as ET
 
 from django.contrib import admin
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -361,7 +362,7 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             problems_xml = ET.fromstring(workbook.read(problems_path))
             type_validation = next(
                 validation for validation in problems_xml.findall('x:dataValidations/x:dataValidation', namespace)
-                if validation.attrib.get('sqref') == 'B2:B1000'
+                if validation.attrib.get('sqref') == 'B2:B{}'.format(settings.PROBLEM_EXCEL_TEMPLATE_MAX_ROW)
             )
             self.assertEqual(
                 type_validation.find('x:formula1', namespace).text,
