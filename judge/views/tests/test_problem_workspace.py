@@ -215,9 +215,12 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertEqual(response.context['workspace_mode'], 'practice')
         self.assertContains(response, 'id="fp-status"', html=False)
         self.assertContains(response, 'id="fp-type"', html=False)
-        self.assertContains(response, 'id="fp-group"', html=False)
+        self.assertContains(response, 'id="fp-course"', html=False)
+        self.assertContains(response, 'id="fp-tags"', html=False)
         self.assertContains(response, 'id="fp-ac-min"', html=False)
         self.assertContains(response, 'id="fp-diff"', html=False)
+        self.assertNotContains(response, 'id="fp-group"', html=False)
+        self.assertIn('workspace_organizations', response.context)
 
     def test_assignment_workspace_exposes_context_id_for_drafts(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)

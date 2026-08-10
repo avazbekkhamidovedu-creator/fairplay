@@ -132,12 +132,40 @@
   function drawerPageSize() {
     return useDrawerPaging ? pageSize : Math.max(items.length, 1);
   }
+  function multiValues(id) {
+    var el = document.getElementById(id);
+    if (!el) return [];
+    var $jq = window.jQuery;
+    if ($jq && $jq.fn.select2 && $jq(el).data('select2')) {
+      var selected = $jq(el).val();
+      if (!selected) return [];
+      return (Array.isArray(selected) ? selected : [selected]).map(String);
+    }
+    return Array.prototype.map.call(el.selectedOptions || [], function (opt) {
+      return String(opt.value);
+    });
+  }
+  function tokenHit(haystack, needles) {
+    if (!needles.length) return true;
+    var padded = ' ' + (haystack || '') + ' ';
+    return needles.some(function (needle) {
+      return padded.indexOf(' ' + needle + ' ') !== -1;
+    });
+  }
+  function matchesFormat(item, formats) {
+    if (!formats.length) return true;
+    var type = item.dataset.type || '';
+    var format = item.dataset.format || type;
+    return formats.some(function (code) {
+      return code === format || code === type;
+    });
+  }
   function visibleItems() {
     var q = (($('#drawer-q') || {}).value || '').toLowerCase();
-    var type = ($('#fp-type') || {}).value || '';
-    var group = String(($('#fp-group') || {}).value || '');
-    var diff = ($('#fp-diff') || {}).value || '';
-    var kp = ($('#fp-kp') || {}).value || '';
+    var formats = multiValues('fp-type');
+    var diffs = multiValues('fp-diff');
+    var courses = multiValues('fp-course');
+    var tags = multiValues('fp-tags');
     var status = ($('#fp-status') || $('#drawer-filter-status') || {}).value || '';
     var min = Number(($('#fp-ac-min') || {}).value || 0);
     var maxRaw = ($('#fp-ac-max') || {}).value;
@@ -145,16 +173,16 @@
     return items.filter(function (item) {
       var acRaw = Number(item.dataset.ac || 0);
       var ac = acRaw * (acRaw <= 1 ? 100 : 1);
-      var kpTokens = (' ' + (item.dataset.kp || '') + ' ').indexOf(' ' + kp + ' ') !== -1;
       return (!q || item.textContent.toLowerCase().indexOf(q) !== -1)
-        && (!type || item.dataset.type === type)
-        && (!group || String(item.dataset.group || '') === group)
-        && (!diff || item.dataset.diff === diff)
-        && (!kp || kpTokens)
+        && matchesFormat(item, formats)
+        && (!diffs.length || diffs.indexOf(item.dataset.diff || '') !== -1)
+        && tokenHit(item.dataset.orgs, courses)
+        && tokenHit(item.dataset.kp, tags)
         && (!status
           || item.dataset.status === status
           || (status === 'answered' && item.dataset.status !== 'unsolved')
-          || (status === 'unanswered' && item.dataset.status === 'unsolved'))
+          || (status === 'unanswered' && item.dataset.status === 'unsolved')
+          || (status === 'unsolved' && item.dataset.status !== 'solved'))
         && ac >= min && ac <= max;
     });
   }
@@ -196,12 +224,33 @@
     if (prev) prev.disabled = page === 0;
     if (next) next.disabled = page + 1 >= pages;
   }
-  ['drawer-q', 'fp-type', 'fp-group', 'fp-diff', 'fp-kp', 'fp-status', 'drawer-filter-status', 'fp-ac-min', 'fp-ac-max'].forEach(function (id) {
+  ['drawer-q', 'fp-type', 'fp-diff', 'fp-course', 'fp-tags', 'fp-status', 'drawer-filter-status', 'fp-ac-min', 'fp-ac-max'].forEach(function (id) {
     var element = document.getElementById(id);
     if (!element) return;
     element.addEventListener('input', function () { page = 0; renderDrawer(); });
     element.addEventListener('change', function () { page = 0; renderDrawer(); });
   });
+  (function initDrawerSelect2() {
+    var $jq = window.jQuery;
+    if (!$jq || !$jq.fn.select2) return;
+    var theme = app.dataset.select2Theme || 'dmoj';
+    var multiOpts = {theme: theme, multiple: true, width: '100%'};
+    ['fp-type', 'fp-diff', 'fp-course', 'fp-tags'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      $jq(el).select2($jq.extend({}, multiOpts, {
+        placeholder: el.getAttribute('data-placeholder') || '',
+      })).on('change', function () { page = 0; renderDrawer(); });
+    });
+    var statusEl = document.getElementById('fp-status');
+    if (statusEl) {
+      $jq(statusEl).select2({
+        theme: theme,
+        minimumResultsForSearch: Infinity,
+        width: '100%',
+      }).on('change', function () { page = 0; renderDrawer(); });
+    }
+  })();
   $('#drawer-page-prev') && $('#drawer-page-prev').addEventListener('click', function () { page--; renderDrawer(); });
   $('#drawer-page-next') && $('#drawer-page-next').addEventListener('click', function () { page++; renderDrawer(); });
   renderDrawer();

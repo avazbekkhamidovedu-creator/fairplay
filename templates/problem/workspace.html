@@ -36,6 +36,7 @@
      data-mode="{{ workspace_mode }}"
      data-context-id="{{ workspace_context_id|default('') }}"
      data-problem="{{ problem.code }}"
+     data-select2-theme="{{ DMOJ_SELECT2_THEME }}"
      data-is-code="{{ '1' if workspace_is_code else '0' }}"
      data-run-url="{{ url('problem_workspace_run', problem.code) }}"
      data-subs-url="{{ url('problem_workspace_submissions', problem.code) }}"
@@ -93,49 +94,44 @@
           </div>
           <div class="ws-filter-panel open exposed" id="filter-popover">
             <div class="filter-block">
-              <label class="filter-label" for="fp-status">{{ _('Status') }}</label>
-              <select id="fp-status">
-                <option value="">{{ _('All') }}</option>
-                <option value="solved">{{ _('Solved') }}</option>
-                <option value="attempted">{{ _('Attempted') }}</option>
-                <option value="unsolved">{{ _('Unsolved') }}</option>
-              </select>
-            </div>
-            <div class="filter-block">
               <label class="filter-label" for="fp-type">{{ _('Problem type') }}</label>
-              <select id="fp-type">
-                <option value="">{{ _('All types') }}</option>
+              <select id="fp-type" multiple data-placeholder="{{ _('All types') }}">
                 {% for option in workspace_format_options %}<option value="{{ option.code }}">{{ option.label }}</option>{% endfor %}
               </select>
             </div>
             <div class="filter-block">
               <label class="filter-label" for="fp-diff">{{ _('Difficulty') }}</label>
-              <select id="fp-diff">
-                <option value="">{{ _('All difficulties') }}</option>
+              <select id="fp-diff" multiple data-placeholder="{{ _('All difficulties') }}">
                 {% for option in workspace_difficulty_options %}<option value="{{ option.code }}">{{ option.label }}</option>{% endfor %}
               </select>
             </div>
             <div class="filter-block">
-              <label class="filter-label" for="fp-group">{{ _('Problem group') }}</label>
-              <select id="fp-group">
-                <option value="">{{ _('All groups') }}</option>
-                {% for group in workspace_groups %}<option value="{{ group.id }}">{{ group.full_name }}</option>{% endfor %}
+              <label class="filter-label" for="fp-course">{{ _('Course') }}</label>
+              <select id="fp-course" multiple data-placeholder="{{ _('All courses') }}">
+                {% for org in workspace_organizations %}<option value="{{ org.id }}">{{ org.name }}</option>{% endfor %}
               </select>
             </div>
             <div class="filter-block">
-              <label class="filter-label" for="fp-kp">{{ _('Knowledge point') }}</label>
-              <select id="fp-kp">
-                <option value="">{{ _('All knowledge points') }}</option>
-                {% for kp in workspace_knowledge_types %}<option value="{{ kp.id }}">{{ kp.full_name }}</option>{% endfor %}
+              <label class="filter-label" for="fp-status">{{ _('Status') }}</label>
+              <select id="fp-status">
+                <option value="">{{ _('All') }}</option>
+                <option value="solved">{{ _('Solved') }}</option>
+                <option value="unsolved">{{ _('Unsolved') }}</option>
               </select>
             </div>
             <div class="filter-block">
-              <label class="filter-label" for="fp-ac-min">{{ _('AC rate') }}</label>
+              <label class="filter-label" for="fp-ac-min">{{ _('AC %%') }}</label>
               <div class="filter-inline">
-                <input id="fp-ac-min" type="number" min="0" max="100" placeholder="{{ _('Min') }}">
+                <input id="fp-ac-min" type="number" min="0" max="100" step="0.1" placeholder="{{ _('Min') }}">
                 <span>~</span>
-                <input id="fp-ac-max" type="number" min="0" max="100" placeholder="{{ _('Max') }}">
+                <input id="fp-ac-max" type="number" min="0" max="100" step="0.1" placeholder="{{ _('Max') }}">
               </div>
+            </div>
+            <div class="filter-block filter-block-tags">
+              <label class="filter-label" for="fp-tags">{{ _('Tags') }}</label>
+              <select id="fp-tags" multiple data-placeholder="{{ _('Click to choose tags (multiple)') }}">
+                {% for kp in workspace_knowledge_types %}<option value="{{ kp.id }}">{{ user_trans(kp.full_name) }}</option>{% endfor %}
+              </select>
             </div>
           </div>
         </div>
@@ -162,10 +158,11 @@
              href="{{ item_problem.get_absolute_url() }}"
              data-code="{{ item_problem.code }}"
              data-type="{{ item_problem.submission_type }}"
-             data-group="{{ item_problem.group_id }}"
+             data-format="{{ item_problem.format_filter_code }}"
+             data-orgs="{% for org in item_problem.organizations.all() %}{{ org.id }} {% endfor %}"
              data-ac="{{ item_problem.ac_rate }}"
              data-diff="{{ row_diff or '' }}"
-             data-kp="{% for t in item_problem.types.all() if t.name not in ('easy', 'medium', 'hard', 'code', 'fill_in_blank', 'multiple_choices') %}{{ t.id }} {% endfor %}"
+             data-kp="{% for tid in item_problem.knowledge_type_ids %}{{ tid }} {% endfor %}"
              data-status="{{ row_status }}"
              data-attempts="{{ row_attempts }}">
             <span class="drawer-st" aria-hidden="true">

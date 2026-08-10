@@ -323,7 +323,9 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['workspace_context_id'] = contest.key
             context['workspace_problems'] = ContestProblem.objects.filter(
                 contest=contest,
-            ).select_related('problem').prefetch_related('problem__types').order_by('order')
+            ).select_related('problem', 'problem__mcq_config').prefetch_related(
+                'problem__types', 'problem__organizations',
+            ).order_by('order')
             context['workspace_context_name'] = contest.name
             context['workspace_return_url'] = reverse('contest_view', args=[contest.key])
             context['workspace_current_order'] = contest_problem.order
@@ -331,7 +333,10 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['workspace_mode'] = 'practice'
             context['workspace_context_id'] = ''
             context['workspace_problems'] = (
-                Problem.get_visible_problems(user).prefetch_related('types').order_by('code')[:250]
+                Problem.get_visible_problems(user)
+                .select_related('mcq_config')
+                .prefetch_related('types', 'organizations')
+                .order_by('code')[:250]
             )
             context['workspace_context_name'] = _('Problem list')
             context['workspace_return_url'] = reverse('problem_list')
@@ -411,18 +416,31 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['prev_contest_problem'] = cp_qs.filter(order__lt=contest_problem.order).order_by('-order').first()
 
         context['submission_type'] = self.object.submission_type
+        from judge.models import ProblemSubmissionType
         from judge.question_types import all_types, get_grader
         workspace_grader = get_grader(self.object.submission_type)
         context['workspace_is_code'] = workspace_grader.routes_to_bridge
         context['workspace_submission_type_label'] = str(workspace_grader.label)
-        context['workspace_groups'] = ProblemGroup.objects.order_by('full_name')
-        context['workspace_format_options'] = [
-            {'code': grader.submission_type, 'label': str(grader.label)} for grader in all_types()
-        ]
+        # Match problem-list redesign filters: multi format (MCQ expanded), course, tags.
+        workspace_format_options = []
+        for grader in all_types():
+            if grader.submission_type == ProblemSubmissionType.MCQ:
+                workspace_format_options.append({
+                    'code': ProblemSubmissionType.MCQ, 'label': str(grader.label),
+                })
+                workspace_format_options.append({'code': 'single', 'label': str(_('Single choice'))})
+                workspace_format_options.append({'code': 'multiple', 'label': str(_('Multiple choice'))})
+                workspace_format_options.append({'code': 'truefalse', 'label': str(_('True/False'))})
+            else:
+                workspace_format_options.append({
+                    'code': grader.submission_type, 'label': str(grader.label),
+                })
+        context['workspace_format_options'] = workspace_format_options
         context['workspace_difficulty_options'] = [
             {'code': name, 'label': Problem.difficulty_display(name)}
             for name in Problem.DIFFICULTY_TYPE_NAMES
         ]
+        context['workspace_organizations'] = list(Organization.objects.order_by('name'))
         reserved_kp = Problem.reserved_auto_type_labels()
         context['workspace_knowledge_types'] = [
             t for t in ProblemType.objects.order_by('full_name')

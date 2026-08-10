@@ -322,6 +322,21 @@ class Problem(models.Model):
         return [label] if label else []
 
     @cached_property
+    def format_filter_code(self):
+        """Value for list/workspace format filters; MCQ expands to single/multiple/truefalse."""
+        if self.submission_type == ProblemSubmissionType.MCQ:
+            try:
+                config = self.mcq_config
+            except ObjectDoesNotExist:
+                return self.submission_type
+            if config.is_true_false:
+                return 'truefalse'
+            if config.multiple_select:
+                return 'multiple'
+            return 'single'
+        return self.submission_type
+
+    @cached_property
     def knowledge_types_list(self):
         # Tags column: knowledge points only — drop difficulty, answer-format, and leftover
         # auto chips; dedupe by displayed label so the list stays clean for older rows.
@@ -338,6 +353,15 @@ class Problem(models.Model):
             seen.add(key)
             out.append(label)
         return out
+
+    @cached_property
+    def knowledge_type_ids(self):
+        reserved = self.reserved_auto_type_labels()
+        return [
+            problem_type.id
+            for problem_type in self.types.all()
+            if self.is_knowledge_problem_type(problem_type, reserved_labels=reserved)
+        ]
 
     @cached_property
     def difficulty(self):
