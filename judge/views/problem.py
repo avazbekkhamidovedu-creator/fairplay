@@ -533,7 +533,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             workspace_subs = list(
                 workspace_subs_qs
                 .select_related('language', 'contest_object', 'contest__problem')
-                .order_by('-date')[:20]
+                .order_by('-date')[:20],
             )
             for submission in workspace_subs:
                 submission.display_points = workspace_display_points(submission, self.request)
