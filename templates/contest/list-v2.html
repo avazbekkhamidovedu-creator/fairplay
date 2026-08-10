@@ -177,10 +177,10 @@
                 <div class="filter-controls">
                     {# Organization multi-select #}
                     <div class="filter-group">
-                        <span class="filter-group-label">{{ _('Organization') }}</span>
+                        <span class="filter-group-label">{{ _('Course') }}</span>
                         <div class="multi-select" id="org-multi-select">
                             <button type="button" class="multi-select-trigger" onclick="toggleMenu('org-multi-select')">
-                                <span id="org-multi-label" class="multi-select-text multi-select-label-empty" data-empty-label="{{ _('All organizations') }}">{{ _('All organizations') }}</span>
+                                <span id="org-multi-label" class="multi-select-text multi-select-label-empty" data-empty-label="{{ _('All courses') }}">{{ _('All courses') }}</span>
                                 <span class="multi-select-caret">▾</span>
                             </button>
                             <div class="multi-select-menu" hidden>
@@ -237,7 +237,7 @@
 
             <div class="filter-row">
                 <label class="filter-label">{{ _('Keyword') }}</label>
-                <input type="text" id="f-q" class="input input-wide" placeholder="{{ _('Search by contest name, key…') }}" value="{{ search_query or '' }}">
+                <input type="text" id="f-q" class="input input-wide" placeholder="{{ _('Search by assignment name, key…') }}" value="{{ search_query or '' }}">
             </div>
 
             <div class="filter-row selected-row">
@@ -273,14 +273,14 @@
                     </div>
                 </div>
             <div class="toolbar-right">
-                <span class="progress-label">{{ total_count }} {{ _('contests') }}</span>
+                <span class="progress-label">{{ total_count }} {{ _('assignments') }}</span>
             </div>
         </section>
     </form>
 
     {# ── Contest List ── #}
     <div class="cl-list" id="contest-list">
-        {# Active participations (user's current contests) #}
+        {# Active participations (user's current assignments) #}
         {% if active_participations %}
             <div class="cl-section">
                 <div class="cl-group-head">
