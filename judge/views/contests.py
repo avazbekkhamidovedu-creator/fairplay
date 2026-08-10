@@ -174,8 +174,9 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
     # Section grouping modes for the list: by assignment status or by course.
     group_modes = frozenset(('status', 'course'))
     default_group = 'course'
-    # Status filters for the list sections ('' means all statuses).
-    time_filters = frozenset(('active', 'ongoing', 'upcoming', 'past'))
+    # Status filters for the list sections ('' means all statuses). The user's
+    # active participations are always shown and are not part of the filter.
+    time_filters = frozenset(('ongoing', 'upcoming', 'past'))
 
     @cached_property
     def _now(self):
@@ -188,8 +189,17 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
 
     @property
     def time_filter(self):
-        tf = self.request.GET.get('time', '')
-        return tf if tf in self.time_filters else ''
+        """Selected statuses as a set, or None when no filter applies.
+
+        Status selection is applied client-side for instant switching; this is
+        only used to render the initial button state. An empty/invalid
+        selection falls back to "all selected".
+        """
+        raw = self.request.GET.get('time')
+        if raw is None:
+            return None
+        selected = {v.strip() for v in raw.split(',') if v.strip() in self.time_filters}
+        return selected if selected else None
 
     def _get_queryset(self):
         queryset = super().get_queryset().prefetch_related(
@@ -287,11 +297,10 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         present_all.sort(key=attrgetter('end_time', 'key'))
         future_all.sort(key=attrgetter('start_time'))
 
-        # Drop sections excluded by the status filter.
-        present = present_all if tf in ('', 'ongoing') else []
-        future = future_all if tf in ('', 'upcoming') else []
-        if tf not in ('', 'active'):
-            active = []
+        # All sections are rendered server-side; the status filter is applied
+        # client-side for instant switching.
+        present = present_all
+        future = future_all
 
         context['active_participations'] = active
         context['current_contests'] = present
@@ -323,17 +332,8 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         return context
 
     def _total_count(self, active, present, future):
-        """Number of assignments shown under the current status filter."""
-        tf = self.time_filter
-        if tf == 'active':
-            return len(active)
-        if tf == 'ongoing':
-            return len(present)
-        if tf == 'upcoming':
-            return len(future)
-        if tf == 'past':
-            return self.get_queryset().values('id').count()
-        return self._apply_filters(self._get_queryset()).count()
+        """Number of assignments matching the (server-side) filters."""
+        return len(active) + len(present) + len(future) + self.get_queryset().values('id').count()
 
     def _solved_data(self, contests):
         """Map contest id -> (solved problems, total problems) for the current user.
@@ -384,9 +384,8 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
             add(contest, 'ongoing')
         for contest in context['future_contests']:
             add(contest, 'upcoming')
-        if self.time_filter in ('', 'past'):
-            for contest in context['past_contests']:
-                add(contest, 'past')
+        for contest in context['past_contests']:
+            add(contest, 'past')
 
         field = self.order.lstrip('-')
         if field not in ('start_time', 'end_time', 'name', 'user_count'):

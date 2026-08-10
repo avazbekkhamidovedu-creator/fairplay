@@ -13,7 +13,6 @@
                 cls: [],
                 tags: [],
                 q: '{{ search_query or '' }}',
-                time: '{{ time_filter }}',
                 order: '{{ sort_by or '-start_time' }}',
                 group: '{{ group }}'
             };
@@ -96,14 +95,12 @@
                 state.cls = checkedValues('#class-multi-select');
                 state.tags = checkedValues('#tag-multi-select');
                 state.q = document.getElementById('f-q').value.trim();
-                state.time = document.getElementById('time-filter').value;
 
                 var params = new URLSearchParams();
                 if (state.org.length) params.set('org', state.org.join(','));
                 if (state.cls.length) params.set('class', state.cls.join(','));
                 if (state.tags.length) params.set('tag', state.tags.join(','));
                 if (state.q) params.set('search', state.q);
-                if (state.time) params.set('time', state.time);
                 if (state.order !== '-start_time') params.set('order', state.order);
                 if (state.group !== 'course') params.set('group', state.group);
 
@@ -111,17 +108,83 @@
                 window.location.href = newUrl;
             };
 
+            // ── Status filter: instant client-side switching (no reload) ──
+            var countSuffix = (function() {
+                var el = document.querySelector('.progress-label');
+                return el ? el.textContent.replace(/^\d+\s*/, '') : ' assignments';
+            })();
+
+            window.applyStatusFilter = function() {
+                var selected = [];
+                document.querySelectorAll('#time-filter-group .status-filter-btn.active').forEach(function(b) {
+                    selected.push(b.dataset.time);
+                });
+                // All deselected falls back to all selected (the default).
+                var allSelected = selected.length === 0 || selected.length === 3;
+                if (allSelected) {
+                    document.querySelectorAll('#time-filter-group .status-filter-btn').forEach(function(b) {
+                        b.classList.add('active');
+                    });
+                }
+
+                var visible = 0;
+                document.querySelectorAll('.cl-row').forEach(function(row) {
+                    var status = row.dataset.status;
+                    // Active participations are always shown.
+                    var show = status === 'active' || allSelected || selected.indexOf(status) !== -1;
+                    row.style.display = show ? '' : 'none';
+                    if (show) visible++;
+                });
+                document.querySelectorAll('.cl-section').forEach(function(sec) {
+                    var hasVisible = Array.prototype.some.call(sec.querySelectorAll('.cl-row'), function(r) {
+                        return r.style.display !== 'none';
+                    });
+                    sec.style.display = hasVisible ? '' : 'none';
+                });
+
+                var countEl = document.querySelector('.progress-label');
+                if (countEl) countEl.textContent = visible + ' ' + countSuffix;
+
+                var emptyEl = document.getElementById('cl-empty-client');
+                if (emptyEl) emptyEl.hidden = !(allSelected === false && visible === 0);
+
+                // Sync the URL without reloading (keeps pagination consistent).
+                var params = new URLSearchParams(location.search);
+                if (allSelected) {
+                    params.delete('time');
+                } else {
+                    params.set('time', selected.join(','));
+                }
+                var q = params.toString();
+                history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
+            };
+
+            // ── Status filter buttons (multi-select, click to toggle) ──
+            document.querySelectorAll('#time-filter-group .status-filter-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    // The last remaining status can't be deselected.
+                    if (btn.classList.contains('active')) {
+                        var activeCount = document.querySelectorAll('#time-filter-group .status-filter-btn.active').length;
+                        if (activeCount <= 1) return;
+                    }
+                    btn.classList.toggle('active');
+                    applyStatusFilter();
+                });
+            });
+
             // ── Clear all filters ──
             window.clearFilters = function() {
                 document.querySelectorAll('#filter-form .multi-select input[type=checkbox]').forEach(function(c) {
                     c.checked = false;
                 });
-                document.getElementById('time-filter').value = '';
+                document.querySelectorAll('#time-filter-group .status-filter-btn').forEach(function(b) {
+                    b.classList.add('active');
+                });
                 document.getElementById('f-q').value = '';
                 refreshOrgLabel();
                 refreshClassLabel();
                 refreshTagLabel();
-                state = { org: [], cls: [], tags: [], q: '', time: '', order: state.order, group: state.group };
+                state = { org: [], cls: [], tags: [], q: '', order: state.order, group: state.group };
                 applyFilters();
             };
 
@@ -184,6 +247,9 @@
                     window.location.href = window.location.pathname + search + sep + 'page=' + this.dataset.page + '{{ page_suffix }}';
                 });
             });
+
+            // ── Apply the status filter from the URL on first load ──
+            applyStatusFilter();
         });
     </script>
 {% endblock %}
@@ -208,7 +274,7 @@
     {% endmacro %}
     {% macro assignment_row(contest, status, participation=None) %}
         {% set solved = solved_counts.get(contest.id, (0, 0)) if solved_counts else (0, 0) %}
-        <article class="cl-row" data-key="{{ contest.key }}">
+        <article class="cl-row" data-key="{{ contest.key }}" data-status="{{ status }}">
             <div>
                 <div class="cl-primary-line">
                     <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
@@ -355,16 +421,14 @@
                         </div>
                     </div>
 
-                    {# Status multi-select #}
+                    {# Status filter (multi-select; all selected by default) #}
                     <div class="filter-group">
                         <span class="filter-group-label">{{ _('Status') }}</span>
-                        <select id="time-filter" class="select" onchange="scheduleApply()">
-                            <option value=""{% if time_filter == '' %} selected{% endif %}>{{ _('All') }}</option>
-                            <option value="active"{% if time_filter == 'active' %} selected{% endif %}>{{ _('Active') }}</option>
-                            <option value="ongoing"{% if time_filter == 'ongoing' %} selected{% endif %}>{{ _('Ongoing') }}</option>
-                            <option value="upcoming"{% if time_filter == 'upcoming' %} selected{% endif %}>{{ _('Upcoming') }}</option>
-                            <option value="past"{% if time_filter == 'past' %} selected{% endif %}>{{ _('Past') }}</option>
-                        </select>
+                        <div class="status-filter" id="time-filter-group">
+                            <button type="button" class="status-filter-btn{% if time_filter is none or 'ongoing' in time_filter %} active{% endif %}" data-time="ongoing">{{ _('Ongoing') }}</button>
+                            <button type="button" class="status-filter-btn{% if time_filter is none or 'upcoming' in time_filter %} active{% endif %}" data-time="upcoming">{{ _('Upcoming') }}</button>
+                            <button type="button" class="status-filter-btn{% if time_filter is none or 'past' in time_filter %} active{% endif %}" data-time="past">{{ _('Past') }}</button>
+                        </div>
                     </div>
 
                     {# Tag multi-select #}
@@ -427,8 +491,8 @@
                     </div>
                 </div>
                 <div class="group-switch" id="group-by" role="group" aria-label="{{ _('Group by') }}">
-                    <button type="button" class="group-switch-btn{% if group == 'course' %} active{% endif %}" data-group="course">{{ _('By course') }}</button>
-                    <button type="button" class="group-switch-btn{% if group == 'status' %} active{% endif %}" data-group="status">{{ _('By status') }}</button>
+                    <button type="button" class="group-switch-btn{% if group == 'course' %} active{% endif %}" data-group="course" title="{{ _('Group assignments by course') }}">{{ _('By course') }}</button>
+                    <button type="button" class="group-switch-btn{% if group == 'status' %} active{% endif %}" data-group="status" title="{{ _('Group assignments by status') }}">{{ _('By status') }}</button>
                 </div>
             <div class="toolbar-right">
                 <span class="progress-label">{{ total_count }} {{ _('assignments') }}</span>
@@ -474,91 +538,86 @@
                 <div class="cl-empty">{{ _('There are no assignments.') }}</div>
             {% endif %}
         {% else %}
-        {# Active participations (user's current assignments) #}
-        {% if not time_filter or time_filter == 'active' %}
-            {% if active_participations %}
-                <div class="cl-section">
-                    <div class="cl-group-head">
-                        <span><i class="fa fa-play-circle"></i> {{ _('Active assignments') }}</span>
-                        <small>{{ active_participations|length }} {{ _('items') }}</small>
-                    </div>
-                    {% for participation in active_participations %}
-                        {{ assignment_row(participation.contest, 'active', participation) }}
-                    {% endfor %}
+        {# Active participations (user's current assignments) — always shown #}
+        {% if active_participations %}
+            <div class="cl-section">
+                <div class="cl-group-head">
+                    <span><i class="fa fa-play-circle"></i> {{ _('Active assignments') }}</span>
+                    <small>{{ active_participations|length }} {{ _('items') }}</small>
                 </div>
-            {% endif %}
+                {% for participation in active_participations %}
+                    {{ assignment_row(participation.contest, 'active', participation) }}
+                {% endfor %}
+            </div>
         {% endif %}
 
         {# Ongoing contests #}
-        {% if not time_filter or time_filter == 'ongoing' %}
-            {% if current_contests %}
-                <div class="cl-section">
-                    <div class="cl-group-head">
-                        <span><i class="fa fa-bolt"></i> {{ _('Ongoing') }}</span>
-                        <small>{{ current_contests|length }} {{ _('items') }}</small>
-                    </div>
-                    {% for contest in current_contests %}
-                        {{ assignment_row(contest, 'ongoing') }}
-                    {% endfor %}
+        {% if current_contests %}
+            <div class="cl-section">
+                <div class="cl-group-head">
+                    <span><i class="fa fa-bolt"></i> {{ _('Ongoing') }}</span>
+                    <small>{{ current_contests|length }} {{ _('items') }}</small>
                 </div>
-            {% endif %}
+                {% for contest in current_contests %}
+                    {{ assignment_row(contest, 'ongoing') }}
+                {% endfor %}
+            </div>
         {% endif %}
 
         {# Upcoming contests #}
-        {% if not time_filter or time_filter == 'upcoming' %}
-            {% if future_contests %}
-                <div class="cl-section">
-                    <div class="cl-group-head">
-                        <span><i class="fa fa-clock-o"></i> {{ _('Upcoming') }}</span>
-                        <small>{{ future_contests|length }} {{ _('items') }}</small>
-                    </div>
-                    {% for contest in future_contests %}
-                        {{ assignment_row(contest, 'upcoming') }}
-                    {% endfor %}
+        {% if future_contests %}
+            <div class="cl-section">
+                <div class="cl-group-head">
+                    <span><i class="fa fa-clock-o"></i> {{ _('Upcoming') }}</span>
+                    <small>{{ future_contests|length }} {{ _('items') }}</small>
                 </div>
-            {% endif %}
+                {% for contest in future_contests %}
+                    {{ assignment_row(contest, 'upcoming') }}
+                {% endfor %}
+            </div>
         {% endif %}
 
         {# Past contests #}
-        {% if not time_filter or time_filter == 'past' %}
-            <div class="cl-section">
-                <div class="cl-group-head">
-                    <span><i class="fa fa-check-circle-o"></i> {{ _('Past') }}</span>
-                    <small>{{ past_contests|length }} {{ _('items') }}</small>
-                </div>
-                {% if past_contests %}
-                    {% for contest in past_contests %}
-                        {{ assignment_row(contest, 'past') }}
-                    {% endfor %}
-
-                    {# Pagination #}
-                    {% if page_obj and page_obj.has_other_pages() %}
-                        <div class="cl-pagination">
-                            {% if page_obj.has_previous() %}
-                                <a href="#" data-page="{{ page_obj.previous_page_number() }}" class="btn btn-outline btn-sm paginate-link">
-                                    <i class="fa fa-chevron-left"></i> {{ _('Previous') }}
-                                </a>
-                            {% endif %}
-                            <span class="page-info">
-                                {{ _('Page %(current)s of %(total)s', current=page_obj.number, total=page_obj.paginator.num_pages) }}
-                            </span>
-                            {% if page_obj.has_next() %}
-                                <a href="#" data-page="{{ page_obj.next_page_number() }}" class="btn btn-outline btn-sm paginate-link">
-                                    {{ _('Next') }} <i class="fa fa-chevron-right"></i>
-                                </a>
-                            {% endif %}
-                        </div>
-                    {% endif %}
-                {% else %}
-                    <div class="cl-empty">{{ _('There are no past assignments.') }}</div>
-                {% endif %}
+        <div class="cl-section">
+            <div class="cl-group-head">
+                <span><i class="fa fa-check-circle-o"></i> {{ _('Past') }}</span>
+                <small>{{ past_contests|length }} {{ _('items') }}</small>
             </div>
-        {% endif %}
+            {% if past_contests %}
+                {% for contest in past_contests %}
+                    {{ assignment_row(contest, 'past') }}
+                {% endfor %}
+
+                {# Pagination #}
+                {% if page_obj and page_obj.has_other_pages() %}
+                    <div class="cl-pagination">
+                        {% if page_obj.has_previous() %}
+                            <a href="#" data-page="{{ page_obj.previous_page_number() }}" class="btn btn-outline btn-sm paginate-link">
+                                <i class="fa fa-chevron-left"></i> {{ _('Previous') }}
+                            </a>
+                        {% endif %}
+                        <span class="page-info">
+                            {{ _('Page %(current)s of %(total)s', current=page_obj.number, total=page_obj.paginator.num_pages) }}
+                        </span>
+                        {% if page_obj.has_next() %}
+                            <a href="#" data-page="{{ page_obj.next_page_number() }}" class="btn btn-outline btn-sm paginate-link">
+                                {{ _('Next') }} <i class="fa fa-chevron-right"></i>
+                            </a>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            {% else %}
+                <div class="cl-empty">{{ _('There are no past assignments.') }}</div>
+            {% endif %}
+        </div>
 
         {# Nothing matches the current filters. #}
         {% if not active_participations and not current_contests and not future_contests and not past_contests %}
             <div class="cl-empty">{{ _('There are no assignments.') }}</div>
         {% endif %}
         {% endif %}
+
+        {# Client-side empty state (status filter hides everything). #}
+        <div class="cl-empty" id="cl-empty-client" hidden>{{ _('There are no assignments.') }}</div>
     </div>
 {% endblock %}

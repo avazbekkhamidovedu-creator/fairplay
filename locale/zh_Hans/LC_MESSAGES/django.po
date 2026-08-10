@@ -7247,3 +7247,11 @@ msgstr "即将开始"
 #: templates/contest/list-v2.html
 msgid "Past"
 msgstr "已结束"
+
+#: templates/contest/list-v2.html
+msgid "Group assignments by course"
+msgstr "按课程分组"
+
+#: templates/contest/list-v2.html
+msgid "Group assignments by status"
+msgstr "按状态分组"
