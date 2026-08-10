@@ -467,16 +467,18 @@ ul.problem-list {
     }
 
     .filter-group {
-        display: flex;
+        display: inline-flex;
         align-items: center;
         gap: 8px;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        flex: 0 0 auto;
     }
 
     .filter-group-label {
-        font-size: var(--oj-font-size-sm);
+        font-size: var(--oj-font-size);
         color: var(--text-muted);
         white-space: nowrap;
+        flex-shrink: 0;
     }
 
     .ac-range {
@@ -675,9 +677,43 @@ ul.problem-list {
         flex: 1;
         min-height: 32px;
         padding: 4px 8px;
-        border: 1px dashed var(--border);
+        border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         align-items: center;
+    }
+
+    /* Select2 local multi-selects: compact fixed width so Filters stay one row. */
+    .filter-controls .select2-container {
+        flex: 0 0 auto;
+    }
+
+    .filter-controls .select2-container .select2-selection--multiple {
+        min-height: var(--oj-control-height);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+    }
+
+    .filter-controls .select,
+    .filter-controls .select2-container--dmoj .select2-selection--single {
+        min-width: 110px;
+        height: var(--oj-control-height);
+        box-sizing: border-box;
+    }
+
+    .filter-controls .select2-container--dmoj .select2-selection--single {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        display: flex;
+        align-items: center;
+    }
+
+    .filter-controls .select2-container--dmoj .select2-selection--single .select2-selection__rendered {
+        padding-left: 10px;
+        line-height: calc(var(--oj-control-height) - 2px);
+    }
+
+    .filter-controls .select2-container--dmoj .select2-selection--single .select2-selection__arrow {
+        height: 100%;
     }
 
     .knowledge-placeholder {

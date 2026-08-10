@@ -27,7 +27,7 @@ class ProblemImportDraft(models.Model):
 class ProblemImportItem(models.Model):
     """One editable row in an Excel import preview."""
     TYPE_CHOICES = (
-        ('C', _('Code')),
+        ('C', _('Programming')),
         ('M', _('Multiple choice')),
         ('B', _('Fill in the blank')),
         ('S', _('Short answer')),

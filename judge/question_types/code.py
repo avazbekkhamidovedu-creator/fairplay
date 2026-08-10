@@ -15,7 +15,7 @@ from judge.question_types.registry import register
 @register
 class CodeQuestionType(QuestionType):
     submission_type = ProblemSubmissionType.CODE
-    label = _('Code')
+    label = _('Programming')
     routes_to_bridge = True
     order = 10
 

@@ -9,6 +9,7 @@ from django.utils import timezone
 from judge.models import Language, Problem, ProblemGroup, ProblemSubmissionType, ProblemType, Submission
 from judge.models.tests.util import (
     CommonDataMixin,
+    create_organization,
     create_problem,
     create_problem_group,
     create_problem_type,
@@ -196,17 +197,19 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         ))
         self.assertEqual(codes, {'filter-easy', 'filter-hard', 'filter-alpha', 'filter-beta'})
 
-    def test_knowledge_and_format_filters_use_and_semantics(self):
+    def test_knowledge_filters_use_or_semantics(self):
+        # Multi-select within tags is OR: problems matching any selected tag are kept.
         codes = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
             {
-                'type': [self.type_ids['dp'], self.type_ids['code']],
+                'type': [self.type_ids['dp'], self.type_ids['greedy']],
                 'filtered': '1',
             },
         ))
-        self.assertEqual(codes, {'filter-easy', 'filter-hard'})
+        self.assertEqual(codes, {'filter-easy', 'filter-hard', 'filter-greedy', 'filter-alpha', 'filter-beta'})
 
     def test_combined_difficulty_and_knowledge_filters(self):
+        # Different dimensions still AND: difficulty ∩ tags.
         codes = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
             {
@@ -247,6 +250,22 @@ class ProblemListFilterTestCase(ProblemListTestBase):
             },
         ))
         self.assertEqual(codes, {'filter-other'})
+
+    def test_organization_filter_uses_or_semantics(self):
+        org_a = create_organization(name='Filter Org A')
+        org_b = create_organization(name='Filter Org B')
+        self.problem_easy.organizations.add(org_a)
+        self.problem_hard.organizations.add(org_b)
+        self.problem_alpha.organizations.add(org_a, org_b)
+
+        codes = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {
+                'organization': [org_a.id, org_b.id],
+                'filtered': '1',
+            },
+        ))
+        self.assertEqual(codes, {'filter-easy', 'filter-hard', 'filter-alpha'})
 
     def test_ac_rate_range_filter(self):
         codes = self._filter_group_codes(self._filtered_codes(
@@ -377,8 +396,13 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="filter-form"', html=False)
         self.assertContains(response, 'id="difficulty-multi-select"', html=False)
+        self.assertContains(response, 'id="org-multi-select"', html=False)
         self.assertContains(response, 'id="status-filter"', html=False)
         self.assertContains(response, 'class="difficulty-badge', html=False)
+        self.assertContains(response, 'Programming', html=False)
+        self.assertNotContains(response, 'group-tabs', html=False)
+        self.assertNotContains(response, 'col-group', html=False)
+        self.assertContains(response, '>Tags<', html=False)
 
     def test_problem_list_context_splits_type_groups(self):
         context = self._context(self.users['normal'], {})
@@ -416,9 +440,9 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         # ...and the active format selection comes from the dedicated ?format param.
         self.assertEqual(context['selected_formats'], [ProblemSubmissionType.MCQ])
 
-    def test_problem_list_context_exposes_group_and_type_counts(self):
+    def test_problem_list_context_exposes_type_counts(self):
         context = self._context(self.users['normal'], {})
-        self.assertGreaterEqual(context['group_counts'].get(self.group_id, 0), 6)
+        self.assertIn('organizations', context)
         self.assertGreaterEqual(context['type_counts'].get(self.type_ids['dp'], 0), 3)
         self.assertGreaterEqual(context['total_problem_count'], 7)
 
@@ -536,11 +560,6 @@ class ProblemListSortTestCase(ProblemListTestBase):
         desc_names = [names_by_code[code] for code in desc]
         self.assertEqual(asc_names, sorted(asc_names))
         self.assertEqual(desc_names, sorted(desc_names, reverse=True))
-
-    def test_sort_by_group(self):
-        codes = self._sorted_codes(self.users['normal'], {'order': 'group'})
-        group_names = [Problem.objects.get(code=code).group.name for code in codes]
-        self.assertEqual(group_names, sorted(group_names))
 
     def test_sort_by_type(self):
         asc = self._sorted_codes(

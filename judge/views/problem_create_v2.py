@@ -85,6 +85,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
             context['test_data_url'] = reverse('problem_data', args=[problem.code])
             context['edit_detail_url'] = reverse('problem_detail', args=[problem.code])
+            if (
+                request.user.has_perm('judge.clone_problem')
+                or problem.is_viewable_by_org_admin(request.user)
+            ):
+                context['can_clone_problem'] = True
+                context['clone_url'] = reverse('problem_clone', args=[problem.code])
         return render(request, self.template_name, context)
 
     def get_context(self, request):
@@ -144,6 +150,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'edit_data_json': 'null',
             'test_data_url': '',
             'edit_detail_url': '',
+            'can_clone_problem': False,
+            'clone_url': '',
             'import_format_url': '',
             'import_create_url': '',
             'import_data_needs_review': False,
