@@ -174,6 +174,8 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
     # Section grouping modes for the list: by assignment status or by course.
     group_modes = frozenset(('status', 'course'))
     default_group = 'course'
+    # Status filters for the list sections ('' means all statuses).
+    time_filters = frozenset(('active', 'ongoing', 'upcoming', 'past'))
 
     @cached_property
     def _now(self):
@@ -183,6 +185,11 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
     def group(self):
         group = self.request.GET.get('group', self.default_group)
         return group if group in self.group_modes else self.default_group
+
+    @property
+    def time_filter(self):
+        tf = self.request.GET.get('time', '')
+        return tf if tf in self.time_filters else ''
 
     def _get_queryset(self):
         queryset = super().get_queryset().prefetch_related(
@@ -247,17 +254,24 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
 
     def get_context_data(self, **kwargs):
         context = super(ContestListV2, self).get_context_data(**kwargs)
-        present, active, future = [], [], []
+        tf = self.time_filter
         finished = set()
-        for contest in self._get_queryset().exclude(end_time__lt=self._now):
+        active = []
+
+        # Filters (org/class/tag/search) apply to every status group, not just
+        # the paginated past section.
+        ongoing_future = self._apply_filters(self._get_queryset().exclude(end_time__lt=self._now))
+        present_all, future_all = [], []
+        for contest in ongoing_future:
             if contest.start_time > self._now:
-                future.append(contest)
+                future_all.append(contest)
             else:
-                present.append(contest)
+                present_all.append(contest)
 
         if self.request.user.is_authenticated:
+            present_ids = [c.id for c in present_all]
             for participation in (
-                ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=present)
+                ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=present_ids)
                 .select_related('contest')
                 .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators',
                                   'contest__organizations', 'contest__classes')
@@ -267,11 +281,17 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
                     finished.add(participation.contest.key)
                 else:
                     active.append(participation)
-                    present.remove(participation.contest)
+                    present_all.remove(participation.contest)
 
         active.sort(key=attrgetter('end_time', 'key'))
-        present.sort(key=attrgetter('end_time', 'key'))
-        future.sort(key=attrgetter('start_time'))
+        present_all.sort(key=attrgetter('end_time', 'key'))
+        future_all.sort(key=attrgetter('start_time'))
+
+        # Drop sections excluded by the status filter.
+        present = present_all if tf in ('', 'ongoing') else []
+        future = future_all if tf in ('', 'upcoming') else []
+        if tf not in ('', 'active'):
+            active = []
 
         context['active_participations'] = active
         context['current_contests'] = present
@@ -286,9 +306,13 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['organizations'] = Organization.objects.all()
         context['classes'] = Class.objects.all()
         context['tags'] = ContestTag.objects.all()
-        context['total_count'] = self._apply_filters(self._get_queryset()).count()
+        context['total_count'] = self._total_count(active, present, future)
         context['sort_by'] = self.order
         context['group'] = self.group
+        context['time_filter'] = tf
+        context['solved_counts'] = self._solved_data(
+            [p.contest for p in active] + present + future + list(context['past_contests']),
+        )
         if self.group == 'course':
             course_groups, contest_statuses = self._get_course_groups(context)
             context['course_groups'] = course_groups
@@ -297,6 +321,46 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context.update(self.get_sort_context())
         context.update(self.get_sort_paginate_context())
         return context
+
+    def _total_count(self, active, present, future):
+        """Number of assignments shown under the current status filter."""
+        tf = self.time_filter
+        if tf == 'active':
+            return len(active)
+        if tf == 'ongoing':
+            return len(present)
+        if tf == 'upcoming':
+            return len(future)
+        if tf == 'past':
+            return self.get_queryset().values('id').count()
+        return self._apply_filters(self._get_queryset()).count()
+
+    def _solved_data(self, contests):
+        """Map contest id -> (solved problems, total problems) for the current user.
+
+        "Solved" counts distinct problems in the contest with an accepted
+        in-contest submission by the user. Returns an empty dict for anonymous
+        users, so the card simply omits the progress indicator.
+        """
+        profile = self.request.profile
+        contest_ids = [c.id for c in contests if c is not None]
+        if not profile or not contest_ids:
+            return {}
+        totals = dict(
+            ContestProblem.objects.filter(contest_id__in=contest_ids)
+            .values('contest_id')
+            .annotate(count=Count('id'))
+            .values_list('contest_id', 'count'),
+        )
+        solved = dict(
+            Submission.objects.filter(user=profile, contest_object_id__in=contest_ids, result='AC')
+            .values('contest_object_id', 'problem_id')
+            .distinct()
+            .values('contest_object_id')
+            .annotate(count=Count('problem_id'))
+            .values_list('contest_object_id', 'count'),
+        )
+        return {cid: (solved.get(cid, 0), totals.get(cid, 0)) for cid in contest_ids}
 
     def _get_course_groups(self, context):
         """Group the displayed assignments by their first organization (course).
@@ -320,8 +384,9 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
             add(contest, 'ongoing')
         for contest in context['future_contests']:
             add(contest, 'upcoming')
-        for contest in context['past_contests']:
-            add(contest, 'past')
+        if self.time_filter in ('', 'past'):
+            for contest in context['past_contests']:
+                add(contest, 'past')
 
         field = self.order.lstrip('-')
         if field not in ('start_time', 'end_time', 'name', 'user_count'):

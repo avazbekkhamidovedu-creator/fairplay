@@ -13,6 +13,7 @@
                 cls: [],
                 tags: [],
                 q: '{{ search_query or '' }}',
+                time: '{{ time_filter }}',
                 order: '{{ sort_by or '-start_time' }}',
                 group: '{{ group }}'
             };
@@ -82,18 +83,27 @@
                 return Array.from(document.querySelectorAll(sel + ' input:checked')).map(function(i) { return i.value; });
             }
 
+            // ── Debounced auto-apply (conditions refresh without Search) ──
+            var autoApplyTimer = null;
+            window.scheduleApply = function() {
+                clearTimeout(autoApplyTimer);
+                autoApplyTimer = setTimeout(applyFilters, 400);
+            };
+
             // ── Apply filters (submit as GET) ──
             window.applyFilters = function() {
                 state.org = checkedValues('#org-multi-select');
                 state.cls = checkedValues('#class-multi-select');
                 state.tags = checkedValues('#tag-multi-select');
                 state.q = document.getElementById('f-q').value.trim();
+                state.time = document.getElementById('time-filter').value;
 
                 var params = new URLSearchParams();
                 if (state.org.length) params.set('org', state.org.join(','));
                 if (state.cls.length) params.set('class', state.cls.join(','));
                 if (state.tags.length) params.set('tag', state.tags.join(','));
                 if (state.q) params.set('search', state.q);
+                if (state.time) params.set('time', state.time);
                 if (state.order !== '-start_time') params.set('order', state.order);
                 if (state.group !== 'course') params.set('group', state.group);
 
@@ -106,11 +116,12 @@
                 document.querySelectorAll('#filter-form .multi-select input[type=checkbox]').forEach(function(c) {
                     c.checked = false;
                 });
+                document.getElementById('time-filter').value = '';
                 document.getElementById('f-q').value = '';
                 refreshOrgLabel();
                 refreshClassLabel();
                 refreshTagLabel();
-                state = { org: [], cls: [], tags: [], q: '', order: state.order, group: state.group };
+                state = { org: [], cls: [], tags: [], q: '', time: '', order: state.order, group: state.group };
                 applyFilters();
             };
 
@@ -196,17 +207,14 @@
         <li><button type="button" data-sort="{{ sort_value }}"{% if sort_by == sort_value %} class="active"{% endif %}>{{ label }}</button></li>
     {% endmacro %}
     {% macro assignment_row(contest, status, participation=None) %}
+        {% set solved = solved_counts.get(contest.id, (0, 0)) if solved_counts else (0, 0) %}
         <article class="cl-row" data-key="{{ contest.key }}">
             <div>
                 <div class="cl-primary-line">
                     <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
-                    <span class="cl-code">/{{ contest.key }}</span>
-                </div>
-                <div class="cl-subline">
-                    {% if status == 'active' %}{{ _('Participating now') }}
-                    {% elif status == 'ongoing' %}{{ _('Ongoing now') }}
-                    {% elif status == 'upcoming' %}{{ _('Not started') }}
-                    {% else %}{{ _('Ended') }}{% endif %}
+                    {% if solved[1] %}
+                        <span class="cl-solved">{{ _('Solved') }} {{ solved[0] }}/{{ solved[1] }}</span>
+                    {% endif %}
                 </div>
                 <div class="cl-course-line">
                     {% for org in contest.organizations.all() %}
@@ -249,11 +257,8 @@
                         {% endif %}
                     {% elif status == 'upcoming' %}
                         <span class="emph warn">{{ _('Starting in %(countdown)s', countdown=as_countdown(contest.time_before_start)) }}</span>
-                    {% else %}
-                        <span class="emph muted">{{ _('Ended') }}</span>
                     {% endif %}
                     <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
-                    <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
                 </div>
             </div>
             <div class="cl-users">
@@ -323,7 +328,7 @@
                             <div class="multi-select-menu" hidden>
                                 {% for org in organizations %}
                                     <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ org.name }}" onchange="refreshOrgLabel()">
+                                        <input type="checkbox" value="{{ org.name }}" onchange="refreshOrgLabel(); scheduleApply();">
                                         <span>{{ org.name }}</span>
                                     </label>
                                 {% endfor %}
@@ -342,12 +347,24 @@
                             <div class="multi-select-menu" hidden>
                                 {% for cls in classes %}
                                     <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ cls.name }}" onchange="refreshClassLabel()">
+                                        <input type="checkbox" value="{{ cls.name }}" onchange="refreshClassLabel(); scheduleApply();">
                                         <span>{{ cls.name }}</span>
                                     </label>
                                 {% endfor %}
                             </div>
                         </div>
+                    </div>
+
+                    {# Status multi-select #}
+                    <div class="filter-group">
+                        <span class="filter-group-label">{{ _('Status') }}</span>
+                        <select id="time-filter" class="select" onchange="scheduleApply()">
+                            <option value=""{% if time_filter == '' %} selected{% endif %}>{{ _('All') }}</option>
+                            <option value="active"{% if time_filter == 'active' %} selected{% endif %}>{{ _('Active') }}</option>
+                            <option value="ongoing"{% if time_filter == 'ongoing' %} selected{% endif %}>{{ _('Ongoing') }}</option>
+                            <option value="upcoming"{% if time_filter == 'upcoming' %} selected{% endif %}>{{ _('Upcoming') }}</option>
+                            <option value="past"{% if time_filter == 'past' %} selected{% endif %}>{{ _('Past') }}</option>
+                        </select>
                     </div>
 
                     {# Tag multi-select #}
@@ -361,7 +378,7 @@
                             <div class="multi-select-menu" hidden id="tag-menu">
                                 {% for tag in tags %}
                                     <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ tag.name }}" onchange="refreshTagLabel()">
+                                        <input type="checkbox" value="{{ tag.name }}" onchange="refreshTagLabel(); scheduleApply();">
                                         <span class="swatch" style="background:{{ tag.color }}"></span>
                                         <span>{{ tag.name }}</span>
                                     </label>
@@ -458,77 +475,90 @@
             {% endif %}
         {% else %}
         {# Active participations (user's current assignments) #}
-        {% if active_participations %}
-            <div class="cl-section">
-                <div class="cl-group-head">
-                    <span><i class="fa fa-play-circle"></i> {{ _('Active assignments') }}</span>
-                    <small>{{ active_participations|length }} {{ _('items') }}</small>
+        {% if not time_filter or time_filter == 'active' %}
+            {% if active_participations %}
+                <div class="cl-section">
+                    <div class="cl-group-head">
+                        <span><i class="fa fa-play-circle"></i> {{ _('Active assignments') }}</span>
+                        <small>{{ active_participations|length }} {{ _('items') }}</small>
+                    </div>
+                    {% for participation in active_participations %}
+                        {{ assignment_row(participation.contest, 'active', participation) }}
+                    {% endfor %}
                 </div>
-                {% for participation in active_participations %}
-                    {{ assignment_row(participation.contest, 'active', participation) }}
-                {% endfor %}
-            </div>
+            {% endif %}
         {% endif %}
 
         {# Ongoing contests #}
-        {% if current_contests %}
-            <div class="cl-section">
-                <div class="cl-group-head">
-                    <span><i class="fa fa-bolt"></i> {{ _('Ongoing') }}</span>
-                    <small>{{ current_contests|length }} {{ _('items') }}</small>
+        {% if not time_filter or time_filter == 'ongoing' %}
+            {% if current_contests %}
+                <div class="cl-section">
+                    <div class="cl-group-head">
+                        <span><i class="fa fa-bolt"></i> {{ _('Ongoing') }}</span>
+                        <small>{{ current_contests|length }} {{ _('items') }}</small>
+                    </div>
+                    {% for contest in current_contests %}
+                        {{ assignment_row(contest, 'ongoing') }}
+                    {% endfor %}
                 </div>
-                {% for contest in current_contests %}
-                    {{ assignment_row(contest, 'ongoing') }}
-                {% endfor %}
-            </div>
+            {% endif %}
         {% endif %}
 
         {# Upcoming contests #}
-        {% if future_contests %}
-            <div class="cl-section">
-                <div class="cl-group-head">
-                    <span><i class="fa fa-clock-o"></i> {{ _('Upcoming') }}</span>
-                    <small>{{ future_contests|length }} {{ _('items') }}</small>
+        {% if not time_filter or time_filter == 'upcoming' %}
+            {% if future_contests %}
+                <div class="cl-section">
+                    <div class="cl-group-head">
+                        <span><i class="fa fa-clock-o"></i> {{ _('Upcoming') }}</span>
+                        <small>{{ future_contests|length }} {{ _('items') }}</small>
+                    </div>
+                    {% for contest in future_contests %}
+                        {{ assignment_row(contest, 'upcoming') }}
+                    {% endfor %}
                 </div>
-                {% for contest in future_contests %}
-                    {{ assignment_row(contest, 'upcoming') }}
-                {% endfor %}
-            </div>
+            {% endif %}
         {% endif %}
 
         {# Past contests #}
-        <div class="cl-section">
-            <div class="cl-group-head">
-                <span><i class="fa fa-check-circle-o"></i> {{ _('Past') }}</span>
-                <small>{{ past_contests|length }} {{ _('items') }}</small>
-            </div>
-            {% if past_contests %}
-                {% for contest in past_contests %}
-                    {{ assignment_row(contest, 'past') }}
-                {% endfor %}
+        {% if not time_filter or time_filter == 'past' %}
+            <div class="cl-section">
+                <div class="cl-group-head">
+                    <span><i class="fa fa-check-circle-o"></i> {{ _('Past') }}</span>
+                    <small>{{ past_contests|length }} {{ _('items') }}</small>
+                </div>
+                {% if past_contests %}
+                    {% for contest in past_contests %}
+                        {{ assignment_row(contest, 'past') }}
+                    {% endfor %}
 
-                {# Pagination #}
-                {% if page_obj and page_obj.has_other_pages() %}
-                    <div class="cl-pagination">
-                        {% if page_obj.has_previous() %}
-                            <a href="#" data-page="{{ page_obj.previous_page_number() }}" class="btn btn-outline btn-sm paginate-link">
-                                <i class="fa fa-chevron-left"></i> {{ _('Previous') }}
-                            </a>
-                        {% endif %}
-                        <span class="page-info">
-                            {{ _('Page %(current)s of %(total)s', current=page_obj.number, total=page_obj.paginator.num_pages) }}
-                        </span>
-                        {% if page_obj.has_next() %}
-                            <a href="#" data-page="{{ page_obj.next_page_number() }}" class="btn btn-outline btn-sm paginate-link">
-                                {{ _('Next') }} <i class="fa fa-chevron-right"></i>
-                            </a>
-                        {% endif %}
-                    </div>
+                    {# Pagination #}
+                    {% if page_obj and page_obj.has_other_pages() %}
+                        <div class="cl-pagination">
+                            {% if page_obj.has_previous() %}
+                                <a href="#" data-page="{{ page_obj.previous_page_number() }}" class="btn btn-outline btn-sm paginate-link">
+                                    <i class="fa fa-chevron-left"></i> {{ _('Previous') }}
+                                </a>
+                            {% endif %}
+                            <span class="page-info">
+                                {{ _('Page %(current)s of %(total)s', current=page_obj.number, total=page_obj.paginator.num_pages) }}
+                            </span>
+                            {% if page_obj.has_next() %}
+                                <a href="#" data-page="{{ page_obj.next_page_number() }}" class="btn btn-outline btn-sm paginate-link">
+                                    {{ _('Next') }} <i class="fa fa-chevron-right"></i>
+                                </a>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                {% else %}
+                    <div class="cl-empty">{{ _('There are no past assignments.') }}</div>
                 {% endif %}
-            {% else %}
-                <div class="cl-empty">{{ _('There are no past assignments.') }}</div>
-            {% endif %}
-        </div>
+            </div>
+        {% endif %}
+
+        {# Nothing matches the current filters. #}
+        {% if not active_participations and not current_contests and not future_contests and not past_contests %}
+            <div class="cl-empty">{{ _('There are no assignments.') }}</div>
+        {% endif %}
         {% endif %}
     </div>
 {% endblock %}
