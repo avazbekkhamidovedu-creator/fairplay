@@ -663,6 +663,7 @@ class Problem(models.Model):
                 pass
             else:
                 problem_data._update_code(self.__original_code, self.code)
+            self.__original_code = self.code
 
     save.alters_data = True
 

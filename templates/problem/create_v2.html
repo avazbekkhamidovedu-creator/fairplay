@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}{% if edit_code %}{{ _('Edit problem') }} &mdash; {{ edit_name or edit_code }}{% else %}{{ _('Add problem') }}{% endif %}{% endblock %}
+{% block title %}{% if import_editor_mode %}{{ _('Excel import preview') }}{% elif edit_code %}{{ _('Edit problem') }} &mdash; {{ edit_name or edit_code }}{% else %}{{ _('Add problem') }}{% endif %}{% endblock %}
 
-{# 与题库列表一致：顶部显示 List / Admin / Add 选项卡（Add 高亮），内容在下方 #}
+{# Match the problem list: show List / Admin / Add tabs at the top, with Add highlighted. #}
 {% block title_row %}
+  {% if not import_editor_mode %}
   {% set tab = 'add' %}
   {% include "problem/problem-list-tabs.html" %}
+  {% endif %}
 {% endblock %}
 {% block title_ruler %}{% endblock %}
 
@@ -18,7 +20,7 @@
   <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}" media="(prefers-color-scheme: dark)">
   {% include "problem/add-problem-menu-assets.html" %}
 
-  <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
+  <!-- Math formulas: block $$...$$ / \[...\]; inline \(...\) (legacy ~...~ remains supported). -->
   <script>
     window.MathJax = {
       tex: {
@@ -37,7 +39,7 @@
 
   <!-- Page-local layout tweaks; colours come from --oj-* / problem_create_v2.css -->
   <style>
-    /* 融入站点框架（继承 base.html）：不再锁 100vh，随页面滚动 */
+    /* Integrate with the base.html layout: do not lock height to 100vh; scroll with the page. */
     .v2-main { display: block; }
     .v2-top { padding: 0.55rem 1.5rem 0.75rem; border-bottom: 1px solid var(--admin-border); background: var(--admin-bg,#f8f8f8); flex-shrink: 0; }
     .v2-top .breadcrumb { margin: 0; }
@@ -52,12 +54,12 @@
     #opt-hint,
     #tc-testdata-hint { display: none !important; }
 
-    /* 需求6：题面标签与预览标题同高，保证左右齐平 */
+    /* Keep the statement label level with the preview heading. */
     .stem-block > .block-label,
     .content-preview .pv-head { height: 20px; line-height: 20px; margin-bottom: 0.6rem !important; }
     .stem-block > .block-label { display: block; font-weight: 600; font-size: var(--oj-font-size, 14px); }
 
-    /* 需求8：内联测试用例 */
+    /* Inline test cases. */
     .tc-table { width: 100%; border-collapse: collapse; font-size: var(--oj-font-size-sm, 12px); }
     .tc-table th, .tc-table td { border: 1px solid var(--admin-border, #ddd); padding: 0.35rem 0.4rem; text-align: left; vertical-align: top; }
     .tc-table th { background: var(--admin-header, #3b3b3b); color: #fff; font-weight: 600; }
@@ -106,7 +108,7 @@
     .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
     .tc-body-wrap { border-top: 1px solid var(--admin-border); padding: 0.75rem 0.85rem 0.9rem; }
 
-    /* ZIP 用例预览：更窄；同时展示该用例的 in + out */
+    /* ZIP case preview: compact and shows both input and output. */
     .tc-drawer-mask {
       display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.28); z-index: 1200;
     }
@@ -147,7 +149,7 @@
     .draft-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: #f39c12; flex-shrink: 0; }
     .draft-banner.saved .dot { background: var(--dmoj-green); }
 
-    /* 需求4：复合题子题目 */
+    /* Composite-problem subquestions. */
     .sub-q { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); margin-bottom: 0.75rem; overflow: hidden; background: #fff; }
     .sub-q-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.65rem; background: #f5f5f5; border-bottom: 1px solid var(--admin-border); }
     .sub-q-head .sq-idx { font-weight: 700; color: var(--oj-accent, #2980B9); }
@@ -160,26 +162,26 @@
     .sub-q-body { padding: 0.75rem; }
     .sub-q.collapsed .sub-q-body { display: none; }
 
-    /* 需求7：部分分 / AI 判题 配置 */
+    /* Partial-score and AI-judging configuration. */
     .score-conf { margin-top: 0.5rem; padding: 0.6rem 0.75rem; background: var(--admin-bg, #fafafa); border: 1px dashed var(--admin-border); border-radius: 5px; }
     .profile-select2 + .select2-container { max-width: 500px; width: 100% !important; }
     .unsaved-note { font-size: 12px; color: var(--muted); padding: 0.35rem 1rem 0.6rem; }
     .radio-list label { display: block; font-weight: normal; width: auto; padding: 0.2rem 0; }
     .inline-num input { width: 70px; }
 
-    /* 需求5：解析折叠 */
+    /* Collapsible solution explanation. */
     .explain-collapse > summary { list-style: none; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--muted); padding: 0.2rem 0; display: flex; align-items: center; gap: 0.4rem; }
     .explain-collapse > summary::-webkit-details-marker { display: none; }
     .explain-collapse .chev { transition: transform 0.15s; }
     .explain-collapse[open] .chev { transform: rotate(90deg); }
     .explain-collapse .ec-body { margin-top: 0.6rem; }
 
-    /* 预览里公式/子题 */
+    /* Formulas and subquestions in the preview. */
     .pv-sub { border-top: 1px dashed #e0e0e0; margin-top: 1rem; padding-top: 0.8rem; }
     .pv-sub .pv-sub-t { font-weight: 600; margin-bottom: 0.35rem; }
     .pv-badge { display: inline-block; font-size: 11px; background: #f3e5f5; color: #7b1fa2; border-radius: 4px; padding: 0.05rem 0.4rem; font-weight: 600; }
 
-    /* 左右分栏：左侧随页面滚动，右侧预览做成与左侧一致的卡片并 sticky 跟随视口 */
+    /* Two columns: the form scrolls with the page and the preview is a matching sticky card. */
     .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
     .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
     .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
@@ -197,15 +199,53 @@
       .pv-panel { max-height: none; }
     }
 
-    /* 难度 AI 判断 */
+    /* AI difficulty assessment. */
     #diff-ai-box { margin-top: 0.5rem; }
     .diff-ai-result { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 12px; background: #ede7f6; color: #5e35b1; border: 1px solid #d1c4e9; border-radius: 14px; padding: 0.15rem 0.6rem; margin-left: 0.5rem; }
+    {% if import_editor_mode %}
+    #navigation,
+    #page-container > br,
+    #page-container > footer,
+    #content > h2,
+    #content > hr { display: none; }
+    #page-container,
+    #content,
+    #content-body { margin: 0; max-width: none; padding: 0; width: auto; }
+    .v2-top { display: none; }
+    .v2-right { display: none; }
+    .v2-split { display: block; }
+    .v2-left { padding: 0.75rem; }
+    .import-review-notice { margin: 0.75rem; }
+    .import-review-notice .form-row:last-child { margin-bottom: 0; }
+    {% endif %}
   </style>
 {% endblock %}
 
 {% block body %}
   <div class="pcv2">
   <main class="v2-main" id="content-main">
+    {% if import_editor_mode and (import_type_needs_review or import_name_needs_review or import_data_needs_review or import_config_needs_review) %}
+    <fieldset class="module import-review-notice">
+      <h2>{{ _('Review required') }}</h2>
+      <div class="form-content">
+        {% if import_name_needs_review %}
+        <div class="form-row"><div class="field"><ul class="errorlist"><li>{{ _('Replace the generated missing-name placeholder before saving.') }}</li></ul></div></div>
+        {% endif %}
+        {% if import_type_needs_review %}
+        <div class="form-row"><div class="field"><label><input id="import-confirm-type" type="checkbox" onchange="if (this.checked) submitForm('save')"> {{ _('Confirm the selected question type') }}</label></div></div>
+        {% endif %}
+        {% if import_data_needs_review %}
+        <div class="form-row"><div class="field"><ul class="errorlist"><li>{{ _('Test data could not be loaded:') }} {{ import_data_load_error }}</li></ul><label><input id="import-confirm-data" type="checkbox" onchange="if (this.checked) submitForm('save')"> {{ _('Confirm and create this problem without the unreadable test data') }}</label></div></div>
+        {% endif %}
+        {% if import_config_needs_review %}
+        <div class="form-row"><div class="field"><ul class="errorlist"><li>{{ _('Review the imported configuration values below, then revise the corresponding fields where needed.') }}</li></ul>
+          <ul>{% for config in import_unrecognized_configurations %}<li><strong>{{ config.column }}</strong>: {{ config.value }}{% if config.reason %} - {{ config.reason }}{% endif %}</li>{% endfor %}</ul>
+          <label><input id="import-confirm-config" type="checkbox" onchange="if (this.checked) submitForm('save')"> {{ _('I have reviewed these values and updated the corresponding configuration where needed') }}</label>
+        </div></div>
+        {% endif %}
+      </div>
+    </fieldset>
+    {% endif %}
     <div class="v2-top">
       <span class="v2-type-hint">{{ _('Current type:') }} <span class="tag-type regular" id="type-badge">{{ _('Single choice') }}</span></span>
       {% if edit_code %}&mdash; <a href="{{ edit_detail_url }}">{{ edit_name or edit_code }}</a>{% endif %}
@@ -213,11 +253,11 @@
 
     <div class="v2-split">
     <form id="add-problem-form" class="v2-left" novalidate>
-      <!-- ① 基本信息 -->
+      <!-- Basic information -->
       <fieldset class="module">
         <h2>{{ _('Basic information') }}</h2>
         <div class="form-content">
-          <!-- 需求4：去掉“题目大类”，直接选题型 -->
+          <!-- Select the question type directly instead of a broad category. -->
           <div class="form-row">
             <label>{{ _('Type') }} <span class="req">*</span></label>
             <div class="field">
@@ -309,13 +349,13 @@
             </div>
           </div>
 
-          <!-- 分值 -->
+          <!-- Points -->
           <div class="form-row">
             <label>{{ _('Points') }} <span class="req">*</span></label>
             <div class="field"><input type="number" id="f-points" value="1" min="0" step="0.5" style="max-width:120px;"></div>
           </div>
 
-          <!-- 需求7：部分分（仅 多选/填空） -->
+          <!-- Partial scores (multiple-choice and fill-blank only). -->
           <div class="form-row type-panel" data-for="multiple,blank" id="partial-row" style="display:none;">
             <label>{{ _('Partial scoring') }}</label>
             <div class="field">
@@ -347,11 +387,11 @@
         </div>
       </fieldset>
 
-      <!-- ② 题面（预览已移至右栏） -->
+      <!-- Statement (preview is in the right column). -->
       <fieldset class="module">
         <h2>{{ _('Statement') }}</h2>
         <div class="form-content">
-              <!-- 题干 / 主题干 -->
+              <!-- Prompt / main statement -->
               <div class="stem-block">
                 <label class="block-label" id="stem-label">{{ _('Description') }} <span class="req">*</span></label>
                 <div data-rich-mount="stem" data-toolbar="full" data-placeholder="{{ _('Enter the problem statement; ~x^2~ or $$x^2$$ math supported…') }}"></div>
@@ -382,14 +422,14 @@
                 </div>
               </div>
 
-              <!-- 单选 / 多选 -->
+              <!-- Single-choice / multiple-choice -->
               <div class="type-panel" data-for="single,multiple">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Options") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);" id="opt-hint">{{ _("(select the correct answer)") }}</span></label>
                 <div class="options-list" id="options"></div>
                 <button type="button" class="btn-add-option" onclick="addOption()">+ {{ _("Add option") }}</button>
               </div>
 
-              <!-- 判断题 -->
+              <!-- True/false -->
               <div class="type-panel" data-for="truefalse" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _('Answer') }} <span class="req">*</span></label>
                 <div class="tf-choices">
@@ -398,13 +438,13 @@
                 </div>
               </div>
 
-              <!-- 简答题 -->
+              <!-- Short answer -->
               <div class="type-panel" data-for="short" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Reference answer") }} <span class="req">*</span></label>
                 <div data-rich-mount="short" data-toolbar="mini" data-placeholder="{{ _('Enter the reference answer…') }}"></div>
               </div>
 
-              <!-- 填空题 -->
+              <!-- Fill in the blank -->
               <div class="type-panel" data-for="blank" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Answers") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">{{ _("Each blank may have multiple acceptable answers; one per line") }}</span></label>
                 <div class="blank-answers" id="blank-answers"></div>
@@ -419,21 +459,21 @@
                 </div>
               </div>
 
-              <!-- 编程题：题面提示 -->
+              <!-- Code problem: statement guidance -->
               <div class="type-panel" data-for="programming" style="display:none;">
                 <div class="blank-hints">
                   {{ _('For programming problems: set time/memory limits and allowed languages under Advanced; enter test cases directly in the section below.') }}
                 </div>
               </div>
 
-              <!-- 复合题：子题目（需求4） -->
+              <!-- Composite problem: subquestions -->
               <div class="type-panel" data-for="compound" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Sub-questions") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">{{ _("Each sub-question can use a different type and its own points") }}</span></label>
                 <div id="sub-list"></div>
                 <button type="button" class="btn-add-option" onclick="addSub('single')">+ {{ _("Add sub-question") }}</button>
               </div>
 
-              <!-- 其他题型 -->
+              <!-- Other question types -->
               <div class="type-panel" data-for="other" style="display:none;">
                 <div class="blank-hints">{{ _('Other type only records the statement and notes for offline/manual grading; it is not auto-judged.') }}</div>
               </div>
@@ -451,7 +491,7 @@
         </div>
       </fieldset>
 
-      <!-- ③ 编程题：测试用例（内联录入 / ZIP，不再嵌入旧页） -->
+      <!-- Code problem test cases: inline entry or ZIP, without embedding the legacy page. -->
       <fieldset class="module type-panel" data-for="programming" style="display:none;">
         <h2>{{ _("Test cases") }}</h2>
         <div class="form-content">
@@ -500,7 +540,7 @@
         </div>
       </fieldset>
 
-      <!-- 测试用例文件内容抽屉：同时展示该用例 in + out -->
+      <!-- Test-case file drawer: shows both input and output for the case. -->
       <div class="tc-drawer-mask" id="tc-drawer-mask" onclick="closeTcDrawer()"></div>
       <aside class="tc-drawer" id="tc-drawer" aria-hidden="true">
         <div class="tc-drawer-head">
@@ -523,7 +563,7 @@
         </div>
       </aside>
 
-      <!-- ④ 编程题：Creation preset 已移入 Advanced -->
+      <!-- Code-problem creation presets are in Advanced. -->
       <p style="margin:1rem 0;">
         <button type="button" class="btn" id="advanced-btn" onclick="toggleAdvanced()">{{ _('Advanced') }}</button>
         <span style="font-size:12px;color:var(--muted);margin-left:0.5rem;">{{ _('Advanced settings (fields shown by problem type)') }}</span>
@@ -704,11 +744,19 @@
       </div>
 
       <div id="bottombar">
+        {% if import_editor_mode %}
+        <button type="button" class="btn btn-primary" onclick="submitForm('save')">{{ _('Save draft') }}</button>
+        <button type="button" class="btn" onclick="submitForm('format')">{{ _('LLM format question') }}</button>
+        <button type="button" class="btn" onclick="submitForm('create')">{{ _('Create problem') }}</button>
+        <span style="flex:1;"></span>
+        <span id="import-save-status" class="unsaved-note"></span>
+        {% else %}
         <button type="button" class="btn btn-primary" onclick="submitForm('save')">{{ _('Save') }}</button>
         <button type="button" class="btn" onclick="submitForm('continue')">{{ _('Save and continue editing') }}</button>
         <button type="button" class="btn" onclick="submitForm('another')">{{ _('Save and add another') }}</button>
         <span style="flex:1;"></span>
         <button type="button" class="btn btn-cancel" onclick="cancelEdit()">{{ _('Cancel') }}</button>
+        {% endif %}
       </div>
 
     </form>
@@ -725,7 +773,7 @@
     <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="RichEditor.onImagePicked(event)">
   </main>
 
-  <!-- problem_type 选择 / 新建弹窗（沿用 add.html） -->
+  <!-- Problem-type selection / creation dialog (reused from add.html). -->
   <div class="qtype-modal hidden" id="ptype-modal">
     <div class="qtype-box" style="width:480px;">
       <div class="qtype-head">
@@ -783,6 +831,10 @@
     const EDIT_CODE = '{{ edit_code }}';
     const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
+    const IMPORT_EDITOR_MODE = {{ 'true' if import_editor_mode else 'false' }};
+    const IMPORT_ITEM_ID = '{{ import_item_id }}';
+    const IMPORT_FORMAT_URL = '{{ import_format_url }}';
+    const IMPORT_CREATE_URL = '{{ import_create_url }}';
     const SERVER_PROBLEM_TYPES = {{ problem_types_json|safe }};
 
     const TYPE_META = {
@@ -803,7 +855,7 @@
     /* Canonical English tags stored on problem_type; UI pills use gettext separately. */
     const DIFF_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
-    /* 取消：编辑模式=放弃本次修改并回到该题详情；新建模式=放弃这道新题。均不删除任何题目。 */
+    /* Cancel: discard changes in edit mode or the new problem in create mode; never delete a problem. */
     function cancelEdit() {
       if (EDIT_CODE) {
         if (!confirm('{{ _("Discard your changes? Your edits will not be saved, but the problem itself is kept.") }}')) return;
@@ -826,7 +878,7 @@
       if (radio) radio.checked = true;
       setDifficultyTag(DIFF_LABEL[level]);
     }
-    // 调用后端 AI 判定难度（judge/llm；未配置时后端回退启发式）
+    // Call the backend AI difficulty assessor; it falls back to heuristics when not configured.
     function runAIDifficulty() {
       const res = document.getElementById('diff-ai-result');
       const box = document.getElementById('diff-ai-box');
@@ -871,7 +923,7 @@
         .finally(() => { if (btn) btn.disabled = false; });
     }
 
-    /* ---------- problem_type 选择（来自数据库） ---------- */
+    /* ---------- Problem-type selection (from the database) ---------- */
     function allTypes() { return SERVER_PROBLEM_TYPES.slice(); }
     function pushServerType(entry) {
       if (!SERVER_PROBLEM_TYPES.some(t => t.name === entry.name)) SERVER_PROBLEM_TYPES.push(entry);
@@ -950,7 +1002,7 @@
         showToast('{{ _("Problem type created") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
-    /* ---------- organization / problem_group 行内新建 ---------- */
+    /* ---------- Inline organization / problem-group creation ---------- */
     function toggleInlineAdd(kind) {
       const box = document.getElementById(kind + '-add-box');
       if (!box) return;
@@ -1033,7 +1085,7 @@
         showToast('{{ _("AI suggestions applied — confirm selection") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
-    /* 需求：AI 入口放在加号旁边，直接按题面推荐并写入标签（无需打开弹窗） */
+    /* Put the AI entry beside the plus button to recommend and add tags without a dialog. */
     function runAIProblemTypeInline() {
       const description = RichEditor.getMarkdown('stem');
       if (!description.trim()) { showToast('{{ _("Please enter problem content first.") }}', false); return; }
@@ -1102,7 +1154,7 @@
         : gettext('Advanced');
     }
 
-    /* ---------- 题型切换（需求4：直接选题型，无大类） ---------- */
+    /* ---------- Question-type switching: select the type directly, without broad categories. ---------- */
     function selectType(type) {
       currentType = type;
       const meta = TYPE_META[type];
@@ -1136,7 +1188,7 @@
 
     /* RichEditor / MarkdownPreview loaded from static JS; see resources/rich_editor.js */
 
-    /* ---------- 选项（富文本 / Markdown） ---------- */
+    /* ---------- Options (rich text / Markdown) ---------- */
     function optionEditorTpl(name) {
       return RichEditor.html(name, { compact: true, placeholder: gettext('Enter option text ($$math$$ supported)') });
     }
@@ -1177,7 +1229,7 @@
       document.querySelectorAll('#options .option-marker input').forEach(i => { i.type = isMulti ? 'checkbox' : 'radio'; i.name = 'correct'; });
     }
 
-    /* ---------- 填空 ---------- */
+    /* ---------- Fill in the blank ---------- */
     function addBlank() {
       const n = ++blankSeq;
       const row = document.createElement('div');
@@ -1190,7 +1242,7 @@
       renderScoreConf(); renderPreview();
     }
 
-    /* ---------- 测试用例（内联录入 + ZIP 文件名模式）---------- */
+    /* ---------- Test cases (inline entry and ZIP filename mode) ---------- */
     // Soft warning only: save uploads the archive as a file (same path as classic test_data).
     const TC_ZIP_WARN_TOTAL = 8 * 1024 * 1024;
     let tcDrawerTarget = null; // { tr }
@@ -1515,7 +1567,7 @@
       if (input) input.addEventListener('change', () => importZipFile(input.files && input.files[0]));
     })();
 
-    /* ---------- 复合子题目（需求4）---------- */
+    /* ---------- Composite subquestions ---------- */
     function addSub(type) {
       const id = ++subSeq;
       const wrap = document.createElement('div');
@@ -1576,7 +1628,7 @@
       renderPreview();
     }
 
-    /* ---------- 需求7：部分分 / AI 判题配置 ---------- */
+    /* ---------- Partial-score / AI-judging configuration ---------- */
     function renderScoreConf() {
       const partialRow = document.getElementById('partial-row');
       const partialOn = document.getElementById('f-partial').checked;
@@ -1634,7 +1686,7 @@
       renderPreview();
     }
 
-    /* ---------- 预览（全部走服务端 markdown 管线） ---------- */
+    /* ---------- Preview (all content goes through the server-side Markdown pipeline) ---------- */
     const PREVIEW_DEBOUNCE_MS = 350;
     let _previewTimer = null;
     let _previewToken = 0;
@@ -2068,7 +2120,7 @@
       (d.clarifications || []).forEach(row => addClarificationRow(row));
     }
 
-    /* ---------- 收集 / 校验 / 保存 ---------- */
+    /* ---------- Collect / validate / save ---------- */
     function collectData() {
       const data = {
         action: 'save',
@@ -2084,7 +2136,7 @@
         rubric: (document.getElementById('f-rubric') || {}).value || '',
         gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
-        // Manual knowledge tags only — auto type/difficulty chips are derived from controls.
+        // Manual tags only; type/difficulty badges are visual helpers, not stored tags.
         problemTypes: currentManualTags(),
         description: RichEditor.getMarkdown('stem'),
         ...collectAdvanced(),
@@ -2150,6 +2202,22 @@
       }
       return null;
     }
+    function validateForImportFormatting(d) {
+      if (!d.name) return '{{ _("Please enter a problem name.") }}';
+      if (UNSUPPORTED_TYPES.includes(d.type)) {
+        return '{{ _("This question type is under development and cannot be formatted yet.") }}';
+      }
+      if (d.type === 'programming' && !CAN_CREATE_CODE) {
+        return '{{ _("You do not have permission to create programming problems.") }}';
+      }
+      if (['single', 'multiple', 'truefalse', 'blank', 'short'].includes(d.type) && !CAN_CREATE_MCQ) {
+        return '{{ _("You do not have permission to create this problem type.") }}';
+      }
+      if (d.type !== 'compound' && d.type !== 'other' && !d.description) {
+        return '{{ _("Please enter a problem description.") }}';
+      }
+      return null;
+    }
     function showToast(msg, ok) {
       const t = document.getElementById('save-toast');
       t.textContent = msg; t.style.background = ok ? 'var(--dmoj-green)' : 'var(--danger)';
@@ -2206,16 +2274,36 @@
 
     function submitForm(action) {
       console.log('[save] submitForm called, action=' + action);
+      function reportImportSaveError(message) {
+        if (IMPORT_EDITOR_MODE) {
+          window.parent.postMessage({kind: 'problem-import-save-error', message: message}, window.location.origin);
+        }
+      }
       var data;
+      var confirmedImportReview = false;
       try {
         data = collectData();
         data.action = action;
+        if (IMPORT_EDITOR_MODE) {
+          const confirmType = document.getElementById('import-confirm-type');
+          const confirmData = document.getElementById('import-confirm-data');
+          const confirmConfig = document.getElementById('import-confirm-config');
+          data.confirm_question_type = confirmType && confirmType.checked ? '1' : '';
+          data.confirm_data_load = confirmData && confirmData.checked ? '1' : '';
+          data.confirm_unrecognized_configurations = confirmConfig && confirmConfig.checked ? '1' : '';
+          confirmedImportReview = !!(
+            data.confirm_question_type || data.confirm_data_load || data.confirm_unrecognized_configurations
+          );
+        }
         if (EDIT_CODE) data.edit_code = EDIT_CODE;
-        var err = validate(data);
-        if (err) { console.log('[save] validation error:', err); showToast(err, false); return; }
+        var err = IMPORT_EDITOR_MODE && (action === 'save' || action === 'format')
+          ? validateForImportFormatting(data)
+          : validate(data);
+        if (err) { console.log('[save] validation error:', err); showToast(err, false); reportImportSaveError(err); return; }
       } catch (ex) {
         console.error('[add-problem] collectData/validate failed:', ex);
-        showToast('{{ _("Page error:") }} ' + ((ex && ex.message) || ex), false);
+        var message = '{{ _("Page error:") }} ' + ((ex && ex.message) || ex);
+        showToast(message, false); reportImportSaveError(message);
         return;
       }
       console.log('[save] validation passed, sending... type=' + data.type + ' ai=' + data.ai + ' gradingTable=' + (data.gradingTable ? data.gradingTable.length + ' rows' : 'null'));
@@ -2232,21 +2320,89 @@
         console.log('[save] server response:', { ok: res.ok, status: res.status, hasBody: !!res.body, hasRedirect: res.body && !!res.body.redirect, error: res.body && res.body.error });
         if (!res.body) {
           console.error('[add-problem] non-JSON response', res.status, res.txt);
-          showToast('{{ _("Save failed (server returned") }} ' + res.status + ')', false);
+          var responseMessage = '{{ _("Save failed (server returned") }} ' + res.status + ')';
+          showToast(responseMessage, false); reportImportSaveError(responseMessage);
           return;
         }
-        if (!res.ok) { showToast(res.body.error || '{{ _("Save failed") }}', false); return; }
+        if (!res.ok) {
+          var errorMessage = res.body.error || res.body.message || '{{ _("Save failed") }}';
+          showToast(errorMessage, false); reportImportSaveError(errorMessage); return;
+        }
+        if (IMPORT_EDITOR_MODE) {
+          if (action === 'save') {
+            const status = document.getElementById('import-save-status');
+            if (status) status.textContent = '{{ _("Draft saved.") }}';
+            showToast('{{ _("Draft saved.") }}', true);
+            window.parent.postMessage({kind: 'problem-import-saved', item: res.body.item}, window.location.origin);
+            if (confirmedImportReview) {
+              const reviewStillNeeded = res.body.item && (
+                res.body.item.name_needs_review || res.body.item.type_needs_review ||
+                res.body.item.data_needs_review || res.body.item.config_needs_review
+              );
+              if (reviewStillNeeded) {
+                if (status) status.textContent = '{{ _("Review is still required before this confirmation can pass.") }}';
+                showToast('{{ _("Fix the listed configuration issues, then confirm again.") }}', false);
+              } else {
+                if (status) status.textContent = '{{ _("Confirmation recorded.") }}';
+                showToast('{{ _("Confirmation recorded.") }}', true);
+              }
+            }
+            return;
+          }
+          const actionUrl = action === 'format' ? IMPORT_FORMAT_URL : IMPORT_CREATE_URL;
+          const pendingMessage = action === 'format'
+            ? '{{ _("Formatting question with LLM…") }}'
+            : '{{ _("Creating problem…") }}';
+          const status = document.getElementById('import-save-status');
+          if (status) status.textContent = pendingMessage;
+          showToast(pendingMessage, true);
+          fetch(actionUrl, {
+            method: 'POST',
+            headers: {'X-CSRFToken': CSRF_TOKEN, 'X-Requested-With': 'XMLHttpRequest'},
+          }).then(function(actionResponse) {
+            return actionResponse.json().then(function(actionBody) {
+              return {ok: actionResponse.ok, body: actionBody};
+            });
+          }).then(function(actionResult) {
+            if (!actionResult.ok || !actionResult.body.ok) {
+              showToast(actionResult.body.message || '{{ _("Request failed") }}', false);
+              return;
+            }
+            if (actionResult.body.item) {
+              window.parent.postMessage({kind: 'problem-import-saved', item: actionResult.body.item}, window.location.origin);
+            }
+            if (action === 'format') {
+              showToast('{{ _("Question formatted. Review the updated configuration.") }}', true);
+              window.location.reload();
+            } else {
+              const parentUrl = new URL(window.parent.location.href);
+              parentUrl.searchParams.set('item', IMPORT_ITEM_ID);
+              window.parent.location.href = parentUrl.toString();
+            }
+          }).catch(function() {
+            showToast('{{ _("Request failed") }}', false);
+          });
+          return;
+        }
         showToast('{{ _("Saved") }} ' + res.body.code, true);
         if (res.body.redirect) setTimeout(function() { location.href = res.body.redirect; }, 600);
         else resetForm();
       }).catch(function(err) {
         console.error('[add-problem] network/fetch error:', err);
-        showToast('{{ _("Network error — please check your connection and try again.") }}', false);
+        var networkMessage = '{{ _("Network error — please check your connection and try again.") }}';
+        showToast(networkMessage, false); reportImportSaveError(networkMessage);
       });
     }
     /* Buttons use onclick directly — no form submit listener needed. */
+    if (IMPORT_EDITOR_MODE) {
+      window.addEventListener('message', function(event) {
+        if (event.origin === window.location.origin && event.data && event.data.kind === 'problem-import-save') {
+          submitForm('save');
+        }
+      });
+    }
 
-    /* ── 富文本图片拖拽缩放（沿用 add.html） ── */
+    /* ── Rich-text image drag resizing (reused from add.html). ── */
     (function initImageResize() {
       const handle = document.createElement('div'); handle.className = 'img-resize-handle'; document.body.appendChild(handle);
       let selImg = null, resizing = false, startX = 0, startW = 0, ratio = 1;
@@ -2260,7 +2416,7 @@
       window.addEventListener('scroll', positionHandle, true); window.addEventListener('resize', positionHandle);
     })();
 
-    /* ---------- 编辑已有题目：把后端数据回填到表单 ---------- */
+    /* ---------- Editing an existing problem: populate the form from backend data. ---------- */
     function loadEditData(d) {
       const radio = document.querySelector(`input[name="qtype"][value="${d.type}"]`);
       if (radio) radio.checked = true;

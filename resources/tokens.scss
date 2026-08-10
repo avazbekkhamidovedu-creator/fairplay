@@ -38,16 +38,52 @@
     --oj-btn-hover: #{$btn_primary_hover};
     --oj-btn-text: #fff;
 
-    /* Danger / success */
+    /* Danger / success / info / warning */
     --oj-danger: #{$btn_danger};
     --oj-danger-hover: #{$btn_danger_hover};
+    --oj-danger-soft: #fdecea;
     --oj-success: #2d7a2d;
     --oj-success-soft: #e8f5e9;
+    --oj-info: #{$highlight_blue};
     --oj-info-soft: #e3f2fd;
-    --oj-warning: #ef6c00;
+    --oj-info-text: #1958c1;
+    --oj-warning: #f57f17;
     --oj-warning-soft: #fde68a;
+    --oj-warning-border: #ffe082;
     --oj-surface-soft: #{$color_primary10};
     --oj-surface-muted: #{$color_primary25};
+
+    /* Difficulty badges (problem list & sidebar) */
+    --oj-diff-easy-bg: #dcfce7;
+    --oj-diff-easy-text: #15803d;
+    --oj-diff-medium-bg: #ffedd5;
+    --oj-diff-medium-text: #c2410c;
+    --oj-diff-hard-bg: #f3e8ff;
+    --oj-diff-hard-text: #7e22ce;
+
+    /* Problem submission / ticket status */
+    --oj-accepted: #44AD41;
+    --oj-rejected: #DE2121;
+    --oj-pending: #BBCC00;
+
+    /* Judge status background colors (status badges) */
+    --oj-judge-pass: #53f23f;
+    --oj-judge-sc: #DFFF00;
+    --oj-judge-fail: #ef1b53;
+    --oj-judge-pending: #CCC;
+    --oj-judge-judging: #FAB623;
+
+    /* Tag / badge background colours */
+    --oj-tag-info-bg: #e3f2fd;
+    --oj-tag-info-text: #1958c1;
+    --oj-tag-regular-bg: #f3e5f5;
+    --oj-tag-regular-text: #7b1fa2;
+    --oj-tag-admin-bg: #fff3e0;
+    --oj-tag-admin-text: #e65100;
+
+    /* Focus ring / affirmative green (rich-editor OK buttons, focus rings) */
+    --oj-focus: #2a9d5c;
+    --oj-focus-ring: rgba(42, 157, 92, 0.15);
 
     /* Shape — classic OJ is modestly rounded */
     --oj-radius: #{$widget_border_radius};

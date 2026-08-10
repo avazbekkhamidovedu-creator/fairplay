@@ -1,11 +1,14 @@
+from unittest import mock
+
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
-from judge.models import Language, LanguageLimit, Problem, Submission
+from judge.models import Language, LanguageLimit, Problem, ProblemData, Submission
 from judge.models.problem import VotePermission, disallowed_characters_validator
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_organization, create_problem, create_problem_type, create_solution, create_user
+from judge.utils.problem_create import apply_simple_problem_defaults
 
 
 class ProblemTestCase(CommonDataMixin, TestCase):
@@ -87,6 +90,17 @@ class ProblemTestCase(CommonDataMixin, TestCase):
         self.assertEqual(self.basic_problem.translated_name('ABCDEFGHIJK'), self.basic_problem.name)
 
         self.assertFalse(self.basic_problem.clarifications.exists())
+
+    def test_new_problem_does_not_rename_data_root_on_later_save(self):
+        problem = Problem(name='New code problem', description='Statement', points=1)
+        apply_simple_problem_defaults(problem)
+
+        with mock.patch.object(ProblemData, '_update_code') as update_code:
+            problem.save()
+            ProblemData.objects.create(problem=problem)
+            problem.save()
+
+        update_code.assert_not_called()
 
     def test_basic_problem_language_limits(self):
         for common_name, memory_limit in self.basic_problem.language_memory_limit:
