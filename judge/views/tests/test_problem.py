@@ -395,14 +395,18 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         response = self.client.get(reverse('problem_list'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="filter-form"', html=False)
-        self.assertContains(response, 'id="difficulty-multi-select"', html=False)
-        self.assertContains(response, 'id="org-multi-select"', html=False)
+        # Select2-backed local multi-selects + tags chip picker.
+        self.assertContains(response, 'id="filter-difficulty"', html=False)
+        self.assertContains(response, 'id="filter-course"', html=False)
         self.assertContains(response, 'id="status-filter"', html=False)
+        self.assertContains(response, 'id="knowledge-picker"', html=False)
         self.assertContains(response, 'class="difficulty-badge', html=False)
         self.assertContains(response, 'Programming', html=False)
         self.assertNotContains(response, 'group-tabs', html=False)
         self.assertNotContains(response, 'col-group', html=False)
         self.assertContains(response, '>Tags<', html=False)
+        self.assertNotContains(response, 'id="difficulty-multi-select"', html=False)
+        self.assertNotContains(response, 'id="org-multi-select"', html=False)
 
     def test_problem_list_context_splits_type_groups(self):
         context = self._context(self.users['normal'], {})
