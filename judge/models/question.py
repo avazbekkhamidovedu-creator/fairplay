@@ -30,6 +30,7 @@ class ProblemImportItem(models.Model):
         ('C', _('Code')),
         ('M', _('Multiple choice')),
         ('B', _('Fill in the blank')),
+        ('S', _('Short answer')),
     )
 
     draft = models.ForeignKey(ProblemImportDraft, related_name='items', on_delete=CASCADE)
@@ -48,6 +49,16 @@ class ProblemImportItem(models.Model):
     options = models.TextField(blank=True)
     correct_options = models.TextField(blank=True)
     blanks = models.TextField(blank=True)
+    rubric = models.TextField(blank=True)
+    grading_table = models.TextField(blank=True)
+    is_true_false = models.BooleanField(default=False)
+    # Preserve the complete unified-editor payload while the import is still a draft.
+    editor_data = models.JSONField(default=dict, blank=True)
+    data_needs_review = models.BooleanField(default=False)
+    data_load_error = models.TextField(blank=True)
+    config_needs_review = models.BooleanField(default=False)
+    unrecognized_configurations = models.JSONField(default=list, blank=True)
+    config_review_signature = models.CharField(max_length=64, blank=True)
     formatting_error = models.TextField(blank=True)
     type_needs_review = models.BooleanField(default=False)
     name_needs_review = models.BooleanField(default=False)
