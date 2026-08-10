@@ -7211,3 +7211,31 @@ msgstr "译文描述"
 msgid "+ Add another Translation"
 msgstr "+ 添加翻译"
 
+#: templates/problem/workspace.html
+msgid "Submitted source"
+msgstr "提交内容"
+
+#: templates/problem/workspace.html
+msgid "Load into editor"
+msgstr "加载到编辑器"
+
+#: judge/views/problem.py
+msgid "(option no longer available)"
+msgstr "（选项已失效）"
+
+#: judge/views/problem.py
+msgid "(no option selected)"
+msgstr "（未选择选项）"
+
+#: judge/views/problem.py
+msgid "Source code cannot be empty."
+msgstr "源代码不能为空。"
+
+#: judge/views/problem.py
+msgid "Answer cannot be empty."
+msgstr "答案不能为空。"
+
+#: templates/comments/list.html
+msgid "Write a comment; $$math$$ supported…"
+msgstr "撰写评论；支持 $$math$$…"
+

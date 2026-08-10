@@ -51,10 +51,22 @@ from judge.utils.problem_create import apply_simple_problem_defaults, default_pr
 # Types the redesigned page offers but the backend cannot grade/store yet.
 NOT_IMPLEMENTED_TYPES = {'compound', 'other'}
 
+# Difficulty ProblemType.full_name defaults when attaching the standard easy/medium/hard row.
+_DIFFICULTY_FULL_NAMES = {
+    'easy': 'Easy',
+    'medium': 'Medium',
+    'hard': 'Hard',
+}
+
 
 def _problem_type_code(text):
     code = re.sub(r'[^\w\-]+', '-', (text or '').strip().lower())[:20].strip('-')
     return code or 'type'
+
+
+def _reserved_auto_labels():
+    """Format/difficulty auto-chip labels that must not be stored as knowledge tags."""
+    return Problem.reserved_auto_type_labels()
 
 
 def _can_create_any(user):
@@ -284,16 +296,21 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'rubric': '',
         }
 
-        diff_labels = {'Easy': 'easy', 'Medium': 'medium', 'Hard': 'hard'}
-        type_tags, difficulty = [], ''
-        for full in problem.types.values_list('full_name', 'name'):
-            label = full[0] or full[1]
-            if label in diff_labels:
-                difficulty = diff_labels[label]
-            else:
-                type_tags.append(label)
+        # Knowledge chips only — difficulty / format / auto type labels are rebuilt by the UI.
+        reserved = _reserved_auto_labels()
+        type_tags = []
+        seen_labels = set()
+        for ptype in problem.types.all():
+            if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                continue
+            label = ptype.full_name or ptype.name
+            key = (label or '').casefold()
+            if not key or key in seen_labels:
+                continue
+            seen_labels.add(key)
+            type_tags.append(label)
         data['problemTypes'] = type_tags
-        data['difficulty'] = difficulty or 'medium'
+        data['difficulty'] = problem.difficulty or 'medium'
 
         if st == ProblemSubmissionType.CODE:
             data['type'] = 'programming'
@@ -519,15 +536,38 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return ProblemType.objects.create(name=code, full_name=label[:100])
 
     def _attach_types(self, problem, payload):
+        """Persist knowledge tags + standard difficulty; drop auto type/difficulty chips."""
+        reserved = _reserved_auto_labels()
         labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
         resolved = []
         seen = set()
         for label in labels:
-            ptype = self._resolve_problem_type(label)
+            text = str(label).strip()
+            if text.casefold() in reserved:
+                continue
+            ptype = self._resolve_problem_type(text)
             if ptype is None or ptype.pk in seen:
+                continue
+            if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
                 continue
             seen.add(ptype.pk)
             resolved.append(ptype)
+
+        diff_name = (payload.get('difficulty') or '').strip().lower()
+        if diff_name in Problem.DIFFICULTY_TYPE_NAMES:
+            diff_type, _created = ProblemType.objects.get_or_create(
+                name=diff_name,
+                defaults={'full_name': _DIFFICULTY_FULL_NAMES[diff_name]},
+            )
+            if diff_type.pk not in seen:
+                resolved.append(diff_type)
+                seen.add(diff_type.pk)
+        else:
+            # Older clients omit difficulty — keep any existing easy/medium/hard row.
+            existing_diff = problem.types.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).first()
+            if existing_diff is not None and existing_diff.pk not in seen:
+                resolved.append(existing_diff)
+
         if resolved:
             problem.types.set(resolved)
         elif not problem.types.exists():

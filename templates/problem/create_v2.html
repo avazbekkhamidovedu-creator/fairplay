@@ -2084,7 +2084,8 @@
         rubric: (document.getElementById('f-rubric') || {}).value || '',
         gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
-        problemTypes: [...document.querySelectorAll('#f-types .ptype-tag')].map(t => t.childNodes[0].textContent.trim()),
+        // Manual knowledge tags only — auto type/difficulty chips are derived from controls.
+        problemTypes: currentManualTags(),
         description: RichEditor.getMarkdown('stem'),
         ...collectAdvanced(),
       };
@@ -2284,7 +2285,13 @@
         const dr = document.querySelector(`input[name="difficulty"][value="${d.difficulty}"]`);
         if (dr) { dr.checked = true; setDifficulty(d.difficulty); }
       }
+      // Knowledge only; type/difficulty auto chips were already inserted by selectType/setDifficulty.
+      const autoLabels = new Set([
+        ...Object.values(TYPE_META).map(m => m.tag),
+        ...Object.values(DIFF_LABEL),
+      ]);
       (d.problemTypes || []).forEach(full => {
+        if (!full || autoLabels.has(full)) return;
         const box = document.getElementById('f-types');
         const el = document.createElement('span');
         el.className = 'ptype-tag';

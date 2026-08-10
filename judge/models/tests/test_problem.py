@@ -443,11 +443,19 @@ class ProblemDifficultyPropertiesTestCase(CommonDataMixin, TestCase):
         create_problem_type(name='fill_in_blank', full_name='Fill in Blank')
         create_problem_type(name='dp', full_name='Dynamic Programming')
         create_problem_type(name='greedy', full_name='Greedy')
+        # Legacy auto chips persisted with non-canonical names (still must not show in Tags).
+        create_problem_type(name='programming', full_name='Programming')
+        create_problem_type(name='fill-in-blank', full_name='Fill-in-blank')
 
         cls.easy_problem = create_problem(
             code='diff-easy',
             is_public=True,
             types=('easy', 'code', 'dp'),
+        )
+        cls.polluted_tags = create_problem(
+            code='diff-polluted',
+            is_public=True,
+            types=('easy', 'programming', 'fill-in-blank', 'dp', 'greedy'),
         )
         cls.hard_problem = create_problem(
             code='diff-hard',
@@ -485,6 +493,12 @@ class ProblemDifficultyPropertiesTestCase(CommonDataMixin, TestCase):
     def test_knowledge_types_list_excludes_format_and_difficulty(self):
         self.assertEqual(self.easy_problem.knowledge_types_list, ['Dynamic Programming'])
         self.assertEqual(self.untagged_difficulty.knowledge_types_list, ['Greedy'])
+
+    def test_knowledge_types_list_excludes_auto_chips_and_dedupes(self):
+        self.assertEqual(
+            self.polluted_tags.knowledge_types_list,
+            ['Dynamic Programming', 'Greedy'],
+        )
 
 
 class DisallowedCharactersValidatorTestCase(SimpleTestCase):

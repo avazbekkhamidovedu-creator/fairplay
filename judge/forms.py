@@ -201,10 +201,17 @@ class MCQSubmitForm(Form):
         return cleaned
 
 
+class NoAutoCompleteCharField(forms.CharField):
+    def widget_attrs(self, widget):
+        attrs = super(NoAutoCompleteCharField, self).widget_attrs(widget)
+        attrs['autocomplete'] = 'off'
+        return attrs
+
+
 class FillBlankSubmitForm(Form):
     """Student-facing fill-in-the-blank answer form.
 
-    One text field per blank, named ``blank_<order>`` and labelled by the blank's label (or
+    One text field per blank, named ``fb_<order>`` and labelled by the blank's label (or
     ``Blank N``). ``clean`` collects the answers in blank order into ``cleaned['answers']``. The
     accepted answers are never exposed to the template.
     """
@@ -213,20 +220,36 @@ class FillBlankSubmitForm(Form):
         super().__init__(*args, **kwargs)
         self.blanks = list(problem.blanks.all())
         for index, blank in enumerate(self.blanks):
-            self.fields['blank_%d' % blank.order] = CharField(
+            # Distinct name prefix avoids browsers matching prior ``blank_N`` autofill history.
+            field = NoAutoCompleteCharField(
                 label=blank.label or (_('Blank %d') % (index + 1)),
-                max_length=1000, required=True, strip=False)
+                max_length=1000, required=True, strip=False,
+            )
+            # Extra browser hints: Chrome often ignores autocomplete=off alone.
+            field.widget.attrs.update({
+                'autocomplete': 'new-password',
+                'autocapitalize': 'off',
+                'autocorrect': 'off',
+                'spellcheck': 'false',
+                'data-lpignore': 'true',
+                'data-1p-ignore': 'true',
+                'readonly': 'readonly',
+                'onfocus': "this.removeAttribute('readonly');",
+            })
+            self.fields['fb_%d' % blank.order] = field
 
     def clean(self):
         cleaned = super().clean()
-        cleaned['answers'] = [cleaned.get('blank_%d' % blank.order, '') or '' for blank in self.blanks]
+        cleaned['answers'] = [cleaned.get('fb_%d' % blank.order, '') or '' for blank in self.blanks]
         return cleaned
 
 
 class ShortAnswerSubmitForm(Form):
     """Student-facing short-answer form: a single free-text response."""
-    answer = CharField(label='', required=True, strip=True,
-                       widget=forms.Textarea(attrs={'rows': 6, 'class': 'short-answer-input'}))
+    answer = NoAutoCompleteCharField(
+        label='', required=True, strip=True,
+        widget=forms.Textarea(attrs={'rows': 6, 'class': 'short-answer-input'}),
+    )
 
     def __init__(self, *args, problem=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -253,13 +276,6 @@ class CustomAuthenticationForm(AuthenticationForm):
     def _has_social_auth(self, key):
         return (getattr(settings, 'SOCIAL_AUTH_%s_KEY' % key, None) and
                 getattr(settings, 'SOCIAL_AUTH_%s_SECRET' % key, None))
-
-
-class NoAutoCompleteCharField(forms.CharField):
-    def widget_attrs(self, widget):
-        attrs = super(NoAutoCompleteCharField, self).widget_attrs(widget)
-        attrs['autocomplete'] = 'off'
-        return attrs
 
 
 class TOTPForm(Form):

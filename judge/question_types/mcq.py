@@ -61,7 +61,17 @@ class MCQQuestionType(QuestionType):
 
     def store_answer(self, submission, cleaned_data):
         from judge.models import SubmissionSource
-        payload = json.dumps({'selected': sorted(int(x) for x in cleaned_data['selected'])})
+        selected = sorted(int(x) for x in cleaned_data['selected'])
+        # Snapshot option text at submit time so Result stays readable after options are edited.
+        options = {o.id: o for o in submission.problem.mcq_options.all()}
+        choices = []
+        for opt_id in selected:
+            opt = options.get(opt_id)
+            if opt is None:
+                choices.append({'id': opt_id, 'order': None, 'text': ''})
+            else:
+                choices.append({'id': opt.id, 'order': opt.order, 'text': opt.text})
+        payload = json.dumps({'selected': selected, 'choices': choices})
         source, _created = SubmissionSource.objects.update_or_create(
             submission=submission, defaults={'source': payload})
         submission.source = source  # prime the reverse relation for immediate grading

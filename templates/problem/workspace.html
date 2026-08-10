@@ -4,14 +4,61 @@
 {% block body_class %}workspace-page{% endblock %}
 {% block title_row %}{% endblock %}
 {% block title_ruler %}{% endblock %}
+{% block media %}
+  {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
+    <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
+    <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
+  {% endif %}
+{% endblock %}
+{% block js_media %}
+  {% if enable_comments %}
+    {# Vote/reply only — new comments use RichEditor, not Martor. #}
+    {% include "comments/media-js-lite.html" %}
+  {% endif %}
+  {% if request.user.is_authenticated and perms.judge.rejudge_submission %}
+    <script type="text/javascript">
+      window.rejudge_submission = function (id, event) {
+        if ((typeof event.ctrlKey === 'undefined' || event.ctrlKey) &&
+            confirm({{ _('Are you sure you want to rejudge?')|htmltojs }})) {
+          $.ajax({
+            url: '{{ url('submission_rejudge') }}',
+            type: 'POST',
+            data: { id: id }
+          });
+        }
+        return false;
+      };
+    </script>
+  {% endif %}
+{% endblock %}
 {% block body %}
 <div class="ws-app" id="workspace"
      data-mode="{{ workspace_mode }}"
+     data-context-id="{{ workspace_context_id|default('') }}"
      data-problem="{{ problem.code }}"
+     data-is-code="{{ '1' if workspace_is_code else '0' }}"
      data-run-url="{{ url('problem_workspace_run', problem.code) }}"
-     data-timer-seconds="{{ workspace_timer_seconds|default(0) }}">
+     data-subs-url="{{ url('problem_workspace_submissions', problem.code) }}"
+     data-testcases-url="{{ url('submission_testcases_query') }}"
+     data-timer-seconds="{{ workspace_timer_seconds|default(0) }}"
+     data-show-timer="{{ '1' if workspace_show_timer else '0' }}"
+     {% if workspace_submission %}data-submission-id="{{ workspace_submission.id }}" data-submission-graded="{{ '1' if workspace_submission.is_graded else '0' }}"{% if not workspace_submission.results_hidden %} data-submission-result="{{ workspace_submission.result or '' }}"{% endif %}{% if workspace_submission.status_url %} data-status-url="{{ workspace_submission.status_url }}"{% endif %}{% if workspace_submission.id_secret %} data-sub-channel="sub_{{ workspace_submission.id_secret }}"{% endif %}{% endif %}
+     {% if workspace_submission and last_msg is defined %}data-last-msg="{{ last_msg }}"{% endif %}
+     data-event-ws="{{ EVENT_DAEMON_LOCATION }}"
+     data-event-poll="{{ EVENT_DAEMON_POLL_LOCATION }}"
+     {% if ai_hints_possible %}data-ai-hints-possible="1" data-ai-hints-remaining="{{ ai_hints_remaining }}"{% if workspace_submission %} data-ai-hint-url="{{ url('submission_ai_hint', workspace_submission.id) }}"{% endif %}{% endif %}
+     {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}data-image-upload-url="{{ url('martor_image_uploader') }}"{% endif %}>
   <div class="ws-toolbar">
-    <button class="tool-btn" type="button" id="btn-overview" aria-expanded="false"><i class="fa fa-bars"></i> {{ _('Problem set') }}</button>
+    <button class="tool-btn icon-only" type="button" id="btn-overview" aria-expanded="false" title="{{ _('Problem set') }}" aria-label="{{ _('Problem set') }}">
+      <span class="ws-overview-icon" aria-hidden="true">
+        <svg viewBox="0 0 16 14" width="16" height="14" focusable="false">
+          <rect x="0" y="1" width="16" height="2" rx="0.6"/>
+          <polygon points="0,5.2 3.4,7 0,8.8"/>
+          <rect x="4.6" y="6" width="11.4" height="2" rx="0.6"/>
+          <rect x="0" y="11" width="16" height="2" rx="0.6"/>
+        </svg>
+      </span>
+    </button>
     <a class="ctx-label" href="{{ workspace_return_url }}">{{ workspace_context_name }}</a>
     <span class="nav-arrows">
       <button class="tool-btn icon-only" id="btn-prev" type="button" title="{{ _('Previous problem') }}"><i class="fa fa-chevron-left"></i></button>
@@ -19,76 +66,494 @@
     </span>
     <div class="ws-layout-switch"><button class="layout-toggle" type="button" id="layout-toggle"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button></div>
     <div class="submit-cluster">
-      {% if workspace_is_code %}<button class="tool-btn submit-btn" type="button" id="btn-submit"><i class="fa fa-cloud-upload"></i> {{ _('Submit') }}</button>{% endif %}
-      {% if workspace_timer_seconds %}<span class="timer-wrap" id="ws-timer"><i class="fa fa-clock-o"></i> <span></span></span>{% endif %}
+      {% if form %}<button class="tool-btn submit-btn" type="button" id="btn-submit"{% if workspace_is_code and not form.fields.language.queryset.exists() %} disabled{% endif %}{% if workspace_show_timer and workspace_timer_seconds <= 0 %} disabled{% endif %}><i class="fa fa-cloud-upload"></i> {{ _('Submit') }}</button>{% endif %}
+      {% if workspace_show_timer %}
+        <span class="timer-wrap{% if workspace_timer_seconds <= 0 %} expired{% endif %}" id="ws-timer" title="{{ _('Assignment duration remaining') }}">
+          <i class="fa fa-clock-o"></i> <span>{% if workspace_timer_seconds <= 0 %}{{ _('Time expired') }}{% endif %}</span>
+        </span>
+      {% endif %}
     </div>
   </div>
   <div class="ws-body layout-lr" id="ws-body">
     <div class="ws-drawer-backdrop" id="drawer-backdrop"></div>
     <aside class="ws-drawer" id="ws-drawer" aria-label="{{ _('Problem set') }}">
-      <div class="ws-drawer-head"><strong><i class="fa fa-list"></i> {{ _('Problem list') }}</strong><button class="close-btn" id="drawer-close" type="button" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button></div>
       {% if workspace_mode == 'practice' %}
-        <div class="ws-drawer-progress"><span id="drawer-solved"></span></div>
-        <div class="ws-drawer-toolbar"><div class="ws-drawer-search"><i class="fa fa-search"></i><input id="drawer-q" type="search" placeholder="{{ _('Search problems') }}"></div></div>
-        <div class="ws-filter-panel">
-          <div class="filter-block"><label for="fp-status">{{ _('Status') }}</label><select id="fp-status"><option value="">{{ _('All') }}</option><option value="solved">{{ _('Solved') }}</option><option value="attempted">{{ _('Attempted') }}</option><option value="unsolved">{{ _('Unsolved') }}</option></select></div>
-          <div class="filter-block"><label for="fp-type">{{ _('Problem type') }}</label><select id="fp-type"><option value="">{{ _('All') }}</option>{% for option in workspace_format_options %}<option value="{{ option.code }}">{{ option.label }}</option>{% endfor %}</select></div>
-          <div class="filter-block"><label for="fp-group">{{ _('Problem group') }}</label><select id="fp-group"><option value="">{{ _('All') }}</option>{% for group in workspace_groups %}<option value="{{ group.id }}">{{ group.full_name }}</option>{% endfor %}</select></div>
-          <div class="filter-block"><label for="fp-ac-min">{{ _('AC rate') }}</label><div class="filter-inline"><input id="fp-ac-min" type="number" min="0" max="100" placeholder="{{ _('Min') }}"><span>~</span><input id="fp-ac-max" type="number" min="0" max="100" placeholder="{{ _('Max') }}"></div></div>
+        <div class="ws-drawer-progress">
+          <button class="close-btn drawer-progress-close" id="drawer-close" type="button" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button>
+          <div class="ws-drawer-solved-line">
+            <span class="solved-frac" id="drawer-solved-frac">0/0</span>
+            {{ _('solved (current filter)') }}
+          </div>
+          <div class="bar" aria-hidden="true"><span id="drawer-bar" style="width:0%"></span></div>
+        </div>
+        <div class="ws-drawer-toolbar">
+          <div class="ws-drawer-search">
+            <i class="fa fa-search" aria-hidden="true"></i>
+            <input id="drawer-q" type="search" placeholder="{{ _('Search problems') }}" autocomplete="off">
+          </div>
+          <div class="ws-filter-panel open exposed" id="filter-popover">
+            <div class="filter-block">
+              <label class="filter-label" for="fp-status">{{ _('Status') }}</label>
+              <select id="fp-status">
+                <option value="">{{ _('All') }}</option>
+                <option value="solved">{{ _('Solved') }}</option>
+                <option value="attempted">{{ _('Attempted') }}</option>
+                <option value="unsolved">{{ _('Unsolved') }}</option>
+              </select>
+            </div>
+            <div class="filter-block">
+              <label class="filter-label" for="fp-type">{{ _('Problem type') }}</label>
+              <select id="fp-type">
+                <option value="">{{ _('All types') }}</option>
+                {% for option in workspace_format_options %}<option value="{{ option.code }}">{{ option.label }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="filter-block">
+              <label class="filter-label" for="fp-diff">{{ _('Difficulty') }}</label>
+              <select id="fp-diff">
+                <option value="">{{ _('All difficulties') }}</option>
+                {% for option in workspace_difficulty_options %}<option value="{{ option.code }}">{{ option.label }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="filter-block">
+              <label class="filter-label" for="fp-group">{{ _('Problem group') }}</label>
+              <select id="fp-group">
+                <option value="">{{ _('All groups') }}</option>
+                {% for group in workspace_groups %}<option value="{{ group.id }}">{{ group.full_name }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="filter-block">
+              <label class="filter-label" for="fp-kp">{{ _('Knowledge point') }}</label>
+              <select id="fp-kp">
+                <option value="">{{ _('All knowledge points') }}</option>
+                {% for kp in workspace_knowledge_types %}<option value="{{ kp.id }}">{{ kp.full_name }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="filter-block">
+              <label class="filter-label" for="fp-ac-min">{{ _('AC rate') }}</label>
+              <div class="filter-inline">
+                <input id="fp-ac-min" type="number" min="0" max="100" placeholder="{{ _('Min') }}">
+                <span>~</span>
+                <input id="fp-ac-max" type="number" min="0" max="100" placeholder="{{ _('Max') }}">
+              </div>
+            </div>
+          </div>
         </div>
       {% else %}
-        <div class="ws-drawer-summary"><span id="drawer-progress"></span><select id="drawer-filter-status"><option value="">{{ _('All') }}</option><option value="answered">{{ _('Answered') }}</option><option value="unanswered">{{ _('Unanswered') }}</option></select></div>
+        <div class="ws-drawer-summary">
+          <button class="close-btn drawer-summary-close" id="drawer-close" type="button" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button>
+          <span id="drawer-progress"></span>
+          <select id="drawer-filter-status">
+            <option value="">{{ _('All') }}</option>
+            <option value="answered">{{ _('Answered') }}</option>
+            <option value="unanswered">{{ _('Unanswered') }}</option>
+          </select>
+        </div>
       {% endif %}
       <div class="ws-drawer-body" id="drawer-problems">
         {% for item in workspace_problems %}
-          {% set item_problem = item.problem if workspace_mode == 'assignment' else item %}
+          {% set item_problem = item.problem if contest_problem else item %}
+          {% set row_status = 'solved' if item_problem.id in completed_problem_ids else ('attempted' if item_problem.id in attempted_problems else 'unsolved') %}
+          {% set row_points = item.points if contest_problem else item_problem.points %}
+          {% set row_attempts = workspace_attempt_counts.get(item_problem.id, 0) %}
+          {% set row_best = workspace_best_points.get(item_problem.id) %}
+          {% set row_diff = item_problem.difficulty %}
           <a class="drawer-problem{% if item_problem.code == problem.code %} active{% endif %}"
              href="{{ item_problem.get_absolute_url() }}"
-             data-code="{{ item_problem.code }}" data-type="{{ item_problem.submission_type }}"
-             data-group="{{ item_problem.group_id }}" data-ac="{{ item_problem.ac_rate }}"
-             data-status="{% if item_problem.id in completed_problem_ids %}solved{% elif item_problem.id in attempted_problems %}attempted{% else %}unsolved{% endif %}">
-            <span class="drawer-problem-code">{% if workspace_mode == 'assignment' %}{{ item.order }}. {% endif %}{{ item_problem.code }}</span><span class="drawer-problem-name">{{ item_problem.name }}</span>{% if workspace_mode == 'assignment' %}<span>{{ item.points }}</span>{% endif %}
+             data-code="{{ item_problem.code }}"
+             data-type="{{ item_problem.submission_type }}"
+             data-group="{{ item_problem.group_id }}"
+             data-ac="{{ item_problem.ac_rate }}"
+             data-diff="{{ row_diff or '' }}"
+             data-kp="{% for t in item_problem.types.all() if t.name not in ('easy', 'medium', 'hard', 'code', 'fill_in_blank', 'multiple_choices') %}{{ t.id }} {% endfor %}"
+             data-status="{{ row_status }}"
+             data-attempts="{{ row_attempts }}">
+            <span class="drawer-st" aria-hidden="true">
+              {% if row_status == 'solved' %}
+                <i class="solved-problem-color fa fa-check-circle" title="{{ _('Solved') }}"></i>
+              {% elif row_status == 'attempted' %}
+                <i class="attempted-problem-color fa fa-minus-circle" title="{{ _('Attempted') }}"></i>
+              {% else %}
+                <i class="unsolved-problem-color fa fa-circle-o" title="{{ _('Unsolved') }}"></i>
+              {% endif %}
+            </span>
+            <span class="drawer-problem-body">
+              <span class="drawer-problem-name">{% if contest_problem %}{{ item.order }}. {% else %}{{ item_problem.code }} {% endif %}{{ item_problem.name }}</span>
+              <span class="drawer-problem-meta">
+                {% if row_diff %}<span class="difficulty-badge diff-{{ row_diff }}">{{ item_problem.difficulty_label }}</span>{% endif %}
+                <span class="drawer-attempts">
+                  {% if row_attempts %}
+                    {{ _('Attempted %(count)s times', count=row_attempts) }}
+                  {% else %}
+                    {{ _('Not attempted') }}
+                  {% endif %}
+                </span>
+              </span>
+            </span>
+            <span class="drawer-score{% if row_status == 'solved' %} got{% elif row_status == 'attempted' %} tried{% endif %}">
+              {% if row_status == 'solved' %}
+                {{ (row_best if row_best is not none else row_points)|floatformat(0) }}/{{ row_points|floatformat(0) }}
+              {% else %}
+                —/{{ row_points|floatformat(0) }}
+              {% endif %}
+            </span>
           </a>
         {% endfor %}
       </div>
-      {% if workspace_mode == 'practice' %}<div class="ws-drawer-pagination"><span id="drawer-page-info"></span><div><button id="drawer-page-prev" type="button" title="{{ _('Previous page') }}"><i class="fa fa-chevron-left"></i></button><button id="drawer-page-next" type="button" title="{{ _('Next page') }}"><i class="fa fa-chevron-right"></i></button></div></div>{% endif %}
+      {% if workspace_mode == 'practice' %}
+        <div class="ws-drawer-pagination">
+          <span class="pager-info" id="drawer-page-info"></span>
+          <div class="pager-actions">
+            <button id="drawer-page-prev" type="button" title="{{ _('Previous page') }}"><i class="fa fa-chevron-left"></i></button>
+            <button id="drawer-page-next" type="button" title="{{ _('Next page') }}"><i class="fa fa-chevron-right"></i></button>
+          </div>
+        </div>
+      {% endif %}
     </aside>
 
     <section class="ws-pane ws-pane-left" id="pane-left">
       <div class="ws-tabs" role="tablist">
         <button class="active" data-tab="desc" type="button">{{ _('Description') }}</button><button data-tab="ai" type="button">AI Hints</button>
-        <button data-tab="result" id="tab-result" type="button" class="{% if not workspace_submission %}tab-hidden{% endif %}">{{ _('Result') }} <span class="tab-dot"></span></button>
+        <button data-tab="result" id="tab-result" type="button">{{ _('Result') }} <span class="tab-dot"></span></button>
         <button data-tab="editorial" type="button"{% if contest_problem %} class="tab-hidden"{% endif %}>{{ _('Editorial') }}</button><button data-tab="subs" type="button">{{ _('Submissions') }}</button>
       </div>
       <div class="ws-tab-panels">
         <div class="ws-tab-panel active" id="panel-desc">
-          <header class="ws-problem-head"><i class="title-state fa fa-circle-o"></i><div><h2>{{ problem.code }} · {{ title }}</h2><div class="ws-badges"><span class="ws-badge">{{ workspace_submission_type_label }}</span>{% if problem.difficulty %}<span class="ws-badge difficulty-badge diff-{{ problem.difficulty }}">{{ problem.difficulty_label }}</span>{% endif %}{% if contest_problem %}<span class="ws-badge">{{ contest_problem.points }} {{ _('points') }}</span>{% endif %}</div></div></header>
-          <div class="ws-meta"><span><i class="fa fa-clock-o"></i> {{ problem.time_limit }}s</span><span><i class="fa fa-server"></i> {{ problem.memory_limit|kbsimpleformat }}</span><span><i class="fa fa-star-o"></i> {% if contest_problem %}{{ contest_problem.points }}{% if contest_problem.partial %} {{ _('(partial)') }}{% endif %}{% else %}{{ problem.points|floatformat }}{% if problem.partial %} {{ _('(partial)') }}{% endif %}{% endif %}</span>{% if submissions_left is defined %}<span>{{ _('Submissions left: %(count)s', count=submissions_left) }}</span>{% endif %}</div>
-          <div class="ws-problem-actions">
-            {% if vote_perm.can_view() %}{% if vote_perm.can_vote() %}<a href="#" data-featherlight="{{ url('problem_vote', problem.code) }}"><i class="fa fa-star"></i> {% if vote is none %}{{ _('Vote on problem points') }}{% else %}{{ _('Edit points vote (%(points)d)', points=vote.points) }}{% endif %}</a>{% endif %}<a href="#" data-featherlight="{{ url('problem_vote_stats', problem.code) }}"><i class="fa fa-bar-chart"></i> {{ _('Voting statistics') }}</a>{% endif %}
-            {% if can_edit_problem %}{% if problem.submission_type == 'M' %}<a href="{{ url('problem_mcq_edit', problem.code) }}"><i class="fa fa-pencil"></i> {{ _('Edit question') }}</a>{% elif problem.submission_type == 'B' %}<a href="{{ url('problem_fillblank_edit', problem.code) }}"><i class="fa fa-pencil"></i> {{ _('Edit question') }}</a>{% else %}<a href="{{ url('admin:judge_problem_change', problem.id) }}"><i class="fa fa-pencil"></i> {{ _('Edit problem') }}</a>{% endif %}{% endif %}
-          </div>
+          <header class="ws-problem-head">
+            <h2>{{ title }}</h2>
+            <div class="ws-badges">
+              {% if problem.difficulty %}<span class="ws-badge difficulty-badge diff-{{ problem.difficulty }}">{{ problem.difficulty_label }}</span>{% endif %}
+              <span class="ws-badge">{{ workspace_submission_type_label }}</span>
+            </div>
+          </header>
+
+          <section class="ws-meta" id="ws-meta" data-problem="{{ problem.code }}">
+            <button type="button" class="ws-meta-toggle" id="ws-meta-toggle" aria-expanded="true" aria-controls="ws-meta-body">
+              <i class="fa fa-chevron-down" aria-hidden="true"></i>
+              <span>{{ _('Problem info') }}</span>
+            </button>
+            <div class="ws-meta-body" id="ws-meta-body">
+              {% macro ws_meta_points() %}
+                <div class="mi">
+                  <i class="fa fa-check fa-fw" aria-hidden="true"></i>
+                  <span class="k">{{ _('Points:') }}</span>
+                  <span class="v">
+                    {% if contest_problem %}
+                      {{ contest_problem.points }}{% if contest_problem.partial %} {{ _('(partial)') }}{% endif %}
+                    {% else %}
+                      {{ problem.points|floatformat }}{% if problem.partial %} {{ _('(partial)') }}{% endif %}
+                    {% endif %}
+                    {% if submissions_left is defined %} · {{ _('Submissions left: %(count)s', count=submissions_left) }}{% endif %}
+                  </span>
+                </div>
+              {% endmacro %}
+              {% macro ws_meta_authors() %}
+                {% if not contest_problem or not contest_problem.contest.hide_problem_authors %}
+                  {% with authors=problem.authors.all() %}
+                    {% if authors %}
+                      <div class="mi span-2">
+                        <i class="fa fa-pencil-square-o fa-fw" aria-hidden="true"></i>
+                        <span class="k">{% trans trimmed count=authors|length %}Author:{% pluralize count %}Authors:{% endtrans %}</span>
+                        <span class="v">{{ link_users(authors) }}</span>
+                      </div>
+                    {% endif %}
+                  {% endwith %}
+                {% endif %}
+              {% endmacro %}
+              {% macro ws_meta_actions() %}
+                <div class="mi span-2">
+                  <i class="fa fa-link fa-fw" aria-hidden="true"></i>
+                  <span class="k">{{ _('Actions:') }}</span>
+                  <span class="v meta-actions">
+                    {% if can_edit_problem %}
+                      <a href="{{ url('problem_edit_v2', problem.code) }}">{{ _('Edit') }}</a>
+                      <a href="{{ url('problem_ticket_list', problem.code) }}">{{ _('Manage tickets') }}{% if num_open_tickets %} <span class="badge">{{ num_open_tickets }}</span>{% endif %}</a>
+                    {% elif request.user.is_authenticated and has_tickets %}
+                      <a href="{{ url('problem_ticket_list', problem.code) }}">{{ _('My tickets') }}{% if num_open_tickets %} <span class="badge">{{ num_open_tickets }}</span>{% endif %}</a>
+                    {% endif %}
+                    {% if vote_perm.can_view() %}
+                      {% if vote_perm.can_vote() %}
+                        <a href="#" data-featherlight="{{ url('problem_vote', problem.code) }}">
+                          {%- if vote is none -%}{{ _('Vote on problem points') }}{%- else -%}{{ _('Edit points vote (%(points)d)', points=vote.points) }}{%- endif -%}
+                        </a>
+                      {% else %}
+                        <span class="ws-info-muted">{{ _('Voting available after solving (classic OJ: requires AC)') }}</span>
+                      {% endif %}
+                      <a href="#" data-featherlight="{{ url('problem_vote_stats', problem.code) }}">{{ _('Voting statistics') }}</a>
+                    {% endif %}
+                  </span>
+                </div>
+              {% endmacro %}
+              {# Knowledge tags only — same filter as problem list (exclude FORMAT_TYPE_NAMES + difficulty). #}
+              {% macro ws_meta_problem_types() %}
+                {% if not contest_problem or not contest_problem.contest.hide_problem_tags %}
+                  {% if problem.knowledge_types_list %}
+                    <div class="mi span-2" id="problem-types">
+                      <div class="toggle closed unselectable">
+                        <i class="fa fa-chevron-right fa-fw" aria-hidden="true"></i>
+                        {% trans trimmed count=problem.knowledge_types_list|length %}Problem type{% pluralize count %}Problem types{% endtrans %}
+                      </div>
+                      <div style="display:none" class="toggled">{{ problem.knowledge_types_list|join(", ") }}</div>
+                    </div>
+                  {% endif %}
+                {% endif %}
+              {% endmacro %}
+
+              {% if workspace_is_code %}
+                {{ ws_meta_points() }}
+                <div class="mi{% if problem.language_time_limit %} span-2{% endif %}">
+                  <i class="fa fa-clock-o fa-fw" aria-hidden="true"></i>
+                  <span class="k">{{ _('Time limit:') }}</span>
+                  <span class="v">
+                    {{ problem.time_limit }}s
+                    {% if problem.language_time_limit %}
+                      <div class="problem-lang-limits">
+                        {% for name, limit in problem.language_time_limit %}
+                          <div class="lang-limit"><span class="lang-name">{{ name }}</span><span class="lang-tl">{{ limit }}s</span></div>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  </span>
+                </div>
+                <div class="mi{% if problem.language_memory_limit %} span-2{% endif %}">
+                  <i class="fa fa-server fa-fw" aria-hidden="true"></i>
+                  <span class="k">{{ _('Memory limit:') }}</span>
+                  <span class="v">
+                    {{ problem.memory_limit|kbsimpleformat }}
+                    {% if problem.language_memory_limit %}
+                      <div class="problem-lang-limits">
+                        {% for name, limit in problem.language_memory_limit %}
+                          <div class="lang-limit"><span class="lang-name">{{ name }}</span><span class="lang-ml">{{ limit|kbsimpleformat }}</span></div>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  </span>
+                </div>
+                {{ ws_meta_authors() }}
+                {{ ws_meta_problem_types() }}
+                {% if show_languages %}
+                  <div class="mi span-2" id="allowed-langs">
+                    <div class="toggle open unselectable">
+                      <i class="fa fa-chevron-right fa-fw" aria-hidden="true"></i>{{ _('Allowed languages') }}
+                    </div>
+                    <div class="toggled">
+                      {% with usable=problem.usable_common_names, langs=problem.languages_list() %}
+                        {% for lang in langs %}
+                          {%- if lang in usable -%}{{ lang }}{%- else -%}<s title="{{ _('No %(lang)s judge online', lang=lang) }}">{{ lang }}</s>{%- endif -%}
+                          {% if not loop.last %}, {% endif -%}
+                        {% endfor %}
+                      {% endwith %}
+                    </div>
+                  </div>
+                {% endif %}
+                {% if problem.is_editable_by(request.user) %}
+                  <div class="mi span-2" id="available-judges">
+                    <i class="fa fa-database fa-fw" aria-hidden="true"></i>
+                    <span class="k">{% trans trimmed count=available_judges|length %}Judge:{% pluralize count %}Judges:{% endtrans %}</span>
+                    <span class="v">
+                      {% if available_judges %}
+                        {% if perms.judge.change_judge %}
+                          {% for judge in available_judges %}
+                            <a href="{{ url('admin:judge_judge_change', judge.id) }}">{{ judge.name }}</a>{%- if not loop.last %}, {% endif %}
+                          {% endfor %}
+                        {% else %}
+                          {{ available_judges|join(", ") }}
+                        {% endif %}
+                      {% else %}
+                        <i>{{ _('none available') }}</i>
+                      {% endif %}
+                    </span>
+                  </div>
+                {% endif %}
+                {{ ws_meta_actions() }}
+              {% else %}
+                {{ ws_meta_authors() }}
+                {{ ws_meta_problem_types() }}
+                {{ ws_meta_points() }}
+                {{ ws_meta_actions() }}
+              {% endif %}
+            </div>
+          </section>
+
           <div class="content-description">{{ description|markdown(problem.markdown_style, MATH_ENGINE)|reference|str|safe }}</div>
           {% with license=problem.license %}{% if license %}<p class="ws-license"><a href="{{ url('license', license.key) }}">{{ license.display or license.name }}</a></p>{% endif %}{% endwith %}
-          <section class="ws-problem-info" aria-label="{{ _('Problem information') }}"><h3>{{ _('Problem information') }}</h3>
-            {% if not contest_problem or not contest_problem.contest.hide_problem_authors %}{% with authors=problem.authors.all() %}{% if authors %}<div><i class="fa fa-pencil-square-o"></i> <b>{% trans trimmed count=authors|length %}Author:{% pluralize count %}Authors:{% endtrans %}</b> {{ link_users(authors) }}</div>{% endif %}{% endwith %}{% endif %}
-            {% if not contest_problem or not contest_problem.contest.hide_problem_tags %}{% with types=problem.types_list %}{% if types %}<div><i class="fa fa-tags"></i> <b>{{ _('Problem types:') }}</b> {{ types|join(', ') }}</div>{% endif %}{% endwith %}{% endif %}
-            {% if show_languages %}<div><i class="fa fa-code"></i> <b>{{ _('Allowed languages') }}:</b> {{ problem.languages_list()|join(', ') }}</div>{% endif %}
-          </section>
         </div>
-        <div class="ws-tab-panel" id="panel-ai"><div class="alert alert-info">{{ _('Use these hints to guide your thinking. They do not reveal an answer or source code.') }}</div><ul><li>{{ _('Identify the input-output relation and edge cases.') }}</li><li>{{ _('Set a complexity budget before writing code.') }}</li><li>{{ _('Validate the smallest counterexample before submitting.') }}</li></ul></div>
-        <div class="ws-tab-panel" id="panel-result"><div id="workspace-submit-status">{% if workspace_submission %}<div class="result-actions">{% if workspace_submission.source %}<button class="tool-btn" id="btn-load-editor" type="button">{{ _('Load into editor') }}</button>{% endif %}</div><h3>{{ _('Execution results') }}</h3><p><b>{{ _('Result') }}:</b> {{ workspace_submission.result }}{% if workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}</p><p><b>{{ _('Resources') }}:</b> {{ workspace_submission.time|default(0) }}s, {{ workspace_submission.memory|default(0) }}KB</p>{% if workspace_submission.source %}<pre class="result-source" id="submitted-source">{{ workspace_submission.source }}</pre>{% endif %}{% else %}<p>{{ _('Submit a solution to see its judging status here.') }}</p>{% endif %}</div></div>
+        <div class="ws-tab-panel" id="panel-ai">
+          <div class="alert alert-info">{{ _('Use these hints to guide your thinking. They do not reveal an answer or source code.') }}</div>
+          {% if not ai_hints_possible %}
+            <p class="ws-info-muted">{{ _('AI Hints are not enabled for this problem, or the hint service is not configured.') }}</p>
+            <ul>
+              <li>{{ _('Identify the input-output relation and edge cases.') }}</li>
+              <li>{{ _('Set a complexity budget before writing code.') }}</li>
+              <li>{{ _('Validate the smallest counterexample before submitting.') }}</li>
+            </ul>
+          {% else %}
+            <p class="sub-hint">{{ _('After a non-AC formal submission finishes judging, you can request a hint (same quota as the classic status page).') }}</p>
+            {% set hint_ready = workspace_submission and workspace_submission.result and workspace_submission.result != 'AC' and workspace_submission.result != 'AB' %}
+            <div id="ai-hint-section" class="ai-hint-section"{% if not hint_ready %} hidden{% endif %}>
+              <button type="button" class="tool-btn" id="ai-hint-btn"{% if ai_hints_remaining == 0 %} disabled{% endif %}>
+                {{ _('Get AI Hint') }}
+                <span id="ai-hint-quota">({{ ai_hints_remaining }} {{ _('uses remaining today') }})</span>
+              </button>
+              <div id="ai-hint-result" class="ai-hint-result" hidden></div>
+            </div>
+            <p id="ai-hint-waiting" class="ws-info-muted"{% if hint_ready %} hidden{% endif %}>
+              {{ _('Submit a solution that is not Accepted to unlock AI Hints for that submission.') }}
+            </p>
+          {% endif %}
+        </div>
+        <div class="ws-tab-panel" id="panel-result">
+          <div id="workspace-submit-status">
+            <div id="workspace-result-main">
+              {% if workspace_submission %}
+                <div class="ws-result-summary">
+                  {% if workspace_submission.results_hidden %}
+                    <h3>{{ _('Results hidden') }}</h3>
+                    <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
+                  {% else %}
+                    <h3>{% if workspace_is_code %}{{ _('Execution results') }}{% else %}{{ _('Judging results') }}{% endif %}</h3>
+                    <p>
+                      <b>{{ _('Result') }}:</b>
+                      <span class="ws-result-code case-{{ workspace_submission.result_class or workspace_submission.result or 'QU' }}"
+                            title="{{ workspace_submission.long_status or workspace_submission.result or '' }}">
+                        {{ workspace_submission.result or workspace_submission.status or '?' }}
+                      </span>
+                      {% if workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}
+                    </p>
+                    {% if workspace_is_code %}
+                      <p><b>{{ _('Resources') }}:</b> {{ workspace_submission.time|default(0) }}s, {{ workspace_submission.memory|default(0) }}KB</p>
+                    {% endif %}
+                  {% endif %}
+                </div>
+              {% else %}
+                <p class="ws-result-empty">{{ _('Submit a solution to see its judging status here.') }}</p>
+              {% endif %}
+            </div>
+            <div id="workspace-result-source" class="source-block"{% if not workspace_submission or not (workspace_submission.source or workspace_submission.answer_display) %} hidden{% endif %}>
+              {% if workspace_is_code %}
+                <div class="result-actions">
+                  <button class="tool-btn" id="btn-load-editor" type="button">{{ _('Load into editor') }}</button>
+                </div>
+              {% endif %}
+              <details class="result-source-details">
+                <summary id="submitted-source-summary">{{ _('Submitted source') }}</summary>
+                <pre class="result-source" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}
+{% endfor %}{% elif workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</pre>
+              </details>
+            </div>
+            <div id="workspace-result-comments" class="ws-result-comments"{% if not workspace_enable_comments %} hidden{% endif %}>
+              {% if workspace_enable_comments %}
+                <hr class="half-hr">
+                {% include "comments/list.html" %}
+              {% endif %}
+            </div>
+          </div>
+        </div>
         <div class="ws-tab-panel" id="panel-editorial">{% if contest_problem %}<div class="editorial-locked"><i class="fa fa-lock"></i> {{ _('Editorial is locked during this assignment.') }}</div>{% elif editorial %}<div class="editorial-body">{{ editorial.content|markdown('default') }}</div>{% else %}<p>{{ _('No editorial is available.') }}</p>{% endif %}</div>
-        <div class="ws-tab-panel" id="panel-subs"><div class="sub-tabs"><button class="active" type="button">{{ _('My') }}</button><a href="{{ url('chronological_submissions', problem.code) }}">{{ _('All') }}</a><a href="{{ url('ranked_submissions', problem.code) }}">{{ _('Best') }}</a></div><table class="oj-table"><thead><tr><th>ID</th><th>{{ _('Result') }}</th><th>{{ _('Score') }}</th><th>{{ _('Language') }}</th><th>{{ _('When') }}</th></tr></thead><tbody>{% for submission in workspace_submissions %}<tr><td><a href="{{ problem.get_absolute_url() }}?submission={{ submission.id }}">{{ submission.id }}</a></td><td>{{ submission.result }}</td><td>{{ submission.points }}</td><td>{{ submission.language.name }}</td><td>{{ submission.date|date('SHORT_DATETIME_FORMAT') }}</td></tr>{% else %}<tr><td colspan="5">{{ _('No submissions yet.') }}</td></tr>{% endfor %}</tbody></table></div>
+        <div class="ws-tab-panel" id="panel-subs">
+          <div class="sub-tabs" role="tablist">
+            <button type="button" class="active" data-sub="my">{{ _('My') }}</button>
+            {% if workspace_mode == 'practice' %}
+            <button type="button" data-sub="all">{{ _('All') }}</button>
+            <button type="button" data-sub="best">{{ _('Best') }}</button>
+            {% endif %}
+          </div>
+          <p class="sub-hint" id="sub-hint">{{ _('Showing your submissions for this problem.') }}</p>
+          <div class="ws-subs-table-wrap">
+            <div id="submissions-table" class="ws-subs-table">
+              {% for submission in workspace_submissions %}
+                {% with profile_id=request.profile.id %}
+                  {% include "problem/workspace-submission-row.html" %}
+                {% endwith %}
+              {% else %}
+                <div class="ws-subs-empty">{{ _('No submissions yet.') }}</div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
     <div class="ws-splitter" id="ws-splitter"></div>
     <section class="ws-pane ws-pane-right{% if not workspace_is_code %} ws-pane-answer{% endif %}" id="pane-right">
       <form id="workspace-submit-form" method="post" action="{{ url('problem_submit', problem.code) }}">{% csrf_token %}<input name="workspace" value="1" type="hidden">
       {% if workspace_is_code and form %}
-        <div id="right-programming"><div class="ide-head"><span class="ide-label"><i class="fa fa-code"></i> {{ _('Code') }}</span>{{ form.language }}{{ form.judge.as_hidden() }}</div><div class="ide-editor-wrap"><textarea id="workspace-source" name="source" spellcheck="false">{{ form.source.value()|default('', true) }}</textarea><div id="monaco-editor" hidden></div><span class="workspace-fallback" id="editor-fallback" hidden>{{ _('The code editor is unavailable. You can still edit and submit this source.') }}</span><div class="ide-status"><span id="draft-status">{{ _('Local draft') }}</span><span id="cursor-status">Ln 1, Col 1</span></div></div><div class="ide-bottom" id="ide-bottom"><div class="ide-bottom-tabs"><button class="active" data-bottom-tab="cases" type="button">{{ _('Custom input') }}</button><button data-bottom-tab="result" type="button">{{ _('Test result') }}</button><button class="run-btn" id="btn-run" type="button"><i class="fa fa-play"></i> {{ _('Run test') }}</button><button id="btn-collapse-bottom" type="button" aria-label="{{ _('Collapse panel') }}"><i class="fa fa-chevron-down"></i></button></div><div class="ide-bottom-body" id="bottom-cases"><div class="tc-pair"><div class="tc-block"><label for="workspace-input">{{ _('Custom input') }}</label><textarea id="workspace-input" placeholder="{{ _('Enter input for this run') }}"></textarea></div><div class="tc-block"><label>{{ _('Output') }}</label><pre id="workspace-output"></pre></div></div></div><div class="ide-bottom-body" id="bottom-result" hidden><div class="alert alert-info" id="run-message">{{ _('Custom Run uses the isolated IDE and does not use hidden tests or affect scores.') }}</div><pre class="workspace-run-output" id="workspace-run-output"></pre></div></div></div>
+        <div id="right-programming">
+          <div class="ide-head">
+            <span class="ide-label"><i class="fa fa-code"></i> {{ _('Code') }}</span>
+            {% set lang_qs = form.fields.language.queryset %}
+            {% set has_usable_languages = lang_qs.exists() %}
+            {% if has_usable_languages %}
+              <select id="id_language" name="language">
+                {% for lang in lang_qs %}
+                  <option value="{{ lang.id }}"
+                          data-id="{{ lang.id }}"
+                          data-name="{{ lang.name }}"
+                          data-ace="{{ lang.ace }}"
+                          data-monaco="{{ lang.ace }}"
+                          {% if form.initial.language and lang.id == form.initial.language.id %}selected{% endif %}>{{ lang.display_name }}</option>
+                {% endfor %}
+              </select>
+            {% else %}
+              <span class="ws-lang-empty alert alert-warning">{{ _('No judge is available for this problem. Language selection is empty until an online judge is assigned.') }}</span>
+            {% endif %}
+            {{ form.judge.as_hidden() }}
+          </div>
+          <div class="ide-stack">
+            <div class="ide-editor-wrap">
+              <textarea id="workspace-source" name="source" spellcheck="false">{{ form.source.value()|default('', true) }}</textarea>
+              <div id="monaco-editor" hidden></div>
+              <span class="workspace-fallback" id="editor-fallback" hidden>{{ _('The code editor is unavailable. You can still edit and submit this source.') }}</span>
+              <div class="ide-status"><span id="draft-status">{{ _('Local draft') }}</span><span id="cursor-status">Ln 1, Col 1</span></div>
+            </div>
+            <div class="ide-v-splitter" id="ide-v-splitter" role="separator" aria-orientation="horizontal" aria-label="{{ _('Resize editor and test panel') }}"></div>
+            <div class="ide-bottom" id="ide-bottom">
+              <div class="ide-bottom-tabs">
+                <button class="active" data-bottom-tab="cases" type="button">{{ _('Custom input') }}</button>
+                <button data-bottom-tab="result" type="button">{{ _('Test result') }}</button>
+                <button class="run-btn" id="btn-run" type="button"{% if not has_usable_languages %} disabled{% endif %}><i class="fa fa-play"></i> {{ _('Run test') }}</button>
+                <button id="btn-collapse-bottom" type="button" aria-label="{{ _('Collapse panel') }}"><i class="fa fa-chevron-down"></i></button>
+              </div>
+              <div class="ide-bottom-body" id="bottom-cases">
+                <div class="tc-block">
+                  <textarea id="workspace-input"
+                            placeholder="{{ _('Enter input for this run') }}"
+                            autocomplete="off"
+                            autocorrect="off"
+                            autocapitalize="off"
+                            spellcheck="false"
+                            data-lpignore="true"
+                            data-1p-ignore="true"
+                            data-form-type="other"></textarea>
+                </div>
+              </div>
+              <div class="ide-bottom-body" id="bottom-result" hidden>
+                <div class="alert alert-info" id="run-message">{{ _('Custom Run reuses the site IDE sandbox (same as /ide/): it does not use hidden tests for this problem or affect scores.') }}</div>
+                <pre class="workspace-run-output" id="workspace-run-output"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
       {% else %}
-        <div class="answer-form"><div class="ide-head"><span class="ide-label"><i class="fa fa-pencil"></i> {{ _('Answer') }}</span></div>{% if form %}{{ form.as_p() }}<button class="submit-btn" type="submit">{{ _('Submit') }}</button>{% else %}<p>{{ _('Log in to answer this problem.') }}</p>{% endif %}</div>
+        <div class="answer-form">
+          <div class="ide-head"><span class="ide-label"><i class="fa fa-pencil"></i> {{ _('Answer') }}</span></div>
+          <div class="answer-body">
+            {% if form %}
+              {{ form.non_field_errors() }}
+              {% if problem.submission_type == 'S' %}
+                <div class="ws-short-answer">
+                  {{ form.answer.errors }}
+                  <div data-rich-mount="workspace-answer"
+                       data-placeholder="{{ _('Enter your answer; $$math$$ supported…') }}"></div>
+                  <textarea name="answer" id="id_answer" class="ws-answer-hidden" hidden>{{ form.answer.value()|default('', true) }}</textarea>
+                </div>
+              {% else %}
+                {{ form.as_p() }}
+              {% endif %}
+            {% else %}
+              <p>{{ _('Log in to answer this problem.') }}</p>
+            {% endif %}
+          </div>
+        </div>
       {% endif %}
       </form>
     </section>
@@ -96,6 +561,14 @@
 </div>
 {% endblock %}
 {% block bodyend %}
+  {% if REQUIRE_JAX %}{% include "mathjax-load.html" %}{% endif %}
   {% if vote_perm.can_view() %}<script src="{{ static('libs/chart.js/Chart.js') }}"></script><script src="{{ static('problem-vote.js') }}"></script>{% endif %}
+  {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
+    <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="RichEditor.onImagePicked(event)">
+    <script src="{{ static('rich_editor.js') }}"></script>
+  {% endif %}
+  {% if workspace_submission and not workspace_submission.is_graded %}
+    <script type="text/javascript" src="{{ static('event.js') }}"></script>
+  {% endif %}
   <script src="{{ static('workspace.js') }}"></script>
 {% endblock %}

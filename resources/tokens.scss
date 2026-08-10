@@ -44,6 +44,7 @@
     --oj-success: #2d7a2d;
     --oj-success-soft: #e8f5e9;
     --oj-info-soft: #e3f2fd;
+    --oj-warning: #ef6c00;
     --oj-warning-soft: #fde68a;
     --oj-surface-soft: #{$color_primary10};
     --oj-surface-muted: #{$color_primary25};
@@ -64,4 +65,14 @@
     --oj-font-size: #{$base_font_size};
     /* Meta / badges only — body text should use --oj-font-size (14px) */
     --oj-font-size-sm: 12px;
+
+    /* Site chrome — nav link row (~44px) + #nav-shadow (3px) */
+    --nav-height: 47px;
+}
+
+@media (max-width: 760px) {
+    :root {
+        /* #navigation height 36px + #nav-shadow 3px */
+        --nav-height: 39px;
+    }
 }
