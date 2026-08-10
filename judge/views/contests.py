@@ -162,9 +162,13 @@ class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestL
 
 
 class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestListMixin, ListView):
-    """Redesigned contest list with filters, sorting, and layout options."""
+    """Redesigned contest list with filters, sorting, and layout options.
+
+    All matching contests are rendered and filtering happens client-side (no
+    pagination), so the filters update instantly without reloads.
+    """
     model = Contest
-    paginate_by = 20
+    paginate_by = None
     template_name = 'contest/list-v2.html'
     title = gettext_lazy('Assignments')
     context_object_name = 'past_contests'
@@ -221,46 +225,12 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
             Exists(Contest.curators.through.objects.filter(contest=OuterRef('pk'), profile=profile)) |
             Exists(Contest.testers.through.objects.filter(contest=OuterRef('pk'), profile=profile)),
             completed_contest=Exists(ContestParticipation.objects.filter(contest=OuterRef('pk'), user=profile,
-                                                                         virtual=ContestParticipation.LIVE)),
+                                                                          virtual=ContestParticipation.LIVE)),
         )
-
-    def _apply_filters(self, queryset):
-        """Apply org, class, tag, and search filters from GET params."""
-        org_filter = self.request.GET.get('org', '')
-        if org_filter:
-            org_names = [n.strip() for n in org_filter.split(',') if n.strip()]
-            if org_names:
-                queryset = queryset.filter(organizations__name__in=org_names)
-
-        class_filter = self.request.GET.get('class', '')
-        if class_filter:
-            class_names = [n.strip() for n in class_filter.split(',') if n.strip()]
-            if class_names:
-                queryset = queryset.filter(classes__name__in=class_names)
-
-        tag_filter = self.request.GET.get('tag', '')
-        if tag_filter:
-            tag_names = [n.strip() for n in tag_filter.split(',') if n.strip()]
-            if tag_names:
-                queryset = queryset.filter(tags__name__in=tag_names)
-
-        self.search_query = None
-        if 'search' in self.request.GET:
-            self.search_query = ' '.join(self.request.GET.getlist('search')).strip()
-            if self.search_query:
-                queryset = queryset.filter(
-                    Q(key__icontains=self.search_query) | Q(name__icontains=self.search_query),
-                )
-
-        return queryset.distinct()
 
     def get_queryset(self):
         queryset = self._get_queryset().order_by(self.order, 'key').filter(end_time__lt=self._now)
-        return self._apply_filters(queryset)
-
-    def get_paginator(self, queryset, per_page, orphans=0, allow_empty_first_page=True, **kwargs):
-        return super().get_paginator(queryset, per_page, orphans, allow_empty_first_page,
-                                     count=self.get_queryset().values('id').count(), **kwargs)
+        return queryset
 
     def get_context_data(self, **kwargs):
         context = super(ContestListV2, self).get_context_data(**kwargs)
@@ -268,9 +238,8 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         finished = set()
         active = []
 
-        # Filters (org/class/tag/search) apply to every status group, not just
-        # the paginated past section.
-        ongoing_future = self._apply_filters(self._get_queryset().exclude(end_time__lt=self._now))
+        # All contests are rendered; filtering is applied client-side.
+        ongoing_future = self._get_queryset().exclude(end_time__lt=self._now)
         present_all, future_all = [], []
         for contest in ongoing_future:
             if contest.start_time > self._now:
@@ -309,7 +278,7 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['now'] = self._now
         context['first_page_href'] = '.'
         context['page_suffix'] = '#past-contests' if self.group == 'status' else ''
-        context['search_query'] = self.search_query
+        context['search_query'] = ' '.join(self.request.GET.getlist('search')).strip()
 
         # Additional context for v2
         context['organizations'] = Organization.objects.all()
@@ -338,29 +307,35 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
     def _solved_data(self, contests):
         """Map contest id -> (solved problems, total problems) for the current user.
 
-        "Solved" counts distinct problems in the contest with an accepted
-        in-contest submission by the user. Returns an empty dict for anonymous
-        users, so the card simply omits the progress indicator.
+        "Solved" counts the contest's problems the user has accepted anywhere
+        (in-contest submissions or plain problem submissions), so submitting to
+        a problem's normal page also counts toward the assignment.
         """
         profile = self.request.profile
         contest_ids = [c.id for c in contests if c is not None]
         if not profile or not contest_ids:
             return {}
-        totals = dict(
-            ContestProblem.objects.filter(contest_id__in=contest_ids)
-            .values('contest_id')
-            .annotate(count=Count('id'))
-            .values_list('contest_id', 'count'),
+        contest_problems = list(
+            ContestProblem.objects.filter(contest_id__in=contest_ids).values_list('contest_id', 'problem_id'),
         )
-        solved = dict(
-            Submission.objects.filter(user=profile, contest_object_id__in=contest_ids, result='AC')
-            .values('contest_object_id', 'problem_id')
-            .distinct()
-            .values('contest_object_id')
-            .annotate(count=Count('problem_id'))
-            .values_list('contest_object_id', 'count'),
+        problems_by_contest = {}
+        problem_ids = set()
+        for cid, pid in contest_problems:
+            problems_by_contest.setdefault(cid, []).append(pid)
+            problem_ids.add(pid)
+        if not problem_ids:
+            return {cid: (0, 0) for cid in contest_ids}
+        solved_ids = set(
+            Submission.objects.filter(user=profile, problem_id__in=problem_ids, result='AC',
+                                      points__gte=F('problem__points'))
+            .values_list('problem_id', flat=True)
+            .distinct(),
         )
-        return {cid: (solved.get(cid, 0), totals.get(cid, 0)) for cid in contest_ids}
+        return {
+            cid: (sum(1 for pid in problems_by_contest.get(cid, []) if pid in solved_ids),
+                  len(problems_by_contest.get(cid, [])))
+            for cid in contest_ids
+        }
 
     def _get_course_groups(self, context):
         """Group the displayed assignments by their first organization (course).

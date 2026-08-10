@@ -82,59 +82,101 @@
                 return Array.from(document.querySelectorAll(sel + ' input:checked')).map(function(i) { return i.value; });
             }
 
-            // ── Debounced auto-apply (conditions refresh without Search) ──
-            var autoApplyTimer = null;
-            window.scheduleApply = function() {
-                clearTimeout(autoApplyTimer);
-                autoApplyTimer = setTimeout(applyFilters, 400);
-            };
+            // ── Get current client-side filter state ──
+            function clientState() {
+                var times = [];
+                document.querySelectorAll('#time-filter-group .status-filter-btn.active').forEach(function(b) {
+                    times.push(b.dataset.time);
+                });
+                return {
+                    orgs: checkedValues('#org-multi-select'),
+                    classes: checkedValues('#class-multi-select'),
+                    tags: checkedValues('#tag-multi-select'),
+                    q: (document.getElementById('f-q').value || '').trim().toLowerCase(),
+                    times: times
+                };
+            }
 
-            // ── Apply filters (submit as GET) ──
-            window.applyFilters = function() {
-                state.org = checkedValues('#org-multi-select');
-                state.cls = checkedValues('#class-multi-select');
-                state.tags = checkedValues('#tag-multi-select');
-                state.q = document.getElementById('f-q').value.trim();
-
+            // ── Build URL params for the current filter state ──
+            function currentParams() {
+                var st = clientState();
                 var params = new URLSearchParams();
-                if (state.org.length) params.set('org', state.org.join(','));
-                if (state.cls.length) params.set('class', state.cls.join(','));
-                if (state.tags.length) params.set('tag', state.tags.join(','));
-                if (state.q) params.set('search', state.q);
+                if (st.orgs.length) params.set('org', st.orgs.join(','));
+                if (st.classes.length) params.set('class', st.classes.join(','));
+                if (st.tags.length) params.set('tag', st.tags.join(','));
+                if (st.q) params.set('search', st.q);
+                if (st.times.length > 0 && st.times.length < 3) params.set('time', st.times.join(','));
                 if (state.order !== '-start_time') params.set('order', state.order);
                 if (state.group !== 'course') params.set('group', state.group);
+                return params;
+            }
 
+            // ── Server reload (used by sort / group switch) ──
+            window.applyFilters = function() {
+                var params = currentParams();
                 var newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
                 window.location.href = newUrl;
             };
 
-            // ── Status filter: instant client-side switching (no reload) ──
+            // ── Instant client-side filtering (no reload) ──
             var countSuffix = (function() {
                 var el = document.querySelector('.progress-label');
                 return el ? el.textContent.replace(/^\d+\s*/, '') : ' assignments';
             })();
+            var serverTotal = (function() {
+                var el = document.querySelector('.progress-label');
+                var m = el ? el.textContent.match(/^(\d+)/) : null;
+                return m ? parseInt(m[1], 10) : 0;
+            })();
 
-            window.applyStatusFilter = function() {
-                var selected = [];
-                document.querySelectorAll('#time-filter-group .status-filter-btn.active').forEach(function(b) {
-                    selected.push(b.dataset.time);
-                });
-                // All deselected falls back to all selected (the default).
-                var allSelected = selected.length === 0 || selected.length === 3;
-                if (allSelected) {
+            window.applyClientFilter = function() {
+                var st = clientState();
+                var allStatus = st.times.length === 0 || st.times.length === 3;
+                if (allStatus) {
                     document.querySelectorAll('#time-filter-group .status-filter-btn').forEach(function(b) {
                         b.classList.add('active');
                     });
                 }
+                var filtering = st.orgs.length || st.classes.length || st.tags.length || st.q || !allStatus;
 
                 var visible = 0;
                 document.querySelectorAll('.cl-row').forEach(function(row) {
                     var status = row.dataset.status;
-                    // Active participations are always shown.
-                    var show = status === 'active' || allSelected || selected.indexOf(status) !== -1;
+                    var show = status === 'active' || allStatus || st.times.indexOf(status) !== -1;
+                    if (show && st.orgs.length) {
+                        var rowOrgs = (row.dataset.orgs || '').split(',');
+                        if (!st.orgs.some(function(o) { return rowOrgs.indexOf(o) !== -1; })) show = false;
+                    }
+                    if (show && st.classes.length) {
+                        var rowClasses = (row.dataset.classes || '').split(',');
+                        if (!st.classes.some(function(c) { return rowClasses.indexOf(c) !== -1; })) show = false;
+                    }
+                    if (show && st.tags.length) {
+                        var rowTags = (row.dataset.tags || '').split(',');
+                        if (!st.tags.every(function(t) { return rowTags.indexOf(t) !== -1; })) show = false;
+                    }
+                    if (show && st.q) {
+                        var hay = (row.dataset.search || '').toLowerCase();
+                        if (hay.indexOf(st.q) === -1) show = false;
+                    }
                     row.style.display = show ? '' : 'none';
                     if (show) visible++;
                 });
+
+                var countEl = document.querySelector('.progress-label');
+                var emptyEl = document.getElementById('cl-empty-client');
+
+                if (!filtering) {
+                    // No active filters: restore the server-rendered state.
+                    document.querySelectorAll('.cl-row').forEach(function(r) { r.style.display = ''; });
+                    document.querySelectorAll('.cl-section').forEach(function(s) { s.style.display = ''; });
+                    if (countEl) countEl.textContent = serverTotal + ' ' + countSuffix;
+                    if (emptyEl) emptyEl.hidden = true;
+                    var q2 = currentParams().toString();
+                    history.replaceState(null, '', location.pathname + (q2 ? '?' + q2 : ''));
+                    return;
+                }
+
                 document.querySelectorAll('.cl-section').forEach(function(sec) {
                     var hasVisible = Array.prototype.some.call(sec.querySelectorAll('.cl-row'), function(r) {
                         return r.style.display !== 'none';
@@ -142,20 +184,10 @@
                     sec.style.display = hasVisible ? '' : 'none';
                 });
 
-                var countEl = document.querySelector('.progress-label');
                 if (countEl) countEl.textContent = visible + ' ' + countSuffix;
+                if (emptyEl) emptyEl.hidden = !(visible === 0);
 
-                var emptyEl = document.getElementById('cl-empty-client');
-                if (emptyEl) emptyEl.hidden = !(allSelected === false && visible === 0);
-
-                // Sync the URL without reloading (keeps pagination consistent).
-                var params = new URLSearchParams(location.search);
-                if (allSelected) {
-                    params.delete('time');
-                } else {
-                    params.set('time', selected.join(','));
-                }
-                var q = params.toString();
+                var q = currentParams().toString();
                 history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
             };
 
@@ -168,11 +200,18 @@
                         if (activeCount <= 1) return;
                     }
                     btn.classList.toggle('active');
-                    applyStatusFilter();
+                    applyClientFilter();
                 });
             });
 
-            // ── Clear all filters ──
+            // ── Keyword search filters live (debounced) ──
+            var searchTimer = null;
+            document.getElementById('f-q').addEventListener('input', function() {
+                clearTimeout(searchTimer);
+                searchTimer = setTimeout(applyClientFilter, 250);
+            });
+
+            // ── Clear all filters (instant, no reload) ──
             window.clearFilters = function() {
                 document.querySelectorAll('#filter-form .multi-select input[type=checkbox]').forEach(function(c) {
                     c.checked = false;
@@ -185,7 +224,7 @@
                 refreshClassLabel();
                 refreshTagLabel();
                 state = { org: [], cls: [], tags: [], q: '', order: state.order, group: state.group };
-                applyFilters();
+                applyClientFilter();
             };
 
             // ── Sort button clicks ──
@@ -248,8 +287,8 @@
                 });
             });
 
-            // ── Apply the status filter from the URL on first load ──
-            applyStatusFilter();
+            // ── Apply the filters from the URL on first load ──
+            applyClientFilter();
         });
     </script>
 {% endblock %}
@@ -274,7 +313,12 @@
     {% endmacro %}
     {% macro assignment_row(contest, status, participation=None) %}
         {% set solved = solved_counts.get(contest.id, (0, 0)) if solved_counts else (0, 0) %}
-        <article class="cl-row" data-key="{{ contest.key }}" data-status="{{ status }}">
+        {% set org_names = contest.organizations.all()|map(attribute='name')|join(',') %}
+        {% set class_names = contest.classes.all()|map(attribute='name')|join(',') %}
+        {% set tag_names = contest.tags.all()|map(attribute='name')|join(',') %}
+        <article class="cl-row" data-key="{{ contest.key }}" data-status="{{ status }}"
+                 data-orgs="{{ org_names }}" data-classes="{{ class_names }}" data-tags="{{ tag_names }}"
+                 data-search="{{ contest.name }} {{ contest.key }}">
             <div>
                 <div class="cl-primary-line">
                     <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
@@ -377,7 +421,7 @@
         </article>
     {% endmacro %}
 
-    <form id="filter-form" class="contest-list-redesign problem-list-redesign oj-ui" onsubmit="event.preventDefault(); applyFilters();">
+    <form id="filter-form" class="contest-list-redesign problem-list-redesign oj-ui" onsubmit="event.preventDefault();">
         {# ── Filter Card ── #}
         <section class="card filter-card">
             <div class="filter-row filter-row-conditions">
@@ -394,7 +438,7 @@
                             <div class="multi-select-menu" hidden>
                                 {% for org in organizations %}
                                     <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ org.name }}" onchange="refreshOrgLabel(); scheduleApply();">
+                                        <input type="checkbox" value="{{ org.name }}" onchange="refreshOrgLabel(); applyClientFilter();">
                                         <span>{{ org.name }}</span>
                                     </label>
                                 {% endfor %}
@@ -413,7 +457,7 @@
                             <div class="multi-select-menu" hidden>
                                 {% for cls in classes %}
                                     <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ cls.name }}" onchange="refreshClassLabel(); scheduleApply();">
+                                        <input type="checkbox" value="{{ cls.name }}" onchange="refreshClassLabel(); applyClientFilter();">
                                         <span>{{ cls.name }}</span>
                                     </label>
                                 {% endfor %}
@@ -442,7 +486,7 @@
                             <div class="multi-select-menu" hidden id="tag-menu">
                                 {% for tag in tags %}
                                     <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ tag.name }}" onchange="refreshTagLabel(); scheduleApply();">
+                                        <input type="checkbox" value="{{ tag.name }}" onchange="refreshTagLabel(); applyClientFilter();">
                                         <span class="swatch" style="background:{{ tag.color }}"></span>
                                         <span>{{ tag.name }}</span>
                                     </label>
@@ -467,8 +511,7 @@
             </div>
 
             <div class="filter-footer">
-                <span class="result-count">{{ _('%(count)d results', count=total_count) }}</span>
-                <button type="submit" class="btn btn-primary"><i class="fa fa-search"></i> {{ _('Search') }}</button>
+                <span class="result-count" id="result-count">{{ _('%(count)d results', count=total_count) }}</span>
             </div>
         </section>
 
