@@ -36,38 +36,16 @@
         width: 100%;
     }
 
-    /* Status filter rendered as clickable pill buttons */
-    .filter-group .status-filter {
-        display: inline-flex;
-        flex-wrap: wrap;
-        gap: 4px;
-
-        .status-filter-btn {
-            height: var(--oj-control-height);
-            padding: 0 12px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            background: var(--surface);
-            font-size: var(--oj-font-size);
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: background 0.15s, border-color 0.15s, color 0.15s;
-
-            &:hover {
-                border-color: var(--oj-accent);
-                color: var(--oj-accent);
-            }
-
-            &.active {
-                background: var(--oj-accent);
-                border-color: var(--oj-accent);
-                color: var(--oj-btn-text);
-            }
-        }
+    /* Sort menu width matches its trigger button */
+    #sort-dropdown .dropdown-menu {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
     }
 
     /* Fix checkbox sizing in filter multi-select dropdowns */
-    .multi-select-option input[type="checkbox"] {
+    .multi-select-option input[type="checkbox"],
+    .multi-select-option input[type="radio"] {
         flex-shrink: 0;
         width: 15px;
         height: 15px;

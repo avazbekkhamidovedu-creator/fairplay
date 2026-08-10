@@ -178,9 +178,8 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
     # Section grouping modes for the list: by assignment status or by course.
     group_modes = frozenset(('status', 'course'))
     default_group = 'course'
-    # Status filters for the list sections ('' means all statuses). The user's
-    # active participations are always shown and are not part of the filter.
-    time_filters = frozenset(('ongoing', 'upcoming', 'past'))
+    # Status filter for the list (single-select, applied client-side).
+    time_filters = frozenset(('active', 'ongoing', 'upcoming', 'past'))
 
     @cached_property
     def _now(self):
@@ -193,17 +192,10 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
 
     @property
     def time_filter(self):
-        """Selected statuses as a set, or None when no filter applies.
-
-        Status selection is applied client-side for instant switching; this is
-        only used to render the initial button state. An empty/invalid
-        selection falls back to "all selected".
-        """
-        raw = self.request.GET.get('time')
-        if raw is None:
-            return None
-        selected = {v.strip() for v in raw.split(',') if v.strip() in self.time_filters}
-        return selected if selected else None
+        """Selected status filter ('' = all). Applied client-side; this is only
+        used to render the initial dropdown selection."""
+        tf = self.request.GET.get('time', '')
+        return tf if tf in self.time_filters else ''
 
     def _get_queryset(self):
         queryset = super().get_queryset().prefetch_related(

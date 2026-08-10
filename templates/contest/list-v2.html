@@ -71,6 +71,15 @@
             window.refreshClassLabel = function() { refreshMultiLabel('class-multi-select', 'class-multi-label'); };
             window.refreshTagLabel = function() { refreshMultiLabel('tag-multi-select', 'tag-multi-label'); };
 
+            // ── Status single-select label (radio, native single-select) ──
+            window.refreshStatusLabel = function() {
+                var checked = document.querySelector('input[name="time-filter"]:checked');
+                var label = document.getElementById('status-multi-label');
+                if (!checked || !label) return;
+                var spans = checked.closest('label').querySelectorAll('span');
+                label.textContent = spans[spans.length - 1].textContent.trim();
+            };
+
             // ── Sort dropdown ──
             window.toggleSort = function() {
                 var menu = document.getElementById('sort-menu');
@@ -84,16 +93,13 @@
 
             // ── Get current client-side filter state ──
             function clientState() {
-                var times = [];
-                document.querySelectorAll('#time-filter-group .status-filter-btn.active').forEach(function(b) {
-                    times.push(b.dataset.time);
-                });
+                var timeRadio = document.querySelector('input[name="time-filter"]:checked');
                 return {
                     orgs: checkedValues('#org-multi-select'),
                     classes: checkedValues('#class-multi-select'),
                     tags: checkedValues('#tag-multi-select'),
                     q: (document.getElementById('f-q').value || '').trim().toLowerCase(),
-                    times: times
+                    time: timeRadio ? timeRadio.value : ''
                 };
             }
 
@@ -105,7 +111,7 @@
                 if (st.classes.length) params.set('class', st.classes.join(','));
                 if (st.tags.length) params.set('tag', st.tags.join(','));
                 if (st.q) params.set('search', st.q);
-                if (st.times.length > 0 && st.times.length < 3) params.set('time', st.times.join(','));
+                if (st.time) params.set('time', st.time);
                 if (state.order !== '-start_time') params.set('order', state.order);
                 if (state.group !== 'course') params.set('group', state.group);
                 return params;
@@ -131,18 +137,12 @@
 
             window.applyClientFilter = function() {
                 var st = clientState();
-                var allStatus = st.times.length === 0 || st.times.length === 3;
-                if (allStatus) {
-                    document.querySelectorAll('#time-filter-group .status-filter-btn').forEach(function(b) {
-                        b.classList.add('active');
-                    });
-                }
-                var filtering = st.orgs.length || st.classes.length || st.tags.length || st.q || !allStatus;
+                var filtering = st.orgs.length || st.classes.length || st.tags.length || st.q || st.time !== '';
 
                 var visible = 0;
                 document.querySelectorAll('.cl-row').forEach(function(row) {
-                    var status = row.dataset.status;
-                    var show = status === 'active' || allStatus || st.times.indexOf(status) !== -1;
+                    var show = true;
+                    if (st.time && row.dataset.status !== st.time) show = false;
                     if (show && st.orgs.length) {
                         var rowOrgs = (row.dataset.orgs || '').split(',');
                         if (!st.orgs.some(function(o) { return rowOrgs.indexOf(o) !== -1; })) show = false;
@@ -191,19 +191,6 @@
                 history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
             };
 
-            // ── Status filter buttons (multi-select, click to toggle) ──
-            document.querySelectorAll('#time-filter-group .status-filter-btn').forEach(function(btn) {
-                btn.addEventListener('click', function() {
-                    // The last remaining status can't be deselected.
-                    if (btn.classList.contains('active')) {
-                        var activeCount = document.querySelectorAll('#time-filter-group .status-filter-btn.active').length;
-                        if (activeCount <= 1) return;
-                    }
-                    btn.classList.toggle('active');
-                    applyClientFilter();
-                });
-            });
-
             // ── Keyword search filters live (debounced) ──
             var searchTimer = null;
             document.getElementById('f-q').addEventListener('input', function() {
@@ -216,9 +203,10 @@
                 document.querySelectorAll('#filter-form .multi-select input[type=checkbox]').forEach(function(c) {
                     c.checked = false;
                 });
-                document.querySelectorAll('#time-filter-group .status-filter-btn').forEach(function(b) {
-                    b.classList.add('active');
+                document.querySelectorAll('input[name="time-filter"]').forEach(function(c) {
+                    c.checked = (c.value === '');
                 });
+                refreshStatusLabel();
                 document.getElementById('f-q').value = '';
                 refreshOrgLabel();
                 refreshClassLabel();
@@ -308,6 +296,12 @@
         'name': _('Name') ~ ' A–Z',
         '-user_count': _('Participants') ~ ' ↓',
     }.get(sort_by, _('Start time') ~ ' ↓') %}
+    {% set status_label = {
+        'ongoing': _('Ongoing'),
+        'upcoming': _('Upcoming'),
+        'active': _('Active'),
+        'past': _('Past'),
+    }.get(time_filter, _('All')) %}
     {% macro sort_item(sort_value, label) %}
         <li><button type="button" data-sort="{{ sort_value }}"{% if sort_by == sort_value %} class="active"{% endif %}>{{ label }}</button></li>
     {% endmacro %}
@@ -465,13 +459,36 @@
                         </div>
                     </div>
 
-                    {# Status filter (multi-select; all selected by default) #}
+                    {# Status filter (single-select dropdown) #}
                     <div class="filter-group">
                         <span class="filter-group-label">{{ _('Status') }}</span>
-                        <div class="status-filter" id="time-filter-group">
-                            <button type="button" class="status-filter-btn{% if time_filter is none or 'ongoing' in time_filter %} active{% endif %}" data-time="ongoing">{{ _('Ongoing') }}</button>
-                            <button type="button" class="status-filter-btn{% if time_filter is none or 'upcoming' in time_filter %} active{% endif %}" data-time="upcoming">{{ _('Upcoming') }}</button>
-                            <button type="button" class="status-filter-btn{% if time_filter is none or 'past' in time_filter %} active{% endif %}" data-time="past">{{ _('Past') }}</button>
+                        <div class="multi-select" id="status-multi-select">
+                            <button type="button" class="multi-select-trigger" onclick="toggleMenu('status-multi-select')">
+                                <span id="status-multi-label" class="multi-select-text" data-empty-label="{{ _('All') }}">{{ status_label }}</span>
+                                <span class="multi-select-caret">▾</span>
+                            </button>
+                            <div class="multi-select-menu" hidden>
+                                <label class="multi-select-option">
+                                    <input type="radio" name="time-filter" value=""{% if time_filter == '' %} checked{% endif %} onchange="refreshStatusLabel(); applyClientFilter();">
+                                    <span>{{ _('All') }}</span>
+                                </label>
+                                <label class="multi-select-option">
+                                    <input type="radio" name="time-filter" value="ongoing"{% if time_filter == 'ongoing' %} checked{% endif %} onchange="refreshStatusLabel(); applyClientFilter();">
+                                    <span>{{ _('Ongoing') }}</span>
+                                </label>
+                                <label class="multi-select-option">
+                                    <input type="radio" name="time-filter" value="upcoming"{% if time_filter == 'upcoming' %} checked{% endif %} onchange="refreshStatusLabel(); applyClientFilter();">
+                                    <span>{{ _('Upcoming') }}</span>
+                                </label>
+                                <label class="multi-select-option">
+                                    <input type="radio" name="time-filter" value="active"{% if time_filter == 'active' %} checked{% endif %} onchange="refreshStatusLabel(); applyClientFilter();">
+                                    <span>{{ _('Active') }}</span>
+                                </label>
+                                <label class="multi-select-option">
+                                    <input type="radio" name="time-filter" value="past"{% if time_filter == 'past' %} checked{% endif %} onchange="refreshStatusLabel(); applyClientFilter();">
+                                    <span>{{ _('Past') }}</span>
+                                </label>
+                            </div>
                         </div>
                     </div>
 
