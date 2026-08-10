@@ -171,10 +171,18 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
     all_sorts = frozenset(('name', 'user_count', 'start_time', 'end_time'))
     default_desc = frozenset(('name', 'user_count'))
     default_sort = '-start_time'
+    # Section grouping modes for the list: by assignment status or by course.
+    group_modes = frozenset(('status', 'course'))
+    default_group = 'course'
 
     @cached_property
     def _now(self):
         return timezone.now()
+
+    @property
+    def group(self):
+        group = self.request.GET.get('group', self.default_group)
+        return group if group in self.group_modes else self.default_group
 
     def _get_queryset(self):
         queryset = super().get_queryset().prefetch_related(
@@ -251,7 +259,8 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
             for participation in (
                 ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=present)
                 .select_related('contest')
-                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators')
+                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators',
+                                  'contest__organizations', 'contest__classes')
                 .annotate(key=F('contest__key'))
             ):
                 if participation.ended:
@@ -270,7 +279,7 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['finished_contests'] = finished
         context['now'] = self._now
         context['first_page_href'] = '.'
-        context['page_suffix'] = '#past-contests'
+        context['page_suffix'] = '#past-contests' if self.group == 'status' else ''
         context['search_query'] = self.search_query
 
         # Additional context for v2
@@ -278,11 +287,48 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['classes'] = Class.objects.all()
         context['tags'] = ContestTag.objects.all()
         context['total_count'] = self._apply_filters(self._get_queryset()).count()
-        context['sort_by'] = self.request.GET.get('sort', self.default_sort)
+        context['sort_by'] = self.order
+        context['group'] = self.group
+        if self.group == 'course':
+            course_groups, contest_statuses = self._get_course_groups(context)
+            context['course_groups'] = course_groups
+            context['contest_statuses'] = contest_statuses
 
         context.update(self.get_sort_context())
         context.update(self.get_sort_paginate_context())
         return context
+
+    def _get_course_groups(self, context):
+        """Group the displayed assignments by their first organization (course).
+
+        Mirrors the mock's "By course" view: one section per course, with each
+        row still showing its status badge. Assignments without an organization
+        fall into a generic "General course" section.
+        """
+        groups = {}
+        statuses = {}
+
+        def add(contest, status):
+            statuses[contest.key] = status
+            orgs = list(contest.organizations.all())
+            name = orgs[0].name if orgs else _('General course')
+            groups.setdefault(name, []).append(contest)
+
+        for participation in context['active_participations']:
+            add(participation.contest, 'active')
+        for contest in context['current_contests']:
+            add(contest, 'ongoing')
+        for contest in context['future_contests']:
+            add(contest, 'upcoming')
+        for contest in context['past_contests']:
+            add(contest, 'past')
+
+        field = self.order.lstrip('-')
+        if field not in ('start_time', 'end_time', 'name', 'user_count'):
+            field = 'start_time'
+        for contests in groups.values():
+            contests.sort(key=attrgetter(field), reverse=self.order.startswith('-'))
+        return {name: groups[name] for name in sorted(groups)}, statuses
 
 
 class PrivateContestError(Exception):

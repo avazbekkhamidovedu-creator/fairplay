@@ -13,7 +13,8 @@
                 cls: [],
                 tags: [],
                 q: '{{ search_query or '' }}',
-                sort: '{{ sort_by or '-start_time' }}'
+                order: '{{ sort_by or '-start_time' }}',
+                group: '{{ group }}'
             };
 
             // ── Multi-select toggle ──
@@ -93,7 +94,8 @@
                 if (state.cls.length) params.set('class', state.cls.join(','));
                 if (state.tags.length) params.set('tag', state.tags.join(','));
                 if (state.q) params.set('search', state.q);
-                if (state.sort !== '-start_time') params.set('sort', state.sort);
+                if (state.order !== '-start_time') params.set('order', state.order);
+                if (state.group !== 'course') params.set('group', state.group);
 
                 var newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
                 window.location.href = newUrl;
@@ -108,16 +110,30 @@
                 refreshOrgLabel();
                 refreshClassLabel();
                 refreshTagLabel();
-                state = { org: [], cls: [], tags: [], q: '', sort: state.sort };
+                state = { org: [], cls: [], tags: [], q: '', order: state.order, group: state.group };
                 applyFilters();
             };
 
             // ── Sort button clicks ──
             document.querySelectorAll('#sort-menu button[data-sort]').forEach(function(btn) {
                 btn.addEventListener('click', function() {
-                    state.sort = btn.dataset.sort;
-                    document.getElementById('sort-label').textContent = btn.textContent.trim();
+                    state.order = btn.dataset.sort;
+                    // Mirror exactly what the reloaded page will render, so the
+                    // label doesn't visibly jump (e.g. drop the "Sort:" prefix)
+                    // between the click and the navigation.
+                    document.getElementById('sort-label').textContent = '{{ _('Sort:') }} ' + btn.textContent.trim();
                     document.getElementById('sort-menu').hidden = true;
+                    applyFilters();
+                });
+            });
+
+            // ── Group switch (By course / By status) ──
+            document.querySelectorAll('#group-by [data-group]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    state.group = btn.dataset.group;
+                    document.querySelectorAll('#group-by [data-group]').forEach(function(b) {
+                        b.classList.toggle('active', b === btn);
+                    });
                     applyFilters();
                 });
             });
@@ -154,7 +170,7 @@
                     e.preventDefault();
                     var search = window.location.search.replace(/[\?&]page=\d+/g, '');
                     var sep = search ? '&' : '?';
-                    window.location.href = window.location.pathname + search + sep + 'page=' + this.dataset.page + '#past-contests';
+                    window.location.href = window.location.pathname + search + sep + 'page=' + this.dataset.page + '{{ page_suffix }}';
                 });
             });
         });
@@ -169,6 +185,127 @@
 {% endblock %}
 
 {% block body %}
+    {% set current_sort_label = {
+        '-start_time': _('Start time') ~ ' ↓',
+        'start_time': _('Start time') ~ ' ↑',
+        '-end_time': _('End time') ~ ' ↓',
+        'name': _('Name') ~ ' A–Z',
+        '-user_count': _('Participants') ~ ' ↓',
+    }.get(sort_by, _('Start time') ~ ' ↓') %}
+    {% macro sort_item(sort_value, label) %}
+        <li><button type="button" data-sort="{{ sort_value }}"{% if sort_by == sort_value %} class="active"{% endif %}>{{ label }}</button></li>
+    {% endmacro %}
+    {% macro assignment_row(contest, status, participation=None) %}
+        <article class="cl-row" data-key="{{ contest.key }}">
+            <div>
+                <div class="cl-primary-line">
+                    <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+                    <span class="cl-code">/{{ contest.key }}</span>
+                </div>
+                <div class="cl-subline">
+                    {% if status == 'active' %}{{ _('Participating now') }}
+                    {% elif status == 'ongoing' %}{{ _('Ongoing now') }}
+                    {% elif status == 'upcoming' %}{{ _('Not started') }}
+                    {% else %}{{ _('Ended') }}{% endif %}
+                </div>
+                <div class="cl-course-line">
+                    {% for org in contest.organizations.all() %}
+                        <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
+                    {% endfor %}
+                    {% for cls in contest.classes.all() %}
+                        <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
+                    {% endfor %}
+                </div>
+                <div class="cl-meta">
+                    {% if status == 'active' %}
+                        <span class="badge badge-st-mine">{{ _('Active') }}</span>
+                    {% elif status == 'ongoing' %}
+                        <span class="badge badge-st-ongoing">{{ _('Ongoing') }}</span>
+                    {% elif status == 'upcoming' %}
+                        <span class="badge badge-st-upcoming">{{ _('Upcoming') }}</span>
+                    {% else %}
+                        <span class="badge badge-st-past">{{ _('Past') }}</span>
+                    {% endif %}
+                    {% if status in ('ongoing', 'past') and contest.is_rated %}
+                        <span class="badge badge-rated">{{ _('rated') }}</span>
+                    {% endif %}
+                    {% if status == 'past' and not contest.is_visible %}
+                        <span class="badge badge-st-past"><i class="fa fa-eye-slash"></i> {{ _('hidden') }}</span>
+                    {% endif %}
+                    {% for tag in contest.tags.all() %}
+                        <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
+                    {% endfor %}
+                </div>
+                <div class="cl-time">
+                    {% if status == 'active' %}
+                        {% if contest.time_limit %}
+                            <span class="emph">{{ _('Window ends in %(countdown)s', countdown=as_countdown(participation.time_remaining)) }}</span>
+                        {% elif contest.time_before_end %}
+                            <span class="emph">{{ _('Ends in %(countdown)s', countdown=as_countdown(contest.time_before_end)) }}</span>
+                        {% endif %}
+                    {% elif status == 'ongoing' %}
+                        {% if contest.time_before_end %}
+                            <span class="emph">{{ _('Ends in %(countdown)s', countdown=as_countdown(contest.time_before_end)) }}</span>
+                        {% endif %}
+                    {% elif status == 'upcoming' %}
+                        <span class="emph warn">{{ _('Starting in %(countdown)s', countdown=as_countdown(contest.time_before_start)) }}</span>
+                    {% else %}
+                        <span class="emph muted">{{ _('Ended') }}</span>
+                    {% endif %}
+                    <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
+                    <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
+                </div>
+            </div>
+            <div class="cl-users">
+                {% if status == 'upcoming' %}
+                    —
+                {% else %}
+                    {% if contest.can_see_own_scoreboard(request.user) %}
+                        <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
+                    {% else %}
+                        {{ contest.user_count }}
+                    {% endif %}
+                    <span class="lbl">{{ _('Users') }}</span>
+                {% endif %}
+            </div>
+            <div class="cl-actions">
+                {% if status == 'active' %}
+                    <a class="button primary" href="{{ url('contest_view', contest.key) }}">{{ _('Enter') }}</a>
+                    {% if contest.can_see_own_scoreboard(request.user) %}
+                        <a class="button" href="{{ url('contest_ranking', contest.key) }}">{{ _('Rankings') }}</a>
+                    {% endif %}
+                {% elif status == 'ongoing' %}
+                    {% if not request.user.is_authenticated %}
+                        {# Anonymous: still surface a Join entry so the card is not
+                           empty — clicking it sends the user through login first. #}
+                        <a class="button" href="{{ url('auth_login') }}?next={{ url('contest_view', contest.key) }}">{{ _('Join') }}</a>
+                    {% elif contest.is_live_joinable_by(request.user) %}
+                        <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
+                            {% csrf_token %}
+                            <button type="submit" class="button primary">{{ _('Join') }}</button>
+                        </form>
+                    {% elif contest.is_spectatable_by(request.user) %}
+                        <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
+                            {% csrf_token %}
+                            <button type="submit" class="button">{{ _('Spectate') }}</button>
+                        </form>
+                    {% endif %}
+                {% elif status == 'upcoming' %}
+                    <button type="button" class="button ghost" disabled>{{ _('Remind') }}</button>
+                {% else %}
+                    {% if not request.in_contest %}
+                        {% if contest.allow_virtual_participation %}
+                            <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
+                                {% csrf_token %}
+                                <button type="submit" class="button ghost">{{ _('Virtual') }}</button>
+                            </form>
+                        {% endif %}
+                    {% endif %}
+                {% endif %}
+            </div>
+        </article>
+    {% endmacro %}
+
     <form id="filter-form" class="contest-list-redesign problem-list-redesign oj-ui" onsubmit="event.preventDefault(); applyFilters();">
         {# ── Filter Card ── #}
         <section class="card filter-card">
@@ -259,18 +396,22 @@
             <div class="toolbar-left">
                 <div class="dropdown" id="sort-dropdown">
                     <button type="button" class="sort-btn" onclick="toggleSort()">
-                        <i class="fa fa-sort"></i> <span id="sort-label">{{ _('Sort:') }} {{ _('Start time') }} ↓</span>
+                        <i class="fa fa-sort"></i> <span id="sort-label">{{ _('Sort:') }} {{ current_sort_label }}</span>
                     </button>
                     <div class="dropdown-menu" id="sort-menu" hidden>
                         <div class="dropdown-title">{{ _('Sort by') }}</div>
                         <ul>
-                            <li><button type="button" data-sort="-start_time">{{ _('Start time') }} ↓</button></li>
-                            <li><button type="button" data-sort="start_time">{{ _('Start time') }} ↑</button></li>
-                            <li><button type="button" data-sort="-end_time">{{ _('End time') }} ↓</button></li>
-                            <li><button type="button" data-sort="name">{{ _('Name') }} A–Z</button></li>
-                            <li><button type="button" data-sort="-user_count">{{ _('Participants') }} ↓</button></li>
+                            {{ sort_item('-start_time', _('Start time') ~ ' ↓') }}
+                            {{ sort_item('start_time', _('Start time') ~ ' ↑') }}
+                            {{ sort_item('-end_time', _('End time') ~ ' ↓') }}
+                            {{ sort_item('name', _('Name') ~ ' A–Z') }}
+                            {{ sort_item('-user_count', _('Participants') ~ ' ↓') }}
                         </ul>
                     </div>
+                </div>
+                <div class="group-switch" id="group-by" role="group" aria-label="{{ _('Group by') }}">
+                    <button type="button" class="group-switch-btn{% if group == 'course' %} active{% endif %}" data-group="course">{{ _('By course') }}</button>
+                    <button type="button" class="group-switch-btn{% if group == 'status' %} active{% endif %}" data-group="status">{{ _('By status') }}</button>
                 </div>
             <div class="toolbar-right">
                 <span class="progress-label">{{ total_count }} {{ _('assignments') }}</span>
@@ -280,6 +421,42 @@
 
     {# ── Contest List ── #}
     <div class="cl-list" id="contest-list">
+        {% if group == 'course' %}
+            {% if course_groups %}
+                {% for course_name, contests in course_groups.items() %}
+                    <div class="cl-section">
+                        <div class="cl-group-head">
+                            <span><i class="fa fa-book"></i> {{ course_name }}</span>
+                            <small>{{ contests|length }} {{ _('assignments') }}</small>
+                        </div>
+                        {% for contest in contests %}
+                            {{ assignment_row(contest, contest_statuses.get(contest.key, 'past')) }}
+                        {% endfor %}
+                    </div>
+                {% endfor %}
+
+                {# Pagination #}
+                {% if page_obj and page_obj.has_other_pages() %}
+                    <div class="cl-pagination">
+                        {% if page_obj.has_previous() %}
+                            <a href="#" data-page="{{ page_obj.previous_page_number() }}" class="btn btn-outline btn-sm paginate-link">
+                                <i class="fa fa-chevron-left"></i> {{ _('Previous') }}
+                            </a>
+                        {% endif %}
+                        <span class="page-info">
+                            {{ _('Page %(current)s of %(total)s', current=page_obj.number, total=page_obj.paginator.num_pages) }}
+                        </span>
+                        {% if page_obj.has_next() %}
+                            <a href="#" data-page="{{ page_obj.next_page_number() }}" class="btn btn-outline btn-sm paginate-link">
+                                {{ _('Next') }} <i class="fa fa-chevron-right"></i>
+                            </a>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            {% else %}
+                <div class="cl-empty">{{ _('There are no assignments.') }}</div>
+            {% endif %}
+        {% else %}
         {# Active participations (user's current assignments) #}
         {% if active_participations %}
             <div class="cl-section">
@@ -288,54 +465,7 @@
                     <small>{{ active_participations|length }} {{ _('items') }}</small>
                 </div>
                 {% for participation in active_participations %}
-                    {% with contest=participation.contest %}
-                        <article class="cl-row" data-key="{{ contest.key }}">
-                            <div>
-                                <div class="cl-primary-line">
-                                    <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
-                                    <span class="cl-code">/{{ contest.key }}</span>
-                                </div>
-                                <div class="cl-subline">{{ _('Participating now') }}</div>
-                                <div class="cl-course-line">
-                                    {% for org in contest.organizations.all() %}
-                                        <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
-                                    {% endfor %}
-                                    {% for cls in contest.classes.all() %}
-                                        <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
-                                    {% endfor %}
-                                </div>
-                                <div class="cl-meta">
-                                    <span class="badge badge-st-mine">{{ _('Active') }}</span>
-                                    {% for tag in contest.tags.all() %}
-                                        <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
-                                    {% endfor %}
-                                </div>
-                                <div class="cl-time">
-                                    {% if contest.time_limit %}
-                                        <span class="emph">{{ _('Window ends in %(countdown)s', countdown=as_countdown(participation.time_remaining)) }}</span>
-                                    {% elif contest.time_before_end %}
-                                        <span class="emph">{{ _('Ends in %(countdown)s', countdown=as_countdown(contest.time_before_end)) }}</span>
-                                    {% endif %}
-                                    <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
-                                    <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
-                                </div>
-                            </div>
-                            <div class="cl-users">
-                                {% if contest.can_see_own_scoreboard(request.user) %}
-                                    <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
-                                {% else %}
-                                    {{ contest.user_count }}
-                                {% endif %}
-                                <span class="lbl">{{ _('Users') }}</span>
-                            </div>
-                            <div class="cl-actions">
-                                <a class="button primary" href="{{ url('contest_view', contest.key) }}">{{ _('Enter') }}</a>
-                                {% if contest.can_see_own_scoreboard(request.user) %}
-                                    <a class="button" href="{{ url('contest_ranking', contest.key) }}">{{ _('Rankings') }}</a>
-                                {% endif %}
-                            </div>
-                        </article>
-                    {% endwith %}
+                    {{ assignment_row(participation.contest, 'active', participation) }}
                 {% endfor %}
             </div>
         {% endif %}
@@ -348,64 +478,7 @@
                     <small>{{ current_contests|length }} {{ _('items') }}</small>
                 </div>
                 {% for contest in current_contests %}
-                    <article class="cl-row" data-key="{{ contest.key }}">
-                        <div>
-                            <div class="cl-primary-line">
-                                <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
-                                <span class="cl-code">/{{ contest.key }}</span>
-                            </div>
-                            <div class="cl-subline">{{ _('Ongoing now') }}</div>
-                            <div class="cl-course-line">
-                                {% for org in contest.organizations.all() %}
-                                    <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
-                                {% endfor %}
-                                {% for cls in contest.classes.all() %}
-                                    <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
-                                {% endfor %}
-                            </div>
-                            <div class="cl-meta">
-                                <span class="badge badge-st-ongoing">{{ _('Ongoing') }}</span>
-                                {% if contest.is_rated %}
-                                    <span class="badge badge-rated">{{ _('rated') }}</span>
-                                {% endif %}
-                                {% for tag in contest.tags.all() %}
-                                    <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
-                                {% endfor %}
-                            </div>
-                            <div class="cl-time">
-                                {% if contest.time_before_end %}
-                                    <span class="emph">{{ _('Ends in %(countdown)s', countdown=as_countdown(contest.time_before_end)) }}</span>
-                                {% endif %}
-                                <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
-                                <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
-                            </div>
-                        </div>
-                        <div class="cl-users">
-                            {% if contest.can_see_own_scoreboard(request.user) %}
-                                <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
-                            {% else %}
-                                {{ contest.user_count }}
-                            {% endif %}
-                            <span class="lbl">{{ _('Users') }}</span>
-                        </div>
-                        <div class="cl-actions">
-                            {% if not request.user.is_authenticated %}
-                                {# Anonymous: still surface a Join entry so the card is not
-                                   empty — clicking it sends the user through login first. #}
-                                <a class="button" href="{{ url('auth_login') }}?next={{ url('contest_view', contest.key) }}">{{ _('Join') }}</a>
-                            {% elif contest.is_live_joinable_by(request.user) %}
-                                <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
-                                    {% csrf_token %}
-                                    <button type="submit" class="button primary">{{ _('Join') }}</button>
-                                </form>
-                            {% elif contest.is_spectatable_by(request.user) %}
-                                <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
-                                    {% csrf_token %}
-                                    <button type="submit" class="button">{{ _('Spectate') }}</button>
-                                </form>
-                            {% endif %}
-                        </div>
-                    </article>
+                    {{ assignment_row(contest, 'ongoing') }}
                 {% endfor %}
             </div>
         {% endif %}
@@ -418,38 +491,7 @@
                     <small>{{ future_contests|length }} {{ _('items') }}</small>
                 </div>
                 {% for contest in future_contests %}
-                    <article class="cl-row" data-key="{{ contest.key }}">
-                        <div>
-                            <div class="cl-primary-line">
-                                <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
-                                <span class="cl-code">/{{ contest.key }}</span>
-                            </div>
-                            <div class="cl-subline">{{ _('Not started') }}</div>
-                            <div class="cl-course-line">
-                                {% for org in contest.organizations.all() %}
-                                    <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
-                                {% endfor %}
-                                {% for cls in contest.classes.all() %}
-                                    <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
-                                {% endfor %}
-                            </div>
-                            <div class="cl-meta">
-                                <span class="badge badge-st-upcoming">{{ _('Upcoming') }}</span>
-                                {% for tag in contest.tags.all() %}
-                                    <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
-                                {% endfor %}
-                            </div>
-                            <div class="cl-time">
-                                <span class="emph warn">{{ _('Starting in %(countdown)s', countdown=as_countdown(contest.time_before_start)) }}</span>
-                                <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
-                                <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
-                            </div>
-                        </div>
-                        <div class="cl-users">—</div>
-                        <div class="cl-actions">
-                                <button type="button" class="button ghost" disabled>{{ _('Remind') }}</button>
-                        </div>
-                    </article>
+                    {{ assignment_row(contest, 'upcoming') }}
                 {% endfor %}
             </div>
         {% endif %}
@@ -462,58 +504,7 @@
             </div>
             {% if past_contests %}
                 {% for contest in past_contests %}
-                    <article class="cl-row" data-key="{{ contest.key }}">
-                        <div>
-                            <div class="cl-primary-line">
-                                <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
-                                <span class="cl-code">/{{ contest.key }}</span>
-                            </div>
-                            <div class="cl-subline">{{ _('Ended') }}</div>
-                            <div class="cl-course-line">
-                                {% for org in contest.organizations.all() %}
-                                    <span class="badge badge-org"><i class="fa fa-book"></i> {{ org.name }}</span>
-                                {% endfor %}
-                                {% for cls in contest.classes.all() %}
-                                    <span class="badge badge-class"><i class="fa fa-users"></i> {{ cls.name }}</span>
-                                {% endfor %}
-                            </div>
-                            <div class="cl-meta">
-                                <span class="badge badge-st-past">{{ _('Past') }}</span>
-                                {% if contest.is_rated %}
-                                    <span class="badge badge-rated">{{ _('rated') }}</span>
-                                {% endif %}
-                                {% if not contest.is_visible %}
-                                    <span class="badge badge-st-past"><i class="fa fa-eye-slash"></i> {{ _('hidden') }}</span>
-                                {% endif %}
-                                {% for tag in contest.tags.all() %}
-                                    <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
-                                {% endfor %}
-                            </div>
-                            <div class="cl-time">
-                                <span class="emph muted">{{ _('Ended') }}</span>
-                                <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
-                                <br><span class="emph muted">{{ _('Duration:') }}</span> {{ contest.contest_window_length|timedelta('localized-no-seconds') if contest.time_limit else _('No limit') }}
-                            </div>
-                        </div>
-                        <div class="cl-users">
-                            {% if contest.can_see_own_scoreboard(request.user) %}
-                                <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
-                            {% else %}
-                                {{ contest.user_count }}
-                            {% endif %}
-                            <span class="lbl">{{ _('Users') }}</span>
-                        </div>
-                        <div class="cl-actions">
-                            {% if not request.in_contest %}
-                                {% if contest.allow_virtual_participation %}
-                                    <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
-                                        {% csrf_token %}
-                                        <button type="submit" class="button ghost">{{ _('Virtual') }}</button>
-                                    </form>
-                                {% endif %}
-                            {% endif %}
-                        </div>
-                    </article>
+                    {{ assignment_row(contest, 'past') }}
                 {% endfor %}
 
                 {# Pagination #}
@@ -538,5 +529,6 @@
                 <div class="cl-empty">{{ _('There are no past assignments.') }}</div>
             {% endif %}
         </div>
+        {% endif %}
     </div>
 {% endblock %}

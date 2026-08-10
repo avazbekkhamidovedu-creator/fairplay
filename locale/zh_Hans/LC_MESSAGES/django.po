@@ -7207,3 +7207,27 @@ msgstr "译文描述"
 msgid "+ Add another Translation"
 msgstr "+ 添加翻译"
 
+
+#: templates/contest/list-v2.html
+msgid "Group by"
+msgstr "分组方式"
+
+#: templates/contest/list-v2.html
+msgid "By course"
+msgstr "按课程"
+
+#: templates/contest/list-v2.html
+msgid "By status"
+msgstr "按状态"
+
+#: templates/contest/list-v2.html
+msgid "General course"
+msgstr "公共课程"
+
+#: templates/contest/list-v2.html
+msgid "assignments"
+msgstr "作业"
+
+#: templates/contest/list-v2.html
+msgid "There are no assignments."
+msgstr "暂无作业。"
