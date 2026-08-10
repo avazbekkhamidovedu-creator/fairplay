@@ -225,7 +225,7 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
             Exists(Contest.curators.through.objects.filter(contest=OuterRef('pk'), profile=profile)) |
             Exists(Contest.testers.through.objects.filter(contest=OuterRef('pk'), profile=profile)),
             completed_contest=Exists(ContestParticipation.objects.filter(contest=OuterRef('pk'), user=profile,
-                                                                          virtual=ContestParticipation.LIVE)),
+                                                                         virtual=ContestParticipation.LIVE)),
         )
 
     def get_queryset(self):
