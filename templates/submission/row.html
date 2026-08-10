@@ -1,5 +1,12 @@
 {% set can_view, can_edit = submission_layout(submission, profile_id, request.user, completed_problem_ids, editable_problem_ids, tester_problem_ids) %}
 {% set results_hidden = not submission.results_visible_to(request.user) %}
+{% set is_code_problem = submission.problem.submission_type == 'C' %}
+{% if request.user.is_authenticated and perms.judge.rejudge_submission %}
+    <div class="sub-check" onclick="event.stopPropagation()">
+        <input type="checkbox" class="sub-row-check" value="{{ submission.id }}"
+               aria-label="{{ _('Select submission') }}">
+    </div>
+{% endif %}
 <div class="sub-result {% if results_hidden %}submission-hidden{% else %}{{ submission.result_class }}{% endif %}">
     <div class="score">
         {%- if results_hidden -%}
@@ -60,6 +67,12 @@
             <a href="{{ url('submission_status', submission.id) }}">
                 <i class="fa fa-eye fa-fw"></i><span class="label">{{ _('view') }}</span>
             </a>
+            {% if perms.judge.rejudge_submission %} ·
+                <a href="#" class="sub-grade-link" onclick="return false;" aria-disabled="true"
+                   title="{{ _('Grading desk is not available yet.') }}">
+                    <i class="fa fa-check-square-o fa-fw"></i><span class="label">{{ _('grade') }}</span>
+                </a>
+            {% endif %}
             {% if perms.judge.rejudge_submission and can_edit %} ·
                 {% if not submission.is_locked %}
                     <a href="#" onclick="rejudge_submission({{ submission.id }}, event);return false">
@@ -83,7 +96,7 @@
 </div>
 
 <div class="sub-usage">
-    {% if results_hidden or submission.status in ('QU', 'P', 'G', 'CE', 'IE', 'AB') %}
+    {% if not is_code_problem or results_hidden or submission.status in ('QU', 'P', 'G', 'CE', 'IE', 'AB') %}
         <div class="time">---</div>
         <div class="memory">---</div>
     {% else %}

@@ -26,9 +26,9 @@ from judge.views.problem_create_v2 import (
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView
-from judge.views.select2 import AssigneeSelect2View, ClassSelect2View, CommentSelect2View, ContestSelect2View, \
-    ContestUserSearchSelect2View, OrganizationSelect2View, ProblemSelect2View, TicketUserSelect2View, \
-    UserSearchSelect2View, UserSelect2View
+from judge.views.select2 import AssigneeSelect2View, ClassSelect2View, CommentSelect2View, ContestFilterSelect2View, \
+    ContestSelect2View, ContestUserSearchSelect2View, OrganizationSelect2View, ProblemFilterSelect2View, \
+    ProblemSelect2View, TicketUserSelect2View, UserSearchSelect2View, UserSelect2View
 from judge.views.widgets import martor_image_uploader
 from martor.views import markdown_search_user
 
@@ -344,6 +344,8 @@ urlpatterns = [
 
     path('widgets/', include([
         path('rejudge', widgets.rejudge_submission, name='submission_rejudge'),
+        path('rejudge/bulk', widgets.bulk_rejudge_submissions, name='submission_bulk_rejudge'),
+        path('rescore/bulk', widgets.bulk_rescore_submissions, name='submission_bulk_rescore'),
         path('single_submission', submission.single_submission, name='submission_single_query'),
         path('submission_testcases', submission.SubmissionTestCaseQuery.as_view(), name='submission_testcases_query'),
         path('status-table', status.status_table, name='status_table'),
@@ -356,6 +358,10 @@ urlpatterns = [
                  name='contest_user_search_select2_ajax'),
             path('ticket_user', TicketUserSelect2View.as_view(), name='ticket_user_select2_ajax'),
             path('ticket_assignee', AssigneeSelect2View.as_view(), name='ticket_assignee_select2_ajax'),
+            path('submission_problem', ProblemFilterSelect2View.as_view(),
+                 name='submission_problem_filter_select2'),
+            path('submission_contest', ContestFilterSelect2View.as_view(),
+                 name='submission_contest_filter_select2'),
         ])),
 
         path('preview/', include([

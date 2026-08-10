@@ -3,15 +3,17 @@
 // =============================================================================
 // DKUOJ shared UI components
 //
-// Prefer `.oj-*` classes on new pages. Inside `.oj-ui` or `.problem-list-redesign`,
-// short aliases (`.btn`, `.card`, `.input`, `.select`) resolve to the same styles.
+// Prefer `.oj-*` classes on new pages. Inside `.oj-ui`, `.problem-list-redesign`,
+// or `.submission-list-redesign`, short aliases (`.btn`, `.card`, `.input`, `.select`)
+// resolve to the same styles.
 // =============================================================================
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 
 .oj-btn,
 .oj-ui .btn,
-.problem-list-redesign .btn {
+.problem-list-redesign .btn,
+.submission-list-redesign .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -41,7 +43,8 @@
 
 .oj-btn-primary,
 .oj-ui .btn-primary,
-.problem-list-redesign .btn-primary {
+.problem-list-redesign .btn-primary,
+.submission-list-redesign .btn-primary {
     color: var(--oj-btn-text);
     background: linear-gradient(to bottom, var(--oj-btn-from) 0, var(--oj-btn-to) 100%) repeat-x;
     border-color: var(--oj-btn-border);
@@ -60,7 +63,8 @@
 
 .oj-btn-outline,
 .oj-ui .btn-outline,
-.problem-list-redesign .btn-outline {
+.problem-list-redesign .btn-outline,
+.submission-list-redesign .btn-outline {
     background: var(--oj-surface);
     border-color: var(--oj-border);
     color: var(--oj-text);
@@ -73,7 +77,8 @@
 
 .oj-btn-text,
 .oj-ui .btn-text,
-.problem-list-redesign .btn-text {
+.problem-list-redesign .btn-text,
+.submission-list-redesign .btn-text {
     border: none;
     background: none;
     color: var(--oj-link);
@@ -88,7 +93,8 @@
 
 .oj-btn-danger,
 .oj-ui .btn-danger,
-.problem-list-redesign .btn-danger {
+.problem-list-redesign .btn-danger,
+.submission-list-redesign .btn-danger {
     color: var(--oj-btn-text);
     background: var(--oj-danger);
     border-color: var(--oj-danger);
@@ -102,7 +108,8 @@
 
 .oj-btn-sm,
 .oj-ui .btn-sm,
-.problem-list-redesign .btn-sm {
+.problem-list-redesign .btn-sm,
+.submission-list-redesign .btn-sm {
     padding: 4px 10px;
     min-height: 28px;
     font-size: var(--oj-font-size-sm);
@@ -112,7 +119,8 @@
 
 .oj-card,
 .oj-ui .card,
-.problem-list-redesign .card {
+.problem-list-redesign .card,
+.submission-list-redesign .card {
     background: var(--oj-surface);
     border: 1px solid var(--oj-border);
     border-radius: var(--oj-radius-md);
@@ -126,7 +134,9 @@
 .oj-ui .input,
 .oj-ui .select,
 .problem-list-redesign .input,
-.problem-list-redesign .select {
+.problem-list-redesign .select,
+.submission-list-redesign .input,
+.submission-list-redesign .select {
     padding: 6px 10px;
     min-height: var(--oj-control-height);
     box-sizing: border-box;
@@ -152,7 +162,8 @@
 
 .oj-select,
 .oj-ui .select,
-.problem-list-redesign .select {
+.problem-list-redesign .select,
+.submission-list-redesign .select {
     min-width: 140px;
 }
 

@@ -5789,38 +5789,99 @@ msgstr "评分时裁判服务端发生了内部错误。"
 msgid "Error information"
 msgstr "错误信息"
 
-#: templates/submission/list.html:35 templates/submission/status.html:81
+#: templates/submission/list.html templates/submission/status.html:81
 msgid "Are you sure you want to rejudge?"
 msgstr "您确定要重新评测吗？"
 
-#: templates/submission/list.html:75
+#: templates/submission/list.html
+msgid "No submissions selected."
+msgstr "未选择提交。"
+
+#: templates/submission/list.html
+msgid "Done."
+msgstr "完成。"
+
+#: templates/submission/list.html
+msgid "Request failed."
+msgstr "请求失败。"
+
+#: templates/submission/list.html
+msgid "Are you sure you want to rejudge the selected submissions?"
+msgstr "确定要对选中的提交重新评测吗？"
+
+#: templates/submission/list.html
+msgid "Are you sure you want to rescore the selected submissions?"
+msgstr "确定要对选中的提交重新计分吗？"
+
+#: templates/submission/list.html
 msgid "Filter by status..."
 msgstr "按状态过滤…"
 
-#: templates/submission/list.html:82
+#: templates/submission/list.html
 msgid "Filter by language..."
 msgstr "按语言筛选…"
 
-#: templates/submission/list.html:306
-msgid "Filter submissions"
-msgstr "提交筛选"
+#: templates/submission/list.html
+msgid "problem / code"
+msgstr "题目 / 题号"
 
-#: templates/submission/list.html:342
+#: templates/submission/list.html
+msgid "contest key"
+msgstr "竞赛 key"
+
+#: templates/submission/list.html
+msgid "Practice only (no contest)"
+msgstr "仅练习（无竞赛）"
+
+#: templates/submission/list.html
+#, python-format
+msgid "Showing submissions in contest: %(contest)s"
+msgstr "当前范围：竞赛 %(contest)s"
+
+#: templates/submission/list.html
+msgid "Select all on this page"
+msgstr "全选当前页"
+
+#: templates/submission/list.html
+msgid "Rejudge selected"
+msgstr "Rejudge 选中"
+
+#: templates/submission/list.html
+msgid "Rescore selected"
+msgstr "Rescore 选中"
+
+#: templates/submission/list.html
+msgid "Practice Grade"
+msgstr "Practice Grade"
+
+#: templates/submission/list.html templates/submission/row.html
+msgid "Grading desk is not available yet."
+msgstr "阅卷台尚未开放。"
+
+#: templates/submission/list.html
 msgid "Total:"
 msgstr "总计："
 
-#: templates/submission/list.html:352
+#: templates/submission/list.html
 msgid "You were disconnected. Refresh to show latest updates."
 msgstr "您处于离线状态。刷新以显示最近的更新。"
 
-#: templates/submission/row.html:44
+#: templates/submission/row.html
+msgid "Select submission"
+msgstr "选择该提交"
+
+#: templates/submission/row.html
 #, python-format
 msgid "Case #%(case)s"
 msgstr "测试数据 #%(case)s"
 
-#: templates/submission/row.html:54
+#: templates/submission/row.html
 msgid "view"
 msgstr "查看"
+
+#: templates/submission/row.html
+msgid "grade"
+msgstr "grade"
 
 #: templates/submission/row.html:59
 msgid "rejudge"
