@@ -260,6 +260,12 @@ class Problem(models.Model):
         'fill-in-blank', 'fill_in_blank', 'true-false', 'short-answer', 'composite', 'other',
         'easy', 'medium', 'hard',
     })
+    # Explicit aliases so create_v2 / Tags filtering still works when locale .mo files are
+    # not compiled (e.g. CI) or when clients post translated chip labels directly.
+    AUTO_TYPE_LABEL_ALIASES = (
+        '编程题', '填空题', '单选题', '多选题', '判断题', '简答题', '复合题', '其他',
+        '简单', '中等', '困难',
+    )
 
     @classmethod
     def difficulty_display(cls, name):
@@ -270,6 +276,7 @@ class Problem(models.Model):
     def reserved_auto_type_labels(cls):
         """Casefolded display labels for format/difficulty chips (EN + configured languages)."""
         labels = set(cls.AUTO_TYPE_LABEL_MSGIDS)
+        labels.update(cls.AUTO_TYPE_LABEL_ALIASES)
         lang_codes = {code for code, _name in getattr(settings, 'LANGUAGES', ())}
         lang_codes.add(translation.get_language() or 'en')
         for lang in lang_codes:
