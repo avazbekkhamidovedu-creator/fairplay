@@ -13,11 +13,11 @@ form#ticket-form {
 
 #ticket-list {
     .fa-check-circle-o {
-        color: #44AD41;
+        color: var(--oj-accepted);
     }
 
     .fa-exclamation-circle {
-        color: #DE2121;
+        color: var(--oj-rejected);
     }
 }
 
@@ -49,11 +49,11 @@ div.ticket-title {
     column-gap: 0.3em;
 
     .fa-check-circle-o {
-        color: #44AD41;
+        color: var(--oj-accepted);
     }
 
     .fa-exclamation-circle {
-        color: #DE2121;
+        color: var(--oj-rejected);
     }
 
     small {
@@ -121,24 +121,24 @@ div.ticket-title {
 .close-ticket {
     display: block;
     width: 100%;
-    background: linear-gradient(to bottom, #4bad00 0%, #278811 100%);
-    border-color: #24710e;
+    background: linear-gradient(to bottom, var(--oj-accepted) 0%, var(--oj-success) 100%);
+    border-color: var(--oj-success);
     font-weight: 600;
 
     &:hover {
-        background: #24710e;
+        background: var(--oj-success);
     }
 }
 
 .open-ticket {
     display: block;
     width: 100%;
-    background: linear-gradient(to bottom, #ff130f, #b03d17);
-    border-color: #853011;
+    background: linear-gradient(to bottom, var(--oj-rejected) 0%, var(--oj-danger) 100%);
+    border-color: var(--oj-danger);
     font-weight: 600;
 
     &:hover {
-        background: #853011;
+        background: var(--oj-danger);
     }
 }
 

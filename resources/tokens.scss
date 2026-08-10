@@ -6,7 +6,9 @@
 @function _hover_overlay() {
     @if $is_light_theme {
         @return rgba(0, 0, 0, 0.03);
-    } @else {
+    }
+
+    @else {
         @return rgba(255, 255, 255, 0.05);
     }
 }
