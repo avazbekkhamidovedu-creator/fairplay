@@ -67,9 +67,19 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='contest_editor', user_permissions=('edit_all_contest',))
+        # A full contest editor: edit_all_contest plus every granular permission
+        # the Django admin gates behind (contest_rating, lock_contest, access
+        # codes, SEB, visibility, private contests, label script, perf ceiling).
+        # Without them, ContestCreate._restricted_fields correctly refuses to
+        # write those fields — see the permission-gating tests below.
+        cls.editor = create_user(username='contest_editor', user_permissions=(
+            'edit_all_contest', 'contest_rating', 'lock_contest', 'contest_access_code',
+            'contest_seb_requirement', 'create_private_contest', 'change_contest_visibility',
+            'contest_problem_label', 'override_performance_ceiling',
+        ))
         cls.curator = create_user(username='contest_curator', user_permissions=('edit_own_contest',))
         cls.normal = create_user(username='contest_normal')
+        cls.organization = Organization.objects.create(name='Edit Org', slug='edit-org')
 
         _now = timezone.now()
         cls.contest = create_contest(
@@ -369,6 +379,142 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    # ── security: granular permission gating (mirrors the Django admin) ─────
+
+    def test_curator_cannot_escalate_visibility(self):
+        # A curator holding only edit_own_contest must not be able to flip
+        # is_visible (needs change_contest_visibility) — the admin makes the
+        # field read-only for them, and so does the frontend editor.
+        self.client.force_login(self.curator)
+        payload = self._full_payload(is_visible=True)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.is_visible)
+
+    def test_curator_cannot_arm_seb_or_set_access_code(self):
+        # contest_seb_requirement / contest_access_code are separate permissions.
+        self.client.force_login(self.curator)
+        payload = self._full_payload(
+            seb_required=True, seb_browser_exam_keys='a' * 64,
+            access_code='sneaky',
+        )
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.seb_required)
+        self.assertEqual(self.contest.access_code, '')
+
+    def test_curator_cannot_mark_rated_or_lock(self):
+        # contest_rating / lock_contest are separate permissions.
+        self.client.force_login(self.curator)
+        payload = self._full_payload(is_rated=True, rate_all=True, locked_after='2030-01-01T00:00:00Z')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.is_rated)
+        self.assertIsNone(self.contest.locked_after)
+
+    def test_curator_cannot_change_organizations(self):
+        # create_private_contest is required to scope a contest to an org.
+        self.client.force_login(self.curator)
+        payload = self._full_payload(organizations=[self.organization.id])
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.organizations.count(), 0)
+
+    # ── vis_mode seg control is the single source of truth for visibility ──
+
+    def test_vis_mode_public_sets_is_visible(self):
+        self.client.force_login(self.editor)
+        payload = self._full_payload(vis_mode='public')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.is_visible)
+        self.assertFalse(self.contest.is_private)
+        self.assertFalse(self.contest.is_organization_private)
+
+    def test_vis_mode_org_sets_org_private(self):
+        self.client.force_login(self.editor)
+        payload = self._full_payload(vis_mode='org')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.is_visible)
+        self.assertTrue(self.contest.is_organization_private)
+
+    def test_vis_mode_hidden_hides(self):
+        # First make the contest visible, then hide it again via the seg.
+        self.contest.is_visible = True
+        self.contest.save()
+        self.client.force_login(self.editor)
+        payload = self._full_payload(vis_mode='hidden')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.is_visible)
+
+    def test_duration_out_of_range_returns_400(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(self._full_payload(duration_hours=5000)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_curator_cannot_attach_hidden_problem(self):
+        # Security: a curator holding only edit_own_contest must not attach
+        # another teacher's hidden problem to a contest students can see —
+        # the contest detail page would otherwise leak it to them.
+        hidden = create_problem('hidden-attach')  # is_public defaults False
+        self.client.force_login(self.curator)
+        payload = self._full_payload(problems=[{'id': hidden.id}])
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('not allowed', json.loads(response.content)['error'])
+
+    def test_curator_keeps_existing_hidden_problem_when_saving(self):
+        # Regression guard: an admin-attached hidden problem must not block a
+        # curator from saving the contest (existing problems stay allowed).
+        from judge.models import ContestProblem
+        hidden = create_problem('hidden-existing')
+        ContestProblem.objects.create(contest=self.contest, problem=hidden, points=100, order=99)
+        self.client.force_login(self.curator)
+        payload = self._full_payload(problems=[{'id': hidden.id, 'points': 100}])
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.contest_problems.filter(problem=hidden).exists())
+
 
 class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
     """Create mode: newly registered model fields + regression fixes."""
@@ -376,7 +522,12 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='fields_editor', user_permissions=('edit_all_contest',))
+        # Same full editor as ContestEditViewTestCase (see comment there).
+        cls.editor = create_user(username='fields_editor', user_permissions=(
+            'edit_all_contest', 'contest_rating', 'lock_contest', 'contest_access_code',
+            'contest_seb_requirement', 'create_private_contest', 'change_contest_visibility',
+            'contest_problem_label', 'override_performance_ceiling',
+        ))
         cls.user_a = create_user(username='fields_user_a')
         cls.user_b = create_user(username='fields_user_b')
         cls.organization = Organization.objects.create(name='Fields Org', slug='fields-org')
@@ -415,27 +566,48 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertTrue(contest.limit_join_organizations)
 
     def test_seb_fields_saved(self):
+        # Keys must be valid 64-char hex hashes: model validation (full_clean)
+        # is now enforced on save, rejecting anything shorter.
+        bek = 'a' * 64
+        cek = 'b' * 64
         response = self._post(
             name='SEB', key='sebtest',
-            seb_required=True, seb_browser_exam_keys='abc\ndef', seb_config_keys='xyz',
+            seb_required=True, seb_browser_exam_keys=bek + '\n' + cek, seb_config_keys=cek,
             seb_quit_url='https://example.com/quit',
         )
         self.assertEqual(response.status_code, 200, response.content)
         contest = Contest.objects.get(key='sebtest')
         self.assertTrue(contest.seb_required)
-        self.assertEqual(contest.seb_browser_exam_keys, 'abc\ndef')
-        self.assertEqual(contest.seb_config_keys, 'xyz')
+        self.assertEqual(contest.seb_browser_exam_keys, bek + '\n' + cek)
+        self.assertEqual(contest.seb_config_keys, cek)
         self.assertEqual(contest.seb_quit_url, 'https://example.com/quit')
 
+    def test_seb_required_without_keys_returns_400(self):
+        # Regression: seb_required=True used to save with no keys (bricking the
+        # contest for every student); model validation now rejects it.
+        response = self._post(name='SEB Bad', key='sebbad', seb_required=True)
+        self.assertEqual(response.status_code, 400)
+
     def test_format_config_json_saved(self):
-        response = self._post(name='FC', key='fctest', format_config='{"points": [100, 200]}')
-        self.assertEqual(response.status_code, 200)
+        # ICPC accepts a config dict with a validated 'penalty' key — use it to
+        # exercise the JSON round-trip (the default format rejects any config).
+        response = self._post(name='FC', key='fctest', format_name='icpc',
+                              format_config='{"penalty": 20}')
+        self.assertEqual(response.status_code, 200, response.content)
         contest = Contest.objects.get(key='fctest')
-        self.assertEqual(contest.format_config, {'points': [100, 200]})
+        self.assertEqual(contest.format_name, 'icpc')
+        self.assertEqual(contest.format_config, {'penalty': 20})
 
     def test_format_config_invalid_json_returns_400(self):
         response = self._post(name='FC Bad', key='fcbad', format_config='{not json')
         self.assertEqual(response.status_code, 400)
+
+    def test_invalid_format_name_returns_400(self):
+        # Regression: an unregistered format name used to store fine and then
+        # KeyError-crash every page rendering the contest.
+        response = self._post(name='Fmt Bad', key='fmtbad', format_name='not-a-format')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('format', json.loads(response.content)['error'])
 
     def test_profile_m2m_fields_saved(self):
         response = self._post(
@@ -476,9 +648,11 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_create_with_problems_saves_points(self):
-        problem = create_problem('problems-save-test')
+        # The problem must be one the editor may attach (public, or owned by
+        # them) — the visibility rule rejects other teachers' hidden problems.
+        problem = create_problem('problems-save-test', is_public=True)
         response = self._post(name='With Prob', key='withprob', problems=[{'id': problem.id, 'points': 150}])
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.content)
         contest = Contest.objects.get(key='withprob')
         cp = contest.contest_problems.get()
         self.assertEqual(cp.problem, problem)
@@ -487,12 +661,31 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
 
     def test_create_with_problem_ids_backward_compatible(self):
         # The legacy plain-id list (points default to 100) must still work.
-        problem = create_problem('problems-legacy-test')
+        problem = create_problem('problems-legacy-test', is_public=True)
         response = self._post(name='Legacy Prob', key='legacyprob', problem_ids=[problem.id])
         self.assertEqual(response.status_code, 200)
         contest = Contest.objects.get(key='legacyprob')
         cp = contest.contest_problems.get()
         self.assertEqual(cp.points, 100)
+
+    # NOTE: attaching a *hidden* problem is only possible for trusted editors
+    # (edit_all_contest / see_private_problem). Curators are blocked from it —
+    # see ContestEditViewTestCase.test_curator_cannot_attach_hidden_problem.
+
+    def test_create_saves_per_problem_options(self):
+        problem = create_problem('problem-options', is_public=True)
+        response = self._post(
+            name='Opts', key='optstest',
+            problems=[{'id': problem.id, 'points': 200, 'partial': False,
+                       'is_pretested': True, 'max_submissions': 3}],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='optstest')
+        cp = contest.contest_problems.get()
+        self.assertEqual(cp.points, 200)
+        self.assertFalse(cp.partial)
+        self.assertTrue(cp.is_pretested)
+        self.assertEqual(cp.max_submissions, 3)
 
 
 class ContestEditProblemsTestCase(CommonDataMixin, TestCase):

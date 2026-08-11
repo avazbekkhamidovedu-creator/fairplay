@@ -316,8 +316,8 @@
                 var fd = new FormData(form);
                 var name = fd.get('name') || {{ _('Untitled assignment')|htmltojs }};
                 var key = fd.get('key') || {{ _('—')|htmltojs }};
-                var vis = document.getElementById('id_is_visible');
-                var rated = document.getElementById('id_is_rated');
+                var visMode = document.querySelector('input[name="vis_mode"]:checked');
+                var visHidden = document.getElementById('id_is_visible');  // non-submitted flag (admin-gated case)
                 var fmt = document.getElementById('id_format_name');
                 var start = fd.get('start_time') || '';
                 var end = fd.get('end_time') || '';
@@ -336,19 +336,25 @@
                         : {{ _('—')|htmltojs }};
                 }
 
+                // Visibility badge: prefer the seg radio; fall back to the
+                // hidden flag when visibility is admin-managed (no seg shown).
                 var visEl = document.getElementById('pv-visibility');
                 if (visEl) {
-                    if (vis && vis.checked) {
-                        visEl.textContent = {{ _('Public')|htmltojs }};
-                        visEl.className = 'badge badge-st-ongoing';
-                    } else {
-                        visEl.textContent = {{ _('Hidden')|htmltojs }};
-                        visEl.className = 'badge badge-st-past';
-                    }
+                    var mode = visMode ? visMode.value
+                                       : (visHidden && visHidden.value === 'true' ? 'public' : 'hidden');
+                    var labels = {
+                        hidden: {{ _('Hidden')|htmltojs }},
+                        public: {{ _('Public')|htmltojs }},
+                        org: {{ _('Org')|htmltojs }},
+                        private: {{ _('Private')|htmltojs }},
+                    };
+                    visEl.textContent = labels[mode] || {{ _('Hidden')|htmltojs }};
+                    visEl.className = 'badge ' + (mode === 'hidden' ? 'badge-st-past' : 'badge-st-ongoing');
                 }
 
                 var ratedEl = document.getElementById('pv-rated');
                 if (ratedEl) {
+                    var rated = document.getElementById('id_is_rated');
                     ratedEl.style.display = (rated && rated.checked) ? 'inline-block' : 'none';
                 }
 
@@ -359,9 +365,33 @@
                 if (descEl) descEl.textContent = desc || {{ _('No description yet.')|htmltojs }};
             }
 
+            // Mirror the problem rows into the "Student view preview" table so
+            // the preview is not a static shell.
+            function syncPreviewProblems() {
+                var tbody = document.querySelector('#pv-body .pv-problems tbody');
+                if (!tbody) return;
+                var rows = document.querySelectorAll('.cp-list .cp-row[data-pid]');
+                if (!rows.length) {
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--muted);">'
+                        + {{ _('No problems added yet.')|htmltojs }} + '</td></tr>';
+                    return;
+                }
+                var html = '';
+                rows.forEach(function (r) {
+                    var letter = r.querySelector('.label-letter');
+                    var pname = r.querySelector('.pname');
+                    var pts = r.querySelector('input.cp-points');
+                    html += '<tr><td>' + (letter ? letter.textContent : '') + '</td>'
+                          + '<td>' + (pname ? pname.textContent : '') + '</td>'
+                          + '<td>' + (pts ? pts.value : '100') + '</td></tr>';
+                });
+                tbody.innerHTML = html;
+            }
+
             form.addEventListener('input', syncPreview);
             form.addEventListener('change', syncPreview);
             syncPreview();
+            syncPreviewProblems();
 
             // --- Auto-generate key from name ---
             // Backend requires the key to be lowercase letters/digits only (^[a-z0-9]+$), no hyphens.
@@ -464,8 +494,12 @@
                 var fd = new FormData(form);
                 var data = {};
                 fd.forEach(function (v, k) { data[k] = v; });
-                // Checkboxes → booleans (keep in sync with ContestCreate._bool_fields)
-                ['is_visible', 'is_rated', 'use_clarifications', 'hide_problem_tags',
+                // Checkboxes → booleans (keep in sync with ContestCreate._bool_fields).
+                // NOTE: 'is_visible' is intentionally absent — visibility is
+                // decided by the 'vis_mode' seg radio (or kept untouched when
+                // the user lacks change_contest_visibility; the server skips
+                // permission-gated fields either way).
+                ['is_rated', 'use_clarifications', 'hide_problem_tags',
                  'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
                  'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
                  'show_short_display', 'is_private', 'is_organization_private',
@@ -490,13 +524,24 @@
                 // format_config is JSON text; empty means "no config"
                 if (data.format_config === undefined || !data.format_config.trim()) delete data.format_config;
 
-                // Problems: collect id + per-row points from the list
+                // Problems: collect id + per-row options (points / partial /
+                // pretested / max submissions) from the list. Always sent —
+                // an empty array tells the backend to clear the problem list.
                 var problems = [];
                 document.querySelectorAll('.cp-list .cp-row[data-pid]').forEach(function(r) {
-                    var ptsInput = r.querySelector('input[type=number]');
-                    problems.push({ id: r.dataset.pid, points: ptsInput ? ptsInput.value : 100 });
+                    var pts = r.querySelector('input.cp-points');
+                    var partial = r.querySelector('input.cp-partial');
+                    var pretested = r.querySelector('input.cp-pretested');
+                    var maxSubs = r.querySelector('input.cp-max-subs');
+                    problems.push({
+                        id: r.dataset.pid,
+                        points: pts ? pts.value : 100,
+                        partial: partial ? partial.checked : true,
+                        is_pretested: pretested ? pretested.checked : false,
+                        max_submissions: maxSubs && maxSubs.value ? maxSubs.value : null,
+                    });
                 });
-                if (problems.length) data.problems = problems;
+                data.problems = problems;
 
                 // Dates: datetime-local is local wall-clock -> convert to UTC ISO before submitting.
                 // The backend TIME_ZONE=UTC; sending raw local time would store it as UTC and show 8h off later.
@@ -722,22 +767,30 @@
                         existingIds.push(pid);
                         ids.push(pid);
 
-                        // Add row to the problem list
+                        // Add row to the problem list (with per-problem options:
+                        // partial credit, pretest-only, max submissions).
                         if (cpList) {
                             var r = document.createElement('div');
                             r.className = 'cp-row';
                             r.dataset.pid = pid;
-                            r.innerHTML = '<span></span><span class="label-letter">' + String.fromCharCode(64 + existingIds.length) + '</span>' +
+                            r.innerHTML =
+                                '<span></span><span class="label-letter">' + String.fromCharCode(64 + existingIds.length) + '</span>' +
                                 '<span class="pname">' + (row.dataset.name || 'Problem ' + pid) + '</span>' +
-                                '<span><input type="number" value="100" style="width:48px"></span>' +
+                                '<span><input type="number" class="cp-points" value="100" style="width:48px"></span>' +
                                 '<span>—</span>' +
-                                '<span class="cp-actions"><button type="button" class="btn-icon danger" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button></span>';
+                                '<span class="cp-actions"><button type="button" class="btn-icon danger" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button></span>' +
+                                '<div class="cp-options" style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;padding-top:0.25rem;color:var(--muted);font-size:12px;">' +
+                                '<label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;"><input type="checkbox" class="cp-partial" checked> {{ _('Partial credit') }}</label>' +
+                                '<label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;"><input type="checkbox" class="cp-pretested"> {{ _('Pretest only') }}</label>' +
+                                '<label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;">{{ _('Max submissions') }} <input type="number" class="cp-max-subs" min="1" placeholder="∞" style="width:56px"></label>' +
+                                '</div>';
                             cpList.appendChild(r);
                         }
                     });
 
                     hiddenIds.value = existingIds.join(',');
                     if (cpCount) cpCount.textContent = existingIds.length + {{ _(" problems")|htmltojs }};
+                    syncPreviewProblems();
 
                     slideover.classList.remove('open');
                     showToast(existingIds.length + {{ _(" problems added")|htmltojs }});
@@ -755,6 +808,7 @@
                         document.querySelector('.cp-list').style.display = 'none';
                         document.querySelector('.cp-empty').style.display = '';
                     }
+                    syncPreviewProblems();
                 };
             }
 
@@ -788,6 +842,29 @@
                         minimumInputLength: 0
                     });
                 });
+            }
+
+            // --- Class options depend on the selected organization ---
+            // The class <option>s carry a data-org attribute; selecting an
+            // organization narrows the class dropdown to that org's classes
+            // (and clears a previously picked class that no longer matches).
+            var orgSel = document.getElementById('id_organizations');
+            var classSel = document.getElementById('id_classes');
+            if (orgSel && classSel) {
+                function syncClassOptions() {
+                    var orgId = orgSel.value;
+                    var stale = true;
+                    Array.from(classSel.options).forEach(function (opt) {
+                        var show = !orgId || opt.dataset.org === orgId;
+                        opt.style.display = show ? '' : 'none';
+                        if (show && opt.value && opt.selected) stale = false;
+                    });
+                    if (stale) classSel.value = '';
+                    var classRow = classSel.closest('.form-row');
+                    if (classRow) classRow.style.display = orgId ? '' : 'none';
+                }
+                orgSel.addEventListener('change', syncClassOptions);
+                syncClassOptions();
             }
         });
     </script>
@@ -876,13 +953,19 @@
                             <div class="form-row">
                                 <label>{{ _('Organization') }}</label>
                                 <div class="field">
-                                    <select id="id_organizations" name="organizations" data-oj-select>
-                                        <option value="">{{ _('— Public —') }}</option>
-                                        {% set prefill_org_ids = (prefill.organizations or []) | map(attribute=0) | list %}
-                                        {% for org in organizations %}
-                                            <option value="{{ org.id }}"{% if org.id in prefill_org_ids %} selected{% endif %}>{{ org.name }}</option>
-                                        {% endfor %}
-                                    </select>
+                                    {# Scoping a contest to an organization needs create_private_contest; without
+                                       it the select is hidden (server also skips the field on save). #}
+                                    {% if 'organizations' in restricted_fields %}
+                                        <div class="ac-help">{{ _('Organization scoping is managed by administrators.') }}</div>
+                                    {% else %}
+                                        <select id="id_organizations" name="organizations" data-oj-select>
+                                            <option value="">{{ _('— Public —') }}</option>
+                                            {% set prefill_org_ids = (prefill.organizations or []) | map(attribute=0) | list %}
+                                            {% for org in organizations %}
+                                                <option value="{{ org.id }}"{% if org.id in prefill_org_ids %} selected{% endif %}>{{ org.name }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    {% endif %}
                                 </div>
                             </div>
 
@@ -893,7 +976,8 @@
                                         <option value="">{{ _('Select organization first') }}</option>
                                         {% set prefill_class_ids = (prefill.classes or []) | map(attribute=0) | list %}
                                         {% for cls in classes %}
-                                            <option value="{{ cls.id }}"{% if cls.id in prefill_class_ids %} selected{% endif %}>{{ cls.name }}</option>
+                                            {# data-org drives the client-side org→class cascade (see JS above). #}
+                                            <option value="{{ cls.id }}" data-org="{{ cls.organization_id }}"{% if cls.id in prefill_class_ids %} selected{% endif %}>{{ cls.name }}</option>
                                         {% endfor %}
                                     </select>
                                 </div>
@@ -923,27 +1007,40 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('List visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Off = visible only to editors; on = listed for students. This is separate from privacy: an on-list assignment can still be restricted to specific users or organizations.')) }}</label>
+                                <label>{{ _('List visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Org = listed, restricted to the organizations/classes above; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side.')) }}</label>
                                 <div class="field">
-                                    <div class="seg" id="vis-seg">
-                                        <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
-                                        <label><input type="radio" name="vis_mode" value="public"{% if prefill.vis_mode == 'public' %} checked{% endif %}><span>{{ _('Public') }}</span></label>
-                                        <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Org') }}</span></label>
-                                        <label><input type="radio" name="vis_mode" value="private"{% if prefill.vis_mode == 'private' %} checked{% endif %}><span>{{ _('Private') }}</span></label>
-                                    </div>
-                                    <div style="margin-top:0.45rem;">
-                                        <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
-                                            <input type="checkbox" id="id_is_visible" name="is_visible"{% if prefill.is_visible %} checked{% endif %}> {{ _('Publicly visible') }}
-                                        </label>
-                                    </div>
+                                    {% if 'is_visible' in restricted_fields %}
+                                        {# Visibility is admin-managed for this user (no change_contest_visibility
+                                           permission): show the still-editable privacy flags directly instead of the
+                                           seg control, and keep a non-submitted hidden flag so the preview badge
+                                           still reflects the stored is_visible value. #}
+                                        <input type="hidden" id="id_is_visible" value="{% if prefill.is_visible %}true{% else %}false{% endif %}">
+                                        <div class="check-grid">
+                                            <label><input type="checkbox" id="id_is_private" name="is_private"{% if prefill.is_private %} checked{% endif %}> {{ _('Private to listed users') }}</label>
+                                            <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to organizations / classes') }}</label>
+                                        </div>
+                                        <div class="ac-help">{{ _('Whether the assignment is listed is managed by administrators.') }}</div>
+                                    {% else %}
+                                        <div class="seg" id="vis-seg">
+                                            <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
+                                            <label><input type="radio" name="vis_mode" value="public"{% if prefill.vis_mode == 'public' %} checked{% endif %}><span>{{ _('Public') }}</span></label>
+                                            <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Org') }}</span></label>
+                                            <label><input type="radio" name="vis_mode" value="private"{% if prefill.vis_mode == 'private' %} checked{% endif %}><span>{{ _('Private') }}</span></label>
+                                        </div>
+                                        <div class="ac-help">{{ _('Org / Private restrict access; pick the organizations/classes or users in the sections above / under Advanced → Private users.') }}</div>
+                                    {% endif %}
                                 </div>
                             </div>
 
                             <div class="form-row">
                                 <label>{{ _('Description') }}</label>
                                 <div class="field">
+                                    {# NB: textarea content MUST be between the tags (a `value=` attribute is
+                                       ignored by textarea). Backfilling it here prevents the data-loss bug
+                                       where editing a contest with an existing description and saving would
+                                       silently wipe the description. #}
                                     <textarea id="id_description" name="description" rows="3"
-                                              placeholder="{{ _('Contest description (supports Markdown)') }}"></textarea>
+                                              placeholder="{{ _('Contest description (supports Markdown)') }}">{{ prefill.description or '' }}</textarea>
                                 </div>
                             </div>
                         </div>
@@ -955,7 +1052,11 @@
                         <div class="form-content">
                             <div class="cp-toolbar">
                                 <button type="button" class="btn-soft"><i class="fa fa-search"></i> {{ _('From library') }}</button>
+                                {# "Create new" opens the Django admin problem editor; hide it for users
+                                   who could not use that page anyway (needs judge.add_problem). #}
+                                {% if perms.judge.add_problem %}
                                 <button type="button" class="btn-soft alt"><i class="fa fa-plus"></i> {{ _('Create new') }}</button>
+                                {% endif %}
                                 <span class="spacer"></span>
                                 <span class="count">{{ prefill.problems|length if prefill.problems else 0 }} {{ _('problems') }}</span>
                             </div>
@@ -971,39 +1072,64 @@
                                 <div class="cp-row" data-pid="{{ p.id }}">
                                     <span></span><span class="label-letter">{{ p.letter }}</span>
                                     <span class="pname">{{ p.name }}</span>
-                                    <span><input type="number" value="{{ p.points }}" style="width:48px"></span>
+                                    <span><input type="number" class="cp-points" value="{{ p.points }}" style="width:48px"></span>
                                     <span>—</span>
                                     <span class="cp-actions"><button type="button" class="btn-icon danger" onclick="this.closest('.cp-row').remove();updateProblemIds()">&times;</button></span>
+                                    {# Per-problem options (admin parity): partial credit, pretest-only,
+                                       max submissions. The sub-row spans the full grid width. #}
+                                    <div class="cp-options" style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;padding-top:0.25rem;color:var(--muted);font-size:12px;">
+                                        <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;"><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}> {{ _('Partial credit') }}</label>
+                                        <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;"><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}> {{ _('Pretest only') }}</label>
+                                        <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;">{{ _('Max submissions') }} <input type="number" class="cp-max-subs" min="1" placeholder="∞" style="width:56px" value="{{ p.max_submissions }}"></label>
+                                    </div>
                                 </div>
                                 {% endfor %}
                             </div>
-                            <div class="cp-empty"{% if prefill.problems %} style="display:none;"{% endif %}>{{ _('No problems yet. Hover between rows to insert.') }}</div>
+                            <div class="cp-empty"{% if prefill.problems %} style="display:none;"{% endif %}>{{ _('No problems yet. Use “From library” to add problems.') }}</div>
                         </div>
                     </fieldset>
 
                     <!-- ③ Anti-cheating -->
+                    {# Permission-gate the anti-cheat controls: access codes need judge.contest_access_code,
+                       SEB settings need judge.contest_seb_requirement. Restricted controls are hidden and the
+                       server skips them on save (see ContestCreate._restricted_fields), so a curator can never
+                       arm SEB or set a code they lack permission for. #}
+                    {% set can_edit_access_code = 'access_code' not in restricted_fields %}
+                    {% set can_edit_seb = 'seb_required' not in restricted_fields and 'seb_browser_exam_keys' not in restricted_fields and 'seb_config_keys' not in restricted_fields and 'seb_quit_url' not in restricted_fields %}
+                    {% if can_edit_access_code or can_edit_seb %}
                     <fieldset class="module">
                         <h2>{{ _('Anti-cheating') }}</h2>
                         <div class="form-content">
                             <div class="seg" style="margin-bottom:0.6rem;">
+                                {% if can_edit_seb %}
                                 <label><input type="radio" name="cheat_level" value="high" hidden{% if prefill.cheat_level == 'high' %} checked{% endif %}><span>{{ _('High') }}</span></label>
+                                {% endif %}
+                                {% if can_edit_access_code %}
                                 <label><input type="radio" name="cheat_level" value="medium" hidden{% if prefill.cheat_level == 'medium' %} checked{% endif %}><span>{{ _('Medium') }}</span></label>
+                                {% endif %}
                                 <label><input type="radio" name="cheat_level" value="low" hidden{% if prefill.cheat_level == 'low' %} checked{% endif %}><span>{{ _('Low') }}</span></label>
+                                {% if can_edit_seb and can_edit_access_code %}
                                 <label><input type="radio" name="cheat_level" value="custom" hidden{% if prefill.cheat_level == 'custom' %} checked{% endif %}><span>{{ _('Custom') }}</span></label>
+                                {% endif %}
                             </div>
                             <div class="ac-help" style="margin-bottom:0.75rem;">
                                 {{ _('High ≈ SEB exam · Medium ≈ classroom quiz (access code) · Low ≈ open practice') }}
                             </div>
+                            {% if can_edit_access_code %}
                             <div class="form-row" id="cheat-accesscode-row">
                                 <label>{{ _('Access code') }}</label>
                                 <div class="field ac-inline">
+                                    {# Backfill the stored code: without this, reopening an existing contest
+                                       shows an empty field and saving would wipe the access code. #}
                                     <input type="text" id="id_access_code" name="access_code"
-                                           placeholder="{{ _('Optional') }}">
+                                           placeholder="{{ _('Optional') }}" value="{{ prefill.access_code or '' }}">
                                     <button type="button" id="gen-access-code" class="btn-soft">{{ _('Generate') }}</button>
                                 </div>
                             </div>
                             <div class="ac-help">{{ _('Students must enter a code before joining.') }}</div>
+                            {% endif %}
 
+                            {% if can_edit_seb %}
                             <div class="ac-card" id="cheat-seb-section">
                                 <div class="form-row">
                                     <label>{{ _('SEB') }}</label>
@@ -1043,8 +1169,17 @@
                                     </div>
                                 </div>
                             </div>
+                            {% endif %}
                         </div>
                     </fieldset>
+                    {% else %}
+                    <fieldset class="module">
+                        <h2>{{ _('Anti-cheating') }}</h2>
+                        <div class="form-content">
+                            <div class="ac-help">{{ _('Anti-cheating settings (access code / Safe Exam Browser) are managed by administrators.') }}</div>
+                        </div>
+                    </fieldset>
+                    {% endif %}
 
                     <!-- ④ Advanced (collapsed by default, click to expand) -->
                     <details class="ac-advanced">
@@ -1110,6 +1245,7 @@
                                             <span class="unit">{{ _('decimal digits') }}</span>
                                         </div>
                                     </div>
+                                    {% if 'problem_label_script' not in restricted_fields %}
                                     <div class="form-row">
                                         <label>{{ _('Label script') }}</label>
                                         <div class="field">
@@ -1117,6 +1253,7 @@
                                                       placeholder="{{ _('Custom Lua function for problem labels') }}">{{ prefill.problem_label_script or '' }}</textarea>
                                         </div>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </details>
 
@@ -1124,6 +1261,7 @@
                             <details class="adv-sub">
                                 <summary>{{ _('Visibility & access') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
+                                    {% if 'private_contestants' not in restricted_fields %}
                                     <div class="form-row">
                                         <label>{{ _('Private users') }}</label>
                                         <div class="field">
@@ -1136,6 +1274,7 @@
                                             {{ tip(_('Non-empty → the assignment is private to exactly these users.')) }}
                                         </div>
                                     </div>
+                                    {% endif %}
                                     <div class="form-row">
                                         <label>{{ _('Join orgs') }}</label>
                                         <div class="field">
@@ -1150,11 +1289,12 @@
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Org / class privacy') }}</label>
+                                        <label>{{ _('Join restriction') }}</label>
                                         <div class="field">
                                             <div class="check-grid">
-                                                <label><input type="checkbox" id="id_is_private" name="is_private"{% if prefill.is_private %} checked{% endif %}> {{ _('Private to listed users') }}</label>
-                                                <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to organizations / classes') }}</label>
+                                                {# is_private / is_organization_private are driven by the List visibility
+                                                   seg control in Basic information (or by the checkboxes shown in its
+                                                   place when visibility is admin-managed); only the join limit stays here. #}
                                                 <label><input type="checkbox" id="id_limit_join_organizations" name="limit_join_organizations"{% if prefill.limit_join_organizations %} checked{% endif %}> {{ _('Limit who may join (join orgs)') }}</label>
                                             </div>
                                         </div>
@@ -1196,6 +1336,7 @@
                                         <label><input type="checkbox" id="id_tester_see_scoreboard" name="tester_see_scoreboard"{% if prefill.tester_see_scoreboard %} checked{% endif %}> {{ _('Testers see scoreboard') }}</label>
                                         <label><input type="checkbox" id="id_show_short_display" name="show_short_display"{% if prefill.show_short_display %} checked{% endif %}> {{ _('Show short settings on contest page') }}</label>
                                     </div>
+                                    {% if 'locked_after' not in restricted_fields %}
                                     <div class="form-row" style="margin-top:0.65rem;">
                                         <label>{{ _('Lock after') }}</label>
                                         <div class="field">
@@ -1204,6 +1345,7 @@
                                             {{ tip(_('Prevent rejudging contest submissions after this time. Blank = unlocked.')) }}
                                         </div>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </details>
 
@@ -1211,10 +1353,15 @@
                             <details class="adv-sub">
                                 <summary>{{ _('Rating (optional)') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
+                                    {# Rating flags need judge.contest_rating; perf-ceiling override needs
+                                       judge.override_performance_ceiling. Both are hidden (and server-skipped)
+                                       when the user lacks the permission. #}
+                                    {% if 'is_rated' not in restricted_fields %}
                                     <div class="check-grid">
                                         <label><input type="checkbox" id="id_is_rated" name="is_rated"{% if prefill.is_rated %} checked{% endif %}> {{ _('Contest rated') }}</label>
                                         <label><input type="checkbox" id="id_rate_all" name="rate_all"{% if prefill.rate_all %} checked{% endif %}> {{ _('Rate users with no submissions') }}</label>
                                     </div>
+                                    {% endif %}
                                     <div class="form-row" style="margin-top:0.5rem;">
                                         <label>{{ _('Floor / ceil') }}</label>
                                         <div class="field ac-inline">
@@ -1223,12 +1370,15 @@
                                             <input type="number" id="id_rating_ceiling" name="rating_ceiling" placeholder="—" style="width:70px;" value="{{ prefill.rating_ceiling or '' }}">
                                         </div>
                                     </div>
+                                    {% if 'performance_ceiling_override' not in restricted_fields %}
                                     <div class="form-row">
                                         <label>{{ _('Perf. ceil') }}</label>
                                         <div class="field">
                                             <input type="number" id="id_performance_ceiling_override" name="performance_ceiling_override" placeholder="{{ _('Auto') }}" value="{{ prefill.performance_ceiling_override or '' }}">
                                         </div>
                                     </div>
+                                    {% endif %}
+                                    {% if 'rate_exclude' not in restricted_fields %}
                                     <div class="form-row">
                                         <label>{{ _('Exclude from ratings') }}</label>
                                         <div class="field">
@@ -1239,6 +1389,7 @@
                                             </select>
                                         </div>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </details>
 
@@ -1397,21 +1548,20 @@
                 </div>
                 <div class="so-body">
                     <table class="so-table">
+                        {# Only ID + Title: Type / Diff / AC% were always rendered
+                           as "—" placeholders (dead columns), so drop them. #}
                         <thead>
-                            <tr><th>ID</th><th>{{ _('Title') }}</th><th>{{ _('Type') }}</th><th>{{ _('Diff') }}</th><th>AC%</th></tr>
+                            <tr><th>ID</th><th>{{ _('Title') }}</th></tr>
                         </thead>
                         <tbody id="lib-results">
                             {% for problem in problems %}
                             <tr data-pid="{{ problem.id }}" data-code="{{ problem.code }}" data-name="{{ problem.name }}">
                                 <td>{{ problem.id }}</td>
                                 <td>{{ problem.name }}</td>
-                                <td>{{ problem.types_list.0 or '—' }}</td>
-                                <td>—</td>
-                                <td>—</td>
                             </tr>
                             {% endfor %}
                             {% if not problems %}
-                            <tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
+                            <tr><td colspan="2" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
                             {% endif %}
                         </tbody>
                     </table>
