@@ -135,6 +135,8 @@ urlpatterns = [
          name='problem_import_preview'),
     path('problems/import-excel/<int:draft>/create-all/', problem_import.ProblemImportCreateAllView.as_view(),
          name='problem_import_create_all'),
+    path('problems/import-excel/<int:draft>/<int:item>/editor/', problem_import.ProblemImportItemEditorView.as_view(),
+         name='problem_import_item_editor'),
     path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
          problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 

@@ -7207,3 +7207,51 @@ msgstr "译文描述"
 msgid "+ Add another Translation"
 msgstr "+ 添加翻译"
 
+
+#: templates/contest/list-v2.html
+msgid "Group by"
+msgstr "分组方式"
+
+#: templates/contest/list-v2.html
+msgid "By course"
+msgstr "按课程"
+
+#: templates/contest/list-v2.html
+msgid "By status"
+msgstr "按状态"
+
+#: templates/contest/list-v2.html
+msgid "General course"
+msgstr "公共课程"
+
+#: templates/contest/list-v2.html
+msgid "assignments"
+msgstr "作业"
+
+#: templates/contest/list-v2.html
+msgid "There are no assignments."
+msgstr "暂无作业。"
+
+#: templates/contest/list-v2.html
+msgid "Active"
+msgstr "我进行中"
+
+#: templates/contest/list-v2.html
+msgid "Ongoing"
+msgstr "进行中"
+
+#: templates/contest/list-v2.html
+msgid "Upcoming"
+msgstr "即将开始"
+
+#: templates/contest/list-v2.html
+msgid "Past"
+msgstr "已结束"
+
+#: templates/contest/list-v2.html
+msgid "Group assignments by course"
+msgstr "按课程分组"
+
+#: templates/contest/list-v2.html
+msgid "Group assignments by status"
+msgstr "按状态分组"

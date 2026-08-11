@@ -144,6 +144,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'edit_data_json': 'null',
             'test_data_url': '',
             'edit_detail_url': '',
+            'import_format_url': '',
+            'import_create_url': '',
+            'import_data_needs_review': False,
+            'import_data_load_error': '',
+            'import_config_needs_review': False,
+            'import_unrecognized_configurations': [],
             'checkers': [{'value': value, 'label': str(label)} for value, label in CHECKERS],
             'checkers_json': json.dumps([
                 {'value': value, 'label': str(label)} for value, label in CHECKERS
