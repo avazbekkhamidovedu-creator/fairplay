@@ -576,10 +576,6 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'resources'),
 ]
 STATIC_URL = '/static/'
-# Optional cache-buster for assets loaded outside django-compressor (e.g. page-local CSS).
-# Set at deploy time from the image/git SHA — never hardcode dates in templates.
-# Example: DMOJ_STATIC_VERSION=$CI_COMMIT_SHORT_SHA
-DMOJ_STATIC_VERSION = os.environ.get('DMOJ_STATIC_VERSION', '')
 
 # Define a cache
 CACHES = {}
