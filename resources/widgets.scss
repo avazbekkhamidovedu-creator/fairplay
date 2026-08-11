@@ -24,8 +24,8 @@
 
 // Bootstrap-y buttons (colours from vars-common / tokens)
 .button, button, input[type=submit] {
-    color: white !important;
-    text-decoration: none !important;
+    color: white;
+    text-decoration: none;
     cursor: pointer;
     vertical-align: middle;
     white-space: nowrap;
@@ -473,7 +473,7 @@ a.close {
     text-align: center;
     white-space: nowrap;
     vertical-align: middle;
-    background-color: #e84848;
+    background-color: $btn_danger;
     border-radius: 10px;
     box-sizing: border-box;
 }
