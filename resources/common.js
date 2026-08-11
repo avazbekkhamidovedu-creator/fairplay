@@ -262,7 +262,11 @@ $(function () {
         // current page is not navigated away, so leaving buttons disabled here
         // would strand the user with an unusable button until they refresh.
         if ($(this).attr('target') === '_blank') return;
-        $("button[type=submit], input[type=submit]").prop('disabled', true);
+        // Only disable the submit button(s) of the form being submitted. The
+        // original global selector also disabled unrelated forms' submit buttons
+        // (e.g. clicking a card's "Virtual" button greyed out the filter panel's
+        // "Search" button on the contest list page).
+        $(this).find("button[type=submit], input[type=submit]").prop('disabled', true);
     });
 });
 
@@ -351,3 +355,162 @@ $(function () {
         $closer.parent().fadeOut(200);
     });
 });
+
+window.dkuojInitSelect = function (select) {
+    if (!select || select.dataset.ojSelectReady || select.multiple || select.hidden ||
+        select.classList.contains('select2-hidden-accessible')) return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'oj-single-select multi-select';
+    wrap.dataset.selectId = select.id || '';
+    if (select.style.maxWidth) wrap.style.maxWidth = select.style.maxWidth;
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'multi-select-trigger oj-single-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+
+    var label = document.createElement('span');
+    label.className = 'multi-select-text';
+    var caret = document.createElement('span');
+    caret.className = 'multi-select-caret';
+    caret.textContent = '\u25BE';
+    trigger.appendChild(label);
+    trigger.appendChild(caret);
+
+    var menu = document.createElement('div');
+    menu.className = 'multi-select-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.id = 'oj-select-menu-' + (select.id || Math.random().toString(36).slice(2));
+    menu.hidden = true;
+    trigger.setAttribute('aria-controls', menu.id);
+
+    select.parentNode.insertBefore(wrap, select);
+    select.classList.add('oj-single-select-native');
+    select.setAttribute('tabindex', '-1');
+    select.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(trigger);
+    wrap.appendChild(menu);
+    wrap.appendChild(select);
+
+    function refresh() {
+        var option = select.options[select.selectedIndex];
+        label.textContent = option ? option.text : '';
+        label.title = label.textContent;
+        trigger.disabled = select.disabled;
+    }
+
+    function buildOptions() {
+        menu.innerHTML = '';
+        Array.prototype.forEach.call(select.options, function (option) {
+            var item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'multi-select-option oj-single-select-option';
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', option.selected ? 'true' : 'false');
+            item.textContent = option.text;
+            item.disabled = option.disabled;
+            item.addEventListener('click', function (event) {
+                event.stopPropagation();
+                select.value = option.value;
+                select.dispatchEvent(new Event('change', {bubbles: true}));
+                refresh();
+                close();
+            });
+            menu.appendChild(item);
+        });
+    }
+
+    function close() {
+        wrap.classList.remove('open');
+        menu.hidden = true;
+        trigger.setAttribute('aria-expanded', 'false');
+    }
+
+    function open() {
+        document.querySelectorAll('.multi-select.open').forEach(function (el) {
+            if (el !== wrap) {
+                el.classList.remove('open');
+                var m = el.querySelector('.multi-select-menu');
+                if (m) m.hidden = true;
+            }
+        });
+        wrap.classList.add('open');
+        menu.hidden = false;
+        trigger.setAttribute('aria-expanded', 'true');
+    }
+
+    trigger.addEventListener('click', function (event) {
+        event.stopPropagation();
+        if (menu.hidden) open();
+        else close();
+    });
+    trigger.addEventListener('keydown', function (event) {
+        var options = Array.prototype.slice.call(menu.querySelectorAll('.oj-single-select-option:not([disabled])'));
+        var currentIndex = options.findIndex(function (item) {
+            return item.getAttribute('aria-selected') === 'true';
+        });
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (menu.hidden) open();
+            var nextIndex = event.key === 'ArrowDown' ? currentIndex + 1 : currentIndex - 1;
+            nextIndex = Math.max(0, Math.min(options.length - 1, nextIndex));
+            if (options[nextIndex]) options[nextIndex].focus();
+        } else if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            if (menu.hidden) open();
+            else close();
+        }
+    });
+    document.addEventListener('click', function (event) {
+        if (!wrap.contains(event.target)) close();
+    });
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') close();
+    });
+    select.addEventListener('change', function () {
+        buildOptions();
+        refresh();
+    });
+
+    if (window.MutationObserver) {
+        new MutationObserver(function () {
+            buildOptions();
+            refresh();
+        }).observe(select, {childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'selected']});
+    }
+
+    wrap.dkuojBuildOptions = buildOptions;
+    wrap.dkuojRefresh = refresh;
+    refresh();
+    buildOptions();
+    select.dataset.ojSelectReady = '1';
+};
+
+window.dkuojRefreshSelects = function () {
+    document.querySelectorAll('.oj-single-select').forEach(function (wrap) {
+        var select = wrap.querySelector('select.oj-single-select-native');
+        if (select && select.dataset.ojSelectReady && wrap.dkuojBuildOptions) {
+            wrap.dkuojBuildOptions();
+            wrap.dkuojRefresh();
+        }
+    });
+};
+
+(function () {
+    function initAll() {
+        document.querySelectorAll('select[data-oj-select]').forEach(window.dkuojInitSelect);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initAll);
+    } else {
+        initAll();
+    }
+
+    if (window.MutationObserver) {
+        var observer = new MutationObserver(initAll);
+        observer.observe(document.documentElement, {childList: true, subtree: true});
+    }
+})();

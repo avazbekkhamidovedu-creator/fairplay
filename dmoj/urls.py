@@ -135,6 +135,8 @@ urlpatterns = [
          name='problem_import_preview'),
     path('problems/import-excel/<int:draft>/create-all/', problem_import.ProblemImportCreateAllView.as_view(),
          name='problem_import_create_all'),
+    path('problems/import-excel/<int:draft>/<int:item>/editor/', problem_import.ProblemImportItemEditorView.as_view(),
+         name='problem_import_item_editor'),
     path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
          problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 
@@ -235,7 +237,8 @@ urlpatterns = [
 
     path('seb/quit/', contests.SEBQuit.as_view(), name='seb_quit'),
 
-    path('contests/', paged_list_view(contests.ContestList, 'contest_list')),
+    path('contests/', paged_list_view(contests.ContestListV2, 'contest_list')),
+    path('contests/legacy/', paged_list_view(contests.ContestList, 'contest_list_legacy')),
     path('contests.ics', contests.ContestICal.as_view(), name='contest_ical'),
     path('contests/<int:year>/<int:month>/', contests.ContestCalendar.as_view(), name='contest_calendar'),
     re_path(r'^contests/tag/(?P<name>[a-z-]+)', include([

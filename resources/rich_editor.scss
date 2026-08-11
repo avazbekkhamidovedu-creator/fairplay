@@ -151,7 +151,7 @@
   cursor: pointer;
 }
 .rich-editor-body hr.hr-selected {
-  outline: 2px solid var(--dmoj-green, #2a9d5c);
+  outline: 2px solid var(--oj-focus, #2a9d5c);
   outline-offset: 2px;
 }
 
@@ -329,7 +329,7 @@
   background: transparent;
   padding: 0.45rem 0.85rem;
   font-size: 13px;
-  color: var(--oj-text) !important;
+  color: var(--oj-text);
   cursor: pointer;
   line-height: 1.35;
 }
@@ -382,7 +382,7 @@
 }
 .rte-field input:focus {
   outline: none;
-  border-color: var(--dmoj-green, #2a9d5c);
+  border-color: var(--oj-focus, #2a9d5c);
   box-shadow: 0 0 0 2px rgba(42, 157, 92, 0.15);
 }
 .rte-popover-actions {
@@ -398,12 +398,12 @@
   padding: 0.25rem 0.7rem;
   font-size: 12px;
   cursor: pointer;
-  color: var(--oj-text-secondary) !important;
+  color: var(--oj-text-secondary);
 }
 .rte-popover-actions .rte-btn-ok {
-  background: var(--dmoj-green, #2a9d5c);
-  border-color: var(--dmoj-green-dark, #1e7a45);
-  color: var(--oj-surface) !important;
+  background: var(--oj-focus, #2a9d5c);
+  border-color: var(--oj-focus, #1e7a45);
+  color: var(--oj-surface);
 }
 .rte-mention-results {
   list-style: none;
@@ -463,7 +463,7 @@
   font-size: 1.4rem;
   line-height: 1;
   cursor: pointer;
-  color: var(--oj-text-muted) !important;
+  color: var(--oj-text-muted);
 }
 .rte-help-body { padding: 0.85rem 1.1rem 1.2rem; font-size: 13px; }
 .rte-help-table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
