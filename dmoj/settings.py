@@ -83,6 +83,10 @@ DMOJ_BOX_SFTP_PASSWORD = ''
 DMOJ_BOX_SFTP_ROOT = 'DKUOJ-backup'
 DMOJ_BOX_KNOWN_HOSTS = ''  # path to a pinned known_hosts file for sftp.services.box.com
 
+# The final spreadsheet row covered by the question-type dropdown in the
+# downloadable problem-import template. Override in local_settings.py if needed.
+PROBLEM_EXCEL_TEMPLATE_MAX_ROW = 1000
+
 DMOJ_PROBLEM_MIN_TIME_LIMIT = 0  # seconds
 DMOJ_PROBLEM_MAX_TIME_LIMIT = 60  # seconds
 DMOJ_PROBLEM_MIN_MEMORY_LIMIT = 0  # kilobytes
