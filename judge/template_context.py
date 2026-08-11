@@ -30,6 +30,7 @@ def get_resource(request):
         'DMOJ_SCHEME': scheme,
         'DMOJ_CANONICAL': settings.DMOJ_CANONICAL,
         'DMOJ_SELECT2_THEME': settings.DMOJ_SELECT2_THEME,
+        'DMOJ_STATIC_VERSION': getattr(settings, 'DMOJ_STATIC_VERSION', '') or '',
     }
 
 

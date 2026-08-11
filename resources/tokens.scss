@@ -1,6 +1,18 @@
 @use "vars" as *;
 @use "sass:color";
 
+// Modern if() rule syntax (Sass >= 1.79) — the legacy if() function form is
+// deprecated and emits a build warning.
+@function _hover_overlay() {
+    @if $is_light_theme {
+        @return rgba(0, 0, 0, 0.03);
+    }
+
+    @else {
+        @return rgba(255, 255, 255, 0.05);
+    }
+}
+
 // =============================================================================
 // DKUOJ design tokens
 //
@@ -12,6 +24,10 @@
 // Usage in SCSS: prefer these CSS vars for new UI; keep @use "vars" for legacy.
 // To restyle the site later, change this file (and vars-*.scss) first.
 // =============================================================================
+
+// Shared values that stay the same across themes (compile-time constants).
+$oj-rated-bg: #e54c14;
+$oj-rated-text: #fff;
 
 :root {
     /* Surfaces & text */
@@ -41,7 +57,8 @@
     /* Danger / success / info / warning */
     --oj-danger: #{$btn_danger};
     --oj-danger-hover: #{$btn_danger_hover};
-    --oj-danger-soft: #fdecea;
+    --oj-danger-soft: #{$color_danger25};
+    --oj-danger-soft-text: #{$color_danger100};
     --oj-success: #2d7a2d;
     --oj-success-soft: #e8f5e9;
     --oj-info: #{$highlight_blue};
@@ -101,4 +118,33 @@
     --oj-font-size: #{$base_font_size};
     /* Meta / badges only — body text should use --oj-font-size (14px) */
     --oj-font-size-sm: 12px;
+
+    /* Hover overlay — lightens/darkens depending on theme */
+    --oj-hover-overlay: #{_hover_overlay()};
+
+    /* ── Badge colours (aware of dark/light Sass theme) ──────────────────── */
+    --oj-badge-ongoing-bg: #{$color_success25};
+    --oj-badge-ongoing-text: #{$color_success100};
+    --oj-badge-upcoming-bg: #{$color_warning25};
+    --oj-badge-upcoming-text: #{$color_warning100};
+    --oj-badge-past-bg: #{$color_primary25};
+    --oj-badge-past-text: #{$color_primary75};
+    --oj-badge-mine-bg: #{$color_info25};
+    --oj-badge-mine-text: #{$color_info100};
+    --oj-badge-org-bg: #{$color_primary10};
+    --oj-badge-org-text: #{$color_primary75};
+    --oj-badge-class-bg: #{$color_info25};
+    --oj-badge-class-text: #{$color_info100};
+    --oj-badge-rated-bg: #{$oj-rated-bg};
+    --oj-badge-rated-text: #{$oj-rated-text};
+    --oj-badge-tag-bg: #{rgba($highlight_blue, 0.15)};
+    --oj-badge-tag-text: #{$highlight_blue};
+
+    /* Section-emph (countdown colours inside .cl-time) */
+    --oj-emph-ongoing: #{$color_success100};
+    --oj-emph-upcoming: #{$color_warning100};
+    --oj-emph-muted: #{$color_primary50};
+
+    /* Dim numbers — fine print in user-count labels */
+    --oj-dim-label: #{$color_primary50};
 }

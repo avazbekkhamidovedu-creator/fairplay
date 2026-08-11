@@ -805,6 +805,31 @@ ul.problem-list {
                 text-decoration: none;
             }
         }
+
+        /* Buttons (e.g. the contest list sort menu) share the link row style. */
+        li button {
+            display: block;
+            width: 100%;
+            padding: 8px 14px;
+            border: none;
+            border-radius: 0;
+            background: transparent;
+            font-size: var(--oj-font-size);
+            text-align: left;
+            color: var(--text);
+            box-shadow: none;
+            cursor: pointer;
+
+            &:hover {
+                background: var(--bg);
+                color: var(--text);
+            }
+
+            &.active {
+                color: var(--oj-accent);
+                font-weight: 600;
+            }
+        }
     }
 }
 
@@ -1216,6 +1241,41 @@ ul.problem-list {
         .sort-btn-dir {
             color: var(--text-muted);
             font-size: var(--oj-font-size-sm);
+        }
+    }
+
+    /* Segmented group switch (By course / By status) in the toolbar. */
+    .group-switch {
+        display: inline-flex;
+        align-items: stretch;
+        height: var(--oj-control-height);
+        padding: 2px;
+        gap: 2px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+
+        .group-switch-btn {
+            height: 100%;
+            padding: 0 12px;
+            border: none;
+            border-radius: calc(var(--radius-sm) - 2px);
+            background: transparent;
+            font-size: var(--oj-font-size);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+
+            &:hover {
+                background: var(--bg);
+                color: var(--oj-accent);
+            }
+
+            &.active {
+                background: var(--oj-accent);
+                color: var(--oj-btn-text);
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            }
         }
     }
 
