@@ -273,9 +273,13 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['search_query'] = ' '.join(self.request.GET.getlist('search')).strip()
 
         # Additional context for v2
-        context['organizations'] = Organization.objects.all()
-        context['classes'] = Class.objects.all()
-        context['tags'] = ContestTag.objects.all()
+        # Filter options are scoped to the contests the user can actually see,
+        # so private course/class/tag names never leak to unauthorized visitors
+        # (the contest rows themselves are gated by get_visible_contests).
+        visible_contests = self._get_queryset()
+        context['organizations'] = Organization.objects.filter(contest__in=visible_contests).distinct()
+        context['classes'] = Class.objects.filter(contest__in=visible_contests).distinct()
+        context['tags'] = ContestTag.objects.filter(contests__in=visible_contests).distinct()
         context['total_count'] = self._total_count(active, present, future)
         context['sort_by'] = self.order
         context['group'] = self.group

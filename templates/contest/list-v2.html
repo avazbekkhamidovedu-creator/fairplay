@@ -12,9 +12,9 @@
                 org: [],
                 cls: [],
                 tags: [],
-                q: '{{ search_query or '' }}',
-                order: '{{ sort_by or '-start_time' }}',
-                group: '{{ group }}'
+                q: '{{ (search_query or '')|escapejs }}',
+                order: '{{ (sort_by or '-start_time')|escapejs }}',
+                group: '{{ group|escapejs }}'
             };
 
             // ── Multi-select toggle ──
@@ -241,7 +241,7 @@
 
             // ── Initialize labels from URL params ──
             {% if request.GET.org %}
-                var orgVals = '{{ request.GET.org }}'.split(',');
+                var orgVals = '{{ request.GET.org|escapejs }}'.split(',');
                 orgVals.forEach(function(v) {
                     var cb = document.querySelector('#org-multi-select input[value="' + v + '"]');
                     if (cb) cb.checked = true;
@@ -249,7 +249,7 @@
                 refreshOrgLabel();
             {% endif %}
             {% if request.GET.class %}
-                var classVals = '{{ request.GET.class }}'.split(',');
+                var classVals = '{{ request.GET.class|escapejs }}'.split(',');
                 classVals.forEach(function(v) {
                     var cb = document.querySelector('#class-multi-select input[value="' + v + '"]');
                     if (cb) cb.checked = true;
@@ -257,7 +257,7 @@
                 refreshClassLabel();
             {% endif %}
             {% if request.GET.tag %}
-                var tagVals = '{{ request.GET.tag }}'.split(',');
+                var tagVals = '{{ request.GET.tag|escapejs }}'.split(',');
                 tagVals.forEach(function(v) {
                     var cb = document.querySelector('#tag-multi-select input[value="' + v + '"]');
                     if (cb) cb.checked = true;
