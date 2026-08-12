@@ -487,11 +487,15 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         context['workspace_enable_comments'] = False
         selected_submission_id = self.request.GET.get('submission')
         if authed and selected_submission_id and selected_submission_id.isdigit():
-            selected_submission = Submission.objects.select_related(
+            selected_qs = Submission.objects.select_related(
                 'source', 'contest_object', 'contest__problem',
             ).prefetch_related('problem__mcq_options', 'problem__blanks').filter(
                 id=int(selected_submission_id), problem=self.object,
-            ).first()
+            )
+            # Assignment/exam: only allow loading submissions from the active contest.
+            if contest_problem:
+                selected_qs = selected_qs.filter(contest_object=contest_problem.contest)
+            selected_submission = selected_qs.first()
             if selected_submission is not None and selected_submission.can_see_detail(user):
                 selected_source = None
                 if selected_submission.user_id == self.request.profile.id:
@@ -614,7 +618,14 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             and str(sid).isdigit()
             and 'body' in request.POST
         ):
-            submission = Submission.objects.filter(id=int(sid), problem=self.object).first()
+            submission_qs = Submission.objects.filter(id=int(sid), problem=self.object)
+            contest_problem = (
+                get_contest_problem(self.object, request.profile)
+                if request.user.is_authenticated else None
+            )
+            if contest_problem:
+                submission_qs = submission_qs.filter(contest_object=contest_problem.contest)
+            submission = submission_qs.first()
             if submission is not None and submission.can_see_detail(request.user):
                 handler = SubmissionCommentMixin()
                 handler.object = submission
@@ -2071,6 +2082,9 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
         )
         if not submission.can_see_detail(request.user):
             return JsonResponse({'error': _('Permission denied.')}, status=403)
+        contest_problem = get_contest_problem(problem, request.profile)
+        if contest_problem and submission.contest_object_id != contest_problem.contest_id:
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
         hidden = not submission.results_visible_to(request.user)
         source = None
         if submission.user_id == request.profile.id:
@@ -2131,6 +2145,11 @@ class ProblemWorkspaceSubmissionsList(LoginRequiredMixin, ProblemMixin, SingleOb
         if scope not in self.VALID_SCOPES:
             return JsonResponse({'error': _('Invalid scope.')}, status=400)
 
+        contest_problem = get_contest_problem(problem, request.profile)
+        # Assignment/exam UI only offers "My"; reject All/Best to match the panel.
+        if contest_problem and scope in ('all', 'best'):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+
         if scope in ('all', 'best'):
             checker = ProblemSubmissionsBase()
             checker.request = request
@@ -2145,7 +2164,6 @@ class ProblemWorkspaceSubmissionsList(LoginRequiredMixin, ProblemMixin, SingleOb
 
         if scope == 'my':
             my_qs = Submission.objects.filter(user=request.profile, problem=problem)
-            contest_problem = get_contest_problem(problem, request.profile)
             if contest_problem:
                 my_qs = my_qs.filter(contest_object=contest_problem.contest)
             submissions = (

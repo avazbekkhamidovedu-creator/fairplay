@@ -191,6 +191,88 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'data-sub="all"')
         self.assertNotContains(response, 'data-sub="best"')
 
+    def test_assignment_rejects_practice_submission_query(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+
+        in_contest = Submission.objects.create(
+            user=self.user.profile, problem=self.problem, language=self.language,
+            result='AC', status='D', points=100, contest_object=self.contest,
+            time=0.01, memory=1024,
+        )
+        ContestSubmission.objects.create(
+            submission=in_contest, problem=self.contest_problem, participation=participation,
+        )
+        SubmissionSource.objects.create(submission=in_contest, source='print("contest")')
+        practice = Submission.objects.create(
+            user=self.user.profile, problem=self.problem, language=self.language,
+            result='WA', status='D', points=0, contest_object=None,
+            time=0.01, memory=1024,
+        )
+        SubmissionSource.objects.create(submission=practice, source='print("practice")')
+
+        blocked = self.client.get(
+            reverse('problem_detail', args=[self.problem.code]) + '?submission=%d' % practice.id,
+        )
+        self.assertEqual(blocked.context['workspace_mode'], 'assignment')
+        self.assertIsNone(blocked.context['workspace_submission'])
+
+        allowed = self.client.get(
+            reverse('problem_detail', args=[self.problem.code]) + '?submission=%d' % in_contest.id,
+        )
+        self.assertIsNotNone(allowed.context['workspace_submission'])
+        self.assertEqual(allowed.context['workspace_submission']['id'], in_contest.id)
+
+    def test_assignment_scope_all_and_best_forbidden(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+
+        in_contest = Submission.objects.create(
+            user=self.user.profile, problem=self.problem, language=self.language,
+            result='AC', status='D', points=100, contest_object=self.contest,
+            time=0.01, memory=1024,
+        )
+        ContestSubmission.objects.create(
+            submission=in_contest, problem=self.contest_problem, participation=participation,
+        )
+        practice = Submission.objects.create(
+            user=self.user.profile, problem=self.problem, language=self.language,
+            result='WA', status='D', points=0, contest_object=None,
+            time=0.01, memory=1024,
+        )
+
+        for scope in ('all', 'best'):
+            response = self.client.get(
+                reverse('problem_workspace_submissions', args=[self.problem.code]) + '?scope=%s' % scope,
+            )
+            self.assertEqual(response.status_code, 403, scope)
+            self.assertIn('error', response.json())
+
+        mine = self.client.get(
+            reverse('problem_workspace_submissions', args=[self.problem.code]) + '?scope=my',
+        )
+        self.assertEqual(mine.status_code, 200)
+        ids = [row['id'] for row in mine.json()['rows']]
+        self.assertEqual(ids, [in_contest.id])
+        self.assertNotIn(practice.id, ids)
+
+    def test_assignment_status_rejects_practice_submission(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+
+        practice = Submission.objects.create(
+            user=self.user.profile, problem=self.problem, language=self.language,
+            result='WA', status='D', points=0, contest_object=None,
+            time=0.01, memory=1024,
+        )
+        response = self.client.get(
+            reverse('problem_workspace_submission_status', args=[self.problem.code, practice.id]),
+        )
+        self.assertEqual(response.status_code, 403)
+
     def test_practice_still_shows_all_and_best_tabs(self):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertEqual(response.context['workspace_mode'], 'practice')
