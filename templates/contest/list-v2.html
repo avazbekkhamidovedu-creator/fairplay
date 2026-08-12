@@ -323,9 +323,6 @@
             <div>
                 <div class="cl-primary-line">
                     <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
-                    {% if solved[1] %}
-                        <span class="cl-solved">{{ _('Solved') }} {{ solved[0] }}/{{ solved[1] }}</span>
-                    {% endif %}
                 </div>
                 <div class="cl-course-line">
                     {% for org in contest.organizations.all() %}
@@ -377,6 +374,11 @@
                         <span class="emph muted">· {{ _('your window:') }} {{ contest.time_limit|timedelta('localized-no-seconds') }}</span>
                     {% endif %}
                 </div>
+            </div>
+            <div class="cl-solved-col">
+                {% if solved[1] %}
+                <span class="cl-solved">{{ _('Solved') }} {{ solved[0] }}/{{ solved[1] }}</span>
+                {% endif %}
             </div>
             <div class="cl-users">
                 {% if status == 'upcoming' %}

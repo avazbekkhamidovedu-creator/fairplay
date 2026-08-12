@@ -332,6 +332,67 @@
             font-family: ui-monospace, Menlo, monospace;
             color: var(--muted);
         }
+        /* Per-problem options (partial credit / pretest / results / out prefix):
+           a dashed-border settings strip, visually distinct from the solid
+           Pts / Max inputs in the row above. */
+        .cp-options {
+            grid-column: 1 / -1;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.9rem;
+            align-items: center;
+            margin-top: 0.15rem;
+            padding: 0.4rem 0.55rem;
+            border: 1px dashed var(--oj-border);
+            border-radius: 4px;
+            background: var(--oj-surface-muted, #f4f4f4);
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .cp-options .cp-opt {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-weight: normal;
+            cursor: default;
+        }
+        .cp-options select,
+        .cp-options input[type=number] {
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius);
+            padding: 3px 8px;
+            font-size: 12px;
+            color: var(--text, #333);
+            background: var(--oj-surface);
+            -webkit-box-sizing: border-box;
+            -moz-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+        /* The Results dropdown reuses the edit page's standard select design
+           (.oj-select / select[data-oj-select]) — native appearance removed,
+           custom chevron, accent focus — but compact for the options strip. */
+        .cp-options select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            min-width: 96px;
+            min-height: 26px;
+            padding: 3px 26px 3px 8px;
+            cursor: pointer;
+            background-image: -moz-linear-gradient(45deg, transparent 50%, var(--oj-text-muted) 50%), -moz-linear-gradient(315deg, var(--oj-text-muted) 50%, transparent 50%);
+            background-image: linear-gradient(45deg, transparent 50%, var(--oj-text-muted) 50%), linear-gradient(135deg, var(--oj-text-muted) 50%, transparent 50%);
+            background-position: -moz-calc(100% - 15px) -moz-calc(50% - 2px), -moz-calc(100% - 10px) -moz-calc(50% - 2px);
+            background-position: calc(100% - 15px) calc(50% - 2px), calc(100% - 10px) calc(50% - 2px);
+            background-size: 5px 5px;
+            background-repeat: no-repeat;
+        }
+        .cp-options select:focus,
+        .cp-options input[type=number]:focus {
+            border-color: var(--oj-accent, #2980B9);
+            -webkit-box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075), 0 0 6px color-mix(in srgb, var(--oj-accent) 55%, transparent);
+                    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075), 0 0 6px color-mix(in srgb, var(--oj-accent) 55%, transparent);
+            outline: none;
+        }
         .cp-actions .btn-icon {
             border: none;
             background: none;
@@ -344,7 +405,25 @@
         .cp-actions .btn-icon:hover {
             color: var(--text, #333);
         }
+        /* Remove button: visible bordered red box (like the problem editor's
+           close icon) so it reads as an explicit action, not a text glyph.
+           Same 28×28 box as the sibling icon buttons (problem_create_v2.css
+           .btn-icon) so it stays centered with them. */
+        .cp-actions .btn-icon.danger {
+            border: 1px solid rgba(198, 59, 59, 0.45);
+            background: rgba(198, 59, 59, 0.08);
+            border-radius: 4px;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            color: #c0392b;
+            font-size: 16px;
+            font-weight: 700;
+            line-height: 1;
+        }
         .cp-actions .btn-icon.danger:hover {
+            border-color: #c0392b;
+            background: rgba(198, 59, 59, 0.16);
             color: #c0392b;
         }
 
@@ -1362,19 +1441,18 @@
                     '<span class="label-letter">' + letter + '</span>' +
                     '<span class="pname">' + (row.dataset.name || 'Problem ' + row.dataset.pid) + '</span>' +
                     '<span><input type="number" class="cp-points" value="100" style="width:48px"></span>' +
-                    '<span>—</span>' +
+                    '<span><input type="number" class="cp-max-subs" min="1" placeholder="∞" title="' + {{ _('Maximum number of submissions allowed for this problem — blank means unlimited.')|htmltojs }} + '" style="width:60px"></span>' +
                     '<span class="cp-actions">' +
                     '<button type="button" class="btn-icon" title="' + {{ _('Preview')|htmltojs }} + '" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>' +
                     '<a class="btn-icon" title="' + {{ _('Solve')|htmltojs }} + '" href="' + solveUrl + '" target="_blank"><i class="fa fa-external-link"></i></a>' +
                     '<button type="button" class="btn-icon danger" title="' + {{ _('Remove')|htmltojs }} + '" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button>' +
                     '</span>' +
-                    '<div class="cp-options" style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;padding-top:0.25rem;color:var(--muted);font-size:12px;">' +
-                    '<label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;"><input type="checkbox" class="cp-partial" checked> ' + {{ _('Partial credit')|htmltojs }} + '</label>' +
-                    '<label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;"><input type="checkbox" class="cp-pretested"> ' + {{ _('Pretest only')|htmltojs }} + '</label>' +
-                    '<label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;">' + {{ _('Max submissions')|htmltojs }} + ' <input type="number" class="cp-max-subs" min="1" placeholder="∞" style="width:56px"></label>' +
-                    '<label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;">' + {{ _('Results')|htmltojs }} +
-                    ' <select class="cp-results" style="padding:0.2rem 0.3rem;"><option value="">' + {{ _('Default')|htmltojs }} + '</option><option value="hide">' + {{ _('Hide')|htmltojs }} + '</option><option value="show">' + {{ _('Show')|htmltojs }} + '</option></select></label>' +
-                    '<label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;">' + {{ _('Out prefix')|htmltojs }} + ' <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px"></label>' +
+                    '<div class="cp-options">' +
+                    '<label class="cp-opt"><input type="checkbox" class="cp-partial" checked> ' + {{ _('Partial credit')|htmltojs }} + '</label>' +
+                    '<label class="cp-opt"><input type="checkbox" class="cp-pretested"> ' + {{ _('Pretest only')|htmltojs }} + '</label>' +
+                    '<label class="cp-opt" title="' + {{ _('What results students can see after judging.')|htmltojs }} + '">' + {{ _('Results')|htmltojs }} +
+                    ' <select class="cp-results"><option value="">' + {{ _('Default')|htmltojs }} + '</option><option value="hide">' + {{ _('Hide')|htmltojs }} + '</option><option value="show">' + {{ _('Show')|htmltojs }} + '</option></select></label>' +
+                    '<label class="cp-opt" title="' + {{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.')|htmltojs }} + '">' + {{ _('Out prefix')|htmltojs }} + ' <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px"></label>' +
                     '</div>' +
                     '<div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>';
             }
@@ -1386,24 +1464,57 @@
                     if (letter) letter.textContent = String.fromCharCode(65 + i);
                 });
             }
-            // Toggle a row's inline statement preview (4b).
+            // Toggle a row's inline statement preview (4b). The preview loads
+            // the real problem statement from the problem page (the teacher has
+            // read access to every problem they can add to an assignment), so
+            // the eye shows the actual content instead of a placeholder.
             window.toggleCpPreview = function (btn) {
                 var row = btn.closest('.cp-row');
                 if (!row) return;
                 var pv = row.querySelector('.cp-preview');
                 if (!pv) return;
-                if (pv.style.display === 'none' || !pv.style.display) {
+                if (pv.style.display === 'none') {
                     if (!pv.dataset.loaded) {
-                        var name = row.querySelector('.pname');
                         var code = row.dataset.code || '';
+                        var name = row.querySelector('.pname');
                         var pts = row.querySelector('input.cp-points');
                         pv.innerHTML = '<b>' + (name ? name.textContent : '') + '</b>' +
                             (code ? ' <span class="pcode">[' + code + ']</span>' : '') +
                             '<br>' + {{ _('Points')|htmltojs }} + ': ' + (pts ? pts.value : '100') +
-                            ' — ' + {{ _('Open the problem page (▶) to read the full statement.')|htmltojs }};
+                            '<div class="pv-status">' + {{ _('Loading statement…')|htmltojs }} + '</div>';
+                        if (code) {
+                            var pvStatus = pv.querySelector('.pv-status');
+                            fetch('/problem/' + encodeURIComponent(code) + '/', {credentials: 'same-origin'})
+                                .then(function (r) {
+                                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                                    return r.text();
+                                })
+                                .then(function (html) {
+                                    var doc = new DOMParser().parseFromString(html, 'text/html');
+                                    var desc = doc.querySelector('.content-description');
+                                    if (!desc) throw new Error('no statement');
+                                    // Rebase relative image/link URLs against the problem page.
+                                    var base = window.location.origin + '/problem/' + encodeURIComponent(code) + '/';
+                                    desc.querySelectorAll('img[src], a[href], video[src], source[src]').forEach(function (el) {
+                                        ['src', 'href'].forEach(function (attr) {
+                                            var v = el.getAttribute(attr);
+                                            if (!v) return;
+                                            if (/^(https?:)?\/\//i.test(v) || /^(data|mailto|javascript|#)/i.test(v)) return;
+                                            try { el.setAttribute(attr, new URL(v, base).href); } catch (e) { /* keep as-is */ }
+                                        });
+                                    });
+                                    pvStatus.remove();
+                                    pv.appendChild(desc);
+                                })
+                                .catch(function () {
+                                    pvStatus.textContent = {{ _('Statement preview unavailable — open the problem page to read the full statement.')|htmltojs }};
+                                });
+                        } else {
+                            pv.querySelector('.pv-status').textContent = {{ _('Open the problem page to read the full statement.')|htmltojs }};
+                        }
                         pv.dataset.loaded = '1';
                     }
-                    pv.style.display = '';
+                    pv.style.display = 'block';
                 } else {
                     pv.style.display = 'none';
                 }
@@ -2184,7 +2295,7 @@
                                     <span class="label-letter">{{ p.letter }}</span>
                                     <span class="pname">{{ p.name }}</span>
                                     <span><input type="number" class="cp-points" value="{{ p.points }}" style="width:48px"></span>
-                                    <span>—</span>
+                                    <span><input type="number" class="cp-max-subs" min="1" placeholder="∞" title="{{ _('Maximum number of submissions allowed for this problem — blank means unlimited.') }}" style="width:60px" value="{{ p.max_submissions }}"></span>
                                     <span class="cp-actions">
                                         <button type="button" class="btn-icon" title="{{ _('Preview') }}" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>
                                         <a class="btn-icon" title="{{ _('Solve') }}" href="{{ url('problem_detail', p.code) }}" target="_blank"><i class="fa fa-external-link"></i></a>
@@ -2192,18 +2303,17 @@
                                     </span>
                                     {# Per-problem options (admin parity): partial credit, pretest-only,
                                        max submissions, result visibility and output prefix. #}
-                                    <div class="cp-options" style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;padding-top:0.25rem;color:var(--muted);font-size:12px;">
-                                        <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;"><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}> {{ _('Partial credit') }}</label>
-                                        <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;"><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}> {{ _('Pretest only') }}</label>
-                                        <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;">{{ _('Max submissions') }} <input type="number" class="cp-max-subs" min="1" placeholder="∞" style="width:56px" value="{{ p.max_submissions }}"></label>
-                                        <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;">{{ _('Results') }}
-                                            <select class="cp-results" style="padding:0.2rem 0.3rem;">
+                                    <div class="cp-options">
+                                        <label class="cp-opt"><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}> {{ _('Partial credit') }}</label>
+                                        <label class="cp-opt"><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}> {{ _('Pretest only') }}</label>
+                                        <label class="cp-opt" title="{{ _('What results students can see after judging.') }}">{{ _('Results') }}
+                                            <select class="cp-results">
                                                 <option value=""{% if p.hide_results is none %} selected{% endif %}>{{ _('Default') }}</option>
                                                 <option value="hide"{% if p.hide_results is sameas(true) %} selected{% endif %}>{{ _('Hide') }}</option>
                                                 <option value="show"{% if p.hide_results is sameas(false) %} selected{% endif %}>{{ _('Show') }}</option>
                                             </select>
                                         </label>
-                                        <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;">{{ _('Out prefix') }} <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px" value="{{ p.output_prefix }}"></label>
+                                        <label class="cp-opt" title="{{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.') }}">{{ _('Out prefix') }} <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px" value="{{ p.output_prefix }}"></label>
                                     </div>
                                     <div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>
                                 </div>

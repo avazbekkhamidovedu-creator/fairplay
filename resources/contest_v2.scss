@@ -73,7 +73,8 @@
     }
 }
 
-/* Group header (status / course grouping) — matches contest list reference */
+/* Group header (status / course grouping) — matches the Problem page's dark
+   table-heading style (--oj-heading background + light text). */
 .cl-group-head {
     display: flex;
     align-items: center;
@@ -81,20 +82,22 @@
     gap: 0.75rem;
     padding: 0.45rem 0.6rem;
     margin: 1rem 0 0.45rem;
-    background: var(--oj-surface-soft);
-    border: 1px solid var(--oj-border);
+    background: var(--oj-heading);
+    border: 1px solid var(--oj-heading);
     border-radius: var(--oj-radius);
-    color: var(--oj-heading);
+    color: var(--oj-heading-text);
     font-size: 13px;
     font-weight: 600;
 
     i {
-        color: var(--oj-text-muted);
+        color: var(--oj-heading-text);
+        opacity: 0.8;
         margin-right: 0.35rem;
     }
 
     small {
-        color: var(--oj-text-muted);
+        color: var(--oj-heading-text);
+        opacity: 0.75;
         font-weight: 400;
         font-size: 12px;
     }
@@ -130,7 +133,7 @@
 /* Contest row */
 .cl-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 76px auto;
+    grid-template-columns: minmax(0, 1fr) auto 76px auto;
     gap: 0.75rem 1rem;
     align-items: center;
     padding: 0.8rem 0.95rem;
@@ -177,12 +180,17 @@
     }
 }
 
-.cl-solved {
-    margin-left: auto;
-    font-style: italic;
-    font-size: 14px;
-    color: var(--oj-text-muted);
+/* Solved progress — its own column just left of the participant count. The
+   wrapper div is always rendered (even when empty) so the card's grid columns
+   stay aligned and the action buttons are never squeezed into a narrow slot. */
+.cl-solved-col {
+    text-align: center;
     white-space: nowrap;
+}
+
+.cl-solved {
+    font-size: 13px;
+    color: var(--oj-text-muted);
 }
 
 .cl-course-line {
@@ -420,6 +428,7 @@
     }
 
     .cl-users,
+    .cl-solved-col,
     .cl-actions {
         text-align: left;
     }
@@ -990,7 +999,7 @@
 
 .cp-row {
     display: grid;
-    grid-template-columns: 24px 28px minmax(0, 1fr) 52px 44px 108px;
+    grid-template-columns: 24px 28px minmax(0, 1fr) 52px 68px 108px;
     gap: 0.25rem;
     align-items: center;
     padding: 0.45rem 0.5rem;

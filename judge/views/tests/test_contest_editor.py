@@ -763,6 +763,46 @@ class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.contest_problems.count(), 0)
 
+    def test_get_renders_max_submissions_input_in_row(self):
+        """The Max submissions input lives in the problem row's Max column,
+        not as a duplicated label in the per-problem options strip below."""
+        response = self.client.get(reverse('contest_edit', args=['probeditcontest']))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn('class="cp-max-subs"', html)
+        # The old duplicated "Max submissions" label was removed from the
+        # options strip; only the header tooltip text (different wording)
+        # may mention max submissions.
+        self.assertNotIn('Max submissions', html)
+        # The options strip still renders the other per-problem settings.
+        for marker in ('cp-partial', 'cp-pretested', 'cp-results', 'cp-out-prefix'):
+            self.assertIn(marker, html)
+
+    def test_post_roundtrips_max_submissions_from_row_input(self):
+        """A max_submissions value sent by the in-row input round-trips to the
+        stored ContestProblem (blank → unlimited)."""
+        response = self.client.post(
+            reverse('contest_edit', args=['probeditcontest']),
+            data=json.dumps(self._full_payload(problems=[
+                {'id': self.problem.id, 'points': 100, 'max_submissions': 5},
+            ])),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.contest_problems.get().max_submissions, 5)
+        # Blank means unlimited.
+        response = self.client.post(
+            reverse('contest_edit', args=['probeditcontest']),
+            data=json.dumps(self._full_payload(problems=[
+                {'id': self.problem.id, 'points': 100, 'max_submissions': ''},
+            ])),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertIsNone(self.contest.contest_problems.get().max_submissions)
+
 
 class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
     """New editor endpoints: tag create, .seb upload, finalize/unfinalize."""
