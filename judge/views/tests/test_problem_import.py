@@ -220,6 +220,9 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         item = draft.items.get()
         preview = self.client.get(reverse('problem_import_preview', args=(draft.pk,)))
         self.assertContains(preview, 'import-editor-frame', html=False)
+        self.assertContains(preview, 'import-problem-row', html=False)
+        self.assertContains(preview, 'fill="#DE2121"', html=False)
+        self.assertContains(preview, 'create-all-problems', html=False)
         self.assertContains(preview, reverse('problem_import_item_editor', args=(draft.pk, item.pk)), html=False)
         self.assertContains(
             preview,
