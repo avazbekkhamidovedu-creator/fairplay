@@ -855,20 +855,21 @@ class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
         response = self.client.post(
             reverse('contest_seb_upload', args=['endpointcontest']),
             data={'seb_config_file': SimpleUploadedFile('exam.seb', b'SEB config')},
-            content_type='multipart/form-data',
         )
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(json.loads(response.content)['ok'])
         self.contest.refresh_from_db()
         self.assertTrue(self.contest.seb_config_file)
-        self.assertTrue(self.contest.seb_config_file.name.endswith('exam.seb'))
+        # MEDIA_ROOT persists across test runs, so Django's storage may suffix a
+        # duplicate filename (exam_1KexZ2r.seb) — assert the basename loosely.
+        basename = self.contest.seb_config_file.name.rsplit('/', 1)[-1]
+        self.assertTrue(basename.startswith('exam') and basename.endswith('.seb'))
 
     def test_seb_upload_rejects_bad_extension(self):
         self.client.force_login(self.editor)
         response = self.client.post(
             reverse('contest_seb_upload', args=['endpointcontest']),
             data={'seb_config_file': SimpleUploadedFile('exam.txt', b'x')},
-            content_type='multipart/form-data',
         )
         self.assertEqual(response.status_code, 400)
 
@@ -876,7 +877,7 @@ class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.editor)
         response = self.client.post(
             reverse('contest_seb_upload', args=['endpointcontest']),
-            data={}, content_type='multipart/form-data',
+            data={},
         )
         self.assertEqual(response.status_code, 400)
 
@@ -892,7 +893,6 @@ class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
         response = self.client.post(
             reverse('contest_seb_upload', args=['othersebcontest']),
             data={'seb_config_file': SimpleUploadedFile('exam.seb', b'x')},
-            content_type='multipart/form-data',
         )
         self.assertEqual(response.status_code, 403)
 
@@ -1283,6 +1283,13 @@ class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
         self.assertTrue(p.ended)
         contest.time_limit = timedelta(hours=3)
         contest.save()
+        # end_time/_now are cached_properties on the participation instance;
+        # drop the cache so the extension is observed (mirrors a fresh request).
+        try:
+            del p.end_time
+            del p._now
+        except AttributeError:
+            pass
         self.assertFalse(p.ended)
 
     def test_shrinking_duration_expires_participant(self):
@@ -1294,4 +1301,10 @@ class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
         self.assertFalse(p.ended)
         contest.time_limit = timedelta(hours=1)
         contest.save()
+        # See above: cached_property on the participation must be dropped.
+        try:
+            del p.end_time
+            del p._now
+        except AttributeError:
+            pass
         self.assertTrue(p.ended)

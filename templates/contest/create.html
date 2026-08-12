@@ -118,6 +118,20 @@
         .v2-left .form-row .field.ac-inline .unit { color: var(--muted); font-size: 12px; }
         .pcv2 .ac-help { font-size: 11px; color: var(--muted); margin-top: 0.25rem; }
 
+        /* Visibility cross-coupling: rows whose scoping is ignored by the
+           current List-visibility mode are struck through, dimmed and made
+           non-interactive. pointer-events only — the value stays submitted. */
+        .pcv2 .form-row.vis-muted { opacity: .5; }
+        .pcv2 .form-row.vis-muted > label { text-decoration: line-through; text-decoration-thickness: 1.5px; }
+        .pcv2 .form-row.vis-muted .field { pointer-events: none; }
+        .pcv2 .form-row .vis-mute-note {
+            font-size: 11px;
+            font-style: italic;
+            color: var(--oj-accent, #b3640e);
+            margin-top: .3rem;
+            display: none;
+        }
+
         /* Stacked rows (Validity / Description / Target score): label on top,
            controls full-width below — the horizontal two-column layout runs
            out of room in a split-pane editor, so these stack like the problem
@@ -447,6 +461,17 @@
             // would answer "Invalid request.".
             form.addEventListener('submit', function (e) {
                 e.preventDefault();
+                // This form never navigates: it validates and POSTs via fetch,
+                // staying on the page. common.js disables every submit button
+                // on ANY form submit (double-submit protection meant for
+                // navigational forms) and, depending on script load order, its
+                // listener can run AFTER this one — which would re-disable the
+                // buttons right after a cancelled confirm(), leaving Save dead
+                // until a reload. Stop its propagation and manage the disabled
+                // state ourselves around the fetch instead.
+                e.stopImmediatePropagation();
+                var submitBtns = form.querySelectorAll('button[type=submit]');
+                for (var i = 0; i < submitBtns.length; i++) submitBtns[i].disabled = false;
                 var fd = new FormData(form);
                 var data = {};
                 fd.forEach(function (v, k) { data[k] = v; });
@@ -626,6 +651,7 @@
                 // NB: use getAttribute('action') not form.action — a hidden
                 // input with name="action" (the save-action button) would
                 // hijack the named property and break the URL.
+                for (var i = 0; i < submitBtns.length; i++) submitBtns[i].disabled = true;
                 fetch(form.getAttribute('action'), {
                     method: 'POST',
                     headers: {
@@ -887,6 +913,13 @@
             var savedDurM = durM ? parseInt(durM.value || 0, 10) : 0;
             var savedEnd = endInput ? endInput.value : '';
             if (startInput && endInput && durH && durM) {
+                // Validity (start/end) and Duration are INDEPENDENT settings:
+                // end_time is the global "assignment closes" deadline, time_limit
+                // is the per-student window. end_time is auto-filled as a
+                // *starting point* (start + duration) but is never overwritten
+                // once the teacher edits it manually — this is what allows a
+                // long availability window with a short per-student timer.
+                var endWarnEl = document.getElementById('dur-end-warning');
                 function calcEnd() {
                     var s = parseLocalInput(startInput.value);
                     var h = parseInt(durH.value || 0, 10);
@@ -894,7 +927,45 @@
                     if (s && (h > 0 || m > 0)) {
                         s.setHours(s.getHours() + h);
                         s.setMinutes(s.getMinutes() + m);
-                        endInput.value = toLocalInput(s);
+                        var derived = toLocalInput(s);
+                        // Auto-fill only while the deadline is untouched (empty
+                        // or still the value we derived last time); once the
+                        // teacher sets their own end time we stop overwriting.
+                        if (!endInput.value || endInput.value === endInput.dataset.autoDerived) {
+                            endInput.value = derived;
+                            endInput.dataset.autoDerived = derived;
+                        }
+                    }
+                    syncEndWarning();
+                }
+                // A manual end_time edit marks the deadline as teacher-owned.
+                endInput.addEventListener('input', function () {
+                    endInput.dataset.autoDerived = '';
+                    syncEndWarning();
+                    syncPreview();
+                    syncScoreSummary();
+                });
+                // Warn when start + duration runs past the assignment end: the
+                // timer is then capped by the deadline (validity wins), so late
+                // starters get less than the full duration.
+                function syncEndWarning() {
+                    if (!endWarnEl) return;
+                    var s = parseLocalInput(startInput.value);
+                    var e = parseLocalInput(endInput.value);
+                    var h = parseInt(durH.value || 0, 10);
+                    var m = parseInt(durM.value || 0, 10);
+                    if (s && e && (h > 0 || m > 0)) {
+                        var win = new Date(s.getTime());
+                        win.setHours(win.getHours() + h);
+                        win.setMinutes(win.getMinutes() + m);
+                        if (win > e) {
+                            endWarnEl.style.display = '';
+                            endWarnEl.textContent = {{ _('The timer would run past the assignment end time — students who start late would get less than the full duration.')|htmltojs }};
+                        } else {
+                            endWarnEl.style.display = 'none';
+                        }
+                    } else {
+                        endWarnEl.style.display = 'none';
                     }
                 }
                 startInput.addEventListener('change', function () {
@@ -907,6 +978,7 @@
                 });
                 durH.addEventListener('input', function () { calcEnd(); syncPreview(); syncScoreSummary(); });
                 durM.addEventListener('input', function () { calcEnd(); syncPreview(); syncScoreSummary(); });
+                syncEndWarning();
 
                 // Default validity: tomorrow -> tomorrow + 3h (initial Range-mode values)
                 if (!startInput.value && !endInput.value) {
@@ -981,10 +1053,98 @@
                 });
             });
 
-            // --- Visibility segmented control ---
+            // --- Visibility segmented control + scoping cross-coupling ---
+            // 'org' mode makes Organization/Class relevant and ignores
+            // Advanced → Private users; 'private' mode is the reverse; public
+            // and hidden ignore both. Ignored rows get struck out / dimmed /
+            // non-interactive (pointer-events, NOT disabled, so the value is
+            // still submitted). Works for all three renderings of the control:
+            // the seg radios, the admin-gated checkboxes, and the read-only
+            // id_vis_mode_ro input.
+            var orgMuteRow = document.getElementById('id_organizations') && document.getElementById('id_organizations').closest('.form-row');
+            var classMuteRow = document.getElementById('id_classes') && document.getElementById('id_classes').closest('.form-row');
+            var privMuteRow = document.getElementById('id_private_contestants') && document.getElementById('id_private_contestants').closest('.form-row');
+            var orgMuteNote = document.getElementById('org-mute-note');
+            var classMuteNote = document.getElementById('class-mute-note');
+            var privMuteNote = document.getElementById('priv-mute-note');
+            function visModeLabel() {
+                var seg = document.getElementById('vis-seg');
+                var segMode = seg ? (seg.querySelector('input[name="vis_mode"]:checked') || {}).value : null;
+                if (segMode) return segMode;
+                var visRo = document.getElementById('id_vis_mode_ro');
+                if (visRo && visRo.value) return visRo.value;
+                var privCb = document.getElementById('id_is_private');
+                if (privCb && privCb.checked) return 'private';
+                var orgCb = document.getElementById('id_is_organization_private');
+                if (orgCb && orgCb.checked) return 'org';
+                var visHidden = document.getElementById('id_is_visible');
+                return (visHidden && visHidden.value === 'true') ? 'public' : 'hidden';
+            }
+            function syncVisMuting() {
+                var mode = visModeLabel();
+                var orgActive = (mode === 'org');
+                var privActive = (mode === 'private');
+                var labels = {
+                    hidden: {{ _('Hidden')|htmltojs }},
+                    public: {{ _('Public')|htmltojs }},
+                    org: {{ _('Org')|htmltojs }},
+                    private: {{ _('Private')|htmltojs }},
+                };
+                var modeLabel = labels[mode] || mode;
+                var ignoredIn = {{ _('Ignored in')|htmltojs }};
+                function applyMute(row, note, active, suffix) {
+                    if (row) row.classList.toggle('vis-muted', !active);
+                    if (note) {
+                        note.textContent = active ? '' : ignoredIn + ' ' + modeLabel + ' — ' + suffix;
+                        note.style.display = active ? 'none' : '';
+                    }
+                }
+                applyMute(orgMuteRow, orgMuteNote, orgActive, {{ _("choose 'Org' to scope to organizations/classes.")|htmltojs }});
+                applyMute(classMuteRow, classMuteNote, orgActive, {{ _("choose 'Org' to scope to organizations/classes.")|htmltojs }});
+                applyMute(privMuteRow, privMuteNote, privActive, {{ _("choose 'Private' to restrict to specific users.")|htmltojs }});
+            }
+            var visToast = {
+                hidden: {{ _('Hidden mode is not listed — Organization/Class scoping and Private users do not apply.')|htmltojs }},
+                public: {{ _('Public mode is visible to everyone — Organization/Class scoping and Private users do not apply.')|htmltojs }},
+                org: {{ _("Org mode restricts visibility to the organizations/classes above. The Advanced → Private users list is ignored.")|htmltojs }},
+                private: {{ _("Private mode ignores the Organization/Class scoping above. Use Advanced → Private users to choose who can see this assignment.")|htmltojs }},
+            };
             document.querySelectorAll('#vis-seg input[type=radio]').forEach(function (radio) {
-                radio.addEventListener('change', syncPreview);
+                radio.addEventListener('change', function () {
+                    syncPreview();
+                    syncVisMuting();
+                    var msg = visToast[radio.value];
+                    if (msg) showToast(msg);
+                });
             });
+            ['id_is_private', 'id_is_organization_private'].forEach(function (id) {
+                var cb = document.getElementById(id);
+                if (cb) cb.addEventListener('change', syncVisMuting);
+            });
+            syncVisMuting();
+
+            // --- Join restriction toggle: dim the Join orgs select while off ---
+            var joinLimitCb = document.getElementById('id_limit_join_organizations');
+            var joinOrgRow = document.getElementById('id_join_organizations') && document.getElementById('id_join_organizations').closest('.form-row');
+            var joinMuteNote = document.getElementById('join-mute-note');
+            if (joinLimitCb && joinOrgRow) {
+                var joinOffNote = {{ _('Join restriction is off — this selection is ignored.')|htmltojs }};
+                function syncJoinMuting() {
+                    var on = joinLimitCb.checked;
+                    joinOrgRow.classList.toggle('vis-muted', !on);
+                    if (joinMuteNote) {
+                        joinMuteNote.textContent = on ? '' : joinOffNote;
+                        joinMuteNote.style.display = on ? 'none' : '';
+                    }
+                }
+                joinLimitCb.addEventListener('change', function () {
+                    syncJoinMuting();
+                    showToast(joinLimitCb.checked
+                        ? {{ _('Join restriction enabled — pick the organizations allowed to join.')|htmltojs }}
+                        : {{ _('Join restriction disabled — the Join orgs selection is ignored.')|htmltojs }});
+                });
+                syncJoinMuting();
+            }
 
 
             // --- Generate access code ---
@@ -1841,7 +2001,7 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Duration') }}{{ tip(_('Each participant gets this much time from when they join. Once students have joined, the duration can only be increased — shortening it would end their windows mid-run and is blocked.')) }}</label>
+                                <label>{{ _('Duration') }}{{ tip(_('Each participant gets this much time from the moment they start. The assignment closes at the end time below — if the deadline arrives first, the timer stops even with time left. Validity and duration are independent. Once students have joined, the duration can only be increased — shortening it would end their windows mid-run and is blocked.')) }}</label>
                                 <div class="field ac-inline">
                                     <input type="number" id="id_duration_hours" name="duration_hours"
                                            min="0" max="1000" value="{{ prefill.duration_hours if contest else 0 }}">
@@ -1854,6 +2014,7 @@
                                         {{ _('No limit') }}
                                     </label>
                                 </div>
+                                <div class="dur-note" id="dur-end-warning" style="display:none;margin-top:0.4rem;"></div>
                             </div>
 
                             <div class="form-row stacked">
@@ -1909,6 +2070,7 @@
                                                 <option value="{{ org.id }}"{% if org.id in prefill_org_ids %} selected{% endif %}>{{ org.name }}</option>
                                             {% endfor %}
                                         </select>
+                                        <div class="vis-mute-note" id="org-mute-note"></div>
                                     {% endif %}
                                 </div>
                             </div>
@@ -1924,6 +2086,7 @@
                                             <option value="{{ cls.id }}" data-org="{{ cls.organization_id }}"{% if cls.id in prefill_class_ids %} selected{% endif %}>{{ cls.name }}</option>
                                         {% endfor %}
                                     </select>
+                                    <div class="vis-mute-note" id="class-mute-note"></div>
                                 </div>
                             </div>
 
@@ -2232,6 +2395,7 @@
                                                 <option value="{{ pid }}" selected>{{ uname }}</option>
                                                 {% endfor %}
                                             </select>
+                                            <div class="vis-mute-note" id="priv-mute-note"></div>
                                             {{ tip(_('Non-empty → the assignment is private to exactly these users.')) }}
                                         </div>
                                     </div>
@@ -2246,6 +2410,7 @@
                                                     <option value="{{ org.id }}"{% if org.id in join_org_ids %} selected{% endif %}>{{ org.name }}</option>
                                                 {% endfor %}
                                             </select>
+                                            <div class="vis-mute-note" id="join-mute-note"></div>
                                         </div>
                                     </div>
                                     <div class="form-row">

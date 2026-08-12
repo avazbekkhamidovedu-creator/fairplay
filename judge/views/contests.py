@@ -1114,9 +1114,13 @@ class ContestCreate(LoginRequiredMixin, View):
             else:
                 prefill['cheat_level'] = 'low'
             # List visibility seg control: user-private > org-private > public > hidden.
-            if contest.is_private or contest.private_contestants.exists():
+            # Derived from the STORED FLAGS only — list contents (private_contestants /
+            # organizations / classes) are scoping data, not mode selectors. Checking the
+            # lists instead would resurrect 'private' every time an assignment that was
+            # once private (leaving entries behind) is switched to org/public and reopened.
+            if contest.is_private:
                 prefill['vis_mode'] = 'private'
-            elif contest.is_organization_private or contest.organizations.exists() or contest.classes.exists():
+            elif contest.is_organization_private:
                 prefill['vis_mode'] = 'org'
             elif contest.is_visible:
                 prefill['vis_mode'] = 'public'
@@ -1654,6 +1658,11 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                 participation_type = LIVE
             elif contest.is_spectatable_by(request.user):
                 participation_type = SPECTATE
+            elif contest.has_completed_contest(request.user):
+                # A student whose live window already ran out: tell them why
+                # they cannot enter again (no spectator fallback for them).
+                return generic_message(request, _('Your time is up'),
+                                       _('Your time for this assignment has ended.'))
             else:
                 return generic_message(request, _('Cannot enter'),
                                        _('You are not able to join this contest.'))
@@ -1674,6 +1683,15 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                     raise ContestAccessDenied()
 
                 if participation.ended:
+                    # A live window that already ran out. Only privileged
+                    # roles may fall back to spectating; a regular student is
+                    # simply done — no silent spectator conversion.
+                    if not contest.is_spectatable_by(request.user):
+                        return generic_message(
+                            request,
+                            _('Your time is up'),
+                            _('Your time for this assignment has ended.'),
+                        )
                     participation = ContestParticipation.objects.get_or_create(
                         contest=contest, user=profile, virtual=SPECTATE,
                         defaults={'real_start': timezone.now()},
@@ -1697,6 +1715,7 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
             form = ContestAccessCodeForm()
         return render(self.request, 'contest/access_code.html', {
             'form': form, 'wrong_code': wrong_code,
+            'contest': contest,
             'title': _('Enter access code for "%s"') % contest.name,
         })
 

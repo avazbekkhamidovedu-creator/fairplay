@@ -1180,6 +1180,18 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
     def _submission_blocked_response(self):
         """Pre-submit guards shared by every question type. Returns a response if blocked."""
+        # A non-public problem that belongs to an assignment may be READ by
+        # anyone who can access the assignment, but submissions must happen
+        # inside the student's own live window — never as a stray regular
+        # submission outside a contest.
+        if self.contest_problem is None and not self.object.is_public:
+            from judge.models import ContestProblem
+            if ContestProblem.objects.filter(problem_id=self.object.id).exists():
+                return generic_message(
+                    self.request,
+                    _('Join the assignment to submit'),
+                    _('This problem belongs to an assignment. Enter the assignment to submit a solution.'),
+                )
         if (
             not self.request.user.has_perm('judge.spam_submission')
             and Submission.objects.filter(user=self.request.profile, rejudged_date__isnull=True)
