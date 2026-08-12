@@ -65,6 +65,24 @@ DMOJ_CAMO_EXCLUDE = ()
 
 DMOJ_PROBLEM_DATA_ROOT = None
 
+# Submission file storage (S3-compatible primary, e.g. Garage; generic S3 API).
+# Empty endpoint URL => local FileSystemStorage under DMOJ_SUBMISSION_FILE_ROOT (dev/tests).
+DMOJ_S3_ENDPOINT_URL = ''
+DMOJ_S3_REGION = 'garage'
+DMOJ_S3_SUBMISSION_BUCKET = 'dkuoj-submissions'
+DMOJ_S3_ACCESS_KEY = ''
+DMOJ_S3_SECRET_KEY = ''
+DMOJ_SUBMISSION_FILE_ROOT = ''  # local fallback root when DMOJ_S3_ENDPOINT_URL is empty
+
+# Box SFTP backup mirror for submission files.
+DMOJ_BACKUP_MIRROR_ENABLED = False  # master switch: mirror task + Box read fallback
+DMOJ_BOX_SFTP_HOST = 'sftp.services.box.com'
+DMOJ_BOX_SFTP_PORT = 22
+DMOJ_BOX_SFTP_USER = ''
+DMOJ_BOX_SFTP_PASSWORD = ''
+DMOJ_BOX_SFTP_ROOT = 'DKUOJ-backup'
+DMOJ_BOX_KNOWN_HOSTS = ''  # path to a pinned known_hosts file for sftp.services.box.com
+
 # The final spreadsheet row covered by the question-type dropdown in the
 # downloadable problem-import template. Override in local_settings.py if needed.
 PROBLEM_EXCEL_TEMPLATE_MAX_ROW = 1000
@@ -693,6 +711,45 @@ if not DEBUG:
             'EVENT_DAEMON_SUBMISSION_KEY is still the well-known development default; '
             'set a unique value in local_settings.py before enabling the event daemon '
             'with DEBUG = False.')
+
+    # Submission-file storage: fail loudly rather than silently degrade to local disk.
+    # These fire only for deployments that actually use the feature (endpoint set, or
+    # the Box mirror switched on), so a site not yet using it is unaffected.
+    if DMOJ_S3_ENDPOINT_URL and not (DMOJ_S3_ACCESS_KEY and DMOJ_S3_SECRET_KEY):
+        raise ImproperlyConfigured(
+            'DMOJ_S3_ENDPOINT_URL is set but DMOJ_S3_ACCESS_KEY / DMOJ_S3_SECRET_KEY are '
+            'empty; the submission-file store cannot authenticate.')
+    if DMOJ_BACKUP_MIRROR_ENABLED:
+        if not DMOJ_S3_ENDPOINT_URL:
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but DMOJ_S3_ENDPOINT_URL is empty; the '
+                'primary store would silently be local disk. Configure the S3 endpoint or '
+                'disable the mirror.')
+        if not (DMOJ_BOX_SFTP_USER and DMOJ_BOX_SFTP_PASSWORD):
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but Box SFTP credentials are missing; the '
+                'mirror would silently write to a local directory. Set DMOJ_BOX_SFTP_USER / '
+                'DMOJ_BOX_SFTP_PASSWORD or disable the mirror.')
+        if not (DMOJ_BOX_KNOWN_HOSTS and os.path.isfile(DMOJ_BOX_KNOWN_HOSTS)):
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but DMOJ_BOX_KNOWN_HOSTS is not a readable '
+                'file; without pinned host keys the SFTP backup is exposed to a first-connect '
+                'MITM. Point it at a known_hosts file for sftp.services.box.com.')
+        # A file that exists but lacks an entry for the Box host is no protection at all,
+        # so check the contents too. paramiko is only imported here (mirror on => it is
+        # installed) and handles hashed |1|... entries a substring check would miss.
+        from paramiko.hostkeys import HostKeys
+
+        # Same key form as judge.storage.box.host_key_name(), spelled out rather than
+        # imported: pulling judge code into settings at load time invites circular imports.
+        _box_host_key = (DMOJ_BOX_SFTP_HOST if DMOJ_BOX_SFTP_PORT == 22
+                         else f'[{DMOJ_BOX_SFTP_HOST}]:{DMOJ_BOX_SFTP_PORT}')
+        if not HostKeys(DMOJ_BOX_KNOWN_HOSTS).lookup(_box_host_key):
+            raise ImproperlyConfigured(
+                f'DMOJ_BOX_KNOWN_HOSTS ({DMOJ_BOX_KNOWN_HOSTS}) contains no host key for '
+                f'{_box_host_key}, so the first connection would have nothing to pin '
+                f'against. Populate it with: '
+                f'ssh-keyscan -p {DMOJ_BOX_SFTP_PORT} {DMOJ_BOX_SFTP_HOST}')
 
 assert DMOJ_PROBLEM_MIN_USER_POINTS_VOTE >= DMOJ_PROBLEM_MIN_PROBLEM_POINTS
 

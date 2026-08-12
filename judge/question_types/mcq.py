@@ -55,7 +55,7 @@ class MCQQuestionType(QuestionType):
         return reverse('problem_mcq_edit', args=(problem.code,))
 
     # --- student submission -------------------------------------------------
-    def build_form(self, problem, profile, data=None, initial=None):
+    def build_form(self, problem, profile, data=None, files=None, initial=None):
         from judge.forms import MCQSubmitForm
         return MCQSubmitForm(data, problem=problem, profile=profile, initial=initial)
 

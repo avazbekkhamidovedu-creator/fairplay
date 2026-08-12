@@ -274,6 +274,8 @@
                   <input type="radio" name="qtype" value="truefalse" onchange="selectType('truefalse')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('True/False') }}</span></label>
                 <label class="type-pill" data-save="short" {% if not can_create_mcq %}style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="short" onchange="selectType('short')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('Short answer') }}</span></label>
+                <label class="type-pill" data-save="file" {% if not can_create_file %}style="opacity:0.45;"{% endif %}>
+                  <input type="radio" name="qtype" value="file" onchange="selectType('file')" {% if not can_create_file %}disabled{% endif %}><span>{{ _('File upload') }}</span></label>
                 <label class="type-pill" data-save="none" style="opacity:0.55;">
                   <input type="radio" name="qtype" value="compound" onchange="selectType('compound')"><span>{{ _('Composite') }}</span></label>
                 <label class="type-pill" data-save="none" style="opacity:0.55;">
@@ -444,6 +446,29 @@
                 <div data-rich-mount="short" data-toolbar="mini" data-placeholder="{{ _('Enter the reference answer…') }}"></div>
               </div>
 
+              <!-- File upload -->
+              <div class="type-panel" data-for="file" style="display:none;">
+                <div class="form-row">
+                  <label for="f-file-ext">{{ _("Allowed extensions") }}</label>
+                  <div class="field">
+                    <input type="text" id="f-file-ext" placeholder="pdf, zip" oninput="renderPreview()">
+                    <div class="help">{{ _("Comma-separated. Leave blank to allow any file type.") }}</div>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label for="f-file-size">{{ _("Maximum file size (MB)") }} <span class="req">*</span></label>
+                  <div class="field"><input type="number" id="f-file-size" min="1" step="1" value="20"></div>
+                </div>
+                <div class="form-row">
+                  <label for="f-file-instructions">{{ _("Submission instructions") }}</label>
+                  <div class="field">
+                    <textarea id="f-file-instructions" rows="3" oninput="renderPreview()"></textarea>
+                    <div class="help">{{ _("Optional. Shown to students above the upload box.") }}</div>
+                  </div>
+                </div>
+                <div class="blank-hints">{{ _("File-upload problems are graded manually by a teacher after submission.") }}</div>
+              </div>
+
               <!-- Fill in the blank -->
               <div class="type-panel" data-for="blank" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Answers") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">{{ _("Each blank may have multiple acceptable answers; one per line") }}</span></label>
@@ -479,7 +504,7 @@
               </div>
 
               <!-- Editorial shortcut → Advanced Solution.content -->
-              <div class="type-panel" data-for="single,multiple,truefalse,short,blank,programming">
+              <div class="type-panel" data-for="single,multiple,truefalse,short,blank,programming,file">
                 <details class="explain-collapse">
                   <summary><span class="chev">▸</span> {{ _("Explanation") }} <span style="font-weight:normal;color:var(--muted);">{{ _("(optional; saved as Solution editorial)") }}</span></summary>
                   <div class="ec-body">
@@ -828,6 +853,7 @@
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
+    const CAN_CREATE_FILE = {{ 'true' if can_create_file else 'false' }};
     const EDIT_CODE = '{{ edit_code }}';
     const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
@@ -844,6 +870,7 @@
       blank:       { title: '{{ _("Fill-in-blank") }}', badge: 'regular', tag: '{{ _("Fill-in-blank") }}' },
       truefalse:   { title: '{{ _("True/False") }}', badge: 'regular', tag: '{{ _("True/False") }}' },
       short:       { title: '{{ _("Short answer") }}', badge: 'regular', tag: '{{ _("Short answer") }}' },
+      file:        { title: '{{ _("File upload") }}', badge: 'regular', tag: '{{ _("File upload") }}' },
       compound:    { title: '{{ _("Composite") }}', badge: 'regular', tag: '{{ _("Composite") }}' },
       other:       { title: '{{ _("Other") }}', badge: 'regular', tag: '{{ _("Other") }}' },
     };
@@ -1738,6 +1765,17 @@
           <div class="pv-option"><span class="mk ${val === 'false' ? 'on' : ''}"></span>${gettext('False')}</div></div>`;
       } else if (currentType === 'short') {
         html += `<div class="pv-answerbox"></div><div class="pv-answerlabel">${gettext('Answer:')}</div>`;
+      } else if (currentType === 'file') {
+        const inst = (document.getElementById('f-file-instructions').value || '').trim();
+        if (inst) html += `<div class="pv-answerlabel">${escapeHtml(inst)}</div>`;
+        html += `<div class="pv-answerbox"></div>`;
+        const ext = (document.getElementById('f-file-ext').value || '').trim();
+        const mb = document.getElementById('f-file-size').value;
+        const bits = [];
+        if (ext) bits.push(interpolate(gettext('Allowed types: %s'), [ext]));
+        if (Number(mb) > 0) bits.push(interpolate(gettext('Max size: %s MB'), [mb]));
+        html += `<div class="pv-answerlabel">${gettext('Students upload a file here.')}` +
+                `${bits.length ? ' ' + escapeHtml(bits.join(' · ')) : ''}</div>`;
       } else if (currentType === 'blank') {
         if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="${gettext('Enter answer')}" disabled>`;
         const ans = [...document.querySelectorAll('#blank-answers .blank-answer')]
@@ -2148,6 +2186,10 @@
         data.tfAnswer = document.querySelector('input[name="tf"]:checked').value;
       } else if (currentType === 'short') {
         data.shortAnswer = RichEditor.getMarkdown('short');
+      } else if (currentType === 'file') {
+        data.fileExtensions = document.getElementById('f-file-ext').value.trim();
+        data.fileMaxSizeMb = document.getElementById('f-file-size').value;
+        data.fileInstructions = document.getElementById('f-file-instructions').value;
       } else if (currentType === 'blank') {
         data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer')].map(t => t.value.trim());
         data.trimWhitespace = (document.getElementById('f-blank-trim') || {}).checked !== false;
@@ -2175,6 +2217,9 @@
       if (['single', 'multiple', 'truefalse', 'blank', 'short'].includes(d.type) && !CAN_CREATE_MCQ) {
         return '{{ _("You do not have permission to create this problem type.") }}';
       }
+      if (d.type === 'file' && !CAN_CREATE_FILE) {
+        return '{{ _("You do not have permission to create this problem type.") }}';
+      }
       if (!d.group_id) return 'Please select a problem group.';
       if (!d.points || Number(d.points) < 0) return 'Please enter a valid point value.';
       if (d.type !== 'compound' && d.type !== 'other' && !d.description) return 'Please enter a problem description.';
@@ -2187,6 +2232,7 @@
       }
       if (d.type === 'short' && !d.shortAnswer) return 'Please provide a reference answer.';
       if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(b => b))) return 'Please provide at least one fill-in-the-blank answer.';
+      if (d.type === 'file' && !(Number(d.fileMaxSizeMb) > 0)) return 'Please enter a maximum file size greater than zero.';
       if (d.type === 'compound' && (!d.subs || !d.subs.length)) return 'Please add at least one sub-problem.';
       // AI grading requires a grading table
       if (d.ai && d.gradingTable && d.gradingTable.length) {
@@ -2478,6 +2524,11 @@
         const caseCb = document.getElementById('f-blank-case'); if (caseCb) caseCb.checked = !!d.caseSensitive;
       } else if (d.type === 'short') {
         RichEditor.setMarkdown('short', d.shortAnswer || '');
+      } else if (d.type === 'file') {
+        const ext = document.getElementById('f-file-ext'); if (ext) ext.value = d.fileExtensions || '';
+        const size = document.getElementById('f-file-size');
+        if (size && d.fileMaxSizeMb != null) size.value = d.fileMaxSizeMb;
+        const inst = document.getElementById('f-file-instructions'); if (inst) inst.value = d.fileInstructions || '';
       } else if (d.type === 'programming') {
         const tl = document.getElementById('f-time'); if (tl && d.time_limit != null) tl.value = d.time_limit;
         const ml = document.getElementById('f-mem'); if (ml && d.memory_limit != null) ml.value = d.memory_limit;
