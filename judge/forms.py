@@ -1,4 +1,5 @@
 import json
+import os
 from operator import attrgetter, itemgetter
 
 import pyotp
@@ -221,6 +222,40 @@ class FillBlankSubmitForm(Form):
         cleaned = super().clean()
         cleaned['answers'] = [cleaned.get('blank_%d' % blank.order, '') or '' for blank in self.blanks]
         return cleaned
+
+
+class FileSubmitForm(Form):
+    """Student-facing file-upload answer form.
+
+    A single file field, validated server-side (extension + size) against the problem's
+    ``ProblemFileConfig`` so an invalid upload never reaches storage. ``profile`` is accepted for
+    a uniform ``build_form`` signature but unused here.
+    """
+    file = forms.FileField(label=_('Your file'), required=True)
+
+    def __init__(self, *args, problem=None, profile=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.problem = problem
+
+    def clean_file(self):
+        upload = self.cleaned_data['file']
+        try:
+            config = self.problem.file_config
+        except ObjectDoesNotExist:
+            config = None
+        if config is not None:
+            allowed = config.allowed_extension_list()
+            if allowed:
+                ext = os.path.splitext(upload.name)[1].lower().lstrip('.')
+                if ext not in allowed:
+                    raise ValidationError(
+                        _('File type "%(ext)s" is not allowed. Allowed types: %(allowed)s.'),
+                        params={'ext': ext or _('(none)'), 'allowed': ', '.join(allowed)})
+            if config.max_file_size and upload.size > config.max_file_size:
+                raise ValidationError(
+                    _('File is too large (%(size)d bytes); the limit is %(max)d bytes.'),
+                    params={'size': upload.size, 'max': config.max_file_size})
+        return upload
 
 
 class ShortAnswerSubmitForm(Form):
