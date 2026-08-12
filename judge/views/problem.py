@@ -45,6 +45,7 @@ from judge.models import (
     Problem,
     ProblemBlank,
     ProblemData,
+    ProblemFileConfig,
     ProblemFillBlankConfig,
     ProblemGroup,
     ProblemHarness,
@@ -1417,6 +1418,10 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             short_answer_config = ProblemShortAnswerConfig.objects.get(problem_id=old_problem_id)
         except ProblemShortAnswerConfig.DoesNotExist:
             short_answer_config = None
+        try:
+            file_config = ProblemFileConfig.objects.get(problem_id=old_problem_id)
+        except ProblemFileConfig.DoesNotExist:
+            file_config = None
 
         # Check if ProblemData exists for original problem
         try:
@@ -1459,6 +1464,7 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
 
             self._clone_question_type_data(
                 problem, mcq_config, mcq_options, fill_blank_config, blanks, short_answer_config,
+                file_config,
             )
 
             # Copy init.yml from original problem
@@ -1642,8 +1648,9 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
 
     def _clone_question_type_data(
         self, new_problem, mcq_config, mcq_options, fill_blank_config, blanks, short_answer_config,
+        file_config=None,
     ):
-        """Deep-copy MCQ / fill-blank / short-answer authoring data onto the clone."""
+        """Deep-copy MCQ / fill-blank / short-answer / file-upload authoring data onto the clone."""
         if mcq_config is not None:
             ProblemMCQConfig.objects.create(
                 problem=new_problem,
@@ -1686,6 +1693,14 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
                 reference_answer=short_answer_config.reference_answer,
                 ai_rubric=short_answer_config.ai_rubric,
                 grading_table=short_answer_config.grading_table,
+            )
+        # Same OneToOne fields create_v2 persists in `_create_file_upload` (MR !39/!46).
+        if file_config is not None:
+            ProblemFileConfig.objects.create(
+                problem=new_problem,
+                allowed_extensions=file_config.allowed_extensions,
+                max_file_size=file_config.max_file_size,
+                instructions=file_config.instructions,
             )
 
     def _clone_harnesses(self, harnesses, new_problem):

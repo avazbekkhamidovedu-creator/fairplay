@@ -8,6 +8,7 @@ from judge.models import (
     LanguageLimit,
     Problem,
     ProblemBlank,
+    ProblemFileConfig,
     ProblemFillBlankConfig,
     ProblemMCQConfig,
     ProblemMCQOption,
@@ -131,3 +132,28 @@ class ProblemCloneTestCase(CommonDataMixin, TestCase):
         self.assertEqual(clone.short_answer_config.reference_answer, '42')
         self.assertEqual(clone.short_answer_config.ai_rubric, 'mention the answer')
         self.assertEqual(problem.short_answer_config.reference_answer, '42')
+
+    def test_clone_file_upload_config(self):
+        problem = create_problem(
+            code='clone-file',
+            name='Clone File Upload',
+            is_public=True,
+            submission_type=ProblemSubmissionType.FILE,
+            authors=('superuser',),
+        )
+        ProblemFileConfig.objects.create(
+            problem=problem,
+            allowed_extensions='pdf,zip',
+            max_file_size=7 * 1024 * 1024,
+            instructions='Upload a PDF or ZIP.',
+        )
+
+        clone = self._clone(problem, 'clonefile2')
+        self.assertEqual(clone.submission_type, ProblemSubmissionType.FILE)
+        self.assertEqual(clone.file_config.allowed_extensions, 'pdf,zip')
+        self.assertEqual(clone.file_config.max_file_size, 7 * 1024 * 1024)
+        self.assertEqual(clone.file_config.instructions, 'Upload a PDF or ZIP.')
+        # Source OneToOne row must remain on the original problem.
+        self.assertTrue(ProblemFileConfig.objects.filter(problem=problem).exists())
+        self.assertEqual(problem.file_config.allowed_extensions, 'pdf,zip')
+        self.assertNotEqual(clone.file_config.pk, problem.file_config.pk)
