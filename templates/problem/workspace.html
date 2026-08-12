@@ -472,7 +472,7 @@
     </section>
     <div class="ws-splitter" id="ws-splitter"></div>
     <section class="ws-pane ws-pane-right{% if not workspace_is_code %} ws-pane-answer{% endif %}" id="pane-right">
-      <form id="workspace-submit-form" method="post" action="{{ url('problem_submit', problem.code) }}">{% csrf_token %}<input name="workspace" value="1" type="hidden">
+      <form id="workspace-submit-form" method="post" action="{{ url('problem_submit', problem.code) }}"{% if problem.submission_type == 'F' %} enctype="multipart/form-data"{% endif %}>{% csrf_token %}<input name="workspace" value="1" type="hidden">
       {% if workspace_is_code and form %}
         <div id="right-programming">
           <div class="ide-head">
