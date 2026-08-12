@@ -52,6 +52,13 @@ from judge.utils.problem_create import apply_simple_problem_defaults, default_pr
 # Types the redesigned page offers but the backend cannot grade/store yet.
 NOT_IMPLEMENTED_TYPES = {'compound', 'other'}
 
+# Difficulty ProblemType.full_name defaults when attaching the standard easy/medium/hard row.
+_DIFFICULTY_FULL_NAMES = {
+    'easy': 'Easy',
+    'medium': 'Medium',
+    'hard': 'Hard',
+}
+
 
 def _problem_type_code(text):
     code = re.sub(r'[^\w\-]+', '-', (text or '').strip().lower())[:20].strip('-')
@@ -305,16 +312,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'rubric': '',
         }
 
-        diff_labels = {'Easy': 'easy', 'Medium': 'medium', 'Hard': 'hard'}
-        type_tags, difficulty = [], ''
-        for full in problem.types.values_list('full_name', 'name'):
-            label = full[0] or full[1]
-            if label in diff_labels:
-                difficulty = diff_labels[label]
-            else:
-                type_tags.append(label)
+        # Knowledge chips only — difficulty is a separate field rebuilt by the UI.
+        type_tags = []
+        for ptype in problem.types.all():
+            if not Problem.is_knowledge_type_name(ptype.name):
+                continue
+            type_tags.append(ptype.full_name or ptype.name)
         data['problemTypes'] = type_tags
-        data['difficulty'] = difficulty or 'medium'
+        data['difficulty'] = problem.difficulty or 'medium'
 
         if st == ProblemSubmissionType.CODE:
             data['type'] = 'programming'
@@ -548,15 +553,50 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return ProblemType.objects.create(name=code, full_name=label[:100])
 
     def _attach_types(self, problem, payload):
-        labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+        """Persist knowledge tags + standard difficulty.
+
+        Distinguishes omitted vs explicit ``problemTypes`` so partial/legacy
+        payloads that only send ``difficulty`` do not wipe knowledge tags:
+
+        - key missing → keep existing knowledge types; only update difficulty
+        - key present (including ``[]``) → replace knowledge types from payload
+        - ``difficulty`` omitted/invalid → keep any existing easy/medium/hard row
+        """
         resolved = []
         seen = set()
-        for label in labels:
-            ptype = self._resolve_problem_type(label)
-            if ptype is None or ptype.pk in seen:
-                continue
-            seen.add(ptype.pk)
-            resolved.append(ptype)
+
+        if 'problemTypes' in payload:
+            labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+            for label in labels:
+                ptype = self._resolve_problem_type(label)
+                if ptype is None or ptype.pk in seen:
+                    continue
+                if not Problem.is_knowledge_type_name(ptype.name):
+                    continue
+                seen.add(ptype.pk)
+                resolved.append(ptype)
+        else:
+            for ptype in problem.types.all():
+                if ptype.pk in seen or not Problem.is_knowledge_type_name(ptype.name):
+                    continue
+                seen.add(ptype.pk)
+                resolved.append(ptype)
+
+        diff_name = (payload.get('difficulty') or '').strip().lower()
+        if diff_name in Problem.DIFFICULTY_TYPE_NAMES:
+            diff_type, _created = ProblemType.objects.get_or_create(
+                name=diff_name,
+                defaults={'full_name': _DIFFICULTY_FULL_NAMES[diff_name]},
+            )
+            if diff_type.pk not in seen:
+                resolved.append(diff_type)
+                seen.add(diff_type.pk)
+        else:
+            # Older clients omit difficulty — keep any existing easy/medium/hard row.
+            existing_diff = problem.types.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).first()
+            if existing_diff is not None and existing_diff.pk not in seen:
+                resolved.append(existing_diff)
+
         if resolved:
             problem.types.set(resolved)
         elif not problem.types.exists():
