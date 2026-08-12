@@ -138,6 +138,8 @@
         {% include "problem/submit/_fillblank.html" %}
     {% elif submission_type == 'S' %}
         {% include "problem/submit/_shortanswer.html" %}
+    {% elif submission_type == 'F' %}
+        {% include "problem/submit/_file.html" %}
     {% else %}
         {% include "problem/submit/_code.html" %}
     {% endif %}

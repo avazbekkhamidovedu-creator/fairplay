@@ -321,7 +321,8 @@ class GraderRegistryTestCase(TestCase):
             self.assertFalse(grader.is_manual)
 
     def test_unregistered_type_raises(self):
-        # File upload is exposed in the admin choices but has no grader yet; it must fail clearly
-        # rather than with a bare KeyError.
-        with self.assertRaises(NotImplementedError):
-            get_grader('F')
+        # A submission_type with no registered grader must fail clearly rather than with a bare
+        # KeyError. ('Z' is not a defined type; C/M/B/S/F are all registered.)
+        for submission_type in ('Z',):
+            with self.assertRaises(NotImplementedError):
+                get_grader(submission_type)

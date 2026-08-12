@@ -49,7 +49,7 @@ class ShortAnswerQuestionType(QuestionType):
         return reverse('admin:judge_problem_change', args=(problem.id,))
 
     # --- student submission -------------------------------------------------
-    def build_form(self, problem, profile, data=None, initial=None):
+    def build_form(self, problem, profile, data=None, files=None, initial=None):
         from judge.forms import ShortAnswerSubmitForm
         return ShortAnswerSubmitForm(data, problem=problem, initial=initial)
 

@@ -496,6 +496,8 @@
             <div><a href="{{ url('problem_mcq_edit', problem.code) }}">{{ _('Edit question') }}</a></div>
         {% elif problem.submission_type == 'B' %}
             <div><a href="{{ url('problem_fillblank_edit', problem.code) }}">{{ _('Edit question') }}</a></div>
+        {% elif problem.submission_type == 'F' %}
+            <div><a href="{{ url('problem_edit_v2', problem.code) }}">{{ _('Edit question') }}</a></div>
         {% else %}
             <div><a href="{{ url('admin:judge_problem_change', problem.id) }}">{{ _('Edit problem') }}</a></div>
             {% if not problem.is_manually_managed %}
@@ -677,6 +679,11 @@
 <div id="submission-area">
     <h3>{{ _('Submit solution') }}</h3>
     {% include "problem/submit/_shortanswer.html" %}
+</div>
+{% elif form and submission_type == 'F' %}
+<div id="submission-area">
+    <h3>{{ _('Submit solution') }}</h3>
+    {% include "problem/submit/_file.html" %}
 </div>
 {% elif form %}
 <div id="submission-area">

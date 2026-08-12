@@ -1172,9 +1172,11 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
     def get_form(self, form_class=None):
         if not self.is_code:
-            data = self.request.POST if self.request.method in ('POST', 'PUT') else None
+            posting = self.request.method in ('POST', 'PUT')
+            data = self.request.POST if posting else None
+            files = self.request.FILES if posting else None
             return self.grader.build_form(self.object, self.request.profile,
-                                          data=data, initial=self.get_initial())
+                                          data=data, files=files, initial=self.get_initial())
 
         form = super().get_form(form_class)
 
