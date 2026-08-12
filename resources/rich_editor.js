@@ -1830,7 +1830,7 @@
 
     const links = [];
     s = s.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (m, url) => {
-      imgs.push('<img src="' + url + '" style="max-width:100%;border-radius:4px;">');
+      imgs.push('<img src="' + escapeAttr(url) + '" style="max-width:100%;border-radius:4px;">');
       return '\u0000I' + (imgs.length - 1) + '\u0000';
     })
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, text, url) => {

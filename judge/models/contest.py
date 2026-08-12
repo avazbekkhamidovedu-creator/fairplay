@@ -528,8 +528,12 @@ class Contest(models.Model):
         if user.has_perm('judge.edit_all_contest'):
             return True
 
-        # If the user is a contest organizer or curator
-        if user.has_perm('judge.edit_own_contest') and user.profile.id in self.editor_ids:
+        # If the user is a contest organizer or curator. Being listed as an
+        # author/curator IS the grant: the curator list is only editable by
+        # people who can already edit, so membership itself is sufficient.
+        # (Sensitive fields inside the editor are still gated by their own
+        # permissions via ContestCreate._restricted_fields.)
+        if user.is_authenticated and user.profile.id in self.editor_ids:
             return True
 
         return False

@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timedelta
 
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -761,3 +762,284 @@ class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.contest_problems.count(), 0)
+
+
+class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
+    """New editor endpoints: tag create, .seb upload, finalize/unfinalize."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='endpoints_editor', user_permissions=(
+            'edit_all_contest', 'contest_rating', 'lock_contest', 'contest_access_code',
+            'contest_seb_requirement', 'create_private_contest', 'change_contest_visibility',
+            'contest_problem_label', 'override_performance_ceiling',
+        ))
+        cls.curator = create_user(username='endpoints_curator', user_permissions=('edit_own_contest',))
+        cls.normal = create_user(username='endpoints_normal')
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='endpointcontest', name='Endpoint',
+            start_time=_now + timedelta(days=1), end_time=_now + timedelta(days=2),
+            authors=('superuser',),
+            curators=('endpoints_curator',),
+        )
+
+    def setUp(self):
+        self.client = Client()
+
+    # ── tag create ──────────────────────────────────────────────────────────
+
+    def test_tag_create_success(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'midterm'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = json.loads(response.content)
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['tag']['name'], 'midterm')
+        self.assertTrue(data['tag']['id'])
+        self.assertTrue(data['tag']['color'].startswith('#'))
+        self.assertTrue(ContestTag.objects.filter(name='midterm').exists())
+
+    def test_tag_create_rejects_bad_name(self):
+        self.client.force_login(self.editor)
+        for bad in ('Midterm', 'mid term', 'midterm!', '中term'):
+            response = self.client.post(
+                reverse('contest_tag_create'),
+                data=json.dumps({'name': bad}), content_type='application/json',
+            )
+            self.assertEqual(response.status_code, 400, bad)
+
+    def test_tag_create_rejects_too_long(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'a' * 21}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_tag_create_rejects_duplicate(self):
+        ContestTag.objects.create(name='dup-tag', color='#ff0000')
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'dup-tag'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already exists', json.loads(response.content)['error'])
+
+    def test_tag_create_denied_for_normal_user(self):
+        self.client.force_login(self.normal)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'sneaky'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_tag_create_allowed_for_curator(self):
+        # edit_own_contest holders may open the editor, so they may add tags.
+        self.client.force_login(self.curator)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'curator-tag'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+
+    # ── .seb upload ─────────────────────────────────────────────────────────
+
+    def test_seb_upload_success(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('exam.seb', b'SEB config')},
+            content_type='multipart/form-data',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(json.loads(response.content)['ok'])
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.seb_config_file)
+        self.assertTrue(self.contest.seb_config_file.name.endswith('exam.seb'))
+
+    def test_seb_upload_rejects_bad_extension(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('exam.txt', b'x')},
+            content_type='multipart/form-data',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_seb_upload_rejects_missing_file(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={}, content_type='multipart/form-data',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_seb_upload_denied_for_curator_of_other_contest(self):
+        # The curator curates endpointcontest — deny when the contest is not theirs.
+        self.client.force_login(self.curator)
+        _now = timezone.now()
+        other = create_contest(
+            key='othersebcontest', name='Other SEB',
+            start_time=_now + timedelta(days=1), end_time=_now + timedelta(days=2),
+            authors=('superuser',),
+        )
+        response = self.client.post(
+            reverse('contest_seb_upload', args=['othersebcontest']),
+            data={'seb_config_file': SimpleUploadedFile('exam.seb', b'x')},
+            content_type='multipart/form-data',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    # ── finalize / unfinalize ───────────────────────────────────────────────
+
+    def test_finalize_denied_for_curator(self):
+        self.client.force_login(self.curator)
+        response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 403)
+
+    def test_finalize_denied_for_normal_user(self):
+        self.client.force_login(self.normal)
+        response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 403)
+
+    def test_finalize_allowed_for_editor(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(json.loads(response.content)['ok'])
+
+    def test_unfinalize_allowed_for_editor(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(reverse('contest_unfinalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(json.loads(response.content)['ok'])
+
+
+class ContestEditorActionFieldTestCase(CommonDataMixin, TestCase):
+    """Save actions: save → contest page, continue → editor, another → no redirect."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='action_editor', user_permissions=('edit_all_contest',))
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.editor)
+
+    def _create_payload(self, key='actiontest'):
+        now = timezone.now()
+        return {
+            'name': 'Action Test', 'key': key,
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+        }
+
+    def test_action_save_redirects_to_contest_view(self):
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(self._create_payload()), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['action'], 'save')
+        self.assertEqual(data['redirect'], reverse('contest_view', args=['actiontest']))
+
+    def test_action_continue_redirects_to_editor(self):
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps({**self._create_payload(), 'action': 'continue'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['action'], 'continue')
+        self.assertEqual(data['redirect'], reverse('contest_edit', args=['actiontest']))
+
+    def test_action_another_has_no_redirect(self):
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps({**self._create_payload(), 'action': 'another'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['action'], 'another')
+        self.assertNotIn('redirect', data)
+        # The contest still exists.
+        self.assertTrue(Contest.objects.filter(key='actiontest').exists())
+
+
+class ContestEditorProblemOptionsTestCase(CommonDataMixin, TestCase):
+    """Per-problem output_prefix / hide_results round-trip."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='probopts_editor', user_permissions=('edit_all_contest',))
+        cls.problem = create_problem('probopts-test', is_public=True)
+        cls.contest = create_contest(
+            key='proboptscontest', name='Prob Opts',
+            start_time=timezone.now() + timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=2),
+            authors=('superuser',),
+        )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.editor)
+
+    def _payload(self, **overrides):
+        now = timezone.now()
+        payload = {
+            'name': 'Prob Opts', 'key': 'proboptscontest',
+            'start_time': (now + timedelta(days=1)).isoformat(),
+            'end_time': (now + timedelta(days=2)).isoformat(),
+            'is_visible': False,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_create_saves_output_prefix_and_hide_results(self):
+        response = self.client.post(
+            reverse('contest_edit', args=['proboptscontest']),
+            data=json.dumps(self._payload(problems=[
+                {'id': self.problem.id, 'points': 100, 'output_prefix': 5, 'hide_results': True},
+            ])), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        cp = self.contest.contest_problems.get()
+        self.assertEqual(cp.output_prefix_override, 5)
+        self.assertTrue(cp.hide_results)
+
+    def test_hide_results_three_state(self):
+        for raw, expected in ((None, None), ('default', None), ('hide', True), ('show', False), (False, False)):
+            # Each POST fully replaces the problem list, so re-fetch after save.
+            response = self.client.post(
+                reverse('contest_edit', args=['proboptscontest']),
+                data=json.dumps(self._payload(problems=[
+                    {'id': self.problem.id, 'points': 100, 'hide_results': raw},
+                ])), content_type='application/json',
+            )
+            self.assertEqual(response.status_code, 200, response.content)
+            cp = self.contest.contest_problems.get()
+            self.assertEqual(cp.hide_results, expected, raw)
+
+    def test_prefill_includes_output_prefix_and_hide_results(self):
+        from judge.models import ContestProblem
+        ContestProblem.objects.create(
+            contest=self.contest, problem=self.problem, points=100, order=1,
+            output_prefix_override=7, hide_results=False,
+        )
+        response = self.client.get(reverse('contest_edit', args=['proboptscontest']))
+        self.assertEqual(response.status_code, 200)
+        problems = response.context['prefill']['problems']
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0]['output_prefix'], 7)
+        self.assertEqual(problems[0]['hide_results'], False)

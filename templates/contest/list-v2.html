@@ -7,6 +7,13 @@
 {% block js_media %}
     <script type="text/javascript">
         document.addEventListener('DOMContentLoaded', function() {
+            // ── Live countdowns (same as the legacy list page) ──
+            if (window.jQuery && typeof count_down === 'function') {
+                jQuery('.time-remaining').each(function () {
+                    count_down(jQuery(this));
+                });
+            }
+
             // ── Filter state ──
             var state = {
                 org: [],
@@ -351,16 +358,16 @@
                 <div class="cl-time">
                     {% if status == 'active' %}
                         {% if contest.time_limit %}
-                            <span class="emph">{{ _('Window ends in %(countdown)s', countdown=as_countdown(participation.time_remaining)) }}</span>
+                            <span class="emph">{{ _('Window ends in') }} <span class="time-remaining" data-secs="{{ participation.time_remaining.total_seconds()|round|int }}">{{ as_countdown(participation.time_remaining) }}</span></span>
                         {% elif contest.time_before_end %}
-                            <span class="emph">{{ _('Ends in %(countdown)s', countdown=as_countdown(contest.time_before_end)) }}</span>
+                            <span class="emph">{{ _('Ends in') }} <span class="time-remaining" data-secs="{{ contest.time_before_end.total_seconds()|round|int }}">{{ as_countdown(contest.time_before_end) }}</span></span>
                         {% endif %}
                     {% elif status == 'ongoing' %}
                         {% if contest.time_before_end %}
-                            <span class="emph">{{ _('Ends in %(countdown)s', countdown=as_countdown(contest.time_before_end)) }}</span>
+                            <span class="emph">{{ _('Ends in') }} <span class="time-remaining" data-secs="{{ contest.time_before_end.total_seconds()|round|int }}">{{ as_countdown(contest.time_before_end) }}</span></span>
                         {% endif %}
                     {% elif status == 'upcoming' %}
-                        <span class="emph warn">{{ _('Starting in %(countdown)s', countdown=as_countdown(contest.time_before_start)) }}</span>
+                        <span class="emph warn">{{ _('Starting in') }} <span class="time-remaining" data-secs="{{ contest.time_before_start.total_seconds()|round|int }}">{{ as_countdown(contest.time_before_start) }}</span></span>
                     {% endif %}
                     <br><span class="emph muted">{{ _('Availability:') }}</span> {{ contest.start_time|date(_("M j, Y, G:i")) }} — {{ contest.end_time|date(_("M j, Y, G:i")) }}
                 </div>
@@ -378,6 +385,12 @@
                 {% endif %}
             </div>
             <div class="cl-actions">
+                {# Frontend editor entry — shown to anyone who may edit this
+                   particular assignment (edit_all_contest, or authors/curators
+                   with edit_own_contest). #}
+                {% if contest.is_editable_by(request.user) %}
+                    <a class="button" href="{{ url('contest_edit', contest.key) }}"><i class="fa fa-edit"></i> {{ _('Edit') }}</a>
+                {% endif %}
                 {% if status == 'active' %}
                     <a class="button primary" href="{{ url('contest_view', contest.key) }}">{{ _('Enter') }}</a>
                     {% if contest.can_see_own_scoreboard(request.user) %}
