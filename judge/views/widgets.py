@@ -81,7 +81,9 @@ def bulk_rejudge_submissions(request):
 
     if not request.user.has_perm('judge.edit_all_problem'):
         profile_id = request.profile.id
-        queryset = queryset.filter(Q(problem__authors__id=profile_id) | Q(problem__curators__id=profile_id))
+        queryset = queryset.filter(
+            Q(problem__authors__id=profile_id) | Q(problem__curators__id=profile_id),
+        ).distinct()
 
     judged = len(queryset)
     for submission in queryset:
@@ -114,7 +116,16 @@ def bulk_rescore_submissions(request):
             'message': _('No submissions selected.'),
         }, status=400)
 
+    # Match SubmissionAdmin.get_queryset: limited staff may only touch
+    # submissions for problems they author or curate (recalculate_score itself
+    # only checks rejudge_submission; admin changelist queryset is already scoped).
     queryset = Submission.objects.filter(id__in=ids)
+    if not request.user.has_perm('judge.edit_all_problem'):
+        profile_id = request.profile.id
+        queryset = queryset.filter(
+            Q(problem__authors__id=profile_id) | Q(problem__curators__id=profile_id),
+        ).distinct()
+
     submissions = list(queryset.defer(None).select_related(None).select_related('problem')
                        .only('points', 'case_points', 'case_total', 'problem__partial', 'problem__points'))
     for submission in submissions:

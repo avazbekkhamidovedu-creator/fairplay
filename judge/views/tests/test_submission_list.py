@@ -16,6 +16,8 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
             'bob': create_user(username='bob'),
         })
         cls.problem_a = create_problem(code='alpha', name='Alpha Problem', is_public=True)
+        cls.problem_a.authors.set([cls.users['staff_problem_edit_own'].profile])
+        cls.problem_a.curators.set([cls.users['staff_problem_edit_own'].profile])
         cls.problem_b = create_problem(code='beta', name='Beta Problem', is_public=True)
         cls.problem_mcq = create_problem(
             code='mcq1', name='MCQ Problem', is_public=True,
@@ -183,6 +185,49 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
         self.assertEqual(data['processed'], 1)
         self.sub_alice_a.refresh_from_db()
         self.assertEqual(self.sub_alice_a.points, self.problem_a.points)
+
+    def test_bulk_rescore_scoped_to_owned_problems(self):
+        """Limited staff may only rescore submissions for problems they edit."""
+        staff = self.users['staff_problem_edit_own']
+        self.client.force_login(staff)
+
+        self.sub_alice_a.points = 0
+        self.sub_alice_a.save(update_fields=['points'])
+        self.sub_bob_b.points = 0
+        self.sub_bob_b.save(update_fields=['points'])
+
+        # Out of scope (problem B has no author/curator link to staff).
+        response = self.client.post(reverse('submission_bulk_rescore'), {'ids': [self.sub_bob_b.id]})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['processed'], 0)
+        self.sub_bob_b.refresh_from_db()
+        self.assertEqual(self.sub_bob_b.points, 0)
+
+        # In scope (staff is author+curator of problem A); distinct avoids double-count.
+        response = self.client.post(
+            reverse('submission_bulk_rescore'),
+            {'ids': [self.sub_alice_a.id, self.sub_bob_b.id]},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['processed'], 1)
+        self.sub_alice_a.refresh_from_db()
+        self.sub_bob_b.refresh_from_db()
+        self.assertEqual(self.sub_alice_a.points, self.problem_a.points)
+        self.assertEqual(self.sub_bob_b.points, 0)
+
+    def test_filter_form_uses_first_page_href(self):
+        response = self._get('?status=AC')
+        self.assertEqual(response.status_code, 200)
+        # DiggPaginatorMixin sets first_page_href to '.' (+ current query) so filters
+        # reset to page 1 instead of submitting against /submissions/<page>.
+        self.assertContains(response, 'id="filter-form"', html=False)
+        self.assertContains(response, 'action=".?status=AC"')
+        self.assertContains(response, 'href=".?status=AC"')
+        self.assertNotContains(response, 'action="/submissions/"')
 
     def test_bulk_rejudge_requires_permission(self):
         self.client.force_login(self.users['normal'])

@@ -396,7 +396,7 @@
             <div class="top-pagination-bar">{% include "list-pages.html" %}</div>
         {% endif %}
 
-        <form id="filter-form" name="form" action="{{ request.path }}" method="get" class="sub-filters">
+        <form id="filter-form" name="form" action="{{ first_page_href }}" method="get" class="sub-filters">
             <div class="filter-field">
                 <label for="status">{{ _('Status') }}</label>
                 <select id="status" name="status" multiple>
@@ -447,7 +447,7 @@
             {% endif %}
             <div class="filter-actions">
                 {% if filter_problems or filter_users or filter_contests or selected_statuses or selected_languages %}
-                    <a class="btn btn-outline btn-sm" href="{{ request.path }}">{{ _('Clear') }}</a>
+                    <a class="btn btn-outline btn-sm" href="{{ first_page_href }}">{{ _('Clear') }}</a>
                 {% endif %}
             </div>
         </form>
