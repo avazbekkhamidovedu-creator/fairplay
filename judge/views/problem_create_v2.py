@@ -41,9 +41,10 @@ from django.views.generic import View
 from reversion import revisions
 
 from judge.models import (Class, Language, LanguageLimit, License, Organization, Problem, ProblemBlank,
-                          ProblemClarification, ProblemFillBlankConfig, ProblemGroup, ProblemMCQConfig,
-                          ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType, ProblemTemplate,
-                          ProblemTranslation, ProblemType, Profile, Solution, SubmissionSourceAccess)
+                          ProblemClarification, ProblemFileConfig, ProblemFillBlankConfig, ProblemGroup,
+                          ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
+                          ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution,
+                          SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
@@ -108,6 +109,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ]),
             'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
+            'can_create_file': user.has_perm('judge.create_private_problem'),
             'can_import_excel_problems': user.has_perm('judge.create_private_problem'),
             'can_change_public': user.has_perm('judge.change_public_visibility'),
             'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
@@ -220,6 +222,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     problem = self._create_fill_blank(request, payload, name, problem=existing)
                 elif qtype == 'short':
                     problem = self._create_short_answer(request, payload, name, problem=existing)
+                elif qtype == 'file':
+                    problem = self._create_file_upload(request, payload, name, problem=existing)
                 else:
                     return JsonResponse({'error': _('Unknown question type.')}, status=400)
                 revisions.set_user(request.user)
@@ -272,6 +276,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ProblemBlank.objects.filter(problem=problem).delete()
         ProblemFillBlankConfig.objects.filter(problem=problem).delete()
         ProblemShortAnswerConfig.objects.filter(problem=problem).delete()
+        # Only the per-problem upload settings go; SubmissionFile rows are student data and are
+        # deliberately left alone.
+        ProblemFileConfig.objects.filter(problem=problem).delete()
         if clear_cases:
             problem.cases.all().delete()
 
@@ -340,6 +347,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['rubric'] = (config.ai_rubric if config else '') or ''
             data['ai'] = True  # short answer always uses AI grading
             data['gradingTable'] = config.grading_table if config else None
+        elif st == ProblemSubmissionType.FILE:
+            data['type'] = 'file'
+            config = getattr(problem, 'file_config', None)
+            data['fileExtensions'] = (config.allowed_extensions if config else '') or ''
+            # The model stores bytes; the page edits MB. Keep 3 decimals so a sub-MB limit set via
+            # the API survives an edit round-trip instead of rounding down to zero.
+            data['fileMaxSizeMb'] = round((config.max_file_size or 0) / (1024 * 1024), 3) if config else 20
+            data['fileInstructions'] = (config.instructions if config else '') or ''
         else:
             data['type'] = 'single'
 
@@ -1268,6 +1283,64 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 reference_answer=(payload.get('shortAnswer') or '').strip(),
                 ai_rubric=(payload.get('rubric') or '').strip(),
                 grading_table=payload.get('gradingTable') or None,
+            )
+        return problem
+
+    @staticmethod
+    def _normalise_extensions(raw):
+        """``".PDF, .zip"`` -> ``"pdf,zip"``.
+
+        ``ProblemFileConfig.allowed_extension_list`` expects lowercase, dot-less entries, so store
+        them that way rather than round-tripping whatever the author typed.
+        """
+        seen, out = set(), []
+        for part in (raw or '').split(','):
+            ext = part.strip().lstrip('.').lower()
+            if ext and ext not in seen:
+                seen.add(ext)
+                out.append(ext)
+        return ','.join(out)
+
+    def _create_file_upload(self, request, payload, name, problem=None):
+        user = request.user
+        if not user.has_perm('judge.create_private_problem'):
+            raise PermissionError(_('You do not have permission to create this problem type.'))
+
+        # The page edits whole MB; the model stores bytes. Guard on the byte count so a fractional
+        # value cannot truncate to 0 — ProblemFileConfig treats 0 as "no limit".
+        max_file_size = int(self._num(payload.get('fileMaxSizeMb'), 20) * 1024 * 1024)
+        if max_file_size <= 0:
+            raise ValueError(_('Maximum file size must be greater than zero.'))
+
+        with transaction.atomic():
+            is_create = problem is None
+            if is_create:
+                problem = Problem(submission_type=ProblemSubmissionType.FILE)
+            else:
+                problem.submission_type = ProblemSubmissionType.FILE
+                self._clear_type_children(problem)
+            problem.name = name
+            problem.description = payload.get('description') or ''
+            problem.points = self._num(payload.get('points'), 1)
+            # A teacher grades these by hand and may award anything in [0, points], so partial
+            # credit must be on for the awarded score to reach Profile.points and the standings.
+            problem.partial = True
+            problem.group = self._resolve_group(payload)
+            apply_simple_problem_defaults(problem)
+            problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
+            problem.save()
+
+            self._attach_types(problem, payload)
+            self._attach_orgs(problem, payload)
+            problem.is_organization_private = problem.organizations.exists()
+            problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request, is_create=is_create)
+
+            ProblemFileConfig.objects.create(
+                problem=problem,
+                allowed_extensions=self._normalise_extensions(payload.get('fileExtensions')),
+                max_file_size=max_file_size,
+                instructions=(payload.get('fileInstructions') or '').strip(),
             )
         return problem
 

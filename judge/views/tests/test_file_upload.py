@@ -1,3 +1,4 @@
+import json
 import tempfile
 from unittest import mock
 
@@ -9,6 +10,7 @@ from django.urls import reverse
 from judge.models import Language, Problem, ProblemFileConfig, Submission, SubmissionFile
 from judge.models.tests.util import CommonDataMixin, create_problem, create_user
 from judge.storage.resilient import ResilientStorage
+from judge.utils.problem_create import default_problem_group
 
 
 def _pdf(name='report.pdf', content=b'%PDF-1.4 hello'):
@@ -51,37 +53,99 @@ class FileUploadBase(CommonDataMixin, TestCase):
 
 
 class FileUploadAuthoringTestCase(FileUploadBase):
-    def test_create_menu_and_page_permission(self):
-        # The redesigned "Add problem" menu no longer iterates the question-type registry, so this
-        # page is reachable by URL but is not linked from anywhere. Authoring moves onto the
-        # unified create_v2 page in a follow-up.
+    """Authoring happens on the unified create_v2 page, not a per-type page."""
+
+    def test_create_page_offers_file_type(self):
         self.client.force_login(self.users['creator'])
-        self.assertEqual(self.client.get(reverse('problem_file_create')).status_code, 200)
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'value="file"', response.content)          # the type pill
+        self.assertIn(b'data-for="file"', response.content)       # its author-config panel
+        self.assertIn(b'f-file-ext', response.content)
 
         # Not available to a user without the permission.
         self.client.force_login(self.users['normal'])
-        self.assertEqual(self.client.get(reverse('problem_file_create')).status_code, 404)
+        self.assertEqual(self.client.get(reverse('problem_create_v2')).status_code, 404)
 
     def test_create_flow(self):
         self.client.force_login(self.users['creator'])
-        response = self.client.post(reverse('problem_file_create'), {
-            'name': 'Upload PDF', 'description': 'Upload your report', 'points': 10,
-            'allowed_extensions': 'pdf', 'max_file_size': 1048576, 'instructions': 'PDF only',
-            'partial': 'on',
-        })
-        self.assertEqual(response.status_code, 302)
-        problem = Problem.objects.get(name='Upload PDF')
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'type': 'file', 'name': 'Upload PDF', 'description': 'Upload your report',
+            'points': 10, 'group_id': default_problem_group().id,
+            'fileExtensions': '.PDF, zip', 'fileMaxSizeMb': 5, 'fileInstructions': 'PDF only',
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
         self.assertEqual(problem.submission_type, 'F')
+        # Manual grading awards an arbitrary score, so partial credit must be forced on.
         self.assertTrue(problem.partial)
-        self.assertEqual(problem.file_config.allowed_extensions, 'pdf')
-        self.assertEqual(problem.file_config.max_file_size, 1048576)
+        # Extensions are normalised to the lowercase, dot-less form the config helper expects.
+        self.assertEqual(problem.file_config.allowed_extensions, 'pdf,zip')
+        self.assertEqual(problem.file_config.allowed_extension_list(), ['pdf', 'zip'])
+        self.assertEqual(problem.file_config.max_file_size, 5 * 1024 * 1024)
+        self.assertEqual(problem.file_config.instructions, 'PDF only')
 
-    def test_edit_rejects_non_editor(self):
-        self.make_problem(code='editf')
-        self.client.force_login(self.users['normal'])
-        self.assertEqual(self.client.get(reverse('problem_file_edit', args=['editf'])).status_code, 404)
+    def test_create_rejects_zero_max_size(self):
         self.client.force_login(self.users['creator'])
-        self.assertEqual(self.client.get(reverse('problem_file_edit', args=['editf'])).status_code, 200)
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'type': 'file', 'name': 'No cap', 'description': 'x',
+            'points': 10, 'group_id': default_problem_group().id, 'fileMaxSizeMb': 0,
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Problem.objects.filter(name='No cap').exists())
+
+    def test_create_requires_permission(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'type': 'file', 'name': 'Nope', 'description': 'x',
+            'points': 10, 'group_id': default_problem_group().id, 'fileMaxSizeMb': 5,
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 403)
+
+    def test_edit_round_trip(self):
+        problem = self.make_problem(code='editf')
+        url = reverse('problem_edit_v2', args=['editf'])
+
+        self.client.force_login(self.users['normal'])
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+        self.client.force_login(self.users['creator'])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        # The existing config is serialized back into the page as MB, not bytes.
+        self.assertIn(b'"fileMaxSizeMb"', response.content)
+
+        response = self.client.post(url, data=json.dumps({
+            'type': 'file', 'edit_code': 'editf', 'name': 'Renamed', 'description': 'new prompt',
+            'points': 10, 'group_id': default_problem_group().id,
+            'fileExtensions': 'docx', 'fileMaxSizeMb': 2, 'fileInstructions': 'Word only',
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem.refresh_from_db()
+        self.assertEqual(problem.name, 'Renamed')
+        # _clear_type_children drops the old config; exactly one must remain.
+        self.assertEqual(ProblemFileConfig.objects.filter(problem=problem).count(), 1)
+        self.assertEqual(problem.file_config.allowed_extensions, 'docx')
+        self.assertEqual(problem.file_config.max_file_size, 2 * 1024 * 1024)
+
+    def test_type_switch_keeps_student_uploads(self):
+        """Switching a problem's type clears its upload config but never student data."""
+        problem = self.make_problem(code='switchf')
+        submission = Submission.objects.create(
+            user=self.users['normal'].profile, problem=problem, language=Language.get_python3())
+        SubmissionFile.objects.create(
+            submission=submission, file=_pdf(), original_name='report.pdf', size=14)
+
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(reverse('problem_edit_v2', args=['switchf']), data=json.dumps({
+            'type': 'short', 'edit_code': 'switchf', 'name': 'Now short', 'description': 'x',
+            'points': 10, 'group_id': default_problem_group().id, 'shortAnswer': 'answer',
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem.refresh_from_db()
+        self.assertEqual(problem.submission_type, 'S')
+        self.assertFalse(ProblemFileConfig.objects.filter(problem=problem).exists())
+        self.assertTrue(SubmissionFile.objects.filter(submission=submission).exists())
 
 
 class FileUploadSubmitTestCase(FileUploadBase):

@@ -115,7 +115,6 @@ urlpatterns = [
     path('problems/random/', problem.RandomProblem.as_view(), name='problem_random'),
     path('problems/new/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_create'),
     path('problems/new/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_create'),
-    path('problems/new/file', file_upload.ProblemFileEditView.as_view(), name='problem_file_create'),
     path('problems/new/', ProblemCreateV2View.as_view(), name='problem_create_v2'),
     path('problems/edit/<str:problem>/', ProblemCreateV2View.as_view(), name='problem_edit_v2'),
     path('problems/new/ai-difficulty/', ProblemCreateV2AIDifficultyView.as_view(),
@@ -151,7 +150,6 @@ urlpatterns = [
         path('/resubmit/<int:submission>', problem.ProblemSubmit.as_view(), name='problem_submit'),
         path('/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_edit'),
         path('/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_edit'),
-        path('/file', file_upload.ProblemFileEditView.as_view(), name='problem_file_edit'),
 
         path('/rank/', paged_list_view(ranked_submission.RankedSubmissions, 'ranked_submissions')),
         path('/submissions/', paged_list_view(submission.ProblemSubmissions, 'chronological_submissions')),
