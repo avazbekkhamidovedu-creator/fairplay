@@ -126,6 +126,14 @@ def bulk_rescore_submissions(request):
             Q(problem__authors__id=profile_id) | Q(problem__curators__id=profile_id),
         ).distinct()
 
+    if not request.user.has_perm('judge.rejudge_submission_lot') and \
+            queryset.count() > settings.DMOJ_SUBMISSIONS_REJUDGE_LIMIT:
+        return JsonResponse({
+            'ok': False,
+            'processed': 0,
+            'message': _('You do not have the permission to rejudge THAT many submissions.'),
+        }, status=403)
+
     submissions = list(queryset.defer(None).select_related(None).select_related('problem')
                        .only('points', 'case_points', 'case_total', 'problem__partial', 'problem__points'))
     for submission in submissions:

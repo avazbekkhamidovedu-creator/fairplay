@@ -42,7 +42,10 @@
                         });
                     }
                 };
-
+            </script>
+        {% endif %}
+        {% if request.user.is_authenticated and perms.judge.rejudge_submission and perms.judge.edit_own_problem %}
+            <script type="text/javascript">
                 function selectedSubmissionIds() {
                     return $('.sub-row-check:checked').map(function () {
                         return this.value;
@@ -464,7 +467,7 @@
                     <a href="javascript:void(0)">{{ _('You were disconnected. Refresh to show latest updates.') }}</a>
                 </div>
 
-                {% if request.user.is_authenticated and perms.judge.rejudge_submission %}
+                {% if request.user.is_authenticated and perms.judge.rejudge_submission and perms.judge.edit_own_problem %}
                     <div class="sub-staff-bar">
                         <label class="sub-select-all">
                             <input type="checkbox" id="sub-check-all">

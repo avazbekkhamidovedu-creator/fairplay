@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -14,6 +14,11 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
         cls.users.update({
             'alice': create_user(username='alice'),
             'bob': create_user(username='bob'),
+            'staff_rejudge_only': create_user(
+                username='staff_rejudge_only',
+                is_staff=True,
+                user_permissions=('rejudge_submission',),
+            ),
         })
         cls.problem_a = create_problem(code='alpha', name='Alpha Problem', is_public=True)
         cls.problem_a.authors.set([cls.users['staff_problem_edit_own'].profile])
@@ -152,6 +157,15 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
         self.assertNotIn(b'sub-grade-link', content)
         self.assertNotIn(b'Practice Grade', content)
 
+    def test_staff_bar_hidden_without_edit_own_problem(self):
+        """rejudge_submission alone is not enough for bulk UI (matches bulk_rejudge)."""
+        self.client.force_login(self.users['staff_rejudge_only'])
+        content = self.client.get(reverse('all_submissions')).content
+        self.assertNotIn(b'sub-staff-bar', content)
+        self.assertNotIn(b'sub-row-check', content)
+        self.assertNotIn(b'btn-bulk-rejudge', content)
+        self.assertNotIn(b'btn-bulk-rescore', content)
+
     def test_grade_hidden_for_student_own_submission(self):
         self.client.force_login(self.users['alice'])
         content = self.client.get(
@@ -218,6 +232,20 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
         self.sub_bob_b.refresh_from_db()
         self.assertEqual(self.sub_alice_a.points, self.problem_a.points)
         self.assertEqual(self.sub_bob_b.points, 0)
+
+    @override_settings(DMOJ_SUBMISSIONS_REJUDGE_LIMIT=1)
+    def test_bulk_rescore_lot_limit(self):
+        """Without rejudge_submission_lot, rescoring more than the limit is forbidden."""
+        self.client.force_login(self.users['staff_problem_edit_all_with_rejudge'])
+        response = self.client.post(
+            reverse('submission_bulk_rescore'),
+            {'ids': [self.sub_alice_a.id, self.sub_bob_b.id]},
+        )
+        self.assertEqual(response.status_code, 403)
+        data = response.json()
+        self.assertFalse(data['ok'])
+        self.assertEqual(data['processed'], 0)
+        self.assertIn('THAT many', data['message'])
 
     def test_filter_form_uses_first_page_href(self):
         response = self._get('?status=AC')

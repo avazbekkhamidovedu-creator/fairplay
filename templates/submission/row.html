@@ -1,7 +1,7 @@
 {% set can_view, can_edit = submission_layout(submission, profile_id, request.user, completed_problem_ids, editable_problem_ids, tester_problem_ids) %}
 {% set results_hidden = not submission.results_visible_to(request.user) %}
 {% set is_code_problem = submission.problem.submission_type == 'C' %}
-{% if request.user.is_authenticated and perms.judge.rejudge_submission %}
+{% if request.user.is_authenticated and perms.judge.rejudge_submission and perms.judge.edit_own_problem %}
     <div class="sub-check" onclick="event.stopPropagation()">
         <input type="checkbox" class="sub-row-check" value="{{ submission.id }}"
                aria-label="{{ _('Select submission') }}">
