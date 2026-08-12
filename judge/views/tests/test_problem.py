@@ -448,7 +448,7 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         context = self._context(self.users['normal'], {})
         self.assertIn('organizations', context)
         self.assertGreaterEqual(context['type_counts'].get(self.type_ids['dp'], 0), 3)
-        self.assertGreaterEqual(context['total_problem_count'], 7)
+        self.assertNotIn('total_problem_count', context)
 
     def test_problem_list_context_exposes_progress_counts(self):
         self._mark_solved(self.problem_easy)

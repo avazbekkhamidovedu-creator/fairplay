@@ -830,7 +830,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             context['current_sort_desc'] = self.order.startswith('-')
 
             base_visible = Problem.objects.filter(self.get_visible_problems_filter())
-            context['total_problem_count'] = base_visible.values('pk').distinct().count()
 
             # Per-type problem counts for the tags picker badges.
             context['type_counts'] = {
