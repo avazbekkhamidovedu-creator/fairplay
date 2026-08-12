@@ -22,6 +22,7 @@ PROBLEM_TYPE_HEADERS = {
 PROBLEM_DESCRIPTION_HEADERS = {
     'content', 'description', 'problem_description', 'question_description', 'question_text', 'statement',
 }
+EXAMPLE_PROBLEM_SHEET_NAMES = {'example problem', 'example problems'}
 
 
 def _excel_column_name(index):
@@ -33,7 +34,7 @@ def _excel_column_name(index):
     return result
 
 
-def _sheet_xml(rows, shared_string_lookup, validations=()):
+def _sheet_xml(rows, shared_string_lookup, validations=(), protected=False):
     sheet_rows = []
     for row_index, row in enumerate(rows, start=1):
         cells = []
@@ -63,11 +64,12 @@ def _sheet_xml(rows, shared_string_lookup, validations=()):
         validation_block = '<dataValidations count="{count}">{items}</dataValidations>'.format(
             count=len(validation_xml), items=''.join(validation_xml),
         )
+    protection_block = '<sheetProtection sheet="1" objects="1" scenarios="1"/>' if protected else ''
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<worksheet xmlns="{main}"><sheetData>{rows}</sheetData>{validations}'
+        '<worksheet xmlns="{main}"><sheetData>{rows}</sheetData>{protection}{validations}'
         '</worksheet>'
-    ).format(main=MAIN_NS, rows=''.join(sheet_rows), validations=validation_block)
+    ).format(main=MAIN_NS, rows=''.join(sheet_rows), protection=protection_block, validations=validation_block)
 
 
 def build_xlsx_workbook(sheets):
@@ -191,9 +193,10 @@ def build_xlsx_workbook(sheets):
         for index, sheet in enumerate(sheets, start=1):
             _, rows = sheet[:2]
             validations = sheet[2] if len(sheet) > 2 else ()
+            protected = sheet[3] if len(sheet) > 3 else False
             archive.writestr(
                 'xl/worksheets/sheet{}.xml'.format(index),
-                _sheet_xml(rows, shared_string_lookup, validations),
+                _sheet_xml(rows, shared_string_lookup, validations, protected),
             )
     return output.getvalue()
 
@@ -304,7 +307,9 @@ def canonical_problem_header(value):
         return 'question_type'
     if key in PROBLEM_DESCRIPTION_HEADERS:
         return 'description'
-    return key
+    # Keep unrecognized headings human-readable for the preview's configuration
+    # review. The importer still normalizes them internally for comparisons.
+    return key.replace('_', ' ')
 
 
 def _xlsx_sheet_names(file_obj):
@@ -324,6 +329,8 @@ def read_problem_xlsx_sheets(file_obj):
     """Return every worksheet with a recognizable problem table, starting at its header."""
     candidates = []
     for sheet_index, sheet_name in enumerate(_xlsx_sheet_names(file_obj)):
+        if sheet_name.casefold() in EXAMPLE_PROBLEM_SHEET_NAMES:
+            continue
         rows = read_xlsx_rows(file_obj, sheet_name=sheet_name)
         best_header = None
         for row_index, row in enumerate(rows[:25]):

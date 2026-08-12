@@ -13,9 +13,9 @@ from django.views.generic import RedirectView
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
 from judge.views import (
-    TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, language, license,
-    mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission, register,
-    stats, status, submission, tasks, ticket, two_factor, user, widgets,
+    TitledTemplateView, api, blog, comment, contest_analytics, contests, file_upload, fill_blank, ide, language,
+    license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission,
+    register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
@@ -135,6 +135,8 @@ urlpatterns = [
          name='problem_import_preview'),
     path('problems/import-excel/<int:draft>/create-all/', problem_import.ProblemImportCreateAllView.as_view(),
          name='problem_import_create_all'),
+    path('problems/import-excel/<int:draft>/<int:item>/editor/', problem_import.ProblemImportItemEditorView.as_view(),
+         name='problem_import_item_editor'),
     path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
          problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 
@@ -194,6 +196,8 @@ urlpatterns = [
         path('/abort', submission.abort_submission, name='submission_abort'),
         path('/test_case/<int:case>/<str:type>', download_test_case, name='submission_test_case_download'),
         path('/ai-hint', submission.SubmissionAIHint.as_view(), name='submission_ai_hint'),
+        path('/file', file_upload.submission_file_download, name='submission_file_download'),
+        path('/grade-file', file_upload.submission_file_grade, name='submission_file_grade'),
     ])),
 
     path('users/', include([
@@ -233,7 +237,8 @@ urlpatterns = [
 
     path('seb/quit/', contests.SEBQuit.as_view(), name='seb_quit'),
 
-    path('contests/', paged_list_view(contests.ContestList, 'contest_list')),
+    path('contests/', paged_list_view(contests.ContestListV2, 'contest_list')),
+    path('contests/legacy/', paged_list_view(contests.ContestList, 'contest_list_legacy')),
     path('contests.ics', contests.ContestICal.as_view(), name='contest_ical'),
     path('contests/<int:year>/<int:month>/', contests.ContestCalendar.as_view(), name='contest_calendar'),
     re_path(r'^contests/tag/(?P<name>[a-z-]+)', include([

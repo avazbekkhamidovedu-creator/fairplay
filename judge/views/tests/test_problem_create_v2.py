@@ -11,8 +11,9 @@ from django.urls import reverse
 from reversion.models import Version
 
 from judge.models import (Language, LanguageLimit, License, Problem, ProblemClarification, ProblemData,
-                          ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig, ProblemTemplate,
-                          ProblemTestCase, ProblemTranslation, ProblemType, Solution, problem_data_storage)
+                          ProblemFileConfig, ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig,
+                          ProblemTemplate, ProblemTestCase, ProblemTranslation, ProblemType, Solution,
+                          problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
@@ -526,6 +527,58 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         config = ProblemShortAnswerConfig.objects.get(problem=problem)
         self.assertEqual(config.reference_answer, 'SYN, SYN-ACK, ACK')
         self.assertEqual(config.ai_rubric, 'mention 3 steps')
+
+    def test_create_file_upload(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'file', 'name': 'Submit your report', 'description': 'Upload a PDF report.',
+            'points': 20, 'group_id': self.group.id,
+            'fileExtensions': 'pdf', 'fileMaxSizeMb': 10, 'fileInstructions': 'One PDF, no zip.',
+        }
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertEqual(problem.submission_type, 'F')
+        self.assertTrue(problem.partial)
+        config = ProblemFileConfig.objects.get(problem=problem)
+        self.assertEqual(config.allowed_extensions, 'pdf')
+        self.assertEqual(config.max_file_size, 10 * 1024 * 1024)
+        self.assertEqual(config.instructions, 'One PDF, no zip.')
+
+    def test_file_upload_edit_data_round_trip(self):
+        """_build_edit_data must hand back MB so a resave does not shrink the limit each time."""
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'type': 'file', 'name': 'Round trip', 'description': 'x', 'points': 5,
+            'group_id': self.group.id, 'fileExtensions': 'pdf', 'fileMaxSizeMb': 7,
+        }), content_type='application/json')
+        problem = Problem.objects.get(code=response.json()['code'])
+
+        data = ProblemCreateV2View()._build_edit_data(problem)
+        self.assertEqual(data['type'], 'file')
+        # MB, not the raw byte count — otherwise the page would show 7340032 and resave 7 TB.
+        self.assertEqual(data['fileMaxSizeMb'], 7)
+        self.assertEqual(data['fileExtensions'], 'pdf')
+
+        # Echoing that value back the way the page does must leave the stored bytes unchanged.
+        response = self.client.post(reverse('problem_edit_v2', args=[problem.code]), data=json.dumps({
+            'type': 'file', 'edit_code': problem.code, 'name': data['name'],
+            'description': data['description'], 'points': data['points'], 'group_id': self.group.id,
+            'fileExtensions': data['fileExtensions'], 'fileMaxSizeMb': data['fileMaxSizeMb'],
+            'fileInstructions': data['fileInstructions'],
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ProblemFileConfig.objects.get(problem=problem).max_file_size, 7 * 1024 * 1024)
+
+    def test_create_file_upload_rejects_non_positive_size(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'type': 'file', 'name': 'Bad cap', 'description': 'x', 'points': 5,
+            'group_id': self.group.id, 'fileMaxSizeMb': 0,
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Problem.objects.filter(name='Bad cap').exists())
 
     def test_create_fill_blank_multiple(self):
         # The create page writes one ProblemBlank per blank; alternatives are newline-separated.
