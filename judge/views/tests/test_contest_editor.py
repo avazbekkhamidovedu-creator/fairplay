@@ -1043,3 +1043,255 @@ class ContestEditorProblemOptionsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(len(problems), 1)
         self.assertEqual(problems[0]['output_prefix'], 7)
         self.assertEqual(problems[0]['hide_results'], False)
+
+
+class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
+    """"Only extend, never shorten" guard for duration / end_time.
+
+    Once students have joined a contest, shrinking the personal time window
+    or pulling the deadline earlier would retroactively end those students'
+    participation mid-run (the middleware clears their current_contest on the
+    next request). These tests lock in that the server refuses such edits.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='guard_editor', user_permissions=('edit_all_contest',))
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='guardcontest', name='Guard',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=5),
+            authors=('superuser',),
+        )
+        # The contest has a 2h personal time window.
+        cls.contest.time_limit = timedelta(hours=2)
+        cls.contest.save()
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.editor)
+
+    def _payload(self, **overrides):
+        now = timezone.now()
+        payload = {
+            'name': 'Guard', 'key': 'guardcontest',
+            'start_time': (now - timedelta(days=1)).isoformat(),
+            'end_time': (now + timedelta(days=5)).isoformat(),
+            'duration_hours': 2, 'duration_minutes': 0,
+            'is_visible': False,
+        }
+        payload.update(overrides)
+        return payload
+
+    def _add_participant(self):
+        from judge.models import ContestParticipation
+        return ContestParticipation.objects.create(
+            contest=self.contest,
+            user=create_user(username='guard_student_%s' % ContestParticipation.objects.count()).profile,
+            real_start=timezone.now(),
+        )
+
+    # ── no participants yet → any edit allowed ────────────────────────────
+
+    def test_no_participants_allows_shrinking(self):
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=1)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.time_limit, timedelta(hours=1))
+
+    # ── duration: only extend ─────────────────────────────────────────────
+
+    def test_cannot_shrink_duration_with_participants(self):
+        self._add_participant()
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=1)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('only be increased', json.loads(response.content)['error'])
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.time_limit, timedelta(hours=2))  # unchanged
+
+    def test_can_extend_duration_with_participants(self):
+        self._add_participant()
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=3)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.time_limit, timedelta(hours=3))
+
+    def test_cannot_switch_unlimited_to_finite_with_participants(self):
+        # A contest with no personal limit treats that as "already unlimited";
+        # imposing a finite duration later is a shrink and must be refused.
+        # Use a fresh contest so the shared setUpTestData object is untouched.
+        _now = timezone.now()
+        unlimited = create_contest(
+            key='guardunlimited', name='Guard Unlimited',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=5),
+            authors=('superuser',),
+            time_limit=None,
+        )
+        from judge.models import ContestParticipation
+        ContestParticipation.objects.create(
+            contest=unlimited,
+            user=create_user(username='guard_student_unlim').profile,
+            real_start=timezone.now(),
+        )
+        response = self.client.post(
+            reverse('contest_edit', args=['guardunlimited']),
+            data=json.dumps({
+                'name': 'Guard Unlimited', 'key': 'guardunlimited',
+                'start_time': (_now - timedelta(days=1)).isoformat(),
+                'end_time': (_now + timedelta(days=5)).isoformat(),
+                'duration_hours': 2, 'duration_minutes': 0,
+                'is_visible': False,
+            }), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('unlimited', json.loads(response.content)['error'])
+
+    def test_can_remove_finite_duration_with_participants(self):
+        # Removing a personal limit always extends (window becomes "until the
+        # contest ends"), so it stays allowed even with participants.
+        self._add_participant()
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=0, duration_minutes=0)),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertIsNone(self.contest.time_limit)
+
+    # ── end_time: only extend ─────────────────────────────────────────────
+
+    def test_cannot_pull_end_time_earlier_with_participants(self):
+        self._add_participant()
+        now = timezone.now()
+        earlier_end = now + timedelta(days=1)  # was now + 5 days
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(end_time=earlier_end.isoformat())),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('end time', json.loads(response.content)['error'])
+        self.contest.refresh_from_db()
+        self.assertGreater(self.contest.end_time, earlier_end)  # unchanged
+
+    def test_can_push_end_time_later_with_participants(self):
+        self._add_participant()
+        now = timezone.now()
+        later_end = now + timedelta(days=10)  # was now + 5 days
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(end_time=later_end.isoformat())),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.end_time, later_end)
+
+
+class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
+    """Participation deadline computation and the middleware's kick-out rule.
+
+    ``ContestParticipation.end_time`` decides when a student's window ends:
+    min(real_start + time_limit, contest.end_time). Once ``ended`` is true the
+    middleware clears ``profile.current_contest``, which removes the submit
+    entry point (submissions no longer count toward the contest). These tests
+    verify that computation — the gate that "expired students cannot submit".
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='timeout_editor', user_permissions=('edit_all_contest',))
+
+    def _mk_contest(self, time_limit=None, end_delta_days=5):
+        _now = timezone.now()
+        contest = create_contest(
+            key='timeout%s' % self._seq(),
+            name='Timeout',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=end_delta_days),
+            authors=('superuser',),
+        )
+        if time_limit is not None:
+            contest.time_limit = time_limit
+            contest.save()
+        return contest
+
+    _seq_counter = 0
+
+    def _seq(self):
+        ContestTimeoutLogicTestCase._seq_counter += 1
+        return ContestTimeoutLogicTestCase._seq_counter
+
+    def _mk_participation(self, contest, real_start=None):
+        from judge.models import ContestParticipation
+        return ContestParticipation.objects.create(
+            contest=contest,
+            user=create_user(username='timeout_student_%s' % self._seq()).profile,
+            real_start=real_start or timezone.now(),
+        )
+
+    def test_no_limit_follows_contest_end(self):
+        contest = self._mk_contest(time_limit=None)
+        p = self._mk_participation(contest)
+        self.assertEqual(p.end_time, contest.end_time)
+
+    def test_duration_deadline_is_real_start_plus_limit(self):
+        contest = self._mk_contest(time_limit=timedelta(hours=2))
+        now = timezone.now()
+        p = self._mk_participation(contest, real_start=now)
+        self.assertEqual(p.end_time, min(now + timedelta(hours=2), contest.end_time))
+
+    def test_duration_capped_by_contest_end(self):
+        # A 10-day duration on a contest ending in 2 days must cap at contest end.
+        contest = self._mk_contest(time_limit=timedelta(days=10), end_delta_days=2)
+        now = timezone.now()
+        p = self._mk_participation(contest, real_start=now)
+        self.assertEqual(p.end_time, contest.end_time)
+
+    def test_ended_true_after_deadline(self):
+        contest = self._mk_contest(time_limit=timedelta(hours=1))
+        started = timezone.now() - timedelta(hours=2)  # joined 2h ago, limit 1h
+        p = self._mk_participation(contest, real_start=started)
+        self.assertTrue(p.ended)
+
+    def test_not_ended_before_deadline(self):
+        contest = self._mk_contest(time_limit=timedelta(hours=3))
+        started = timezone.now() - timedelta(hours=1)
+        p = self._mk_participation(contest, real_start=started)
+        self.assertFalse(p.ended)
+
+    def test_extending_duration_rescues_participant(self):
+        # The "only extend" rule is meaningful because extending the duration
+        # after a student joined moves their deadline and un-expires them.
+        contest = self._mk_contest(time_limit=timedelta(hours=1))
+        started = timezone.now() - timedelta(hours=2)
+        p = self._mk_participation(contest, real_start=started)
+        self.assertTrue(p.ended)
+        contest.time_limit = timedelta(hours=3)
+        contest.save()
+        self.assertFalse(p.ended)
+
+    def test_shrinking_duration_expires_participant(self):
+        # And shrinking it retroactively expires someone mid-run — which is
+        # exactly why the server refuses that edit once participants exist.
+        contest = self._mk_contest(time_limit=timedelta(hours=3))
+        started = timezone.now() - timedelta(hours=2)
+        p = self._mk_participation(contest, real_start=started)
+        self.assertFalse(p.ended)
+        contest.time_limit = timedelta(hours=1)
+        contest.save()
+        self.assertTrue(p.ended)

@@ -458,6 +458,17 @@ class ContestCreate(LoginRequiredMixin, View):
             restricted.add('problem_label_script')
         if not user.has_perm('judge.override_performance_ceiling'):
             restricted.add('performance_ceiling_override')
+
+        # Roles (authors / curators / testers / spectators) are managed by the
+        # contest's authors (or full editors) only — a mere curator must not be
+        # able to promote themselves or reassign the contest. On create the
+        # creator becomes an author, so the roles stay editable.
+        contest = getattr(self, 'contest', None)
+        if not user.has_perm('judge.edit_all_contest'):
+            if contest is None:
+                pass  # create mode: the creator becomes an author
+            elif not user.is_authenticated or user.profile.id not in contest.author_ids:
+                restricted |= {'authors', 'curators', 'testers', 'spectators'}
         return restricted
 
     def dispatch(self, request, *args, **kwargs):
@@ -675,6 +686,48 @@ class ContestCreate(LoginRequiredMixin, View):
 
         # Duration: the frontend edits hours+minutes, the model stores a timedelta.
         contest.time_limit = self._parse_duration(payload)
+
+        # ── "Only extend, never shorten" guard ──────────────────────────────
+        # Once students have joined (a participation exists), shrinking the
+        # duration or pulling the deadline earlier would retroactively end
+        # those students' windows mid-run: the middleware clears their
+        # current_contest on the next request, kicking them out of the exam.
+        # To protect active participants we refuse such edits server-side:
+        #   - duration may only stay equal or grow (None = no personal limit
+        #     is treated as "already unlimited", so going to a finite value is
+        #     a shrink and is rejected);
+        #   - end_time may only stay equal or move later.
+        # This mirrors the frontend validation, but is authoritative — a
+        # crafted JSON payload cannot bypass it.
+        # IMPORTANT: the old values must come from the DATABASE, not from
+        # ``contest`` — by this point ``_apply_payload`` has already written
+        # the new duration/end_time onto it, and ``self.contest`` IS that same
+        # object, so reading ``existing.time_limit`` would see the new value.
+        existing = getattr(self, 'contest', None)
+        if existing is not None and existing.pk is not None \
+                and existing.users.exists():
+            from django.db.models import F
+            old_row = type(existing).objects.filter(pk=existing.pk).values('time_limit', 'end_time').first()
+            old_limit = old_row['time_limit'] if old_row else None
+            old_end = old_row['end_time'] if old_row else None
+            new_limit = contest.time_limit
+            if old_limit is None:
+                if new_limit is not None:
+                    raise ValidationError(
+                        _('Students have already joined. The duration can only be '
+                          'increased — it cannot be changed from unlimited to a fixed time.'))
+            elif new_limit is None:
+                # Removing a personal limit is always an extension (the window
+                # becomes "until the contest ends"), so it is allowed.
+                pass
+            elif new_limit < old_limit:
+                raise ValidationError(
+                    _('Students have already joined. The duration can only be '
+                      'increased, not shortened.'))
+            if old_end is not None and end_time < old_end:
+                raise ValidationError(
+                    _('Students have already joined. The end time can only be '
+                      'extended, not brought earlier.'))
         return contest
 
     def _save_m2m(self, contest, payload):
@@ -1094,6 +1147,11 @@ class ContestCreate(LoginRequiredMixin, View):
             # Whether the user may scope a contest to a private audience at all
             # (drives which seg options the visibility control offers).
             'can_edit_private': self.request.user.has_perm('judge.create_private_contest'),
+            # Whether students have joined: when true, duration/end_time may
+            # only be extended (the server refuses shortening — see the guard
+            # in _apply_payload). The frontend mirrors this to give instant
+            # feedback instead of a round-trip error.
+            'has_participants': bool(contest is not None and contest.users.exists()),
             'prefill': prefill,
         }
 

@@ -307,6 +307,10 @@
         .cp-row.dragging {
             opacity: 0.4;
         }
+        /* Drag & drop insertion indicator: a highlighted edge shows where the
+           dragged row will land (top half → drop-before, bottom half → drop-after). */
+        .cp-row.drop-before { box-shadow: 0 -2px 0 0 var(--oj-accent, #2980B9); }
+        .cp-row.drop-after { box-shadow: 0 2px 0 0 var(--oj-accent, #2980B9); }
         .cp-preview {
             color: var(--text, #333);
         }
@@ -527,6 +531,35 @@
                     if (!confirm(fullTargetMsg)) {
                         var btns = form.querySelectorAll('button[type=submit]');
                         for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+                        return;
+                    }
+                }
+
+                // "Only extend, never shorten" save-time guard (mirrors the
+                // server rule in ContestCreate._apply_payload). Once students
+                // have joined, shrinking the duration or pulling the deadline
+                // earlier would end their windows mid-run, so we refuse to
+                // submit such a change and tell the teacher why. The teacher
+                // can type freely while editing; the check happens here.
+                if (guardActive) {
+                    var newDurH = parseInt(document.getElementById('id_duration_hours').value || 0, 10);
+                    var newDurM = parseInt(document.getElementById('id_duration_minutes').value || 0, 10);
+                    var newTotal = newDurH * 60 + newDurM;
+                    var savedTotal = savedDurH * 60 + savedDurM;
+                    // No limit (blank inputs) is always allowed: it removes the
+                    // personal window entirely, i.e. only extends.
+                    var noLimit = document.getElementById('id_duration_none').checked;
+                    if (!noLimit && newTotal < savedTotal) {
+                        showToast({{ _('Students have already joined — the duration can only be increased, not shortened.')|htmltojs }}, true);
+                        var btns = form.querySelectorAll('button[type=submit]');
+                        for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+                        return;
+                    }
+                    var newEndVal = document.getElementById('id_end_time').value;
+                    if (savedEnd && newEndVal && newEndVal < savedEnd) {
+                        showToast({{ _('Students have already joined — the end time can only be extended, not brought earlier.')|htmltojs }}, true);
+                        var btns2 = form.querySelectorAll('button[type=submit]');
+                        for (var j = 0; j < btns2.length; j++) btns2[j].disabled = false;
                         return;
                     }
                 }
@@ -840,6 +873,19 @@
             var endInput = document.getElementById('id_end_time');
             var durH = document.getElementById('id_duration_hours');
             var durM = document.getElementById('id_duration_minutes');
+            // "Only extend, never shorten" guard (mirrors the server rule):
+            // once students have joined, shrinking the duration or pulling the
+            // deadline earlier would end their windows mid-run. The check runs
+            // at save time (submit handler) so the teacher can type freely,
+            // then gets a clear error instead of a silent revert.
+            // `guardActive` comes from the template (has_participants on an
+            // existing contest).
+            var guardActive = {{ 'true' if has_participants else 'false' }};
+            // Initial (saved) duration — used to restore the "No limit" toggle
+            // and as the lower bound for the save-time check.
+            var savedDurH = durH ? parseInt(durH.value || 0, 10) : 0;
+            var savedDurM = durM ? parseInt(durM.value || 0, 10) : 0;
+            var savedEnd = endInput ? endInput.value : '';
             if (startInput && endInput && durH && durM) {
                 function calcEnd() {
                     var s = parseLocalInput(startInput.value);
@@ -876,6 +922,35 @@
                     // until the teacher touches another field.
                     syncPreview();
                     syncScoreSummary();
+                }
+
+                // "No limit" checkbox: when checked, the duration inputs are
+                // disabled (blank duration → time_limit=None on save, which is
+                // always an extension). Unchecking restores the last saved
+                // duration (or 0h 0min if none was ever set).
+                var durNone = document.getElementById('id_duration_none');
+                if (durNone) {
+                    function syncDurNone() {
+                        var isNone = durNone.checked;
+                        durH.disabled = isNone;
+                        durM.disabled = isNone;
+                        if (isNone) {
+                            durH.value = '';
+                            durM.value = '';
+                        } else {
+                            // Restore the previously saved duration, or a clean
+                            // 0h 0min if the contest never had one.
+                            durH.value = savedDurH || '';
+                            durM.value = savedDurM || '';
+                        }
+                    }
+                    durNone.addEventListener('change', function () {
+                        syncDurNone();
+                        calcEnd();
+                        syncPreview();
+                        syncScoreSummary();
+                    });
+                    syncDurNone();
                 }
             }
 
@@ -1129,8 +1204,8 @@
                     '<span><input type="number" class="cp-points" value="100" style="width:48px"></span>' +
                     '<span>—</span>' +
                     '<span class="cp-actions">' +
-                    '<button type="button" class="btn-icon" title="' + {{ _('Preview')|htmltojs }} + '" onclick="toggleCpPreview(this)">👁</button>' +
-                    '<a class="btn-icon" title="' + {{ _('Solve')|htmltojs }} + '" href="' + solveUrl + '" target="_blank">▶</a>' +
+                    '<button type="button" class="btn-icon" title="' + {{ _('Preview')|htmltojs }} + '" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>' +
+                    '<a class="btn-icon" title="' + {{ _('Solve')|htmltojs }} + '" href="' + solveUrl + '" target="_blank"><i class="fa fa-external-link"></i></a>' +
                     '<button type="button" class="btn-icon danger" title="' + {{ _('Remove')|htmltojs }} + '" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button>' +
                     '</span>' +
                     '<div class="cp-options" style="grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;padding-top:0.25rem;color:var(--muted);font-size:12px;">' +
@@ -1424,10 +1499,28 @@
                 });
                 cpListEl.addEventListener('dragover', function (e) {
                     e.preventDefault();
-                    e.dataTransfer.dropEffect = 'move';
+                    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+                    // Show an insertion indicator on the row being hovered: a
+                    // top/bottom border tells where the dragged row will land.
+                    cpListEl.querySelectorAll('.drop-before, .drop-after').forEach(function (el) {
+                        el.classList.remove('drop-before', 'drop-after');
+                    });
+                    var row = e.target.closest('.cp-row[data-pid]');
+                    if (!row || row.dataset.pid === dragPid) return;
+                    var rect = row.getBoundingClientRect();
+                    var above = e.clientY < rect.top + rect.height / 2;
+                    row.classList.add(above ? 'drop-before' : 'drop-after');
+                });
+                cpListEl.addEventListener('dragleave', function () {
+                    cpListEl.querySelectorAll('.drop-before, .drop-after').forEach(function (el) {
+                        el.classList.remove('drop-before', 'drop-after');
+                    });
                 });
                 cpListEl.addEventListener('drop', function (e) {
                     e.preventDefault();
+                    cpListEl.querySelectorAll('.drop-before, .drop-after').forEach(function (el) {
+                        el.classList.remove('drop-before', 'drop-after');
+                    });
                     if (!dragPid) return;
                     var targetRow = e.target.closest('.cp-row[data-pid]');
                     if (!targetRow) return;
@@ -1440,8 +1533,13 @@
                         if (r.dataset.pid === targetRow.dataset.pid) toIdx = i;
                     });
                     if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+                    // Respect the hovered half: dropping on the top half inserts
+                    // before the target, bottom half after it.
+                    var rect = targetRow.getBoundingClientRect();
+                    var insertAfter = e.clientY >= rect.top + rect.height / 2;
                     var moved = rows.splice(fromIdx, 1)[0];
-                    rows.splice(toIdx, 0, moved);
+                    if (!insertAfter && fromIdx < toIdx) toIdx--;  // index shifted after removal
+                    rows.splice(insertAfter ? toIdx + 1 : toIdx, 0, moved);
                     rows.forEach(function (r) { cpListEl.appendChild(r); });
                     dragPid = null;
                     renumberCpRows();
@@ -1743,7 +1841,7 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Duration') }}</label>
+                                <label>{{ _('Duration') }}{{ tip(_('Each participant gets this much time from when they join. Once students have joined, the duration can only be increased — shortening it would end their windows mid-run and is blocked.')) }}</label>
                                 <div class="field ac-inline">
                                     <input type="number" id="id_duration_hours" name="duration_hours"
                                            min="0" max="1000" value="{{ prefill.duration_hours if contest else 0 }}">
@@ -1751,12 +1849,15 @@
                                     <input type="number" id="id_duration_minutes" name="duration_minutes"
                                            min="0" max="59" value="{{ prefill.duration_minutes if contest else 0 }}">
                                     <span class="unit">{{ _('min') }}</span>
-                                    <span class="unit" style="margin-left:0.5rem;">{{ _('No limit') }}</span>
+                                    <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;margin-left:0.5rem;">
+                                        <input type="checkbox" id="id_duration_none"{% if not contest or not prefill.duration_hours and not prefill.duration_minutes %} checked{% endif %}>
+                                        {{ _('No limit') }}
+                                    </label>
                                 </div>
                             </div>
 
                             <div class="form-row stacked">
-                                <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time.', tz=user_timezone)) }}</label>
+                                <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time. Once students have joined, the end time can only be extended, not brought earlier.', tz=user_timezone)) }}</label>
                                 <div class="field">
                                     <div class="seg" style="margin-bottom:0.45rem;">
                                         <label><input type="radio" name="validity_type" value="range" hidden checked><span>{{ _('Range') }}</span></label>
@@ -1785,7 +1886,7 @@
                                 </div>
                             </div>
 
-                            <div class="form-row stacked">
+                            <div class="form-row">
                                 <label>{{ _('Target score') }}{{ tip(_('Just a planning aid — the editor warns if the sum of problem points differs from this target. Not saved.')) }}</label>
                                 <div class="field ac-inline">
                                     <input type="number" id="f-score" min="1" value="{{ prefill.target_score or 100 }}" style="width:80px;">
@@ -1910,8 +2011,8 @@
                                 <div class="cp-row cp-row-head">
                                     <span></span><span></span>
                                     <span class="pname">{{ _('Problem') }}</span>
-                                    <span>{{ _('Pts') }}</span>
-                                    <span>{{ _('Max') }}</span>
+                                    <span>{{ _('Pts') }}{{ tip(_('Points this problem is worth.')) }}</span>
+                                    <span>{{ _('Max') }}{{ tip(_('Maximum number of submissions allowed for this problem — blank means unlimited.')) }}</span>
                                     <span></span>
                                 </div>
                                 {% for p in prefill.problems %}
@@ -1922,8 +2023,8 @@
                                     <span><input type="number" class="cp-points" value="{{ p.points }}" style="width:48px"></span>
                                     <span>—</span>
                                     <span class="cp-actions">
-                                        <button type="button" class="btn-icon" title="{{ _('Preview') }}" onclick="toggleCpPreview(this)">👁</button>
-                                        <a class="btn-icon" title="{{ _('Solve') }}" href="{{ url('problem_detail', p.code) }}" target="_blank">▶</a>
+                                        <button type="button" class="btn-icon" title="{{ _('Preview') }}" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>
+                                        <a class="btn-icon" title="{{ _('Solve') }}" href="{{ url('problem_detail', p.code) }}" target="_blank"><i class="fa fa-external-link"></i></a>
                                         <button type="button" class="btn-icon danger" title="{{ _('Remove') }}" onclick="this.closest('.cp-row').remove();updateProblemIds()">&times;</button>
                                     </span>
                                     {# Per-problem options (admin parity): partial credit, pretest-only,
@@ -2136,7 +2237,7 @@
                                     </div>
                                     {% endif %}
                                     <div class="form-row">
-                                        <label>{{ _('Join orgs') }}</label>
+                                        <label>{{ _('Join orgs') }}{{ tip(_('Who may join — separate from who may see the assignment.')) }}</label>
                                         <div class="field">
                                             <select id="id_join_organizations" name="join_organizations" data-oj-select>
                                                 <option value="">{{ _('— No extra limit —') }}</option>
@@ -2145,7 +2246,6 @@
                                                     <option value="{{ org.id }}"{% if org.id in join_org_ids %} selected{% endif %}>{{ org.name }}</option>
                                                 {% endfor %}
                                             </select>
-                                            {{ tip(_('Who may join — separate from who may see the assignment.')) }}
                                         </div>
                                     </div>
                                     <div class="form-row">
@@ -2180,14 +2280,13 @@
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Banned users') }}</label>
+                                        <label>{{ _('Banned users') }}{{ tip(_('Bans the selected users from joining this contest.')) }}</label>
                                         <div class="field">
                                             <select name="banned_users" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.banned_users or [] %}
                                                 <option value="{{ pid }}" selected>{{ uname }}</option>
                                                 {% endfor %}
                                             </select>
-                                            {{ tip(_('Bans the selected users from joining this contest.')) }}
                                         </div>
                                     </div>
                                 </div>
@@ -2294,6 +2393,9 @@
                             <details class="adv-sub" open>
                                 <summary>{{ _('Roles') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
+                                    {% if 'authors' in restricted_fields %}
+                                    <div class="ac-help" style="margin-bottom:0.5rem;">{{ _('Roles are managed by the assignment authors (or administrators).') }}</div>
+                                    {% else %}
                                     <div class="form-row">
                                         <label>{{ _('Authors') }}{{ tip(_('May edit the contest. On create, you are the author.')) }}</label>
                                         <div class="field">
@@ -2334,6 +2436,7 @@
                                             </select>
                                         </div>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </details>
 
