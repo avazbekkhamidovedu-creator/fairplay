@@ -450,6 +450,41 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         self.assertGreaterEqual(context['type_counts'].get(self.type_ids['dp'], 0), 3)
         self.assertNotIn('total_problem_count', context)
 
+    def test_m2m_filters_do_not_duplicate_rows(self):
+        """M2M course/tag JOINs can multiply rows; list/count must stay distinct."""
+        org_a = create_organization(name='Distinct Org A')
+        org_b = create_organization(name='Distinct Org B')
+        # One problem matching both selected orgs and both selected knowledge tags.
+        self.problem_easy.organizations.add(org_a, org_b)
+        self.problem_easy.types.add(
+            ProblemType.objects.get(id=self.type_ids['dp']),
+            ProblemType.objects.get(id=self.type_ids['greedy']),
+        )
+
+        qs = self._view(self.users['normal'], {
+            'organization': [org_a.id, org_b.id],
+            'type': [self.type_ids['dp'], self.type_ids['greedy']],
+            'filtered': '1',
+        }).get_normal_queryset()
+        codes = list(qs.values_list('code', flat=True))
+        easy_hits = [c for c in codes if c == 'filter-easy']
+        self.assertEqual(len(easy_hits), 1, 'expected a single list row for filter-easy, got %r' % (codes,))
+        self.assertEqual(qs.filter(code='filter-easy').count(), 1)
+
+        # Pagination / progress count uses the same distinct queryset.
+        view = self._view(self.users['normal'], {
+            'organization': [org_a.id, org_b.id],
+            'type': [self.type_ids['dp'], self.type_ids['greedy']],
+            'filtered': '1',
+        })
+        queryset = view.get_normal_queryset()
+        paginator = view.get_paginator(queryset, view.paginate_by)
+        self.assertEqual(paginator.count, queryset.count())
+        self.assertEqual(
+            sum(1 for p in paginator.object_list if p.code == 'filter-easy'),
+            1,
+        )
+
     def test_problem_list_context_exposes_progress_counts(self):
         self._mark_solved(self.problem_easy)
         context = self._context(self.users['normal'], {'category': str(self.group_id), 'filtered': '1'})
