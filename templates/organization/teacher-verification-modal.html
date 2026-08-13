@@ -1,0 +1,18 @@
+<div id="teacher-verification-modal" class="course-modal" hidden>
+    <div class="course-modal-backdrop js-close-modal"></div>
+    <div class="course-modal-dialog" role="dialog" aria-labelledby="tv-title">
+        <h2 id="tv-title">{{ _('Teacher verification') }}</h2>
+        <p>{{ _('Submit a request to site administrators. They will review and grant teacher access.') }}</p>
+        <form method="post" action="{{ url('organization_teacher_verification') }}">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.path }}">
+            <label for="tv-reason">{{ _('Why do you need teacher access?') }}</label>
+            <textarea id="tv-reason" name="reason" rows="4" required maxlength="2000"
+                      placeholder="{{ _('e.g. I teach this course and need to manage classes and grading.') }}"></textarea>
+            <p style="margin-top: 0.85rem;">
+                <button type="submit" class="oj-btn oj-btn-primary">{{ _('Submit request') }}</button>
+                <button type="button" class="oj-btn oj-btn-outline js-close-modal">{{ _('Close') }}</button>
+            </p>
+        </form>
+    </div>
+</div>
