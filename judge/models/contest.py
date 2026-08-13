@@ -505,15 +505,24 @@ class Contest(models.Model):
 
     # Also skips access check
     def is_spectatable_by(self, user):
+        """Only privileged roles may spectate (view without participating).
+
+        Regular students get no spectate path: they either join a live window
+        or are turned away (window over / before start / banned). Spectating is
+        a review capability for staff (``see_private_contest`` /
+        ``edit_all_contest``), editors, testers, explicit spectators and org
+        admins of the contest's organizations.
+        """
         if not user.is_authenticated:
             return False
-
-        if user.profile.id in self.editor_ids or user.profile.id in self.tester_ids:
+        if user.has_perm('judge.see_private_contest') or user.has_perm('judge.edit_all_contest'):
             return True
-
-        if self.limit_join_organizations:
-            return self.join_organizations.filter(id__in=user.profile.organizations.all()).exists()
-        return True
+        pid = user.profile.id
+        if pid in self.editor_ids or pid in self.tester_ids or pid in self.spectator_ids:
+            return True
+        if self.is_viewable_by_org_admin(user):
+            return True
+        return False
 
     def is_accessible_by(self, user):
         try:
@@ -528,8 +537,12 @@ class Contest(models.Model):
         if user.has_perm('judge.edit_all_contest'):
             return True
 
-        # If the user is a contest organizer or curator
-        if user.has_perm('judge.edit_own_contest') and user.profile.id in self.editor_ids:
+        # If the user is a contest organizer or curator. Being listed as an
+        # author/curator IS the grant: the curator list is only editable by
+        # people who can already edit, so membership itself is sufficient.
+        # (Sensitive fields inside the editor are still gated by their own
+        # permissions via ContestCreate._restricted_fields.)
+        if user.is_authenticated and user.profile.id in self.editor_ids:
             return True
 
         return False

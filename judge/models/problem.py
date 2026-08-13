@@ -431,6 +431,21 @@ class Problem(models.Model):
                 if ContestProblem.objects.filter(problem_id=self.id, contest__users__id=current).exists():
                     return True
 
+            # Reading: a problem attached to an assignment the user may access
+            # is readable while that assignment has started — even before the
+            # student enters their own window. (Submission stays gated by the
+            # in-contest requirement; see ProblemSubmit.)
+            from judge.models import ContestProblem, Contest
+            for cp in ContestProblem.objects.filter(problem_id=self.id).select_related('contest'):
+                contest = cp.contest
+                if not contest.started:
+                    continue
+                try:
+                    contest.access_check(user)
+                except (Contest.Inaccessible, Contest.PrivateContest):
+                    continue
+                return True
+
         # Problem is public.
         if self.is_public:
             # Problem is not private to an organization.

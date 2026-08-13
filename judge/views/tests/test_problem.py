@@ -9,6 +9,7 @@ from django.utils import timezone
 from judge.models import Language, Problem, ProblemGroup, ProblemSubmissionType, ProblemType, Submission
 from judge.models.tests.util import (
     CommonDataMixin,
+    create_contest,
     create_organization,
     create_problem,
     create_problem_group,
@@ -720,3 +721,53 @@ class ProblemBulkDeleteRedirectTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, '/problems/?category=1')
         self.assertFalse(Problem.objects.filter(code='bulk-del-keep').exists())
+
+
+class ProblemSubmitGuardTestCase(CommonDataMixin, TestCase):
+    """A non-public problem attached to a started assignment is readable but
+    not submittable outside a live contest window — except by its editors."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.student = create_user(username='guard_student')
+        cls.editor = create_user(username='guard_editor', user_permissions=('edit_own_problem',))
+        cls.problem = create_problem(code='guardprob', authors=('guard_editor',), allowed_languages=('PY3',))
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='guardcontest', name='Guard Contest',
+            start_time=_now - timedelta(days=1), end_time=_now + timedelta(days=1),
+            is_visible=True, authors=('superuser',),
+        )
+        from judge.models import ContestProblem, Judge
+        ContestProblem.objects.create(contest=cls.contest, problem=cls.problem, points=100, order=1)
+        cls.lang = Language.objects.get(key='PY3')
+        judge = Judge.objects.create(name='guardjudge', auth_key='guardkey', online=True)
+        judge.problems.add(cls.problem)
+        judge.runtimes.add(cls.lang)
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_student_blocked_from_regular_submit(self):
+        self.client.force_login(self.student)
+        response = self.client.post(
+            reverse('problem_submit', args=['guardprob']),
+            {'language': self.lang.id, 'source': 'print(1)'},
+        )
+        self.assertContains(response, 'Join the assignment to submit')
+        self.assertFalse(Submission.objects.filter(user=self.student.profile).exists())
+
+    def test_editor_not_blocked_from_regular_submit(self):
+        # Maintainers (authors/editors) may still test-submit from the problem
+        # page outside a contest — the guard must not overblock them.
+        from unittest import mock
+
+        with mock.patch('judge.models.submission.judge_submission'):
+            self.client.force_login(self.editor)
+            response = self.client.post(
+                reverse('problem_submit', args=['guardprob']),
+                {'language': self.lang.id, 'source': 'print(1)'},
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Submission.objects.filter(user=self.editor.profile).exists())

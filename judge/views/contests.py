@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from calendar import Calendar, SUNDAY
 from collections import defaultdict, namedtuple
@@ -6,13 +7,15 @@ from datetime import date, datetime, time, timedelta
 from functools import partial
 from itertools import chain
 from operator import attrgetter, itemgetter
+from zoneinfo import ZoneInfo
 
 import markdown
 from django import forms
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
-from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
-from django.db import IntegrityError
+from django.contrib.auth.views import redirect_to_login
+from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, PermissionDenied, ValidationError
+from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Case, Count, F, FloatField, IntegerField, Max, Min, Q, Sum, Value, When
 from django.db.models.expressions import CombinedExpression, Exists, OuterRef
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest, HttpResponseRedirect, JsonResponse
@@ -20,11 +23,13 @@ from django.shortcuts import get_object_or_404, render
 from django.template.defaultfilters import date as date_filter
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.utils.functional import cached_property
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils.timezone import make_aware
 from django.utils.translation import gettext as _, gettext_lazy
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import ListView, TemplateView, View
 from django.views.generic.detail import BaseDetailView, DetailView, SingleObjectMixin
 from django.views.generic.list import BaseListView
@@ -32,6 +37,7 @@ from icalendar import Calendar as ICalendar, Event
 from markdown_katex import KatexExtension
 from reversion import revisions
 
+from judge import contest_format
 from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
@@ -48,12 +54,24 @@ from judge.utils.stats import get_bar_chart, get_pie_chart
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
 
-__all__ = ['ContestList', 'ContestListV2', 'ContestDetail', 'ContestRanking', 'ContestJoin',
+logger = logging.getLogger(__name__)
+
+__all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'ContestRanking', 'ContestJoin',
            'ContestLeave', 'ContestCalendar', 'ContestClone', 'ContestStats', 'ContestMossView',
            'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
-           'ContestSEBConfig', 'SEBQuit']
+           'ContestSEBConfig', 'SEBQuit', 'ContestTagCreateView', 'ContestSEBFileView',
+           'ContestFinalizeView', 'ContestUnfinalizeView']
+
+
+def _valid_tz(name):
+    """Return ``name`` when it is a valid IANA timezone, else ''."""
+    try:
+        ZoneInfo(name)
+        return name
+    except (KeyError, ValueError):
+        return ''
 
 
 def _find_contest(request, key, private_check=True):
@@ -364,6 +382,941 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         for contests in groups.values():
             contests.sort(key=attrgetter(field), reverse=self.order.startswith('-'))
         return {name: groups[name] for name in sorted(groups)}, statuses
+
+
+class ContestCreate(LoginRequiredMixin, View):
+    """Create or edit a contest with the split layout form.
+
+    ``/contests/create/`` (add) and ``/contests/<key>/edit/`` (edit) share this
+    view and the same template; only the title and pre-fill differ.
+
+    Every field below maps 1:1 onto the ``Contest`` model — i.e. a column of
+    the ``judge_contest`` table — so "registering" a field in one of the
+    ``_*_fields`` tuples is all it takes for the frontend editor to read/write
+    it, staying in sync with the Django admin's contest editor.
+    """
+    template_name = 'contest/create.html'
+
+    # Scalar fields handled generically from the JSON payload.
+    _bool_fields = (
+        'is_visible', 'is_rated', 'use_clarifications', 'hide_problem_tags',
+        'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
+        'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
+        'show_short_display', 'is_private', 'is_organization_private',
+        'limit_join_organizations', 'seb_required',
+    )
+    _text_fields = (
+        'name', 'description', 'access_code', 'problem_label_script',
+        'og_image', 'logo_override_image', 'summary',
+        'seb_browser_exam_keys', 'seb_config_keys', 'seb_quit_url',
+    )
+    _int_fields = ('points_precision', 'rating_floor', 'rating_ceiling', 'performance_ceiling_override')
+    _m2m_fields = (
+        'curators', 'testers', 'spectators', 'rate_exclude',
+        'view_contest_scoreboard', 'view_contest_submissions', 'banned_users',
+        'organizations', 'classes', 'join_organizations', 'tags', 'private_contestants',
+    )
+
+    def _restricted_fields(self, user):
+        """Fields the current user may NOT write, mirroring the Django admin.
+
+        ``ContestAdmin.get_readonly_fields`` gates sensitive fields behind their
+        own model permissions (``contest_access_code``, ``contest_seb_requirement``,
+        ``change_contest_visibility``, ``contest_rating``, ``lock_contest``,
+        ``contest_problem_label``, ``override_performance_ceiling`` and
+        ``create_private_contest``).
+
+        The frontend editor must enforce the exact same rules server-side:
+        otherwise any curator holding only ``judge.edit_own_contest`` could
+        bypass every one of those permissions by POSTing the field directly
+        (e.g. flip ``is_visible`` on a contest they merely curate, or arm SEB
+        without the ``contest_seb_requirement`` permission).
+
+        Returns a ``set`` of model field names that must be skipped when
+        applying the payload — and hidden in the template, so the UI only ever
+        shows controls the user is actually allowed to touch. Kept in lock-step
+        with ``ContestAdmin.get_readonly_fields``: if that list changes, change
+        this one too.
+        """
+        restricted = set()
+        if not user.has_perm('judge.contest_rating'):
+            restricted |= {'is_rated', 'rate_all', 'rate_exclude'}
+        if not user.has_perm('judge.lock_contest'):
+            restricted.add('locked_after')
+        if not user.has_perm('judge.contest_access_code'):
+            restricted.add('access_code')
+        if not user.has_perm('judge.contest_seb_requirement'):
+            restricted |= {'seb_required', 'seb_browser_exam_keys', 'seb_config_keys',
+                           'seb_config_file', 'seb_quit_url'}
+        if not user.has_perm('judge.create_private_contest'):
+            restricted |= {'private_contestants', 'organizations', 'is_private', 'is_organization_private'}
+            # is_visible is only gated when the user can neither create private
+            # contests nor change visibility — same nesting as the admin.
+            if not user.has_perm('judge.change_contest_visibility'):
+                restricted.add('is_visible')
+        if not user.has_perm('judge.contest_problem_label'):
+            restricted.add('problem_label_script')
+        if not user.has_perm('judge.override_performance_ceiling'):
+            restricted.add('performance_ceiling_override')
+
+        # Roles (authors / curators / testers / spectators) are managed by the
+        # contest's authors (or full editors) only — a mere curator must not be
+        # able to promote themselves or reassign the contest. On create the
+        # creator becomes an author, so the roles stay editable.
+        contest = getattr(self, 'contest', None)
+        if not user.has_perm('judge.edit_all_contest'):
+            if contest is None:
+                pass  # create mode: the creator becomes an author
+            elif not user.is_authenticated or user.profile.id not in contest.author_ids:
+                restricted |= {'authors', 'curators', 'testers', 'spectators'}
+        return restricted
+
+    def dispatch(self, request, *args, **kwargs):
+        """Route to create or edit mode and enforce the matching permission.
+
+        - Create mode (no ``contest`` kwarg) requires ``judge.edit_all_contest``.
+        - Edit mode (``contest`` kwarg) requires ``is_editable_by``, which also
+          admits ``edit_own_contest`` holders who are curators of the contest.
+        """
+        self.contest = None
+        if 'contest' in kwargs:
+            self.contest = get_object_or_404(Contest, key=kwargs['contest'])
+            if not request.user.is_authenticated:
+                return redirect_to_login(request.get_full_path())
+            if not self.contest.is_editable_by(request.user):
+                raise PermissionDenied
+        else:
+            if not request.user.is_authenticated:
+                return redirect_to_login(request.get_full_path())
+            if not request.user.has_perm('judge.edit_all_contest'):
+                raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        context = self.get_context_data()
+        return render(request, self.template_name, context)
+
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            # A browser sending a non-JSON body (e.g. a native form POST after
+            # the page's JS failed to attach its submit handler) lands here.
+            # Log enough to diagnose it from the server side.
+            logger.warning('Contest save rejected: expected JSON body, got content-type=%r body=%r',
+                           request.content_type, request.body[:500])
+            return JsonResponse({'error': _('Invalid request.')}, status=400)
+        if self.contest is None:
+            return self._create(request, payload)
+        return self._update(request, payload)
+
+    # ── payload → model helpers ─────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_datetime(payload, field):
+        """Parse an ISO-8601 payload value into an aware UTC datetime.
+
+        The frontend always sends UTC strings ending in ``Z`` (from
+        ``Date.toISOString()``); naive local strings are also accepted and
+        interpreted as UTC to match ``settings.TIME_ZONE``. Returns ``None``
+        when the field is blank. Raises ``ValidationError`` on bad input.
+        """
+        value = payload.get(field)
+        if not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        except ValueError:
+            raise ValidationError(_('Invalid date format for "%(field)s".') % {'field': field})
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.utc)
+        return dt
+
+    @staticmethod
+    def _parse_duration(payload):
+        """Convert the frontend's hours/minutes inputs into a ``timedelta``.
+
+        A blank or zero duration means "no time limit" (``time_limit`` = None).
+
+        The values are bounded (0–1000 h / 0–59 min) and coerced defensively:
+        a hostile or malformed payload must not be able to raise
+        ``OverflowError`` inside ``timedelta`` (→ 500) or store a negative /
+        absurd time limit.
+        """
+        if not (payload.get('duration_hours') or payload.get('duration_minutes')):
+            return None
+        try:
+            hours = int(payload.get('duration_hours', 0) or 0)
+            minutes = int(payload.get('duration_minutes', 0) or 0)
+        except (TypeError, ValueError):
+            raise ValidationError(_('Invalid duration.'))
+        if not (hours or minutes):
+            return None
+        if not 0 <= hours <= 1000 or not 0 <= minutes <= 59:
+            raise ValidationError(_('Duration must be between 0 and 1000 hours.'))
+        return timedelta(hours=hours, minutes=minutes)
+
+    def _apply_payload(self, contest, payload):
+        """Copy every supported field from the payload onto the contest object.
+
+        Only assigns attributes — it never calls ``save()``. Shared by the
+        create and update flows so the two modes cannot drift apart. Raises
+        ``ValidationError`` (→ HTTP 400) for invalid dates, bad format JSON or
+        an unregistered ``format_name``.
+
+        Three security-critical rules are enforced here:
+
+        * **Granular permission gating** — fields the current user may not
+          touch (per ``_restricted_fields``, mirroring the Django admin) are
+          skipped entirely. This is the server-side backstop: even if the
+          frontend were bypassed, a curator cannot widen visibility, arm SEB,
+          mark a contest rated, lock it, or change label scripts / ceilings.
+        * **Format whitelist** — ``format_name`` must name a registered contest
+          format. Anything else would later blow up ``Contest.format_class``
+          (KeyError) on every page that renders the contest, bricking it.
+        * **Single source of truth for visibility** — when the payload carries
+          the ``vis_mode`` seg control it derives the three underlying flags
+          (``is_visible`` / ``is_private`` / ``is_organization_private``),
+          instead of letting the UI and the backend disagree about state.
+
+        Note: model-level validation (``Contest.clean()`` / field lengths /
+        SEB keys / label script) is NOT run here — it happens via
+        ``full_clean()`` in ``_create`` / ``_update`` right before ``save()``,
+        so invalid input becomes a readable 400 instead of bricking the row.
+        """
+        restricted = self._restricted_fields(self.request.user)
+
+        # ── List visibility: vis_mode seg control is authoritative ──────────
+        # Maps the four-option radio onto the three underlying flags, touching
+        # only flags the user may actually modify (is_visible is admin-gated
+        # for users without change_contest_visibility).
+        vis_mode = payload.get('vis_mode')
+        vis_applied = vis_mode in ('hidden', 'public', 'org', 'private')
+        if vis_applied:
+            can_edit_visible = 'is_visible' not in restricted
+            # Privacy flags (is_private / is_organization_private) need
+            # create_private_contest. Without it a curator must never be able
+            # to flip a shared contest private (locking out students) or public
+            # (leaking a private contest) via the vis_mode seg control — the
+            # flags are kept at their stored values instead.
+            can_edit_private = 'is_private' not in restricted
+            if vis_mode == 'hidden':
+                if can_edit_visible:
+                    contest.is_visible = False
+                if can_edit_private:
+                    contest.is_private = False
+                    contest.is_organization_private = False
+            elif vis_mode == 'public':
+                if can_edit_visible:
+                    contest.is_visible = True
+                if can_edit_private:
+                    contest.is_private = False
+                    contest.is_organization_private = False
+            elif vis_mode == 'org':
+                if can_edit_visible:
+                    contest.is_visible = True
+                if can_edit_private:
+                    contest.is_private = False
+                    contest.is_organization_private = True
+            elif vis_mode == 'private':
+                if can_edit_visible:
+                    contest.is_visible = True
+                if can_edit_private:
+                    contest.is_private = True
+                    contest.is_organization_private = False
+
+        # ── Plain scalars: booleans, text, and nullable integers ────────────
+        for field in self._bool_fields:
+            if field in restricted:
+                # Permission-gated: keep whatever is already stored.
+                continue
+            if vis_applied and field in ('is_visible', 'is_private', 'is_organization_private'):
+                # Already decided by the vis_mode seg control above.
+                continue
+            # The JS layer already converts checkboxes to real booleans.
+            setattr(contest, field, bool(payload.get(field, False)))
+        for field in self._text_fields:
+            if field in restricted:
+                continue
+            setattr(contest, field, payload.get(field, ''))
+        for field in self._int_fields:
+            if field in restricted:
+                continue
+            value = payload.get(field)
+            try:
+                parsed = int(value) if value not in (None, '') else None
+            except (TypeError, ValueError):
+                parsed = None
+            if parsed is None:
+                # Fall back to the model's default: points_precision is NOT NULL
+                # (default 3), the rating bounds are nullable (default None).
+                parsed = contest._meta.get_field(field).get_default()
+            setattr(contest, field, parsed)
+
+        # ── Format: registered name + optional JSON config blob ─────────────
+        # Validating against contest_format.formats (rather than the field's
+        # choices) keeps this working even for formats added via the registry.
+        format_name = payload.get('format_name', 'default')
+        if format_name not in contest_format.formats:
+            raise ValidationError(_('Invalid contest format: "%(name)s".') % {'name': format_name})
+        contest.format_name = format_name
+        format_config = payload.get('format_config')
+        if format_config is not None and str(format_config).strip():
+            try:
+                contest.format_config = json.loads(format_config)
+            except ValueError:
+                raise ValidationError(_('Invalid contest format configuration JSON.'))
+        elif format_config is not None:
+            contest.format_config = None
+
+        # ── Schedule: start/end are required and must be ordered; lock is optional ──
+        start_time = self._parse_datetime(payload, 'start_time')
+        end_time = self._parse_datetime(payload, 'end_time')
+        if start_time is None or end_time is None:
+            raise ValidationError(_('Start and end time are required.'))
+        if start_time >= end_time:
+            raise ValidationError(_('Start time must be before end time.'))
+        contest.start_time = start_time
+        contest.end_time = end_time
+        if 'locked_after' not in restricted:
+            # Locking submissions (preventing rejudge) needs judge.lock_contest.
+            contest.locked_after = self._parse_datetime(payload, 'locked_after')
+
+        # Duration: the frontend edits hours+minutes, the model stores a timedelta.
+        contest.time_limit = self._parse_duration(payload)
+
+        # ── "Only extend, never shorten" guard ──────────────────────────────
+        # Once students have joined (a participation exists), shrinking the
+        # duration or pulling the deadline earlier would retroactively end
+        # those students' windows mid-run: the middleware clears their
+        # current_contest on the next request, kicking them out of the exam.
+        # To protect active participants we refuse such edits server-side:
+        #   - duration may only stay equal or grow (None = no personal limit
+        #     is treated as "already unlimited", so going to a finite value is
+        #     a shrink and is rejected);
+        #   - end_time may only stay equal or move later.
+        # This mirrors the frontend validation, but is authoritative — a
+        # crafted JSON payload cannot bypass it.
+        # IMPORTANT: the old values must come from the DATABASE, not from
+        # ``contest`` — by this point ``_apply_payload`` has already written
+        # the new duration/end_time onto it, and ``self.contest`` IS that same
+        # object, so reading ``existing.time_limit`` would see the new value.
+        existing = getattr(self, 'contest', None)
+        if existing is not None and existing.pk is not None \
+                and existing.users.exists():
+            old_row = type(existing).objects.filter(pk=existing.pk).values('time_limit', 'end_time').first()
+            old_limit = old_row['time_limit'] if old_row else None
+            old_end = old_row['end_time'] if old_row else None
+            new_limit = contest.time_limit
+            if old_limit is None:
+                if new_limit is not None:
+                    raise ValidationError(
+                        _('Students have already joined. The duration can only be '
+                          'increased — it cannot be changed from unlimited to a fixed time.'))
+            elif new_limit is None:
+                # Removing a personal limit is always an extension (the window
+                # becomes "until the contest ends"), so it is allowed.
+                pass
+            elif new_limit < old_limit:
+                raise ValidationError(
+                    _('Students have already joined. The duration can only be '
+                      'increased, not shortened.'))
+            if old_end is not None and end_time < old_end:
+                raise ValidationError(
+                    _('Students have already joined. The end time can only be '
+                      'extended, not brought earlier.'))
+        return contest
+
+    def _save_m2m(self, contest, payload):
+        """Fully replace each submitted many-to-many field with the given ids.
+
+        Only fields present in the payload are touched: Django's ``.set()`` is
+        atomic, so an omitted field keeps its current rows and an empty list
+        clears them.
+
+        Permission-gated fields (e.g. ``organizations`` / ``private_contestants``
+        without ``create_private_contest``, ``rate_exclude`` without
+        ``contest_rating``) are skipped entirely — same rule as the admin.
+        """
+        restricted = self._restricted_fields(self.request.user)
+        for field in self._m2m_fields:
+            if field not in payload or field in restricted:
+                continue
+            values = payload[field]
+            if isinstance(values, str):
+                values = [values] if values else []
+            try:
+                ids = [int(v) for v in values if str(v)]
+            except (TypeError, ValueError):
+                raise ValidationError(_('Invalid value for "%(field)s".') % {'field': field})
+            getattr(contest, field).set(ids)
+
+    def _sync_problems(self, contest, payload):
+        """Replace the contest's problem list with the submitted selection.
+
+        Accepts either a list of ``{id, points, partial, is_pretested,
+        max_submissions, output_prefix, hide_results}`` dicts (what the
+        frontend sends) or a plain list of ids (points default to 100, partial
+        on, not pretested, unlimited submissions). Called on create (initial
+        add) and on edit (full replace, mirroring the frontend's problem
+        library). A missing/absent ``problems`` key is a no-op, so existing
+        problems are preserved unless explicitly edited; an explicit empty
+        list clears them.
+
+        **Security:** only problems the editor may see may be attached. The
+        problem picker already filters to ``_visible_problems_for``; this check
+        is the server-side backstop against a crafted request attaching another
+        teacher's hidden problem, which the contest page would then display to
+        students (cross-user information disclosure). Problems *already*
+        attached to the contest stay allowed, so a curator can keep saving a
+        contest that contains an admin-attached problem they cannot otherwise
+        see.
+        """
+        problems = payload.get('problems')
+        if problems is None:
+            problems = payload.get('problem_ids')
+        if problems is None:
+            return
+        if isinstance(problems, str):
+            problems = [problems]
+
+        user = self.request.user
+        if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.see_private_problem'):
+            # Trusted editor: may attach anything (same trust as the admin picker).
+            allowed_ids = None
+        else:
+            # Everyone else: visible problems ∪ problems already on this contest.
+            allowed_ids = set(Problem.get_visible_problems(user).values_list('id', flat=True)) \
+                | set(contest.contest_problems.values_list('problem_id', flat=True))
+
+        ContestProblem.objects.filter(contest=contest).delete()
+        order = 1
+        for item in problems:
+            if isinstance(item, dict):
+                pid = item.get('id')
+                raw_points = item.get('points', 100)
+                raw_partial = item.get('partial')
+                raw_pretested = item.get('is_pretested')
+                raw_max_subs = item.get('max_submissions')
+                raw_out_prefix = item.get('output_prefix')
+                raw_hide_results = item.get('hide_results')
+            else:
+                pid = item
+                raw_points = 100
+                raw_partial = raw_pretested = None
+                raw_max_subs = None
+                raw_out_prefix = raw_hide_results = None
+            try:
+                problem = Problem.objects.get(pk=int(pid))
+            except (TypeError, ValueError, Problem.DoesNotExist):
+                continue
+            if allowed_ids is not None and problem.id not in allowed_ids:
+                raise ValidationError(
+                    _('You are not allowed to attach problem "%(code)s" to this contest.') % {'code': problem.code})
+            try:
+                points = int(raw_points) if raw_points not in (None, '') else 100
+            except (TypeError, ValueError):
+                points = 100
+            # Per-problem options (admin-parity). Explicit booleans win; when
+            # the payload omits them (plain id list) the model defaults apply.
+            partial = bool(raw_partial) if raw_partial is not None else True
+            is_pretested = bool(raw_pretested) if raw_pretested is not None else False
+            try:
+                max_submissions = int(raw_max_subs) if raw_max_subs not in (None, '') else None
+            except (TypeError, ValueError):
+                max_submissions = None
+            # output_prefix_override: nullable int (blank → model default 0).
+            try:
+                output_prefix = int(raw_out_prefix) if raw_out_prefix not in (None, '') else None
+            except (TypeError, ValueError):
+                output_prefix = None
+            # hide_results: three-state — None/'default' → unset, True/'hide' → hidden,
+            # False/'show' → shown (defaults to the question type's policy).
+            if raw_hide_results in (True, 'true', 'hide', 1, '1'):
+                hide_results = True
+            elif raw_hide_results in (False, 'false', 'show', 0, '0'):
+                hide_results = False
+            else:
+                hide_results = None
+            ContestProblem.objects.create(
+                contest=contest, problem=problem, points=points, order=order,
+                partial=partial, is_pretested=is_pretested, max_submissions=max_submissions,
+                output_prefix_override=output_prefix, hide_results=hide_results,
+            )
+            order += 1
+
+    # ── create / update ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _error_response(exception):
+        """Map a save failure to a JSON error response.
+
+        Validation errors (bad dates/JSON/user input) return their message
+        with HTTP 400; anything else is logged and reported generically so
+        internal details never reach the browser.
+        """
+        if isinstance(exception, ValidationError):
+            # Django's ValidationError can carry dicts / lists of messages
+            # (e.g. from full_clean()); flatten them into one readable line.
+            return JsonResponse({'error': ' '.join(exception.messages)}, status=400)
+        logger.exception('Contest save failed: %s', exception)
+        return JsonResponse({'error': _('Failed to save contest.')}, status=500)
+
+    def _create(self, request, payload):
+        """Validate identity, insert a new ``judge_contest`` row, return redirect."""
+        # Basic identity checks: both name and key are mandatory.
+        for field in ('name', 'key'):
+            if not payload.get(field):
+                return JsonResponse({'error': _('Missing required field: %s') % field}, status=400)
+        key = payload.get('key', '')
+        if not re.match(r'^[a-z0-9]+$', key):
+            return JsonResponse({'error': _('Contest key must contain only lowercase letters and numbers.')},
+                                status=400)
+        if Contest.objects.filter(key=key).exists():
+            return JsonResponse({'error': _('A contest with this key already exists.')}, status=400)
+
+        try:
+            with transaction.atomic():
+                contest = Contest(key=key)
+                self._apply_payload(contest, payload)
+                # Run the model's own validation (field lengths, SEB keys,
+                # format config, Lua label script, start/end ordering) before
+                # the first save. Without this, an invalid payload could store
+                # a row that 500s every page that renders it.
+                contest.full_clean()
+                contest.save()
+                self._save_m2m(contest, payload)
+                contest.authors.add(request.profile)  # the creator becomes an author
+                self._sync_problems(contest, payload)
+                return self._action_response(payload, contest.key)
+        except Exception as e:
+            return self._error_response(e)
+
+    def _update(self, request, payload):
+        """Update an existing contest row (and optionally its key) in place."""
+        contest = self.contest
+        try:
+            with transaction.atomic():
+                # Renaming the key (the URL slug) needs a uniqueness check that
+                # excludes this very contest.
+                new_key = payload.get('key') or contest.key
+                if new_key != contest.key:
+                    if not re.match(r'^[a-z0-9]+$', new_key):
+                        return JsonResponse(
+                            {'error': _('Contest key must contain only lowercase letters and numbers.')},
+                            status=400,
+                        )
+                    if Contest.objects.filter(key=new_key).exclude(pk=contest.pk).exists():
+                        return JsonResponse({'error': _('A contest with this key already exists.')}, status=400)
+                    contest.key = new_key
+
+                self._apply_payload(contest, payload)
+                # Same model-level validation as create: an invalid edit must
+                # 400 with a readable message, not brick the contest.
+                contest.full_clean()
+                contest.save()
+                self._save_m2m(contest, payload)
+                # Authors are only editable here; create auto-adds the current user.
+                if 'authors' in payload:
+                    values = payload['authors']
+                    if isinstance(values, str):
+                        values = [values] if values else []
+                    try:
+                        contest.authors.set([int(v) for v in values if str(v)])
+                    except (TypeError, ValueError):
+                        raise ValidationError(_('Invalid value for "authors".'))
+                self._sync_problems(contest, payload)
+                return self._action_response(payload, contest.key)
+        except Exception as e:
+            return self._error_response(e)
+
+    @staticmethod
+    def _action_response(payload, key):
+        """Build the post-save response from the ``action`` button clicked.
+
+        ``save`` (default) → redirect to the contest page; ``continue`` → back
+        to the editor for another round of edits; ``another`` → no redirect —
+        the frontend clears the form and stays put to create the next contest.
+        """
+        action = payload.get('action') if isinstance(payload, dict) else None
+        if action not in ('save', 'continue', 'another'):
+            action = 'save'
+        if action == 'another':
+            return JsonResponse({'ok': True, 'action': 'another'})
+        redirect = reverse('contest_edit', args=[key]) if action == 'continue' \
+            else reverse('contest_view', args=[key])
+        return JsonResponse({'ok': True, 'action': action, 'redirect': redirect})
+
+    # ── template context ────────────────────────────────────────────────────
+
+    def _visible_problems_for(self, user):
+        """Problems the editor may attach to a contest (library + server check).
+
+        Full editors (``edit_all_contest`` / ``see_private_problem``) may
+        attach anything — the same trust as the Django admin's problem picker.
+        Everyone else is limited to what they could already see via
+        ``Problem.get_visible_problems``: public problems, their own
+        authored/curated/tested problems, and the org-private problems of
+        organizations they administer. This keeps a curator who merely holds
+        ``edit_own_contest`` from attaching — and thereby leaking — a
+        colleague's hidden problem through a contest that students can see.
+        """
+        if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.see_private_problem'):
+            return Problem.objects.all()
+        return Problem.get_visible_problems(user)
+
+    @staticmethod
+    def _local_input(dt, tz):
+        """Format a stored UTC datetime in the given user timezone.
+
+        The editor stores UTC; this renders the value back in the *user's* own
+        timezone (not the site's), so a teacher who typed 10:00 in UTC+8 sees
+        10:00 again when reopening the form instead of the raw 02:00 UTC.
+        """
+        if not dt:
+            return ''
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.utc)
+        return dt.astimezone(tz).strftime('%Y-%m-%dT%H:%M')
+
+    def get_context_data(self):
+        """Build the template context, pre-filling every field in edit mode.
+
+        Add mode ships sensible defaults (e.g. virtual participation on,
+        ``vis_mode`` = hidden); edit mode overwrites them from the stored row.
+        """
+        contest = self.contest
+        # Temporary timezone for this editor, remembered per-browser-session so
+        # the choice survives page reloads / reopening the form, while the
+        # profile's saved timezone is never touched (a teacher abroad can plan
+        # an assignment in Beijing time without changing their account).
+        # Resolution order: ?tz= (explicit, also persists) > session > profile.
+        profile_tz_name = getattr(getattr(self.request, 'profile', None), 'timezone', '') \
+            or settings.DEFAULT_USER_TIME_ZONE
+
+        user_tz_name = _valid_tz(self.request.GET.get('tz', '').strip()) \
+            or _valid_tz(self.request.session.get('contest_editor_tz', '')) \
+            or profile_tz_name
+        if not _valid_tz(user_tz_name):
+            user_tz_name = 'UTC'
+        # Remember an explicitly selected ?tz= for the rest of the session.
+        explicit_tz = _valid_tz(self.request.GET.get('tz', '').strip())
+        if explicit_tz and explicit_tz != self.request.session.get('contest_editor_tz'):
+            self.request.session['contest_editor_tz'] = explicit_tz
+        try:
+            user_tz = ZoneInfo(user_tz_name)
+        except (KeyError, ValueError):
+            user_tz = ZoneInfo('UTC')
+        prefill = {
+            'name': '', 'key': '', 'description': '', 'summary': '', 'og_image': '',
+            'logo_override_image': '', 'access_code': '', 'problem_label_script': '',
+            'format_config': '', 'format_name': 'default', 'scoreboard_visibility': 'V',
+            'points_precision': 3, 'rating_floor': '', 'rating_ceiling': '',
+            'performance_ceiling_override': '', 'start_time': '', 'end_time': '',
+            'locked_after': '', 'duration_hours': 0, 'duration_minutes': 0,
+            'seb_browser_exam_keys': '', 'seb_config_keys': '', 'seb_quit_url': '',
+            'is_visible': False, 'is_rated': False, 'use_clarifications': True,
+            'hide_problem_tags': False, 'hide_problem_authors': False,
+            'allow_virtual_participation': True, 'run_pretests_only': False,
+            'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': False,
+            'show_short_display': False, 'is_private': False, 'is_organization_private': False,
+            'limit_join_organizations': False, 'seb_required': False,
+            'vis_mode': 'hidden', 'cheat_level': 'medium', 'problems': [],
+            'target_score': 100,
+        }
+        for field in self._m2m_fields:
+            prefill[field] = []
+        prefill['authors'] = []
+
+        if contest is not None:
+            total = int(contest.time_limit.total_seconds()) if contest.time_limit else 0
+            # Privacy of prefill: sensitive fields the current user may not
+            # edit (per _restricted_fields) are blanked so they never reach
+            # the browser, even as hidden input values / JS state. The UI
+            # already hides those controls; this is defense in depth against
+            # a lower-privileged editor reading the page source.
+            restricted = self._restricted_fields(self.request.user)
+            prefill.update({
+                'name': contest.name,
+                'key': contest.key,
+                'description': contest.description,
+                'summary': contest.summary,
+                'og_image': contest.og_image,
+                'logo_override_image': contest.logo_override_image,
+                'access_code': contest.access_code if 'access_code' not in restricted else '',
+                'problem_label_script': (contest.problem_label_script
+                                         if 'problem_label_script' not in restricted else ''),
+                'format_config': json.dumps(contest.format_config, ensure_ascii=False) if contest.format_config else '',
+                'format_name': contest.format_name,
+                'scoreboard_visibility': contest.scoreboard_visibility,
+                'points_precision': contest.points_precision,
+                'rating_floor': contest.rating_floor if contest.rating_floor is not None else '',
+                'rating_ceiling': contest.rating_ceiling if contest.rating_ceiling is not None else '',
+                'performance_ceiling_override': (contest.performance_ceiling_override
+                                                 if contest.performance_ceiling_override is not None else ''),
+                'start_time': self._local_input(contest.start_time, user_tz),
+                'end_time': self._local_input(contest.end_time, user_tz),
+                'locked_after': self._local_input(contest.locked_after, user_tz),
+                'duration_hours': total // 3600 if total else 0,
+                'duration_minutes': (total % 3600) // 60 if total else 0,
+                'seb_browser_exam_keys': (contest.seb_browser_exam_keys
+                                          if 'seb_browser_exam_keys' not in restricted else ''),
+                'seb_config_keys': (contest.seb_config_keys
+                                    if 'seb_config_keys' not in restricted else ''),
+                'seb_quit_url': contest.seb_quit_url if 'seb_quit_url' not in restricted else '',
+            })
+            for field in self._bool_fields:
+                prefill[field] = getattr(contest, field)
+            # Profile M2M → (id, username); organization/class/tag M2M → (id, name).
+            for field in self._m2m_fields:
+                related = getattr(contest, field)
+                if field in ('organizations', 'join_organizations', 'classes'):
+                    prefill[field] = [(o.id, o.name) for o in related.all()]
+                elif field == 'tags':
+                    prefill[field] = [(t.id, t.name) for t in related.all()]
+                else:
+                    prefill[field] = [(p.id, p.user.username) for p in related.all()]
+            prefill['authors'] = [(p.id, p.user.username) for p in contest.authors.all()]
+            # Problems currently attached to the contest, in display order.
+            # Per-problem options (partial / pretested / max submissions / out
+            # prefix / result visibility) ride along so the editor round-trips
+            # them losslessly.
+            prefill['problems'] = [
+                {
+                    'id': cp.problem_id,
+                    'code': cp.problem.code,
+                    'name': cp.problem.name,
+                    'points': cp.points,
+                    'letter': chr(65 + idx),
+                    'partial': cp.partial,
+                    'is_pretested': cp.is_pretested,
+                    'max_submissions': cp.max_submissions if cp.max_submissions is not None else '',
+                    'output_prefix': cp.output_prefix_override if cp.output_prefix_override is not None else '',
+                    'hide_results': cp.hide_results,  # three-state: None/True/False
+                }
+                for idx, cp in enumerate(contest.contest_problems.all().order_by('order'))
+            ]
+            # Target score (pure UX, not a model field): backfill from the sum
+            # of problem points so the editor's target input matches reality.
+            prefill['target_score'] = sum(cp.points for cp in contest.contest_problems.all()) or 100
+
+            # Reconstruct UI-only controls from the stored flags.
+            # Anti-cheat level: SEB + access code → custom; SEB → high; code → medium.
+            if contest.seb_required and contest.access_code:
+                prefill['cheat_level'] = 'custom'
+            elif contest.seb_required:
+                prefill['cheat_level'] = 'high'
+            elif contest.access_code:
+                prefill['cheat_level'] = 'medium'
+            else:
+                prefill['cheat_level'] = 'low'
+            # List visibility seg control: user-private > org-private > public > hidden.
+            # Derived from the STORED FLAGS only — list contents (private_contestants /
+            # organizations / classes) are scoping data, not mode selectors. Checking the
+            # lists instead would resurrect 'private' every time an assignment that was
+            # once private (leaving entries behind) is switched to org/public and reopened.
+            if contest.is_private:
+                prefill['vis_mode'] = 'private'
+            elif contest.is_organization_private:
+                prefill['vis_mode'] = 'org'
+            elif contest.is_visible:
+                prefill['vis_mode'] = 'public'
+            else:
+                prefill['vis_mode'] = 'hidden'
+
+        return {
+            'title': _('Edit Contest') if contest else _('Add Contest'),
+            'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
+            'now': timezone.now(),
+            'organizations': Organization.objects.all(),
+            'classes': Class.objects.all(),
+            'tags': ContestTag.objects.all(),
+            'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
+            # Only problems this editor may attach — see _visible_problems_for.
+            # select_related/prefetch_related feed the library columns (group,
+            # types / difficulty, orgs) without N+1 queries on a large bank.
+            'problems': (self._visible_problems_for(self.request.user)
+                         .select_related('group').prefetch_related('types', 'organizations')
+                         .order_by('-date')),
+            'contest': contest,
+            'user_timezone': user_tz_name,
+            'tz_options': self._tz_options(user_tz_name),
+            'is_edit': contest is not None,
+            # Fields hidden in the template AND skipped server-side, mirroring
+            # ContestAdmin.get_readonly_fields (see _restricted_fields).
+            'restricted_fields': self._restricted_fields(self.request.user),
+            # Whether the user may scope a contest to a private audience at all
+            # (drives which seg options the visibility control offers).
+            'can_edit_private': self.request.user.has_perm('judge.create_private_contest'),
+            # Whether students have joined: when true, duration/end_time may
+            # only be extended (the server refuses shortening — see the guard
+            # in _apply_payload). The frontend mirrors this to give instant
+            # feedback instead of a round-trip error.
+            'has_participants': bool(contest is not None and contest.users.exists()),
+            'prefill': prefill,
+        }
+
+    @staticmethod
+    def _tz_options(current):
+        """Curated timezone list for the temporary form-timezone selector.
+
+        Kept small on purpose — a sprawling optgroup tree is worse than a
+        focused set of zones teachers actually cross timezones between (the
+        site default + common CN/US/EU zones). ``current`` is placed first
+        (labelled "current") so the selector always shows the active zone.
+        """
+        zones = [
+            ('Asia/Shanghai', _('China (Beijing) UTC+8')),
+            ('America/New_York', _('US Eastern UTC-5')),
+            ('America/Chicago', _('US Central UTC-6')),
+            ('America/Denver', _('US Mountain UTC-7')),
+            ('America/Los_Angeles', _('US Pacific UTC-8')),
+            ('America/Toronto', _('Canada Eastern UTC-5')),
+            ('Europe/London', _('UK (London) UTC+0')),
+            ('Europe/Paris', _('France (Paris) UTC+1')),
+            ('Europe/Berlin', _('Germany (Berlin) UTC+1')),
+            ('Europe/Moscow', _('Russia (Moscow) UTC+3')),
+            ('UTC', _('UTC')),
+        ]
+        ordered = [(name, label) for name, label in zones if name != current]
+        if current:
+            ordered.insert(0, (current, _('%(tz)s (current)') % {'tz': current}))
+        return ordered
+
+
+class ContestTZPreference(LoginRequiredMixin, View):
+    """Persist the editor's temporary timezone to the session (AJAX, no reload).
+
+    The create/edit form switches timezone locally in JS; this endpoint stores
+    the choice so reopening the form later keeps the same wall-clock timezone,
+    without a full page round-trip that would discard unsaved input.
+    """
+
+    def post(self, request, *args, **kwargs):
+        tz = _valid_tz(request.POST.get('tz', '').strip())
+        if not tz:
+            return JsonResponse({'error': _('Invalid timezone.')}, status=400)
+        request.session['contest_editor_tz'] = tz
+        return JsonResponse({'ok': True, 'tz': tz})
+
+
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+class ContestTagCreateView(LoginRequiredMixin, View):
+    """Create a ContestTag from the contest editor's tag input ("Add new").
+
+    The tag field on ``Contest`` is a plain M2M to ``ContestTag``; the editor
+    only lets teachers pick existing tags. This endpoint lets them type a new
+    tag name, persist it (with an auto-assigned colour), and immediately select
+    it — mirroring ``ProblemCreateV2ProblemTypeView`` for problem types.
+    """
+
+    # Rotating palette so consecutive tags get distinct colours automatically.
+    _PALETTE = ('#2980B9', '#27AE60', '#E74C3C', '#8E44AD', '#F39C12')
+
+    @staticmethod
+    def _can_create(user):
+        # Same population that may open the contest editor: full editors,
+        # edit_own_contest holders, and anyone listed as author/curator of at
+        # least one contest (curators may edit contests even without the
+        # permission — see Contest.is_editable_by).
+        if not user.is_authenticated:
+            return False
+        if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.edit_own_contest'):
+            return True
+        from judge.models import Contest as ContestModel
+        return (ContestModel.authors.through.objects.filter(profile=user.profile).exists()
+                or ContestModel.curators.through.objects.filter(profile=user.profile).exists())
+
+    def post(self, request, *args, **kwargs):
+        if not self._can_create(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': _('Invalid request.')}, status=400)
+
+        name = (payload.get('name') or '').strip()
+        if not name:
+            return JsonResponse({'error': _('Please enter a tag name.')}, status=400)
+        if not re.match(r'^[a-z-]+$', name):
+            return JsonResponse({'error': _('Lowercase letters and hyphens only.')}, status=400)
+        if len(name) > 20:
+            return JsonResponse({'error': _('Tag name must be at most 20 characters.')}, status=400)
+        if ContestTag.objects.filter(name=name).exists():
+            return JsonResponse({'error': _('This tag already exists.')}, status=400)
+
+        tag = ContestTag.objects.create(
+            name=name,
+            color=self._PALETTE[ContestTag.objects.count() % len(self._PALETTE)],
+        )
+        return JsonResponse({'ok': True, 'tag': {'id': tag.id, 'name': tag.name, 'color': tag.color}})
+
+
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+class ContestSEBFileView(LoginRequiredMixin, View):
+    """Upload/replace a contest's ``.seb`` Safe Exam Browser config file.
+
+    The admin-only ``seb_config_file`` FileField becomes editable from the
+    contest editor via a multipart POST (the main editor save is JSON and
+    cannot carry file uploads). Permission mirrors ``ContestCreate`` edit mode:
+    the contest must be editable by the requesting user.
+    """
+
+    def post(self, request, *args, **kwargs):
+        contest = get_object_or_404(Contest, key=kwargs['contest'])
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        if not contest.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        if 'seb_config_file' not in request.FILES:
+            return JsonResponse({'error': _('No file uploaded.')}, status=400)
+        upload = request.FILES['seb_config_file']
+        if not upload.name.lower().endswith('.seb'):
+            return JsonResponse({'error': _('Only .seb files are accepted.')}, status=400)
+        try:
+            contest.seb_config_file = upload
+            contest.save(update_fields=['seb_config_file'])
+            return JsonResponse({'ok': True, 'name': upload.name})
+        except Exception:
+            logger.exception('SEB config upload failed for contest %s', contest.key)
+            return JsonResponse({'error': _('Failed to upload the file.')}, status=500)
+
+
+class ContestFinalizeView(LoginRequiredMixin, View):
+    """Finalize (or un-finalize) an exam-style contest from the editor.
+
+    Only full editors may trigger this (``judge.edit_all_contest``): finalizing
+    reveals hidden problem results, rejudges latest submissions and recomputes
+    the standings, so it must not be reachable by mere curators. The heavy work
+    runs as a celery task via ``transaction.on_commit``, exactly like the admin.
+    """
+
+    def post(self, request, *args, **kwargs):
+        contest = get_object_or_404(Contest, key=kwargs['contest'])
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        if not contest.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        if not request.user.has_perm('judge.edit_all_contest'):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        from judge.tasks import finalize_contest_results, unfinalize_contest_results
+        task = finalize_contest_results if self.finalize else unfinalize_contest_results
+        transaction.on_commit(task.s(contest.key).delay)
+        return JsonResponse({'ok': True})
+
+    @property
+    def finalize(self):
+        return True
+
+
+class ContestUnfinalizeView(ContestFinalizeView):
+    """Reverse of ``ContestFinalizeView``: re-hide results until finalize again."""
+
+    @property
+    def finalize(self):
+        return False
 
 
 class PrivateContestError(Exception):
@@ -704,6 +1657,11 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                 participation_type = LIVE
             elif contest.is_spectatable_by(request.user):
                 participation_type = SPECTATE
+            elif contest.has_completed_contest(request.user):
+                # A student whose live window already ran out: tell them why
+                # they cannot enter again (no spectator fallback for them).
+                return generic_message(request, _('Your time is up'),
+                                       _('Your time for this assignment has ended.'))
             else:
                 return generic_message(request, _('Cannot enter'),
                                        _('You are not able to join this contest.'))
@@ -724,6 +1682,15 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                     raise ContestAccessDenied()
 
                 if participation.ended:
+                    # A live window that already ran out. Only privileged
+                    # roles may fall back to spectating; a regular student is
+                    # simply done — no silent spectator conversion.
+                    if not contest.is_spectatable_by(request.user):
+                        return generic_message(
+                            request,
+                            _('Your time is up'),
+                            _('Your time for this assignment has ended.'),
+                        )
                     participation = ContestParticipation.objects.get_or_create(
                         contest=contest, user=profile, virtual=SPECTATE,
                         defaults={'real_start': timezone.now()},
@@ -747,6 +1714,7 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
             form = ContestAccessCodeForm()
         return render(self.request, 'contest/access_code.html', {
             'form': form, 'wrong_code': wrong_code,
+            'contest': contest,
             'title': _('Enter access code for "%s"') % contest.name,
         })
 

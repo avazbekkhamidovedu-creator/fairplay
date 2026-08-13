@@ -250,6 +250,13 @@ urlpatterns = [
 
     path('contests/', paged_list_view(contests.ContestListV2, 'contest_list')),
     path('contests/legacy/', paged_list_view(contests.ContestList, 'contest_list_legacy')),
+    path('contests/create/', contests.ContestCreate.as_view(), name='contest_create'),
+    path('contests/<str:contest>/edit/', contests.ContestCreate.as_view(), name='contest_edit'),
+    path('contest-tz/', contests.ContestTZPreference.as_view(), name='contest_tz_preference'),
+    path('contest-tags/create/', contests.ContestTagCreateView.as_view(), name='contest_tag_create'),
+    path('contests/<str:contest>/seb/', contests.ContestSEBFileView.as_view(), name='contest_seb_upload'),
+    path('contests/<str:contest>/finalize/', contests.ContestFinalizeView.as_view(), name='contest_finalize'),
+    path('contests/<str:contest>/unfinalize/', contests.ContestUnfinalizeView.as_view(), name='contest_unfinalize'),
     path('contests.ics', contests.ContestICal.as_view(), name='contest_ical'),
     path('contests/<int:year>/<int:month>/', contests.ContestCalendar.as_view(), name='contest_calendar'),
     re_path(r'^contests/tag/(?P<name>[a-z-]+)', include([
