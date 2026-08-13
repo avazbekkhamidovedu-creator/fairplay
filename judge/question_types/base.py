@@ -39,8 +39,12 @@ class QuestionType:
         raise NotImplementedError
 
     # --- student submission -------------------------------------------------
-    def build_form(self, problem, profile, data=None, initial=None):
-        """Return a bound/unbound form for the student submit page."""
+    def build_form(self, problem, profile, data=None, files=None, initial=None):
+        """Return a bound/unbound form for the student submit page.
+
+        ``files`` carries ``request.FILES`` for types that accept an upload (e.g. file upload);
+        types without a file field ignore it.
+        """
         raise NotImplementedError
 
     def store_answer(self, submission, cleaned_data):

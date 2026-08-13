@@ -15,12 +15,12 @@ from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMix
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import BooleanField, Case, CharField, Count, F, FilteredRelation, Prefetch, Q, When
+from django.db.models import BooleanField, Case, CharField, Count, F, FilteredRelation, Max, Prefetch, Q, When
 from django.db.models.functions import Coalesce
 from django.db.utils import ProgrammingError
 from django.http import Http404, HttpResponse, HttpResponseForbidden, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404
-from django.template.loader import get_template
+from django.template.loader import get_template, render_to_string
 from django.urls import reverse
 from django.utils import timezone, translation
 from django.utils.functional import cached_property
@@ -33,19 +33,27 @@ from django.views.generic import DetailView, ListView, View
 from django.views.generic.detail import SingleObjectMixin
 from reversion import revisions
 
-from judge.comments import CommentedDetailView
+from judge import event_poster as event
+from judge.comments import CommentedDetailView, SubmissionCommentMixin
 from judge.forms import ProblemCloneForm, ProblemPointsVoteForm, ProblemSubmitForm
 from judge.models import (
     ContestProblem,
     ContestSubmission,
     Judge,
     Language,
+    LanguageLimit,
     Organization,
     Problem,
+    ProblemBlank,
     ProblemData,
+    ProblemFileConfig,
+    ProblemFillBlankConfig,
     ProblemGroup,
     ProblemHarness,
+    ProblemMCQConfig,
+    ProblemMCQOption,
     ProblemPointsVote,
+    ProblemShortAnswerConfig,
     ProblemTemplate,
     ProblemTestCase,
     ProblemTranslation,
@@ -65,6 +73,8 @@ from judge.utils.problems import (
     hot_problems,
     user_attempted_ids,
     user_completed_ids,
+    user_editable_ids,
+    user_tester_ids,
 )
 from judge.utils.strings import safe_float_or_none, safe_int_or_none
 from judge.utils.tickets import own_ticket_filter
@@ -77,6 +87,8 @@ recjk = re.compile(
 
 
 def get_contest_problem(problem, profile):
+    if profile is None or profile.current_contest is None:
+        return None
     try:
         return problem.contests.get(contest_id=profile.current_contest.contest_id)
     except ObjectDoesNotExist:
@@ -89,6 +101,95 @@ def get_contest_submission_count(problem, profile, virtual):
         .filter(problem__problem=problem, participation__virtual=virtual)
         .count()
     )
+
+
+def workspace_display_points(submission, request):
+    """Score shown in Workspace: assignment uses ContestSubmission.points, else problem scale."""
+    if getattr(request, 'in_contest', False):
+        contest_sub = submission.contest_or_none
+        if contest_sub is not None:
+            return contest_sub.points
+    return submission.points
+
+
+def get_workspace_answer_display(submission):
+    """Human-readable answer rows for non-code Result panels (MCQ / fill-blank / short answer)."""
+    from judge.question_types import get_grader
+
+    grader = get_grader(submission.problem.submission_type)
+    if grader.routes_to_bridge:
+        return []
+    try:
+        raw = submission.source.source
+    except ObjectDoesNotExist:
+        return []
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return [{'label': '', 'value': raw}] if raw else []
+
+    if submission.problem.submission_type == 'M':
+        options = {
+            opt.id: opt
+            for opt in submission.problem.mcq_options.all()
+        }
+        rows = []
+        # Prefer submit-time snapshot (survives option recreate on edit).
+        snapshot = payload.get('choices') if isinstance(payload, dict) else None
+        if snapshot:
+            for choice in snapshot:
+                text = (choice.get('text') or '').strip()
+                order = choice.get('order')
+                opt_id = choice.get('id')
+                live = options.get(int(opt_id)) if opt_id is not None and str(opt_id).isdigit() else None
+                if not text and live is not None:
+                    text = live.text
+                    order = live.order
+                if order is None and live is not None:
+                    order = live.order
+                letter = chr(ord('A') + order) if isinstance(order, int) else ''
+                prefix = ('%s. ' % letter) if letter else ''
+                if text:
+                    rows.append({'label': '', 'value': '%s%s' % (prefix, text)})
+                else:
+                    rows.append({'label': '', 'value': _('(option no longer available)')})
+            return rows or [{'label': '', 'value': _('(no option selected)')}]
+
+        selected = payload.get('selected') or [] if isinstance(payload, dict) else []
+        for opt_id in selected:
+            opt = options.get(int(opt_id)) if str(opt_id).isdigit() or isinstance(opt_id, int) else None
+            if opt is None:
+                # Stale id after options were rewritten — do not show bare database ids.
+                rows.append({'label': '', 'value': _('(option no longer available)')})
+            else:
+                letter = chr(ord('A') + opt.order) if opt.order is not None else ''
+                label = ('%s. ' % letter) if letter else ''
+                rows.append({'label': '', 'value': '%s%s' % (label, opt.text)})
+        return rows or [{'label': '', 'value': _('(no option selected)')}]
+
+    if submission.problem.submission_type == 'B':
+        answers = payload.get('answers') or []
+        blanks = list(submission.problem.blanks.order_by('order'))
+        rows = []
+        for idx, blank in enumerate(blanks):
+            value = answers[idx] if idx < len(answers) else ''
+            rows.append({
+                'label': _('Blank %(n)d') % {'n': idx + 1},
+                'value': value if value != '' else _('(empty)'),
+            })
+        if not rows and answers:
+            for idx, value in enumerate(answers):
+                rows.append({
+                    'label': _('Blank %(n)d') % {'n': idx + 1},
+                    'value': value if value != '' else _('(empty)'),
+                })
+        return rows
+
+    if submission.problem.submission_type == 'S':
+        text = payload.get('text', '')
+        return [{'label': '', 'value': text if text != '' else _('(empty)')}]
+
+    return [{'label': '', 'value': raw}] if raw else []
 
 
 class ProblemMixin(object):
@@ -196,7 +297,12 @@ class ProblemSolution(
 
 class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
     context_object_name = 'problem'
-    template_name = 'problem/problem.html'
+    template_name = 'problem/workspace.html'
+
+    def get_template_names(self):
+        if self.request.GET.get('legacy') == '1':
+            return ['problem/problem.html']
+        return [self.template_name]
 
     def get_comment_page(self):
         return 'p:%s' % self.object.code
@@ -215,6 +321,34 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         )
         context['contest_problem'] = contest_problem
         if contest_problem:
+            contest = contest_problem.contest
+            # Isolate practice / assignment / exam drafts and UI context.
+            if contest.format_class.has_hidden_results:
+                context['workspace_mode'] = 'exam'
+            else:
+                context['workspace_mode'] = 'assignment'
+            context['workspace_context_id'] = contest.key
+            context['workspace_problems'] = ContestProblem.objects.filter(
+                contest=contest,
+            ).select_related('problem', 'problem__mcq_config').prefetch_related(
+                'problem__types', 'problem__organizations',
+            ).order_by('order')
+            context['workspace_context_name'] = contest.name
+            context['workspace_return_url'] = reverse('contest_view', args=[contest.key])
+            context['workspace_current_order'] = contest_problem.order
+        else:
+            context['workspace_mode'] = 'practice'
+            context['workspace_context_id'] = ''
+            context['workspace_problems'] = (
+                Problem.get_visible_problems(user)
+                .select_related('mcq_config')
+                .prefetch_related('types', 'organizations')
+                .order_by('code')[:250]
+            )
+            context['workspace_context_name'] = _('Problem list')
+            context['workspace_return_url'] = reverse('problem_list')
+            context['workspace_current_order'] = None
+        if contest_problem:
             clarifications = self.object.clarifications
             context['has_clarifications'] = clarifications.count() > 0
             context['clarifications'] = clarifications.order_by('-date')
@@ -231,6 +365,12 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         context['has_pdf_render'] = PDF_RENDERING_ENABLED
         context['completed_problem_ids'] = self.get_completed_problems()
         context['attempted_problems'] = self.get_attempted_problems()
+        if authed:
+            context['editable_problem_ids'] = user_editable_ids(user.profile)
+            context['tester_problem_ids'] = user_tester_ids(user.profile)
+        else:
+            context['editable_problem_ids'] = set()
+            context['tester_problem_ids'] = set()
 
         can_edit = self.object.is_editable_by(user)
         context['can_edit_problem'] = can_edit
@@ -283,6 +423,160 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['prev_contest_problem'] = cp_qs.filter(order__lt=contest_problem.order).order_by('-order').first()
 
         context['submission_type'] = self.object.submission_type
+        from judge.models import ProblemSubmissionType
+        from judge.question_types import all_types, get_grader
+        workspace_grader = get_grader(self.object.submission_type)
+        context['workspace_is_code'] = workspace_grader.routes_to_bridge
+        context['workspace_submission_type_label'] = str(workspace_grader.label)
+        # Match problem-list redesign filters: multi format (MCQ expanded), course, tags.
+        workspace_format_options = []
+        for grader in all_types():
+            if grader.submission_type == ProblemSubmissionType.MCQ:
+                workspace_format_options.append({
+                    'code': ProblemSubmissionType.MCQ, 'label': str(grader.label),
+                })
+                workspace_format_options.append({'code': 'single', 'label': str(_('Single choice'))})
+                workspace_format_options.append({'code': 'multiple', 'label': str(_('Multiple choice'))})
+                workspace_format_options.append({'code': 'truefalse', 'label': str(_('True/False'))})
+            else:
+                workspace_format_options.append({
+                    'code': grader.submission_type, 'label': str(grader.label),
+                })
+        context['workspace_format_options'] = workspace_format_options
+        context['workspace_difficulty_options'] = [
+            {'code': name, 'label': Problem.difficulty_display(name)}
+            for name in Problem.DIFFICULTY_TYPE_NAMES
+        ]
+        context['workspace_organizations'] = list(Organization.objects.order_by('name'))
+        reserved_kp = Problem.reserved_auto_type_labels()
+        context['workspace_knowledge_types'] = [
+            t for t in ProblemType.objects.order_by('full_name')
+            if Problem.is_knowledge_problem_type(t, reserved_labels=reserved_kp)
+        ]
+        context['workspace_attempt_counts'] = {}
+        context['workspace_best_points'] = {}
+        if authed:
+            if contest_problem:
+                drawer_problem_ids = [cp.problem_id for cp in context['workspace_problems']]
+                # Assignment drawer: ContestSubmission.points (assignment problem scale).
+                if drawer_problem_ids:
+                    for row in (
+                        ContestSubmission.objects.filter(
+                            participation=self.request.participation,
+                            problem__problem_id__in=drawer_problem_ids,
+                        )
+                        .values('problem__problem_id')
+                        .annotate(c=Count('id'), p=Max('points'))
+                    ):
+                        context['workspace_attempt_counts'][row['problem__problem_id']] = row['c']
+                        context['workspace_best_points'][row['problem__problem_id']] = row['p']
+            else:
+                drawer_problem_ids = [p.id for p in context['workspace_problems']]
+                if drawer_problem_ids:
+                    for row in (
+                        Submission.objects.filter(user=user.profile, problem_id__in=drawer_problem_ids)
+                        .values('problem_id')
+                        .annotate(c=Count('id'), p=Max('points'))
+                    ):
+                        context['workspace_attempt_counts'][row['problem_id']] = row['c']
+                        context['workspace_best_points'][row['problem_id']] = row['p']
+        # Duration countdown only when assignment defines personal time_limit (not window deadline).
+        context['workspace_show_timer'] = bool(
+            contest_problem and contest_problem.contest.time_limit is not None,
+        )
+        context['workspace_timer_seconds'] = 0
+        if context['workspace_show_timer'] and self.request.participation.end_time:
+            remaining = self.request.participation.time_remaining
+            context['workspace_timer_seconds'] = (
+                max(0, int(remaining.total_seconds())) if remaining is not None else 0
+            )
+        context['workspace_submission'] = None
+        context['workspace_enable_comments'] = False
+        selected_submission_id = self.request.GET.get('submission')
+        if authed and selected_submission_id and selected_submission_id.isdigit():
+            selected_qs = Submission.objects.select_related(
+                'source', 'contest_object', 'contest__problem',
+            ).prefetch_related('problem__mcq_options', 'problem__blanks').filter(
+                id=int(selected_submission_id), problem=self.object,
+            )
+            # Assignment/exam: only allow loading submissions from the active contest.
+            if contest_problem:
+                selected_qs = selected_qs.filter(contest_object=contest_problem.contest)
+            selected_submission = selected_qs.first()
+            if selected_submission is not None and selected_submission.can_see_detail(user):
+                selected_source = None
+                if selected_submission.user_id == self.request.profile.id:
+                    try:
+                        selected_source = selected_submission.source.source
+                    except ObjectDoesNotExist:
+                        pass
+                results_hidden = not selected_submission.results_visible_to(user)
+                display_points = workspace_display_points(selected_submission, self.request)
+                context['workspace_submission'] = {
+                    'id': selected_submission.id,
+                    'result': None if results_hidden else selected_submission.result,
+                    'status': selected_submission.status,
+                    'result_class': None if results_hidden else selected_submission.result_class,
+                    'long_status': None if results_hidden else selected_submission.long_status,
+                    'points': None if results_hidden else display_points,
+                    'time': None if results_hidden else selected_submission.time,
+                    'memory': None if results_hidden else selected_submission.memory,
+                    'source': selected_source,
+                    'answer_display': (
+                        get_workspace_answer_display(selected_submission)
+                        if selected_source is not None else []
+                    ),
+                    'results_hidden': results_hidden,
+                    'is_graded': selected_submission.is_graded,
+                    'id_secret': selected_submission.id_secret,
+                    'status_url': reverse(
+                        'problem_workspace_submission_status',
+                        args=(self.object.code, selected_submission.id),
+                    ),
+                }
+                # Result-tab comments = submission page (sub:ID), gated by DMOJ_ENABLE_COMMENTS + CommentLock.
+                if settings.DMOJ_ENABLE_COMMENTS:
+                    comment_handler = SubmissionCommentMixin()
+                    comment_handler.object = selected_submission
+                    comment_handler.request = self.request
+                    comment_handler.comment_use_rich_editor = True
+                    comment_ctx = comment_handler.get_comment_context()
+                    context['workspace_enable_comments'] = True
+                    context['comment_use_rich_editor'] = True
+                    context['has_comments'] = comment_ctx['has_comments']
+                    context['comment_lock'] = comment_ctx['comment_lock']
+                    context['comment_list'] = comment_ctx['comment_list']
+                    context['vote_hide_threshold'] = comment_ctx['vote_hide_threshold']
+                    context['reply_cutoff'] = comment_ctx['reply_cutoff']
+                    context['comment_form'] = comment_ctx['comment_form']
+                    context['is_new_user'] = comment_ctx.get('is_new_user', False)
+                    context['comment_form_action'] = '%s?submission=%d' % (
+                        reverse('problem_detail', args=[self.object.code]),
+                        selected_submission.id,
+                    )
+                context['last_msg'] = event.last()
+        if authed:
+            workspace_subs_qs = Submission.objects.filter(user=self.request.profile, problem=self.object)
+            if contest_problem:
+                workspace_subs_qs = workspace_subs_qs.filter(contest_object=contest_problem.contest)
+            workspace_subs = list(
+                workspace_subs_qs
+                .select_related('language', 'contest_object', 'contest__problem')
+                .order_by('-date')[:20],
+            )
+            for submission in workspace_subs:
+                submission.display_points = workspace_display_points(submission, self.request)
+            context['workspace_submissions'] = workspace_subs
+        else:
+            context['workspace_submissions'] = []
+        from judge import ai_hints as ai_hints_mod
+        context['ai_hints_possible'] = bool(
+            self.object.ai_hints_enabled and ai_hints_mod.is_configured(),
+        )
+        context['ai_hints_remaining'] = (
+            ai_hints_mod.get_remaining(self.request.profile.id)
+            if authed and context['ai_hints_possible'] else 0
+        )
         if self.request.user.is_authenticated:
             from judge.question_types import get_grader
             grader = get_grader(self.object.submission_type)
@@ -316,6 +610,48 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                 context['submit_url'] = reverse('problem_submit', args=[self.object.code])
 
         return context
+
+    def post(self, request, *args, **kwargs):
+        """Post submission comments from the Result tab.
+
+        Aligns with SubmissionStatus + SubmissionCommentMixin (page sub:ID).
+        Falls back to problem-page comments (CommentedDetailView) otherwise.
+        """
+        self.object = self.get_object()
+        sid = request.GET.get('submission') or request.POST.get('workspace_comment_submission')
+        if (
+            settings.DMOJ_ENABLE_COMMENTS
+            and sid
+            and str(sid).isdigit()
+            and 'body' in request.POST
+        ):
+            submission_qs = Submission.objects.filter(id=int(sid), problem=self.object)
+            contest_problem = (
+                get_contest_problem(self.object, request.profile)
+                if request.user.is_authenticated else None
+            )
+            if contest_problem:
+                submission_qs = submission_qs.filter(contest_object=contest_problem.contest)
+            submission = submission_qs.first()
+            if submission is not None and submission.can_see_detail(request.user):
+                handler = SubmissionCommentMixin()
+                handler.object = submission
+                handler.request = request
+                response, form = handler.handle_comment_post(request)
+                if response is not None:
+                    if isinstance(response, HttpResponseRedirect):
+                        return HttpResponseRedirect(
+                            '%s?submission=%d' % (
+                                reverse('problem_detail', args=[self.object.code]),
+                                submission.id,
+                            ),
+                        )
+                    return response
+                context = self.get_context_data(object=self.object)
+                context['comment_form'] = form
+                context['workspace_enable_comments'] = True
+                return self.render_to_response(context)
+        return super(ProblemDetail, self).post(request, *args, **kwargs)
 
 
 class ProblemVote(ProblemMixin, DetailView):
@@ -470,7 +806,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
     template_name = 'problem/list.html'
     paginate_by = 20
     sql_sort = frozenset(('points', 'ac_rate', 'user_count', 'code', 'date'))
-    manual_sort = frozenset(('name', 'group', 'solved', 'type', 'editorial'))
+    manual_sort = frozenset(('name', 'solved', 'type', 'editorial'))
     all_sorts = sql_sort | manual_sort
     default_desc = frozenset(('points', 'ac_rate', 'user_count', 'date'))
     default_sort = 'code'
@@ -493,8 +829,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 queryset = queryset.order_by(self.order, 'id')
             elif sort_key == 'name':
                 queryset = queryset.order_by(self.order.replace('name', 'i18n_name'), 'id')
-            elif sort_key == 'group':
-                queryset = queryset.order_by(self.order + '__name', 'id')
             elif sort_key == 'editorial':
                 queryset = queryset.order_by(self.order.replace('editorial', 'has_public_editorial'), 'id')
             elif sort_key == 'solved':
@@ -676,17 +1010,19 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             queryset = queryset.filter(has_public_editorial=True)
         if self.category is not None:
             queryset = queryset.filter(group__id=self.category)
+        if self.selected_organizations:
+            # Multi-select within organizations is OR (union).
+            queryset = queryset.filter(organizations__in=self.selected_organizations)
         if self.selected_types:
-            # AND semantics across types/knowledge points: a problem must carry every selected one.
-            # Difficulty levels are an exception: selecting several difficulties means OR, since a
-            # problem only ever has a single difficulty.
+            # Within a filter dimension multi-select is OR; dimensions combine with AND.
+            # Difficulty and tags/knowledge points both use OR within their selected ids.
             difficulty_ids = set(
                 ProblemType.objects.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).values_list('id', flat=True),
             )
             selected_difficulty = [t for t in self.selected_types if t in difficulty_ids]
             selected_other = [t for t in self.selected_types if t not in difficulty_ids]
-            for type_id in selected_other:
-                queryset = queryset.filter(types=type_id)
+            if selected_other:
+                queryset = queryset.filter(types__in=selected_other)
             if selected_difficulty:
                 queryset = queryset.filter(types__in=selected_difficulty)
         if self.selected_formats:
@@ -739,8 +1075,10 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         context['full_text'] = 0 if self.in_contest else int(self.full_text)
         context['category'] = self.category
         context['categories'] = ProblemGroup.objects.all()
+        context['organizations'] = list(Organization.objects.order_by('name'))
+        context['selected_organizations'] = self.selected_organizations
         if self.show_types:
-            # Knowledge points come from the ProblemType taxonomy.
+            # Tags (knowledge points) come from the ProblemType taxonomy.
             all_problem_types = list(ProblemType.objects.all())
             context['problem_types'] = all_problem_types
             context['selected_types'] = self.selected_types
@@ -751,19 +1089,19 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 (t for t in all_problem_types if t.name in Problem.DIFFICULTY_TYPE_NAMES),
                 key=lambda t: difficulty_order.get(t.name, len(difficulty_order)),
             )
-            # Knowledge points are everything that is neither an answer-format nor a difficulty tag.
+            # Knowledge points: exclude format/difficulty rows and leftover auto-chip ProblemTypes.
+            reserved_labels = Problem.reserved_auto_type_labels()
             knowledge_types = [
                 t for t in all_problem_types
-                if t.name not in Problem.FORMAT_TYPE_NAMES and t.name not in Problem.DIFFICULTY_TYPE_NAMES
+                if Problem.is_knowledge_problem_type(t, reserved_labels=reserved_labels)
             ]
             context['difficulty_types'] = difficulty_types
             context['knowledge_types'] = knowledge_types
             difficulty_ids = {t.id for t in difficulty_types}
-            format_type_ids = {t.id for t in all_problem_types if t.name in Problem.FORMAT_TYPE_NAMES}
+            knowledge_ids = {t.id for t in knowledge_types}
             context['selected_difficulty_types'] = [i for i in self.selected_types if i in difficulty_ids]
             context['selected_knowledge_types'] = [
-                i for i in self.selected_types
-                if i not in difficulty_ids and i not in format_type_ids
+                i for i in self.selected_types if i in knowledge_ids
             ]
             # The answer format is driven by the authoritative submission_type discriminator
             # (MCQ expanded into single / multiple / true-false); offer the question types the
@@ -790,6 +1128,14 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 editable_ids = {p.id for p in page_problems if p.is_editable_by(user)}
         context['can_manage_problems'] = can_manage and not self.in_contest
         context['editable_problem_ids'] = editable_ids
+        # Clone entry on the list (detail page already has it). Org admins without the
+        # global perm can still open /clone/ via ProblemClone.has_permission for problems
+        # they admin; surface the icon for the common permission case.
+        context['can_clone_problems'] = (
+            user.is_authenticated
+            and not self.in_contest
+            and user.has_perm('judge.clone_problem')
+        )
 
         from judge.question_types import creatable_types
         context['creatable_problem_types'] = creatable_types(self.request.user)
@@ -806,7 +1152,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             sort_labels = {
                 'code': _('Problem code'),
                 'name': _('Problem'),
-                'group': _('Category'),
                 'type': _('Problem type'),
                 'ac_rate': _('AC %'),
                 'points': _('Points'),
@@ -818,16 +1163,9 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             context['current_sort_label'] = sort_labels.get(self.order.lstrip('-'), '')
             context['current_sort_desc'] = self.order.startswith('-')
 
-            # Per-group counts for the group tabs, over the user-visible problem set.
             base_visible = Problem.objects.filter(self.get_visible_problems_filter())
-            group_counts = {
-                row['group']: row['count']
-                for row in base_visible.values('group').annotate(count=Count('pk', distinct=True))
-            }
-            context['group_counts'] = group_counts
-            context['total_problem_count'] = sum(group_counts.values())
 
-            # Per-type problem counts for the knowledge-point picker badges.
+            # Per-type problem counts for the tags picker badges.
             context['type_counts'] = {
                 row['types']: row['count']
                 for row in base_visible.values('types').annotate(count=Count('pk', distinct=True))
@@ -906,6 +1244,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         self.category = None
         self.selected_types = []
         self.selected_formats = []
+        self.selected_organizations = []
 
         # This actually copies into the instance dictionary...
         self.all_sorts = set(self.all_sorts)
@@ -921,6 +1260,15 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         if 'format' in request.GET:
             valid_formats = {code for code, label, q in self.get_format_options()}
             self.selected_formats = [c for c in request.GET.getlist('format') if c in valid_formats]
+        # UI label is "Course"; accept both `course` and legacy `organization`.
+        if 'course' in request.GET or 'organization' in request.GET:
+            try:
+                self.selected_organizations = list(map(
+                    int,
+                    request.GET.getlist('course') or request.GET.getlist('organization'),
+                ))
+            except ValueError:
+                pass
 
         self.point_start = safe_float_or_none(request.GET.get('point_start'))
         self.point_end = safe_float_or_none(request.GET.get('point_end'))
@@ -1140,7 +1488,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             except (ValueError, TypeError, ObjectDoesNotExist):
                 answers = []
             for blank, answer in zip(self.object.blanks.all(), answers):
-                initial['blank_%d' % blank.order] = answer
+                initial['fb_%d' % blank.order] = answer
         return initial
 
     def get_form_kwargs(self):
@@ -1158,9 +1506,11 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
     def get_form(self, form_class=None):
         if not self.is_code:
-            data = self.request.POST if self.request.method in ('POST', 'PUT') else None
+            posting = self.request.method in ('POST', 'PUT')
+            data = self.request.POST if posting else None
+            files = self.request.FILES if posting else None
             return self.grader.build_form(self.object, self.request.profile,
-                                          data=data, initial=self.get_initial())
+                                          data=data, files=files, initial=self.get_initial())
 
         form = super().get_form(form_class)
 
@@ -1176,7 +1526,68 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         return form
 
     def get_success_url(self):
+        if self.request.POST.get('workspace') == '1':
+            return '%s?submission=%d' % (
+                reverse('problem_detail', args=(self.object.code,)), self.new_submission.id,
+            )
         return reverse('submission_status', args=(self.new_submission.id,))
+
+    def _wants_workspace_json(self):
+        return (
+            self.request.POST.get('workspace') == '1'
+            and self.request.headers.get('X-Workspace-Submit') == '1'
+        )
+
+    def _workspace_json_error(self, message, status=400, **extra):
+        payload = {'error': message}
+        payload.update(extra)
+        return JsonResponse(payload, status=status)
+
+    def form_invalid(self, form):
+        if self._wants_workspace_json():
+            message = _('Please fix the errors below.')
+            for _field, errors in form.errors.items():
+                if errors:
+                    message = str(errors[0])
+                    break
+            # Empty code / blank required fields surface as field errors — keep them explicit.
+            if self.is_code and not (form.data.get('source') or '').strip():
+                message = _('Source code cannot be empty.')
+            elif not self.is_code:
+                non_empty = False
+                for key, value in form.data.items():
+                    if key in ('csrfmiddlewaretoken', 'workspace', 'parent'):
+                        continue
+                    if isinstance(value, list):
+                        if any(str(v).strip() for v in value):
+                            non_empty = True
+                            break
+                    elif str(value).strip():
+                        non_empty = True
+                        break
+                if not non_empty:
+                    message = _('Answer cannot be empty.')
+            return self._workspace_json_error(message, status=400, errors=form.errors.get_json_data())
+        return super().form_invalid(form)
+
+    def _workspace_success_response(self, form):
+        if self._wants_workspace_json():
+            submission = self.new_submission
+            hidden = not submission.results_visible_to(self.request.user)
+            try:
+                source = submission.source.source
+            except ObjectDoesNotExist:
+                source = None
+            return JsonResponse({
+                'submission_id': submission.id,
+                'status': submission.status,
+                'result': None if hidden else submission.result,
+                'results_hidden': hidden,
+                'source': source,
+                'answer_display': get_workspace_answer_display(submission) if source is not None else [],
+                'status_url': reverse('problem_workspace_submission_status', args=(self.object.code, submission.id)),
+            })
+        return super().form_valid(form)
 
     def _submission_blocked_response(self):
         """Pre-submit guards shared by every question type. Returns a response if blocked."""
@@ -1202,11 +1613,18 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             .count()
             >= settings.DMOJ_SUBMISSION_LIMIT
         ):
+            if self._wants_workspace_json():
+                return self._workspace_json_error(_('You submitted too many submissions.'), status=429)
             return HttpResponse(
                 format_html('<h1>{0}</h1>', _('You submitted too many submissions.')),
                 status=429,
             )
         if not self.request.user.is_superuser and self.object.banned_users.filter(id=self.request.profile.id).exists():
+            if self._wants_workspace_json():
+                return self._workspace_json_error(
+                    _('You are permanently barred from submitting to this problem.'),
+                    status=403,
+                )
             return generic_message(
                 self.request,
                 _('Banned from submitting'),
@@ -1217,6 +1635,11 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             )
         # Must check for zero and not None. None means infinite submissions remaining.
         if self.remaining_submission_count == 0:
+            if self._wants_workspace_json():
+                return self._workspace_json_error(
+                    _('You have exceeded the submission limit for this problem.'),
+                    status=429,
+                )
             return generic_message(
                 self.request,
                 _('Too many submissions'),
@@ -1277,7 +1700,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         self.new_submission.source = source
         self.new_submission.judge(force_judge=True, judge_id=form.cleaned_data['judge'])
 
-        return super().form_valid(form)
+        return self._workspace_success_response(form)
 
     def _noncode_form_valid(self, form):
         with transaction.atomic():
@@ -1302,7 +1725,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         else:
             self.new_submission.judge(force_judge=True)
 
-        return super().form_valid(form)
+        return self._workspace_success_response(form)
 
     def _needs_ai_grading(self):
         """Return True if this submission type requires an LLM call (and thus
@@ -1389,8 +1812,8 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
 
         # Store references to ManyToMany relationships
         languages = problem.allowed_languages.all()
-        language_limits = problem.language_limits.all()
         organizations = problem.organizations.all()
+        classes = problem.classes.all()
         types = problem.types.all()
         old_code = problem.code
         new_code = form.cleaned_data['code']
@@ -1400,6 +1823,26 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         test_cases = list(ProblemTestCase.objects.filter(dataset_id=old_problem_id).order_by('order'))
         templates = list(ProblemTemplate.objects.filter(problem_id=old_problem_id))
         harnesses = list(ProblemHarness.objects.filter(problem_id=old_problem_id))
+        # LanguageLimit has a FK to Problem — clone rows; never .set() (that would move them).
+        language_limits = list(LanguageLimit.objects.filter(problem_id=old_problem_id))
+        mcq_options = list(ProblemMCQOption.objects.filter(problem_id=old_problem_id).order_by('order'))
+        blanks = list(ProblemBlank.objects.filter(problem_id=old_problem_id).order_by('order'))
+        try:
+            mcq_config = ProblemMCQConfig.objects.get(problem_id=old_problem_id)
+        except ProblemMCQConfig.DoesNotExist:
+            mcq_config = None
+        try:
+            fill_blank_config = ProblemFillBlankConfig.objects.get(problem_id=old_problem_id)
+        except ProblemFillBlankConfig.DoesNotExist:
+            fill_blank_config = None
+        try:
+            short_answer_config = ProblemShortAnswerConfig.objects.get(problem_id=old_problem_id)
+        except ProblemShortAnswerConfig.DoesNotExist:
+            short_answer_config = None
+        try:
+            file_config = ProblemFileConfig.objects.get(problem_id=old_problem_id)
+        except ProblemFileConfig.DoesNotExist:
+            file_config = None
 
         # Check if ProblemData exists for original problem
         try:
@@ -1421,9 +1864,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             problem.save()
             problem.authors.add(self.request.profile)
             problem.allowed_languages.set(languages)
-            problem.language_limits.set(language_limits)
             problem.organizations.set(organizations)
+            problem.classes.set(classes)
             problem.types.set(types)
+
+            self._clone_language_limits(language_limits, problem)
 
             # Clone ProblemData if it exists
             if has_problem_data:
@@ -1438,6 +1883,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             # Clone ProblemHarness instances
             self._clone_harnesses(harnesses, problem)
 
+            self._clone_question_type_data(
+                problem, mcq_config, mcq_options, fill_blank_config, blanks, short_answer_config,
+                file_config,
+            )
+
             # Copy init.yml from original problem
             self._copy_init_yml(old_code, new_code)
 
@@ -1445,7 +1895,7 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_user(self.request.user)
             revisions.set_comment(_('Cloned problem from %s') % old_code)
 
-        return HttpResponseRedirect(reverse('admin:judge_problem_change', args=(problem.id,)))
+        return HttpResponseRedirect(reverse('problem_edit_v2', args=(problem.code,)))
 
     def _clone_problem_data(self, original_data, new_problem, old_code, new_code):
         """
@@ -1604,6 +2054,76 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         if new_templates:
             ProblemTemplate.objects.bulk_create(new_templates)
 
+    def _clone_language_limits(self, language_limits, new_problem):
+        """Deep-copy LanguageLimit rows so the source problem keeps its FK rows."""
+        new_limits = []
+        for original in language_limits:
+            new_limits.append(LanguageLimit(
+                problem=new_problem,
+                language=original.language,
+                time_limit=original.time_limit,
+                memory_limit=original.memory_limit,
+            ))
+        if new_limits:
+            LanguageLimit.objects.bulk_create(new_limits)
+
+    def _clone_question_type_data(
+        self, new_problem, mcq_config, mcq_options, fill_blank_config, blanks, short_answer_config,
+        file_config=None,
+    ):
+        """Deep-copy MCQ / fill-blank / short-answer / file-upload authoring data onto the clone."""
+        if mcq_config is not None:
+            ProblemMCQConfig.objects.create(
+                problem=new_problem,
+                multiple_select=mcq_config.multiple_select,
+                is_true_false=mcq_config.is_true_false,
+                shuffle_options=mcq_config.shuffle_options,
+            )
+        if mcq_options:
+            ProblemMCQOption.objects.bulk_create([
+                ProblemMCQOption(
+                    problem=new_problem,
+                    order=opt.order,
+                    text=opt.text,
+                    is_correct=opt.is_correct,
+                )
+                for opt in mcq_options
+            ])
+        if fill_blank_config is not None:
+            ProblemFillBlankConfig.objects.create(
+                problem=new_problem,
+                case_sensitive=fill_blank_config.case_sensitive,
+                trim_whitespace=fill_blank_config.trim_whitespace,
+                grading_mode=fill_blank_config.grading_mode,
+                ai_rubric=fill_blank_config.ai_rubric,
+                grading_table=fill_blank_config.grading_table,
+            )
+        if blanks:
+            ProblemBlank.objects.bulk_create([
+                ProblemBlank(
+                    problem=new_problem,
+                    order=blank.order,
+                    answers=blank.answers,
+                    label=blank.label,
+                )
+                for blank in blanks
+            ])
+        if short_answer_config is not None:
+            ProblemShortAnswerConfig.objects.create(
+                problem=new_problem,
+                reference_answer=short_answer_config.reference_answer,
+                ai_rubric=short_answer_config.ai_rubric,
+                grading_table=short_answer_config.grading_table,
+            )
+        # Same OneToOne fields create_v2 persists in `_create_file_upload` (MR !39/!46).
+        if file_config is not None:
+            ProblemFileConfig.objects.create(
+                problem=new_problem,
+                allowed_extensions=file_config.allowed_extensions,
+                max_file_size=file_config.max_file_size,
+                instructions=file_config.instructions,
+            )
+
     def _clone_harnesses(self, harnesses, new_problem):
         """
         Clone all ProblemHarness instances for the new problem.
@@ -1652,3 +2172,192 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
                     'Failed to copy init.yml. You may need to regenerate it manually.',
                 ),
             )
+
+
+class ProblemWorkspaceRun(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, View):
+    """Run code in the existing isolated IDE sandbox, never against this problem."""
+
+    http_method_names = ['post']
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        from judge.question_types import get_grader
+        if not get_grader(self.object.submission_type).routes_to_bridge:
+            return JsonResponse({'error': _('Run is available only for programming problems.')}, status=400)
+        if self.object.banned_users.filter(id=request.profile.id).exists() and not request.user.is_superuser:
+            return JsonResponse({'error': _('You are banned from submitting to this problem.')}, status=403)
+        if not self.object.usable_languages.filter(id=request.POST.get('language')).exists():
+            return JsonResponse({'error': _('This language is not allowed for this problem.')}, status=400)
+        if request.profile.current_contest and not get_contest_problem(self.object, request.profile):
+            return JsonResponse({'error': _('This problem is not in your active assignment.')}, status=403)
+        # Reuse the site IDE endpoint as-is: same rate limits, source/input
+        # caps, output truncation, and bridge protocol. Submissions are filed
+        # under the internal `idepractice` sandbox problem (see IDE_PROBLEM_CODE)
+        # so they never attach ContestSubmission or touch this problem's tests.
+        from judge.views.ide import IDESubmitView
+        return IDESubmitView().post(request)
+
+
+class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, View):
+    """Status JSON for the current user's formal Workspace submission."""
+
+    http_method_names = ['get']
+
+    def get(self, request, *args, **kwargs):
+        problem = self.get_object()
+        submission = get_object_or_404(
+            Submission.objects.select_related(
+                'source', 'contest_object', 'contest__problem', 'user__user',
+            ).prefetch_related('problem__mcq_options', 'problem__blanks'),
+            id=kwargs['submission'], problem=problem,
+        )
+        if not submission.can_see_detail(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        contest_problem = get_contest_problem(problem, request.profile)
+        if contest_problem and submission.contest_object_id != contest_problem.contest_id:
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        hidden = not submission.results_visible_to(request.user)
+        source = None
+        if submission.user_id == request.profile.id:
+            try:
+                source = submission.source.source
+            except ObjectDoesNotExist:
+                pass
+        answer_display = get_workspace_answer_display(submission) if source is not None else []
+        comments_html = ''
+        if settings.DMOJ_ENABLE_COMMENTS:
+            comment_handler = SubmissionCommentMixin()
+            comment_handler.object = submission
+            comment_handler.request = request
+            comment_handler.comment_use_rich_editor = True
+            comment_ctx = comment_handler.get_comment_context()
+            comment_ctx.update({
+                'request': request,
+                'ENABLE_COMMENTS': True,
+                'comment_use_rich_editor': True,
+                'comment_form_action': '%s?submission=%d' % (
+                    reverse('problem_detail', args=[problem.code]),
+                    submission.id,
+                ),
+            })
+            comments_html = render_to_string('comments/list.html', comment_ctx, request=request)
+        return JsonResponse({
+            'id': submission.id,
+            'status': submission.status,
+            'result': None if hidden else submission.result,
+            'result_class': None if hidden else submission.result_class,
+            'points': None if hidden else workspace_display_points(submission, request),
+            'time': None if hidden else submission.time,
+            'memory': None if hidden else submission.memory,
+            'results_hidden': hidden,
+            'is_graded': submission.is_graded,
+            'source': source,
+            'answer_display': answer_display,
+            'comments_html': comments_html,
+            'id_secret': submission.id_secret,
+            'status_url': reverse(
+                'problem_workspace_submission_status',
+                args=(problem.code, submission.id),
+            ),
+        })
+
+
+class ProblemWorkspaceSubmissionsList(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, View):
+    """JSON submission rows for the Workspace inline submissions panel."""
+
+    http_method_names = ['get']
+    VALID_SCOPES = frozenset({'my', 'all', 'best'})
+
+    def get(self, request, *args, **kwargs):
+        from judge.views.submission import ProblemSubmissionsBase
+
+        problem = self.get_object()
+        scope = request.GET.get('scope', 'my')
+        if scope not in self.VALID_SCOPES:
+            return JsonResponse({'error': _('Invalid scope.')}, status=400)
+
+        contest_problem = get_contest_problem(problem, request.profile)
+        # Assignment/exam UI only offers "My"; reject All/Best to match the panel.
+        if contest_problem and scope in ('all', 'best'):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+
+        if scope in ('all', 'best'):
+            checker = ProblemSubmissionsBase()
+            checker.request = request
+            checker.problem = problem
+            checker.problem_name = problem.translated_name(request.LANGUAGE_CODE)
+            try:
+                checker.access_check(request)
+            except PermissionDenied:
+                return JsonResponse({'error': _('Permission denied.')}, status=403)
+            except Http404:
+                return JsonResponse({'error': _('Permission denied.')}, status=403)
+
+        if scope == 'my':
+            my_qs = Submission.objects.filter(user=request.profile, problem=problem)
+            if contest_problem:
+                my_qs = my_qs.filter(contest_object=contest_problem.contest)
+            submissions = (
+                my_qs
+                .select_related('language', 'contest_object', 'contest__problem')
+                .order_by('-date')[:50]
+            )
+        elif scope == 'all':
+            checker.selected_languages = set()
+            checker.selected_statuses = set()
+            submissions = checker.get_queryset().select_related(
+                'language', 'contest_object', 'contest__problem',
+            ).order_by('-id')[:50]
+        else:
+            checker.selected_languages = set()
+            checker.selected_statuses = set()
+            submissions = self._best_submissions(
+                checker.get_queryset().select_related('language', 'contest_object', 'contest__problem'),
+            )
+
+        profile = request.profile
+        completed = user_completed_ids(profile)
+        editable = user_editable_ids(profile)
+        testers = user_tester_ids(profile)
+        rows = []
+        for submission in submissions:
+            if not submission.can_see_detail(request.user):
+                continue
+            html = render_to_string(
+                'problem/workspace-submission-row.html',
+                {
+                    'submission': submission,
+                    'profile_id': profile.id,
+                    'completed_problem_ids': completed,
+                    'editable_problem_ids': editable,
+                    'tester_problem_ids': testers,
+                    'request': request,
+                },
+                request=request,
+            )
+            rows.append({
+                'id': submission.id,
+                'html': html,
+                'status_url': reverse(
+                    'problem_workspace_submission_status',
+                    args=(problem.code, submission.id),
+                ),
+                'url': '%s?submission=%d' % (
+                    reverse('problem_detail', args=[problem.code]), submission.id,
+                ),
+            })
+
+        return JsonResponse({'scope': scope, 'rows': rows})
+
+    @staticmethod
+    def _best_submissions(queryset):
+        seen_users = set()
+        rows = []
+        for submission in queryset.filter(points__gt=0, user__is_unlisted=False).order_by('-points', 'time'):
+            if submission.user_id in seen_users:
+                continue
+            seen_users.add(submission.user_id)
+            rows.append(submission)
+            if len(rows) >= 50:
+                break
+        return rows

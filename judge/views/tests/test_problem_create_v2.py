@@ -11,8 +11,9 @@ from django.urls import reverse
 from reversion.models import Version
 
 from judge.models import (Language, LanguageLimit, License, Problem, ProblemClarification, ProblemData,
-                          ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig, ProblemTemplate,
-                          ProblemTestCase, ProblemTranslation, ProblemType, Solution, problem_data_storage)
+                          ProblemFileConfig, ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig,
+                          ProblemTemplate, ProblemTestCase, ProblemTranslation, ProblemType, Solution,
+                          problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
@@ -527,6 +528,58 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(config.reference_answer, 'SYN, SYN-ACK, ACK')
         self.assertEqual(config.ai_rubric, 'mention 3 steps')
 
+    def test_create_file_upload(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'file', 'name': 'Submit your report', 'description': 'Upload a PDF report.',
+            'points': 20, 'group_id': self.group.id,
+            'fileExtensions': 'pdf', 'fileMaxSizeMb': 10, 'fileInstructions': 'One PDF, no zip.',
+        }
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertEqual(problem.submission_type, 'F')
+        self.assertTrue(problem.partial)
+        config = ProblemFileConfig.objects.get(problem=problem)
+        self.assertEqual(config.allowed_extensions, 'pdf')
+        self.assertEqual(config.max_file_size, 10 * 1024 * 1024)
+        self.assertEqual(config.instructions, 'One PDF, no zip.')
+
+    def test_file_upload_edit_data_round_trip(self):
+        """_build_edit_data must hand back MB so a resave does not shrink the limit each time."""
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'type': 'file', 'name': 'Round trip', 'description': 'x', 'points': 5,
+            'group_id': self.group.id, 'fileExtensions': 'pdf', 'fileMaxSizeMb': 7,
+        }), content_type='application/json')
+        problem = Problem.objects.get(code=response.json()['code'])
+
+        data = ProblemCreateV2View()._build_edit_data(problem)
+        self.assertEqual(data['type'], 'file')
+        # MB, not the raw byte count — otherwise the page would show 7340032 and resave 7 TB.
+        self.assertEqual(data['fileMaxSizeMb'], 7)
+        self.assertEqual(data['fileExtensions'], 'pdf')
+
+        # Echoing that value back the way the page does must leave the stored bytes unchanged.
+        response = self.client.post(reverse('problem_edit_v2', args=[problem.code]), data=json.dumps({
+            'type': 'file', 'edit_code': problem.code, 'name': data['name'],
+            'description': data['description'], 'points': data['points'], 'group_id': self.group.id,
+            'fileExtensions': data['fileExtensions'], 'fileMaxSizeMb': data['fileMaxSizeMb'],
+            'fileInstructions': data['fileInstructions'],
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ProblemFileConfig.objects.get(problem=problem).max_file_size, 7 * 1024 * 1024)
+
+    def test_create_file_upload_rejects_non_positive_size(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'type': 'file', 'name': 'Bad cap', 'description': 'x', 'points': 5,
+            'group_id': self.group.id, 'fileMaxSizeMb': 0,
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Problem.objects.filter(name='Bad cap').exists())
+
     def test_create_fill_blank_multiple(self):
         # The create page writes one ProblemBlank per blank; alternatives are newline-separated.
         # End-to-end grading is covered by judge/views/tests/test_fill_blank.py.
@@ -614,6 +667,202 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         problem = Problem.objects.get(code=response.json()['code'])
         self.assertEqual(ProblemType.objects.count(), before)
         self.assertEqual(list(problem.types.all()), [existing])
+
+    def test_auto_type_difficulty_chips_not_stored_or_duplicated_on_edit(self):
+        """UI auto chips (Programming/Fill-in-blank/Easy) must not pollute knowledge tags."""
+        self.client.force_login(self.users['staff_adder'])
+        knowledge = 'Graph Theory'
+        create_payload = {
+            'type': 'programming',
+            'name': 'Tag dedupe',
+            'description': 'auto chips should be ignored on save',
+            'points': 10,
+            'group_id': self.group.id,
+            'difficulty': 'easy',
+            # Mimic a buggy/legacy client that also posts the gray auto chips.
+            'problemTypes': ['Programming', 'Easy', knowledge, 'Programming', 'Easy'],
+            'testcases': [
+                {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+
+        type_names = list(problem.types.values_list('name', flat=True))
+        type_full = list(problem.types.values_list('full_name', flat=True))
+        self.assertIn('easy', type_names)
+        self.assertEqual(problem.difficulty, 'easy')
+        self.assertIn(knowledge, type_full)
+        self.assertNotIn('Programming', type_full)
+        self.assertEqual(type_full.count(knowledge), 1)
+        self.assertEqual(type_names.count('easy'), 1)
+
+        edit_get = self.client.get(reverse('problem_edit_v2', args=[code]))
+        self.assertEqual(edit_get.status_code, 200)
+        edit_data = json.loads(edit_get.context['edit_data_json'])
+        self.assertEqual(edit_data['difficulty'], 'easy')
+        self.assertEqual(edit_data['problemTypes'], [knowledge])
+        self.assertNotIn('Programming', edit_data['problemTypes'])
+        self.assertNotIn('Easy', edit_data['problemTypes'])
+
+        # Re-save with the same polluted payload (create → edit cycle).
+        edit_payload = dict(create_payload)
+        edit_payload.update({
+            'name': 'Tag dedupe edited',
+            'edit_code': code,
+            'problemTypes': ['Programming', 'Easy', knowledge, 'Fill-in-blank'],
+        })
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200)
+        problem.refresh_from_db()
+        # Invalidate cached_property from the earlier difficulty assertion.
+        problem.__dict__.pop('difficulty', None)
+
+        type_names = list(problem.types.values_list('name', flat=True))
+        type_full = list(problem.types.values_list('full_name', flat=True))
+        self.assertEqual(type_names.count('easy'), 1)
+        self.assertEqual(type_full.count(knowledge), 1)
+        self.assertNotIn('Programming', type_full)
+        self.assertNotIn('Fill-in-blank', type_full)
+        self.assertEqual(problem.difficulty, 'easy')
+        self.assertEqual(problem.knowledge_types_list, [knowledge])
+
+        # Blank + translated-style auto labels are also stripped; difficulty follows the field.
+        blank_payload = {
+            'type': 'blank',
+            'name': 'Blank tag dedupe',
+            'description': 'fill __blank__',
+            'points': 5,
+            'group_id': self.group.id,
+            'difficulty': 'medium',
+            'problemTypes': ['Fill-in-blank', '填空题', 'Medium', '中等', knowledge],
+            'blanks': ['answer'],
+        }
+        self.client.force_login(self.users['creator'])
+        blank_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(blank_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(blank_resp.status_code, 200)
+        blank = Problem.objects.get(code=blank_resp.json()['code'])
+        blank_full = set(blank.types.values_list('full_name', flat=True))
+        self.assertIn(knowledge, blank_full)
+        self.assertNotIn('Fill-in-blank', blank_full)
+        self.assertNotIn('填空题', blank_full)
+        self.assertEqual(blank.difficulty, 'medium')
+
+    def test_edit_omitting_problem_types_keeps_knowledge_tags(self):
+        """Partial payloads that only send difficulty must not wipe knowledge tags."""
+        knowledge = ProblemType.objects.create(name='graph-theory', full_name='Graph Theory')
+        self.client.force_login(self.users['creator'])
+        create_payload = {
+            'type': 'single',
+            'name': 'Tagged MCQ',
+            'description': 'has tags',
+            'points': 5,
+            'group_id': self.group.id,
+            'difficulty': 'easy',
+            'problemTypes': ['Graph Theory'],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.content)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+        self.assertEqual(problem.difficulty, 'easy')
+        self.assertIn(knowledge, list(problem.types.all()))
+
+        edit_payload = {
+            'type': 'single',
+            'name': 'Tagged MCQ',
+            'description': 'has tags',
+            'points': 5,
+            'group_id': self.group.id,
+            'edit_code': code,
+            'difficulty': 'hard',
+            # intentionally omit problemTypes
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        problem.refresh_from_db()
+        problem.__dict__.pop('difficulty', None)
+        self.assertEqual(problem.difficulty, 'hard')
+        self.assertIn(knowledge, list(problem.types.all()))
+
+    def test_edit_explicit_empty_problem_types_clears_knowledge_tags(self):
+        knowledge = ProblemType.objects.create(name='dp-tag', full_name='Dynamic Programming')
+        self.client.force_login(self.users['creator'])
+        create_payload = {
+            'type': 'single',
+            'name': 'Clear Tags',
+            'description': 'will clear',
+            'points': 5,
+            'group_id': self.group.id,
+            'difficulty': 'medium',
+            'problemTypes': ['Dynamic Programming'],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.content)
+        code = create_resp.json()['code']
+
+        edit_payload = {
+            'type': 'single',
+            'name': 'Clear Tags',
+            'description': 'cleared',
+            'points': 5,
+            'group_id': self.group.id,
+            'edit_code': code,
+            'difficulty': 'medium',
+            'problemTypes': [],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        problem = Problem.objects.get(code=code)
+        problem.__dict__.pop('difficulty', None)
+        self.assertEqual(problem.difficulty, 'medium')
+        self.assertNotIn(knowledge, list(problem.types.all()))
 
     def test_edit_code_keeps_testcases_when_payload_omits_them(self):
         self.client.force_login(self.users['staff_adder'])

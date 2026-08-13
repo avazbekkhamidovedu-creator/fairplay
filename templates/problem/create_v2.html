@@ -164,7 +164,8 @@
 
     /* Partial-score and AI-judging configuration. */
     .score-conf { margin-top: 0.5rem; padding: 0.6rem 0.75rem; background: var(--admin-bg, #fafafa); border: 1px dashed var(--admin-border); border-radius: 5px; }
-    .profile-select2 + .select2-container { max-width: 500px; width: 100% !important; }
+    .profile-select2 + .select2-container,
+    .org-select2 + .select2-container { max-width: 500px; width: 100% !important; }
     .unsaved-note { font-size: 12px; color: var(--muted); padding: 0.35rem 1rem 0.6rem; }
     .radio-list label { display: block; font-weight: normal; width: auto; padding: 0.2rem 0; }
     .inline-num input { width: 70px; }
@@ -249,6 +250,9 @@
     <div class="v2-top">
       <span class="v2-type-hint">{{ _('Current type:') }} <span class="tag-type regular" id="type-badge">{{ _('Single choice') }}</span></span>
       {% if edit_code %}&mdash; <a href="{{ edit_detail_url }}">{{ edit_name or edit_code }}</a>{% endif %}
+      {% if can_clone_problem and clone_url %}
+        &mdash; <a href="{{ clone_url }}"><i class="fa fa-copy"></i> {{ _('Clone') }}</a>
+      {% endif %}
     </div>
 
     <div class="v2-split">
@@ -262,7 +266,7 @@
             <label>{{ _('Type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="type-pills" id="type-pills">
-                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create code problems') }}" style="opacity:0.45;"{% endif %}>
+                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create programming problems') }}" style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="programming" onchange="selectType('programming')" {% if not can_create_code %}disabled{% endif %}><span>{{ _('Programming') }}</span></label>
                 <label class="type-pill" data-save="mcq">
                   <input type="radio" name="qtype" value="single" {% if can_create_mcq %}checked{% endif %} onchange="selectType('single')"><span>{{ _('Single choice') }}</span></label>
@@ -274,6 +278,8 @@
                   <input type="radio" name="qtype" value="truefalse" onchange="selectType('truefalse')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('True/False') }}</span></label>
                 <label class="type-pill" data-save="short" {% if not can_create_mcq %}style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="short" onchange="selectType('short')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('Short answer') }}</span></label>
+                <label class="type-pill" data-save="file" {% if not can_create_file %}style="opacity:0.45;"{% endif %}>
+                  <input type="radio" name="qtype" value="file" onchange="selectType('file')" {% if not can_create_file %}disabled{% endif %}><span>{{ _('File upload') }}</span></label>
                 <label class="type-pill" data-save="none" style="opacity:0.55;">
                   <input type="radio" name="qtype" value="compound" onchange="selectType('compound')"><span>{{ _('Composite') }}</span></label>
                 <label class="type-pill" data-save="none" style="opacity:0.55;">
@@ -286,41 +292,29 @@
             <div class="field"><input type="text" id="f-name" placeholder="{{ _('Problem name') }}" oninput="renderPreview()"></div>
           </div>
           <div class="form-row">
-            <label>{{ _('Organizations') }}</label>
+            <label>{{ _('Courses') }}</label>
             <div class="field">
               <div class="select-with-add">
-                <select id="f-org">
-                  <option value="">— {{ _('None') }} —</option>
+                <select multiple id="f-org" class="org-select2" style="width:100%;max-width:500px;">
                   {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
                 </select>
                 {% if can_create_organization %}
-                <button type="button" class="inline-add-btn" title="{{ _('Create organization') }}" aria-label="{{ _('Create organization') }}" onclick="toggleInlineAdd('org')">+</button>
+                <button type="button" class="inline-add-btn" title="{{ _('Create course') }}" aria-label="{{ _('Create course') }}" onclick="toggleInlineAdd('org')">+</button>
                 {% endif %}
               </div>
               {% if can_create_organization %}
               <div class="inline-add-box" id="org-add-box" style="display:none;">
-                <input type="text" id="org-add-name" placeholder="{{ _('Organization name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createOrg();}">
+                <input type="text" id="org-add-name" placeholder="{{ _('Course name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createOrg();}">
                 <button type="button" class="btn-mini btn-mini-primary" onclick="createOrg()">{{ _('Create') }}</button>
                 <button type="button" class="btn-mini" onclick="toggleInlineAdd('org')">{{ _('Cancel') }}</button>
               </div>
               {% endif %}
-              <div class="help">{{ _('Leave blank for a public problem (requires permission); selecting an organization makes it private to that organization') }}</div>
             </div>
           </div>
           <div class="form-row">
-            <label>{{ _('Problem group') }} <span class="req">*</span></label>
+            <label>{{ _('publicly visible') }}</label>
             <div class="field">
-              <div class="select-with-add">
-                <select id="f-group">
-                  {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
-                </select>
-                <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" aria-label="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+</button>
-              </div>
-              <div class="inline-add-box" id="group-add-box" style="display:none;">
-                <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
-                <button type="button" class="btn-mini btn-mini-primary" onclick="createGroup()">{{ _('Create') }}</button>
-                <button type="button" class="btn-mini" onclick="toggleInlineAdd('group')">{{ _('Cancel') }}</button>
-              </div>
+              <input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}>
             </div>
           </div>
           <div class="form-row">
@@ -444,6 +438,29 @@
                 <div data-rich-mount="short" data-toolbar="mini" data-placeholder="{{ _('Enter the reference answer…') }}"></div>
               </div>
 
+              <!-- File upload -->
+              <div class="type-panel" data-for="file" style="display:none;">
+                <div class="form-row">
+                  <label for="f-file-ext">{{ _("Allowed extensions") }}</label>
+                  <div class="field">
+                    <input type="text" id="f-file-ext" placeholder="pdf, zip" oninput="renderPreview()">
+                    <div class="help">{{ _("Comma-separated. Leave blank to allow any file type.") }}</div>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label for="f-file-size">{{ _("Maximum file size (MB)") }} <span class="req">*</span></label>
+                  <div class="field"><input type="number" id="f-file-size" min="1" step="1" value="20"></div>
+                </div>
+                <div class="form-row">
+                  <label for="f-file-instructions">{{ _("Submission instructions") }}</label>
+                  <div class="field">
+                    <textarea id="f-file-instructions" rows="3" oninput="renderPreview()"></textarea>
+                    <div class="help">{{ _("Optional. Shown to students above the upload box.") }}</div>
+                  </div>
+                </div>
+                <div class="blank-hints">{{ _("File-upload problems are graded manually by a teacher after submission.") }}</div>
+              </div>
+
               <!-- Fill in the blank -->
               <div class="type-panel" data-for="blank" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Answers") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">{{ _("Each blank may have multiple acceptable answers; one per line") }}</span></label>
@@ -479,7 +496,7 @@
               </div>
 
               <!-- Editorial shortcut → Advanced Solution.content -->
-              <div class="type-panel" data-for="single,multiple,truefalse,short,blank,programming">
+              <div class="type-panel" data-for="single,multiple,truefalse,short,blank,programming,file">
                 <details class="explain-collapse">
                   <summary><span class="chev">▸</span> {{ _("Explanation") }} <span style="font-weight:normal;color:var(--muted);">{{ _("(optional; saved as Solution editorial)") }}</span></summary>
                   <div class="ec-body">
@@ -573,8 +590,23 @@
           <h2>{{ _('Advanced') }}</h2>
           <div class="form-content">
             <div class="form-row type-panel" data-for="programming"><label>{{ _('Creation preset') }}</label><div class="field"><select id="preset" style="max-width:200px;"><option selected>{{ _('Default') }}</option><option>{{ _('Custom') }}</option></select><div class="help">{{ _('Becomes Custom after you change advanced fields') }}</div></div></div>
+            <div class="form-row">
+              <label>{{ _('Problem group') }}</label>
+              <div class="field">
+                <div class="select-with-add">
+                  <select id="f-group">
+                    {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
+                  </select>
+                  <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" aria-label="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+</button>
+                </div>
+                <div class="inline-add-box" id="group-add-box" style="display:none;">
+                  <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
+                  <button type="button" class="btn-mini btn-mini-primary" onclick="createGroup()">{{ _('Create') }}</button>
+                  <button type="button" class="btn-mini" onclick="toggleInlineAdd('group')">{{ _('Cancel') }}</button>
+                </div>
+              </div>
+            </div>
             <div class="form-row"><label>{{ _('Problem code') }}</label><div class="field"><input type="text" id="f-code" value="" placeholder="{{ _('Auto-generated as p000000 on save') }}" readonly><div class="help">{{ _('Unique problem code, generated by the backend') }}</div></div></div>
-            <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}><div class="help">{% if can_change_public %}{{ _('Visible to everyone when no organization is selected') }}{% else %}{{ _('You cannot make problems public without organization scope') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('Is manually managed') }}</label><div class="field"><input type="checkbox" id="f-manual" {% if not can_change_manually_managed %}disabled{% endif %}><div class="help">{% if can_change_manually_managed %}{{ _('When checked, the test_data page cannot be used') }}{% else %}{{ _('You do not have permission to change this flag') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('Date') }}</label><div class="field"><input type="text" id="f-date" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"><div class="help">{{ _('Problem publish/release time') }}</div></div></div>
             <div class="form-row"><label>{{ _('Authors') }}</label><div class="field">
@@ -626,7 +658,7 @@
           <div class="form-content">
             <div class="form-row"><label>{{ _('Classes') }}</label><div class="field">
               <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"></select>
-              <div class="help">{{ _('Only classes belonging to the selected organization are listed') }}</div>
+              <div class="help">{{ _('Only classes belonging to the selected courses are listed') }}</div>
             </div></div>
           </div>
         </fieldset>
@@ -828,6 +860,7 @@
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
+    const CAN_CREATE_FILE = {{ 'true' if can_create_file else 'false' }};
     const EDIT_CODE = '{{ edit_code }}';
     const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
@@ -844,6 +877,7 @@
       blank:       { title: '{{ _("Fill-in-blank") }}', badge: 'regular', tag: '{{ _("Fill-in-blank") }}' },
       truefalse:   { title: '{{ _("True/False") }}', badge: 'regular', tag: '{{ _("True/False") }}' },
       short:       { title: '{{ _("Short answer") }}', badge: 'regular', tag: '{{ _("Short answer") }}' },
+      file:        { title: '{{ _("File upload") }}', badge: 'regular', tag: '{{ _("File upload") }}' },
       compound:    { title: '{{ _("Composite") }}', badge: 'regular', tag: '{{ _("Composite") }}' },
       other:       { title: '{{ _("Other") }}', badge: 'regular', tag: '{{ _("Other") }}' },
     };
@@ -1031,19 +1065,21 @@
     function createOrg() {
       const inp = document.getElementById('org-add-name');
       const name = inp.value.trim();
-      if (!name) { showToast('{{ _("Please enter an organization name.") }}', false); return; }
+      if (!name) { showToast('{{ _("Please enter a course name.") }}', false); return; }
       fetch(CREATE_ORGANIZATION_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
         body: JSON.stringify({ name }),
       }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
-        if (!ok) { showToast(body.error || '{{ _("Failed to create organization") }}', false); return; }
+        if (!ok) { showToast(body.error || '{{ _("Failed to create course") }}', false); return; }
         const sel = document.getElementById('f-org');
-        const opt = document.createElement('option');
-        opt.value = body.organization.id; opt.textContent = body.organization.name;
-        sel.appendChild(opt); sel.value = body.organization.id;
+        ensureOption(sel, body.organization.id, body.organization.name, true);
+        if (window.jQuery && jQuery(sel).data('select2')) {
+          const vals = (jQuery(sel).val() || []).concat([String(body.organization.id)]);
+          jQuery(sel).val([...new Set(vals)]).trigger('change');
+        }
         toggleInlineAdd('org');
-        showToast('{{ _("Organization created") }}', true);
+        showToast('{{ _("Course created") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
     function runAIProblemType(fillInput) {
@@ -1738,6 +1774,17 @@
           <div class="pv-option"><span class="mk ${val === 'false' ? 'on' : ''}"></span>${gettext('False')}</div></div>`;
       } else if (currentType === 'short') {
         html += `<div class="pv-answerbox"></div><div class="pv-answerlabel">${gettext('Answer:')}</div>`;
+      } else if (currentType === 'file') {
+        const inst = (document.getElementById('f-file-instructions').value || '').trim();
+        if (inst) html += `<div class="pv-answerlabel">${escapeHtml(inst)}</div>`;
+        html += `<div class="pv-answerbox"></div>`;
+        const ext = (document.getElementById('f-file-ext').value || '').trim();
+        const mb = document.getElementById('f-file-size').value;
+        const bits = [];
+        if (ext) bits.push(interpolate(gettext('Allowed types: %s'), [ext]));
+        if (Number(mb) > 0) bits.push(interpolate(gettext('Max size: %s MB'), [mb]));
+        html += `<div class="pv-answerlabel">${gettext('Students upload a file here.')}` +
+                `${bits.length ? ' ' + escapeHtml(bits.join(' · ')) : ''}</div>`;
       } else if (currentType === 'blank') {
         if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="${gettext('Enter answer')}" disabled>`;
         const ans = [...document.querySelectorAll('#blank-answers .blank-answer')]
@@ -1887,21 +1934,35 @@
         ensureOption(document.getElementById('f-authors'), CURRENT_PROFILE.id, CURRENT_PROFILE.username, true);
       }
     }
+    function initOrgPicker() {
+      const sel = document.getElementById('f-org');
+      if (!sel || !window.jQuery || !jQuery.fn.select2) return;
+      const $el = jQuery(sel);
+      if ($el.data('select2')) return;
+      $el.select2({
+        theme: SELECT2_THEME,
+        width: '100%',
+        placeholder: gettext('Select courses…'),
+        allowClear: true,
+      });
+    }
     function initClassPicker() {
       const sel = document.getElementById('f-classes');
       const org = document.getElementById('f-org');
       initSelect2Multi(sel, CLASS_SELECT2_URL, () => {
-        const v = (org && org.value) || '';
-        return v ? { organizations: v } : { organizations: '' };
+        const ids = selectedIds(org);
+        return { organizations: ids.length ? ids.join(',') : '' };
       });
       if (org) {
-        org.addEventListener('change', () => {
+        const onOrgChange = () => {
           if (window.jQuery && jQuery(sel).data('select2')) {
             jQuery(sel).val(null).trigger('change');
           } else if (sel) {
             sel.textContent = '';
           }
-        });
+        };
+        if (window.jQuery) jQuery(org).on('change', onOrgChange);
+        else org.addEventListener('change', onOrgChange);
       }
     }
     function translationLangSelectHtml() {
@@ -2126,7 +2187,7 @@
         action: 'save',
         type: currentType, typeLabel: TYPE_META[currentType].title,
         name: document.getElementById('f-name').value.trim(),
-        organizations: (() => { const v = document.getElementById('f-org').value; return v ? [parseInt(v, 10)] : []; })(),
+        organizations: selectedIds(document.getElementById('f-org')),
         group_id: document.getElementById('f-group').value,
         points: document.getElementById('f-points').value,
         is_public: document.getElementById('f-public').checked,
@@ -2136,7 +2197,7 @@
         rubric: (document.getElementById('f-rubric') || {}).value || '',
         gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
-        // Type and difficulty badges are visual helpers, not user-selected problem tags.
+        // Manual tags only; type/difficulty badges are visual helpers, not stored tags.
         problemTypes: currentManualTags(),
         description: RichEditor.getMarkdown('stem'),
         ...collectAdvanced(),
@@ -2148,6 +2209,10 @@
         data.tfAnswer = document.querySelector('input[name="tf"]:checked').value;
       } else if (currentType === 'short') {
         data.shortAnswer = RichEditor.getMarkdown('short');
+      } else if (currentType === 'file') {
+        data.fileExtensions = document.getElementById('f-file-ext').value.trim();
+        data.fileMaxSizeMb = document.getElementById('f-file-size').value;
+        data.fileInstructions = document.getElementById('f-file-instructions').value;
       } else if (currentType === 'blank') {
         data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer')].map(t => t.value.trim());
         data.trimWhitespace = (document.getElementById('f-blank-trim') || {}).checked !== false;
@@ -2175,7 +2240,9 @@
       if (['single', 'multiple', 'truefalse', 'blank', 'short'].includes(d.type) && !CAN_CREATE_MCQ) {
         return '{{ _("You do not have permission to create this problem type.") }}';
       }
-      if (!d.group_id) return 'Please select a problem group.';
+      if (d.type === 'file' && !CAN_CREATE_FILE) {
+        return '{{ _("You do not have permission to create this problem type.") }}';
+      }
       if (!d.points || Number(d.points) < 0) return 'Please enter a valid point value.';
       if (d.type !== 'compound' && d.type !== 'other' && !d.description) return 'Please enter a problem description.';
       if (d.type === 'single' || d.type === 'multiple') {
@@ -2187,6 +2254,7 @@
       }
       if (d.type === 'short' && !d.shortAnswer) return 'Please provide a reference answer.';
       if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(b => b))) return 'Please provide at least one fill-in-the-blank answer.';
+      if (d.type === 'file' && !(Number(d.fileMaxSizeMb) > 0)) return 'Please enter a maximum file size greater than zero.';
       if (d.type === 'compound' && (!d.subs || !d.subs.length)) return 'Please add at least one sub-problem.';
       // AI grading requires a grading table
       if (d.ai && d.gradingTable && d.gradingTable.length) {
@@ -2424,7 +2492,13 @@
 
       document.getElementById('f-name').value = d.name || '';
       if (d.organizations && d.organizations.length) {
-        const org = document.getElementById('f-org'); if (org) org.value = String(d.organizations[0]);
+        const org = document.getElementById('f-org');
+        if (org) {
+          d.organizations.forEach(id => ensureOption(org, id, null, true));
+          if (window.jQuery && jQuery(org).data('select2')) {
+            jQuery(org).val(d.organizations.map(String)).trigger('change');
+          }
+        }
       }
       if (d.group_id) { const g = document.getElementById('f-group'); if (g) g.value = String(d.group_id); }
       const pts = document.getElementById('f-points'); if (pts && d.points != null) pts.value = d.points;
@@ -2441,7 +2515,13 @@
         const dr = document.querySelector(`input[name="difficulty"][value="${d.difficulty}"]`);
         if (dr) { dr.checked = true; setDifficulty(d.difficulty); }
       }
+      // Knowledge only; type/difficulty auto chips were already inserted by selectType/setDifficulty.
+      const autoLabels = new Set([
+        ...Object.values(TYPE_META).map(m => m.tag),
+        ...Object.values(DIFF_LABEL),
+      ]);
       (d.problemTypes || []).forEach(full => {
+        if (!full || autoLabels.has(full)) return;
         const box = document.getElementById('f-types');
         const el = document.createElement('span');
         el.className = 'ptype-tag';
@@ -2472,6 +2552,11 @@
         const caseCb = document.getElementById('f-blank-case'); if (caseCb) caseCb.checked = !!d.caseSensitive;
       } else if (d.type === 'short') {
         RichEditor.setMarkdown('short', d.shortAnswer || '');
+      } else if (d.type === 'file') {
+        const ext = document.getElementById('f-file-ext'); if (ext) ext.value = d.fileExtensions || '';
+        const size = document.getElementById('f-file-size');
+        if (size && d.fileMaxSizeMb != null) size.value = d.fileMaxSizeMb;
+        const inst = document.getElementById('f-file-instructions'); if (inst) inst.value = d.fileInstructions || '';
       } else if (d.type === 'programming') {
         const tl = document.getElementById('f-time'); if (tl && d.time_limit != null) tl.value = d.time_limit;
         const ml = document.getElementById('f-mem'); if (ml && d.memory_limit != null) ml.value = d.memory_limit;
@@ -2516,6 +2601,7 @@
     });
     RichEditor.mount();
     setDifficulty(currentDifficulty);
+    initOrgPicker();
     initProfilePickers();
     initClassPicker();
 
