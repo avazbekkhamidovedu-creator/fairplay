@@ -36,7 +36,8 @@ from judge.views.ide import IDE_PROBLEM_CODE
 def submission_related(queryset):
     return queryset.select_related('user__user', 'problem', 'language') \
         .only('id', 'user__user__username', 'user__display_rank', 'user__rating', 'problem__name',
-              'problem__code', 'problem__is_public', 'language__short_name', 'language__key', 'date', 'time', 'memory',
+              'problem__code', 'problem__is_public', 'problem__submission_type',
+              'language__short_name', 'language__key', 'date', 'time', 'memory',
               'points', 'result', 'status', 'case_points', 'case_total', 'current_testcase', 'contest_object',
               'locked_after', 'problem__submission_source_visibility_mode', 'user__username_display_override') \
         .prefetch_related('contest_object__authors', 'contest_object__curators')
@@ -363,6 +364,9 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
     template_name = 'submission/list.html'
     context_object_name = 'submissions'
     first_page_href = None
+    filter_problems = ()
+    filter_users = ()
+    filter_contests = ()
 
     def get_result_data(self):
         result = self._get_result_data()
@@ -431,6 +435,20 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
         if self.selected_statuses:
             queryset = queryset.filter(result__in=self.selected_statuses)
 
+        if self.filter_problems:
+            queryset = queryset.filter(problem__code__in=self.filter_problems)
+        if self.filter_users:
+            queryset = queryset.filter(user__user__username__in=self.filter_users)
+        if self.filter_contests:
+            include_practice = '__none__' in self.filter_contests
+            contest_keys = [key for key in self.filter_contests if key != '__none__']
+            contest_q = Q()
+            if include_practice:
+                contest_q |= Q(contest_object__isnull=True)
+            if contest_keys:
+                contest_q |= Q(contest_object__key__in=contest_keys)
+            queryset = queryset.filter(contest_q)
+
         # Filter out IDE practice submissions except when viewing the idepractice problem page
         if not (hasattr(self, 'problem') and self.problem.code == IDE_PROBLEM_CODE):
             queryset = queryset.exclude(problem__code=IDE_PROBLEM_CODE)
@@ -456,6 +474,30 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
             hidden_codes += ['IE']
         return [(key, value) for key, value in Submission.RESULT if key not in hidden_codes]
 
+    def _filter_problem_options(self):
+        if not self.filter_problems:
+            return []
+        problems = {
+            p.code: '%s — %s' % (p.code, p.name)
+            for p in Problem.objects.filter(code__in=self.filter_problems).only('code', 'name')
+        }
+        return [(code, problems.get(code, code)) for code in self.filter_problems]
+
+    def _filter_contest_options(self):
+        if not self.filter_contests:
+            return []
+        contests = {
+            c.key: '%s — %s' % (c.key, c.name)
+            for c in Contest.objects.filter(key__in=self.filter_contests).only('key', 'name')
+        }
+        options = []
+        for key in self.filter_contests:
+            if key == '__none__':
+                options.append((key, _('Practice only (no contest)')))
+            else:
+                options.append((key, contests.get(key, key)))
+        return options
+
     def get_context_data(self, **kwargs):
         context = super(SubmissionsListBase, self).get_context_data(**kwargs)
         authenticated = self.request.user.is_authenticated
@@ -474,6 +516,17 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
         context['all_statuses'] = self.get_searchable_status_codes()
         context['selected_statuses'] = self.selected_statuses
 
+        context['filter_problems'] = self.filter_problems
+        context['filter_users'] = self.filter_users
+        context['filter_contests'] = self.filter_contests
+        context['filter_problem_options'] = self._filter_problem_options()
+        context['filter_contest_options'] = self._filter_contest_options()
+        # Hide filters already implied by the URL scope (per-problem / per-user / in-contest).
+        context['show_problem_filter'] = self.show_problem
+        context['show_user_filter'] = not hasattr(self, 'profile')
+        context['show_contest_filter'] = not self.in_contest
+        context['scope_contest'] = self.contest if self.in_contest else None
+
         context['results_json'] = mark_safe(json.dumps(self.get_result_data()))
         context['results_colors_json'] = mark_safe(json.dumps(settings.DMOJ_STATS_SUBMISSION_RESULT_COLORS))
 
@@ -491,6 +544,9 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
 
         self.selected_languages = set(request.GET.getlist('language'))
         self.selected_statuses = set(request.GET.getlist('status'))
+        self.filter_problems = tuple(p for p in request.GET.getlist('problem') if p.strip())
+        self.filter_users = tuple(u for u in request.GET.getlist('user') if u.strip())
+        self.filter_contests = tuple(c for c in request.GET.getlist('contest') if c.strip())
 
         if 'results' in request.GET:
             return JsonResponse(self.get_result_data())
@@ -694,7 +750,8 @@ class AllSubmissions(InfinitePaginationMixin, SubmissionsListBase):
         return context
 
     def _get_result_data(self, queryset=None):
-        if queryset is not None or self.in_contest or self.selected_languages or self.selected_statuses:
+        if (queryset is not None or self.in_contest or self.selected_languages or self.selected_statuses or
+                self.filter_problems or self.filter_users or self.filter_contests):
             return super(AllSubmissions, self)._get_result_data(queryset)
 
         key = 'global_submission_result_data'
