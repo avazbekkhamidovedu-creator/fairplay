@@ -1,12 +1,7 @@
-# Idempotent fix for environments that already ran 0187 before it called rebuild().
-# Nav tabs are rendered with mptt_tree (tree_id), so order-only updates leave IDE last.
+# Kept for migration graph compatibility with earlier branch history.
+# IDE nav removal lives in 0189_remove_auto_ide_navigation.
 
 from django.db import migrations
-
-
-def rebuild_nav(apps, schema_editor):
-    from judge.models import NavigationBar
-    NavigationBar.objects.rebuild()
 
 
 class Migration(migrations.Migration):
@@ -15,6 +10,4 @@ class Migration(migrations.Migration):
         ('judge', '0187_add_ide_navigation'),
     ]
 
-    operations = [
-        migrations.RunPython(rebuild_nav, migrations.RunPython.noop),
-    ]
+    operations = []
