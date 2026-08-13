@@ -7,7 +7,7 @@ from django.utils.translation import gettext, gettext_lazy as _
 from reversion.admin import VersionAdmin
 
 from judge.models import Organization
-from judge.views.organization import sync_class_members_to_organization
+from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget
 
 
