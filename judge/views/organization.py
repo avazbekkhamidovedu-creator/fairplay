@@ -13,6 +13,7 @@ from django.forms import Form, modelformset_factory
 from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
 from django.utils.translation import gettext as _, gettext_lazy, ngettext
@@ -20,24 +21,36 @@ from django.views.generic import DetailView, FormView, ListView, UpdateView, Vie
 from django.views.generic.detail import SingleObjectMixin, SingleObjectTemplateResponseMixin
 from reversion import revisions
 
-from judge.forms import ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
-from judge.models import AdminNotification, Class, ClassMaterial, Contest, Organization, \
-    OrganizationRequest, Profile, TeacherVerificationRequest
-from judge.models.notification import SITE_ADMINISTRATORS_GROUP
+from judge.forms import ClassAssignmentsForm, ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
+from judge.models import AdminNotification, Class, ClassMaterial, Contest, Organization, OrganizationRequest, \
+    Profile, TeacherVerificationRequest
+from judge.models.notification import SITE_ADMINISTRATORS_GROUP, TEACHERS_GROUP, ensure_teachers_group
 from judge.utils.admin_notify import (
-    notify_class_join, notify_course_join, unread_notification_count,
+    notify_class_join, notify_course_join, notify_teacher_verification, unread_notification_count,
 )
 from judge.utils.import_export import process_user_csv
 from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.utils.ranker import ranker
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, TitleMixin, generic_message
 
-__all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers',
-           'OrganizationMembershipChange', 'JoinOrganization', 'LeaveOrganization',
-           'EditOrganization', 'CreateOrganization', 'DeleteOrganization',
-           'RequestJoinOrganization', 'OrganizationRequestDetail', 'OrganizationRequestView',
-           'OrganizationRequestLog', 'KickUserWidgetView', 'ClassHome', 'RequestJoinClass',
-           'OrganizationImportUsers', 'CreateClass', 'EditClass', 'DeleteClass']
+__all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers', 'OrganizationMembershipChange',
+           'JoinOrganization', 'LeaveOrganization', 'EditOrganization', 'CreateOrganization',
+           'DeleteOrganization', 'RequestJoinOrganization',
+           'OrganizationRequestDetail', 'OrganizationRequestView', 'OrganizationRequestLog',
+           'TeacherJoinRequestsView', 'TeacherVerificationInboxView',
+           'AdminNotificationInboxView', 'TeacherVerificationSubmitView',
+           'KickUserWidgetView', 'ClassHome', 'RequestJoinClass',
+           'OrganizationImportUsers', 'CreateClass', 'EditClass', 'DeleteClass',
+           'ClassLinkAssignmentsView', 'ClassMaterialActionView', 'ClassMaterialDownloadView']
+
+
+# Materials upload policy (extensions lowercase, without leading dot).
+CLASS_MATERIAL_ALLOWED_EXTENSIONS = frozenset({
+    'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'csv', 'txt', 'md',
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'zip', 'py', 'c', 'cpp', 'h', 'hpp',
+    'java', 'js', 'ts', 'html', 'css', 'json',
+})
+CLASS_MATERIAL_MAX_BYTES = 25 * 1024 * 1024  # 25 MiB
 
 
 def unique_organization_slug(base):
@@ -229,6 +242,53 @@ def course_inbox_chrome_context(request):
         ),
         'admin_email': admin_email or getattr(settings, 'SITE_ADMIN_EMAIL', '') or 'admin@example.com',
     }
+
+
+def apply_teacher_verification_action(verification, action, reviewer):
+    """approve / reject / reopen a TeacherVerificationRequest. Returns True if changed."""
+    from django.contrib.auth.models import Group
+
+    if action == 'approve':
+        if verification.state not in ('P', 'R'):
+            return False
+        verification.state = 'A'
+        verification.reviewed_by = reviewer
+        verification.reviewed_time = timezone.now()
+        verification.save()
+        group = ensure_teachers_group()
+        group.user_set.add(verification.user.user)
+        AdminNotification.objects.filter(
+            teacher_verification=verification, read_at__isnull=True,
+        ).update(read_at=timezone.now())
+        return True
+    if action == 'reject':
+        if verification.state not in ('P', 'A'):
+            return False
+        if verification.state == 'A':
+            group = Group.objects.filter(name=TEACHERS_GROUP).first()
+            if group is not None:
+                group.user_set.remove(verification.user.user)
+        verification.state = 'R'
+        verification.reviewed_by = reviewer
+        verification.reviewed_time = timezone.now()
+        verification.save()
+        AdminNotification.objects.filter(
+            teacher_verification=verification, read_at__isnull=True,
+        ).update(read_at=timezone.now())
+        return True
+    if action == 'reopen':
+        if verification.state not in ('A', 'R'):
+            return False
+        if verification.state == 'A':
+            group = Group.objects.filter(name=TEACHERS_GROUP).first()
+            if group is not None:
+                group.user_set.remove(verification.user.user)
+        verification.state = 'P'
+        verification.reviewed_by = reviewer
+        verification.reviewed_time = timezone.now()
+        verification.save()
+        return True
+    return False
 
 
 def parse_class_description_meta(description):
@@ -887,6 +947,220 @@ class OrganizationRequestLog(OrganizationRequestBaseView):
         return context
 
 
+class TeacherJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
+    """Cross-course join-request inbox for teachers (Status dropdown + Course/Class filters)."""
+
+    template_name = 'organization/requests/inbox.html'
+    title = gettext_lazy('Join requests')
+
+    def _reviewable_queryset(self, profile):
+        org_admin_ids = set(Organization.objects.filter(admins=profile).values_list('id', flat=True))
+        class_admin_ids = set(Class.objects.filter(admins=profile).values_list('id', flat=True))
+        return OrganizationRequest.objects.filter(
+            Q(organization_id__in=org_admin_ids) | Q(request_class_id__in=class_admin_ids),
+        ).select_related('user__user', 'organization', 'request_class').order_by('-time')
+
+    def _can_review_all(self, request):
+        return request.user.has_perm('judge.edit_all_organization') or request.user.is_superuser
+
+    def _inbox_queryset(self, request):
+        profile = request.profile
+        qs = self._reviewable_queryset(profile)
+        if self._can_review_all(request):
+            qs = OrganizationRequest.objects.select_related(
+                'user__user', 'organization', 'request_class',
+            ).order_by('-time')
+        return qs
+
+    def get(self, request, *args, **kwargs):
+        profile = request.profile
+        can_all = self._can_review_all(request)
+        if not can_all and not orgs_reviewable_by(profile).exists():
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to review join requests.'), status=403)
+        qs = self._inbox_queryset(request)
+
+        status = request.GET.get('status') or 'P'
+        if status not in ('P', 'A', 'R', 'all'):
+            status = 'P'
+        course_id = safe_int(request.GET.get('course'))
+        class_id = safe_int(request.GET.get('class'))
+        kind = request.GET.get('kind') or ''
+        if kind not in ('', 'course', 'class'):
+            kind = ''
+        q = (request.GET.get('q') or '').strip()
+
+        if status != 'all':
+            qs = qs.filter(state=status)
+        if course_id:
+            qs = qs.filter(organization_id=course_id)
+        if class_id:
+            qs = qs.filter(request_class_id=class_id)
+        if kind == 'course':
+            qs = qs.filter(request_class__isnull=True)
+        elif kind == 'class':
+            qs = qs.filter(request_class__isnull=False)
+        if q:
+            qs = qs.filter(
+                Q(user__user__username__icontains=q) |
+                Q(reason__icontains=q) |
+                Q(organization__name__icontains=q) |
+                Q(organization__short_name__icontains=q),
+            )
+
+        if can_all:
+            courses = Organization.objects.order_by('name')
+            classes = Class.objects.select_related('organization').order_by('organization__name', 'name')
+        else:
+            courses = orgs_reviewable_by(profile).order_by('name')
+            classes = Class.objects.filter(
+                Q(organization__admins=profile) | Q(admins=profile),
+            ).select_related('organization').distinct().order_by('organization__name', 'name')
+        if course_id:
+            classes = classes.filter(organization_id=course_id)
+
+        pending_review_total = self._inbox_queryset(request).filter(state='P').count()
+        ctx = {
+            'title': self.title,
+            'requests': qs,
+            'status': status,
+            'course_id': course_id,
+            'class_id': class_id,
+            'kind': kind,
+            'filter_q': q,
+            'courses': courses,
+            'classes': classes,
+            'inbox_panel': 'joins',
+        }
+        ctx.update(course_inbox_chrome_context(request))
+        ctx['can_review_any'] = True
+        ctx['pending_review_total'] = pending_review_total
+        return self.render_to_response(ctx)
+
+    def post(self, request, *args, **kwargs):
+        profile = request.profile
+        can_all = self._can_review_all(request)
+        if not can_all and not orgs_reviewable_by(profile).exists():
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to review join requests.'), status=403)
+        action = request.POST.get('action')
+        ids = []
+        for raw in request.POST.getlist('request_ids'):
+            try:
+                ids.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        # Single-id fallback (optional).
+        if not ids:
+            raw_one = request.POST.get('request_id')
+            try:
+                if raw_one:
+                    ids.append(int(raw_one))
+            except (TypeError, ValueError):
+                pass
+
+        qs = list(self._inbox_queryset(request).filter(id__in=ids))
+        approved = rejected = reopened = 0
+
+        def grant_membership(obj):
+            # Class membership always implies course membership.
+            if obj.grants_organization or obj.request_class_id:
+                obj.user.organizations.add(obj.organization)
+            if obj.request_class:
+                obj.user.classes.add(obj.request_class)
+            cache.delete(make_template_fragment_key('org_member_count', (obj.organization_id,)))
+
+        def revoke_membership(obj):
+            # Class-only revoke: drop that class, keep course membership.
+            # Course revoke: leave course and clear all classes under it.
+            if obj.grants_organization:
+                remove_profile_from_organization(obj.user, obj.organization)
+            elif obj.request_class:
+                obj.user.classes.remove(obj.request_class)
+            else:
+                cache.delete(make_template_fragment_key('org_member_count', (obj.organization_id,)))
+                return
+            cache.delete(make_template_fragment_key('org_member_count', (obj.organization_id,)))
+
+        if action == 'approve':
+            candidates = [obj for obj in qs if obj.state in ('P', 'R')]
+            by_org = {}
+            for obj in candidates:
+                by_org.setdefault(obj.organization_id, []).append(obj)
+            blocked = set()
+            for org_id, reqs in by_org.items():
+                org = reqs[0].organization
+                if org.slots is None:
+                    continue
+                current_members = org.members.count()
+                member_ids = set(org.members.values_list('id', flat=True))
+                missing = sum(1 for o in reqs if o.user_id not in member_ids)
+                can_add = org.slots - current_members
+                if missing > can_add:
+                    blocked.add(org_id)
+                    messages.error(
+                        request,
+                        _('Cannot approve %(count)d request(s) for %(course)s: only %(slots)d slot(s) left.') % {
+                            'count': len(reqs),
+                            'course': org.name,
+                            'slots': max(can_add, 0),
+                        },
+                    )
+            for obj in candidates:
+                if obj.organization_id in blocked:
+                    continue
+                obj.state = 'A'
+                obj.save()
+                grant_membership(obj)
+                approved += 1
+        elif action == 'reject':
+            for obj in qs:
+                if obj.state not in ('P', 'A'):
+                    continue
+                if obj.state == 'A':
+                    revoke_membership(obj)
+                obj.state = 'R'
+                obj.save()
+                rejected += 1
+        elif action == 'reopen':
+            for obj in qs:
+                if obj.state not in ('A', 'R'):
+                    continue
+                if obj.state == 'A':
+                    revoke_membership(obj)
+                obj.state = 'P'
+                obj.save()
+                reopened += 1
+        elif action == 'delete':
+            deleted = 0
+            for obj in qs:
+                obj.delete()
+                deleted += 1
+            if deleted:
+                messages.success(
+                    request,
+                    ngettext('Deleted %d request.', 'Deleted %d requests.', deleted) % deleted,
+                )
+            return HttpResponseRedirect(request.get_full_path())
+
+        if approved:
+            messages.success(request, ngettext('Approved %d request.', 'Approved %d requests.', approved) % approved)
+        if rejected:
+            messages.success(request, ngettext('Rejected %d request.', 'Rejected %d requests.', rejected) % rejected)
+        if reopened:
+            messages.success(
+                request,
+                ngettext('Reopened %d request as pending.', 'Reopened %d requests as pending.', reopened) % reopened,
+            )
+        if action in ('approve', 'reject', 'reopen') and not approved and not rejected and not reopened:
+            messages.error(request, _('No eligible requests selected for that action.'))
+        return HttpResponseRedirect(request.get_full_path())
+
+    def render_to_response(self, context):
+        from django.shortcuts import render
+        return render(self.request, self.template_name, context)
+
+
 def safe_int(value):
     try:
         return int(value) if value not in (None, '') else None
@@ -1364,6 +1638,215 @@ class DeleteClass(LoginRequiredMixin, View):
         return HttpResponseRedirect(org.get_absolute_url())
 
 
+class ClassMaterialActionView(LoginRequiredMixin, View):
+    """Upload / new-folder / delete materials directly on the class Materials tab."""
+
+    http_method_names = ['post']
+
+    def post(self, request, *args, **kwargs):
+        class_obj = get_object_or_404(Class, id=kwargs['cpk'])
+        org = class_obj.organization
+        if class_obj.slug != kwargs.get('cslug') or org.id != kwargs.get('pk') or org.slug != kwargs.get('slug'):
+            return HttpResponsePermanentRedirect(reverse(
+                'class_material_action',
+                args=[org.id, org.slug, class_obj.id, class_obj.slug],
+            ))
+        if not profile_manages_class(request.profile, class_obj, request.user):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to manage materials for this class.'), status=403)
+
+        action = request.POST.get('action')
+        folder_id = safe_int(request.POST.get('folder') or request.GET.get('folder'))
+        parent = None
+        if folder_id:
+            parent = ClassMaterial.objects.filter(
+                id=folder_id, class_obj=class_obj, is_folder=True,
+            ).first()
+
+        redirect_url = class_obj.get_absolute_url() + '?tab=materials'
+        if parent:
+            redirect_url += '&folder=%d' % parent.id
+
+        if action == 'upload':
+            files = request.FILES.getlist('files') or (
+                [request.FILES['file']] if 'file' in request.FILES else []
+            )
+            if not files:
+                messages.error(request, _('Choose at least one file to upload.'))
+                return HttpResponseRedirect(redirect_url)
+            created = 0
+            for uploaded in files:
+                name = (uploaded.name or _('Untitled'))[:255]
+                ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+                if ext not in CLASS_MATERIAL_ALLOWED_EXTENSIONS:
+                    messages.error(
+                        request,
+                        _('File "%(name)s" has a disallowed type. Allowed: %(types)s.') % {
+                            'name': name,
+                            'types': ', '.join(sorted(CLASS_MATERIAL_ALLOWED_EXTENSIONS)),
+                        },
+                    )
+                    continue
+                size = getattr(uploaded, 'size', None)
+                if size is not None and size > CLASS_MATERIAL_MAX_BYTES:
+                    messages.error(
+                        request,
+                        _('File "%(name)s" exceeds the %(limit)d MB upload limit.') % {
+                            'name': name,
+                            'limit': CLASS_MATERIAL_MAX_BYTES // (1024 * 1024),
+                        },
+                    )
+                    continue
+                ClassMaterial.objects.create(
+                    class_obj=class_obj,
+                    parent=parent,
+                    name=name,
+                    is_folder=False,
+                    file=uploaded,
+                    uploaded_by=request.profile,
+                )
+                created += 1
+            if created:
+                messages.success(
+                    request,
+                    ngettext('Uploaded %d file.', 'Uploaded %d files.', created) % created,
+                )
+            elif files:
+                messages.error(request, _('No files were uploaded.'))
+        elif action == 'mkdir':
+            name = (request.POST.get('name') or '').strip()
+            if not name:
+                messages.error(request, _('Enter a folder name.'))
+                return HttpResponseRedirect(redirect_url)
+            ClassMaterial.objects.create(
+                class_obj=class_obj,
+                parent=parent,
+                name=name[:255],
+                is_folder=True,
+                uploaded_by=request.profile,
+            )
+            messages.success(request, _('Folder "%s" created.') % name)
+        elif action == 'delete':
+            ids = []
+            for raw in request.POST.getlist('material_ids'):
+                try:
+                    ids.append(int(raw))
+                except (TypeError, ValueError):
+                    continue
+            qs = ClassMaterial.objects.filter(class_obj=class_obj, id__in=ids)
+            count = qs.count()
+            for item in qs:
+                if item.file:
+                    item.file.delete(save=False)
+                item.delete()
+            if count:
+                messages.success(
+                    request,
+                    ngettext('Deleted %d item.', 'Deleted %d items.', count) % count,
+                )
+            else:
+                messages.error(request, _('No materials selected.'))
+        else:
+            messages.error(request, _('Unknown action.'))
+        return HttpResponseRedirect(redirect_url)
+
+
+class ClassMaterialDownloadView(LoginRequiredMixin, View):
+    """Authenticated download for class materials (do not expose raw MEDIA URLs)."""
+
+    http_method_names = ['get']
+
+    def get(self, request, *args, **kwargs):
+        from django.http import FileResponse, Http404
+
+        class_obj = get_object_or_404(Class, id=kwargs['cpk'])
+        org = class_obj.organization
+        if class_obj.slug != kwargs.get('cslug') or org.id != kwargs.get('pk') or org.slug != kwargs.get('slug'):
+            return HttpResponsePermanentRedirect(reverse(
+                'class_material_download',
+                args=[org.id, org.slug, class_obj.id, class_obj.slug, kwargs['mid']],
+            ))
+        if not profile_can_view_class_content(request.profile, class_obj, request.user):
+            return generic_message(
+                request, _('Access Denied'),
+                _('You do not have permission to download materials for this class.'),
+                status=403,
+            )
+        material = get_object_or_404(ClassMaterial, id=kwargs['mid'], class_obj=class_obj, is_folder=False)
+        if not material.file:
+            raise Http404()
+        try:
+            handle = material.file.open('rb')
+        except (OSError, ValueError):
+            raise Http404()
+        response = FileResponse(handle, as_attachment=True, filename=material.name)
+        return response
+
+
+class ClassLinkAssignmentsView(LoginRequiredMixin, TitleMixin, FormView):
+    """Link contests to a class as Assignments (site UI, not Django admin)."""
+
+    template_name = 'organization/link_assignments.html'
+    form_class = ClassAssignmentsForm
+
+    def get_object(self):
+        return get_object_or_404(Class, id=self.kwargs['cpk'])
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
+        self.object = self.get_object()
+        org = self.object.organization
+        if self.object.slug != kwargs.get('cslug') or org.id != kwargs.get('pk') or org.slug != kwargs.get('slug'):
+            return HttpResponsePermanentRedirect(reverse(
+                'class_link_assignments',
+                args=[org.id, org.slug, self.object.id, self.object.slug],
+            ))
+        if not (
+            org.admins.filter(id=request.profile.id).exists() or
+            self.object.admins.filter(id=request.profile.id).exists() or
+            user_can_edit_all_organizations(request.user)
+        ):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to manage assignments for this class.'), status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['class_obj'] = self.object
+        return kwargs
+
+    def get_title(self):
+        return _('Manage assignments - %s') % self.object.name
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['organization'] = self.object.organization
+        context['class'] = self.object
+        context['title'] = self.get_title()
+        context.update(course_inbox_chrome_context(self.request))
+        return context
+
+    def form_valid(self, form):
+        selected = list(form.cleaned_data['contests'])
+        selected_ids = {c.id for c in selected}
+        current = list(Contest.objects.filter(classes=self.object))
+        for contest in current:
+            if contest.id not in selected_ids:
+                contest.classes.remove(self.object)
+        for contest in selected:
+            contest.classes.add(self.object)
+        messages.success(
+            self.request,
+            ngettext(
+                'Updated assignments: %d contest linked.',
+                'Updated assignments: %d contests linked.',
+                len(selected),
+            ) % len(selected),
+        )
+        return HttpResponseRedirect(self.object.get_absolute_url() + '?tab=assignments')
+
+
 class OrganizationImportForm(forms.Form):
     csv_file = forms.FileField(label=gettext_lazy('CSV File'))
     target_class = forms.ModelChoiceField(
@@ -1425,3 +1908,196 @@ class OrganizationImportUsers(LoginRequiredMixin, OrganizationMixin, FormView):
                                   update_existing=update_existing, activate=activate)
 
         return self.render_to_response(self.get_context_data(form=form, result=result))
+
+
+class TeacherVerificationForm(Form):
+    reason = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 4, 'class': 'oj-input'}),
+        label=gettext_lazy('Why do you need teacher access?'),
+        max_length=2000,
+    )
+
+
+class TeacherVerificationSubmitView(LoginRequiredMixin, View):
+    """POST-only: create teacher verification + notify Site Administrators."""
+
+    http_method_names = ['post']
+
+    def post(self, request, *args, **kwargs):
+        form = TeacherVerificationForm(request.POST)
+        next_url = safe_redirect_url(
+            request,
+            request.POST.get('next') or request.META.get('HTTP_REFERER'),
+            reverse('organization_list'),
+        )
+        if not form.is_valid():
+            messages.error(request, _('Please provide a short reason for teacher verification.'))
+            return HttpResponseRedirect(next_url)
+
+        profile = request.profile
+        if TeacherVerificationRequest.objects.filter(user=profile, state='P').exists():
+            messages.info(request, _('You already have a pending teacher verification request.'))
+            return HttpResponseRedirect(next_url)
+
+        verification = TeacherVerificationRequest.objects.create(
+            user=profile,
+            reason=form.cleaned_data['reason'].strip(),
+            state='P',
+        )
+        notify_teacher_verification(verification)
+        messages.success(
+            request,
+            _('Your teacher verification request was sent to site administrators.'),
+        )
+        return HttpResponseRedirect(next_url)
+
+
+class AdminNotificationInboxView(LoginRequiredMixin, TitleMixin, View):
+    """Simple message inbox (teacher verification + join notifications)."""
+
+    template_name = 'organization/requests/notifications.html'
+    title = gettext_lazy('Messages')
+
+    def render_to_response(self, context):
+        from django.shortcuts import render
+        return render(self.request, self.template_name, context)
+
+    def _can_access(self, request):
+        chrome = course_inbox_chrome_context(request)
+        return chrome['can_see_notifications'] or chrome['can_review_any'] or request.user.is_superuser
+
+    def get(self, request, *args, **kwargs):
+        if not self._can_access(request):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to view this inbox.'), status=403)
+        profile = request.profile
+        status = request.GET.get('status') or 'unread'
+        qs = AdminNotification.objects.filter(recipient=profile).select_related(
+            'actor__user', 'organization_request__organization', 'organization_request__user__user',
+            'teacher_verification__user__user',
+        )
+        if status == 'unread':
+            qs = qs.filter(read_at__isnull=True)
+        elif status == 'read':
+            qs = qs.filter(read_at__isnull=False)
+        # else all
+        ctx = {
+            'title': self.title,
+            'notifications': list(qs[:200]),
+            'status': status,
+            'inbox_panel': 'messages',
+        }
+        ctx.update(course_inbox_chrome_context(request))
+        return self.render_to_response(ctx)
+
+    def post(self, request, *args, **kwargs):
+        if not self._can_access(request):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to view this inbox.'), status=403)
+        profile = request.profile
+        action = request.POST.get('action')
+        ids = []
+        for raw in request.POST.getlist('notification_ids'):
+            try:
+                ids.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        qs = AdminNotification.objects.filter(recipient=profile, id__in=ids)
+
+        if action == 'mark_read':
+            qs.filter(read_at__isnull=True).update(read_at=timezone.now())
+            messages.success(request, _('Marked as read.'))
+        elif action == 'mark_unread':
+            qs.update(read_at=None)
+            messages.success(request, _('Marked as unread.'))
+        else:
+            messages.error(request, _('Unknown action.'))
+
+        return HttpResponseRedirect(reverse('organization_notifications') + '?status=' + (
+            request.GET.get('status') or 'unread'
+        ))
+
+
+class TeacherVerificationInboxView(LoginRequiredMixin, TitleMixin, View):
+    """Site-admin inbox for teacher verification (Pending / Approve / Reject / Reopen)."""
+
+    template_name = 'organization/requests/teacher_inbox.html'
+    title = gettext_lazy('Teacher verification')
+
+    def render_to_response(self, context):
+        from django.shortcuts import render
+        return render(self.request, self.template_name, context)
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
+        if not user_can_review_teacher_verifications(request.user):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to review teacher verification.'), status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        status = request.GET.get('status') or 'P'
+        if status not in ('P', 'A', 'R', 'all'):
+            status = 'P'
+        qs = TeacherVerificationRequest.objects.select_related(
+            'user__user', 'reviewed_by__user',
+        ).order_by('-time')
+        if status != 'all':
+            qs = qs.filter(state=status)
+        ctx = {
+            'title': self.title,
+            'requests': qs,
+            'status': status,
+            'inbox_panel': 'teachers',
+        }
+        ctx.update(course_inbox_chrome_context(request))
+        return self.render_to_response(ctx)
+
+    def post(self, request, *args, **kwargs):
+        action = request.POST.get('action')
+        ids = []
+        for raw in request.POST.getlist('request_ids'):
+            try:
+                ids.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        qs = list(
+            TeacherVerificationRequest.objects.filter(id__in=ids).select_related('user__user'),
+        )
+        approved = rejected = reopened = 0
+        reviewer = request.profile
+        if action == 'approve':
+            for obj in qs:
+                if apply_teacher_verification_action(obj, 'approve', reviewer):
+                    approved += 1
+        elif action == 'reject':
+            for obj in qs:
+                if apply_teacher_verification_action(obj, 'reject', reviewer):
+                    rejected += 1
+        elif action == 'reopen':
+            for obj in qs:
+                if apply_teacher_verification_action(obj, 'reopen', reviewer):
+                    reopened += 1
+        else:
+            messages.error(request, _('Unknown action.'))
+            return HttpResponseRedirect(request.get_full_path())
+
+        if approved:
+            messages.success(
+                request,
+                ngettext('Approved %d teacher request.', 'Approved %d teacher requests.', approved) % approved,
+            )
+        if rejected:
+            messages.success(
+                request,
+                ngettext('Rejected %d teacher request.', 'Rejected %d teacher requests.', rejected) % rejected,
+            )
+        if reopened:
+            messages.success(
+                request,
+                ngettext('Reopened %d teacher request.', 'Reopened %d teacher requests.', reopened) % reopened,
+            )
+        if action in ('approve', 'reject', 'reopen') and not approved and not rejected and not reopened:
+            messages.error(request, _('No eligible requests selected for that action.'))
+        return HttpResponseRedirect(request.get_full_path())
