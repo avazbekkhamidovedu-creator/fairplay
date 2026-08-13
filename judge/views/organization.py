@@ -13,7 +13,6 @@ from django.forms import Form, modelformset_factory
 from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
-from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
 from django.utils.translation import gettext as _, gettext_lazy, ngettext
@@ -22,8 +21,8 @@ from django.views.generic.detail import SingleObjectMixin, SingleObjectTemplateR
 from reversion import revisions
 
 from judge.forms import ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
-from judge.models import AdminNotification, Class, ClassMaterial, Contest, Organization, OrganizationRequest, \
-    Profile, TeacherVerificationRequest
+from judge.models import AdminNotification, Class, ClassMaterial, Contest, Organization, \
+    OrganizationRequest, Profile, TeacherVerificationRequest
 from judge.models.notification import SITE_ADMINISTRATORS_GROUP
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, unread_notification_count,
@@ -33,15 +32,12 @@ from judge.utils.organization_membership import sync_class_members_to_organizati
 from judge.utils.ranker import ranker
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, TitleMixin, generic_message
 
-__all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers', 
-           'OrganizationMembershipChange', 'JoinOrganization', 'LeaveOrganization', 
-           'EditOrganization', 'CreateOrganization', 'DeleteOrganization', 
-           'RequestJoinOrganization', 'OrganizationRequestDetail', 'OrganizationRequestView', 
-           'OrganizationRequestLog', 'KickUserWidgetView', 'ClassHome', 'RequestJoinClass', 
+__all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers',
+           'OrganizationMembershipChange', 'JoinOrganization', 'LeaveOrganization',
+           'EditOrganization', 'CreateOrganization', 'DeleteOrganization',
+           'RequestJoinOrganization', 'OrganizationRequestDetail', 'OrganizationRequestView',
+           'OrganizationRequestLog', 'KickUserWidgetView', 'ClassHome', 'RequestJoinClass',
            'OrganizationImportUsers', 'CreateClass', 'EditClass', 'DeleteClass']
-
-
-
 
 
 def unique_organization_slug(base):
@@ -233,6 +229,8 @@ def course_inbox_chrome_context(request):
         ),
         'admin_email': admin_email or getattr(settings, 'SITE_ADMIN_EMAIL', '') or 'admin@example.com',
     }
+
+
 def parse_class_description_meta(description):
     """Parse structured meta lines from a class description (Session/Location/…)."""
     meta = {
@@ -887,6 +885,8 @@ class OrganizationRequestLog(OrganizationRequestBaseView):
         context = super(OrganizationRequestLog, self).get_context_data(**kwargs)
         context['requests'] = self.get_requests().filter(state__in=self.states)
         return context
+
+
 def safe_int(value):
     try:
         return int(value) if value not in (None, '') else None
@@ -1362,6 +1362,8 @@ class DeleteClass(LoginRequiredMixin, View):
         class_obj.delete()
         messages.success(request, _('Class "%s" deleted.') % name)
         return HttpResponseRedirect(org.get_absolute_url())
+
+
 class OrganizationImportForm(forms.Form):
     csv_file = forms.FileField(label=gettext_lazy('CSV File'))
     target_class = forms.ModelChoiceField(

@@ -295,9 +295,6 @@ urlpatterns = [
 
     path('organizations/', organization.OrganizationList.as_view(), name='organization_list'),
     path('organizations/new/', organization.CreateOrganization.as_view(), name='organization_create'),
-         name='organization_notifications'),
-         name='organization_teacher_requests'),
-         name='organization_teacher_verification'),
     path('organization/<int:pk>-<slug:slug>', include([
         path('', organization.OrganizationHome.as_view(), name='organization_home'),
         path('/users', organization.OrganizationUsers.as_view(), name='organization_users'),
@@ -325,9 +322,6 @@ urlpatterns = [
             path('', organization.ClassHome.as_view(), name='class_home'),
             path('/join', organization.RequestJoinClass.as_view(), name='class_join'),
             path('/edit', organization.EditClass.as_view(), name='class_edit'),
-                 name='class_link_assignments'),
-                 name='class_material_action'),
-                 name='class_material_download'),
             path('/delete', organization.DeleteClass.as_view(), name='class_delete'),
         ])),
 
