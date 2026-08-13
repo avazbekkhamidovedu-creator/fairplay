@@ -89,6 +89,26 @@ class Submission(models.Model):
                                        on_delete=models.SET_NULL, related_name='+', db_index=False)
     locked_after = models.DateTimeField(verbose_name=_('submission lock'), null=True, blank=True)
 
+    # ── Manual grading metadata (teacher-side grade page) ───────────────────
+    # These three fields back the "评分与评语" (score + review comment) panel of
+    # the grade workspace. They are deliberately NOT exposed on the student
+    # submission view — they exist so a teacher can annotate a submission and
+    # the grade list can show "Last graded · by X" state, mirroring the
+    # grading.html reference design.
+    review_note = models.TextField(
+        verbose_name=_('review note'), blank=True, default='',
+        help_text=_('Teacher comment written on the grade page while grading this submission.'),
+    )
+    reviewed_by = models.ForeignKey(
+        'Profile', verbose_name=_('reviewed by'), null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+',
+        help_text=_('The teacher who last saved a manual grade for this submission.'),
+    )
+    reviewed_at = models.DateTimeField(
+        verbose_name=_('reviewed at'), null=True, blank=True,
+        help_text=_('When the manual grade was last saved.'),
+    )
+
     @classmethod
     def result_class_from_code(cls, result, case_points, case_total):
         if result == 'AC':

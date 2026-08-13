@@ -11,7 +11,10 @@
 
 {% block media %}
     <style>
-        /* Grade workspace — mirrors the grading.html reference on --oj-* tokens (dark-aware) */
+        /* Grade workspace — mirrors the grading.html reference on --oj-* tokens (dark-aware).
+           Layout is intentionally a simple two-column grid (kept stable per design review);
+           the CONTENT is enriched to match the reference: badges, problem stem, answer
+           result summary, review note (评语), Release / Rejudge actions. */
         .grade-head {
             display: flex;
             justify-content: space-between;
@@ -38,6 +41,28 @@
             flex-wrap: wrap;
             align-items: center;
         }
+        /* Toolbar actions (Release / Rejudge) — same visual language as the ws-toolbar reference. */
+        .tool-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            height: 32px;
+            padding: 0 0.75rem;
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius);
+            background: var(--oj-surface);
+            color: var(--oj-text);
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .tool-btn:hover { border-color: var(--oj-accent); color: var(--oj-accent); }
+        .tool-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .tool-btn.primary {
+            background: linear-gradient(to bottom, var(--oj-btn-from), var(--oj-btn-to));
+            border-color: var(--oj-btn-border);
+            color: #fff;
+        }
+        .tool-btn.primary:hover { background: var(--oj-btn-hover); color: #fff; }
 
         .grade-layout {
             display: grid;
@@ -148,6 +173,21 @@
         }
         .gs-usage .time { font-weight: 700; }
 
+        /* Row badges — mirror the reference (pending / graded / final / released / V). */
+        .badge {
+            display: inline-block;
+            font-size: 10px;
+            padding: 0.05rem 0.3rem;
+            border-radius: 3px;
+            margin-left: 0.2rem;
+            vertical-align: 1px;
+        }
+        .badge-review { background: #fff3e0; color: #e65100; }
+        .badge-done { background: #e8f5e9; color: #2e7d32; }
+        .badge-final { background: #e3f2fd; color: #1565c0; }
+        .badge-released { background: #ede7f6; color: #4527a0; }
+        .badge-hidden { background: #eee; color: #666; }
+
         .grade-detail {
             padding: 0.95rem 1rem 1.1rem;
             min-height: 34rem;
@@ -182,6 +222,12 @@
             color: var(--oj-text);
             font-size: 13px;
         }
+        /* Problem stem (题面): plain pre-wrapped text — escaped, never raw HTML. */
+        .gd-stem {
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.65;
+        }
         .gd-source {
             background: #111827;
             color: #e5e7eb;
@@ -192,6 +238,10 @@
             white-space: pre-wrap;
             overflow: auto;
         }
+        /* Result summary line (Answer result). */
+        .gd-result-summary { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 13px; }
+        .gd-result-summary .rs-label { color: var(--oj-text-muted); font-size: 11px; text-transform: uppercase; }
+        .gd-result-summary .rs-value { font-weight: 700; color: var(--oj-text); }
         .gd-score-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
         .gd-score-row input[type="number"] {
             height: 32px;
@@ -199,6 +249,20 @@
             border-radius: var(--oj-radius);
             padding: 0 0.45rem;
             font-size: 13px;
+            background: var(--oj-surface);
+            color: var(--oj-text);
+        }
+        /* Review note (评语) textarea. */
+        .gd-note {
+            width: 100%;
+            box-sizing: border-box;
+            min-height: 90px;
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius);
+            padding: 0.55rem 0.65rem;
+            font: inherit;
+            font-size: 13px;
+            resize: vertical;
             background: var(--oj-surface);
             color: var(--oj-text);
         }
@@ -217,9 +281,19 @@
 {% block js_media %}
     <script type="text/javascript">
         $(function () {
+            // ── Server-provided data ────────────────────────────────────────
+            // grade_submissions_json is serialized with |tojson (html-safe JSON:
+            // `<`, `>`, `&`, `'` become \u003c etc.), so student-controlled
+            // source can never break out of this <script> block (stored XSS).
             var submissions = {{ grade_submissions_json|tojson }};
             var problems = {{ grade_problems_json|tojson }};
             var saveUrl = {{ url('contest_grade_save', contest.key)|tojson }};
+            var releaseUrl = {{ url('contest_grade_release', contest.key)|tojson }};
+            var rejudgeUrl = {{ url('submission_rejudge')|tojson }};
+            var released = {{ 'true' if grade_released else 'false' }};
+            // Rejudge additionally needs staff + the rejudge_submission perm
+            // (enforced server-side by the widget too); disable the button when absent.
+            var canRejudge = {{ 'true' if request.user.is_staff and request.user.has_perm('judge.rejudge_submission') else 'false' }};
             var selectedId = null;
 
             function esc(s) {
@@ -228,13 +302,23 @@
                 });
             }
 
-            function problemName(code) {
+            // problems is now a list of dicts: {code, name, letter, description}.
+            function problemMeta(code) {
                 for (var i = 0; i < problems.length; i++) {
-                    if (problems[i][0] === code) return problems[i][1];
+                    if (problems[i].code === code) return problems[i];
                 }
-                return code;
+                return null;
+            }
+            function problemName(code) {
+                var p = problemMeta(code);
+                return p ? p.name : code;
+            }
+            function problemLabel(code) {
+                var p = problemMeta(code);
+                return p && p.letter ? p.letter + '. ' + p.name : problemName(code);
             }
 
+            // ── Filtering (queue / problem / user) ──────────────────────────
             function filtered() {
                 var q = $('#f-queue').val();
                 var problem = $('#f-problem').val();
@@ -248,12 +332,29 @@
                 });
             }
 
+            function refreshReleaseButton() {
+                $('#btn-release').html(
+                    '<i class="fa fa-flag-checkered"></i> ' + (released ? '{{ _('Unrelease') }}' : '{{ _('Release') }}')
+                );
+                $('#btn-release').attr('title', released
+                    ? '{{ _('Withdraw the released grades from students') }}'
+                    : '{{ _('Reveal final grades to students (results_finalized)') }}');
+            }
+
+            // ── Submission list ─────────────────────────────────────────────
             function renderList() {
                 var rows = filtered();
-                $('#left-summary').text(rows.length + ' rows');
+                $('#left-summary').text(rows.length + ' rows' + (released ? ' · released' : ''));
                 if (!selectedId && rows.length) selectedId = rows[0].id;
                 $('#submission-list').html(rows.map(function (s) {
                     var score = s.points != null ? s.points + ' / ' + (s.total || '—') : '— / ' + (s.total || '—');
+                    // Badges mirror the reference: pending / graded / final / released / V.
+                    var badges = '';
+                    if (s.points == null) badges += '<span class="badge badge-review">pending</span>';
+                    else badges += '<span class="badge badge-done">graded</span>';
+                    if (s.is_latest) badges += '<span class="badge badge-final">final</span>';
+                    if (released) badges += '<span class="badge badge-released">released</span>';
+                    if (s.virtual) badges += '<span class="badge badge-hidden">V</span>';
                     return '<div class="grade-submission-row' + (s.id === selectedId ? ' active' : '') + '" data-id="' + s.id + '">' +
                         '<div class="gs-result">' +
                             '<div class="score">' + esc(score) + '</div>' +
@@ -261,8 +362,8 @@
                         '</div>' +
                         '<div class="gs-main">' +
                             '<div class="gs-info">' +
-                                '<div class="name">' + esc(problemName(s.problem)) + '</div>' +
-                                '<div class="time">' + esc(s.user) + ' · ' + esc(s.date) + '</div>' +
+                                '<div class="name">' + esc(problemLabel(s.problem)) + '</div>' +
+                                '<div class="time">' + esc(s.user) + ' · ' + esc(s.date) + ' ' + badges + '</div>' +
                             '</div>' +
                         '</div>' +
                         '<div class="gs-usage">' +
@@ -279,6 +380,7 @@
                 });
             }
 
+            // ── Detail pane (info · stem · result · grading) ────────────────
             function renderDetail() {
                 var box = $('#detail');
                 var s = null;
@@ -286,53 +388,92 @@
                     if (submissions[i].id === selectedId) { s = submissions[i]; break; }
                 }
                 if (!s) {
-                    box.html('<div class="gd-empty">Select a submission on the left to start grading.</div>');
+                    box.html('<div class="gd-empty">{{ _('Select a submission on the left to start grading.') }}</div>');
+                    $('#btn-rejudge').prop('disabled', true);
                     return;
                 }
-                box.html(
+                $('#btn-rejudge').prop('disabled', !canRejudge);
+
+                // Header: #id · user · problem
+                var html =
                     '<div class="gd-top">' +
-                        '<div><h3>#' + s.id + ' · ' + esc(s.user) + ' · ' + esc(problemName(s.problem)) + '</h3>' +
-                        '<div class="muted">' + esc(s.date) + '</div></div>' +
-                    '</div>' +
-                    '<div class="gd-section"><h4>Source</h4><div class="gd-source">' + esc(s.source || 'No source.') + '</div></div>' +
-                    '<div class="gd-section"><h4>Manual score</h4><div class="gd-section-card">' +
-                        '<div class="gd-score-row">' +
-                            '<label>Score</label>' +
-                            '<input type="number" id="g-score" min="0" max="' + (s.total || 0) + '" value="' + (s.points != null ? s.points : 0) + '" step="0.01">' +
-                            '<span>/ ' + (s.total || 0) + '</span>' +
-                            '<button type="button" class="btn btn-primary" id="btn-save-score">' + 'Save score' + '</button>' +
-                        '</div>' +
-                    '</div></div>'
-                );
+                        '<div><h3>#' + s.id + ' · ' + esc(s.user) + ' · ' + esc(problemLabel(s.problem)) + '</h3>' +
+                        '<div class="muted">' + esc(s.date) +
+                            (s.virtual ? ' · <span class="badge badge-hidden">V</span>' : '') +
+                            (s.reviewed_by ? (' · {{ _('Last graded') }} ' + esc(s.reviewed_at || '') + ' by ' + esc(s.reviewed_by)) : '') +
+                        '</div></div>' +
+                    '</div>';
+
+                // Problem statement (题面)
+                var desc = problemMeta(s.problem);
+                html += '<div class="gd-section"><h4>{{ _('Problem description') }}</h4>' +
+                    '<div class="gd-section-card gd-stem">' + esc(desc ? desc.description : '') + '</div></div>';
+
+                // Answer result summary
+                html += '<div class="gd-section"><h4>{{ _('Answer result') }}</h4><div class="gd-section-card">' +
+                    '<div class="gd-result-summary">' +
+                        '<div><div class="rs-label">{{ _('Result') }}</div><div class="rs-value">' + esc(s.result || '—') + '</div></div>' +
+                        '<div><div class="rs-label">{{ _('Points') }}</div><div class="rs-value">' + esc(scoreText(s)) + '</div></div>' +
+                        '<div><div class="rs-label">{{ _('Language') }}</div><div class="rs-value">' + esc(s.lang || '—') + '</div></div>' +
+                        '<div><div class="rs-label">{{ _('Time') }}</div><div class="rs-value">' + (s.time != null ? Number(s.time).toFixed(2) + 's' : '—') + '</div></div>' +
+                        '<div><div class="rs-label">{{ _('Memory') }}</div><div class="rs-value">' + esc(s.memory != null ? s.memory : '—') + '</div></div>' +
+                    '</div></div></div>';
+
+                // Submitted source
+                html += '<div class="gd-section"><h4>{{ _('Source') }}</h4><div class="gd-source">' + esc(s.source || 'No source.') + '</div></div>';
+
+                // Test cases (if any)
                 if (s.test_cases && s.test_cases.length) {
-                    box.append('<div class="gd-section"><h4>Test cases</h4><div class="gd-section-card">' +
-                        '<table class="gd-testcases"><thead><tr><th>#</th><th>Result</th><th>Time</th><th>Memory</th><th>Points</th></tr></thead><tbody>' +
+                    html += '<div class="gd-section"><h4>{{ _('Test cases') }}</h4><div class="gd-section-card">' +
+                        '<table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Time') }}</th><th>{{ _('Memory') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
                         s.test_cases.map(function (tc) {
                             return '<tr><td>' + tc.case + '</td><td>' + esc(tc.status) + '</td><td>' +
                                 (tc.time != null ? Number(tc.time).toFixed(2) + 's' : '—') + '</td><td>' +
                                 (tc.memory != null ? esc(tc.memory) : '—') + '</td><td>' +
                                 (tc.points != null ? tc.points : '—') + '</td></tr>';
                         }).join('') +
-                        '</tbody></table></div></div>');
+                        '</tbody></table></div></div>';
                 }
+
+                // Manual score + review note (评分与评语)
+                html += '<div class="gd-section"><h4>{{ _('Manual grading') }}</h4><div class="gd-section-card">' +
+                    '<div class="gd-score-row">' +
+                        '<label>{{ _('Score') }}</label>' +
+                        '<input type="number" id="g-score" min="0" max="' + (s.total || 0) + '" value="' + (s.points != null ? s.points : 0) + '" step="0.01">' +
+                        '<span>/ ' + (s.total || 0) + '</span>' +
+                        '<button type="button" class="btn btn-primary" id="btn-save-score">{{ _('Save grading') }}</button>' +
+                        '<span class="muted">{{ _('Submit grading 后需 Release 才会更新学生前台最新分') }}</span>' +
+                    '</div>' +
+                    '<label style="display:block;margin-top:0.6rem;font-size:12px;color:var(--oj-text-muted);">{{ _('Review note') }}</label>' +
+                    '<textarea id="g-note" class="gd-note" placeholder="{{ _('Write review comment...') }}">' + esc(s.review_note || '') + '</textarea>' +
+                '</div></div>';
+
+                box.html(html);
                 $('#btn-save-score').on('click', function () {
                     $.post(saveUrl, {
                         submission: s.id,
-                        score: $('#g-score').val()
+                        score: $('#g-score').val(),
+                        note: $('#g-note').val()
                     }).done(function (res) {
-                        if (!res.ok) { alert(res.error || 'Failed to save'); return; }
+                        if (!res.ok) { alert(res.error || '{{ _('Failed to save') }}'); return; }
                         for (var i = 0; i < submissions.length; i++) {
                             if (submissions[i].id === res.submission) {
                                 submissions[i].points = res.score;
                                 submissions[i].total = res.total;
+                                submissions[i].review_note = res.note || '';
                             }
                         }
                         renderList();
                         renderDetail();
-                    }).fail(function () { alert('Failed to save score'); });
+                    }).fail(function () { alert('{{ _('Failed to save grading') }}'); });
                 });
             }
 
+            function scoreText(s) {
+                return s.points != null ? (s.points + ' / ' + (s.total || '—')) : '— / ' + (s.total || '—');
+            }
+
+            // ── Filter events ───────────────────────────────────────────────
             $('#f-queue, #f-problem').on('change', function () {
                 selectedId = null;
                 renderList();
@@ -344,6 +485,31 @@
                 renderDetail();
             });
 
+            // ── Toolbar: Release / Unrelease ────────────────────────────────
+            $('#btn-release').on('click', function () {
+                var $btn = $(this).prop('disabled', true);
+                $.post(releaseUrl).done(function (res) {
+                    if (!res.ok) { alert(res.error || '{{ _('Failed') }}'); return; }
+                    released = res.released;
+                    refreshReleaseButton();
+                    renderList();
+                    renderDetail();
+                }).fail(function () { alert('{{ _('Failed to toggle release') }}'); })
+                  .always(function () { $btn.prop('disabled', false); });
+            });
+
+            // ── Toolbar: Rejudge (needs staff + rejudge_submission) ─────────
+            $('#btn-rejudge').on('click', function () {
+                if (!selectedId) return;
+                var $btn = $(this).prop('disabled', true);
+                $.post(rejudgeUrl, {id: selectedId}).done(function () {
+                    alert('{{ _('Rejudge queued') }}');
+                }).fail(function (xhr) {
+                    alert('{{ _('Rejudge failed') }} (' + xhr.status + ')');
+                }).always(function () { $btn.prop('disabled', !canRejudge); });
+            });
+
+            refreshReleaseButton();
             renderList();
             renderDetail();
         });
@@ -355,6 +521,14 @@
         <div>
             <h1>{{ _('Grade') }} — {{ contest.name }}</h1>
             <div class="sub">{{ _('Assignment grading workspace') }}</div>
+        </div>
+        <div class="head-actions">
+            <button type="button" class="tool-btn" id="btn-release">
+                <i class="fa fa-flag-checkered"></i> {{ _('Release') }}
+            </button>
+            <button type="button" class="tool-btn" id="btn-rejudge" disabled title="{{ _('Requires staff + rejudge permission') }}">
+                <i class="fa fa-refresh"></i> {{ _('Rejudge') }}
+            </button>
         </div>
     </div>
 
@@ -374,8 +548,8 @@
                         <label>{{ _('Problem') }}</label>
                         <select id="f-problem" data-oj-select>
                             <option value="">{{ _('All problems') }}</option>
-                            {% for code, name in grade_problems %}
-                                <option value="{{ code }}">{{ name }}</option>
+                            {% for p in grade_problems %}
+                                <option value="{{ p.code }}">{{ p.name }}</option>
                             {% endfor %}
                         </select>
                     </div>

@@ -58,6 +58,7 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
+           'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease',
            'ContestSEBConfig', 'SEBQuit']
 
 
@@ -1030,6 +1031,24 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
                 problem_count=Count('id'),
             ),
         )
+        # Which problems the viewer has solved / attempted *within this contest*,
+        # driving the green checkmark (same visual language as the Problem list
+        # page). Results are withheld while an exam-style contest is still
+        # masking verdicts (has_hidden_results && not finalized), so the check
+        # cannot leak a hidden result before release.
+        solved = set()
+        attempted = set()
+        profile = getattr(self.request, 'profile', None)
+        if self.request.user.is_authenticated and profile is not None:
+            contest_subs = Submission.objects.filter(contest_object=self.object, user=profile)
+            attempted = set(contest_subs.values_list('problem_id', flat=True).distinct())
+            if not (self.object.format_class.has_hidden_results and not self.object.results_finalized):
+                solved = set(
+                    contest_subs.filter(result='AC', case_points__gte=F('case_total'))
+                    .values_list('problem_id', flat=True).distinct(),
+                )
+        context['contest_solved_problem_ids'] = solved
+        context['contest_attempted_problem_ids'] = attempted
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         context['enable_social'] = settings.DMOJ_ENABLE_SOCIAL
         return context
@@ -1454,10 +1473,16 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
         return _('%s Grade') % self.object.name
 
     def dispatch(self, request, *args, **kwargs):
-        # Teacher gate: only editors / edit-all-contest holders may grade.
+        # Grading is an *edit* action, not a view action, so we gate on
+        # `is_editable_by` and NOT on `ContestMixin.get_object()`'s
+        # `access_check`. Using `get_object()` here would (a) 404 a hidden
+        # contest for non-viewers *before* the edit check, and (b) raise an
+        # uncaught `PrivateContestError` (→500) for a private contest. Fetching
+        # the contest directly gives every authenticated non-editor a uniform,
+        # existence-hiding 404.
         if not request.user.is_authenticated:
             return redirect_to_login(self.request.get_full_path())
-        self.object = self.get_object()
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
         if not self.object.is_editable_by(request.user):
             raise Http404()
         return super().dispatch(request, *args, **kwargs)
@@ -1467,22 +1492,44 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
         contest = self.object
         submissions = (
             Submission.objects.filter(contest_object=contest)
-            .select_related('user__user', 'problem', 'language')
+            .select_related('user__user', 'problem', 'language',
+                            'reviewed_by__user', 'contest__participation')
             .prefetch_related('test_cases')
             .order_by('-date')
         )
         context['grade_submissions'] = submissions
-        context['grade_problems'] = list(
-            contest.contest_problems.order_by('order').select_related('problem')
-            .values_list('problem__code', 'problem__name'),
-        )
+        # Problem library for the grade page: code → display name + statement,
+        # so the detail pane can render the problem description ("题面").
+        problems = list(contest.contest_problems.order_by('order').select_related('problem'))
+        context['grade_problems'] = [
+            {
+                'code': cp.problem.code,
+                'name': cp.problem.name,
+                'letter': chr(65 + idx) if len(problems) <= 26 else '',
+                'points': cp.points,
+                'description': cp.problem.description or '',
+            }
+            for idx, cp in enumerate(problems)
+        ]
+        # Whether grades are currently released to students (drives the
+        # Release / Unrelease toolbar button state).
+        context['grade_released'] = contest.results_finalized
 
         payload = []
+        latest_seen = set()
         for sub in submissions:
+            # "Latest version" marker: the first row seen per (user, problem)
+            # because the queryset is ordered newest-first.
+            user_problem = (sub.user_id, sub.problem_id)
+            is_latest = user_problem not in latest_seen
+            latest_seen.add(user_problem)
             try:
                 source = sub.source.source
             except Submission.source.RelatedObjectDoesNotExist:
                 source = ''
+            # `sub.contest` is the per-participation ContestSubmission row; a
+            # None means this submission was not part of a live/virtual run.
+            contest_submission = sub.contest_or_none
             payload.append({
                 'id': sub.id,
                 'user': sub.user.user.username,
@@ -1504,6 +1551,14 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                         'points': tc.points,
                     } for tc in sub.test_cases.all()
                 ],
+                # Manual-grading metadata (评分与评语 state).
+                'review_note': sub.review_note or '',
+                'reviewed_by': sub.reviewed_by.user.username if sub.reviewed_by else None,
+                'reviewed_at': sub.reviewed_at.strftime('%Y-%m-%d %H:%M') if sub.reviewed_at else None,
+                # Participation kind: virtual runs are marked with a "V" badge.
+                'virtual': bool(contest_submission and contest_submission.participation_id
+                                and contest_submission.participation.virtual),
+                'is_latest': is_latest,
             })
         # Pass Python objects; the template serializes with |tojson (htmlsafe JSON,
         # escapes `<`/`>`/`&`/`'`) so student-controlled source can never break out
@@ -1517,9 +1572,14 @@ class ContestGradeSave(ContestMixin, DetailView):
     """Save a manual score for a submission (teacher-side)."""
 
     def dispatch(self, request, *args, **kwargs):
+        # Same reasoning as `ContestGrade.dispatch`: grading is an edit action,
+        # so we check `is_editable_by` directly instead of `access_check` (which
+        # would give non-viewers a 404 HTML page rather than the 403 JSON the
+        # frontend expects, and 500 on private contests). Status contract for the
+        # JSON endpoint: 401 anonymous, 403 authenticated non-editor, 200 editor.
         if not request.user.is_authenticated:
             return JsonResponse({'error': _('Not authenticated.')}, status=401)
-        self.object = self.get_object()
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
         if not self.object.is_editable_by(request.user):
             return JsonResponse({'error': _('Permission denied.')}, status=403)
         return super().dispatch(request, *args, **kwargs)
@@ -1540,16 +1600,55 @@ class ContestGradeSave(ContestMixin, DetailView):
         except Submission.DoesNotExist:
             return JsonResponse({'error': _('Submission not found.')}, status=404)
 
+        # Clamp the manual score to [0, max] so a typo (−50 or 10⁹) can never
+        # produce a nonsensical grade.
         total = submission.case_total or submission.problem.points
         score = min(max(score, 0), total)
         submission.points = score
-        submission.save(update_fields=['points'])
+        # Save the review note (评语) alongside the score. The note is only
+        # written by graders on this endpoint; it is not student-editable.
+        note = request.POST.get('note')
+        if note is not None:
+            submission.review_note = note
+        submission.reviewed_by = request.profile
+        submission.reviewed_at = timezone.now()
+        submission.save(update_fields=['points', 'review_note', 'reviewed_by', 'reviewed_at'])
         return JsonResponse({
             'ok': True,
             'submission': submission_id,
             'score': score,
             'total': total,
+            'note': submission.review_note,
         })
+
+
+class ContestGradeRelease(ContestMixin, DetailView):
+    """Release / unrelease grades for a contest (teacher-side).
+
+    Mirrors the "Release" button of the grading.html reference: releasing sets
+    ``Contest.results_finalized``, which reveals hidden (exam-style) results to
+    students and folds them into the scoreboard; unreleasing hides them again.
+    The status contract matches ``ContestGradeSave``: 401 anonymous, 403
+    authenticated non-editor, 200 editor.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
+        if not self.object.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        raise Http404()
+
+    def post(self, request, *args, **kwargs):
+        # Toggle: a second release call unreleases (idempotent UI state lives
+        # in the button label, so the server only flips the boolean).
+        self.object.results_finalized = not self.object.results_finalized
+        self.object.save(update_fields=['results_finalized'])
+        return JsonResponse({'ok': True, 'released': self.object.results_finalized})
 
 
 def make_contest_ranking_profile(contest, participation, contest_problems):
