@@ -724,8 +724,9 @@ class ProblemBulkDeleteRedirectTestCase(CommonDataMixin, TestCase):
 
 
 class ProblemSubmitGuardTestCase(CommonDataMixin, TestCase):
-    """A non-public problem attached to a started assignment is readable but
-    not submittable outside a live contest window — except by its editors."""
+    """A non-public problem attached to an assignment is only reachable after
+    joining (OJ contest-problem access). Editors may still test-submit outside
+    a live window."""
 
     @classmethod
     def setUpTestData(cls):
@@ -751,11 +752,13 @@ class ProblemSubmitGuardTestCase(CommonDataMixin, TestCase):
 
     def test_student_blocked_from_regular_submit(self):
         self.client.force_login(self.student)
+        detail = self.client.get(reverse('problem_detail', args=['guardprob']))
+        self.assertEqual(detail.status_code, 404)
         response = self.client.post(
             reverse('problem_submit', args=['guardprob']),
             {'language': self.lang.id, 'source': 'print(1)'},
         )
-        self.assertContains(response, 'Join the assignment to submit')
+        self.assertIn(response.status_code, (403, 404))
         self.assertFalse(Submission.objects.filter(user=self.student.profile).exists())
 
     def test_editor_not_blocked_from_regular_submit(self):

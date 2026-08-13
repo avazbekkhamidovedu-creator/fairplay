@@ -148,9 +148,9 @@
       {% endif %}
       <div class="ws-drawer-body" id="drawer-problems">
         {% for item in workspace_problems %}
-          {% set item_problem = item.problem if contest_problem else item %}
+          {% set item_problem = item.problem if workspace_in_contest else item %}
           {% set row_status = 'solved' if item_problem.id in completed_problem_ids else ('attempted' if item_problem.id in attempted_problems else 'unsolved') %}
-          {% set row_points = item.points if contest_problem else item_problem.points %}
+          {% set row_points = item.points if workspace_in_contest else item_problem.points %}
           {% set row_attempts = workspace_attempt_counts.get(item_problem.id, 0) %}
           {% set row_best = workspace_best_points.get(item_problem.id) %}
           {% set row_diff = item_problem.difficulty %}
@@ -175,7 +175,7 @@
               {% endif %}
             </span>
             <span class="drawer-problem-body">
-              <span class="drawer-problem-name">{% if contest_problem %}{{ item.order }}. {% else %}{{ item_problem.code }} {% endif %}{{ item_problem.name }}</span>
+              <span class="drawer-problem-name">{% if workspace_in_contest %}{{ item.order }}. {% else %}{{ item_problem.code }} {% endif %}{{ item_problem.name }}</span>
               <span class="drawer-problem-meta">
                 {% if row_diff %}<span class="difficulty-badge diff-{{ row_diff }}">{{ item_problem.difficulty_label }}</span>{% endif %}
                 <span class="drawer-attempts">
@@ -212,7 +212,7 @@
       <div class="ws-tabs" role="tablist">
         <button class="active" data-tab="desc" type="button">{{ _('Description') }}</button><button data-tab="ai" type="button">AI Hints</button>
         <button data-tab="result" id="tab-result" type="button">{{ _('Result') }} <span class="tab-dot"></span></button>
-        <button data-tab="editorial" type="button"{% if contest_problem %} class="tab-hidden"{% endif %}>{{ _('Editorial') }}</button><button data-tab="subs" type="button">{{ _('Submissions') }}</button>
+        <button data-tab="editorial" type="button"{% if workspace_in_contest %} class="tab-hidden"{% endif %}>{{ _('Editorial') }}</button><button data-tab="subs" type="button">{{ _('Submissions') }}</button>
       </div>
       <div class="ws-tab-panels">
         <div class="ws-tab-panel active" id="panel-desc">
@@ -245,7 +245,7 @@
                 </div>
               {% endmacro %}
               {% macro ws_meta_authors() %}
-                {% if not contest_problem or not contest_problem.contest.hide_problem_authors %}
+                {% if not workspace_in_contest or not request.participation.contest.hide_problem_authors %}
                   {% with authors=problem.authors.all() %}
                     {% if authors %}
                       <div class="mi span-2">
@@ -283,7 +283,7 @@
               {% endmacro %}
               {# Knowledge tags only — same filter as problem list (exclude FORMAT_TYPE_NAMES + difficulty). #}
               {% macro ws_meta_problem_types() %}
-                {% if not contest_problem or not contest_problem.contest.hide_problem_tags %}
+                {% if not workspace_in_contest or not request.participation.contest.hide_problem_tags %}
                   {% if problem.knowledge_types_list %}
                     <div class="mi span-2" id="problem-types">
                       <div class="toggle closed unselectable">
@@ -446,7 +446,7 @@
             </div>
           </div>
         </div>
-        <div class="ws-tab-panel" id="panel-editorial">{% if contest_problem %}<div class="editorial-locked"><i class="fa fa-lock"></i> {{ _('Editorial is locked during this assignment.') }}</div>{% elif editorial %}<div class="editorial-body">{{ editorial.content|markdown('default') }}</div>{% else %}<p>{{ _('No editorial is available.') }}</p>{% endif %}</div>
+        <div class="ws-tab-panel" id="panel-editorial">{% if workspace_in_contest %}<div class="editorial-locked"><i class="fa fa-lock"></i> {{ _('Editorial is locked during this assignment.') }}</div>{% elif editorial %}<div class="editorial-body">{{ editorial.content|markdown('default') }}</div>{% else %}<p>{{ _('No editorial is available.') }}</p>{% endif %}</div>
         <div class="ws-tab-panel" id="panel-subs">
           <div class="sub-tabs" role="tablist">
             <button type="button" class="active" data-sub="my">{{ _('My') }}</button>

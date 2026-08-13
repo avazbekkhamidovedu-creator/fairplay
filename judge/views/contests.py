@@ -1657,11 +1657,6 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                 participation_type = LIVE
             elif contest.is_spectatable_by(request.user):
                 participation_type = SPECTATE
-            elif contest.has_completed_contest(request.user):
-                # A student whose live window already ran out: tell them why
-                # they cannot enter again (no spectator fallback for them).
-                return generic_message(request, _('Your time is up'),
-                                       _('Your time for this assignment has ended.'))
             else:
                 return generic_message(request, _('Cannot enter'),
                                        _('You are not able to join this contest.'))
@@ -1682,15 +1677,6 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                     raise ContestAccessDenied()
 
                 if participation.ended:
-                    # A live window that already ran out. Only privileged
-                    # roles may fall back to spectating; a regular student is
-                    # simply done — no silent spectator conversion.
-                    if not contest.is_spectatable_by(request.user):
-                        return generic_message(
-                            request,
-                            _('Your time is up'),
-                            _('Your time for this assignment has ended.'),
-                        )
                     participation = ContestParticipation.objects.get_or_create(
                         contest=contest, user=profile, virtual=SPECTATE,
                         defaults={'real_start': timezone.now()},
