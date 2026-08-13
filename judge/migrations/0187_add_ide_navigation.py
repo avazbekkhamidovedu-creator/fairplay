@@ -1,4 +1,4 @@
-from django.db import migrations, models
+from django.db import migrations
 from django.db.models import F
 
 
@@ -22,7 +22,6 @@ def add_ide_nav(apps, schema_editor):
     )
 
     if ide is None:
-        max_tree = NavigationBar.objects.aggregate(m=models.Max('tree_id'))['m'] or 0
         NavigationBar.objects.create(
             key='ide',
             label='IDE',
@@ -30,14 +29,15 @@ def add_ide_nav(apps, schema_editor):
             regex=r'^/ide',
             order=target,
             parent=None,
-            level=0,
-            lft=1,
-            rght=2,
-            tree_id=max_tree + 1,
         )
     else:
         ide.order = target
         ide.save(update_fields=['order'])
+
+    # Nav is rendered via mptt_tree (tree_id/lft), not bare order. Rebuild so
+    # order_insertion_by=['order'] places IDE between User and About.
+    from judge.models import NavigationBar as LiveNavigationBar
+    LiveNavigationBar.objects.rebuild()
 
 
 def remove_ide_nav(apps, schema_editor):
@@ -48,6 +48,8 @@ def remove_ide_nav(apps, schema_editor):
     order = ide.order
     ide.delete()
     NavigationBar.objects.filter(order__gt=order).update(order=F('order') - 1)
+    from judge.models import NavigationBar as LiveNavigationBar
+    LiveNavigationBar.objects.rebuild()
 
 
 class Migration(migrations.Migration):
