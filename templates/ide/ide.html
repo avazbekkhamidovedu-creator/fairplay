@@ -4,26 +4,64 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block js_media %}
-    <script type="text/javascript" src="{{ ACE_URL }}/ace.js"></script>
+    {# Monaco via CDN (same major as problem-workspace's monaco-editor ^0.52; no local vendoring). #}
+    <script type="text/javascript">
+        window.MONACO_VS_URL = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
+        // Cross-origin workers need a same-origin blob proxy (standard Monaco CDN pattern).
+        window.MonacoEnvironment = {
+            getWorkerUrl: function() {
+                var vs = window.MONACO_VS_URL;
+                var base = vs.replace(/\/vs\/?$/, '/');
+                return URL.createObjectURL(new Blob([
+                    "self.MonacoEnvironment={baseUrl:" + JSON.stringify(base) + "};",
+                    "importScripts(" + JSON.stringify(vs + '/base/worker/workerMain.js') + ");"
+                ], {type: 'text/javascript'}));
+            }
+        };
+    </script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
     {% if REQUIRE_JAX %}
         {% include "mathjax-load.html" %}
     {% endif %}
     <script type="text/javascript">
         $(function() {
-            // Initialize ACE editors
-            var codeEditor = ace.edit("code-editor");
-            codeEditor.setTheme("ace/theme/{{ ace_theme }}");
-            codeEditor.getSession().setMode("ace/mode/python");
-            codeEditor.setFontSize(14);
-            codeEditor.getSession().setUseWrapMode(true);
-            codeEditor.setPrintMarginColumn(100);
+            // ACE mode keys → Monaco language ids (from problem-workspace resources/workspace.js)
+            var ACE_TO_MONACO = {
+                c_cpp: 'cpp', cpp: 'cpp', c: 'c', csharp: 'csharp', golang: 'go', go: 'go',
+                java: 'java', javascript: 'javascript', python: 'python', rust: 'rust',
+                ruby: 'ruby', php: 'php', kotlin: 'kotlin', swift: 'swift', typescript: 'typescript',
+                pascal: 'pascal', haskell: 'haskell', lua: 'lua', perl: 'perl', r: 'r', scala: 'scala'
+            };
+            var ACE_DARK_THEMES = {
+                ambiance: 1, chaos: 1, clouds_midnight: 1, cobalt: 1, idle_fingers: 1,
+                kr_theme: 1, merbivore: 1, merbivore_soft: 1, mono_industrial: 1,
+                monokai: 1, pastel_on_dark: 1, solarized_dark: 1, terminal: 1,
+                tomorrow_night: 1, tomorrow_night_blue: 1, tomorrow_night_bright: 1,
+                tomorrow_night_eighties: 1, twilight: 1, vibrant_ink: 1
+            };
+            var aceTheme = {% if ace_theme %}'{{ ace_theme }}'{% else %}null{% endif %};
+            var darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
-            var inputEditor = ace.edit("input-editor");
-            inputEditor.setTheme("ace/theme/{{ ace_theme }}");
-            inputEditor.setFontSize(14);
-            inputEditor.getSession().setUseWrapMode(true);
+            function monacoTheme() {
+                if (aceTheme) {
+                    return ACE_DARK_THEMES[aceTheme] ? 'vs-dark' : 'vs';
+                }
+                return darkQuery.matches ? 'vs-dark' : 'vs';
+            }
+
+            function monacoLanguageFromOption($option) {
+                var key = ($option.data('monaco') || $option.data('ace') || '') + '';
+                if (ACE_TO_MONACO[key]) return ACE_TO_MONACO[key];
+                if (key) return key;
+                var name = ($option.text() || '').toLowerCase();
+                if (name.indexOf('python') >= 0) return 'python';
+                if (name.indexOf('java') >= 0 && name.indexOf('script') < 0) return 'java';
+                return 'plaintext';
+            }
 
             var $outputDisplay = $('#output-display');
+            var codeEditor = null;
+            var inputEditor = null;
 
             function escHtml(s) {
                 return $('<div/>').text(s == null ? '' : String(s)).html();
@@ -41,6 +79,41 @@
                 setOutputHtml(escHtml(text));
             }
 
+            function codeValue() {
+                return codeEditor ? codeEditor.getValue() : '';
+            }
+
+            function setCodeValue(value) {
+                if (codeEditor) {
+                    codeEditor.setValue(value == null ? '' : String(value));
+                }
+            }
+
+            function inputValue() {
+                return inputEditor ? inputEditor.getValue() : '';
+            }
+
+            function setInputValue(value) {
+                if (inputEditor) {
+                    inputEditor.setValue(value == null ? '' : String(value));
+                }
+            }
+
+            function setCodeLanguage() {
+                if (!codeEditor || !window.monaco) return;
+                var $option = $('#language-select').find('option:selected');
+                window.monaco.editor.setModelLanguage(
+                    codeEditor.getModel(),
+                    monacoLanguageFromOption($option)
+                );
+            }
+
+            function syncMonacoTheme() {
+                if (window.monaco) {
+                    window.monaco.editor.setTheme(monacoTheme());
+                }
+            }
+
             // Language selection
             $('#language-select').select2({
                 theme: '{{ DMOJ_SELECT2_THEME }}'
@@ -48,25 +121,23 @@
 
             // Language change handler
             $('#language-select').change(function() {
-                var selectedOption = $(this).find('option:selected');
-                var lang = selectedOption.data('ace');
-                codeEditor.getSession().setMode("ace/mode/" + lang);
+                setCodeLanguage();
 
                 // Load template from localStorage or AJAX
                 var langId = $(this).val();
                 var storageKey = 'ide_code:' + langId;
                 var cached = localStorage.getItem(storageKey);
 
-                if (cached != null && codeEditor.getValue().trim() === '') {
-                    codeEditor.setValue(cached, -1);
-                } else if (codeEditor.getValue().trim() === '') {
+                if (cached != null && codeValue().trim() === '') {
+                    setCodeValue(cached);
+                } else if (codeValue().trim() === '') {
                     // Load language template via AJAX
                     $.get('{{ url("language_template_ajax") }}', {
                         id: langId,
                         _: Date.now() + Math.random()
                     }, function(template) {
                         if (template && template.trim()) {
-                            codeEditor.setValue(template, -1);
+                            setCodeValue(template);
                             localStorage.setItem(storageKey, template);
                         }
                     }).fail(function() {
@@ -77,29 +148,23 @@
 
             // Auto-save code to localStorage
             var saveTimer;
-            codeEditor.on('change', function() {
+            function onCodeChange() {
                 clearTimeout(saveTimer);
                 saveTimer = setTimeout(function() {
                     var langId = $('#language-select').val();
                     if (langId) {
-                        localStorage.setItem('ide_code:' + langId, codeEditor.getValue());
+                        localStorage.setItem('ide_code:' + langId, codeValue());
                     }
                 }, 1000);
-            });
+            }
 
             // Auto-save input to localStorage
             var inputSaveTimer;
-            inputEditor.on('change', function() {
+            function onInputChange() {
                 clearTimeout(inputSaveTimer);
                 inputSaveTimer = setTimeout(function() {
-                    localStorage.setItem('ide_input', inputEditor.getValue());
+                    localStorage.setItem('ide_input', inputValue());
                 }, 1000);
-            });
-
-            // Load saved input from localStorage
-            var savedInput = localStorage.getItem('ide_input');
-            if (savedInput) {
-                inputEditor.setValue(savedInput, -1);
             }
 
             // Run button handler
@@ -108,9 +173,9 @@
 
             $('#run-button').click(function() {
                 var button = $(this);
-                var sourceCode = codeEditor.getValue();
+                var sourceCode = codeValue();
                 var languageId = $('#language-select').val();
-                var customInput = inputEditor.getValue();
+                var customInput = inputValue();
 
                 if (!sourceCode.trim()) {
                     setOutputText('{{ _("Error: Source code cannot be empty") }}');
@@ -234,15 +299,6 @@
                     });
             }
 
-            // Keyboard shortcuts
-            codeEditor.commands.addCommand({
-                name: 'runCode',
-                bindKey: {win: 'Ctrl-Enter', mac: 'Command-Enter'},
-                exec: function(editor) {
-                    $('#run-button').click();
-                }
-            });
-
             // Responsive sizing
             function resizeEditors() {
                 var windowHeight = $(window).height();
@@ -255,15 +311,82 @@
                 $('#code-editor').height(codeHeight);
                 $('#input-editor').height(sideHeight);
 
-                codeEditor.resize();
-                inputEditor.resize();
+                if (codeEditor) codeEditor.layout();
+                if (inputEditor) inputEditor.layout();
             }
 
             $(window).resize(resizeEditors);
-            resizeEditors();
 
-            // Initialize with default language
-            $('#language-select').val({{ default_lang.id }}).trigger('change');
+            function bindEditorShortcuts() {
+                if (!codeEditor || !window.monaco) return;
+                codeEditor.addCommand(
+                    window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.Enter,
+                    function() {
+                        $('#run-button').click();
+                    }
+                );
+            }
+
+            function initEditors() {
+                var theme = monacoTheme();
+                var $langOption = $('#language-select').find('option:selected');
+
+                codeEditor = window.monaco.editor.create(document.getElementById('code-editor'), {
+                    value: '',
+                    language: monacoLanguageFromOption($langOption),
+                    theme: theme,
+                    fontSize: 14,
+                    wordWrap: 'on',
+                    automaticLayout: true,
+                    minimap: {enabled: false},
+                    scrollBeyondLastLine: false,
+                    renderLineHighlight: 'line'
+                });
+
+                inputEditor = window.monaco.editor.create(document.getElementById('input-editor'), {
+                    value: '',
+                    language: 'plaintext',
+                    theme: theme,
+                    fontSize: 14,
+                    wordWrap: 'on',
+                    automaticLayout: true,
+                    minimap: {enabled: false},
+                    scrollBeyondLastLine: false,
+                    lineNumbers: 'off',
+                    glyphMargin: false,
+                    folding: false,
+                    renderLineHighlight: 'none'
+                });
+
+                codeEditor.onDidChangeModelContent(onCodeChange);
+                inputEditor.onDidChangeModelContent(onInputChange);
+                bindEditorShortcuts();
+
+                // Load saved input from localStorage
+                var savedInput = localStorage.getItem('ide_input');
+                if (savedInput) {
+                    setInputValue(savedInput);
+                }
+
+                if (darkQuery.addEventListener) {
+                    darkQuery.addEventListener('change', syncMonacoTheme);
+                } else if (darkQuery.addListener) {
+                    darkQuery.addListener(syncMonacoTheme);
+                }
+
+                resizeEditors();
+
+                // Initialize with default language
+                $('#language-select').val({{ default_lang.id }}).trigger('change');
+            }
+
+            window.require.config({paths: {vs: window.MONACO_VS_URL}});
+            window.require(['vs/editor/editor.main'], function() {
+                initEditors();
+            }, function(err) {
+                console.error('Failed to load Monaco Editor', err);
+                setOutputText('{{ _("Failed to load code editor. Please refresh the page.") }}');
+            });
         });
     </script>
 {% endblock %}
@@ -368,6 +491,7 @@
             flex: 1;
             position: relative;
             overflow: hidden;
+            min-height: 0;
         }
 
         #code-editor, #input-editor, #output-display {
@@ -455,7 +579,7 @@
         <div class="ide-controls">
             <select id="language-select">
                 {% for lang in languages %}
-                    <option value="{{ lang.id }}" data-ace="{{ lang.ace }}"
+                    <option value="{{ lang.id }}" data-ace="{{ lang.ace }}" data-monaco="{{ lang.ace }}"
                             {% if lang.id == default_lang.id %}selected{% endif %}>
                         {{ lang.name }}
                     </option>

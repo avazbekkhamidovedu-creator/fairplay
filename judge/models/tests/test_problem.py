@@ -494,11 +494,20 @@ class ProblemDifficultyPropertiesTestCase(CommonDataMixin, TestCase):
         self.assertIsNone(Problem.difficulty_display(None))
 
     def test_format_types_list_excludes_difficulty_and_knowledge(self):
-        self.assertEqual(self.easy_problem.format_types_list, ['Code'])
+        self.assertEqual(self.easy_problem.format_types_list, ['Programming'])
 
     def test_knowledge_types_list_excludes_format_and_difficulty(self):
         self.assertEqual(self.easy_problem.knowledge_types_list, ['Dynamic Programming'])
         self.assertEqual(self.untagged_difficulty.knowledge_types_list, ['Greedy'])
+
+    def test_is_knowledge_type_name_excludes_format_aliases(self):
+        self.assertTrue(Problem.is_knowledge_type_name('dp'))
+        self.assertFalse(Problem.is_knowledge_type_name('code'))
+        self.assertFalse(Problem.is_knowledge_type_name('programming'))
+        self.assertFalse(Problem.is_knowledge_type_name('编程题'))
+        self.assertFalse(Problem.is_knowledge_type_name('single-choice'))
+        self.assertFalse(Problem.is_knowledge_type_name('easy'))
+        self.assertFalse(Problem.is_knowledge_type_name('hard'))
 
 
 class DisallowedCharactersValidatorTestCase(SimpleTestCase):

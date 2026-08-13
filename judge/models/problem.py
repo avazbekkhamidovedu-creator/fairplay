@@ -44,7 +44,7 @@ class ProblemSubmissionType:
     FILE = 'F'
 
     CHOICES = (
-        (CODE, _('Code')),
+        (CODE, _('Programming')),
         (MCQ, _('Multiple choice')),
         (FILL_BLANK, _('Fill in the blank')),
         (SHORT_ANSWER, _('Short answer')),
@@ -179,8 +179,8 @@ class Problem(models.Model):
                                               help_text=_('Whether judges should be allowed to manage data or not.'))
     submission_type = models.CharField(verbose_name=_('submission type'), max_length=1, db_index=True,
                                        default=ProblemSubmissionType.CODE, choices=ProblemSubmissionType.CHOICES,
-                                       help_text=_('How this problem is answered and graded. Code problems route to '
-                                                   'the judge; other types are graded internally.'))
+                                       help_text=_('How this problem is answered and graded. Programming problems '
+                                                   'route to the judge; other types are graded internally.'))
     date = models.DateTimeField(verbose_name=_('date of publishing'), null=True, blank=True, db_index=True,
                                 help_text=_(
                                     "Doesn't have the magic ability to auto-publish due to backward compatibility."))
@@ -224,12 +224,32 @@ class Problem(models.Model):
 
     # Problem types whose name marks the answer format. With multi-type, the answer format is
     # carried by the authoritative submission_type discriminator, not a ProblemType tag; these
-    # names are kept only to keep any legacy format-named rows out of the knowledge points.
-    FORMAT_TYPE_NAMES = ('code', 'fill_in_blank', 'multiple_choices')
+    # names (legacy + import/AI aliases, EN/ZH) are kept out of the Tags / knowledge filter.
+    FORMAT_TYPE_NAMES = frozenset({
+        'code', 'programming',
+        'fill_in_blank', 'fill-in-blank',
+        'multiple_choices', 'multiple-choice',
+        'single-choice', 'true-false', 'short-answer',
+        '编程题', '填空题', '多选题', '单选题', '判断题', '简答题',
+    })
 
     # Problem types whose name marks the difficulty level, ordered from easiest to hardest.
     # These are surfaced as a dedicated difficulty column/filter rather than as tags.
     DIFFICULTY_TYPE_NAMES = ('easy', 'medium', 'hard')
+
+    @classmethod
+    def is_knowledge_type_name(cls, name):
+        """True if this ProblemType name is a real tag (not format / difficulty)."""
+        if not name:
+            return False
+        if name in cls.FORMAT_TYPE_NAMES or name in cls.DIFFICULTY_TYPE_NAMES:
+            return False
+        # Normalize EN aliases: programming_problem, Multiple-Choice, etc.
+        norm = name.strip().lower().replace(' ', '-').replace('_', '-')
+        format_norm = {n.lower().replace('_', '-') for n in cls.FORMAT_TYPE_NAMES if n.isascii()}
+        if norm in format_norm or norm in cls.DIFFICULTY_TYPE_NAMES:
+            return False
+        return True
     # Display labels use django gettext msgids (not dmoj-user / DB full_name), so list/create
     # UIs stay aligned with the existing Easy / Medium / Hard translations.
     DIFFICULTY_LABELS = {
@@ -266,10 +286,9 @@ class Problem(models.Model):
     @cached_property
     def knowledge_types_list(self):
         # Format is carried by submission_type and difficulty is surfaced separately, so every
-        # remaining ProblemType row is a knowledge point.
+        # remaining ProblemType row is a knowledge point / tag.
         return [user_gettext(t.full_name) for t in self.types.all()
-                if t.name not in Problem.FORMAT_TYPE_NAMES
-                and t.name not in Problem.DIFFICULTY_TYPE_NAMES]
+                if Problem.is_knowledge_type_name(t.name)]
 
     @cached_property
     def difficulty(self):
