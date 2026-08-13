@@ -49,6 +49,22 @@
     },
     {
         "fields": {
+            "key": "ide",
+            "label": "IDE",
+            "level": 0,
+            "lft": 1,
+            "order": 4,
+            "parent": null,
+            "path": "/ide/",
+            "regex": "^/ide",
+            "rght": 2,
+            "tree_id": 7
+        },
+        "model": "judge.navigationbar",
+        "pk": 4
+    },
+    {
+        "fields": {
             "key": "contest",
             "label": "Contests",
             "level": 0,
