@@ -304,6 +304,14 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'id="fp-group"', html=False)
         self.assertIn('workspace_organizations', response.context)
 
+    def test_anonymous_problem_detail_stays_in_practice(self):
+        # `authed and current_contest` is False for guests; that must not be
+        # treated as an active participation (bool has no .contest).
+        response = Client().get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['workspace_in_contest'])
+        self.assertEqual(response.context['workspace_mode'], 'practice')
+
     def test_assignment_drawer_stays_on_contest_for_other_problems(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
         self.user.profile.current_contest = participation

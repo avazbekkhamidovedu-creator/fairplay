@@ -323,7 +323,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         # Drawer list follows the active participation, not whether *this* problem
         # happens to be in the assignment. After Join, the solving page always
         # shows the assignment problem set.
-        current_participation = authed and user.profile.current_contest
+        current_participation = user.profile.current_contest if authed else None
         workspace_in_contest = current_participation is not None
         context['workspace_in_contest'] = workspace_in_contest
         if workspace_in_contest:
