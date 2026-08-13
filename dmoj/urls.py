@@ -457,12 +457,16 @@ handler404 = 'judge.views.error.error404'
 handler403 = 'judge.views.error.error403'
 handler500 = 'judge.views.error.error500'
 
-# Production deployments should serve MEDIA_URL directly through Nginx. This
-# fallback makes uploaded Markdown and DOCX figures visible in local DEBUG runs.
-if settings.DEBUG:
-    urlpatterns += static_files(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-
 if 'newsletter' in settings.INSTALLED_APPS:
     urlpatterns.append(path('newsletter/', include('newsletter.urls')))
 if 'impersonate' in settings.INSTALLED_APPS:
     urlpatterns.append(path('impersonate/', include('impersonate.urls')))
+
+# Production deployments should serve MEDIA_URL directly through Nginx. This
+# fallback makes uploaded Markdown and DOCX figures visible in local DEBUG runs.
+# It must stay last: static_files() compiles to ^<prefix>(?P<path>.*)$, so a
+# root-ish MEDIA_URL ('/' or unset) degenerates into a catch-all that swallows
+# every route declared after it. Only honor real sub-path prefixes.
+_media_url = getattr(settings, 'MEDIA_URL', '')
+if settings.DEBUG and _media_url.strip('/'):
+    urlpatterns += static_files(_media_url, document_root=settings.MEDIA_ROOT)
