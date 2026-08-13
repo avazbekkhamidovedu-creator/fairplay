@@ -668,6 +668,100 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(ProblemType.objects.count(), before)
         self.assertEqual(list(problem.types.all()), [existing])
 
+    def test_auto_type_difficulty_chips_not_stored_or_duplicated_on_edit(self):
+        """UI auto chips (Programming/Fill-in-blank/Easy) must not pollute knowledge tags."""
+        self.client.force_login(self.users['staff_adder'])
+        knowledge = 'Graph Theory'
+        create_payload = {
+            'type': 'programming',
+            'name': 'Tag dedupe',
+            'description': 'auto chips should be ignored on save',
+            'points': 10,
+            'group_id': self.group.id,
+            'difficulty': 'easy',
+            # Mimic a buggy/legacy client that also posts the gray auto chips.
+            'problemTypes': ['Programming', 'Easy', knowledge, 'Programming', 'Easy'],
+            'testcases': [
+                {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+
+        type_names = list(problem.types.values_list('name', flat=True))
+        type_full = list(problem.types.values_list('full_name', flat=True))
+        self.assertIn('easy', type_names)
+        self.assertEqual(problem.difficulty, 'easy')
+        self.assertIn(knowledge, type_full)
+        self.assertNotIn('Programming', type_full)
+        self.assertEqual(type_full.count(knowledge), 1)
+        self.assertEqual(type_names.count('easy'), 1)
+
+        edit_get = self.client.get(reverse('problem_edit_v2', args=[code]))
+        self.assertEqual(edit_get.status_code, 200)
+        edit_data = json.loads(edit_get.context['edit_data_json'])
+        self.assertEqual(edit_data['difficulty'], 'easy')
+        self.assertEqual(edit_data['problemTypes'], [knowledge])
+        self.assertNotIn('Programming', edit_data['problemTypes'])
+        self.assertNotIn('Easy', edit_data['problemTypes'])
+
+        # Re-save with the same polluted payload (create → edit cycle).
+        edit_payload = dict(create_payload)
+        edit_payload.update({
+            'name': 'Tag dedupe edited',
+            'edit_code': code,
+            'problemTypes': ['Programming', 'Easy', knowledge, 'Fill-in-blank'],
+        })
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200)
+        problem.refresh_from_db()
+        # Invalidate cached_property from the earlier difficulty assertion.
+        problem.__dict__.pop('difficulty', None)
+
+        type_names = list(problem.types.values_list('name', flat=True))
+        type_full = list(problem.types.values_list('full_name', flat=True))
+        self.assertEqual(type_names.count('easy'), 1)
+        self.assertEqual(type_full.count(knowledge), 1)
+        self.assertNotIn('Programming', type_full)
+        self.assertNotIn('Fill-in-blank', type_full)
+        self.assertEqual(problem.difficulty, 'easy')
+        self.assertEqual(problem.knowledge_types_list, [knowledge])
+
+        # Blank + translated-style auto labels are also stripped; difficulty follows the field.
+        blank_payload = {
+            'type': 'blank',
+            'name': 'Blank tag dedupe',
+            'description': 'fill __blank__',
+            'points': 5,
+            'group_id': self.group.id,
+            'difficulty': 'medium',
+            'problemTypes': ['Fill-in-blank', '填空题', 'Medium', '中等', knowledge],
+            'blanks': ['answer'],
+        }
+        self.client.force_login(self.users['creator'])
+        blank_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(blank_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(blank_resp.status_code, 200)
+        blank = Problem.objects.get(code=blank_resp.json()['code'])
+        blank_full = set(blank.types.values_list('full_name', flat=True))
+        self.assertIn(knowledge, blank_full)
+        self.assertNotIn('Fill-in-blank', blank_full)
+        self.assertNotIn('填空题', blank_full)
+        self.assertEqual(blank.difficulty, 'medium')
+
     def test_edit_omitting_problem_types_keeps_knowledge_tags(self):
         """Partial payloads that only send difficulty must not wipe knowledge tags."""
         knowledge = ProblemType.objects.create(name='graph-theory', full_name='Graph Theory')

@@ -668,7 +668,12 @@ class ProblemDetailDifficultyTestCase(CommonDataMixin, TestCase):
     def test_problem_detail_shows_difficulty_badge(self):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'class="difficulty-badge diff-easy"', html=False)
+        # Workspace header uses ws-badge; classic problem.html uses bare difficulty-badge.
+        self.assertTrue(
+            'ws-badge difficulty-badge diff-easy' in response.content.decode()
+            or 'class="difficulty-badge diff-easy"' in response.content.decode(),
+            'expected difficulty badge for the open problem',
+        )
         self.assertContains(response, 'Easy', html=False)
 
     def test_problem_detail_hides_difficulty_when_unset(self):
@@ -679,7 +684,9 @@ class ProblemDetailDifficultyTestCase(CommonDataMixin, TestCase):
         )
         response = self.client.get(reverse('problem_detail', args=[problem.code]))
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, 'class="difficulty-badge', html=False)
+        # Drawer rows may still show badges for other problems; only the open problem
+        # header uses the ws-badge difficulty chip.
+        self.assertNotContains(response, 'ws-badge difficulty-badge', html=False)
 
 
 class ProblemBulkDeleteRedirectTestCase(CommonDataMixin, TestCase):

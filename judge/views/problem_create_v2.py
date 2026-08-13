@@ -65,6 +65,11 @@ def _problem_type_code(text):
     return code or 'type'
 
 
+def _reserved_auto_labels():
+    """Format/difficulty auto-chip labels that must not be stored as knowledge tags."""
+    return Problem.reserved_auto_type_labels()
+
+
 def _can_create_any(user):
     """The page is visible to anyone who can create at least one supported problem type."""
     return user.has_perm('judge.create_private_problem') or (user.is_staff and user.has_perm('judge.add_problem'))
@@ -312,12 +317,19 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'rubric': '',
         }
 
-        # Knowledge chips only — difficulty is a separate field rebuilt by the UI.
+        # Knowledge chips only — difficulty / format / auto type labels are rebuilt by the UI.
+        reserved = _reserved_auto_labels()
         type_tags = []
+        seen_labels = set()
         for ptype in problem.types.all():
-            if not Problem.is_knowledge_type_name(ptype.name):
+            if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
                 continue
-            type_tags.append(ptype.full_name or ptype.name)
+            label = ptype.full_name or ptype.name
+            key = (label or '').casefold()
+            if not key or key in seen_labels:
+                continue
+            seen_labels.add(key)
+            type_tags.append(label)
         data['problemTypes'] = type_tags
         data['difficulty'] = problem.difficulty or 'medium'
 
@@ -553,7 +565,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return ProblemType.objects.create(name=code, full_name=label[:100])
 
     def _attach_types(self, problem, payload):
-        """Persist knowledge tags + standard difficulty.
+        """Persist knowledge tags + standard difficulty; drop auto type/difficulty chips.
 
         Distinguishes omitted vs explicit ``problemTypes`` so partial/legacy
         payloads that only send ``difficulty`` do not wipe knowledge tags:
@@ -562,22 +574,28 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         - key present (including ``[]``) → replace knowledge types from payload
         - ``difficulty`` omitted/invalid → keep any existing easy/medium/hard row
         """
+        reserved = _reserved_auto_labels()
         resolved = []
         seen = set()
 
         if 'problemTypes' in payload:
             labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
             for label in labels:
-                ptype = self._resolve_problem_type(label)
+                text = str(label).strip()
+                if text.casefold() in reserved:
+                    continue
+                ptype = self._resolve_problem_type(text)
                 if ptype is None or ptype.pk in seen:
                     continue
-                if not Problem.is_knowledge_type_name(ptype.name):
+                if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
                     continue
                 seen.add(ptype.pk)
                 resolved.append(ptype)
         else:
             for ptype in problem.types.all():
-                if ptype.pk in seen or not Problem.is_knowledge_type_name(ptype.name):
+                if ptype.pk in seen:
+                    continue
+                if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
                     continue
                 seen.add(ptype.pk)
                 resolved.append(ptype)

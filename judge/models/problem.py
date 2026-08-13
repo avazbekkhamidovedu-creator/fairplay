@@ -10,9 +10,9 @@ from django.db import models
 from django.db.models import CASCADE, Exists, F, FilteredRelation, OuterRef, Q, SET_NULL
 from django.db.models.functions import Coalesce
 from django.urls import reverse
-from django.utils import timezone
+from django.utils import timezone, translation
 from django.utils.functional import cached_property
-from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext, gettext_lazy as _
 
 from judge.fulltext import SearchQuerySet
 from judge.models.profile import Class, Organization, Profile
@@ -257,11 +257,69 @@ class Problem(models.Model):
         'medium': _('Medium'),
         'hard': _('Hard'),
     }
+    # Auto chips / legacy format rows that must never appear in the Tags column. Includes
+    # common slugified ``ProblemType.name`` values create_v2 used to persist for those chips.
+    AUTO_TYPE_LABEL_MSGIDS = (
+        'Programming',
+        'Code',
+        'Single choice',
+        'Multiple choice',
+        'Fill-in-blank',
+        'Fill in the blank',
+        'Fill in Blank',
+        'True/False',
+        'Short answer',
+        'Composite',
+        'Other',
+        'Easy',
+        'Medium',
+        'Hard',
+    )
+    AUTO_TYPE_NAME_SLUGS = frozenset({
+        'programming', 'code', 'single-choice', 'multiple-choice', 'multiple-choices',
+        'fill-in-blank', 'fill_in_blank', 'true-false', 'short-answer', 'composite', 'other',
+        'easy', 'medium', 'hard',
+    })
+    # Explicit aliases so create_v2 / Tags filtering still works when locale .mo files are
+    # not compiled (e.g. CI) or when clients post translated chip labels directly.
+    AUTO_TYPE_LABEL_ALIASES = (
+        '编程题', '填空题', '单选题', '多选题', '判断题', '简答题', '复合题', '其他',
+        '简单', '中等', '困难',
+    )
 
     @classmethod
     def difficulty_display(cls, name):
         label = cls.DIFFICULTY_LABELS.get(name)
         return str(label) if label is not None else None
+
+    @classmethod
+    def reserved_auto_type_labels(cls):
+        """Casefolded display labels for format/difficulty chips (EN + configured languages)."""
+        labels = set(cls.AUTO_TYPE_LABEL_MSGIDS)
+        labels.update(cls.AUTO_TYPE_LABEL_ALIASES)
+        lang_codes = {code for code, _name in getattr(settings, 'LANGUAGES', ())}
+        lang_codes.add(translation.get_language() or 'en')
+        for lang in lang_codes:
+            with translation.override(lang):
+                for msgid in cls.AUTO_TYPE_LABEL_MSGIDS:
+                    labels.add(gettext(msgid))
+        return {label.casefold() for label in labels if label}
+
+    @classmethod
+    def is_knowledge_problem_type(cls, problem_type, reserved_labels=None):
+        """True if this ProblemType should appear in the Tags / knowledge column."""
+        if problem_type.name in cls.FORMAT_TYPE_NAMES or problem_type.name in cls.DIFFICULTY_TYPE_NAMES:
+            return False
+        if problem_type.name.casefold() in cls.AUTO_TYPE_NAME_SLUGS:
+            return False
+        if reserved_labels is None:
+            reserved_labels = cls.reserved_auto_type_labels()
+        display = user_gettext(problem_type.full_name)
+        if display and display.casefold() in reserved_labels:
+            return False
+        if problem_type.full_name and problem_type.full_name.casefold() in reserved_labels:
+            return False
+        return True
 
     @cached_property
     def types_list(self):
@@ -284,11 +342,46 @@ class Problem(models.Model):
         return [label] if label else []
 
     @cached_property
+    def format_filter_code(self):
+        """Value for list/workspace format filters; MCQ expands to single/multiple/truefalse."""
+        if self.submission_type == ProblemSubmissionType.MCQ:
+            try:
+                config = self.mcq_config
+            except ObjectDoesNotExist:
+                return self.submission_type
+            if config.is_true_false:
+                return 'truefalse'
+            if config.multiple_select:
+                return 'multiple'
+            return 'single'
+        return self.submission_type
+
+    @cached_property
     def knowledge_types_list(self):
-        # Format is carried by submission_type and difficulty is surfaced separately, so every
-        # remaining ProblemType row is a knowledge point / tag.
-        return [user_gettext(t.full_name) for t in self.types.all()
-                if Problem.is_knowledge_type_name(t.name)]
+        # Tags column: knowledge points only — drop difficulty, answer-format, and leftover
+        # auto chips; dedupe by displayed label so the list stays clean for older rows.
+        reserved = self.reserved_auto_type_labels()
+        seen = set()
+        out = []
+        for problem_type in self.types.all():
+            if not self.is_knowledge_problem_type(problem_type, reserved_labels=reserved):
+                continue
+            label = user_gettext(problem_type.full_name)
+            key = label.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(label)
+        return out
+
+    @cached_property
+    def knowledge_type_ids(self):
+        reserved = self.reserved_auto_type_labels()
+        return [
+            problem_type.id
+            for problem_type in self.types.all()
+            if self.is_knowledge_problem_type(problem_type, reserved_labels=reserved)
+        ]
 
     @cached_property
     def difficulty(self):

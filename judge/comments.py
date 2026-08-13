@@ -37,9 +37,17 @@ class CommentForm(ModelForm):
             attrs={'data-markdownfy-url': reverse_lazy('comment_preview')},
         )
 
-    def __init__(self, request, *args, **kwargs):
+    def __init__(self, request, *args, use_rich_editor=False, **kwargs):
         self.request = request
+        self.use_rich_editor = use_rich_editor
         super(CommentForm, self).__init__(*args, **kwargs)
+        if use_rich_editor:
+            # Workspace Result uses RichEditor; keep a plain field the editor syncs into.
+            self.fields['body'].widget = forms.Textarea(attrs={
+                'id': 'id_body',
+                'class': 'ws-comment-md',
+                'hidden': 'hidden',
+            })
 
     def clean(self):
         if self.request is not None and self.request.user.is_authenticated:
@@ -162,7 +170,12 @@ class SubmissionCommentMixin:
         context['comment_list'] = queryset
         context['vote_hide_threshold'] = settings.DMOJ_COMMENT_VOTE_HIDE_THRESHOLD
         context['reply_cutoff'] = timezone.now() - settings.DMOJ_COMMENT_REPLY_TIMEFRAME
-        context['comment_form'] = CommentForm(self.request, initial={'page': page, 'parent': None})
+        context['comment_form'] = CommentForm(
+            self.request,
+            initial={'page': page, 'parent': None},
+            use_rich_editor=getattr(self, 'comment_use_rich_editor', False),
+        )
+        context['comment_use_rich_editor'] = getattr(self, 'comment_use_rich_editor', False)
 
         return context
 
