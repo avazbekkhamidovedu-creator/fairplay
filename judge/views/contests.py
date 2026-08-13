@@ -176,19 +176,40 @@ class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestL
 
 
 class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestListMixin, ListView):
-    """Redesigned contest list with filters, sorting, and layout options."""
+    """Redesigned contest list with filters, sorting, and layout options.
+
+    All matching contests are rendered and filtering happens client-side (no
+    pagination), so the filters update instantly without reloads.
+    """
     model = Contest
-    paginate_by = 20
+    paginate_by = None
     template_name = 'contest/list-v2.html'
     title = gettext_lazy('Assignments')
     context_object_name = 'past_contests'
     all_sorts = frozenset(('name', 'user_count', 'start_time', 'end_time'))
     default_desc = frozenset(('name', 'user_count'))
     default_sort = '-start_time'
+    # Section grouping modes for the list: by assignment status or by course.
+    group_modes = frozenset(('status', 'course'))
+    default_group = 'course'
+    # Status filter for the list (single-select, applied client-side).
+    time_filters = frozenset(('active', 'ongoing', 'upcoming', 'past'))
 
     @cached_property
     def _now(self):
         return timezone.now()
+
+    @property
+    def group(self):
+        group = self.request.GET.get('group', self.default_group)
+        return group if group in self.group_modes else self.default_group
+
+    @property
+    def time_filter(self):
+        """Selected status filter ('' = all). Applied client-side; this is only
+        used to render the initial dropdown selection."""
+        tf = self.request.GET.get('time', '')
+        return tf if tf in self.time_filters else ''
 
     def _get_queryset(self):
         queryset = super().get_queryset().prefetch_related(
@@ -213,70 +234,48 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
                                                                          virtual=ContestParticipation.LIVE)),
         )
 
-    def _apply_filters(self, queryset):
-        """Apply org, class, tag, and search filters from GET params."""
-        org_filter = self.request.GET.get('org', '')
-        if org_filter:
-            org_names = [n.strip() for n in org_filter.split(',') if n.strip()]
-            if org_names:
-                queryset = queryset.filter(organizations__name__in=org_names)
-
-        class_filter = self.request.GET.get('class', '')
-        if class_filter:
-            class_names = [n.strip() for n in class_filter.split(',') if n.strip()]
-            if class_names:
-                queryset = queryset.filter(classes__name__in=class_names)
-
-        tag_filter = self.request.GET.get('tag', '')
-        if tag_filter:
-            tag_names = [n.strip() for n in tag_filter.split(',') if n.strip()]
-            if tag_names:
-                queryset = queryset.filter(tags__name__in=tag_names)
-
-        self.search_query = None
-        if 'search' in self.request.GET:
-            self.search_query = ' '.join(self.request.GET.getlist('search')).strip()
-            if self.search_query:
-                queryset = queryset.filter(
-                    Q(key__icontains=self.search_query) | Q(name__icontains=self.search_query),
-                )
-
-        return queryset.distinct()
-
     def get_queryset(self):
         queryset = self._get_queryset().order_by(self.order, 'key').filter(end_time__lt=self._now)
-        return self._apply_filters(queryset)
-
-    def get_paginator(self, queryset, per_page, orphans=0, allow_empty_first_page=True, **kwargs):
-        return super().get_paginator(queryset, per_page, orphans, allow_empty_first_page,
-                                     count=self.get_queryset().values('id').count(), **kwargs)
+        return queryset
 
     def get_context_data(self, **kwargs):
         context = super(ContestListV2, self).get_context_data(**kwargs)
-        present, active, future = [], [], []
+        tf = self.time_filter
         finished = set()
-        for contest in self._get_queryset().exclude(end_time__lt=self._now):
+        active = []
+
+        # All contests are rendered; filtering is applied client-side.
+        ongoing_future = self._get_queryset().exclude(end_time__lt=self._now)
+        present_all, future_all = [], []
+        for contest in ongoing_future:
             if contest.start_time > self._now:
-                future.append(contest)
+                future_all.append(contest)
             else:
-                present.append(contest)
+                present_all.append(contest)
 
         if self.request.user.is_authenticated:
+            present_ids = [c.id for c in present_all]
             for participation in (
-                ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=present)
+                ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=present_ids)
                 .select_related('contest')
-                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators')
+                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators',
+                                  'contest__organizations', 'contest__classes')
                 .annotate(key=F('contest__key'))
             ):
                 if participation.ended:
                     finished.add(participation.contest.key)
                 else:
                     active.append(participation)
-                    present.remove(participation.contest)
+                    present_all.remove(participation.contest)
 
         active.sort(key=attrgetter('end_time', 'key'))
-        present.sort(key=attrgetter('end_time', 'key'))
-        future.sort(key=attrgetter('start_time'))
+        present_all.sort(key=attrgetter('end_time', 'key'))
+        future_all.sort(key=attrgetter('start_time'))
+
+        # All sections are rendered server-side; the status filter is applied
+        # client-side for instant switching.
+        present = present_all
+        future = future_all
 
         context['active_participations'] = active
         context['current_contests'] = present
@@ -284,19 +283,101 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['finished_contests'] = finished
         context['now'] = self._now
         context['first_page_href'] = '.'
-        context['page_suffix'] = '#past-contests'
-        context['search_query'] = self.search_query
+        context['page_suffix'] = '#past-contests' if self.group == 'status' else ''
+        context['search_query'] = ' '.join(self.request.GET.getlist('search')).strip()
 
         # Additional context for v2
-        context['organizations'] = Organization.objects.all()
-        context['classes'] = Class.objects.all()
-        context['tags'] = ContestTag.objects.all()
-        context['total_count'] = self._apply_filters(self._get_queryset()).count()
-        context['sort_by'] = self.request.GET.get('sort', self.default_sort)
+        # Filter options are scoped to the contests the user can actually see,
+        # so private course/class/tag names never leak to unauthorized visitors
+        # (the contest rows themselves are gated by get_visible_contests).
+        visible_contests = self._get_queryset()
+        context['organizations'] = Organization.objects.filter(contest__in=visible_contests).distinct()
+        context['classes'] = Class.objects.filter(contest__in=visible_contests).distinct()
+        context['tags'] = ContestTag.objects.filter(contests__in=visible_contests).distinct()
+        context['total_count'] = self._total_count(active, present, future)
+        context['sort_by'] = self.order
+        context['group'] = self.group
+        context['time_filter'] = tf
+        context['solved_counts'] = self._solved_data(
+            [p.contest for p in active] + present + future + list(context['past_contests']),
+        )
+        if self.group == 'course':
+            course_groups, contest_statuses = self._get_course_groups(context)
+            context['course_groups'] = course_groups
+            context['contest_statuses'] = contest_statuses
 
         context.update(self.get_sort_context())
         context.update(self.get_sort_paginate_context())
         return context
+
+    def _total_count(self, active, present, future):
+        """Number of assignments matching the (server-side) filters."""
+        return len(active) + len(present) + len(future) + self.get_queryset().values('id').count()
+
+    def _solved_data(self, contests):
+        """Map contest id -> (solved problems, total problems) for the current user.
+
+        "Solved" counts the contest's problems the user has accepted anywhere
+        (in-contest submissions or plain problem submissions), so submitting to
+        a problem's normal page also counts toward the assignment.
+        """
+        profile = self.request.profile
+        contest_ids = [c.id for c in contests if c is not None]
+        if not profile or not contest_ids:
+            return {}
+        contest_problems = list(
+            ContestProblem.objects.filter(contest_id__in=contest_ids).values_list('contest_id', 'problem_id'),
+        )
+        problems_by_contest = {}
+        problem_ids = set()
+        for cid, pid in contest_problems:
+            problems_by_contest.setdefault(cid, []).append(pid)
+            problem_ids.add(pid)
+        if not problem_ids:
+            return {cid: (0, 0) for cid in contest_ids}
+        solved_ids = set(
+            Submission.objects.filter(user=profile, problem_id__in=problem_ids, result='AC',
+                                      points__gte=F('problem__points'))
+            .values_list('problem_id', flat=True)
+            .distinct(),
+        )
+        return {
+            cid: (sum(1 for pid in problems_by_contest.get(cid, []) if pid in solved_ids),
+                  len(problems_by_contest.get(cid, [])))
+            for cid in contest_ids
+        }
+
+    def _get_course_groups(self, context):
+        """Group the displayed assignments by their first organization (course).
+
+        Mirrors the mock's "By course" view: one section per course, with each
+        row still showing its status badge. Assignments without an organization
+        fall into a generic "General course" section.
+        """
+        groups = {}
+        statuses = {}
+
+        def add(contest, status):
+            statuses[contest.key] = status
+            orgs = list(contest.organizations.all())
+            name = orgs[0].name if orgs else _('General course')
+            groups.setdefault(name, []).append(contest)
+
+        for participation in context['active_participations']:
+            add(participation.contest, 'active')
+        for contest in context['current_contests']:
+            add(contest, 'ongoing')
+        for contest in context['future_contests']:
+            add(contest, 'upcoming')
+        for contest in context['past_contests']:
+            add(contest, 'past')
+
+        field = self.order.lstrip('-')
+        if field not in ('start_time', 'end_time', 'name', 'user_count'):
+            field = 'start_time'
+        for contests in groups.values():
+            contests.sort(key=attrgetter(field), reverse=self.order.startswith('-'))
+        return {name: groups[name] for name in sorted(groups)}, statuses
 
 
 class ContestCreate(LoginRequiredMixin, View):

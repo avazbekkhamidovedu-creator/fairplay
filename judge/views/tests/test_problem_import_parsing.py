@@ -88,6 +88,22 @@ class ProblemImportTestDataParsingTestCase(SimpleTestCase):
         self.assertEqual(rows[1], ['Example', 'code', 'Body'])
         self.assertEqual(attachments, [])
 
+    def test_skips_protected_example_problem_sheet(self):
+        workbook = build_xlsx_workbook([
+            ('Example Problems', [['name', 'question_type'], ['Example', 'code']], (), True),
+            ('Problems', [['name', 'question_type'], ['Teacher problem', 'code']]),
+        ])
+
+        rows, attachments = read_xlsx_rows_with_embedded_files(io.BytesIO(workbook))
+
+        self.assertEqual(rows, [['name', 'question_type'], ['Teacher problem', 'code']])
+        self.assertEqual(attachments, [])
+
+    def test_removes_leading_blank_lines_from_text_test_data(self):
+        cases = _parse_text_test_data('input data 1:\n\nfirst\noutput data 1:\n\nsecond')
+
+        self.assertEqual(cases, [('case001.in', 'first', 'case001.out', 'second')])
+
     def test_merges_every_recognized_problem_sheet_and_aligns_headers(self):
         workbook = build_xlsx_workbook([
             ('Question Bank A', [['Title', 'Problem Type', 'Content'], ['First', 'Coding', 'One']]),

@@ -47,8 +47,8 @@ class IDEView(LoginRequiredMixin, TitleMixin, TemplateView):
         context['languages'] = Language.objects.filter(
             judges__online=True,
         ).distinct().order_by('name', 'key')
-        context['ACE_URL'] = settings.ACE_URL
         context['default_lang'] = self.request.profile.language
+        # Used only to pick Monaco vs / vs-dark (IDE no longer loads Ace).
         context['ace_theme'] = self.request.profile.resolved_ace_theme
         context['rate_limit_count'] = IDE_RATE_LIMIT_COUNT
         context['rate_limit_window'] = IDE_RATE_LIMIT_WINDOW

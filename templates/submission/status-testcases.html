@@ -297,7 +297,8 @@
 {% endif %}
 
 {# --- QU status polling fallback (in case WebSocket doesn't fire) --- #}
-{% if submission.status == 'QU' %}
+{# Workspace embeds poll via workspace.js; avoid full-page reload there. #}
+{% if submission.status == 'QU' and not workspace_embed %}
 <script>
 (function() {
     var pollCount = 0;

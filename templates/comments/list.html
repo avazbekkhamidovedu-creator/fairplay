@@ -146,7 +146,7 @@
                     {{ _('You must solve at least one problem before your voice can be heard.') }}
                 </div>
             {% else %}
-                <form class="comment-submit-form{% if comment_warn_code %} comment-warn-code{% endif %}" action="" method="post">
+                <form class="comment-submit-form{% if comment_warn_code %} comment-warn-code{% endif %}" action="{{ comment_form_action|default('') }}" method="post">
                     {% csrf_token %}
                     {% if comment_form.errors %}
                         <div id="form-errors">
@@ -156,7 +156,19 @@
                         </div>
                     {% endif %}
                     {{ comment_form.parent }}
-                    <div id="comment-form-body">{{ comment_form.body }}</div>
+                    <div id="comment-form-body">
+                        {% if comment_use_rich_editor %}
+                            {{ comment_form.body }}
+                            <div data-rich-mount="comment-new"
+                                 data-compact
+                                 data-placeholder="{{ _('Write a comment; $$math$$ supported…') }}"></div>
+                            <div class="ws-comment-actions" style="margin-top:0.5rem;">
+                                <button type="submit" class="button">{{ _('Post!') }}</button>
+                            </div>
+                        {% else %}
+                            {{ comment_form.body }}
+                        {% endif %}
+                    </div>
                 </form>
             {% endif %}
         </div>

@@ -36,8 +36,16 @@
         width: 100%;
     }
 
+    /* Sort menu width matches its trigger button */
+    #sort-dropdown .dropdown-menu {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+
     /* Fix checkbox sizing in filter multi-select dropdowns */
-    .multi-select-option input[type="checkbox"] {
+    .multi-select-option input[type="checkbox"],
+    .multi-select-option input[type="radio"] {
         flex-shrink: 0;
         width: 15px;
         height: 15px;
@@ -159,7 +167,7 @@
 }
 
 .cl-title {
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 600;
     color: var(--oj-link);
 
@@ -169,16 +177,12 @@
     }
 }
 
-.cl-code {
-    font-size: 11px;
+.cl-solved {
+    margin-left: auto;
+    font-style: italic;
+    font-size: 14px;
     color: var(--oj-text-muted);
-    margin-left: 0.4rem;
-}
-
-.cl-subline {
-    margin-top: 0.18rem;
-    font-size: 12px;
-    color: var(--oj-text-muted);
+    white-space: nowrap;
 }
 
 .cl-course-line {
@@ -199,7 +203,7 @@
 
 .cl-time {
     margin-top: 0.35rem;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--oj-text-muted);
     line-height: 1.45;
 

@@ -24,8 +24,8 @@
 
 // Bootstrap-y buttons (colours from vars-common / tokens)
 .button, button, input[type=submit] {
-    color: white !important;
-    text-decoration: none !important;
+    color: white;
+    text-decoration: none;
     cursor: pointer;
     vertical-align: middle;
     white-space: nowrap;
@@ -198,20 +198,25 @@ textarea:focus {
             }
         }
 
-        /* Primary CTA tab (e.g. Add problem) — same geometry as Join contest:
-           top-rounded only, bottom edge flush with the tabs rule. */
+        /* Primary CTA tab (e.g. Add problem) — top-rounded only; bottom edge
+           flush with the tabs rule (same height as sibling tabs, no white gap). */
         &.tab-cta {
             margin-left: 0.5em;
+            display: flex;
+            align-items: flex-end;
 
             > a, > span {
                 border: 1px solid $btn_primary_border !important;
                 border-top-width: 1px !important;
+                border-bottom-width: 1px !important;
                 border-radius: $widget_border_radius $widget_border_radius 0 0 !important;
-                background: linear-gradient(to bottom, $btn_primary_from 0, $btn_primary_to 100%);
+                background: linear-gradient(to bottom, $btn_primary_from 0, $btn_primary_to 100%) !important;
                 color: #fff !important;
                 font-weight: 600;
-                padding: 6px 12px;
-                line-height: 1.7em;
+                /* Match regular tab padding/line-height so the blue meets the rule. */
+                padding: 10px 15px !important;
+                line-height: 1.42857 !important;
+                margin-bottom: -1px;
             }
 
             .tab-icon {
@@ -219,16 +224,16 @@ textarea:focus {
             }
 
             > a:hover, > span:hover {
-                background: $btn_primary_hover;
+                background: $btn_primary_hover !important;
                 color: #fff !important;
                 text-decoration: none;
             }
 
             &.active > a, &.active > span,
             &.active > a:hover, &.active > span:hover {
-                background: $btn_primary_hover;
+                background: $btn_primary_hover !important;
                 border-color: $btn_primary_border !important;
-                /* Keep bottom on the tabs rule (do not cut the line with page bg). */
+                /* Do not use pageBg bottom — keep CTA color intersecting the tabs rule. */
                 border-bottom-color: $btn_primary_border !important;
                 color: #fff !important;
                 cursor: default;
@@ -473,7 +478,7 @@ a.close {
     text-align: center;
     white-space: nowrap;
     vertical-align: middle;
-    background-color: #e84848;
+    background-color: $btn_danger;
     border-radius: 10px;
     box-sizing: border-box;
 }

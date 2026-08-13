@@ -1,6 +1,7 @@
 .gitlab-ci-local
 .opencode
 .omo
+.playwright-mcp
 .tmp
 .idea
 .vscode
@@ -33,4 +34,7 @@ node_modules
 .venv
 .test_static
 test_logs/
+test-reports/
+p000000/
+static/jsi18n/
 dmoj/test_settings.py

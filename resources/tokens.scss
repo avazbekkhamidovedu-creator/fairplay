@@ -6,7 +6,9 @@
 @function _hover_overlay() {
     @if $is_light_theme {
         @return rgba(0, 0, 0, 0.03);
-    } @else {
+    }
+
+    @else {
         @return rgba(255, 255, 255, 0.05);
     }
 }
@@ -145,4 +147,14 @@ $oj-rated-text: #fff;
 
     /* Dim numbers — fine print in user-count labels */
     --oj-dim-label: #{$color_primary50};
+
+    /* Site chrome — nav link row (~44px) + #nav-shadow (3px) */
+    --nav-height: 47px;
+}
+
+@media (max-width: 760px) {
+    :root {
+        /* #navigation height 36px + #nav-shadow 3px */
+        --nav-height: 39px;
+    }
 }

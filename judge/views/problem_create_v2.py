@@ -41,9 +41,10 @@ from django.views.generic import View
 from reversion import revisions
 
 from judge.models import (Class, Language, LanguageLimit, License, Organization, Problem, ProblemBlank,
-                          ProblemClarification, ProblemFillBlankConfig, ProblemGroup, ProblemMCQConfig,
-                          ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType, ProblemTemplate,
-                          ProblemTranslation, ProblemType, Profile, Solution, SubmissionSourceAccess)
+                          ProblemClarification, ProblemFileConfig, ProblemFillBlankConfig, ProblemGroup,
+                          ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
+                          ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution,
+                          SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
@@ -51,10 +52,22 @@ from judge.utils.problem_create import apply_simple_problem_defaults, default_pr
 # Types the redesigned page offers but the backend cannot grade/store yet.
 NOT_IMPLEMENTED_TYPES = {'compound', 'other'}
 
+# Difficulty ProblemType.full_name defaults when attaching the standard easy/medium/hard row.
+_DIFFICULTY_FULL_NAMES = {
+    'easy': 'Easy',
+    'medium': 'Medium',
+    'hard': 'Hard',
+}
+
 
 def _problem_type_code(text):
     code = re.sub(r'[^\w\-]+', '-', (text or '').strip().lower())[:20].strip('-')
     return code or 'type'
+
+
+def _reserved_auto_labels():
+    """Format/difficulty auto-chip labels that must not be stored as knowledge tags."""
+    return Problem.reserved_auto_type_labels()
 
 
 def _can_create_any(user):
@@ -85,6 +98,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
             context['test_data_url'] = reverse('problem_data', args=[problem.code])
             context['edit_detail_url'] = reverse('problem_detail', args=[problem.code])
+            if (
+                request.user.has_perm('judge.clone_problem')
+                or problem.is_viewable_by_org_admin(request.user)
+            ):
+                context['can_clone_problem'] = True
+                context['clone_url'] = reverse('problem_clone', args=[problem.code])
         return render(request, self.template_name, context)
 
     def get_context(self, request):
@@ -108,6 +127,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ]),
             'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
+            'can_create_file': user.has_perm('judge.create_private_problem'),
             'can_import_excel_problems': user.has_perm('judge.create_private_problem'),
             'can_change_public': user.has_perm('judge.change_public_visibility'),
             'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
@@ -144,6 +164,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'edit_data_json': 'null',
             'test_data_url': '',
             'edit_detail_url': '',
+            'can_clone_problem': False,
+            'clone_url': '',
+            'import_format_url': '',
+            'import_create_url': '',
+            'import_data_needs_review': False,
+            'import_data_load_error': '',
+            'import_config_needs_review': False,
+            'import_unrecognized_configurations': [],
             'checkers': [{'value': value, 'label': str(label)} for value, label in CHECKERS],
             'checkers_json': json.dumps([
                 {'value': value, 'label': str(label)} for value, label in CHECKERS
@@ -214,6 +242,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     problem = self._create_fill_blank(request, payload, name, problem=existing)
                 elif qtype == 'short':
                     problem = self._create_short_answer(request, payload, name, problem=existing)
+                elif qtype == 'file':
+                    problem = self._create_file_upload(request, payload, name, problem=existing)
                 else:
                     return JsonResponse({'error': _('Unknown question type.')}, status=400)
                 revisions.set_user(request.user)
@@ -266,6 +296,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ProblemBlank.objects.filter(problem=problem).delete()
         ProblemFillBlankConfig.objects.filter(problem=problem).delete()
         ProblemShortAnswerConfig.objects.filter(problem=problem).delete()
+        # Only the per-problem upload settings go; SubmissionFile rows are student data and are
+        # deliberately left alone.
+        ProblemFileConfig.objects.filter(problem=problem).delete()
         if clear_cases:
             problem.cases.all().delete()
 
@@ -284,16 +317,21 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'rubric': '',
         }
 
-        diff_labels = {'Easy': 'easy', 'Medium': 'medium', 'Hard': 'hard'}
-        type_tags, difficulty = [], ''
-        for full in problem.types.values_list('full_name', 'name'):
-            label = full[0] or full[1]
-            if label in diff_labels:
-                difficulty = diff_labels[label]
-            else:
-                type_tags.append(label)
+        # Knowledge chips only — difficulty / format / auto type labels are rebuilt by the UI.
+        reserved = _reserved_auto_labels()
+        type_tags = []
+        seen_labels = set()
+        for ptype in problem.types.all():
+            if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                continue
+            label = ptype.full_name or ptype.name
+            key = (label or '').casefold()
+            if not key or key in seen_labels:
+                continue
+            seen_labels.add(key)
+            type_tags.append(label)
         data['problemTypes'] = type_tags
-        data['difficulty'] = difficulty or 'medium'
+        data['difficulty'] = problem.difficulty or 'medium'
 
         if st == ProblemSubmissionType.CODE:
             data['type'] = 'programming'
@@ -334,6 +372,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['rubric'] = (config.ai_rubric if config else '') or ''
             data['ai'] = True  # short answer always uses AI grading
             data['gradingTable'] = config.grading_table if config else None
+        elif st == ProblemSubmissionType.FILE:
+            data['type'] = 'file'
+            config = getattr(problem, 'file_config', None)
+            data['fileExtensions'] = (config.allowed_extensions if config else '') or ''
+            # The model stores bytes; the page edits MB. Keep 3 decimals so a sub-MB limit set via
+            # the API survives an edit round-trip instead of rounding down to zero.
+            data['fileMaxSizeMb'] = round((config.max_file_size or 0) / (1024 * 1024), 3) if config else 20
+            data['fileInstructions'] = (config.instructions if config else '') or ''
         else:
             data['type'] = 'single'
 
@@ -519,15 +565,56 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return ProblemType.objects.create(name=code, full_name=label[:100])
 
     def _attach_types(self, problem, payload):
-        labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+        """Persist knowledge tags + standard difficulty; drop auto type/difficulty chips.
+
+        Distinguishes omitted vs explicit ``problemTypes`` so partial/legacy
+        payloads that only send ``difficulty`` do not wipe knowledge tags:
+
+        - key missing → keep existing knowledge types; only update difficulty
+        - key present (including ``[]``) → replace knowledge types from payload
+        - ``difficulty`` omitted/invalid → keep any existing easy/medium/hard row
+        """
+        reserved = _reserved_auto_labels()
         resolved = []
         seen = set()
-        for label in labels:
-            ptype = self._resolve_problem_type(label)
-            if ptype is None or ptype.pk in seen:
-                continue
-            seen.add(ptype.pk)
-            resolved.append(ptype)
+
+        if 'problemTypes' in payload:
+            labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+            for label in labels:
+                text = str(label).strip()
+                if text.casefold() in reserved:
+                    continue
+                ptype = self._resolve_problem_type(text)
+                if ptype is None or ptype.pk in seen:
+                    continue
+                if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                    continue
+                seen.add(ptype.pk)
+                resolved.append(ptype)
+        else:
+            for ptype in problem.types.all():
+                if ptype.pk in seen:
+                    continue
+                if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                    continue
+                seen.add(ptype.pk)
+                resolved.append(ptype)
+
+        diff_name = (payload.get('difficulty') or '').strip().lower()
+        if diff_name in Problem.DIFFICULTY_TYPE_NAMES:
+            diff_type, _created = ProblemType.objects.get_or_create(
+                name=diff_name,
+                defaults={'full_name': _DIFFICULTY_FULL_NAMES[diff_name]},
+            )
+            if diff_type.pk not in seen:
+                resolved.append(diff_type)
+                seen.add(diff_type.pk)
+        else:
+            # Older clients omit difficulty — keep any existing easy/medium/hard row.
+            existing_diff = problem.types.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).first()
+            if existing_diff is not None and existing_diff.pk not in seen:
+                resolved.append(existing_diff)
+
         if resolved:
             problem.types.set(resolved)
         elif not problem.types.exists():
@@ -1262,6 +1349,64 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 reference_answer=(payload.get('shortAnswer') or '').strip(),
                 ai_rubric=(payload.get('rubric') or '').strip(),
                 grading_table=payload.get('gradingTable') or None,
+            )
+        return problem
+
+    @staticmethod
+    def _normalise_extensions(raw):
+        """``".PDF, .zip"`` -> ``"pdf,zip"``.
+
+        ``ProblemFileConfig.allowed_extension_list`` expects lowercase, dot-less entries, so store
+        them that way rather than round-tripping whatever the author typed.
+        """
+        seen, out = set(), []
+        for part in (raw or '').split(','):
+            ext = part.strip().lstrip('.').lower()
+            if ext and ext not in seen:
+                seen.add(ext)
+                out.append(ext)
+        return ','.join(out)
+
+    def _create_file_upload(self, request, payload, name, problem=None):
+        user = request.user
+        if not user.has_perm('judge.create_private_problem'):
+            raise PermissionError(_('You do not have permission to create this problem type.'))
+
+        # The page edits whole MB; the model stores bytes. Guard on the byte count so a fractional
+        # value cannot truncate to 0 — ProblemFileConfig treats 0 as "no limit".
+        max_file_size = int(self._num(payload.get('fileMaxSizeMb'), 20) * 1024 * 1024)
+        if max_file_size <= 0:
+            raise ValueError(_('Maximum file size must be greater than zero.'))
+
+        with transaction.atomic():
+            is_create = problem is None
+            if is_create:
+                problem = Problem(submission_type=ProblemSubmissionType.FILE)
+            else:
+                problem.submission_type = ProblemSubmissionType.FILE
+                self._clear_type_children(problem)
+            problem.name = name
+            problem.description = payload.get('description') or ''
+            problem.points = self._num(payload.get('points'), 1)
+            # A teacher grades these by hand and may award anything in [0, points], so partial
+            # credit must be on for the awarded score to reach Profile.points and the standings.
+            problem.partial = True
+            problem.group = self._resolve_group(payload)
+            apply_simple_problem_defaults(problem)
+            problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
+            problem.save()
+
+            self._attach_types(problem, payload)
+            self._attach_orgs(problem, payload)
+            problem.is_organization_private = problem.organizations.exists()
+            problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request, is_create=is_create)
+
+            ProblemFileConfig.objects.create(
+                problem=problem,
+                allowed_extensions=self._normalise_extensions(payload.get('fileExtensions')),
+                max_file_size=max_file_size,
+                instructions=(payload.get('fileInstructions') or '').strip(),
             )
         return problem
 

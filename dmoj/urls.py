@@ -13,9 +13,9 @@ from django.views.generic import RedirectView
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
 from judge.views import (
-    TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, language, license,
-    mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission, register,
-    stats, status, submission, tasks, ticket, two_factor, user, widgets,
+    TitledTemplateView, api, blog, comment, contest_analytics, contests, file_upload, fill_blank, ide, language,
+    license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission,
+    register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
@@ -135,6 +135,8 @@ urlpatterns = [
          name='problem_import_preview'),
     path('problems/import-excel/<int:draft>/create-all/', problem_import.ProblemImportCreateAllView.as_view(),
          name='problem_import_create_all'),
+    path('problems/import-excel/<int:draft>/<int:item>/editor/', problem_import.ProblemImportItemEditorView.as_view(),
+         name='problem_import_item_editor'),
     path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
          problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 
@@ -145,6 +147,17 @@ urlpatterns = [
         path('/pdf/<slug:language>', problem.ProblemPdfView.as_view(), name='problem_pdf'),
         path('/clone', problem.ProblemClone.as_view(), name='problem_clone'),
         path('/submit', problem.ProblemSubmit.as_view(), name='problem_submit'),
+        path('/workspace/run', problem.ProblemWorkspaceRun.as_view(), name='problem_workspace_run'),
+        path(
+            '/workspace/submissions/',
+            problem.ProblemWorkspaceSubmissionsList.as_view(),
+            name='problem_workspace_submissions',
+        ),
+        path(
+            '/workspace/submission/<int:submission>',
+            problem.ProblemWorkspaceSubmissionStatus.as_view(),
+            name='problem_workspace_submission_status',
+        ),
         path('/resubmit/<int:submission>', problem.ProblemSubmit.as_view(), name='problem_submit'),
         path('/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_edit'),
         path('/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_edit'),
@@ -194,6 +207,8 @@ urlpatterns = [
         path('/abort', submission.abort_submission, name='submission_abort'),
         path('/test_case/<int:case>/<str:type>', download_test_case, name='submission_test_case_download'),
         path('/ai-hint', submission.SubmissionAIHint.as_view(), name='submission_ai_hint'),
+        path('/file', file_upload.submission_file_download, name='submission_file_download'),
+        path('/grade-file', file_upload.submission_file_grade, name='submission_file_grade'),
     ])),
 
     path('users/', include([
