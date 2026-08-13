@@ -762,6 +762,108 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertNotIn('填空题', blank_full)
         self.assertEqual(blank.difficulty, 'medium')
 
+    def test_edit_omitting_problem_types_keeps_knowledge_tags(self):
+        """Partial payloads that only send difficulty must not wipe knowledge tags."""
+        knowledge = ProblemType.objects.create(name='graph-theory', full_name='Graph Theory')
+        self.client.force_login(self.users['creator'])
+        create_payload = {
+            'type': 'single',
+            'name': 'Tagged MCQ',
+            'description': 'has tags',
+            'points': 5,
+            'group_id': self.group.id,
+            'difficulty': 'easy',
+            'problemTypes': ['Graph Theory'],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.content)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+        self.assertEqual(problem.difficulty, 'easy')
+        self.assertIn(knowledge, list(problem.types.all()))
+
+        edit_payload = {
+            'type': 'single',
+            'name': 'Tagged MCQ',
+            'description': 'has tags',
+            'points': 5,
+            'group_id': self.group.id,
+            'edit_code': code,
+            'difficulty': 'hard',
+            # intentionally omit problemTypes
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        problem.refresh_from_db()
+        problem.__dict__.pop('difficulty', None)
+        self.assertEqual(problem.difficulty, 'hard')
+        self.assertIn(knowledge, list(problem.types.all()))
+
+    def test_edit_explicit_empty_problem_types_clears_knowledge_tags(self):
+        knowledge = ProblemType.objects.create(name='dp-tag', full_name='Dynamic Programming')
+        self.client.force_login(self.users['creator'])
+        create_payload = {
+            'type': 'single',
+            'name': 'Clear Tags',
+            'description': 'will clear',
+            'points': 5,
+            'group_id': self.group.id,
+            'difficulty': 'medium',
+            'problemTypes': ['Dynamic Programming'],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.content)
+        code = create_resp.json()['code']
+
+        edit_payload = {
+            'type': 'single',
+            'name': 'Clear Tags',
+            'description': 'cleared',
+            'points': 5,
+            'group_id': self.group.id,
+            'edit_code': code,
+            'difficulty': 'medium',
+            'problemTypes': [],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        problem = Problem.objects.get(code=code)
+        problem.__dict__.pop('difficulty', None)
+        self.assertEqual(problem.difficulty, 'medium')
+        self.assertNotIn(knowledge, list(problem.types.all()))
+
     def test_edit_code_keeps_testcases_when_payload_omits_them(self):
         self.client.force_login(self.users['staff_adder'])
         create_payload = {

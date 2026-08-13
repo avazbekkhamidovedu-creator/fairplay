@@ -41,12 +41,19 @@ from judge.models import (
     ContestSubmission,
     Judge,
     Language,
+    LanguageLimit,
     Organization,
     Problem,
+    ProblemBlank,
     ProblemData,
+    ProblemFileConfig,
+    ProblemFillBlankConfig,
     ProblemGroup,
     ProblemHarness,
+    ProblemMCQConfig,
+    ProblemMCQOption,
     ProblemPointsVote,
+    ProblemShortAnswerConfig,
     ProblemTemplate,
     ProblemTestCase,
     ProblemTranslation,
@@ -799,7 +806,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
     template_name = 'problem/list.html'
     paginate_by = 20
     sql_sort = frozenset(('points', 'ac_rate', 'user_count', 'code', 'date'))
-    manual_sort = frozenset(('name', 'group', 'solved', 'type', 'editorial'))
+    manual_sort = frozenset(('name', 'solved', 'type', 'editorial'))
     all_sorts = sql_sort | manual_sort
     default_desc = frozenset(('points', 'ac_rate', 'user_count', 'date'))
     default_sort = 'code'
@@ -822,8 +829,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 queryset = queryset.order_by(self.order, 'id')
             elif sort_key == 'name':
                 queryset = queryset.order_by(self.order.replace('name', 'i18n_name'), 'id')
-            elif sort_key == 'group':
-                queryset = queryset.order_by(self.order + '__name', 'id')
             elif sort_key == 'editorial':
                 queryset = queryset.order_by(self.order.replace('editorial', 'has_public_editorial'), 'id')
             elif sort_key == 'solved':
@@ -1005,17 +1010,19 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             queryset = queryset.filter(has_public_editorial=True)
         if self.category is not None:
             queryset = queryset.filter(group__id=self.category)
+        if self.selected_organizations:
+            # Multi-select within organizations is OR (union).
+            queryset = queryset.filter(organizations__in=self.selected_organizations)
         if self.selected_types:
-            # AND semantics across types/knowledge points: a problem must carry every selected one.
-            # Difficulty levels are an exception: selecting several difficulties means OR, since a
-            # problem only ever has a single difficulty.
+            # Within a filter dimension multi-select is OR; dimensions combine with AND.
+            # Difficulty and tags/knowledge points both use OR within their selected ids.
             difficulty_ids = set(
                 ProblemType.objects.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).values_list('id', flat=True),
             )
             selected_difficulty = [t for t in self.selected_types if t in difficulty_ids]
             selected_other = [t for t in self.selected_types if t not in difficulty_ids]
-            for type_id in selected_other:
-                queryset = queryset.filter(types=type_id)
+            if selected_other:
+                queryset = queryset.filter(types__in=selected_other)
             if selected_difficulty:
                 queryset = queryset.filter(types__in=selected_difficulty)
         if self.selected_formats:
@@ -1068,8 +1075,10 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         context['full_text'] = 0 if self.in_contest else int(self.full_text)
         context['category'] = self.category
         context['categories'] = ProblemGroup.objects.all()
+        context['organizations'] = list(Organization.objects.order_by('name'))
+        context['selected_organizations'] = self.selected_organizations
         if self.show_types:
-            # Knowledge points come from the ProblemType taxonomy.
+            # Tags (knowledge points) come from the ProblemType taxonomy.
             all_problem_types = list(ProblemType.objects.all())
             context['problem_types'] = all_problem_types
             context['selected_types'] = self.selected_types
@@ -1119,6 +1128,14 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 editable_ids = {p.id for p in page_problems if p.is_editable_by(user)}
         context['can_manage_problems'] = can_manage and not self.in_contest
         context['editable_problem_ids'] = editable_ids
+        # Clone entry on the list (detail page already has it). Org admins without the
+        # global perm can still open /clone/ via ProblemClone.has_permission for problems
+        # they admin; surface the icon for the common permission case.
+        context['can_clone_problems'] = (
+            user.is_authenticated
+            and not self.in_contest
+            and user.has_perm('judge.clone_problem')
+        )
 
         from judge.question_types import creatable_types
         context['creatable_problem_types'] = creatable_types(self.request.user)
@@ -1135,7 +1152,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             sort_labels = {
                 'code': _('Problem code'),
                 'name': _('Problem'),
-                'group': _('Category'),
                 'type': _('Problem type'),
                 'ac_rate': _('AC %'),
                 'points': _('Points'),
@@ -1147,16 +1163,9 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             context['current_sort_label'] = sort_labels.get(self.order.lstrip('-'), '')
             context['current_sort_desc'] = self.order.startswith('-')
 
-            # Per-group counts for the group tabs, over the user-visible problem set.
             base_visible = Problem.objects.filter(self.get_visible_problems_filter())
-            group_counts = {
-                row['group']: row['count']
-                for row in base_visible.values('group').annotate(count=Count('pk', distinct=True))
-            }
-            context['group_counts'] = group_counts
-            context['total_problem_count'] = sum(group_counts.values())
 
-            # Per-type problem counts for the knowledge-point picker badges.
+            # Per-type problem counts for the tags picker badges.
             context['type_counts'] = {
                 row['types']: row['count']
                 for row in base_visible.values('types').annotate(count=Count('pk', distinct=True))
@@ -1235,6 +1244,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         self.category = None
         self.selected_types = []
         self.selected_formats = []
+        self.selected_organizations = []
 
         # This actually copies into the instance dictionary...
         self.all_sorts = set(self.all_sorts)
@@ -1250,6 +1260,15 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         if 'format' in request.GET:
             valid_formats = {code for code, label, q in self.get_format_options()}
             self.selected_formats = [c for c in request.GET.getlist('format') if c in valid_formats]
+        # UI label is "Course"; accept both `course` and legacy `organization`.
+        if 'course' in request.GET or 'organization' in request.GET:
+            try:
+                self.selected_organizations = list(map(
+                    int,
+                    request.GET.getlist('course') or request.GET.getlist('organization'),
+                ))
+            except ValueError:
+                pass
 
         self.point_start = safe_float_or_none(request.GET.get('point_start'))
         self.point_end = safe_float_or_none(request.GET.get('point_end'))
@@ -1778,8 +1797,8 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
 
         # Store references to ManyToMany relationships
         languages = problem.allowed_languages.all()
-        language_limits = problem.language_limits.all()
         organizations = problem.organizations.all()
+        classes = problem.classes.all()
         types = problem.types.all()
         old_code = problem.code
         new_code = form.cleaned_data['code']
@@ -1789,6 +1808,26 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         test_cases = list(ProblemTestCase.objects.filter(dataset_id=old_problem_id).order_by('order'))
         templates = list(ProblemTemplate.objects.filter(problem_id=old_problem_id))
         harnesses = list(ProblemHarness.objects.filter(problem_id=old_problem_id))
+        # LanguageLimit has a FK to Problem — clone rows; never .set() (that would move them).
+        language_limits = list(LanguageLimit.objects.filter(problem_id=old_problem_id))
+        mcq_options = list(ProblemMCQOption.objects.filter(problem_id=old_problem_id).order_by('order'))
+        blanks = list(ProblemBlank.objects.filter(problem_id=old_problem_id).order_by('order'))
+        try:
+            mcq_config = ProblemMCQConfig.objects.get(problem_id=old_problem_id)
+        except ProblemMCQConfig.DoesNotExist:
+            mcq_config = None
+        try:
+            fill_blank_config = ProblemFillBlankConfig.objects.get(problem_id=old_problem_id)
+        except ProblemFillBlankConfig.DoesNotExist:
+            fill_blank_config = None
+        try:
+            short_answer_config = ProblemShortAnswerConfig.objects.get(problem_id=old_problem_id)
+        except ProblemShortAnswerConfig.DoesNotExist:
+            short_answer_config = None
+        try:
+            file_config = ProblemFileConfig.objects.get(problem_id=old_problem_id)
+        except ProblemFileConfig.DoesNotExist:
+            file_config = None
 
         # Check if ProblemData exists for original problem
         try:
@@ -1810,9 +1849,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             problem.save()
             problem.authors.add(self.request.profile)
             problem.allowed_languages.set(languages)
-            problem.language_limits.set(language_limits)
             problem.organizations.set(organizations)
+            problem.classes.set(classes)
             problem.types.set(types)
+
+            self._clone_language_limits(language_limits, problem)
 
             # Clone ProblemData if it exists
             if has_problem_data:
@@ -1827,6 +1868,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             # Clone ProblemHarness instances
             self._clone_harnesses(harnesses, problem)
 
+            self._clone_question_type_data(
+                problem, mcq_config, mcq_options, fill_blank_config, blanks, short_answer_config,
+                file_config,
+            )
+
             # Copy init.yml from original problem
             self._copy_init_yml(old_code, new_code)
 
@@ -1834,7 +1880,7 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_user(self.request.user)
             revisions.set_comment(_('Cloned problem from %s') % old_code)
 
-        return HttpResponseRedirect(reverse('admin:judge_problem_change', args=(problem.id,)))
+        return HttpResponseRedirect(reverse('problem_edit_v2', args=(problem.code,)))
 
     def _clone_problem_data(self, original_data, new_problem, old_code, new_code):
         """
@@ -1992,6 +2038,76 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         # Bulk create for efficiency
         if new_templates:
             ProblemTemplate.objects.bulk_create(new_templates)
+
+    def _clone_language_limits(self, language_limits, new_problem):
+        """Deep-copy LanguageLimit rows so the source problem keeps its FK rows."""
+        new_limits = []
+        for original in language_limits:
+            new_limits.append(LanguageLimit(
+                problem=new_problem,
+                language=original.language,
+                time_limit=original.time_limit,
+                memory_limit=original.memory_limit,
+            ))
+        if new_limits:
+            LanguageLimit.objects.bulk_create(new_limits)
+
+    def _clone_question_type_data(
+        self, new_problem, mcq_config, mcq_options, fill_blank_config, blanks, short_answer_config,
+        file_config=None,
+    ):
+        """Deep-copy MCQ / fill-blank / short-answer / file-upload authoring data onto the clone."""
+        if mcq_config is not None:
+            ProblemMCQConfig.objects.create(
+                problem=new_problem,
+                multiple_select=mcq_config.multiple_select,
+                is_true_false=mcq_config.is_true_false,
+                shuffle_options=mcq_config.shuffle_options,
+            )
+        if mcq_options:
+            ProblemMCQOption.objects.bulk_create([
+                ProblemMCQOption(
+                    problem=new_problem,
+                    order=opt.order,
+                    text=opt.text,
+                    is_correct=opt.is_correct,
+                )
+                for opt in mcq_options
+            ])
+        if fill_blank_config is not None:
+            ProblemFillBlankConfig.objects.create(
+                problem=new_problem,
+                case_sensitive=fill_blank_config.case_sensitive,
+                trim_whitespace=fill_blank_config.trim_whitespace,
+                grading_mode=fill_blank_config.grading_mode,
+                ai_rubric=fill_blank_config.ai_rubric,
+                grading_table=fill_blank_config.grading_table,
+            )
+        if blanks:
+            ProblemBlank.objects.bulk_create([
+                ProblemBlank(
+                    problem=new_problem,
+                    order=blank.order,
+                    answers=blank.answers,
+                    label=blank.label,
+                )
+                for blank in blanks
+            ])
+        if short_answer_config is not None:
+            ProblemShortAnswerConfig.objects.create(
+                problem=new_problem,
+                reference_answer=short_answer_config.reference_answer,
+                ai_rubric=short_answer_config.ai_rubric,
+                grading_table=short_answer_config.grading_table,
+            )
+        # Same OneToOne fields create_v2 persists in `_create_file_upload` (MR !39/!46).
+        if file_config is not None:
+            ProblemFileConfig.objects.create(
+                problem=new_problem,
+                allowed_extensions=file_config.allowed_extensions,
+                max_file_size=file_config.max_file_size,
+                instructions=file_config.instructions,
+            )
 
     def _clone_harnesses(self, harnesses, new_problem):
         """

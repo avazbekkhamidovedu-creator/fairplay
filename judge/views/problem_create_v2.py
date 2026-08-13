@@ -98,6 +98,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
             context['test_data_url'] = reverse('problem_data', args=[problem.code])
             context['edit_detail_url'] = reverse('problem_detail', args=[problem.code])
+            if (
+                request.user.has_perm('judge.clone_problem')
+                or problem.is_viewable_by_org_admin(request.user)
+            ):
+                context['can_clone_problem'] = True
+                context['clone_url'] = reverse('problem_clone', args=[problem.code])
         return render(request, self.template_name, context)
 
     def get_context(self, request):
@@ -158,6 +164,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'edit_data_json': 'null',
             'test_data_url': '',
             'edit_detail_url': '',
+            'can_clone_problem': False,
+            'clone_url': '',
             'import_format_url': '',
             'import_create_url': '',
             'import_data_needs_review': False,
@@ -557,22 +565,40 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return ProblemType.objects.create(name=code, full_name=label[:100])
 
     def _attach_types(self, problem, payload):
-        """Persist knowledge tags + standard difficulty; drop auto type/difficulty chips."""
+        """Persist knowledge tags + standard difficulty; drop auto type/difficulty chips.
+
+        Distinguishes omitted vs explicit ``problemTypes`` so partial/legacy
+        payloads that only send ``difficulty`` do not wipe knowledge tags:
+
+        - key missing → keep existing knowledge types; only update difficulty
+        - key present (including ``[]``) → replace knowledge types from payload
+        - ``difficulty`` omitted/invalid → keep any existing easy/medium/hard row
+        """
         reserved = _reserved_auto_labels()
-        labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
         resolved = []
         seen = set()
-        for label in labels:
-            text = str(label).strip()
-            if text.casefold() in reserved:
-                continue
-            ptype = self._resolve_problem_type(text)
-            if ptype is None or ptype.pk in seen:
-                continue
-            if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
-                continue
-            seen.add(ptype.pk)
-            resolved.append(ptype)
+
+        if 'problemTypes' in payload:
+            labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+            for label in labels:
+                text = str(label).strip()
+                if text.casefold() in reserved:
+                    continue
+                ptype = self._resolve_problem_type(text)
+                if ptype is None or ptype.pk in seen:
+                    continue
+                if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                    continue
+                seen.add(ptype.pk)
+                resolved.append(ptype)
+        else:
+            for ptype in problem.types.all():
+                if ptype.pk in seen:
+                    continue
+                if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                    continue
+                seen.add(ptype.pk)
+                resolved.append(ptype)
 
         diff_name = (payload.get('difficulty') or '').strip().lower()
         if diff_name in Problem.DIFFICULTY_TYPE_NAMES:

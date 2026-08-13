@@ -164,7 +164,8 @@
 
     /* Partial-score and AI-judging configuration. */
     .score-conf { margin-top: 0.5rem; padding: 0.6rem 0.75rem; background: var(--admin-bg, #fafafa); border: 1px dashed var(--admin-border); border-radius: 5px; }
-    .profile-select2 + .select2-container { max-width: 500px; width: 100% !important; }
+    .profile-select2 + .select2-container,
+    .org-select2 + .select2-container { max-width: 500px; width: 100% !important; }
     .unsaved-note { font-size: 12px; color: var(--muted); padding: 0.35rem 1rem 0.6rem; }
     .radio-list label { display: block; font-weight: normal; width: auto; padding: 0.2rem 0; }
     .inline-num input { width: 70px; }
@@ -249,6 +250,9 @@
     <div class="v2-top">
       <span class="v2-type-hint">{{ _('Current type:') }} <span class="tag-type regular" id="type-badge">{{ _('Single choice') }}</span></span>
       {% if edit_code %}&mdash; <a href="{{ edit_detail_url }}">{{ edit_name or edit_code }}</a>{% endif %}
+      {% if can_clone_problem and clone_url %}
+        &mdash; <a href="{{ clone_url }}"><i class="fa fa-copy"></i> {{ _('Clone') }}</a>
+      {% endif %}
     </div>
 
     <div class="v2-split">
@@ -262,7 +266,7 @@
             <label>{{ _('Type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="type-pills" id="type-pills">
-                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create code problems') }}" style="opacity:0.45;"{% endif %}>
+                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create programming problems') }}" style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="programming" onchange="selectType('programming')" {% if not can_create_code %}disabled{% endif %}><span>{{ _('Programming') }}</span></label>
                 <label class="type-pill" data-save="mcq">
                   <input type="radio" name="qtype" value="single" {% if can_create_mcq %}checked{% endif %} onchange="selectType('single')"><span>{{ _('Single choice') }}</span></label>
@@ -288,41 +292,29 @@
             <div class="field"><input type="text" id="f-name" placeholder="{{ _('Problem name') }}" oninput="renderPreview()"></div>
           </div>
           <div class="form-row">
-            <label>{{ _('Organizations') }}</label>
+            <label>{{ _('Courses') }}</label>
             <div class="field">
               <div class="select-with-add">
-                <select id="f-org">
-                  <option value="">— {{ _('None') }} —</option>
+                <select multiple id="f-org" class="org-select2" style="width:100%;max-width:500px;">
                   {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
                 </select>
                 {% if can_create_organization %}
-                <button type="button" class="inline-add-btn" title="{{ _('Create organization') }}" aria-label="{{ _('Create organization') }}" onclick="toggleInlineAdd('org')">+</button>
+                <button type="button" class="inline-add-btn" title="{{ _('Create course') }}" aria-label="{{ _('Create course') }}" onclick="toggleInlineAdd('org')">+</button>
                 {% endif %}
               </div>
               {% if can_create_organization %}
               <div class="inline-add-box" id="org-add-box" style="display:none;">
-                <input type="text" id="org-add-name" placeholder="{{ _('Organization name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createOrg();}">
+                <input type="text" id="org-add-name" placeholder="{{ _('Course name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createOrg();}">
                 <button type="button" class="btn-mini btn-mini-primary" onclick="createOrg()">{{ _('Create') }}</button>
                 <button type="button" class="btn-mini" onclick="toggleInlineAdd('org')">{{ _('Cancel') }}</button>
               </div>
               {% endif %}
-              <div class="help">{{ _('Leave blank for a public problem (requires permission); selecting an organization makes it private to that organization') }}</div>
             </div>
           </div>
           <div class="form-row">
-            <label>{{ _('Problem group') }} <span class="req">*</span></label>
+            <label>{{ _('publicly visible') }}</label>
             <div class="field">
-              <div class="select-with-add">
-                <select id="f-group">
-                  {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
-                </select>
-                <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" aria-label="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+</button>
-              </div>
-              <div class="inline-add-box" id="group-add-box" style="display:none;">
-                <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
-                <button type="button" class="btn-mini btn-mini-primary" onclick="createGroup()">{{ _('Create') }}</button>
-                <button type="button" class="btn-mini" onclick="toggleInlineAdd('group')">{{ _('Cancel') }}</button>
-              </div>
+              <input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}>
             </div>
           </div>
           <div class="form-row">
@@ -598,8 +590,23 @@
           <h2>{{ _('Advanced') }}</h2>
           <div class="form-content">
             <div class="form-row type-panel" data-for="programming"><label>{{ _('Creation preset') }}</label><div class="field"><select id="preset" style="max-width:200px;"><option selected>{{ _('Default') }}</option><option>{{ _('Custom') }}</option></select><div class="help">{{ _('Becomes Custom after you change advanced fields') }}</div></div></div>
+            <div class="form-row">
+              <label>{{ _('Problem group') }}</label>
+              <div class="field">
+                <div class="select-with-add">
+                  <select id="f-group">
+                    {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
+                  </select>
+                  <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" aria-label="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+</button>
+                </div>
+                <div class="inline-add-box" id="group-add-box" style="display:none;">
+                  <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
+                  <button type="button" class="btn-mini btn-mini-primary" onclick="createGroup()">{{ _('Create') }}</button>
+                  <button type="button" class="btn-mini" onclick="toggleInlineAdd('group')">{{ _('Cancel') }}</button>
+                </div>
+              </div>
+            </div>
             <div class="form-row"><label>{{ _('Problem code') }}</label><div class="field"><input type="text" id="f-code" value="" placeholder="{{ _('Auto-generated as p000000 on save') }}" readonly><div class="help">{{ _('Unique problem code, generated by the backend') }}</div></div></div>
-            <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}><div class="help">{% if can_change_public %}{{ _('Visible to everyone when no organization is selected') }}{% else %}{{ _('You cannot make problems public without organization scope') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('Is manually managed') }}</label><div class="field"><input type="checkbox" id="f-manual" {% if not can_change_manually_managed %}disabled{% endif %}><div class="help">{% if can_change_manually_managed %}{{ _('When checked, the test_data page cannot be used') }}{% else %}{{ _('You do not have permission to change this flag') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('Date') }}</label><div class="field"><input type="text" id="f-date" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"><div class="help">{{ _('Problem publish/release time') }}</div></div></div>
             <div class="form-row"><label>{{ _('Authors') }}</label><div class="field">
@@ -651,7 +658,7 @@
           <div class="form-content">
             <div class="form-row"><label>{{ _('Classes') }}</label><div class="field">
               <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"></select>
-              <div class="help">{{ _('Only classes belonging to the selected organization are listed') }}</div>
+              <div class="help">{{ _('Only classes belonging to the selected courses are listed') }}</div>
             </div></div>
           </div>
         </fieldset>
@@ -1058,19 +1065,21 @@
     function createOrg() {
       const inp = document.getElementById('org-add-name');
       const name = inp.value.trim();
-      if (!name) { showToast('{{ _("Please enter an organization name.") }}', false); return; }
+      if (!name) { showToast('{{ _("Please enter a course name.") }}', false); return; }
       fetch(CREATE_ORGANIZATION_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
         body: JSON.stringify({ name }),
       }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
-        if (!ok) { showToast(body.error || '{{ _("Failed to create organization") }}', false); return; }
+        if (!ok) { showToast(body.error || '{{ _("Failed to create course") }}', false); return; }
         const sel = document.getElementById('f-org');
-        const opt = document.createElement('option');
-        opt.value = body.organization.id; opt.textContent = body.organization.name;
-        sel.appendChild(opt); sel.value = body.organization.id;
+        ensureOption(sel, body.organization.id, body.organization.name, true);
+        if (window.jQuery && jQuery(sel).data('select2')) {
+          const vals = (jQuery(sel).val() || []).concat([String(body.organization.id)]);
+          jQuery(sel).val([...new Set(vals)]).trigger('change');
+        }
         toggleInlineAdd('org');
-        showToast('{{ _("Organization created") }}', true);
+        showToast('{{ _("Course created") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
     function runAIProblemType(fillInput) {
@@ -1925,21 +1934,35 @@
         ensureOption(document.getElementById('f-authors'), CURRENT_PROFILE.id, CURRENT_PROFILE.username, true);
       }
     }
+    function initOrgPicker() {
+      const sel = document.getElementById('f-org');
+      if (!sel || !window.jQuery || !jQuery.fn.select2) return;
+      const $el = jQuery(sel);
+      if ($el.data('select2')) return;
+      $el.select2({
+        theme: SELECT2_THEME,
+        width: '100%',
+        placeholder: gettext('Select courses…'),
+        allowClear: true,
+      });
+    }
     function initClassPicker() {
       const sel = document.getElementById('f-classes');
       const org = document.getElementById('f-org');
       initSelect2Multi(sel, CLASS_SELECT2_URL, () => {
-        const v = (org && org.value) || '';
-        return v ? { organizations: v } : { organizations: '' };
+        const ids = selectedIds(org);
+        return { organizations: ids.length ? ids.join(',') : '' };
       });
       if (org) {
-        org.addEventListener('change', () => {
+        const onOrgChange = () => {
           if (window.jQuery && jQuery(sel).data('select2')) {
             jQuery(sel).val(null).trigger('change');
           } else if (sel) {
             sel.textContent = '';
           }
-        });
+        };
+        if (window.jQuery) jQuery(org).on('change', onOrgChange);
+        else org.addEventListener('change', onOrgChange);
       }
     }
     function translationLangSelectHtml() {
@@ -2164,7 +2187,7 @@
         action: 'save',
         type: currentType, typeLabel: TYPE_META[currentType].title,
         name: document.getElementById('f-name').value.trim(),
-        organizations: (() => { const v = document.getElementById('f-org').value; return v ? [parseInt(v, 10)] : []; })(),
+        organizations: selectedIds(document.getElementById('f-org')),
         group_id: document.getElementById('f-group').value,
         points: document.getElementById('f-points').value,
         is_public: document.getElementById('f-public').checked,
@@ -2220,7 +2243,6 @@
       if (d.type === 'file' && !CAN_CREATE_FILE) {
         return '{{ _("You do not have permission to create this problem type.") }}';
       }
-      if (!d.group_id) return 'Please select a problem group.';
       if (!d.points || Number(d.points) < 0) return 'Please enter a valid point value.';
       if (d.type !== 'compound' && d.type !== 'other' && !d.description) return 'Please enter a problem description.';
       if (d.type === 'single' || d.type === 'multiple') {
@@ -2470,7 +2492,13 @@
 
       document.getElementById('f-name').value = d.name || '';
       if (d.organizations && d.organizations.length) {
-        const org = document.getElementById('f-org'); if (org) org.value = String(d.organizations[0]);
+        const org = document.getElementById('f-org');
+        if (org) {
+          d.organizations.forEach(id => ensureOption(org, id, null, true));
+          if (window.jQuery && jQuery(org).data('select2')) {
+            jQuery(org).val(d.organizations.map(String)).trigger('change');
+          }
+        }
       }
       if (d.group_id) { const g = document.getElementById('f-group'); if (g) g.value = String(d.group_id); }
       const pts = document.getElementById('f-points'); if (pts && d.points != null) pts.value = d.points;
@@ -2573,6 +2601,7 @@
     });
     RichEditor.mount();
     setDifficulty(currentDifficulty);
+    initOrgPicker();
     initProfilePickers();
     initClassPicker();
 
