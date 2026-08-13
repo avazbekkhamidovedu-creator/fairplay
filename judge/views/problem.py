@@ -1183,8 +1183,11 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         # A non-public problem that belongs to an assignment may be READ by
         # anyone who can access the assignment, but submissions must happen
         # inside the student's own live window — never as a stray regular
-        # submission outside a contest.
-        if self.contest_problem is None and not self.object.is_public:
+        # submission outside a contest. Maintainers (authors/editors who can
+        # edit the problem) are exempt so they can still test-submit from the
+        # problem page outside a contest context.
+        if self.contest_problem is None and not self.object.is_public \
+                and not self.object.is_editable_by(self.request.user):
             from judge.models import ContestProblem
             if ContestProblem.objects.filter(problem_id=self.object.id).exists():
                 return generic_message(

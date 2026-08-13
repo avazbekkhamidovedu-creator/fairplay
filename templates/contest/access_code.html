@@ -40,10 +40,13 @@
         </p>
     </form>
     <script type="text/javascript">
-        // Remember the access code on THIS browser once it has been entered,
-        // per assignment (multiple exams keep separate entries), and re-submit
-        // it automatically on the next visit — no more retyping. A code that
-        // stops working is dropped so we never loop on a stale value.
+        // Remember the access code for THIS browser tab/session once it has
+        // been entered, per assignment (multiple exams keep separate entries),
+        // and re-submit it automatically on the next visit — no more retyping.
+        // Uses sessionStorage (not localStorage) so the code never outlives the
+        // session: on shared/lab machines a later user opening a fresh session
+        // cannot inherit a previously cached code. A code that stops working is
+        // dropped so we never loop on a stale value.
         (function () {
             var KEY = 'dmoj_access_codes';
             var input = document.getElementById('id_access_code');
@@ -51,7 +54,7 @@
             if (!input || !form) return;
 
             var cache = {};
-            try { cache = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) {}
+            try { cache = JSON.parse(sessionStorage.getItem(KEY) || '{}') || {}; } catch (e) {}
 
             var contestKey = {{ contest.key|tojson }};
             var wrongCode = {{ 'true' if wrong_code else 'false' }};
@@ -62,12 +65,12 @@
                 // drop it so we don't auto-submit it again, and focus for
                 // re-entry.
                 delete cache[contestKey];
-                try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) {}
+                try { sessionStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) {}
                 input.focus();
             } else if (cache[contestKey]) {
                 input.value = cache[contestKey];
                 if (hint) {
-                    hint.textContent = {{ _('Access code remembered on this browser — joining automatically...')|htmltojs }};
+                    hint.textContent = {{ _('Access code remembered for this session — joining automatically...')|htmltojs }};
                     hint.style.display = '';
                 }
                 // Auto-submit shortly after load; typing or focusing cancels it
@@ -84,7 +87,7 @@
                 var code = input.value.trim();
                 if (code) {
                     cache[contestKey] = code;
-                    try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) {}
+                    try { sessionStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) {}
                 }
             });
         })();

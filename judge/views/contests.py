@@ -23,12 +23,12 @@ from django.shortcuts import get_object_or_404, render
 from django.template.defaultfilters import date as date_filter
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.utils.functional import cached_property
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils.timezone import make_aware
 from django.utils.translation import gettext as _, gettext_lazy
-from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import ListView, TemplateView, View
 from django.views.generic.detail import BaseDetailView, DetailView, SingleObjectMixin
@@ -706,7 +706,6 @@ class ContestCreate(LoginRequiredMixin, View):
         existing = getattr(self, 'contest', None)
         if existing is not None and existing.pk is not None \
                 and existing.users.exists():
-            from django.db.models import F
             old_row = type(existing).objects.filter(pk=existing.pk).values('time_limit', 'end_time').first()
             old_limit = old_row['time_limit'] if old_row else None
             old_end = old_row['end_time'] if old_row else None

@@ -925,7 +925,7 @@ class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
         # The curator curates endpointcontest — deny when the contest is not theirs.
         self.client.force_login(self.curator)
         _now = timezone.now()
-        other = create_contest(
+        create_contest(
             key='othersebcontest', name='Other SEB',
             start_time=_now + timedelta(days=1), end_time=_now + timedelta(days=2),
             authors=('superuser',),
