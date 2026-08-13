@@ -396,6 +396,26 @@
     color: #fff;
 }
 
+/* Time-limited assignments (per-student duration window). Rendered in the
+   same soft-colour status-badge family as Ongoing/Upcoming/Past, but red so
+   it stays visually distinct from the other badges and custom tag pills. */
+.badge-duration {
+    background: var(--oj-danger-soft);
+    color: var(--oj-danger-soft-text);
+}
+
+/* Explanatory note for time-limited assignments (student detail page +
+   editor warning when the timer would run past the assignment deadline) */
+.dur-note {
+    margin-top: 0.6em;
+    padding: 0.45em 0.75em;
+    background: var(--oj-warning-soft, #fde68a);
+    border: 1px solid var(--oj-warning-border, #ffe082);
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--oj-warning-text, #8a5a00);
+}
+
 /* Tag swatch in multi-select */
 .multi-select-option .swatch {
     width: 10px;
