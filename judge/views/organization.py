@@ -1,3 +1,4 @@
+import re
 from operator import attrgetter
 
 from django import forms
@@ -12,27 +13,299 @@ from django.forms import Form, modelformset_factory
 from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
-from django.utils.html import escape, format_html
-from django.utils.safestring import mark_safe
+from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.text import slugify
 from django.utils.translation import gettext as _, gettext_lazy, ngettext
 from django.views.generic import DetailView, FormView, ListView, UpdateView, View
 from django.views.generic.detail import SingleObjectMixin, SingleObjectTemplateResponseMixin
 from reversion import revisions
 
-from judge.forms import EditOrganizationForm
-from judge.models import Class, Organization, OrganizationRequest, Profile
+from judge.forms import ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
+from judge.models import AdminNotification, Class, ClassMaterial, Contest, Organization, OrganizationRequest, \
+    Profile, TeacherVerificationRequest
+from judge.models.notification import SITE_ADMINISTRATORS_GROUP
+from judge.utils.admin_notify import (
+    notify_class_join, notify_course_join, unread_notification_count,
+)
+from judge.utils.import_export import process_user_csv
+from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.utils.ranker import ranker
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, TitleMixin, generic_message
 
-__all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers', 'OrganizationMembershipChange',
-           'JoinOrganization', 'LeaveOrganization', 'EditOrganization', 'RequestJoinOrganization',
-           'OrganizationRequestDetail', 'OrganizationRequestView', 'OrganizationRequestLog',
-           'KickUserWidgetView', 'ClassHome', 'RequestJoinClass', 'OrganizationImportUsers', 'CreateClass']
+__all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers', 
+           'OrganizationMembershipChange', 'JoinOrganization', 'LeaveOrganization', 
+           'EditOrganization', 'CreateOrganization', 'DeleteOrganization', 
+           'RequestJoinOrganization', 'OrganizationRequestDetail', 'OrganizationRequestView', 
+           'OrganizationRequestLog', 'KickUserWidgetView', 'ClassHome', 'RequestJoinClass', 
+           'OrganizationImportUsers', 'CreateClass', 'EditClass', 'DeleteClass']
+
+
+
+
+
+def unique_organization_slug(base):
+    slug = slugify(base)[:120] or 'course'
+    candidate = slug
+    n = 2
+    while Organization.objects.filter(slug=candidate).exists():
+        candidate = ('%s-%d' % (slug, n))[:128]
+        n += 1
+    return candidate
+
+
+def unique_class_slug(organization, base):
+    slug = slugify(base)[:120] or 'class'
+    candidate = slug
+    n = 2
+    while Class.objects.filter(organization=organization, slug=candidate).exists():
+        candidate = ('%s-%d' % (slug, n))[:128]
+        n += 1
+    return candidate
+
+
+def plain_text_summary(text, max_len=160):
+    """Strip light markdown/markup for class-card previews."""
+    if not text:
+        return ''
+    cleaned = text.replace('\r\n', '\n').replace('\r', '\n')
+    cleaned = re.sub(r'```.*?```', ' ', cleaned, flags=re.S)
+    cleaned = re.sub(r'`([^`]*)`', r'\1', cleaned)
+    cleaned = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', cleaned)
+    cleaned = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', cleaned)
+    cleaned = re.sub(r'[#>*_~]+', ' ', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 1].rstrip() + '…'
+    return cleaned
+
+
+def remove_profile_from_organization(profile, org):
+    """Leave course and drop all class memberships under that course."""
+    profile.organizations.remove(org)
+    class_ids = list(org.classes.values_list('id', flat=True))
+    if class_ids:
+        profile.classes.remove(*class_ids)
+    cache.delete(make_template_fragment_key('org_member_count', (org.id,)))
+
+
+def safe_redirect_url(request, candidate, fallback):
+    if candidate and url_has_allowed_host_and_scheme(
+        url=candidate,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return candidate
+    return fallback
+
+
+def orgs_reviewable_by(profile):
+    # Reverse FK uses related_query_name 'class' in lookups, related_name 'classes' on instances.
+    return Organization.objects.filter(
+        Q(admins=profile) | Q(class__admins=profile),
+    ).distinct()
+
+
+def user_can_edit_all_organizations(user):
+    return bool(user and user.is_authenticated and (
+        user.is_superuser or user.has_perm('judge.edit_all_organization')
+    ))
+
+
+def profile_is_org_admin(profile, org):
+    return bool(profile and org.admins.filter(id=profile.id).exists())
+
+
+def profile_is_class_admin_in_org(profile, org):
+    return bool(profile and Class.objects.filter(organization=org, admins=profile).exists())
+
+
+def profile_manages_organization(profile, org, user=None):
+    """Org admin, class admin in this course, or site-wide org editor."""
+    if user_can_edit_all_organizations(user):
+        return True
+    return profile_is_org_admin(profile, org) or profile_is_class_admin_in_org(profile, org)
+
+
+def profile_is_class_admin(profile, class_obj):
+    return bool(profile and class_obj.admins.filter(id=profile.id).exists())
+
+
+def profile_manages_class(profile, class_obj, user=None):
+    """Class admin, parent course admin, or site-wide org editor."""
+    if user_can_edit_all_organizations(user):
+        return True
+    if profile is None:
+        return False
+    org = class_obj.organization
+    return profile_is_org_admin(profile, org) or profile_is_class_admin(profile, class_obj)
+
+
+def profile_has_pending_class_request(profile, class_obj):
+    if profile is None:
+        return False
+    return class_obj.organization.requests.filter(
+        user=profile, state='P', request_class=class_obj,
+    ).exists()
+
+
+def profile_can_access_class(profile, class_obj, user=None, *, allow_pending=True):
+    """Who may open the class detail page (not necessarily materials)."""
+    if profile_manages_class(profile, class_obj, user):
+        return True
+    if profile is None:
+        return False
+    if class_obj.members.filter(id=profile.id).exists():
+        return True
+    if allow_pending and profile_has_pending_class_request(profile, class_obj):
+        return True
+    return False
+
+
+def profile_can_view_class_content(profile, class_obj, user=None):
+    """Members and managers may see students / materials / full class body."""
+    if profile_manages_class(profile, class_obj, user):
+        return True
+    return bool(profile and class_obj.members.filter(id=profile.id).exists())
+
+
+def pending_requests_for_reviewer(profile, user=None, organization=None):
+    """Pending join requests visible to this teacher/admin (optionally scoped to one course)."""
+    qs = OrganizationRequest.objects.filter(state='P')
+    if organization is not None:
+        qs = qs.filter(organization=organization)
+    if user_can_edit_all_organizations(user):
+        return qs
+    if profile is None:
+        return OrganizationRequest.objects.none()
+    org_admin_ids = set(Organization.objects.filter(admins=profile).values_list('id', flat=True))
+    class_admin_ids = set(Class.objects.filter(admins=profile).values_list('id', flat=True))
+    return qs.filter(
+        Q(organization_id__in=org_admin_ids) | Q(request_class_id__in=class_admin_ids),
+    )
 
 
 def users_for_template(users, order):
     return ranker(users.filter(is_unlisted=False).order_by(order)
                   .select_related('user').defer('about', 'user_script', 'notes'))
+
+
+def user_can_review_teacher_verifications(user):
+    """Site Administrators group, edit_all_organization, or superuser."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser or user.has_perm('judge.edit_all_organization'):
+        return True
+    return user.groups.filter(name=SITE_ADMINISTRATORS_GROUP).exists()
+
+
+def course_inbox_chrome_context(request):
+    """Shared Course tab chrome: join-request / teacher-request / message badges."""
+    profile = request.profile if request.user.is_authenticated else None
+    can_all = user_can_edit_all_organizations(request.user)
+    reviewable = orgs_reviewable_by(profile) if profile is not None else Organization.objects.none()
+    can_review_any = bool(profile is not None and (reviewable.exists() or can_all))
+    pending_review_total = pending_requests_for_reviewer(
+        profile, request.user,
+    ).count() if can_review_any else 0
+    can_review_teachers = user_can_review_teacher_verifications(request.user)
+    pending_teacher_total = (
+        TeacherVerificationRequest.objects.filter(state='P').count() if can_review_teachers else 0
+    )
+    unread = unread_notification_count(profile)
+    can_see_notifications = bool(
+        profile is not None and (
+            can_review_any or can_review_teachers or unread or
+            AdminNotification.objects.filter(recipient=profile).exists() or
+            request.user.is_superuser
+        ),
+    )
+    admin_email = settings.ADMINS[0][1] if settings.ADMINS else ''
+    return {
+        'can_review_any': can_review_any,
+        'pending_review_total': pending_review_total,
+        'can_review_teachers': can_review_teachers,
+        'pending_teacher_total': pending_teacher_total,
+        'can_see_notifications': can_see_notifications,
+        'unread_notification_total': unread,
+        'can_add_course': request.user.is_authenticated and (
+            request.user.is_superuser or request.user.has_perm('judge.add_organization')
+        ),
+        'admin_email': admin_email or getattr(settings, 'SITE_ADMIN_EMAIL', '') or 'admin@example.com',
+    }
+def parse_class_description_meta(description):
+    """Parse structured meta lines from a class description (Session/Location/…)."""
+    meta = {
+        'session_label': '',
+        'section_label': '',
+        'location_line': '',
+        'schedule_line': '',
+        'dates_line': '',
+        'credits_line': '',
+        'materials_line': '',
+        'material_items': [],
+        'desc_lines': [],
+    }
+    if not description:
+        return meta
+    in_materials = False
+    for raw in description.splitlines():
+        line = raw.strip().lstrip('#').strip()
+        if not line:
+            in_materials = False
+            continue
+        low = line.lower()
+        if low.startswith('session:') or low.startswith('term:'):
+            meta['session_label'] = line.split(':', 1)[1].strip() or line
+            in_materials = False
+        elif low.startswith('section:'):
+            meta['section_label'] = line.split(':', 1)[1].strip() or line
+            in_materials = False
+        elif low.startswith('location:') or low.startswith('room:') or low.startswith('canvas:'):
+            meta['location_line'] = line.split(':', 1)[1].strip() or line
+            in_materials = False
+        elif low.startswith('schedule:'):
+            meta['schedule_line'] = line.split(':', 1)[1].strip() or line
+            in_materials = False
+        elif low.startswith('dates:'):
+            # Prefer dedicated class-dates; also fill schedule when empty (card/hero).
+            value = line.split(':', 1)[1].strip() or line
+            meta['dates_line'] = value
+            if not meta['schedule_line']:
+                meta['schedule_line'] = value
+            in_materials = False
+        elif low.startswith('credits:'):
+            meta['credits_line'] = line.split(':', 1)[1].strip() or line
+            in_materials = False
+        elif low.startswith('materials:') or low.startswith('content:'):
+            value = line.split(':', 1)[1].strip()
+            meta['materials_line'] = value or line
+            if value:
+                meta['material_items'].append(value)
+            in_materials = True
+        elif in_materials and (line.startswith('- ') or line.startswith('* ')):
+            item = line[2:].strip()
+            if item:
+                meta['material_items'].append(item)
+        else:
+            in_materials = False
+            meta['desc_lines'].append(line)
+    return meta
+
+
+def contest_assignment_status(contest):
+    """Return (status_key, status_label, timing_label) for class assignment rows."""
+    if not contest.started:
+        return 'scheduled', _('Scheduled'), _('Opens %(time)s') % {
+            'time': contest.start_time.strftime('%Y/%m/%d %H:%M:%S'),
+        }
+    if contest.ended:
+        return 'released', _('Released'), _('Ended %(time)s') % {
+            'time': contest.end_time.strftime('%Y/%m/%d %H:%M:%S'),
+        }
+    return 'open', _('Open'), _('Due %(time)s') % {
+        'time': contest.end_time.strftime('%Y/%m/%d %H:%M:%S'),
+    }
 
 
 class OrganizationMixin(object):
@@ -57,12 +330,22 @@ class OrganizationMixin(object):
                                        _('Could not find such organization.'))
 
     def can_edit_organization(self, org=None):
+        """Can edit course settings / create classes: org admin or site-wide editor."""
         if org is None:
             org = self.object
         if not self.request.user.is_authenticated:
             return False
-        profile_id = self.request.profile.id
-        return org.admins.filter(id=profile_id).exists()
+        if user_can_edit_all_organizations(self.request.user):
+            return True
+        return profile_is_org_admin(self.request.profile, org)
+
+    def can_manage_organization(self, org=None):
+        """Can manage course without joining as a student (org or class admin)."""
+        if org is None:
+            org = self.object
+        if not self.request.user.is_authenticated:
+            return False
+        return profile_manages_organization(self.request.profile, org, self.request.user)
 
 
 class BaseOrganizationListView(OrganizationMixin, ListView):
@@ -95,14 +378,91 @@ class OrganizationList(TitleMixin, ListView):
     model = Organization
     context_object_name = 'organizations'
     template_name = 'organization/list.html'
-    title = gettext_lazy('Organizations')
+    title = gettext_lazy('Courses')
 
     def get_queryset(self):
-        return super(OrganizationList, self).get_queryset().annotate(member_count=Count('member')).order_by('name')
+        qs = Organization.objects.annotate(
+            member_count=Count('member', distinct=True),
+            class_count=Count('class', distinct=True),
+            admin_count=Count('admins', distinct=True),
+        )
+        # Filtering / sorting is applied client-side for live updates; keep a stable default order.
+        return qs.order_by('short_name', 'name')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['admin_email'] = settings.ADMINS[0][1] if settings.ADMINS else ''
+        admin_email = ''
+        if settings.ADMINS:
+            admin_email = settings.ADMINS[0][1]
+        context['admin_email'] = admin_email or getattr(settings, 'SITE_ADMIN_EMAIL', '') or 'admin@example.com'
+        context['filter_q'] = (self.request.GET.get('q') or '').strip()
+        context['filter_joined'] = self.request.GET.get('joined') or ''
+        context['filter_join_mode'] = self.request.GET.get('join_mode') or ''
+        context['filter_sort'] = self.request.GET.get('sort') or 'short_name'
+        profile = self.request.profile if self.request.user.is_authenticated else None
+        pending_ids = set()
+        joined_ids = set()
+        pending_review_total = 0
+        can_review_any = False
+        org_pending_counts = {}
+        manage_ids = set()
+        can_all = user_can_edit_all_organizations(self.request.user)
+        if profile is not None:
+            joined_ids = set(profile.organizations.values_list('id', flat=True))
+            pending_ids = set(
+                OrganizationRequest.objects.filter(user=profile, state='P')
+                .values_list('organization_id', flat=True),
+            )
+            reviewable = orgs_reviewable_by(profile)
+            can_review_any = reviewable.exists() or can_all
+            if can_review_any:
+                pending_qs = pending_requests_for_reviewer(profile, self.request.user)
+                pending_review_total = pending_qs.count()
+                for row in pending_qs.values('organization_id').annotate(c=Count('id')):
+                    org_pending_counts[row['organization_id']] = row['c']
+            if can_all:
+                manage_ids = set(Organization.objects.values_list('id', flat=True))
+            else:
+                manage_ids = set(reviewable.values_list('id', flat=True))
+
+        # Always ship the full course set; live filtering/sorting runs in the page JS.
+        orgs = list(context['organizations'])
+        editable_ids = set()
+        if profile is not None:
+            if can_all:
+                editable_ids = {o.id for o in orgs}
+            else:
+                editable_ids = set(
+                    Organization.admins.through.objects.filter(profile=profile)
+                    .values_list('organization_id', flat=True),
+                )
+        # Prefetch teachers for card display (org admins).
+        admin_map = {}
+        if orgs:
+            through = Organization.admins.through
+            for row in through.objects.filter(organization_id__in=[o.id for o in orgs]).select_related(
+                'profile__user',
+            ):
+                admin_map.setdefault(row.organization_id, []).append(row.profile)
+        for org in orgs:
+            org.user_joined = org.id in joined_ids
+            org.user_pending = org.id in pending_ids and not org.user_joined
+            org.review_pending_count = org_pending_counts.get(org.id, 0)
+            org.can_edit = org.id in editable_ids or can_all
+            org.can_manage = org.id in manage_ids
+            teachers = admin_map.get(org.id, [])
+            names = []
+            for t in teachers[:2]:
+                names.append(t.user.username)
+            if len(teachers) > 2:
+                names.append('+%d' % (len(teachers) - 2))
+            org.teacher_line = ', '.join(names) if names else _('TBA')
+            org.teacher_count = len(teachers)
+        context['organizations'] = orgs
+        context.update(course_inbox_chrome_context(self.request))
+        # Keep list-page review totals (already computed above) if chrome helper differs.
+        context['can_review_any'] = can_review_any
+        context['pending_review_total'] = pending_review_total
         return context
 
 
@@ -112,20 +472,158 @@ class OrganizationHome(OrganizationDetailView):
     def get_context_data(self, **kwargs):
         context = super(OrganizationHome, self).get_context_data(**kwargs)
         context['title'] = self.object.name
+        profile = self.request.profile if self.request.user.is_authenticated else None
+        can_all = user_can_edit_all_organizations(self.request.user)
         context['can_edit'] = self.can_edit_organization()
+        context['can_manage'] = self.can_manage_organization()
         context['can_review_requests'] = not self.object.is_open and self.request.user.is_authenticated and (
             self.object.can_review_all_requests(self.request.profile) or
-            self.object.can_review_class_requests(self.request.profile)
+            self.object.can_review_class_requests(self.request.profile) or
+            can_all
         )
+        context['user_pending'] = False
+        context['review_pending_count'] = 0
+        if profile is not None:
+            context['user_pending'] = (
+                profile not in self.object and
+                self.object.requests.filter(user=profile, state='P').exists()
+            )
+            if context['can_review_requests']:
+                context['review_pending_count'] = pending_requests_for_reviewer(
+                    profile, self.request.user, organization=self.object,
+                ).count()
 
-        classes = self.object.classes.filter(is_active=True)
-        if self.request.user.is_authenticated:
+        context.update(course_inbox_chrome_context(self.request))
+        # Per-course badge on the detail page link.
+        context['org_pending_review_count'] = context['review_pending_count']
+        context['join_request_form'] = None
+        active_classes = self.object.classes.filter(is_active=True)
+        can_apply = (
+            profile is not None and
+            not context['can_manage'] and
+            profile not in self.object and
+            not context['user_pending'] and
+            not self.object.is_open and
+            not (self.object.class_required and not active_classes.exists())
+        )
+        if can_apply:
+            context['join_request_form'] = OrganizationRequestForm(
+                class_required=self.object.class_required,
+                class_queryset=active_classes,
+            )
+
+        classes = active_classes.prefetch_related('admins__user', 'members')
+        if profile is not None:
             classes = classes.annotate(joined=Subquery(
-                self.request.profile.classes.filter(id=OuterRef('id')).values('id'),
+                profile.classes.filter(id=OuterRef('id')).values('id'),
             )).order_by('-joined', 'name')
+            pending_class_ids = set(
+                self.object.requests.filter(user=profile, state='P', request_class__isnull=False)
+                .values_list('request_class_id', flat=True),
+            )
         else:
             classes = classes.annotate(joined=Value(0, output_field=IntegerField()))
-        context['classes'] = classes
+            pending_class_ids = set()
+        class_list = list(classes)
+        teachers = {}
+        sessions = set()
+        for cls in class_list:
+            cls.user_pending = cls.id in pending_class_ids and not cls.joined
+            admins = list(cls.admins.all())
+            if admins:
+                cls.instructor_id = str(admins[0].id)
+                cls.instructor_name = admins[0].user.username
+                teachers[admins[0].id] = admins[0].user.username
+            else:
+                org_admins = list(self.object.admins.all()[:1])
+                if org_admins:
+                    cls.instructor_id = str(org_admins[0].id)
+                    cls.instructor_name = org_admins[0].user.username
+                    teachers[org_admins[0].id] = org_admins[0].user.username
+                else:
+                    cls.instructor_id = ''
+                    cls.instructor_name = _('TBA')
+
+            meta = parse_class_description_meta(cls.description)
+            session_label = cls.term_session or meta['session_label']
+            section_label = meta['section_label']
+            location_line = cls.location or meta['location_line']
+            schedule_line = cls.schedule_label or meta['schedule_line']
+            materials_line = meta['materials_line']
+            desc_lines = meta['desc_lines']
+            # Infer session only from distinct metadata-ish lines, never from class.name alone.
+            if not session_label:
+                for line in desc_lines:
+                    low = line.lower()
+                    if 'section' in low:
+                        continue
+                    if 'spring' in low or 'fall' in low or 'session' in low or '·' in line:
+                        session_label = line
+                        break
+            cleaned = []
+            name_l = (cls.name or '').lower()
+            session_l = (session_label or '').lower()
+            for line in desc_lines:
+                low = line.lower().strip()
+                if not low or low == name_l or low == session_l:
+                    continue
+                if 'section' in low and ('spring' in low or 'fall' in low or '·' in line or 'session' in low):
+                    continue
+                if session_l and session_l in low and len(low) <= len(session_l) + 24:
+                    continue
+                cleaned.append(line)
+            summary = plain_text_summary(' '.join(cleaned[:3]))
+            if session_label and summary.lower().startswith(session_label.lower()):
+                summary = summary[len(session_label):].strip(' ·-–—')
+            if not summary:
+                summary = _('Assignments, materials and students are organized inside this class.')
+
+            if not section_label:
+                name = cls.name or ''
+                section_label = name
+
+            if cls.academic_year and session_label:
+                cls.session_label = '%s · %s' % (cls.academic_year, session_label)
+            else:
+                cls.session_label = session_label or cls.academic_year
+            cls.section_label = section_label
+            cls.session_key = session_label or cls.academic_year or 'none'
+            cls.location_line = location_line
+            cls.schedule_line = schedule_line
+            cls.description_summary = summary
+            cls.card_title = cls.session_label or (cls.name or _('Untitled class'))
+            mat_count = ClassMaterial.objects.filter(class_obj=cls, is_folder=False).count()
+            if mat_count:
+                cls.materials_line = ngettext('%d material', '%d materials', mat_count) % mat_count
+            elif materials_line:
+                cls.materials_line = materials_line
+            elif summary and summary != _('Assignments, materials and students are organized inside this class.'):
+                cls.materials_line = summary
+            else:
+                cls.materials_line = _('Assignments & materials inside')
+            cls.member_count = cls.members.count()
+            org_slots = self.object.slots
+            cls.capacity_display = org_slots if org_slots else '—'
+            cls.user_can_edit = bool(
+                context['can_edit'] or
+                (profile is not None and any(a.id == profile.id for a in admins)),
+            )
+            cls.review_pending_count = 0
+            if cls.session_label:
+                sessions.add(cls.session_label)
+        if context['can_review_requests']:
+            class_pending_map = {}
+            for row in pending_requests_for_reviewer(
+                profile, self.request.user, organization=self.object,
+            ).filter(request_class__isnull=False).values('request_class_id').annotate(c=Count('id')):
+                class_pending_map[row['request_class_id']] = row['c']
+            for cls in class_list:
+                cls.review_pending_count = class_pending_map.get(cls.id, 0)
+        context['classes'] = class_list
+        context['class_teachers'] = [
+            {'id': str(tid), 'username': uname} for tid, uname in sorted(teachers.items(), key=lambda x: x[1])
+        ]
+        context['class_sessions'] = sorted(sessions)
         return context
 
 
@@ -174,6 +672,10 @@ class JoinOrganization(OrganizationMembershipChange):
         if not org.is_open:
             return generic_message(request, _('Joining organization'), _('This organization is not open.'))
 
+        if org.slots is not None and org.members.count() >= org.slots:
+            return generic_message(request, _('Joining organization'),
+                                   _('This course has no remaining slots.'))
+
         max_orgs = settings.DMOJ_USER_MAX_ORGANIZATION_COUNT
         if profile.organizations.filter(is_open=True).count() >= max_orgs:
             return generic_message(
@@ -192,8 +694,7 @@ class LeaveOrganization(OrganizationMembershipChange):
     def handle(self, request, org, profile):
         if not profile.organizations.filter(id=org.id).exists():
             return generic_message(request, _('Leaving organization'), _('You are not in "%s".') % org.short_name)
-        profile.organizations.remove(org)
-        cache.delete(make_template_fragment_key('org_member_count', (org.id,)))
+        remove_profile_from_organization(profile, org)
 
 
 class OrganizationRequestForm(Form):
@@ -205,6 +706,8 @@ class OrganizationRequestForm(Form):
         self.fields['class_'].required = class_required
         self.fields['class_'].queryset = class_queryset
         self.fields['class_'].label_from_instance = attrgetter('name')
+        self.fields['class_'].widget.attrs.update({'class': 'oj-select'})
+        self.fields['reason'].widget.attrs.update({'rows': 5, 'class': 'oj-input'})
         self.show_classes = class_required or bool(class_queryset)
 
 
@@ -217,11 +720,21 @@ class RequestJoinOrganization(LoginRequiredMixin, SingleObjectMixin, FormView):
 
     def dispatch(self, request, *args, **kwargs):
         self.object = self.get_object()
-        if self.object.requests.filter(user=self.request.profile, state='P').exists():
+        profile = self.request.profile
+        if profile_manages_organization(profile, self.object, request.user):
+            return generic_message(self.request, _("Can't request to join %s") % self.object.name,
+                                   _('You already manage this course and do not need to request membership.'))
+        if profile in self.object:
+            return generic_message(self.request, _("Can't request to join %s") % self.object.name,
+                                   _('You are already a member of %s.') % self.object.name)
+        if self.object.requests.filter(user=profile, state='P').exists():
             return generic_message(self.request, _("Can't request to join %s") % self.object.name,
                                    _('You already have a pending request to join %s.') % self.object.name)
         if self.object.is_open:
             raise Http404()
+        if self.object.class_required and not self.object.classes.filter(is_active=True).exists():
+            return generic_message(self.request, _("Can't request to join %s") % self.object.name,
+                                   _('This course requires a class, but no classes are available yet.'))
         return super(RequestJoinOrganization, self).dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self) -> dict:
@@ -242,10 +755,14 @@ class RequestJoinOrganization(LoginRequiredMixin, SingleObjectMixin, FormView):
         request.reason = form.cleaned_data['reason']
         request.request_class = form.cleaned_data['class_']
         request.state = 'P'
+        request.grants_organization = True
         request.save()
-        return HttpResponseRedirect(reverse('request_organization_detail', args=(
-            request.organization.id, request.organization.slug, request.id,
-        )))
+        notify_course_join(request)
+        messages.success(self.request, _('Your join request has been submitted.'))
+        next_url = self.request.POST.get('next') or self.request.GET.get('next')
+        return HttpResponseRedirect(safe_redirect_url(
+            self.request, next_url, request.organization.get_absolute_url(),
+        ))
 
 
 class OrganizationRequestDetail(LoginRequiredMixin, TitleMixin, DetailView):
@@ -257,13 +774,15 @@ class OrganizationRequestDetail(LoginRequiredMixin, TitleMixin, DetailView):
     def get_object(self, queryset=None):
         object = super(OrganizationRequestDetail, self).get_object(queryset)
         profile = self.request.profile
+        if user_can_edit_all_organizations(self.request.user):
+            return object
         if object.user_id != profile.id and not object.organization.admins.filter(id=profile.id).exists() and (
                 not object.request_class or not object.request_class.admins.filter(id=profile.id).exists()):
             raise PermissionDenied()
         return object
 
 
-OrganizationRequestFormSet = modelformset_factory(OrganizationRequest, extra=0, fields=('state',), can_delete=True)
+OrganizationRequestFormSet = modelformset_factory(OrganizationRequest, extra=0, fields=('state',), can_delete=False)
 
 
 class OrganizationRequestBaseView(LoginRequiredMixin, SingleObjectTemplateResponseMixin, SingleObjectMixin, View):
@@ -274,7 +793,9 @@ class OrganizationRequestBaseView(LoginRequiredMixin, SingleObjectTemplateRespon
 
     def get_object(self, queryset=None):
         organization = super(OrganizationRequestBaseView, self).get_object(queryset)
-        if organization.can_review_all_requests(self.request.profile):
+        if user_can_edit_all_organizations(self.request.user):
+            self.edit_all = True
+        elif organization.can_review_all_requests(self.request.profile):
             self.edit_all = True
         elif organization.can_review_class_requests(self.request.profile):
             self.edit_all = False
@@ -334,7 +855,9 @@ class OrganizationRequestView(OrganizationRequestBaseView):
             approved, rejected = 0, 0
             for obj in formset.save():
                 if obj.state == 'A':
-                    obj.user.organizations.add(obj.organization)
+                    # Class membership always implies course membership.
+                    if getattr(obj, 'grants_organization', True) or obj.request_class_id:
+                        obj.user.organizations.add(obj.organization)
                     if obj.request_class:
                         obj.user.classes.add(obj.request_class)
                     approved += 1
@@ -364,6 +887,49 @@ class OrganizationRequestLog(OrganizationRequestBaseView):
         context = super(OrganizationRequestLog, self).get_context_data(**kwargs)
         context['requests'] = self.get_requests().filter(state__in=self.states)
         return context
+def safe_int(value):
+    try:
+        return int(value) if value not in (None, '') else None
+    except (TypeError, ValueError):
+        return None
+
+
+class CreateOrganization(LoginRequiredMixin, TitleMixin, FormView):
+    template_name = 'organization/edit.html'
+    form_class = OrganizationSiteForm
+    title = gettext_lazy('Add course')
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser or request.user.has_perm('judge.add_organization')):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to create courses.'), status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form(self, form_class=None):
+        form = super().get_form(form_class)
+        if self.request.method == 'GET':
+            form.fields['admins'].initial = [self.request.profile.pk]
+        return form
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['form_mode'] = 'create'
+        context['title'] = self.title
+        context.update(course_inbox_chrome_context(self.request))
+        return context
+
+    def form_valid(self, form):
+        with revisions.create_revision(atomic=True):
+            org = form.save(commit=False)
+            org.slug = unique_organization_slug(org.short_name or org.name)
+            org.about = org.about or ''
+            org.save()
+            form.save_m2m()
+            org.admins.add(self.request.profile)
+            revisions.set_comment(_('Created course from site'))
+            revisions.set_user(self.request.user)
+        messages.success(self.request, _('Course "%s" created successfully.') % org.name)
+        return HttpResponseRedirect(org.get_absolute_url())
 
 
 class EditOrganization(LoginRequiredMixin, TitleMixin, OrganizationMixin, UpdateView):
@@ -376,15 +942,15 @@ class EditOrganization(LoginRequiredMixin, TitleMixin, OrganizationMixin, Update
 
     def get_object(self, queryset=None):
         object = super(EditOrganization, self).get_object()
-        if not self.can_edit_organization(object):
+        if not self.can_edit_organization(object) and not self.request.user.has_perm('judge.edit_all_organization'):
             raise PermissionDenied()
         return object
 
-    def get_form(self, form_class=None):
-        form = super(EditOrganization, self).get_form(form_class)
-        form.fields['admins'].queryset = \
-            Profile.objects.filter(Q(organizations=self.object) | Q(admin_of=self.object)).distinct()
-        return form
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['form_mode'] = 'edit'
+        context.update(course_inbox_chrome_context(self.request))
+        return context
 
     def form_valid(self, form):
         with revisions.create_revision(atomic=True):
@@ -398,6 +964,21 @@ class EditOrganization(LoginRequiredMixin, TitleMixin, OrganizationMixin, Update
         except PermissionDenied:
             return generic_message(request, _("Can't edit organization"),
                                    _('You are not allowed to edit this organization.'), status=403)
+
+
+class DeleteOrganization(LoginRequiredMixin, OrganizationMixin, SingleObjectMixin, View):
+    def post(self, request, *args, **kwargs):
+        organization = self.get_object()
+        if not self.can_edit_organization(organization) and not request.user.has_perm('judge.delete_organization'):
+            return generic_message(request, _("Can't delete course"),
+                                   _('You are not allowed to delete this course.'), status=403)
+        name = organization.name
+        with revisions.create_revision(atomic=True):
+            revisions.set_comment(_('Deleted course from site'))
+            revisions.set_user(request.user)
+            organization.delete()
+        messages.success(request, _('Course "%s" deleted.') % name)
+        return HttpResponseRedirect(reverse('organization_list'))
 
 
 class KickUserWidgetView(LoginRequiredMixin, OrganizationMixin, SingleObjectMixin, View):
@@ -418,7 +999,7 @@ class KickUserWidgetView(LoginRequiredMixin, OrganizationMixin, SingleObjectMixi
                                    _('The user you are trying to kick is not in organization: %s') %
                                    organization.name, status=400)
 
-        organization.members.remove(user)
+        remove_profile_from_organization(user, organization)
         return HttpResponseRedirect(organization.get_users_url())
 
 
@@ -442,25 +1023,158 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
     default_desc = all_sorts
     default_sort = '-performance_points'
 
+    def dispatch(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        org = self.object.organization
+        if self.object.slug != kwargs.get('cslug') or org.id != kwargs.get('pk') or org.slug != kwargs.get('slug'):
+            return HttpResponsePermanentRedirect(self.object.get_absolute_url())
+        profile = request.profile if request.user.is_authenticated else None
+        if not profile_can_access_class(profile, self.object, request.user, allow_pending=True):
+            if not request.user.is_authenticated:
+                return generic_message(
+                    request, _('Login required'),
+                    _('Log in and join this course and class to view class details.'),
+                    status=403,
+                )
+            if profile is not None and org.members.filter(id=profile.id).exists():
+                return generic_message(
+                    request, _('Access Denied'),
+                    _('Join this class to view its details, materials, and members.'),
+                    status=403,
+                )
+            return generic_message(
+                request, _('Access Denied'),
+                _('Join this course first, then request to join the class.'),
+                status=403,
+            )
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['logo_override_image'] = self.object.organization.logo_override_image
-        context['users'] = users_for_template(self.object.members, self.order)
+        org = self.object.organization
+        profile = self.request.profile if self.request.user.is_authenticated else None
+        context['logo_override_image'] = org.logo_override_image
+        context['organization'] = org
+        can_edit = False
+        joined = False
+        user_pending = False
+        in_org = False
+        if profile is not None:
+            in_org = org.members.filter(id=profile.id).exists()
+            joined = self.object.members.filter(id=profile.id).exists()
+            user_pending = (
+                not joined and
+                profile_has_pending_class_request(profile, self.object)
+            )
+            can_edit = profile_manages_class(profile, self.object, self.request.user)
+        can_view_content = profile_can_view_class_content(profile, self.object, self.request.user)
+        context['can_edit'] = can_edit
+        context['can_manage'] = can_edit or profile_manages_organization(profile, org, self.request.user)
+        context['class_joined'] = joined
+        context['class_pending'] = user_pending
+        context['in_organization'] = in_org
+        context['can_view_content'] = can_view_content
         context['is_admin'] = False  # Don't allow kicking here
+
+        if can_view_content:
+            ranked_users = list(users_for_template(self.object.members, self.order))
+        else:
+            ranked_users = []
+        context['users'] = ranked_users
+
+        meta = parse_class_description_meta(self.object.description)
+        obj = self.object
+        context['academic_year'] = obj.academic_year or ''
+        context['session_label'] = obj.term_session or meta['session_label']
+        context['offering_label'] = obj.offering_label or context['session_label'] or _('Not set')
+        context['section_label'] = meta['section_label'] or obj.name
+        context['location_line'] = obj.location or meta['location_line']
+        context['schedule_line'] = obj.schedule_label or meta['schedule_line']
+        context['dates_line'] = obj.schedule_label or meta['dates_line'] or meta['schedule_line']
+        context['credits_line'] = (
+            ('%s' % obj.credits).rstrip('0').rstrip('.') if obj.credits is not None else meta['credits_line']
+        )
+        context['materials_line'] = meta['materials_line']
+        # Free-form description body (legacy structured prefix lines still stripped).
+        context['description_body'] = '\n'.join(meta['desc_lines']).strip() or obj.description
+        # Do not leak Canvas/location URLs in the hero for pending/outsiders.
+        hero_location = context['location_line'] if can_view_content else ''
+        hero_bits = [b for b in (context['schedule_line'], hero_location) if b]
+        context['hero_subtitle'] = ' · '.join(hero_bits)
+
+        admins = list(self.object.admins.select_related('user').all())
+        if not admins:
+            admins = list(org.admins.select_related('user').all()[:5])
+        context['class_admins'] = admins
+        context['admin_names'] = ', '.join(a.user.username for a in admins) if admins else _('Not set')
+        context['member_count'] = self.object.members.count() if can_view_content else None
+        context['not_set'] = _('Not set')
+
+        # Assignments = contests linked to this class (visible to user, or all for editors).
+        assignments = []
+        assignment_tags = set()
+        if can_view_content:
+            contest_qs = (
+                Contest.objects.filter(classes=self.object)
+                .prefetch_related('tags', 'problems')
+                .order_by('-start_time')
+            )
+            for contest in contest_qs:
+                if not (can_edit or contest.is_accessible_by(self.request.user)):
+                    continue
+                status_key, status_label, timing = contest_assignment_status(contest)
+                tag_names = [t.name for t in contest.tags.all()[:6]]
+                assignment_tags.update(tag_names)
+                assignments.append({
+                    'contest': contest,
+                    'status_key': status_key,
+                    'status_label': status_label,
+                    'timing_label': timing,
+                    'tag_names': tag_names,
+                    'format_name': contest.format_name or 'default',
+                    'summary': plain_text_summary(contest.summary or contest.description, max_len=180),
+                    'problem_count': contest.problems.count(),
+                })
+        context['assignments'] = assignments
+        context['assignment_tags'] = sorted(assignment_tags)
+
+        folder_id = safe_int(self.request.GET.get('folder'))
+        material_qs = ClassMaterial.objects.filter(class_obj=self.object).select_related(
+            'uploaded_by__user', 'parent',
+        )
+        current_folder = None
+        material_rows = []
+        if can_view_content:
+            if folder_id:
+                current_folder = material_qs.filter(id=folder_id, is_folder=True).first()
+            material_rows = list(
+                material_qs.filter(parent=current_folder).order_by('-is_folder', 'name'),
+            )
+        context['current_folder'] = current_folder
+        context['material_rows'] = material_rows
+        context['material_count'] = len(material_rows)
+        context['material_upload_url'] = reverse(
+            'class_material_action',
+            args=[org.id, org.slug, self.object.id, self.object.slug],
+        )
+
+        context.update(course_inbox_chrome_context(self.request))
+        if can_edit:
+            context['add_assignment_url'] = reverse(
+                'class_link_assignments',
+                args=[org.id, org.slug, self.object.id, self.object.slug],
+            )
+        else:
+            context['add_assignment_url'] = ''
+
         context.update(self.get_sort_context())
         return context
 
-    def get_content_title(self):
-        org = self.object.organization
-        return mark_safe(escape(_('Class {name} in {organization}')).format(
-            name=escape(self.object.name),
-            organization=format_html('<a href="{0}">{1}</a>', org.get_absolute_url(), org.name),
-        ))
-
     def get_title(self):
-        return _('Class {name} - {organization}').format(
-            name=self.object.name, organization=self.object.organization.name,
-        )
+        return _('%(class)s - %(organization)s') % {
+            'class': self.object.name,
+            'organization': self.object.organization.name,
+        }
 
 
 class ClassRequestForm(Form):
@@ -477,9 +1191,22 @@ class RequestJoinClass(LoginRequiredMixin, ClassMixin, FormView):
 
         self.object = self.get_object()
         org = self.object.organization
-        if not org.members.filter(id=self.request.profile.id).exists():
+        profile = self.request.profile
+        if (
+            profile_manages_organization(profile, org, request.user) or
+            self.object.admins.filter(id=profile.id).exists()
+        ):
+            return generic_message(self.request, _("Can't request to join %s") % self.object.name,
+                                   _('You already manage this class and do not need to request membership.'))
+        if self.object.members.filter(id=profile.id).exists():
+            return generic_message(self.request, _("Can't request to join %s") % self.object.name,
+                                   _('You are already a member of %s.') % self.object.name)
+        if not org.members.filter(id=profile.id).exists():
+            if org.is_open:
+                messages.info(self.request, _('Join the course first, then request this class.'))
+                return HttpResponseRedirect(org.get_absolute_url())
             return HttpResponseRedirect(reverse('request_organization', args=(org.id, org.slug)))
-        if org.requests.filter(user=self.request.profile, state='P', request_class=self.object).exists():
+        if org.requests.filter(user=profile, state='P', request_class=self.object).exists():
             return generic_message(self.request, _("Can't request to join %s") % self.object.name,
                                    _('You already have a pending request to join %s.') % self.object.name)
         return super().dispatch(request, *args, **kwargs)
@@ -498,39 +1225,45 @@ class RequestJoinClass(LoginRequiredMixin, ClassMixin, FormView):
         request.reason = form.cleaned_data['reason']
         request.request_class = self.object
         request.state = 'P'
+        request.grants_organization = False
         request.save()
+        notify_class_join(request)
+        messages.success(self.request, _('Your class join request has been submitted.'))
         return HttpResponseRedirect(reverse('request_organization_detail', args=(
             request.organization.id, request.organization.slug, request.id,
         )))
 
 
-class ClassCreateForm(forms.ModelForm):
-    class Meta:
-        model = Class
-        fields = ['name', 'slug', 'description', 'access_code']
-        widgets = {
-            'description': forms.Textarea(attrs={'rows': 4}),
-        }
-
-    def __init__(self, *args, organization=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.organization = organization
-
-    def clean_slug(self):
-        slug = self.cleaned_data['slug']
-        if self.organization and Class.objects.filter(organization=self.organization, slug=slug).exists():
-            raise forms.ValidationError(_('A class with this slug already exists in this organization.'))
-        return slug
+def apply_class_member_csv(form, class_obj, organization):
+    """Process optional member_csv on ClassSiteForm; link users to class + course."""
+    csv_file = form.cleaned_data.get('member_csv')
+    if not csv_file:
+        return None
+    if hasattr(csv_file, 'seek'):
+        csv_file.seek(0)
+    result = process_user_csv(
+        csv_file, organization=organization, target_class=class_obj,
+        update_existing=True, activate=True,
+    )
+    return result
 
 
 class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
     template_name = 'organization/create_class.html'
-    form_class = ClassCreateForm
+    form_class = ClassSiteForm
+
+    def get_form(self, form_class=None):
+        form = super().get_form(form_class)
+        if self.request.method == 'GET':
+            form.fields['admins'].initial = [self.request.profile.pk]
+        return form
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['organization'] = self.object
-        context['title'] = _('Create Class - %s') % self.object.name
+        context['title'] = _('Add class - %s') % self.object.name
+        context['form_mode'] = 'create'
+        context.update(course_inbox_chrome_context(self.request))
         return context
 
     def get_object(self, queryset=None):
@@ -543,22 +1276,92 @@ class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
                                    _('You do not have permission to create classes for this organization.'), status=403)
         return super().dispatch(request, *args, **kwargs)
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs['organization'] = self.object
-        return kwargs
-
     def form_valid(self, form):
         new_class = form.save(commit=False)
         new_class.organization = self.object
-        new_class.is_active = True
+        new_class.slug = unique_class_slug(self.object, new_class.name)
+        if new_class.is_active is None:
+            new_class.is_active = True
         new_class.save()
-        # Add the creator as an admin of the class
+        form.save_m2m()
         new_class.admins.add(self.request.profile)
+        csv_result = apply_class_member_csv(form, new_class, self.object)
+        sync_class_members_to_organization(new_class)
         messages.success(self.request, _('Class "%s" created successfully.') % new_class.name)
+        if csv_result is not None:
+            messages.info(
+                self.request,
+                _('CSV import: %(created)d created, %(linked)d linked to class.') % {
+                    'created': csv_result.created,
+                    'linked': csv_result.class_linked,
+                },
+            )
         return HttpResponseRedirect(new_class.get_absolute_url())
 
 
+class EditClass(LoginRequiredMixin, TitleMixin, FormView):
+    template_name = 'organization/create_class.html'
+    form_class = ClassSiteForm
+
+    def get_object(self):
+        return get_object_or_404(Class, id=self.kwargs['cpk'])
+
+    def dispatch(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        org = self.object.organization
+        if not (org.admins.filter(id=request.profile.id).exists() or
+                self.object.admins.filter(id=request.profile.id).exists() or
+                request.user.has_perm('judge.edit_all_organization')):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to edit this class.'), status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['instance'] = self.object
+        return kwargs
+
+    def get_title(self):
+        return _('Edit class - %s') % self.object.name
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['organization'] = self.object.organization
+        context['form_mode'] = 'edit'
+        context['class'] = self.object
+        context.update(course_inbox_chrome_context(self.request))
+        return context
+
+    def form_valid(self, form):
+        form.save()
+        csv_result = apply_class_member_csv(form, self.object, self.object.organization)
+        sync_class_members_to_organization(self.object)
+        messages.success(self.request, _('Class "%s" updated.') % self.object.name)
+        if csv_result is not None:
+            messages.info(
+                self.request,
+                _('CSV import: %(created)d created, %(linked)d linked to class.') % {
+                    'created': csv_result.created,
+                    'linked': csv_result.class_linked,
+                },
+            )
+        return HttpResponseRedirect(self.object.get_absolute_url())
+
+
+class DeleteClass(LoginRequiredMixin, View):
+    def post(self, request, *args, **kwargs):
+        class_obj = get_object_or_404(Class, id=kwargs['cpk'])
+        org = class_obj.organization
+        if not (org.admins.filter(id=request.profile.id).exists() or
+                class_obj.admins.filter(id=request.profile.id).exists() or
+                request.user.has_perm('judge.delete_class') or
+                user_can_edit_all_organizations(request.user)):
+            return generic_message(request, _("Can't delete class"),
+                                   _('You are not allowed to delete this class.'), status=403)
+        name = class_obj.name
+        class_obj.delete()
+        messages.success(request, _('Class "%s" deleted.') % name)
+        return HttpResponseRedirect(org.get_absolute_url())
 class OrganizationImportForm(forms.Form):
     csv_file = forms.FileField(label=gettext_lazy('CSV File'))
     target_class = forms.ModelChoiceField(
