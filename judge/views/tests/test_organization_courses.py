@@ -1,7 +1,7 @@
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
-from judge.models import Class, OrganizationRequest
+from judge.models import Class, ClassMaterial, InstructorVerificationRequest, OrganizationRequest
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.views.organization import safe_redirect_url
 
@@ -31,7 +31,7 @@ class SafeRedirectUrlTest(SimpleTestCase):
         self.assertEqual(safe_redirect_url(request, None, '/fallback/'), '/fallback/')
 
 
-class TeacherJoinRequestActionsTest(CommonDataMixin, TestCase):
+class InstructorJoinRequestActionsTest(CommonDataMixin, TestCase):
     """Approve / reopen must respect grants_organization (class-only revoke)."""
 
     @classmethod
@@ -174,7 +174,6 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
         cls.outsider = create_user(username='class_outsider')
         cls.member.profile.organizations.add(cls.org)
         cls.member.profile.classes.add(cls.klass)
-        from judge.models import ClassMaterial
         from django.core.files.base import ContentFile
         cls.material = ClassMaterial.objects.create(
             class_obj=cls.klass,
@@ -240,6 +239,59 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
         self.client.force_login(self.outsider)
         response = self.client.get(self._download_url())
         self.assertEqual(response.status_code, 403)
+
+    def test_cross_class_material_id_not_downloadable(self):
+        """Student in class A must not fetch class B's file by swapping material id."""
+        other = Class.objects.create(
+            organization=self.org, name='Other Class Materials', slug='other-class-mat',
+        )
+        other.members.add(self.member.profile)
+        from django.core.files.base import ContentFile
+        foreign = ClassMaterial.objects.create(
+            class_obj=other, name='other-secret.txt', is_folder=False,
+            uploaded_by=self.admin.profile,
+        )
+        foreign.file.save('other-secret.txt', ContentFile(b'other-bytes'), save=True)
+        # URL claims self.klass but mid belongs to other class → 404
+        url = reverse(
+            'class_material_download',
+            args=[self.org.id, self.org.slug, self.klass.id, self.klass.slug, foreign.id],
+        )
+        self.client.force_login(self.member)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_delete_folder_removes_nested_oss_files(self):
+        from django.core.files.base import ContentFile
+        from judge.models import StoredFileRecord
+
+        folder = ClassMaterial.objects.create(
+            class_obj=self.klass, name='Notes', is_folder=True, uploaded_by=self.admin.profile,
+        )
+        nested = ClassMaterial.objects.create(
+            class_obj=self.klass, parent=folder, name='nested.txt', is_folder=False,
+            uploaded_by=self.admin.profile,
+        )
+        nested.file.save('nested.txt', ContentFile(b'nested-bytes'), save=True)
+        path = nested.file.name
+        self.assertTrue(path)
+        self.assertTrue(StoredFileRecord.objects.filter(path=path).exists())
+
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse(
+                'class_material_action',
+                args=[self.org.id, self.org.slug, self.klass.id, self.klass.slug],
+            ),
+            {'action': 'delete', 'material_ids': [str(folder.id)]},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ClassMaterial.objects.filter(id=folder.id).exists())
+        self.assertFalse(ClassMaterial.objects.filter(id=nested.id).exists())
+        record = StoredFileRecord.objects.filter(path=path).first()
+        self.assertIsNotNone(record)
+        self.assertEqual(record.status, StoredFileRecord.STATUS_DELETED)
+        self.assertTrue(path.startswith('class_materials/'))
 
 
 class LeaveCourseClearsClassesTest(CommonDataMixin, TestCase):
@@ -311,3 +363,134 @@ class SyncClassMembersToOrgTest(CommonDataMixin, TestCase):
         self.assertFalse(user.profile.organizations.filter(id=self.org.id).exists())
         sync_class_members_to_organization(self.klass)
         self.assertTrue(user.profile.organizations.filter(id=self.org.id).exists())
+
+
+class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
+    """Instructor apply is per course/class; approval grants class admin only."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.org = cls.organizations['open']
+        cls.klass = Class.objects.create(
+            organization=cls.org,
+            name='CS101 Spring',
+            slug='cs101-spring',
+            term_session='Spring',
+            academic_year='2026',
+        )
+        cls.other = Class.objects.create(
+            organization=cls.org,
+            name='CS101 Fall',
+            slug='cs101-fall',
+            term_session='Fall',
+            academic_year='2026',
+        )
+        cls.applicant = create_user(username='instructor_applicant')
+
+    def test_submit_requires_course_and_class(self):
+        self.client.force_login(self.applicant)
+        response = self.client.post(reverse('organization_instructor_verification'), {
+            'reason': 'I instruct this session',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(InstructorVerificationRequest.objects.filter(user=self.applicant.profile).exists())
+
+    def test_submit_and_approve_grants_only_that_class(self):
+        from django.contrib.auth.models import Group
+        from judge.models.notification import INSTRUCTORS_GROUP
+
+        self.client.force_login(self.applicant)
+        response = self.client.post(reverse('organization_instructor_verification'), {
+            'organization': self.org.id,
+            'request_class': self.klass.id,
+            'reason': 'I instruct CS101 Spring',
+        })
+        self.assertEqual(response.status_code, 302)
+        req = InstructorVerificationRequest.objects.get(user=self.applicant.profile, state='P')
+        self.assertEqual(req.request_class_id, self.klass.id)
+        self.assertEqual(req.organization_id, self.org.id)
+
+        self.client.force_login(self.users['superuser'])
+        response = self.client.post(
+            reverse('organization_instructor_requests'),
+            {'action': 'approve', 'request_ids': [str(req.id)]},
+        )
+        self.assertEqual(response.status_code, 302)
+        req.refresh_from_db()
+        self.assertEqual(req.state, 'A')
+        self.assertTrue(self.klass.admins.filter(id=self.applicant.profile.id).exists())
+        self.assertFalse(self.other.admins.filter(id=self.applicant.profile.id).exists())
+        self.assertTrue(self.applicant.profile.organizations.filter(id=self.org.id).exists())
+        # Must not become course administrator.
+        self.assertFalse(self.org.admins.filter(id=self.applicant.profile.id).exists())
+        self.applicant.refresh_from_db()
+        self.assertTrue(self.applicant.is_staff)
+        req.refresh_from_db()
+        self.assertTrue(req.granted_staff)
+        self.assertTrue(req.granted_class_admin)
+        instructors = Group.objects.filter(name=INSTRUCTORS_GROUP).first()
+        if instructors is not None:
+            self.assertFalse(instructors.user_set.filter(id=self.applicant.id).exists())
+
+        # Class instructor can open their class, not the sibling class.
+        self.client.force_login(self.applicant)
+        ok = self.client.get(self.klass.get_absolute_url())
+        self.assertEqual(ok.status_code, 200)
+        blocked = self.client.get(self.other.get_absolute_url())
+        self.assertEqual(blocked.status_code, 403)
+        # Cannot open course edit (course administrator only).
+        edit = self.client.get(reverse('edit_organization', args=[self.org.id, self.org.slug]))
+        self.assertIn(edit.status_code, (403, 302))
+
+    def test_revoke_removes_class_admin(self):
+        req = InstructorVerificationRequest.objects.create(
+            user=self.applicant.profile,
+            organization=self.org,
+            request_class=self.klass,
+            reason='instruct',
+            state='A',
+            granted_class_admin=True,
+            granted_staff=True,
+        )
+        self.klass.admins.add(self.applicant.profile)
+        self.org.members.add(self.applicant.profile)
+        self.applicant.is_staff = True
+        self.applicant.save(update_fields=['is_staff'])
+
+        self.client.force_login(self.users['superuser'])
+        response = self.client.post(
+            reverse('organization_instructor_requests') + '?status=A',
+            {'action': 'reject', 'request_ids': [str(req.id)]},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(self.klass.admins.filter(id=self.applicant.profile.id).exists())
+        # Course membership kept after revoke.
+        self.assertTrue(self.applicant.profile.organizations.filter(id=self.org.id).exists())
+        self.applicant.refresh_from_db()
+        self.assertFalse(self.applicant.is_staff)
+
+    def test_revoke_preserves_unrelated_staff(self):
+        """Staff granted outside instructor approval must survive revoke."""
+        self.applicant.is_staff = True
+        self.applicant.save(update_fields=['is_staff'])
+        req = InstructorVerificationRequest.objects.create(
+            user=self.applicant.profile,
+            organization=self.org,
+            request_class=self.klass,
+            reason='already staff',
+            state='A',
+            granted_class_admin=True,
+            granted_staff=False,
+        )
+        self.klass.admins.add(self.applicant.profile)
+
+        self.client.force_login(self.users['superuser'])
+        response = self.client.post(
+            reverse('organization_instructor_requests') + '?status=A',
+            {'action': 'reject', 'request_ids': [str(req.id)]},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(self.klass.admins.filter(id=self.applicant.profile.id).exists())
+        self.applicant.refresh_from_db()
+        self.assertTrue(self.applicant.is_staff)

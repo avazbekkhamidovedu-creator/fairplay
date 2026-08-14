@@ -3,11 +3,11 @@
 {% block js_media %}
 <script type="text/javascript">
 $(function () {
-    $('#teacher-verification-btn').on('click', function () {
-        $('#teacher-verification-modal').prop('hidden', false);
+    $('#instructor-verification-btn').on('click', function () {
+        $('#instructor-verification-modal').prop('hidden', false);
     });
-    $('#teacher-verification-modal .js-close-modal').on('click', function () {
-        $('#teacher-verification-modal').prop('hidden', true);
+    $('#instructor-verification-modal .js-close-modal').on('click', function () {
+        $('#instructor-verification-modal').prop('hidden', true);
     });
     $('#select-all-notes').on('change', function () {
         $('.note-select').prop('checked', this.checked);
@@ -47,8 +47,8 @@ $(function () {
         {% if can_review_any %}
             <a class="inbox-subtab" href="{{ url('organization_join_requests') }}">{{ _('Join requests') }}</a>
         {% endif %}
-        {% if can_review_teachers %}
-            <a class="inbox-subtab" href="{{ url('organization_teacher_requests') }}">{{ _('Teacher verification') }}</a>
+        {% if can_review_instructors %}
+            <a class="inbox-subtab" href="{{ url('organization_instructor_requests') }}">{{ _('Instructor verification') }}</a>
         {% endif %}
         <a class="inbox-subtab active" href="{{ url('organization_notifications') }}">{{ _('Messages') }}</a>
     </div>
@@ -90,7 +90,7 @@ $(function () {
                         <tr class="{% if note.is_unread %}note-unread{% endif %}">
                             <td><input type="checkbox" class="note-select" name="notification_ids" value="{{ note.id }}"></td>
                             <td>
-                                {% if note.kind == 'teacher_verify' %}{{ _('Teacher verification') }}
+                                {% if note.kind == 'instructor_verify' %}{{ _('Instructor verification') }}
                                 {% elif note.kind == 'course_join' %}{{ _('Course join') }}
                                 {% elif note.kind == 'class_join' %}{{ _('Class join') }}
                                 {% else %}{{ note.kind }}{% endif %}
@@ -100,8 +100,8 @@ $(function () {
                                 {% if note.body %}
                                     <div class="note-body">{{ note.body }}</div>
                                 {% endif %}
-                                {% if note.kind == 'teacher_verify' %}
-                                    <div class="note-hint">{{ _('Review teacher applications in Teacher verification.') }}</div>
+                                {% if note.kind == 'instructor_verify' %}
+                                    <div class="note-hint">{{ _('Review instructor applications in Instructor verification.') }}</div>
                                 {% endif %}
                             </td>
                             <td>{% if note.actor %}{{ note.actor.username }}{% else %}—{% endif %}</td>
@@ -119,5 +119,5 @@ $(function () {
     {% endif %}
 </div>
 
-{% include "organization/teacher-verification-modal.html" %}
+{% include "organization/instructor-verification-modal.html" %}
 {% endblock %}

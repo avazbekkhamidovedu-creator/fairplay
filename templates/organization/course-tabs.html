@@ -3,9 +3,9 @@
 {% block tabs %}
     {{ make_tab('course', 'fa-university', url('organization_list'), _('Course')) }}
     {# Applicants submit via modal; site admins also get a review queue tab below. #}
-    <li class="tab" id="teacher-verification-tab">
-        <a href="javascript:void(0)" id="teacher-verification-btn">
-            <i class="tab-icon fa fa-id-badge"></i> {{ _('Apply as teacher') }}
+    <li class="tab" id="instructor-verification-tab">
+        <a href="javascript:void(0)" id="instructor-verification-btn">
+            <i class="tab-icon fa fa-id-badge"></i> {{ _('Apply as instructor') }}
         </a>
     </li>
     {% if can_review_any %}
@@ -18,12 +18,12 @@
             </a>
         </li>
     {% endif %}
-    {% if can_review_teachers %}
-        <li class="tab{% if tab == 'teacher_requests' %} active{% endif %}">
-            <a href="{{ url('organization_teacher_requests') }}">
-                <i class="tab-icon fa fa-id-badge"></i> {{ _('Teacher requests') }}
-                {% if pending_teacher_total %}
-                    <span class="course-tab-badge">{{ pending_teacher_total }}</span>
+    {% if can_review_instructors %}
+        <li class="tab{% if tab == 'instructor_requests' %} active{% endif %}">
+            <a href="{{ url('organization_instructor_requests') }}">
+                <i class="tab-icon fa fa-id-badge"></i> {{ _('Instructor requests') }}
+                {% if pending_instructor_total %}
+                    <span class="course-tab-badge">{{ pending_instructor_total }}</span>
                 {% endif %}
             </a>
         </li>

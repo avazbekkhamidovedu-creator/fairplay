@@ -11,11 +11,11 @@
     <script src="{{ static('rich_editor.js') }}"></script>
     <script type="text/javascript">
         $(function () {
-            $('#teacher-verification-btn').on('click', function () {
-                $('#teacher-verification-modal').prop('hidden', false);
+            $('#instructor-verification-btn').on('click', function () {
+                $('#instructor-verification-modal').prop('hidden', false);
             });
-            $('#teacher-verification-modal .js-close-modal').on('click', function () {
-                $('#teacher-verification-modal').prop('hidden', true);
+            $('#instructor-verification-modal .js-close-modal').on('click', function () {
+                $('#instructor-verification-modal').prop('hidden', true);
             });
             if (typeof RichEditor !== 'undefined') {
                 var csrf = document.querySelector('[name=csrfmiddlewaretoken]');
@@ -23,6 +23,12 @@
                     imageUploadUrl: '{{ url("martor_image_uploader") }}',
                     csrfToken: csrf ? csrf.value : '',
                 });
+                function syncRichEditorSources() {
+                    document.querySelectorAll('textarea[data-rich-editor]').forEach(function (ta) {
+                        var name = ta.getAttribute('data-rich-editor');
+                        try { ta.value = RichEditor.getMarkdown(name) || ''; } catch (e) {}
+                    });
+                }
                 document.querySelectorAll('textarea[data-rich-editor]').forEach(function (ta) {
                     var name = ta.getAttribute('data-rich-editor');
                     var mount = document.createElement('div');
@@ -30,18 +36,15 @@
                     ta.parentNode.insertBefore(mount, ta);
                     RichEditor.mount(ta.parentNode);
                     ta.setAttribute('aria-hidden', 'true');
+                    ta.removeAttribute('required');
                     ta.tabIndex = -1;
                     ta.classList.add('rich-editor-source');
                     if (ta.value) {
                         try { RichEditor.setMarkdown(name, ta.value); } catch (e) {}
                     }
                 });
-                $('form.course-form').on('submit', function () {
-                    document.querySelectorAll('textarea[data-rich-editor]').forEach(function (ta) {
-                        var name = ta.getAttribute('data-rich-editor');
-                        try { ta.value = RichEditor.getMarkdown(name) || ''; } catch (e) {}
-                    });
-                });
+                $('form.course-form').on('click', '[type=submit]', syncRichEditorSources);
+                $('form.course-form').on('submit', syncRichEditorSources);
             }
             $('#btn-import-csv').on('click', function () {
                 $('#id_member_csv').trigger('click');
@@ -141,6 +144,18 @@
             <section class="class-form-module">
                 <h2>{{ _('People') }}</h2>
                 <div class="class-form-grid">
+                    <div class="class-form-field">
+                        <label for="{{ form.instructor_names.id_for_label }}">{{ form.instructor_names.label }}</label>
+                        {{ form.instructor_names }}
+                        {% if form.instructor_names.help_text %}<div class="helptext">{{ form.instructor_names.help_text }}</div>{% endif %}
+                        {{ form.instructor_names.errors }}
+                    </div>
+                    <div class="class-form-field">
+                        <label for="{{ form.ta_names.id_for_label }}">{{ form.ta_names.label }}</label>
+                        {{ form.ta_names }}
+                        {% if form.ta_names.help_text %}<div class="helptext">{{ form.ta_names.help_text }}</div>{% endif %}
+                        {{ form.ta_names.errors }}
+                    </div>
                     <div class="class-form-field full">
                         <label for="{{ form.admins.id_for_label }}">{{ form.admins.label }}</label>
                         {{ form.admins }}
@@ -191,5 +206,5 @@
         </form>
     </div>
 </div>
-{% include "organization/teacher-verification-modal.html" %}
+{% include "organization/instructor-verification-modal.html" %}
 {% endblock %}

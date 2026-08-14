@@ -297,8 +297,8 @@ class OrganizationSiteForm(ModelForm):
 
     class Meta:
         model = Organization
-        fields = ['name', 'short_name', 'about', 'is_open', 'class_required', 'slots', 'admins',
-                  'logo_override_image']
+        fields = ['name', 'short_name', 'about', 'is_open', 'class_required', 'slots', 'instructor_names',
+                  'admins', 'logo_override_image']
         labels = {
             'name': _('Course name'),
             'short_name': _('Short name'),
@@ -306,6 +306,7 @@ class OrganizationSiteForm(ModelForm):
             'is_open': _('Is open organization?'),
             'class_required': _('Class membership required'),
             'slots': _('Maximum size'),
+            'instructor_names': _('Instructors'),
             'admins': _('Course administrators'),
             'logo_override_image': _('Logo override image'),
         }
@@ -313,7 +314,8 @@ class OrganizationSiteForm(ModelForm):
             'is_open': _('If checked, students can join without approval. Cannot combine with class required.'),
             'class_required': _('If checked, students must select a class when requesting membership.'),
             'slots': _('Optional. Maximum members for private courses.'),
-            'admins': _('Optional. The creator is always added as a teacher. Add others who can edit this course '
+            'instructor_names': _('Comma-separated names shown on the course list (not the same as administrators).'),
+            'admins': _('Optional. The creator is always added as an instructor. Add others who can edit this course '
                         'and review join requests.'),
         }
         widgets = {
@@ -323,6 +325,10 @@ class OrganizationSiteForm(ModelForm):
                 'data-rich-editor': 'course-about',
             }),
             'slots': forms.NumberInput(attrs={'min': 1, 'placeholder': _('Optional')}),
+            'instructor_names': forms.TextInput(attrs={
+                'class': 'oj-input',
+                'placeholder': _('e.g. Alice Smith, Bob Lee'),
+            }),
             'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
         }
 
@@ -333,6 +339,22 @@ class OrganizationSiteForm(ModelForm):
             self.fields['slots'].required = False
         if 'logo_override_image' in self.fields:
             self.fields['logo_override_image'].required = False
+        if 'instructor_names' in self.fields:
+            self.fields['instructor_names'].required = False
+        # RichEditor mounts a visual editor; the Django textarea stays hidden.
+        # HTML5 "required" on that hidden control blocks submit before JS can
+        # copy markdown back — validate emptiness in clean_about instead.
+        if 'about' in self.fields:
+            self.fields['about'].required = False
+
+    def clean_about(self):
+        about = (self.cleaned_data.get('about') or '').strip()
+        if not about:
+            raise ValidationError(_('This field is required.'))
+        return about
+
+    def clean_instructor_names(self):
+        return (self.cleaned_data.get('instructor_names') or '').strip()
 
     def clean(self):
         cleaned = super().clean()
@@ -367,7 +389,7 @@ class ClassSiteForm(ModelForm):
         fields = [
             'name', 'description',
             'academic_year', 'term_session', 'credits', 'location', 'start_date', 'end_date',
-            'admins', 'members', 'access_code', 'is_active',
+            'instructor_names', 'ta_names', 'admins', 'members', 'access_code', 'is_active',
         ]
         labels = {
             'name': _('Name'),
@@ -378,12 +400,16 @@ class ClassSiteForm(ModelForm):
             'location': _('Location or Canvas link'),
             'start_date': _('Class start'),
             'end_date': _('Class end'),
+            'instructor_names': _('Instructors'),
+            'ta_names': _('Teaching assistants'),
             'admins': _('Class administrators'),
             'members': _('Members'),
             'access_code': _('Class access code'),
             'is_active': _('Class is active'),
         }
         help_texts = {
+            'instructor_names': _('Comma-separated names shown on the class page and course class cards.'),
+            'ta_names': _('Comma-separated TA names shown on the class page.'),
             'admins': _('Optional. The creator is always added as a class administrator.'),
             'members': _('Search course members or users. Use Import CSV to bulk-add usernames.'),
             'access_code': _('Optional.'),
@@ -401,6 +427,14 @@ class ClassSiteForm(ModelForm):
             'location': forms.TextInput(attrs={'class': 'oj-input', 'placeholder': 'IB 204'}),
             'start_date': forms.DateInput(attrs={'class': 'oj-input', 'type': 'date'}),
             'end_date': forms.DateInput(attrs={'class': 'oj-input', 'type': 'date'}),
+            'instructor_names': forms.TextInput(attrs={
+                'class': 'oj-input',
+                'placeholder': _('e.g. Alice Smith'),
+            }),
+            'ta_names': forms.TextInput(attrs={
+                'class': 'oj-input',
+                'placeholder': _('e.g. Carol Chen, Dan Wu'),
+            }),
             'access_code': forms.TextInput(attrs={'class': 'oj-input', 'maxlength': '7'}),
             'name': forms.TextInput(attrs={'class': 'oj-input', 'placeholder': _('CS201 2026 Spring Session 1')}),
             'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
@@ -418,10 +452,16 @@ class ClassSiteForm(ModelForm):
         self.fields['term_session'].widget.choices = list(self.TERM_SESSION_CHOICES)
         for name in (
             'admins', 'members', 'access_code', 'description', 'academic_year', 'term_session',
-            'credits', 'location', 'start_date', 'end_date',
+            'credits', 'location', 'start_date', 'end_date', 'instructor_names', 'ta_names',
         ):
             if name in self.fields:
                 self.fields[name].required = False
+
+    def clean_instructor_names(self):
+        return (self.cleaned_data.get('instructor_names') or '').strip()
+
+    def clean_ta_names(self):
+        return (self.cleaned_data.get('ta_names') or '').strip()
 
     def clean_name(self):
         name = self.cleaned_data['name']
