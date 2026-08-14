@@ -647,6 +647,56 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
                               seb_required=True, seb_use_default=True)
         self.assertEqual(response.status_code, 400)
 
+    def _edit_seb(self, contest, **overrides):
+        data = {
+            'name': contest.name, 'key': contest.key,
+            'start_time': contest.start_time.isoformat(),
+            'end_time': contest.end_time.isoformat(),
+            'seb_required': True,
+        }
+        data.update(overrides)
+        return self.client.post(
+            reverse('contest_edit', args=[contest.key]),
+            data=json.dumps(data), content_type='application/json',
+        )
+
+    def test_resave_keeps_existing_preset_when_default_changes(self):
+        # Publishing a newer default must not silently re-point an existing
+        # assignment: that changes its Config Key and 403s every student
+        # already inside SEB.
+        original = _create_preset()
+        self._post(name='SEB Keep', key='sebkeep', seb_required=True, seb_use_default=True)
+        contest = Contest.objects.get(key='sebkeep')
+        self.assertEqual(contest.seb_preset, original)
+
+        newer = SEBConfigPreset(name='Newer default', browser_exam_keys='1' * 64,
+                                config_keys='2' * 64, is_default=True)
+        newer.config_file.save('newer.seb', ContentFile(b'SEB config'), save=False)
+        newer.save()
+        self.assertEqual(SEBConfigPreset.get_default(), newer)
+
+        response = self._edit_seb(contest, seb_use_default=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        contest.refresh_from_db()
+        self.assertEqual(contest.seb_preset, original)
+
+    def test_resave_keeps_preset_after_default_retired(self):
+        # A disabled checkbox is not submitted, so an unrelated save used to
+        # arrive as seb_use_default=False and silently drop the link. The
+        # control now stays enabled whenever a link exists.
+        preset = _create_preset()
+        self._post(name='SEB Retired', key='sebretired', seb_required=True, seb_use_default=True)
+        contest = Contest.objects.get(key='sebretired')
+
+        SEBConfigPreset.objects.filter(pk=preset.pk).update(is_active=False)
+        cache.delete(DEFAULT_PRESET_CACHE_KEY)
+        self.assertIsNone(SEBConfigPreset.get_default())
+
+        response = self._edit_seb(contest, seb_use_default=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        contest.refresh_from_db()
+        self.assertEqual(contest.seb_preset, preset)
+
     def test_seb_use_default_unset_clears_preset(self):
         preset = _create_preset()
         self._post(name='SEB Clear', key='sebclear', seb_required=True, seb_use_default=True)

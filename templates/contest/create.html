@@ -2410,19 +2410,33 @@
                                         {# The one-click path: point this assignment at the .seb configuration
                                            published by the site administrator, so the instructor never has to
                                            build one or transcribe key hashes. Ticking it hides the manual
-                                           fields below; unticking restores the fully custom path. #}
+                                           fields below; unticking restores the fully custom path.
+
+                                           The card names seb_linked_preset when this contest already uses one
+                                           — that may be a different (or retired) preset than today's site
+                                           default, and re-pointing it would re-key every student mid-exam, so
+                                           the link is kept until unticked. Disable the checkbox ONLY when
+                                           there is nothing to express: no default published AND no existing
+                                           link. A disabled input is not submitted, which the server would
+                                           otherwise read as "unlink". #}
+                                        {% set seb_shown_preset = seb_linked_preset or seb_default_preset %}
                                         <div class="ac-card" id="seb-default-row" style="margin-bottom:0.5rem;">
                                             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.25rem;">
                                                 <input type="checkbox" id="id_seb_use_default" name="seb_use_default"
-                                                       {%- if not seb_default_preset %} disabled{% endif %}
+                                                       {%- if not seb_shown_preset %} disabled{% endif %}
                                                        {%- if prefill.seb_use_default %} checked{% endif %}>
                                                 {{ _('Use the default configuration') }}
                                             </label>
-                                            {% if seb_default_preset %}
+                                            {% if seb_shown_preset %}
                                             <div class="ac-help">
-                                                <strong>{{ seb_default_preset.name }}</strong>{% if seb_default_preset.description %} — {{ seb_default_preset.description }}{% endif %}
-                                                <a href="{{ seb_default_preset.config_file.url }}" target="_blank">{{ _('Preview .seb') }}</a>
+                                                <strong>{{ seb_shown_preset.name }}</strong>{% if seb_shown_preset.description %} — {{ seb_shown_preset.description }}{% endif %}
+                                                <a href="{{ seb_shown_preset.config_file.url }}" target="_blank">{{ _('Preview .seb') }}</a>
                                             </div>
+                                            {% if seb_linked_preset and seb_linked_preset != seb_default_preset %}
+                                            <div class="ac-help">
+                                                {{ _('This assignment keeps the configuration it was set up with. To move it to the current site default, untick and save, then tick again and save.') }}
+                                            </div>
+                                            {% endif %}
                                             {% else %}
                                             <div class="ac-help">
                                                 {{ _('No default configuration has been published yet. Ask a site administrator to add one, or fill in the fields below yourself.') }}

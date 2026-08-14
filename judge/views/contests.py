@@ -664,12 +664,18 @@ class ContestCreate(LoginRequiredMixin, View):
         # Contest.clean()'s "at least one key" requirement without any upload.
         if 'seb_preset' not in restricted and 'seb_use_default' in payload:
             if payload.get('seb_use_default'):
-                preset = SEBConfigPreset.get_default()
-                if preset is None:
-                    raise ValidationError(
-                        _('No default Safe Exam Browser configuration has been set up by the site '
-                          'administrator yet.'))
-                contest.seb_preset = preset
+                # An existing link is kept as-is. Re-resolving on every save
+                # would silently move the contest onto whatever preset happens
+                # to be default now — changing its Config Key and locking out
+                # anyone mid-exam, the exact failure SEBConfigPreset.clean()
+                # refuses to allow when the preset itself is edited.
+                if contest.seb_preset_id is None:
+                    preset = SEBConfigPreset.get_default()
+                    if preset is None:
+                        raise ValidationError(
+                            _('No default Safe Exam Browser configuration has been set up by the site '
+                              'administrator yet.'))
+                    contest.seb_preset = preset
             else:
                 contest.seb_preset = None
 
@@ -1047,6 +1053,10 @@ class ContestCreate(LoginRequiredMixin, View):
         for field in self._m2m_fields:
             prefill[field] = []
         prefill['authors'] = []
+        # The preset this contest is actually linked to, which is not
+        # necessarily the current site default (staff may have published a
+        # newer one, or retired this one).
+        linked_preset = None
 
         if contest is not None:
             total = int(contest.time_limit.total_seconds()) if contest.time_limit else 0
@@ -1087,6 +1097,8 @@ class ContestCreate(LoginRequiredMixin, View):
                 'seb_use_default': (contest.seb_preset_id is not None
                                     if 'seb_preset' not in restricted else False),
             })
+            if 'seb_preset' not in restricted:
+                linked_preset = contest.seb_preset
             for field in self._bool_fields:
                 prefill[field] = getattr(contest, field)
             # Profile M2M → (id, username); organization/class/tag M2M → (id, name).
@@ -1179,6 +1191,9 @@ class ContestCreate(LoginRequiredMixin, View):
             # checkbox, or None when no administrator has set one up yet (the
             # template then explains why the checkbox is disabled).
             'seb_default_preset': SEBConfigPreset.get_default(),
+            # What this contest already uses, so the card names the real
+            # configuration rather than whichever one is default today.
+            'seb_linked_preset': linked_preset,
             'prefill': prefill,
         }
 
