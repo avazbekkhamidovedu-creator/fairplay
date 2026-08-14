@@ -333,6 +333,17 @@ class OrganizationSiteForm(ModelForm):
             self.fields['slots'].required = False
         if 'logo_override_image' in self.fields:
             self.fields['logo_override_image'].required = False
+        # RichEditor mounts a visual editor; the Django textarea stays hidden.
+        # HTML5 "required" on that hidden control blocks submit before JS can
+        # copy markdown back — validate emptiness in clean_about instead.
+        if 'about' in self.fields:
+            self.fields['about'].required = False
+
+    def clean_about(self):
+        about = (self.cleaned_data.get('about') or '').strip()
+        if not about:
+            raise ValidationError(_('This field is required.'))
+        return about
 
     def clean(self):
         cleaned = super().clean()

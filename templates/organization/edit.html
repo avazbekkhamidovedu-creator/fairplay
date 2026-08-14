@@ -23,6 +23,12 @@
                 imageUploadUrl: '{{ url("martor_image_uploader") }}',
                 csrfToken: csrf ? csrf.value : '',
             });
+            function syncRichEditorSources() {
+                document.querySelectorAll('textarea[data-rich-editor]').forEach(function (ta) {
+                    var name = ta.getAttribute('data-rich-editor');
+                    try { ta.value = RichEditor.getMarkdown(name) || ''; } catch (e) {}
+                });
+            }
             document.querySelectorAll('textarea[data-rich-editor]').forEach(function (ta) {
                 var name = ta.getAttribute('data-rich-editor');
                 var mount = document.createElement('div');
@@ -30,18 +36,17 @@
                 ta.parentNode.insertBefore(mount, ta);
                 RichEditor.mount(ta.parentNode);
                 ta.setAttribute('aria-hidden', 'true');
+                ta.removeAttribute('required');
                 ta.tabIndex = -1;
                 ta.classList.add('rich-editor-source');
                 if (ta.value) {
                     try { RichEditor.setMarkdown(name, ta.value); } catch (e) {}
                 }
             });
-            $('form.course-form').on('submit', function () {
-                document.querySelectorAll('textarea[data-rich-editor]').forEach(function (ta) {
-                    var name = ta.getAttribute('data-rich-editor');
-                    try { ta.value = RichEditor.getMarkdown(name) || ''; } catch (e) {}
-                });
-            });
+            // Native constraint validation runs before the submit event; sync on
+            // the submit control click so the hidden textarea is filled in time.
+            $('form.course-form').on('click', '[type=submit]', syncRichEditorSources);
+            $('form.course-form').on('submit', syncRichEditorSources);
         });
     </script>
 {% endblock %}
