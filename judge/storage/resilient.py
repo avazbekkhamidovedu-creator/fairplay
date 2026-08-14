@@ -38,6 +38,17 @@ def generate_submission_key(submission_id, original_name, now=None):
     return 'submissions/%04d/%02d/%d/%s%s' % (now.year, now.month, submission_id, uuid.uuid4().hex, ext)
 
 
+def generate_class_material_key(class_id, original_name, now=None):
+    """Object key for course-class materials (same store as submission files)."""
+    now = now or timezone.now()
+    ext = posixpath.splitext(original_name)[1].lower()
+    if not _EXT_RE.fullmatch(ext):
+        ext = ''
+    return 'class_materials/%04d/%02d/%d/%s%s' % (
+        now.year, now.month, class_id or 0, uuid.uuid4().hex, ext,
+    )
+
+
 class ResilientStorage(Storage):
     """Composite storage: every write goes to the primary and is queued for an async
     mirror to the backup; reads fall back to the backup when the primary is sick.

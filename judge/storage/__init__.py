@@ -4,10 +4,10 @@ from django.conf import settings
 from django.core.files.storage import FileSystemStorage
 
 from judge.storage.resilient import ResilientStorage, StorageUnavailableError, \
-    generate_submission_key
+    generate_class_material_key, generate_submission_key
 
 __all__ = ['submission_storage', 'ResilientStorage', 'StorageUnavailableError',
-           'generate_submission_key']
+           'generate_class_material_key', 'generate_submission_key']
 
 _submission_storage = None
 

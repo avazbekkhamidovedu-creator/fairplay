@@ -21,8 +21,11 @@ def site_administrator_profiles():
 
 
 def notify_profiles(recipients, *, kind, title, body='', actor=None, link='',
-                    organization_request=None, teacher_verification=None):
+                    organization_request=None, instructor_verification=None,
+                    teacher_verification=None):
     """Create AdminNotification rows for each recipient (skips actor)."""
+    if instructor_verification is None:
+        instructor_verification = teacher_verification
     if recipients is None:
         return 0
     if hasattr(recipients, 'all'):
@@ -46,7 +49,7 @@ def notify_profiles(recipients, *, kind, title, body='', actor=None, link='',
             body=body or '',
             link=link or '',
             organization_request=organization_request,
-            teacher_verification=teacher_verification,
+            instructor_verification=instructor_verification,
         )
         created += 1
     return created
@@ -110,22 +113,30 @@ def notify_class_join(org_request):
     )
 
 
-def notify_teacher_verification(verification):
+def notify_instructor_verification(verification):
     actor = verification.user
-    title = _('Teacher verification: %(user)s') % {'user': actor.username}
-    body = _('%(user)s requested teacher verification.') % {'user': actor.username}
+    target = verification.target_label or _('a class')
+    title = _('Instructor request: %(user)s → %(target)s') % {
+        'user': actor.username, 'target': target,
+    }
+    body = _('%(user)s applied to instruct %(target)s.') % {
+        'user': actor.username, 'target': target,
+    }
     if verification.reason:
         body += '\n' + verification.reason
-    link = reverse('organization_teacher_requests') + '?status=P'
+    link = reverse('organization_instructor_requests') + '?status=P'
     return notify_profiles(
         site_administrator_profiles(),
-        kind=AdminNotification.KIND_TEACHER_VERIFY,
+        kind=AdminNotification.KIND_INSTRUCTOR_VERIFY,
         title=title,
         body=body,
         actor=actor,
         link=link,
-        teacher_verification=verification,
+        instructor_verification=verification,
     )
+
+
+notify_teacher_verification = notify_instructor_verification
 
 
 def unread_notification_count(profile):

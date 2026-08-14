@@ -1,0 +1,90 @@
+<div id="instructor-verification-modal" class="course-modal" hidden
+     data-preselect-org="{{ instructor_apply_org_id|default('') }}"
+     data-preselect-class="{{ instructor_apply_class_id|default('') }}">
+    <div class="course-modal-backdrop js-close-modal"></div>
+    <div class="course-modal-dialog" role="dialog" aria-labelledby="iv-title">
+        <h2 id="iv-title">{{ _('Apply as class instructor') }}</h2>
+        <p>{{ _('Choose the course and class/session you want to instruct. Site administrators must approve before you become instructor of that class only.') }}</p>
+        <form method="post" action="{{ url('organization_instructor_verification') }}" id="instructor-verification-form">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.path }}">
+            <label for="iv-organization">{{ _('Course') }}</label>
+            <select id="iv-organization" name="organization" class="oj-select" required>
+                <option value="">{{ _('Select a course…') }}</option>
+            </select>
+            <label for="iv-class" style="margin-top:0.75rem;display:block">{{ _('Class / session') }}</label>
+            <select id="iv-class" name="request_class" class="oj-select" required disabled>
+                <option value="">{{ _('Select a class…') }}</option>
+            </select>
+            <label for="iv-reason" style="margin-top:0.75rem;display:block">{{ _('Why do you need to instruct this class?') }}</label>
+            <textarea id="iv-reason" name="reason" rows="4" required maxlength="2000"
+                      placeholder="{{ _('e.g. I am the instructor for CS101 Spring session.') }}"></textarea>
+            <p style="margin-top: 0.85rem;">
+                <button type="submit" class="oj-btn oj-btn-primary">{{ _('Submit request') }}</button>
+                <button type="button" class="oj-btn oj-btn-outline js-close-modal">{{ _('Close') }}</button>
+            </p>
+        </form>
+    </div>
+</div>
+<script type="application/json" id="instructor-apply-catalog-data">{{ instructor_apply_catalog|default([])|tojson }}</script>
+<script type="text/javascript">
+(function () {
+    var catalogEl = document.getElementById('instructor-apply-catalog-data');
+    var modal = document.getElementById('instructor-verification-modal');
+    if (!catalogEl || !modal) return;
+    var catalog = [];
+    try { catalog = JSON.parse(catalogEl.textContent || '[]'); } catch (e) { catalog = []; }
+    var orgSelect = document.getElementById('iv-organization');
+    var classSelect = document.getElementById('iv-class');
+    if (!orgSelect || !classSelect) return;
+
+    function fillClasses(orgId, selectedClassId) {
+        classSelect.innerHTML = '';
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = {{ _('Select a class…')|tojson }};
+        classSelect.appendChild(placeholder);
+        var org = null;
+        for (var i = 0; i < catalog.length; i++) {
+            if (String(catalog[i].id) === String(orgId)) { org = catalog[i]; break; }
+        }
+        if (!org || !org.classes || !org.classes.length) {
+            classSelect.disabled = true;
+            return;
+        }
+        org.classes.forEach(function (cls) {
+            var opt = document.createElement('option');
+            opt.value = cls.id;
+            opt.textContent = cls.label || cls.name;
+            if (selectedClassId && String(cls.id) === String(selectedClassId)) opt.selected = true;
+            classSelect.appendChild(opt);
+        });
+        classSelect.disabled = false;
+    }
+
+    catalog.forEach(function (org) {
+        var opt = document.createElement('option');
+        opt.value = org.id;
+        opt.textContent = org.short_name + (org.name && org.name !== org.short_name ? ' — ' + org.name : '');
+        orgSelect.appendChild(opt);
+    });
+
+    orgSelect.addEventListener('change', function () {
+        fillClasses(orgSelect.value, '');
+    });
+
+    function applyPreselect() {
+        var orgId = modal.getAttribute('data-preselect-org') || '';
+        var classId = modal.getAttribute('data-preselect-class') || '';
+        if (orgId) {
+            orgSelect.value = String(orgId);
+            fillClasses(orgId, classId);
+        }
+    }
+
+    $(document).on('click', '#instructor-verification-btn', function () {
+        setTimeout(applyPreselect, 0);
+    });
+    applyPreselect();
+})();
+</script>

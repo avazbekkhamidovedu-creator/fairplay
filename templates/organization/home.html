@@ -4,10 +4,10 @@
 {% block js_media %}
 <script type="text/javascript">
 $(function () {
-    $('#teacher-verification-btn').on('click', function () {
-        $('#teacher-verification-modal').prop('hidden', false);
+    $('#instructor-verification-btn').on('click', function () {
+        $('#instructor-verification-modal').prop('hidden', false);
     });
-    $('#teacher-verification-modal .js-close-modal, #join-request-modal .js-close-modal').on('click', function () {
+    $('#instructor-verification-modal .js-close-modal, #join-request-modal .js-close-modal').on('click', function () {
         $(this).closest('.course-modal').prop('hidden', true);
     });
     $('.js-open-join-modal').on('click', function (e) {
@@ -24,36 +24,36 @@ $(function () {
     var $cards = $('.js-class-card');
     function applyFilters() {
         var q = ($('#f-class-q').val() || '').toLowerCase();
-        var teacher = $('#f-teacher').val() || '';
+        var instructor = $('#f-instructor').val() || '';
         var session = $('#f-session').val() || '';
         var sort = $('#f-class-sort').val() || 'session';
-        var group = $('.view-switch button.active').data('group') || 'all';
+        var group = $('.view-switch button.active').data('group') || 'session';
 
         var items = $cards.get().map(function (el) {
             return {
                 el: el,
                 name: (el.getAttribute('data-name') || '').toLowerCase(),
-                teacher: el.getAttribute('data-teacher') || '',
+                instructor: el.getAttribute('data-instructor') || '',
                 session: el.getAttribute('data-session') || '',
                 year: el.getAttribute('data-year') || '',
-                teacherLabel: el.getAttribute('data-teacher-label') || '',
+                instructorLabel: el.getAttribute('data-instructor-label') || '',
                 sessionLabel: el.getAttribute('data-session-label') || ''
             };
         });
 
         items.forEach(function (it) {
             var show = true;
-            if (q && it.name.indexOf(q) < 0 && it.teacherLabel.toLowerCase().indexOf(q) < 0 &&
+            if (q && it.name.indexOf(q) < 0 && it.instructorLabel.toLowerCase().indexOf(q) < 0 &&
                 it.sessionLabel.toLowerCase().indexOf(q) < 0) show = false;
-            if (teacher && it.teacher !== teacher) show = false;
+            if (instructor && it.instructor !== instructor) show = false;
             if (session && it.session !== session) show = false;
             $(it.el).toggle(show);
             it.show = show;
         });
 
         items.sort(function (a, b) {
-            if (sort === 'teacher') return a.teacherLabel.localeCompare(b.teacherLabel) || a.name.localeCompare(b.name);
-            if (sort === 'year') return b.year.localeCompare(a.year) || a.teacherLabel.localeCompare(b.teacherLabel);
+            if (sort === 'instructor') return a.instructorLabel.localeCompare(b.instructorLabel) || a.name.localeCompare(b.name);
+            if (sort === 'year') return b.year.localeCompare(a.year) || a.instructorLabel.localeCompare(b.instructorLabel);
             if (sort === 'session') return b.sessionLabel.localeCompare(a.sessionLabel) || a.name.localeCompare(b.name);
             return a.name.localeCompare(b.name);
         });
@@ -72,9 +72,9 @@ $(function () {
             $parent.append($grid);
         }
 
-        if (group === 'teacher' || group === 'session') {
-            var keyFn = group === 'teacher'
-                ? function (it) { return it.teacherLabel || {{ _('TBA')|htmltojs }}; }
+        if (group === 'instructor' || group === 'session') {
+            var keyFn = group === 'instructor'
+                ? function (it) { return it.instructorLabel || {{ _('TBA')|htmltojs }}; }
                 : function (it) { return it.sessionLabel || {{ _('Session TBA')|htmltojs }}; };
             var groups = {};
             visible.forEach(function (it) {
@@ -101,12 +101,13 @@ $(function () {
     }
 
     $('#f-class-q').on('input', applyFilters);
-    $('#f-teacher, #f-session, #f-class-sort').on('change', applyFilters);
+    $('#f-instructor, #f-session, #f-class-sort').on('change', applyFilters);
     $('.view-switch button').on('click', function () {
         $('.view-switch button').removeClass('active');
         $(this).addClass('active');
         applyFilters();
     });
+    applyFilters();
 });
 </script>
 {% endblock %}
@@ -192,10 +193,10 @@ $(function () {
                 <input id="f-class-q" type="text" placeholder="{{ _('Session 1 / Fall / lab') }}">
             </div>
             <div>
-                <label for="f-teacher">{{ _('Administrator') }}</label>
-                <select id="f-teacher" class="oj-select">
-                    <option value="">{{ _('All administrators') }}</option>
-                    {% for t in class_teachers %}
+                <label for="f-instructor">{{ _('Instructor') }}</label>
+                <select id="f-instructor" class="oj-select">
+                    <option value="">{{ _('All instructors') }}</option>
+                    {% for t in class_instructors %}
                         <option value="{{ t.id }}">{{ t.username }}</option>
                     {% endfor %}
                 </select>
@@ -213,16 +214,16 @@ $(function () {
                 <label for="f-class-sort">{{ _('Sort by') }}</label>
                 <select id="f-class-sort" class="oj-select">
                     <option value="session">{{ _('Latest session') }}</option>
-                    <option value="teacher">{{ _('Administrator') }}</option>
+                    <option value="instructor">{{ _('Instructor') }}</option>
                     <option value="year">{{ _('Year') }}</option>
                 </select>
             </div>
         </div>
 
         <div class="view-switch" role="group" aria-label="{{ _('Class view') }}">
-            <button type="button" class="active" data-group="all">{{ _('All') }}</button>
-            <button type="button" data-group="teacher">{{ _('By administrator') }}</button>
-            <button type="button" data-group="session">{{ _('By session') }}</button>
+            <button type="button" class="active" data-group="session">{{ _('By session') }}</button>
+            <button type="button" data-group="instructor">{{ _('By instructor') }}</button>
+            <button type="button" data-group="all">{{ _('All') }}</button>
         </div>
 
         <div id="class-root">
@@ -231,8 +232,8 @@ $(function () {
                     {% for class in classes %}
                         <div class="class-card js-class-card"
                              data-name="{{ class.name }}"
-                             data-teacher="{{ class.instructor_id or '' }}"
-                             data-teacher-label="{{ class.instructor_name }}"
+                             data-instructor="{{ class.instructor_id or '' }}"
+                             data-instructor-label="{{ class.instructor_name }}"
                              data-session="{{ class.session_key }}"
                              data-session-label="{{ class.session_label or '' }}"
                              data-year="{{ class.academic_year or '' }}">
@@ -243,7 +244,7 @@ $(function () {
                             {% endif %}
                             <div class="class-label">{{ class.instructor_name }}</div>
                             <div class="class-name">
-                                {% if can_manage or can_edit or class.joined or class.user_pending %}
+                                {% if can_edit or class.user_can_open or class.user_pending %}
                                     <a href="{{ class.get_absolute_url() }}">{{ class.card_title }}</a>
                                 {% elif request.user.is_authenticated and request.profile in organization %}
                                     <a href="{{ class.get_join_url() }}">{{ class.card_title }}</a>
@@ -255,7 +256,7 @@ $(function () {
                                 <div class="line">
                                     <i class="fa fa-map-marker"></i>
                                     <span>
-                                        {% if can_manage or can_edit or class.joined %}
+                                        {% if can_edit or class.user_can_open %}
                                             {{ class.location_line or _('Location TBA') }}
                                         {% else %}
                                             {{ _('Join class to view location') }}
@@ -269,7 +270,7 @@ $(function () {
                                 <div class="line">
                                     <i class="fa fa-tasks"></i>
                                     <span>
-                                        {% if can_manage or can_edit or class.joined %}
+                                        {% if can_edit or class.user_can_open %}
                                             {{ class.materials_line }}
                                         {% else %}
                                             {{ _('Assignments & materials inside') }}
@@ -278,7 +279,7 @@ $(function () {
                                 </div>
                             </div>
                             <div class="class-actions">
-                                {% if can_manage or can_edit or class.joined %}
+                                {% if can_edit or class.user_can_open %}
                                     <a class="button" href="{{ class.get_absolute_url() }}">{{ _('Open class') }}</a>
                                 {% elif class.user_pending %}
                                     <span class="button disabled">{{ _('Pending class join') }}</span>
@@ -307,7 +308,7 @@ $(function () {
     </div>
 </div>
 
-{% include "organization/teacher-verification-modal.html" %}
+{% include "organization/instructor-verification-modal.html" %}
 
 {% if join_request_form %}
 <div id="join-request-modal" class="course-modal" hidden>
