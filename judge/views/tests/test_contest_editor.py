@@ -16,7 +16,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestTag, Organization
+from judge.models import Contest, ContestParticipation, ContestTag, Organization
 from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
 from judge.views.contests import ContestCreate
 
@@ -1246,9 +1246,11 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
     # timer and students see no extra time ("duration +1h" must be real).
 
     def test_duration_increase_extends_deadline(self):
-        """Deadline still ahead: new end = old end + increase."""
-        self._add_participant()
+        """Deadline still ahead: new end = old end + increase (contest AND student)."""
+        part = self._add_participant()
         old_end = self.contest.end_time  # now + 5 days
+        # The student's deadline is min(real_start + 2h, now + 5d) = real_start + 2h.
+        old_student_deadline = ContestParticipation.objects.get(pk=part.pk).end_time
         response = self.client.post(
             reverse('contest_edit', args=['guardcontest']),
             data=json.dumps(self._payload(duration_hours=3)), content_type='application/json',
@@ -1257,6 +1259,10 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.time_limit, timedelta(hours=3))
         self.assertEqual(self.contest.end_time, old_end + timedelta(hours=1))
+        # The joined student's own window must also grow by the same amount —
+        # not just the global deadline (otherwise they still see time up).
+        fresh = ContestParticipation.objects.get(pk=part.pk)
+        self.assertEqual(fresh.end_time, old_student_deadline + timedelta(hours=1))
 
     def test_duration_increase_extends_from_now_when_deadline_passed(self):
         """Deadline already passed: the extension starts from *now* (the stale
@@ -1270,7 +1276,7 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
             time_limit=timedelta(hours=2),
         )
         from judge.models import ContestParticipation
-        ContestParticipation.objects.create(
+        part = ContestParticipation.objects.create(
             contest=expired,
             user=create_user(username='guard_student_expired').profile,
             real_start=_now - timedelta(days=2),
@@ -1292,6 +1298,12 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
         expected = timezone.now() + timedelta(hours=1)
         self.assertLess(abs((expired.end_time - expected).total_seconds()), 5)
         self.assertGreater(expired.end_time, _now)
+        # The student whose window had already finished must be extended from
+        # now too (this is the "still shows Your time is up!" regression).
+        fresh = ContestParticipation.objects.get(pk=part.pk)
+        expected_student = timezone.now() + timedelta(hours=1)
+        self.assertLess(abs((fresh.end_time - expected_student).total_seconds()), 5)
+        self.assertGreater(fresh.end_time, _now)
 
 
 class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):

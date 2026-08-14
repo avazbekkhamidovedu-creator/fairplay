@@ -709,7 +709,31 @@ class ContestCreate(LoginRequiredMixin, View):
                 new_limit = contest.time_limit
                 if old_limit is not None and new_limit is not None and new_limit > old_limit \
                         and old_end is not None:
-                    contest.end_time = max(old_end, timezone.now()) + (new_limit - old_limit)
+                    increase = new_limit - old_limit
+                    contest.end_time = max(old_end, timezone.now()) + increase
+                    # Also extend the windows of students who have ALREADY
+                    # joined. Their deadline is `min(real_start + time_limit,
+                    # end_time)` anchored to the immutable `real_start`, so a
+                    # contest-level change alone is invisible to anyone whose
+                    # `real_start + new_limit` is already in the past (they
+                    # still see "Your time is up!"). Shift `real_start` later
+                    # so each student's new deadline is exactly
+                    # `max(old deadline, now) + increase` — active students
+                    # keep their start (their end just grows), finished
+                    # students restart their window from now. Spectators have
+                    # no personal window (their end is the contest's), so they
+                    # are left untouched.
+                    _now = timezone.now()
+                    shifted = []
+                    for participation in existing.users.exclude(
+                            virtual=ContestParticipation.SPECTATE).only('id', 'real_start'):
+                        if participation.real_start is None:
+                            continue
+                        old_deadline = min(participation.real_start + old_limit, old_end)
+                        participation.real_start = max(old_deadline, _now) - old_limit
+                        shifted.append(participation)
+                    if shifted:
+                        ContestParticipation.objects.bulk_update(shifted, ['real_start'])
 
         # ── "Only extend, never shorten" guard ──────────────────────────────
         # Once students have joined (a participation exists), shrinking the
