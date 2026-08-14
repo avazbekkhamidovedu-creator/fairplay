@@ -14,6 +14,8 @@ from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import F, Max, Q, UniqueConstraint
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.encoding import force_bytes
@@ -27,6 +29,7 @@ from sortedm2m.fields import SortedManyToManyField
 from judge.models.choices import ACE_THEMES, MATH_ENGINES_CHOICES, SITE_THEMES, TIMEZONE
 from judge.models.runtime import Language
 from judge.ratings import rating_class
+from judge.storage import generate_class_material_key, submission_storage
 from judge.utils.two_factor import webauthn_decode
 
 __all__ = ['Class', 'ClassMaterial', 'Organization', 'Profile', 'OrganizationRequest', 'WebAuthnCredential']
@@ -219,11 +222,16 @@ class Class(models.Model):
 
 
 def class_material_upload_to(instance, filename):
-    return 'class_materials/%s/%s' % (instance.class_obj_id or 'tmp', filename)
+    """upload_to: opaque OSS key (original display name stays on ClassMaterial.name)."""
+    return generate_class_material_key(instance.class_obj_id, filename)
 
 
 class ClassMaterial(models.Model):
-    """File or folder listed under a class Materials tab."""
+    """File or folder listed under a class Materials tab.
+
+    File bytes live in ``submission_storage`` (S3/OSS primary + async Box mirror), same
+    pipeline as file-upload submissions — never on the web/judge local disk for downloads.
+    """
 
     class_obj = models.ForeignKey(
         Class, verbose_name=_('class'), related_name='materials', on_delete=models.CASCADE,
@@ -235,7 +243,8 @@ class ClassMaterial(models.Model):
     name = models.CharField(max_length=255, verbose_name=_('name'))
     is_folder = models.BooleanField(verbose_name=_('is folder'), default=False)
     file = models.FileField(
-        verbose_name=_('file'), upload_to=class_material_upload_to, null=True, blank=True, max_length=512,
+        verbose_name=_('file'), storage=submission_storage, upload_to=class_material_upload_to,
+        null=True, blank=True, max_length=255,
     )
     uploaded_by = models.ForeignKey(
         'Profile', verbose_name=_('uploaded by'), null=True, blank=True,
@@ -258,7 +267,7 @@ class ClassMaterial(models.Model):
             return '—'
         try:
             size = self.file.size
-        except (OSError, ValueError):
+        except Exception:
             return '—'
         if size < 1024:
             return '%d B' % size
@@ -275,6 +284,23 @@ class ClassMaterial(models.Model):
         if name.startswith('http://') or name.startswith('https://'):
             return name
         return ''
+
+    def delete_stored_file(self):
+        """Remove object from primary OSS (and mark StoredFileRecord deleted)."""
+        if not self.file:
+            return
+        name = self.file.name
+        if not name:
+            return
+        try:
+            self.file.delete(save=False)
+        except Exception:
+            self.file = None
+
+
+@receiver(pre_delete, sender=ClassMaterial)
+def _class_material_delete_oss_file(sender, instance, **kwargs):
+    instance.delete_stored_file()
 
 
 class Profile(models.Model):

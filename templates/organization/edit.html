@@ -11,11 +11,11 @@
     <script src="{{ static('rich_editor.js') }}"></script>
     <script type="text/javascript">
         $(function () {
-            $('#teacher-verification-btn').on('click', function () {
-                $('#teacher-verification-modal').prop('hidden', false);
+            $('#instructor-verification-btn').on('click', function () {
+                $('#instructor-verification-modal').prop('hidden', false);
             });
-            $('#teacher-verification-modal .js-close-modal').on('click', function () {
-                $('#teacher-verification-modal').prop('hidden', true);
+            $('#instructor-verification-modal .js-close-modal').on('click', function () {
+                $('#instructor-verification-modal').prop('hidden', true);
             });
             if (typeof RichEditor === 'undefined') return;
             var csrf = document.querySelector('[name=csrfmiddlewaretoken]');
@@ -162,5 +162,5 @@
         </form>
     </div>
 </div>
-{% include "organization/teacher-verification-modal.html" %}
+{% include "organization/instructor-verification-modal.html" %}
 {% endblock %}

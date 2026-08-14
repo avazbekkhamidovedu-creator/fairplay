@@ -3,11 +3,11 @@
 {% block js_media %}
 <script type="text/javascript">
 $(function () {
-    $('#teacher-verification-btn').on('click', function () {
-        $('#teacher-verification-modal').prop('hidden', false);
+    $('#instructor-verification-btn').on('click', function () {
+        $('#instructor-verification-modal').prop('hidden', false);
     });
-    $('#teacher-verification-modal .js-close-modal').on('click', function () {
-        $('#teacher-verification-modal').prop('hidden', true);
+    $('#instructor-verification-modal .js-close-modal').on('click', function () {
+        $('#instructor-verification-modal').prop('hidden', true);
     });
     $('#select-all').on('change', function () {
         $('.req-select').prop('checked', this.checked);
@@ -16,7 +16,7 @@ $(function () {
         var action = $(this).val();
         if (!action) return;
         var id = String($(this).data('id'));
-        var $form = $('#teacher-bulk-form');
+        var $form = $('#instructor-bulk-form');
         $form.find('.req-select').prop('checked', false);
         $form.find('.req-select[value="' + id + '"]').prop('checked', true);
         $form.find('#bulk-action').val(action);
@@ -26,7 +26,7 @@ $(function () {
     $('.js-bulk-submit').on('click', function () {
         $('#bulk-action').val($(this).data('action'));
     });
-    $('#teacher-bulk-form').on('submit', function (e) {
+    $('#instructor-bulk-form').on('submit', function (e) {
         if (!$('.req-select:checked').length) {
             e.preventDefault();
             alert({{ _('Select at least one request.')|htmltojs }});
@@ -44,7 +44,7 @@ $(function () {
 {% block title_ruler %}{% endblock %}
 
 {% block title_row %}
-    {% set tab = 'teacher_requests' %}
+    {% set tab = 'instructor_requests' %}
     {% set title = _('Course') %}
     {% set title_url = url('organization_list') %}
     {% include "organization/course-tabs.html" %}
@@ -58,13 +58,13 @@ $(function () {
         {% if can_review_any %}
             <a class="inbox-subtab" href="{{ url('organization_join_requests') }}">{{ _('Join requests') }}</a>
         {% endif %}
-        <a class="inbox-subtab active" href="{{ url('organization_teacher_requests') }}">{{ _('Teacher verification') }}</a>
+        <a class="inbox-subtab active" href="{{ url('organization_instructor_requests') }}">{{ _('Instructor verification') }}</a>
         {% if can_see_notifications %}
             <a class="inbox-subtab" href="{{ url('organization_notifications') }}">{{ _('Messages') }}</a>
         {% endif %}
     </div>
 
-    <p class="empty" style="text-align:left;margin:0 0 0.85rem">{{ _('Review applications from users who want teacher access. Approve adds them to the Teachers group; Reject or Revoke removes it; Reopen returns a request to Pending.') }}</p>
+    <p class="empty" style="text-align:left;margin:0 0 0.85rem">{{ _('Review applications to instruct a specific course class. Approve makes them instructor of that class and grants staff access; Reject or Revoke removes that class instructor role (and staff if they have no other instructor classes); Reopen returns a request to Pending.') }}</p>
 
     <div class="join-toolbar">
         <form class="join-requests-filters" method="get" action="">
@@ -81,7 +81,7 @@ $(function () {
     </div>
 
     {% if requests %}
-        <form id="teacher-bulk-form" method="post" action="{{ url('organization_teacher_requests') }}?status={{ status }}">
+        <form id="instructor-bulk-form" method="post" action="{{ url('organization_instructor_requests') }}?status={{ status }}">
             {% csrf_token %}
             <input type="hidden" name="action" id="bulk-action" value="">
             <div class="bulk-actions">
@@ -102,6 +102,7 @@ $(function () {
                     <tr>
                         <th><input type="checkbox" id="select-all"></th>
                         <th>{{ _('User') }}</th>
+                        <th>{{ _('Course / class') }}</th>
                         <th>{{ _('Reason') }}</th>
                         <th>{{ _('Time') }}</th>
                         <th>{{ _('Status') }}</th>
@@ -114,6 +115,7 @@ $(function () {
                     <tr>
                         <td><input type="checkbox" class="req-select" name="request_ids" value="{{ req.id }}"></td>
                         <td><a href="{{ url('user_page', req.user.username) }}">{{ req.user.username }}</a></td>
+                        <td>{% if req.target_label %}{{ req.target_label }}{% else %}—{% endif %}</td>
                         <td class="note-body">{{ req.reason }}</td>
                         <td>{{ req.time }}</td>
                         <td>
@@ -144,9 +146,9 @@ $(function () {
             </table>
         </form>
     {% else %}
-        <div class="empty">{{ _('No teacher verification requests match your filters.') }}</div>
+        <div class="empty">{{ _('No instructor verification requests match your filters.') }}</div>
     {% endif %}
 </div>
 
-{% include "organization/teacher-verification-modal.html" %}
+{% include "organization/instructor-verification-modal.html" %}
 {% endblock %}

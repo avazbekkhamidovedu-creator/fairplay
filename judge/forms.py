@@ -315,7 +315,7 @@ class OrganizationSiteForm(ModelForm):
             'class_required': _('If checked, students must select a class when requesting membership.'),
             'slots': _('Optional. Maximum members for private courses.'),
             'instructor_names': _('Comma-separated names shown on the course list (not the same as administrators).'),
-            'admins': _('Optional. The creator is always added as a teacher. Add others who can edit this course '
+            'admins': _('Optional. The creator is always added as an instructor. Add others who can edit this course '
                         'and review join requests.'),
         }
         widgets = {

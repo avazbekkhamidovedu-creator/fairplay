@@ -3,11 +3,11 @@
 {% block js_media %}
 <script type="text/javascript">
 $(function () {
-    $('#teacher-verification-btn').on('click', function () {
-        $('#teacher-verification-modal').prop('hidden', false);
+    $('#instructor-verification-btn').on('click', function () {
+        $('#instructor-verification-modal').prop('hidden', false);
     });
-    $('#teacher-verification-modal .js-close-modal').on('click', function () {
-        $('#teacher-verification-modal').prop('hidden', true);
+    $('#instructor-verification-modal .js-close-modal').on('click', function () {
+        $('#instructor-verification-modal').prop('hidden', true);
     });
     $('.js-delete-class').on('click', function () {
         return confirm({{ _('Delete this class? This cannot be undone.')|htmltojs }});
@@ -439,5 +439,5 @@ $(function () {
     </div>
 </div>
 
-{% include "organization/teacher-verification-modal.html" %}
+{% include "organization/instructor-verification-modal.html" %}
 {% endblock %}

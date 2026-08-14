@@ -18,7 +18,6 @@ from django.core import signing
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Count, Max, Min
-from django.db.models.functions import ExtractYear, TruncDate
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -274,21 +273,25 @@ class UserAboutPage(UserPage):
             'height': '%.3fem' % rating_progress(rating.rating),
         } for rating in ratings]))
 
-        submissions = (
+        # Aggregate in Python: MySQL TruncDate/ExtractYear use CONVERT_TZ, which returns
+        # NULL when timezone tables are missing — that crashes .isoformat() for non-UTC users.
+        submission_days = {}
+        min_year = None
+        for submitted_at in (
             self.object.submission_set
-            .annotate(date_only=TruncDate('date'))
-            .values('date_only').annotate(cnt=Count('id'))
-        )
+            .filter(date__isnull=False)
+            .values_list('date', flat=True)
+            .iterator(chunk_size=2000)
+        ):
+            local_day = timezone.localtime(submitted_at).date()
+            key = local_day.isoformat()
+            submission_days[key] = submission_days.get(key, 0) + 1
+            if min_year is None or local_day.year < min_year:
+                min_year = local_day.year
 
-        context['submission_data'] = mark_safe(json.dumps({
-            date_counts['date_only'].isoformat(): date_counts['cnt'] for date_counts in submissions
-        }))
+        context['submission_data'] = mark_safe(json.dumps(submission_days))
         context['submission_metadata'] = mark_safe(json.dumps({
-            'min_year': (
-                self.object.submission_set
-                .annotate(year_only=ExtractYear('date'))
-                .aggregate(min_year=Min('year_only'))['min_year']
-            ),
+            'min_year': min_year,
         }))
         return context
 
