@@ -281,35 +281,60 @@ def course_inbox_chrome_context(request):
 
 
 def grant_class_instructor_role(profile, class_obj):
-    """Make profile an instructor for one class (class admin + course member + staff)."""
+    """Make profile an instructor for one class (class admin + course member + staff).
+
+    Returns (granted_class_admin, granted_staff) describing what this call changed.
+    """
     if profile is None or class_obj is None:
-        return
+        return False, False
+    already_admin = class_obj.admins.filter(id=profile.id).exists()
     class_obj.admins.add(profile)
     class_obj.organization.members.add(profile)
+    granted_class_admin = not already_admin
+    granted_staff = False
     user = profile.user
     if user is not None and not user.is_staff:
         user.is_staff = True
         user.save(update_fields=['is_staff'])
+        granted_staff = True
+    return granted_class_admin, granted_staff
 
 
 def revoke_class_instructor_role(profile, class_obj, *, excluding_verification=None):
-    """Remove class-admin role granted by instructor verification (keep course membership).
+    """Undo privileges this verification granted (keep course membership).
 
-    Drops is_staff only when the user has no other approved instructor assignments left.
+    - class.admins: removed when this approval granted it, or for legacy approvals
+      that predate the flag (only if no other approved request still covers the class).
+    - is_staff: cleared only when this approval recorded granted_staff and no other
+      still-approved request retains that grant (never strips unrelated staff).
     """
     if profile is None or class_obj is None:
         return
-    class_obj.admins.remove(profile)
-    approved = InstructorVerificationRequest.objects.filter(user=profile, state='A')
-    if excluding_verification is not None:
-        approved = approved.exclude(pk=excluding_verification.pk)
-    still_instructor = approved.exists() or Class.objects.filter(admins=profile).exists()
-    if still_instructor:
-        return
-    user = profile.user
-    if user is not None and user.is_staff and not user.is_superuser:
-        user.is_staff = False
-        user.save(update_fields=['is_staff'])
+    verification = excluding_verification
+
+    remove_admin = False
+    if verification is None:
+        remove_admin = True
+    elif verification.granted_class_admin:
+        remove_admin = True
+    else:
+        # Legacy approval without the flag: remove only if nothing else still covers
+        # this class as an approved instructor request.
+        remove_admin = not InstructorVerificationRequest.objects.filter(
+            user=profile, state='A', request_class=class_obj,
+        ).exclude(pk=verification.pk).exists()
+    if remove_admin:
+        class_obj.admins.remove(profile)
+
+    if verification is not None and verification.granted_staff:
+        others = InstructorVerificationRequest.objects.filter(
+            user=profile, state='A', granted_staff=True,
+        ).exclude(pk=verification.pk)
+        if not others.exists():
+            user = profile.user
+            if user is not None and user.is_staff and not user.is_superuser:
+                user.is_staff = False
+                user.save(update_fields=['is_staff'])
 
 
 def apply_instructor_verification_action(verification, action, reviewer):
@@ -319,11 +344,15 @@ def apply_instructor_verification_action(verification, action, reviewer):
             return False
         if verification.request_class_id is None:
             return False
+        granted_class_admin, granted_staff = grant_class_instructor_role(
+            verification.user, verification.request_class,
+        )
         verification.state = 'A'
         verification.reviewed_by = reviewer
         verification.reviewed_time = timezone.now()
+        verification.granted_class_admin = granted_class_admin
+        verification.granted_staff = granted_staff
         verification.save()
-        grant_class_instructor_role(verification.user, verification.request_class)
         AdminNotification.objects.filter(
             instructor_verification=verification, read_at__isnull=True,
         ).update(read_at=timezone.now())
@@ -339,6 +368,8 @@ def apply_instructor_verification_action(verification, action, reviewer):
         verification.state = 'R'
         verification.reviewed_by = reviewer
         verification.reviewed_time = timezone.now()
+        verification.granted_class_admin = False
+        verification.granted_staff = False
         verification.save()
         AdminNotification.objects.filter(
             instructor_verification=verification, read_at__isnull=True,
@@ -355,6 +386,8 @@ def apply_instructor_verification_action(verification, action, reviewer):
         verification.state = 'P'
         verification.reviewed_by = reviewer
         verification.reviewed_time = timezone.now()
+        verification.granted_class_admin = False
+        verification.granted_staff = False
         verification.save()
         return True
     return False

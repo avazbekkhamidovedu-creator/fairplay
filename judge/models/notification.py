@@ -74,6 +74,15 @@ class InstructorVerificationRequest(models.Model):
         related_name='reviewed_instructor_verifications', on_delete=models.SET_NULL,
     )
     reviewed_time = models.DateTimeField(verbose_name=_('reviewed time'), null=True, blank=True)
+    # Track what this approval actually granted so revoke does not strip unrelated access.
+    granted_class_admin = models.BooleanField(
+        verbose_name=_('granted class admin'), default=False,
+        help_text=_('True if approval added the user to class.admins.'),
+    )
+    granted_staff = models.BooleanField(
+        verbose_name=_('granted staff'), default=False,
+        help_text=_('True if approval flipped user.is_staff from False to True.'),
+    )
 
     class Meta:
         verbose_name = _('instructor verification request')

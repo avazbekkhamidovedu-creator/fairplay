@@ -425,6 +425,9 @@ class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
         self.assertFalse(self.org.admins.filter(id=self.applicant.profile.id).exists())
         self.applicant.refresh_from_db()
         self.assertTrue(self.applicant.is_staff)
+        req.refresh_from_db()
+        self.assertTrue(req.granted_staff)
+        self.assertTrue(req.granted_class_admin)
         instructors = Group.objects.filter(name=INSTRUCTORS_GROUP).first()
         if instructors is not None:
             self.assertFalse(instructors.user_set.filter(id=self.applicant.id).exists())
@@ -446,6 +449,8 @@ class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
             request_class=self.klass,
             reason='instruct',
             state='A',
+            granted_class_admin=True,
+            granted_staff=True,
         )
         self.klass.admins.add(self.applicant.profile)
         self.org.members.add(self.applicant.profile)
@@ -463,3 +468,28 @@ class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
         self.assertTrue(self.applicant.profile.organizations.filter(id=self.org.id).exists())
         self.applicant.refresh_from_db()
         self.assertFalse(self.applicant.is_staff)
+
+    def test_revoke_preserves_unrelated_staff(self):
+        """Staff granted outside instructor approval must survive revoke."""
+        self.applicant.is_staff = True
+        self.applicant.save(update_fields=['is_staff'])
+        req = InstructorVerificationRequest.objects.create(
+            user=self.applicant.profile,
+            organization=self.org,
+            request_class=self.klass,
+            reason='already staff',
+            state='A',
+            granted_class_admin=True,
+            granted_staff=False,
+        )
+        self.klass.admins.add(self.applicant.profile)
+
+        self.client.force_login(self.users['superuser'])
+        response = self.client.post(
+            reverse('organization_instructor_requests') + '?status=A',
+            {'action': 'reject', 'request_ids': [str(req.id)]},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(self.klass.admins.filter(id=self.applicant.profile.id).exists())
+        self.applicant.refresh_from_db()
+        self.assertTrue(self.applicant.is_staff)
