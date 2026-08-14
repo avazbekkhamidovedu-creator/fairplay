@@ -443,7 +443,7 @@ class ContestTestCase(CommonDataMixin, TestCase):
                 'can_see_own_scoreboard': self.assertTrue,
                 'can_see_full_scoreboard': self.assertTrue,
                 'is_accessible_by': self.assertTrue,
-                'is_editable_by': self.assertFalse,
+                'is_editable_by': self.assertTrue,  # listed author -> edit rights
                 'is_in_contest': self.assertFalse,
             },
         }

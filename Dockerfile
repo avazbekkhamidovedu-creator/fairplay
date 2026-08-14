@@ -50,7 +50,7 @@ COPY requirements.txt ./
 RUN pip install --upgrade pip && \
     pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
     pip install -r requirements.txt "gunicorn[gevent]" mysqlclient \
-        --retries=10 --timeout=180
+        --retries=10 --timeout=120
 
 # 复制剩余代码
 COPY . .

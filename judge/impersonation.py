@@ -53,7 +53,9 @@ def get_impersonable_users(request):
 
     if user.has_perm('judge.impersonate_class'):
         admin_class_ids = profile.class_admin_of.values_list('id', flat=True)
-        qs = qs | User.objects.filter(profile__classes__in=admin_class_ids)
+        # Class.members sets related_query_name='class', so 'classes' is only the
+        # Python accessor; the filter path is 'class'.
+        qs = qs | User.objects.filter(profile__class__in=admin_class_ids)
 
     if user.has_perm('judge.impersonate_contest'):
         contest_ids = set()

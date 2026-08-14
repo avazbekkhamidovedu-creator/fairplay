@@ -2,6 +2,7 @@ from django.db.models import F, Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.encoding import smart_str
+from django.utils.translation import gettext as _
 from django.views.generic.list import BaseListView
 
 from judge.jinja2.gravatar import gravatar
@@ -81,6 +82,58 @@ class ContestSelect2View(Select2View):
     def get_queryset(self):
         return Contest.get_visible_contests(self.request.user) \
                       .filter(Q(key__icontains=self.term) | Q(name__icontains=self.term))
+
+
+class ProblemFilterSelect2View(Select2View):
+    """Submission-list problem filter: id is problem code (querystring-friendly)."""
+
+    def get_queryset(self):
+        return Problem.get_visible_problems(self.request.user) \
+                      .filter(Q(code__icontains=self.term) | Q(name__icontains=self.term)) \
+                      .only('code', 'name').order_by('code')
+
+    def get(self, request, *args, **kwargs):
+        self.request = request
+        self.term = kwargs.get('term', request.GET.get('term', ''))
+        self.object_list = self.get_queryset()
+        context = self.get_context_data()
+        return JsonResponse({
+            'results': [
+                {
+                    'text': '%s — %s' % (obj.code, obj.name),
+                    'id': obj.code,
+                } for obj in context['object_list']
+            ],
+            'more': context['page_obj'].has_next(),
+        })
+
+
+class ContestFilterSelect2View(Select2View):
+    """Submission-list contest filter: id is contest key; includes practice-only option."""
+
+    def get_queryset(self):
+        return Contest.get_visible_contests(self.request.user) \
+                      .filter(Q(key__icontains=self.term) | Q(name__icontains=self.term)) \
+                      .only('key', 'name').order_by('key')
+
+    def get(self, request, *args, **kwargs):
+        self.request = request
+        self.term = kwargs.get('term', request.GET.get('term', ''))
+        self.object_list = self.get_queryset()
+        context = self.get_context_data()
+        results = []
+        practice_label = str(_('Practice only (no contest)'))
+        term_l = self.term.lower()
+        if not self.term or term_l in practice_label.lower() or self.term in ('__none__', 'practice'):
+            results.append({'id': '__none__', 'text': practice_label})
+        results.extend({
+            'text': '%s — %s' % (obj.key, obj.name),
+            'id': obj.key,
+        } for obj in context['object_list'])
+        return JsonResponse({
+            'results': results,
+            'more': context['page_obj'].has_next(),
+        })
 
 
 class CommentSelect2View(Select2View):

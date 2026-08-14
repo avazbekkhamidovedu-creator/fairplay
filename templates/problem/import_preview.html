@@ -4,19 +4,35 @@
     <style>
         .import-preview-layout { display: grid; gap: 1.25em; grid-template-columns: minmax(13rem, 22rem) minmax(0, 1fr); }
         .import-problem-list { align-self: start; position: sticky; top: 1em; }
-        .import-problem-list h2 { margin-top: 0; }
-        .import-problem-nav { display: grid; gap: 0.35em; margin: 0.8em 0; }
-        .import-problem-nav a { box-sizing: border-box; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+        .import-problem-list-header { align-items: center; display: flex; gap: 0.65em; justify-content: space-between; }
+        .import-problem-list h2 { margin: 0; }
+        .import-problem-list-header .button { flex: 0 0 auto; white-space: nowrap; }
+        .import-problem-nav { display: grid; gap: 0.2em; margin: 0.8em 0; }
+        .import-problem-nav a {
+            align-items: center; border-left: 3px solid transparent; box-sizing: border-box;
+            color: var(--oj-text, inherit); display: flex; gap: 0.5em; min-width: 0;
+            padding: 0.55em 0.4em; text-decoration: none; width: 100%;
+        }
+        .import-problem-nav a:hover { background: var(--oj-surface-muted, rgba(0, 0, 0, 0.05)); }
+        .import-problem-nav a.is-active {
+            background: var(--oj-surface-muted, rgba(0, 0, 0, 0.05));
+            border-left-color: var(--oj-link, currentColor); font-weight: 700;
+        }
+        .import-problem-state {
+            display: inline-flex; flex: 0 0 1.25em; height: 1.25em; width: 1.25em;
+        }
+        .import-problem-state svg { display: block; height: 100%; width: 100%; }
+        .import-problem-type { flex: 0 0 auto; font-size: 0.78em; }
+        .import-problem-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .import-problem-entry { min-width: 0; }
         .import-problem-issues { display: flex; flex-wrap: wrap; gap: 0.3em; margin: 0.3em 0.4em 0.5em; }
         .import-problem-issues .tag-type { font-size: 0.8em; }
-        .import-problem-nav a.is-active { font-weight: 700; text-decoration: underline; }
         .import-problem-nav a.has-error { font-weight: 700; }
         .import-preview-panel { min-width: 0; }
         .import-editor-frame { border: 0; box-sizing: border-box; display: block; min-height: 78vh; width: 100%; }
         .import-created-panel { margin: 0; }
         .import-created-panel .tag-type { margin-right: 0.45em; }
-        #create-all-problems { width: 100%; }
+        #create-all-problems { background: var(--oj-link, #2980b9); color: var(--oj-btn-text, #fff); }
         .import-preview-status { display: block; margin-top: 0.65em; min-height: 1.2em; }
         @media (max-width: 760px) {
             .import-preview-layout { grid-template-columns: 1fr; }
@@ -44,11 +60,21 @@
                 if (item.config_needs_review) labels.push('{{ _("Configuration")|escapejs }}');
                 return labels;
             }
+            function stateIcon(needsReview) {
+                if (needsReview) {
+                    return '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#DE2121"/><path d="M5 5l6 6m0-6l-6 6" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="2"/></svg>';
+                }
+                return '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#44AD41"/><path d="M4.1 8.2l2.3 2.3 5.4-5.4" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>';
+            }
             function updateReviewState(itemId, item) {
                 var button = navButton(itemId);
                 var entry = button.closest('.import-problem-entry');
                 var labels = reviewLabels(item);
                 button.toggleClass('has-error error', labels.length > 0);
+                button.find('.import-problem-state')
+                    .toggleClass('is-ready', !labels.length)
+                    .toggleClass('needs-review', labels.length > 0)
+                    .html(stateIcon(labels.length > 0));
                 entry.find('.import-problem-issues').remove();
                 if (!labels.length) return;
                 var issues = $('<div>', {
@@ -63,7 +89,14 @@
             function refreshLeftItem(itemId, item) {
                 var button = navButton(itemId);
                 if (item.name) {
-                    button.text(item.name).data('name', item.name);
+                    button.find('.import-problem-name').text(item.name);
+                    button.data('name', item.name);
+                }
+                if (item.preview_type_label) {
+                    button.find('.import-problem-type')
+                        .text(item.preview_type_label)
+                        .toggleClass('programming', item.preview_type_class === 'programming')
+                        .toggleClass('regular', item.preview_type_class !== 'programming');
                 }
                 button.attr('title', item.formatting_error || '');
                 updateReviewState(itemId, item);
@@ -172,11 +205,26 @@
         {% if feedback %}<p class="import-preview-status{% if feedback_error %} error{% else %} success{% endif %}">{{ feedback }}</p>{% endif %}
         <div class="import-preview-layout">
             <aside class="import-problem-list module">
-                <h2>{{ _('Uploaded problems') }}</h2>
+                <div class="import-problem-list-header">
+                    <h2>{{ _('Uploaded problems') }}</h2>
+                    <form method="post" action="{{ url('problem_import_create_all', draft.pk) }}">
+                        {% csrf_token %}
+                        <button id="create-all-problems" type="submit" class="button" data-url="{{ url('problem_import_create_all', draft.pk) }}">{{ _('Create all') }}</button>
+                    </form>
+                </div>
+                <span id="create-all-status" class="import-preview-status"></span>
                 <div class="import-problem-nav">
                     {% for item in items %}
                     <div class="import-problem-entry">
-                        <a class="button{% if item.pk == selected_item.pk %} is-active{% endif %}{% if item.formatting_error or item.type_needs_review or item.name_needs_review or item.data_needs_review or item.config_needs_review %} has-error error{% endif %}" href="?item={{ item.pk }}" data-item-id="{{ item.pk }}" data-name="{{ item.name }}" data-editor-url="{{ url('problem_import_item_editor', draft.pk, item.pk) }}"{% if item.created_problem %} data-created-url="{{ url('problem_detail', item.created_problem.code) }}"{% endif %}{% if item.formatting_error %} title="{{ item.formatting_error }}"{% endif %}>{{ item.name }}</a>
+                        <a class="import-problem-row{% if item.pk == selected_item.pk %} is-active{% endif %}{% if item.formatting_error or item.type_needs_review or item.name_needs_review or item.data_needs_review or item.config_needs_review %} has-error error{% endif %}" href="?item={{ item.pk }}" data-item-id="{{ item.pk }}" data-name="{{ item.name }}" data-editor-url="{{ url('problem_import_item_editor', draft.pk, item.pk) }}"{% if item.created_problem %} data-created-url="{{ url('problem_detail', item.created_problem.code) }}"{% endif %}{% if item.formatting_error %} title="{{ item.formatting_error }}"{% endif %}>
+                            {% if item.formatting_error or item.type_needs_review or item.name_needs_review or item.data_needs_review or item.config_needs_review %}
+                            <span class="import-problem-state needs-review" title="{{ _('Needs review') }}">{{ '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#DE2121"/><path d="M5 5l6 6m0-6l-6 6" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="2"/></svg>'|safe }}</span>
+                            {% else %}
+                            <span class="import-problem-state is-ready" title="{{ _('Ready') }}">{{ '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#44AD41"/><path d="M4.1 8.2l2.3 2.3 5.4-5.4" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>'|safe }}</span>
+                            {% endif %}
+                            <span class="tag-type import-problem-type {{ item.preview_type_class }}">{{ item.preview_type_label }}</span>
+                            <span class="import-problem-name">{{ item.name }}</span>
+                        </a>
                         {% if item.name_needs_review or item.type_needs_review or item.data_needs_review or item.config_needs_review %}
                         <div class="import-problem-issues" aria-label="{{ _('This problem needs review') }}">
                             {% if item.name_needs_review %}<span class="tag-type regular">{{ _('Name') }}</span>{% endif %}
@@ -188,11 +236,6 @@
                     </div>
                     {% endfor %}
                 </div>
-                <form method="post" action="{{ url('problem_import_create_all', draft.pk) }}">
-                    {% csrf_token %}
-                    <button id="create-all-problems" type="submit" class="button" data-url="{{ url('problem_import_create_all', draft.pk) }}">{{ _('Create all') }}</button>
-                </form>
-                <span id="create-all-status" class="import-preview-status"></span>
             </aside>
             <section class="import-preview-panel">
                 {% if selected_item %}

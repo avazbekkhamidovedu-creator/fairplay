@@ -104,6 +104,11 @@ test:
     # errors out before its assertion.
     - python manage.py compilejsi18n
   script:
+    # Fail fast on a split migration graph. Two branches numbering off the same parent leave
+    # judge/migrations with two leaves, and then every `migrate` — including the one in
+    # docker/entrypoint.sh on deploy — aborts before applying anything. Reads the graph off
+    # disk only, so it costs seconds and needs no database.
+    - python manage.py check_migration_graph judge
     # XMLTestRunner (configured in .ci.settings.py) writes test-reports/TEST-*.xml.
     - coverage run --source=. manage.py test judge
     - coverage xml

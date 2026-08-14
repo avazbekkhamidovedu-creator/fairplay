@@ -15,6 +15,8 @@
     <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
     {# Same pattern as base.html DARK_STYLE_CSS: rebuild page styles with vars-dark. #}
     <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
+    <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
 
     <!-- Page-local layout tweaks; colours come from --oj-* / problem_create_v2.css tokens -->
     <style>
@@ -116,6 +118,36 @@
         .v2-left .form-row .field.ac-inline .unit { color: var(--muted); font-size: 12px; }
         .pcv2 .ac-help { font-size: 11px; color: var(--muted); margin-top: 0.25rem; }
 
+        /* Visibility cross-coupling: rows whose scoping is ignored by the
+           current List-visibility mode are struck through, dimmed and made
+           non-interactive. pointer-events only — the value stays submitted. */
+        .pcv2 .form-row.vis-muted { opacity: .5; }
+        .pcv2 .form-row.vis-muted > label { text-decoration: line-through; text-decoration-thickness: 1.5px; }
+        .pcv2 .form-row.vis-muted .field { pointer-events: none; }
+        .pcv2 .form-row .vis-mute-note {
+            font-size: 11px;
+            font-style: italic;
+            color: var(--oj-accent, #b3640e);
+            margin-top: .3rem;
+            display: none;
+        }
+
+        /* Stacked rows (Validity / Description / Target score): label on top,
+           controls full-width below — the horizontal two-column layout runs
+           out of room in a split-pane editor, so these stack like the problem
+           editor's .stem-block. */
+        .v2-left .form-row.stacked { display: block; }
+        .v2-left .form-row.stacked > label {
+            display: block;
+            width: auto;
+            padding-top: 0;
+            margin-bottom: 0.35rem;
+        }
+        .v2-left .form-row.stacked .field { width: 100%; }
+        .v2-left .form-row.stacked .field input[type="datetime-local"],
+        .v2-left .form-row.stacked .field select { max-width: 100%; }
+        .v2-left .form-row.stacked .tz-selector { max-width: 520px; }
+
         /* Temporary timezone picker: lets a teacher view/enter Validity times
            in a different zone than their account default, without changing
            their profile. Only affects how this form echoes UTC back. */
@@ -140,13 +172,6 @@
             min-width: 220px;
             max-width: 260px;
             flex: 0 1 auto;
-        }
-        .tz-selector .tz-current {
-            color: var(--muted);
-            font-style: italic;
-        }
-        .tz-selector .tz-current::before {
-            content: '· ';
         }
 
         /* SEB card: visually consistent with fieldset.module */
@@ -192,6 +217,18 @@
         }
         .pcv2 .ac-advanced[open] > summary .chev::before { content: '\f077'; }
         .pcv2 .ac-advanced .fold-body { padding: 1rem; }
+
+        /* Advanced section via the problem-editor-style toggle button.
+           .advanced-hidden/.advanced-visible come from problem_create_v2.scss;
+           .adv-outer keeps the card chrome of the old <details> block. */
+        .pcv2 .adv-outer {
+            background: var(--card-bg);
+            border: 1px solid var(--admin-border);
+            border-radius: var(--oj-radius-md, 6px);
+            padding: 1rem;
+            box-shadow: var(--oj-shadow, none);
+        }
+        .advanced-visible .adv-outer { display: block; }
 
         /* Error toast: must not intercept button clicks (it used to cover the Create button) */
         #toast {
@@ -250,15 +287,196 @@
             .pcv2 input[type="datetime-local"],
             .pcv2 input[type="date"] { color-scheme: dark; }
         }
+
+        /* Empty state inside the tag modal (no tags in the DB yet). */
+        .tag-suggest-empty {
+            padding: 0.5rem 0.65rem;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        /* Tag pills sit in a ptype-tags row with a "+" modal opener, exactly
+           like the problem editor's type picker. */
+        .v2-left .ptype-tags#tag-pills { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+        .v2-left .ptype-tags#tag-pills .ptype-add {
+            flex: 0 0 auto;
+            width: var(--oj-control-height, 34px);
+            height: var(--oj-control-height, 34px);
+            padding: 0;
+        }
+
+        /* Target-score mismatch flag on the problem count. */
+        .score-mismatch {
+            color: #c0392b !important;
+            font-weight: 600;
+        }
+
+        /* Problem row: drag handle + inline preview. */
+        .cp-row .cp-drag {
+            cursor: grab;
+            color: var(--muted);
+            user-select: none;
+            font-size: 12px;
+        }
+        .cp-row.dragging {
+            opacity: 0.4;
+        }
+        /* Drag & drop insertion indicator: a highlighted edge shows where the
+           dragged row will land (top half → drop-before, bottom half → drop-after). */
+        .cp-row.drop-before { box-shadow: 0 -2px 0 0 var(--oj-accent, #2980B9); }
+        .cp-row.drop-after { box-shadow: 0 2px 0 0 var(--oj-accent, #2980B9); }
+        .cp-preview {
+            color: var(--text, #333);
+        }
+        .cp-preview .pcode {
+            font-family: ui-monospace, Menlo, monospace;
+            color: var(--muted);
+        }
+        /* Per-problem options (partial credit / pretest / results / out prefix):
+           a dashed-border settings strip, visually distinct from the solid
+           Pts / Max inputs in the row above. */
+        .cp-options {
+            grid-column: 1 / -1;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.9rem;
+            align-items: center;
+            margin-top: 0.15rem;
+            padding: 0.4rem 0.55rem;
+            border: 1px dashed var(--oj-border);
+            border-radius: 4px;
+            background: var(--oj-surface-muted, #f4f4f4);
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .cp-options .cp-opt {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-weight: normal;
+            cursor: default;
+        }
+        .cp-options select,
+        .cp-options input[type=number] {
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius);
+            padding: 3px 8px;
+            font-size: 12px;
+            color: var(--text, #333);
+            background: var(--oj-surface);
+            -webkit-box-sizing: border-box;
+            -moz-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+        /* The Results dropdown reuses the edit page's standard select design
+           (.oj-select / select[data-oj-select]) — native appearance removed,
+           custom chevron, accent focus — but compact for the options strip. */
+        .cp-options select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            min-width: 96px;
+            min-height: 26px;
+            padding: 3px 26px 3px 8px;
+            cursor: pointer;
+            background-image: -moz-linear-gradient(45deg, transparent 50%, var(--oj-text-muted) 50%), -moz-linear-gradient(315deg, var(--oj-text-muted) 50%, transparent 50%);
+            background-image: linear-gradient(45deg, transparent 50%, var(--oj-text-muted) 50%), linear-gradient(135deg, var(--oj-text-muted) 50%, transparent 50%);
+            background-position: -moz-calc(100% - 15px) -moz-calc(50% - 2px), -moz-calc(100% - 10px) -moz-calc(50% - 2px);
+            background-position: calc(100% - 15px) calc(50% - 2px), calc(100% - 10px) calc(50% - 2px);
+            background-size: 5px 5px;
+            background-repeat: no-repeat;
+        }
+        .cp-options select:focus,
+        .cp-options input[type=number]:focus {
+            border-color: var(--oj-accent, #2980B9);
+            -webkit-box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075), 0 0 6px color-mix(in srgb, var(--oj-accent) 55%, transparent);
+                    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075), 0 0 6px color-mix(in srgb, var(--oj-accent) 55%, transparent);
+            outline: none;
+        }
+        .cp-actions .btn-icon {
+            border: none;
+            background: none;
+            cursor: pointer;
+            color: var(--muted);
+            font-size: 13px;
+            text-decoration: none;
+            padding: 0 0.2rem;
+        }
+        .cp-actions .btn-icon:hover {
+            color: var(--text, #333);
+        }
+        /* Remove button: visible bordered red box (like the problem editor's
+           close icon) so it reads as an explicit action, not a text glyph.
+           Same 28×28 box as the sibling icon buttons (problem_create_v2.css
+           .btn-icon) so it stays centered with them. */
+        .cp-actions .btn-icon.danger {
+            border: 1px solid rgba(198, 59, 59, 0.45);
+            background: rgba(198, 59, 59, 0.08);
+            border-radius: 4px;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            color: #c0392b;
+            font-size: 16px;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .cp-actions .btn-icon.danger:hover {
+            border-color: #c0392b;
+            background: rgba(198, 59, 59, 0.16);
+            color: #c0392b;
+        }
+
+        /* Library pager. */
+        .so-pager {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-size: 12px;
+            color: var(--muted);
+        }
+        .so-pager button {
+            border: 1px solid var(--oj-control-border, #ccc);
+            background: var(--card-bg, #fff);
+            border-radius: 3px;
+            padding: 0.15rem 0.45rem;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .so-pager button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+        .so-table tbody tr.added {
+            opacity: 0.55;
+        }
+
+        /* Fallback guard for the profile multi-selects: if select2 fails to
+           initialise (e.g. its JS never ran), the native <select multiple>
+           would render as a tall listbox. Cap it so the form stays compact. */
+        .profile-select2:not(.select2-hidden-accessible) {
+            height: 42px;
+            overflow-y: auto;
+        }
     </style>
 {% endblock %}
 
 {% block js_media %}
+    <script src="{{ static('rich_editor.js') }}"></script>
+    <script src="{{ static('markdown_preview.js') }}"></script>
     <script type="text/javascript">
         // Timezone whose wall clock the teacher is currently editing. Drives the
         // datetime-local -> UTC conversion on submit; defaults to the profile
         // timezone, overridden by the temporary ?tz= picker next to Validity.
         window.DMOJ_EDIT_TZ = {{ user_timezone|tojson }};
+        // Edit-mode prefill snapshot used by the submit handler for the
+        // "this triggers a rescore" warning (compare against current values).
+        window.DMOJ_EDIT_PREFILL = {
+            problems: {{ (prefill.problems or [])|tojson }},
+            format_name: {{ prefill.format_name|tojson }},
+            format_config: {{ prefill.format_config|tojson }},
+        };
+        window.DMOJ_IS_EDIT = {{ 'true' if contest else 'false' }};
 
         // HTML-escape a string for safe interpolation into innerHTML. Problem
         // names come from the database (teachers can create/import them with
@@ -301,12 +519,6 @@
             });
             window.DMOJ_EDIT_TZ = tz;
 
-            var label = document.querySelector('.tz-current');
-            if (label) {
-                var gettextFn = window.gettext || function (s) { return s; };
-                label.textContent = gettextFn('Times above shown in %(tz)s').replace('%(tz)s', tz);
-            }
-
             // Persist to the session without a reload (best-effort; a failed
             // write only affects the next visit's default zone, not this save).
             var form = document.getElementById('contest-form');
@@ -320,18 +532,310 @@
             var form = document.getElementById('contest-form');
             if (!form) return;
 
+            // ── Toast ─────────────────────────────────────────────────────────
+            var toastEl = document.getElementById('toast');
+            function showToast(msg, isError) {
+                if (!toastEl) return;
+                toastEl.textContent = msg;
+                toastEl.className = isError ? 'err' : '';
+                toastEl.style.display = 'block';
+                setTimeout(function () { toastEl.style.display = 'none'; }, 2500);
+            }
+
+            // ── Form submission ───────────────────────────────────────────────
+            // Registered FIRST on purpose: even if some cosmetic initializer
+            // below throws (a missing element, a broken translation, ...), the
+            // save handler must still be attached — otherwise the form would
+            // silently fall back to a native (non-JSON) POST and the backend
+            // would answer "Invalid request.".
+            form.addEventListener('submit', function (e) {
+                e.preventDefault();
+                // This form never navigates: it validates and POSTs via fetch,
+                // staying on the page. common.js disables every submit button
+                // on ANY form submit (double-submit protection meant for
+                // navigational forms) and, depending on script load order, its
+                // listener can run AFTER this one — which would re-disable the
+                // buttons right after a cancelled confirm(), leaving Save dead
+                // until a reload. Stop its propagation and manage the disabled
+                // state ourselves around the fetch instead.
+                e.stopImmediatePropagation();
+                var submitBtns = form.querySelectorAll('button[type=submit]');
+                for (var i = 0; i < submitBtns.length; i++) submitBtns[i].disabled = false;
+                var fd = new FormData(form);
+                var data = {};
+                fd.forEach(function (v, k) { data[k] = v; });
+                // Checkboxes → booleans (keep in sync with ContestCreate._bool_fields).
+                // NOTE: 'is_visible' is intentionally absent — visibility is
+                // decided by the 'vis_mode' seg radio (or kept untouched when
+                // the user lacks change_contest_visibility; the server skips
+                // permission-gated fields either way).
+                ['is_rated', 'use_clarifications', 'hide_problem_tags',
+                 'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
+                 'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
+                 'show_short_display', 'is_private', 'is_organization_private',
+                 'limit_join_organizations', 'seb_required'].forEach(function(f) {
+                    data[f] = fd.has(f);
+                });
+
+                // Single-select M2M fields — wrap value in array for backend
+                ['organizations', 'classes', 'join_organizations'].forEach(function(f) {
+                    var v = fd.get(f);
+                    if (v && v !== '') data[f] = [v];
+                    else delete data[f];
+                });
+                // Multi-select (select2 + native multiple) M2M fields — filter empty
+                ['tags', 'private_contestants', 'curators', 'testers', 'spectators',
+                 'rate_exclude', 'view_contest_scoreboard', 'view_contest_submissions',
+                 'banned_users', 'authors'].forEach(function(f) {
+                    var vals = fd.getAll(f).filter(function(v) { return v !== ''; });
+                    if (vals.length) data[f] = vals;
+                    else delete data[f];
+                });
+                // format_config is JSON text; empty means "no config"
+                if (data.format_config === undefined || !data.format_config.trim()) delete data.format_config;
+
+                // Description now lives in the RichEditor (markdown source of truth).
+                if (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown) {
+                    data.description = RichEditor.getMarkdown('desc') || '';
+                }
+
+                // Problems: collect id + per-row options (points / partial /
+                // pretested / max submissions / result visibility / out prefix)
+                // from the list. Always sent — an empty array tells the backend
+                // to clear the problem list.
+                var problems = [];
+                document.querySelectorAll('.cp-list .cp-row[data-pid]').forEach(function(r) {
+                    var pts = r.querySelector('input.cp-points');
+                    var partial = r.querySelector('input.cp-partial');
+                    var pretested = r.querySelector('input.cp-pretested');
+                    var maxSubs = r.querySelector('input.cp-max-subs');
+                    var results = r.querySelector('select.cp-results');
+                    var outPrefix = r.querySelector('input.cp-out-prefix');
+                    problems.push({
+                        id: r.dataset.pid,
+                        points: pts ? pts.value : 100,
+                        partial: partial ? partial.checked : true,
+                        is_pretested: pretested ? pretested.checked : false,
+                        max_submissions: maxSubs && maxSubs.value ? maxSubs.value : null,
+                        hide_results: results ? (results.value === '' ? null : results.value) : null,
+                        output_prefix: outPrefix && outPrefix.value !== '' ? outPrefix.value : null,
+                    });
+                });
+                data.problems = problems;
+
+                // Action button (save / continue / another) — hidden input set
+                // by the bottom-bar click handlers (submitter isn't reliable here).
+                var actionInput = document.getElementById('form-action');
+                if (actionInput && actionInput.value) data.action = actionInput.value;
+
+                // Target-score sanity check (pure UX, not a model field): warn
+                // when the sum of problem points differs from the entered target.
+                var targetInput = document.getElementById('f-score');
+                var sum = 0;
+                problems.forEach(function(p) {
+                    var v = parseInt(p.points, 10);
+                    if (!isNaN(v)) sum += v;
+                });
+                if (targetInput && targetInput.value && parseInt(targetInput.value, 10) !== sum) {
+                    // NB: uses {0}/{1} placeholders, NOT %s — Jinja2's i18n
+                    // extension %-formats every gettext() call, so a literal
+                    // '%s' here would crash rendering ("not enough arguments").
+                    var targetMsg = {{ _('Total problem points is {0}, but the target is {1}. Save anyway?')|tojson }};
+                    var fullTargetMsg = targetMsg.replace('{0}', sum).replace('{1}', targetInput.value);
+                    if (!confirm(fullTargetMsg)) {
+                        var btns = form.querySelectorAll('button[type=submit]');
+                        for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+                        return;
+                    }
+                }
+
+                // "Only extend, never shorten" save-time guard (mirrors the
+                // server rule in ContestCreate._apply_payload). Once students
+                // have joined, shrinking the duration or pulling the deadline
+                // earlier would end their windows mid-run, so we refuse to
+                // submit such a change and tell the teacher why. The teacher
+                // can type freely while editing; the check happens here.
+                if (guardActive) {
+                    var newDurH = parseInt(document.getElementById('id_duration_hours').value || 0, 10);
+                    var newDurM = parseInt(document.getElementById('id_duration_minutes').value || 0, 10);
+                    var newTotal = newDurH * 60 + newDurM;
+                    var savedTotal = savedDurH * 60 + savedDurM;
+                    // No limit (blank inputs) is always allowed: it removes the
+                    // personal window entirely, i.e. only extends.
+                    var noLimit = document.getElementById('id_duration_none').checked;
+                    if (!noLimit && newTotal < savedTotal) {
+                        showToast({{ _('Students have already joined — the duration can only be increased, not shortened.')|htmltojs }}, true);
+                        var btns = form.querySelectorAll('button[type=submit]');
+                        for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+                        return;
+                    }
+                    var newEndVal = document.getElementById('id_end_time').value;
+                    if (savedEnd && newEndVal && newEndVal < savedEnd) {
+                        showToast({{ _('Students have already joined — the end time can only be extended, not brought earlier.')|htmltojs }}, true);
+                        var btns2 = form.querySelectorAll('button[type=submit]');
+                        for (var j = 0; j < btns2.length; j++) btns2[j].disabled = false;
+                        return;
+                    }
+                }
+
+                // Edit-mode rescore warning: changing problems or the format
+                // (name/config) forces a rescore of existing submissions.
+                if (window.DMOJ_IS_EDIT && window.DMOJ_EDIT_PREFILL) {
+                    var pf = window.DMOJ_EDIT_PREFILL;
+                    var fmt = document.getElementById('id_format_name');
+                    var fmtCfg = document.getElementById('id_format_config');
+                    var problemsChanged = problems.length !== (pf.problems || []).length;
+                    if (!problemsChanged) {
+                        for (var j = 0; j < problems.length; j++) {
+                            var old = pf.problems[j] || {};
+                            if (String(problems[j].id) !== String(old.id) ||
+                                String(problems[j].points) !== String(old.points)) {
+                                problemsChanged = true;
+                                break;
+                            }
+                        }
+                    }
+                    var fmtChanged = (fmt && fmt.value !== pf.format_name) ||
+                                    (fmtCfg && (fmtCfg.value || '') !== (pf.format_config || ''));
+                    if (problemsChanged || fmtChanged) {
+                        if (!confirm({{ _('Changing problems or the format will rescore existing submissions. Continue?')|tojson }})) {
+                            var btns2 = form.querySelectorAll('button[type=submit]');
+                            for (var k = 0; k < btns2.length; k++) btns2[k].disabled = false;
+                            return;
+                        }
+                    }
+                }
+
+                // Dates: datetime-local is local wall-clock -> convert to UTC ISO before submitting.
+                // The backend TIME_ZONE=UTC; sending raw local time would store it as UTC and show 8h off later.
+                // NB: the wall clock the teacher edits is NOT the browser's local time when the
+                // temporary timezone picker is used — it is the *selected* timezone's wall clock.
+                // Interpreting it as browser-local would shift the stored instant by the offset
+                // difference (e.g. 12h when planning Beijing time from the US East Coast).
+                // (wallClockToUtcIso / toUtcIso live at the DOMContentLoaded scope below so the
+                //  date-cache init and the timezone picker can share them.)
+
+                // Permanent mode: the backend still requires start_time/end_time -- auto-fill "now -> +100 years"
+                var validityType = document.querySelector('input[name="validity_type"]:checked');
+                if (validityType && validityType.value === 'permanent') {
+                    if (!data.start_time) {
+                        data.start_time = toLocalInput(new Date());
+                    }
+                    if (!data.end_time) {
+                        var far = new Date();
+                        far.setFullYear(far.getFullYear() + 100);
+                        data.end_time = toLocalInput(far);
+                    }
+                }
+                if (data.start_time) data.start_time = toUtcIso(data.start_time);
+                if (data.end_time) data.end_time = toUtcIso(data.end_time);
+                // locked_after is also a datetime-local -> convert to UTC ISO; omit when empty
+                if (data.locked_after) data.locked_after = toUtcIso(data.locked_after);
+                else delete data.locked_after;
+                // Empty optional numeric fields must be omitted (backend turns missing into None)
+                ['rating_floor', 'rating_ceiling', 'performance_ceiling_override'].forEach(function(f) {
+                    if (!data[f] || data[f] === '') delete data[f];
+                });
+
+                // NB: use getAttribute('action') not form.action — a hidden
+                // input with name="action" (the save-action button) would
+                // hijack the named property and break the URL.
+                for (var i = 0; i < submitBtns.length; i++) submitBtns[i].disabled = true;
+                fetch(form.getAttribute('action'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': fd.get('csrfmiddlewaretoken') || ''
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (res.ok) {
+                        if (res.action === 'another') {
+                            // "Save and add another": stay put and clear the form.
+                            if (typeof window.resetFormForAnother === 'function') window.resetFormForAnother();
+                            else form.reset();
+                            showToast({{ _("Assignment saved — create another one.")|htmltojs }});
+                        } else {
+                            window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
+                        }
+                    } else {
+                        showToast(res.error || {{ _("Failed to save contest")|htmltojs }}, true);
+                    }
+                })
+                .catch(function () {
+                    showToast({{ _("An error occurred while saving")|htmltojs }}, true);
+                })
+                .finally(function () {
+                    // common.js disables every submit button on any form submit to prevent
+                    // double submission; since we keep the page (fetch + preventDefault),
+                    // re-enable the buttons so the user can retry after an error.
+                    var btns = form.querySelectorAll('button[type=submit]');
+                    for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+                });
+            });
+
+            // --- UTC ↔ wall-clock helpers (shared by the submit handler, the
+            // date-cache init below and the timezone picker) ---
+            // Defined at DOMContentLoaded scope, NOT inside the submit handler:
+            // the date-cache initialisation also calls wallClockToUtcIso(), and
+            // a function scoped inside the handler would throw ReferenceError
+            // here — killing the whole initialisation (which is exactly the bug
+            // that used to break saving on the deployed page).
+            function wallClockToUtcIso(v, tz) {
+                var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v || '');
+                if (!m) return '';
+                var y = +m[1], mo = +m[2] - 1, d = +m[3], h = +m[4], mi = +m[5];
+                var target = Date.UTC(y, mo, d, h, mi);
+                var fmt = new Intl.DateTimeFormat('en-US', {
+                    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', hour12: false,
+                });
+                function parts(ts) {
+                    var p = fmt.formatToParts(new Date(ts));
+                    var o = {};
+                    p.forEach(function (x) { if (x.type !== 'literal') o[x.type] = x.value; });
+                    return o;
+                }
+                // Iterate: format an estimate, measure the wall-clock error, correct, re-check.
+                var ts = target;
+                for (var i = 0; i < 2; i++) {
+                    var o = parts(ts);
+                    var got = Date.UTC(+o.year, +o.month - 1, +o.day, +o.hour % 24, +o.minute);
+                    ts += (target - got);
+                }
+                return new Date(ts).toISOString();
+            }
+            function toUtcIso(v) {
+                var tz = window.DMOJ_EDIT_TZ || 'UTC';
+                return wallClockToUtcIso(v, tz);
+            }
+
+            // Everything below is cosmetic initialisation (preview sync, key
+            // auto-generation, cascading selects, ...). It must never be able
+            // to take down the save handler above, so failures are contained.
+            try {
+
             // --- Preview sync ---
             var preview = document.getElementById('pv-body');
             function syncPreview() {
                 var fd = new FormData(form);
                 var name = fd.get('name') || {{ _('Untitled assignment')|htmltojs }};
                 var key = fd.get('key') || {{ _('—')|htmltojs }};
-                var vis = document.getElementById('id_is_visible');
-                var rated = document.getElementById('id_is_rated');
+                var visMode = document.querySelector('input[name="vis_mode"]:checked');
+                var visHidden = document.getElementById('id_is_visible');  // non-submitted flag (admin-gated case)
                 var fmt = document.getElementById('id_format_name');
                 var start = fd.get('start_time') || '';
                 var end = fd.get('end_time') || '';
-                var desc = fd.get('description') || '';
+                // Description now lives in the RichEditor; fall back to a
+                // raw textarea read if the editor failed to load.
+                var desc = '';
+                if (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown) {
+                    desc = RichEditor.getMarkdown('desc') || '';
+                } else {
+                    desc = fd.get('description') || '';
+                }
 
                 var titleEl = document.getElementById('pv-title');
                 if (titleEl) titleEl.textContent = name;
@@ -346,19 +850,27 @@
                         : {{ _('—')|htmltojs }};
                 }
 
+                // Visibility badge: prefer the seg radio; fall back to the
+                // hidden flag when visibility is admin-managed (no seg shown).
                 var visEl = document.getElementById('pv-visibility');
                 if (visEl) {
-                    if (vis && vis.checked) {
-                        visEl.textContent = {{ _('Public')|htmltojs }};
-                        visEl.className = 'badge badge-st-ongoing';
-                    } else {
-                        visEl.textContent = {{ _('Hidden')|htmltojs }};
-                        visEl.className = 'badge badge-st-past';
-                    }
+                    var visRo = document.getElementById('id_vis_mode_ro');
+                    var mode = visMode ? visMode.value
+                                       : (visRo ? visRo.value
+                                                : (visHidden && visHidden.value === 'true' ? 'public' : 'hidden'));
+                    var labels = {
+                        hidden: {{ _('Hidden')|htmltojs }},
+                        public: {{ _('Public')|htmltojs }},
+                        org: {{ _('Org')|htmltojs }},
+                        private: {{ _('Private')|htmltojs }},
+                    };
+                    visEl.textContent = labels[mode] || {{ _('Hidden')|htmltojs }};
+                    visEl.className = 'badge ' + (mode === 'hidden' ? 'badge-st-past' : 'badge-st-ongoing');
                 }
 
                 var ratedEl = document.getElementById('pv-rated');
                 if (ratedEl) {
+                    var rated = document.getElementById('id_is_rated');
                     ratedEl.style.display = (rated && rated.checked) ? 'inline-block' : 'none';
                 }
 
@@ -366,12 +878,74 @@
                 if (fmtEl && fmt) fmtEl.textContent = fmt.options[fmt.selectedIndex].text;
 
                 var descEl = document.getElementById('pv-desc');
-                if (descEl) descEl.textContent = desc || {{ _('No description yet.')|htmltojs }};
+                if (descEl) {
+                    var rendered = desc ? desc : {{ _('No description yet.')|htmltojs }};
+                    if (typeof RichEditor !== 'undefined' && RichEditor.mdToHtml) {
+                        descEl.innerHTML = RichEditor.mdToHtml(desc || '');
+                    } else {
+                        descEl.textContent = rendered;
+                    }
+                }
             }
 
-            form.addEventListener('input', syncPreview);
-            form.addEventListener('change', syncPreview);
+            // Target-score bookkeeping for the toolbar count: "N problems ·
+            // sum X / target Y pts" with a red flag when they mismatch.
+            function syncScoreSummary() {
+                var countEl = document.getElementById('cp-count');
+                if (!countEl) return;
+                var rows = document.querySelectorAll('.cp-list .cp-row[data-pid]');
+                var sum = 0;
+                rows.forEach(function (r) {
+                    var pts = r.querySelector('input.cp-points');
+                    var v = parseInt(pts ? pts.value : '100', 10);
+                    if (!isNaN(v)) sum += v;
+                });
+                var targetEl = document.getElementById('f-score');
+                var target = targetEl && targetEl.value !== '' ? parseInt(targetEl.value, 10) : NaN;
+                var n = rows.length;
+                if (!n) {
+                    countEl.textContent = {{ _('0 problems')|htmltojs }};
+                    countEl.classList.remove('score-mismatch');
+                    return;
+                }
+                var label = n + {{ _(' problems · sum ') | htmltojs }} + '<b>' + sum + '</b> / target ' + target + ' pts';
+                countEl.innerHTML = label;
+                if (!isNaN(target) && target !== sum) countEl.classList.add('score-mismatch');
+                else countEl.classList.remove('score-mismatch');
+            }
+
+            // Mirror the problem rows into the "Student view preview" table so
+            // the preview is not a static shell.
+            function syncPreviewProblems() {
+                var tbody = document.querySelector('#pv-body .pv-problems tbody');
+                if (!tbody) return;
+                var rows = document.querySelectorAll('.cp-list .cp-row[data-pid]');
+                if (!rows.length) {
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--muted);">'
+                        + {{ _('No problems added yet.')|htmltojs }} + '</td></tr>';
+                    return;
+                }
+                var html = '';
+                rows.forEach(function (r) {
+                    var letter = r.querySelector('.label-letter');
+                    var pname = r.querySelector('.pname');
+                    var pts = r.querySelector('input.cp-points');
+                    html += '<tr><td>' + (letter ? letter.textContent : '') + '</td>'
+                          + '<td>' + (pname ? pname.textContent : '') + '</td>'
+                          + '<td>' + (pts ? pts.value : '100') + '</td></tr>';
+                });
+                tbody.innerHTML = html;
+            }
+
+            form.addEventListener('input', function (e) { syncPreview(); syncScoreSummary(); });
+            form.addEventListener('change', function (e) { syncPreview(); syncScoreSummary(); syncPreviewProblems(); });
+            // RichEditor changes do not bubble as form events; hook its onChange.
+            if (typeof RichEditor !== 'undefined' && RichEditor.configure) {
+                RichEditor.configure({ onChange: function () { syncPreview(); } });
+            }
             syncPreview();
+            syncPreviewProblems();
+            syncScoreSummary();
 
             // --- Auto-generate key from name ---
             // Backend requires the key to be lowercase letters/digits only (^[a-z0-9]+$), no hyphens.
@@ -414,7 +988,27 @@
             var endInput = document.getElementById('id_end_time');
             var durH = document.getElementById('id_duration_hours');
             var durM = document.getElementById('id_duration_minutes');
+            // "Only extend, never shorten" guard (mirrors the server rule):
+            // once students have joined, shrinking the duration or pulling the
+            // deadline earlier would end their windows mid-run. The check runs
+            // at save time (submit handler) so the teacher can type freely,
+            // then gets a clear error instead of a silent revert.
+            // `guardActive` comes from the template (has_participants on an
+            // existing contest).
+            var guardActive = {{ 'true' if has_participants else 'false' }};
+            // Initial (saved) duration — used to restore the "No limit" toggle
+            // and as the lower bound for the save-time check.
+            var savedDurH = durH ? parseInt(durH.value || 0, 10) : 0;
+            var savedDurM = durM ? parseInt(durM.value || 0, 10) : 0;
+            var savedEnd = endInput ? endInput.value : '';
             if (startInput && endInput && durH && durM) {
+                // Validity (start/end) and Duration are INDEPENDENT settings:
+                // end_time is the global "assignment closes" deadline, time_limit
+                // is the per-student window. end_time is auto-filled as a
+                // *starting point* (start + duration) but is never overwritten
+                // once the teacher edits it manually — this is what allows a
+                // long availability window with a short per-student timer.
+                var endWarnEl = document.getElementById('dur-end-warning');
                 function calcEnd() {
                     var s = parseLocalInput(startInput.value);
                     var h = parseInt(durH.value || 0, 10);
@@ -422,12 +1016,58 @@
                     if (s && (h > 0 || m > 0)) {
                         s.setHours(s.getHours() + h);
                         s.setMinutes(s.getMinutes() + m);
-                        endInput.value = toLocalInput(s);
+                        var derived = toLocalInput(s);
+                        // Auto-fill only while the deadline is untouched (empty
+                        // or still the value we derived last time); once the
+                        // teacher sets their own end time we stop overwriting.
+                        if (!endInput.value || endInput.value === endInput.dataset.autoDerived) {
+                            endInput.value = derived;
+                            endInput.dataset.autoDerived = derived;
+                        }
+                    }
+                    syncEndWarning();
+                }
+                // A manual end_time edit marks the deadline as teacher-owned.
+                endInput.addEventListener('input', function () {
+                    endInput.dataset.autoDerived = '';
+                    syncEndWarning();
+                    syncPreview();
+                    syncScoreSummary();
+                });
+                // Warn when start + duration runs past the assignment end: the
+                // timer is then capped by the deadline (validity wins), so late
+                // starters get less than the full duration.
+                function syncEndWarning() {
+                    if (!endWarnEl) return;
+                    var s = parseLocalInput(startInput.value);
+                    var e = parseLocalInput(endInput.value);
+                    var h = parseInt(durH.value || 0, 10);
+                    var m = parseInt(durM.value || 0, 10);
+                    if (s && e && (h > 0 || m > 0)) {
+                        var win = new Date(s.getTime());
+                        win.setHours(win.getHours() + h);
+                        win.setMinutes(win.getMinutes() + m);
+                        if (win > e) {
+                            endWarnEl.style.display = '';
+                            endWarnEl.textContent = {{ _('The timer would run past the assignment end time — students who start late would get less than the full duration.')|htmltojs }};
+                        } else {
+                            endWarnEl.style.display = 'none';
+                        }
+                    } else {
+                        endWarnEl.style.display = 'none';
                     }
                 }
-                startInput.addEventListener('change', calcEnd);
-                durH.addEventListener('input', calcEnd);
-                durM.addEventListener('input', calcEnd);
+                startInput.addEventListener('change', function () {
+                    calcEnd();
+                    // start/end changed programmatically — refresh preview + cache
+                    syncPreview();
+                    syncScoreSummary();
+                    if (startInput.value) startInput.dataset.utc = wallClockToUtcIso(startInput.value, window.DMOJ_EDIT_TZ);
+                    if (endInput.value) endInput.dataset.utc = wallClockToUtcIso(endInput.value, window.DMOJ_EDIT_TZ);
+                });
+                durH.addEventListener('input', function () { calcEnd(); syncPreview(); syncScoreSummary(); });
+                durM.addEventListener('input', function () { calcEnd(); syncPreview(); syncScoreSummary(); });
+                syncEndWarning();
 
                 // Default validity: tomorrow -> tomorrow + 3h (initial Range-mode values)
                 if (!startInput.value && !endInput.value) {
@@ -437,8 +1077,57 @@
                     defEnd.setHours(defEnd.getHours() + 3);
                     startInput.value = toLocalInput(def);
                     endInput.value = toLocalInput(defEnd);
+                    // The default dates are set after the initial syncPreview()
+                    // ran (which saw empty fields), so refresh the preview now —
+                    // otherwise the student-view preview shows "—" for Validity
+                    // until the teacher touches another field.
+                    syncPreview();
+                    syncScoreSummary();
+                }
+
+                // "No limit" checkbox: when checked, the duration inputs are
+                // disabled (blank duration → time_limit=None on save, which is
+                // always an extension). Unchecking restores the last saved
+                // duration (or 0h 0min if none was ever set).
+                var durNone = document.getElementById('id_duration_none');
+                if (durNone) {
+                    function syncDurNone() {
+                        var isNone = durNone.checked;
+                        durH.disabled = isNone;
+                        durM.disabled = isNone;
+                        if (isNone) {
+                            durH.value = '';
+                            durM.value = '';
+                        } else {
+                            // Restore the previously saved duration, or a clean
+                            // 0h 0min if the contest never had one.
+                            durH.value = savedDurH || '';
+                            durM.value = savedDurM || '';
+                        }
+                    }
+                    durNone.addEventListener('change', function () {
+                        syncDurNone();
+                        calcEnd();
+                        syncPreview();
+                        syncScoreSummary();
+                    });
+                    syncDurNone();
                 }
             }
+
+            // --- Advanced toggle (same pattern as the problem editor) ---
+            window.toggleAdvanced = function () {
+                var cm = document.querySelector('.pcv2');
+                if (!cm) return;
+                cm.classList.toggle('advanced-visible');
+                var open = cm.classList.contains('advanced-visible');
+                var btn = document.getElementById('advanced-btn');
+                if (btn) {
+                    btn.textContent = open
+                        ? {{ _('Hide advanced settings')|htmltojs }}
+                        : {{ _('Advanced')|htmltojs }};
+                }
+            };
 
             // --- Layout toggle ---
             var splitEl = document.querySelector('.sp-split');
@@ -453,145 +1142,99 @@
                 });
             });
 
-            // --- Visibility segmented control ---
+            // --- Visibility segmented control + scoping cross-coupling ---
+            // 'org' mode makes Organization/Class relevant and ignores
+            // Advanced → Private users; 'private' mode is the reverse; public
+            // and hidden ignore both. Ignored rows get struck out / dimmed /
+            // non-interactive (pointer-events, NOT disabled, so the value is
+            // still submitted). Works for all three renderings of the control:
+            // the seg radios, the admin-gated checkboxes, and the read-only
+            // id_vis_mode_ro input.
+            var orgMuteRow = document.getElementById('id_organizations') && document.getElementById('id_organizations').closest('.form-row');
+            var classMuteRow = document.getElementById('id_classes') && document.getElementById('id_classes').closest('.form-row');
+            var privMuteRow = document.getElementById('id_private_contestants') && document.getElementById('id_private_contestants').closest('.form-row');
+            var orgMuteNote = document.getElementById('org-mute-note');
+            var classMuteNote = document.getElementById('class-mute-note');
+            var privMuteNote = document.getElementById('priv-mute-note');
+            function visModeLabel() {
+                var seg = document.getElementById('vis-seg');
+                var segMode = seg ? (seg.querySelector('input[name="vis_mode"]:checked') || {}).value : null;
+                if (segMode) return segMode;
+                var visRo = document.getElementById('id_vis_mode_ro');
+                if (visRo && visRo.value) return visRo.value;
+                var privCb = document.getElementById('id_is_private');
+                if (privCb && privCb.checked) return 'private';
+                var orgCb = document.getElementById('id_is_organization_private');
+                if (orgCb && orgCb.checked) return 'org';
+                var visHidden = document.getElementById('id_is_visible');
+                return (visHidden && visHidden.value === 'true') ? 'public' : 'hidden';
+            }
+            function syncVisMuting() {
+                var mode = visModeLabel();
+                var orgActive = (mode === 'org');
+                var privActive = (mode === 'private');
+                var labels = {
+                    hidden: {{ _('Hidden')|htmltojs }},
+                    public: {{ _('Public')|htmltojs }},
+                    org: {{ _('Org')|htmltojs }},
+                    private: {{ _('Private')|htmltojs }},
+                };
+                var modeLabel = labels[mode] || mode;
+                var ignoredIn = {{ _('Ignored in')|htmltojs }};
+                function applyMute(row, note, active, suffix) {
+                    if (row) row.classList.toggle('vis-muted', !active);
+                    if (note) {
+                        note.textContent = active ? '' : ignoredIn + ' ' + modeLabel + ' — ' + suffix;
+                        note.style.display = active ? 'none' : '';
+                    }
+                }
+                applyMute(orgMuteRow, orgMuteNote, orgActive, {{ _("choose 'Org' to scope to organizations/classes.")|htmltojs }});
+                applyMute(classMuteRow, classMuteNote, orgActive, {{ _("choose 'Org' to scope to organizations/classes.")|htmltojs }});
+                applyMute(privMuteRow, privMuteNote, privActive, {{ _("choose 'Private' to restrict to specific users.")|htmltojs }});
+            }
+            var visToast = {
+                hidden: {{ _('Hidden mode is not listed — Organization/Class scoping and Private users do not apply.')|htmltojs }},
+                public: {{ _('Public mode is visible to everyone — Organization/Class scoping and Private users do not apply.')|htmltojs }},
+                org: {{ _("Org mode restricts visibility to the organizations/classes above. The Advanced → Private users list is ignored.")|htmltojs }},
+                private: {{ _("Private mode ignores the Organization/Class scoping above. Use Advanced → Private users to choose who can see this assignment.")|htmltojs }},
+            };
             document.querySelectorAll('#vis-seg input[type=radio]').forEach(function (radio) {
-                radio.addEventListener('change', syncPreview);
+                radio.addEventListener('change', function () {
+                    syncPreview();
+                    syncVisMuting();
+                    var msg = visToast[radio.value];
+                    if (msg) showToast(msg);
+                });
             });
+            ['id_is_private', 'id_is_organization_private'].forEach(function (id) {
+                var cb = document.getElementById(id);
+                if (cb) cb.addEventListener('change', syncVisMuting);
+            });
+            syncVisMuting();
 
-            // --- Toast ---
-            var toastEl = document.getElementById('toast');
-            function showToast(msg, isError) {
-                if (!toastEl) return;
-                toastEl.textContent = msg;
-                toastEl.className = isError ? 'err' : '';
-                toastEl.style.display = 'block';
-                setTimeout(function () { toastEl.style.display = 'none'; }, 2500);
+            // --- Join restriction toggle: dim the Join orgs select while off ---
+            var joinLimitCb = document.getElementById('id_limit_join_organizations');
+            var joinOrgRow = document.getElementById('id_join_organizations') && document.getElementById('id_join_organizations').closest('.form-row');
+            var joinMuteNote = document.getElementById('join-mute-note');
+            if (joinLimitCb && joinOrgRow) {
+                var joinOffNote = {{ _('Join restriction is off — this selection is ignored.')|htmltojs }};
+                function syncJoinMuting() {
+                    var on = joinLimitCb.checked;
+                    joinOrgRow.classList.toggle('vis-muted', !on);
+                    if (joinMuteNote) {
+                        joinMuteNote.textContent = on ? '' : joinOffNote;
+                        joinMuteNote.style.display = on ? 'none' : '';
+                    }
+                }
+                joinLimitCb.addEventListener('change', function () {
+                    syncJoinMuting();
+                    showToast(joinLimitCb.checked
+                        ? {{ _('Join restriction enabled — pick the organizations allowed to join.')|htmltojs }}
+                        : {{ _('Join restriction disabled — the Join orgs selection is ignored.')|htmltojs }});
+                });
+                syncJoinMuting();
             }
 
-            // --- Form submission ---
-            form.addEventListener('submit', function (e) {
-                e.preventDefault();
-                var fd = new FormData(form);
-                var data = {};
-                fd.forEach(function (v, k) { data[k] = v; });
-                // Checkboxes → booleans (keep in sync with ContestCreate._bool_fields)
-                ['is_visible', 'is_rated', 'use_clarifications', 'hide_problem_tags',
-                 'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
-                 'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
-                 'show_short_display', 'is_private', 'is_organization_private',
-                 'limit_join_organizations', 'seb_required'].forEach(function(f) {
-                    data[f] = fd.has(f);
-                });
-
-                // Single-select M2M fields — wrap value in array for backend
-                ['organizations', 'classes', 'join_organizations'].forEach(function(f) {
-                    var v = fd.get(f);
-                    if (v && v !== '') data[f] = [v];
-                    else delete data[f];
-                });
-                // Multi-select (select2 + native multiple) M2M fields — filter empty
-                ['tags', 'private_contestants', 'curators', 'testers', 'spectators',
-                 'rate_exclude', 'view_contest_scoreboard', 'view_contest_submissions',
-                 'banned_users', 'authors'].forEach(function(f) {
-                    var vals = fd.getAll(f).filter(function(v) { return v !== ''; });
-                    if (vals.length) data[f] = vals;
-                    else delete data[f];
-                });
-                // format_config is JSON text; empty means "no config"
-                if (data.format_config === undefined || !data.format_config.trim()) delete data.format_config;
-
-                // Problems: collect id + per-row points from the list
-                var problems = [];
-                document.querySelectorAll('.cp-list .cp-row[data-pid]').forEach(function(r) {
-                    var ptsInput = r.querySelector('input[type=number]');
-                    problems.push({ id: r.dataset.pid, points: ptsInput ? ptsInput.value : 100 });
-                });
-                if (problems.length) data.problems = problems;
-
-                // Dates: datetime-local is local wall-clock -> convert to UTC ISO before submitting.
-                // The backend TIME_ZONE=UTC; sending raw local time would store it as UTC and show 8h off later.
-                // NB: the wall clock the teacher edits is NOT the browser's local time when the
-                // temporary timezone picker is used — it is the *selected* timezone's wall clock.
-                // Interpreting it as browser-local would shift the stored instant by the offset
-                // difference (e.g. 12h when planning Beijing time from the US East Coast).
-                function wallClockToUtcIso(v, tz) {
-                    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v || '');
-                    if (!m) return '';
-                    var y = +m[1], mo = +m[2] - 1, d = +m[3], h = +m[4], mi = +m[5];
-                    var target = Date.UTC(y, mo, d, h, mi);
-                    var fmt = new Intl.DateTimeFormat('en-US', {
-                        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-                        hour: '2-digit', minute: '2-digit', hour12: false,
-                    });
-                    function parts(ts) {
-                        var p = fmt.formatToParts(new Date(ts));
-                        var o = {};
-                        p.forEach(function (x) { if (x.type !== 'literal') o[x.type] = x.value; });
-                        return o;
-                    }
-                    // Iterate: format an estimate, measure the wall-clock error, correct, re-check.
-                    var ts = target;
-                    for (var i = 0; i < 2; i++) {
-                        var o = parts(ts);
-                        var got = Date.UTC(+o.year, +o.month - 1, +o.day, +o.hour % 24, +o.minute);
-                        ts += (target - got);
-                    }
-                    return new Date(ts).toISOString();
-                }
-                function toUtcIso(v) {
-                    var tz = window.DMOJ_EDIT_TZ || 'UTC';
-                    return wallClockToUtcIso(v, tz);
-                }
-
-                // Permanent mode: the backend still requires start_time/end_time -- auto-fill "now -> +100 years"
-                var validityType = document.querySelector('input[name="validity_type"]:checked');
-                if (validityType && validityType.value === 'permanent') {
-                    if (!data.start_time) {
-                        data.start_time = toLocalInput(new Date());
-                    }
-                    if (!data.end_time) {
-                        var far = new Date();
-                        far.setFullYear(far.getFullYear() + 100);
-                        data.end_time = toLocalInput(far);
-                    }
-                }
-                if (data.start_time) data.start_time = toUtcIso(data.start_time);
-                if (data.end_time) data.end_time = toUtcIso(data.end_time);
-                // locked_after is also a datetime-local -> convert to UTC ISO; omit when empty
-                if (data.locked_after) data.locked_after = toUtcIso(data.locked_after);
-                else delete data.locked_after;
-                // Empty optional numeric fields must be omitted (backend turns missing into None)
-                ['rating_floor', 'rating_ceiling', 'performance_ceiling_override'].forEach(function(f) {
-                    if (!data[f] || data[f] === '') delete data[f];
-                });
-
-                fetch(form.action, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': fd.get('csrfmiddlewaretoken') || ''
-                    },
-                    body: JSON.stringify(data)
-                })
-                .then(function (r) { return r.json(); })
-                .then(function (res) {
-                    if (res.ok) {
-                        window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
-                    } else {
-                        showToast(res.error || {{ _("Failed to save contest")|htmltojs }}, true);
-                    }
-                })
-                .catch(function () {
-                    showToast({{ _("An error occurred while saving")|htmltojs }}, true);
-                })
-                .finally(function () {
-                    // common.js disables every submit button on any form submit to prevent
-                    // double submission; since we keep the page (fetch + preventDefault),
-                    // re-enable the buttons so the user can retry after an error.
-                    var btns = form.querySelectorAll('button[type=submit]');
-                    for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
-                });
-            });
 
             // --- Generate access code ---
             var genBtn = document.getElementById('gen-access-code');
@@ -619,47 +1262,164 @@
                 });
             }
 
-            // --- Tag pills ---
+            // --- Tag picker: pills + "+" opens a modal (mirrors the problem
+            //     editor's problem-type picker) ---
             var tagSelect = document.getElementById('id_tags');
             var tagPills = document.getElementById('tag-pills');
-            var tagSuggest = document.getElementById('tag-suggest');
-            var tagAddBtn = document.getElementById('tag-add-btn');
+            // All known tags: seeded from the server + any created this session.
+            var knownTags = [];
+            Array.prototype.forEach.call(tagSelect.querySelectorAll('option'), function (opt) {
+                knownTags.push({ id: opt.value, name: opt.textContent });
+            });
             function syncTagPills() {
                 if (!tagPills || !tagSelect) return;
                 tagPills.innerHTML = '';
-                Array.from(tagSelect.selectedOptions).forEach(function(opt) {
+                Array.from(tagSelect.selectedOptions).forEach(function (opt) {
                     var pill = document.createElement('span');
-                    pill.className = 'tag-pill';
+                    pill.className = 'ptype-tag tag-pill';
                     pill.textContent = opt.text;
                     var x = document.createElement('button');
                     x.type = 'button';
                     x.className = 'x';
                     x.textContent = '×';
-                    x.addEventListener('click', function() {
+                    x.addEventListener('click', function () {
                         opt.selected = false;
                         syncTagPills();
+                        syncTagModalOptions();
                     });
                     pill.appendChild(x);
                     tagPills.appendChild(pill);
                 });
+                // The "+" add button sits at the end of the pill row, like the
+                // problem editor's ptype-add.
+                var addBtn = document.createElement('button');
+                addBtn.type = 'button';
+                addBtn.className = 'inline-add-btn ptype-add';
+                addBtn.title = {{ _('Select from existing tags / create new')|tojson }};
+                addBtn.textContent = '+';
+                addBtn.addEventListener('click', openTagModal);
+                tagPills.appendChild(addBtn);
             }
-            if (tagSuggest && tagAddBtn) {
-                tagAddBtn.addEventListener('click', function() {
-                    tagSuggest.classList.toggle('open');
+            function selectTagById(id) {
+                var opt = tagSelect.querySelector('option[value="' + id + '"]');
+                if (opt) { opt.selected = true; syncTagPills(); }
+            }
+            // ── Tag modal (same chrome as the problem-type modal) ─────────────
+            function openTagModal() {
+                syncTagModalOptions();
+                var modal = document.getElementById('tag-modal');
+                if (modal) modal.classList.remove('hidden');
+                var search = document.getElementById('tag-modal-search');
+                if (search) { search.value = ''; search.focus(); }
+            }
+            function closeTagModal() {
+                var modal = document.getElementById('tag-modal');
+                if (modal) modal.classList.add('hidden');
+            }
+            // Reflect the currently selected tags into the modal's checkboxes.
+            function syncTagModalOptions() {
+                var box = document.getElementById('tag-options');
+                if (!box) return;
+                var selected = new Set(Array.from(tagSelect.selectedOptions).map(function (o) { return o.value; }));
+                box.textContent = '';
+                knownTags.forEach(function (t) {
+                    var label = document.createElement('label');
+                    label.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-size:13px;padding:0.35rem 0.5rem;border:1px solid var(--admin-border);border-radius:5px;cursor:pointer;';
+                    var input = document.createElement('input');
+                    input.type = 'checkbox';
+                    input.value = t.id;
+                    if (selected.has(t.id)) input.checked = true;
+                    var span = document.createElement('span');
+                    span.textContent = t.name;
+                    label.appendChild(input);
+                    label.appendChild(span);
+                    box.appendChild(label);
                 });
-                tagSuggest.querySelectorAll('button').forEach(function(btn) {
-                    btn.addEventListener('click', function() {
-                        var opt = tagSelect.querySelector('option[value="' + this.dataset.id + '"]');
-                        if (opt) { opt.selected = true; syncTagPills(); }
-                        tagSuggest.classList.remove('open');
+                if (!knownTags.length) {
+                    var empty = document.createElement('div');
+                    empty.className = 'tag-suggest-empty';
+                    empty.textContent = {{ _('No tags yet — create one below.')|htmltojs }};
+                    box.appendChild(empty);
+                }
+            }
+            function filterTagModalOptions() {
+                var q = (document.getElementById('tag-modal-search').value || '').toLowerCase();
+                Array.prototype.forEach.call(
+                    document.querySelectorAll('#tag-options label'),
+                    function (label) {
+                        var text = label.textContent.toLowerCase();
+                        label.style.display = (!q || text.indexOf(q) !== -1) ? '' : 'none';
                     });
-                });
-                document.addEventListener('click', function(e) {
-                    if (!e.target.closest('.tag-add-wrap')) tagSuggest.classList.remove('open');
-                });
-                tagSelect.addEventListener('change', syncTagPills);
-                syncTagPills();
             }
+            function toggleNewTagForm(show) {
+                document.getElementById('tag-new-form').style.display = show ? 'block' : 'none';
+                document.getElementById('tag-new-btn').style.display = show ? 'none' : 'block';
+                if (show) document.getElementById('nt-tag').focus();
+            }
+            function createNewTag() {
+                var raw = document.getElementById('nt-tag').value.trim();
+                if (!raw) { showToast({{ _('Please enter a tag name.')|htmltojs }}, true); return; }
+                fetch({{ url('contest_tag_create')|tojson }}, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('input[name="csrfmiddlewaretoken"]').value || ''
+                    },
+                    body: JSON.stringify({ name: raw })
+                })
+                .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+                .then(function (res) {
+                    if (res.data.ok && res.data.tag) {
+                        var t = res.data.tag;
+                        knownTags.push({ id: String(t.id), name: t.name });
+                        var opt = document.createElement('option');
+                        opt.value = t.id;
+                        opt.textContent = t.name;
+                        opt.selected = true;
+                        tagSelect.appendChild(opt);
+                        syncTagPills();
+                        syncTagModalOptions();
+                        document.getElementById('nt-tag').value = '';
+                        toggleNewTagForm(false);
+                        showToast({{ _('Tag created.')|htmltojs }});
+                    } else {
+                        showToast(res.data.error || {{ _('Failed to create tag.')|htmltojs }}, true);
+                    }
+                })
+                .catch(function () {
+                    showToast({{ _('Failed to create tag.')|htmltojs }}, true);
+                });
+            }
+            function applyTagSelection() {
+                var chosen = new Set(Array.prototype.map.call(
+                    document.querySelectorAll('#tag-options input:checked'),
+                    function (i) { return i.value; }));
+                Array.prototype.forEach.call(tagSelect.options, function (opt) {
+                    opt.selected = chosen.has(opt.value);
+                });
+                syncTagPills();
+                closeTagModal();
+            }
+            // Wire the modal controls.
+            var tagModal = document.getElementById('tag-modal');
+            if (tagModal) {
+                tagModal.querySelector('.qtype-head button').addEventListener('click', closeTagModal);
+                document.getElementById('tag-modal-search').addEventListener('input', filterTagModalOptions);
+                document.getElementById('tag-new-btn').addEventListener('click', function () { toggleNewTagForm(true); });
+                document.getElementById('tag-new-cancel').addEventListener('click', function () { toggleNewTagForm(false); });
+                document.getElementById('tag-new-add').addEventListener('click', createNewTag);
+                document.getElementById('nt-tag').addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') { e.preventDefault(); createNewTag(); }
+                });
+                document.getElementById('tag-modal-ok').addEventListener('click', applyTagSelection);
+                document.getElementById('tag-modal-cancel').addEventListener('click', closeTagModal);
+                // Close on backdrop click.
+                tagModal.addEventListener('click', function (e) {
+                    if (e.target === tagModal) closeTagModal();
+                });
+            }
+            tagSelect.addEventListener('change', syncTagPills);
+            syncTagPills();
 
             // --- Anti-cheat seg control: toggle fields by level ---
             var cheatRadios = document.querySelectorAll('input[name="cheat_level"]');
@@ -678,12 +1438,102 @@
             cheatRadios.forEach(function(r) { r.addEventListener('change', updateCheatFields); });
             updateCheatFields();
 
-            // --- From library button ---
+            // --- From library button + enhanced bank (filters/sort/pagination) ---
             var libBtn = document.querySelector('.btn-soft:not(.alt)');
             var slideover = document.getElementById('problem-library');
+            // Insert-at-position support: set to an index (or null for append)
+            // by the drag-reorder rail / toolbar before opening the library.
+            window.cpInsertAt = null;
+            function libRowHtml(row, letter) {
+                var code = row.dataset.code || '';
+                var solveUrl = code ? '/problem/' + code : '#';
+                return '<span class="cp-drag" title="' + {{ _('Drag to reorder')|htmltojs }} + '">⠿</span>' +
+                    '<span class="label-letter">' + letter + '</span>' +
+                    '<span class="pname">' + (row.dataset.name || 'Problem ' + row.dataset.pid) + '</span>' +
+                    '<span><input type="number" class="cp-points" value="100" style="width:48px"></span>' +
+                    '<span><input type="number" class="cp-max-subs" min="1" placeholder="∞" title="' + {{ _('Maximum number of submissions allowed for this problem — blank means unlimited.')|htmltojs }} + '" style="width:60px"></span>' +
+                    '<span class="cp-actions">' +
+                    '<button type="button" class="btn-icon" title="' + {{ _('Preview')|htmltojs }} + '" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>' +
+                    '<a class="btn-icon" title="' + {{ _('Solve')|htmltojs }} + '" href="' + solveUrl + '" target="_blank"><i class="fa fa-external-link"></i></a>' +
+                    '<button type="button" class="btn-icon danger" title="' + {{ _('Remove')|htmltojs }} + '" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button>' +
+                    '</span>' +
+                    '<div class="cp-options">' +
+                    '<label class="cp-opt"><input type="checkbox" class="cp-partial" checked> ' + {{ _('Partial credit')|htmltojs }} + '</label>' +
+                    '<label class="cp-opt"><input type="checkbox" class="cp-pretested"> ' + {{ _('Pretest only')|htmltojs }} + '</label>' +
+                    '<label class="cp-opt" title="' + {{ _('What results students can see after judging.')|htmltojs }} + '">' + {{ _('Results')|htmltojs }} +
+                    ' <select class="cp-results"><option value="">' + {{ _('Default')|htmltojs }} + '</option><option value="hide">' + {{ _('Hide')|htmltojs }} + '</option><option value="show">' + {{ _('Show')|htmltojs }} + '</option></select></label>' +
+                    '<label class="cp-opt" title="' + {{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.')|htmltojs }} + '">' + {{ _('Out prefix')|htmltojs }} + ' <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px"></label>' +
+                    '</div>' +
+                    '<div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>';
+            }
+            // Re-render a `.cp-row`'s letter after reorder (drag/drop, insert).
+            function renumberCpRows() {
+                var rows = document.querySelectorAll('.cp-list .cp-row[data-pid]');
+                rows.forEach(function (r, i) {
+                    var letter = r.querySelector('.label-letter');
+                    if (letter) letter.textContent = String.fromCharCode(65 + i);
+                });
+            }
+            // Toggle a row's inline statement preview (4b). The preview loads
+            // the real problem statement from the problem page (the teacher has
+            // read access to every problem they can add to an assignment), so
+            // the eye shows the actual content instead of a placeholder.
+            window.toggleCpPreview = function (btn) {
+                var row = btn.closest('.cp-row');
+                if (!row) return;
+                var pv = row.querySelector('.cp-preview');
+                if (!pv) return;
+                if (pv.style.display === 'none') {
+                    if (!pv.dataset.loaded) {
+                        var code = row.dataset.code || '';
+                        var name = row.querySelector('.pname');
+                        var pts = row.querySelector('input.cp-points');
+                        pv.innerHTML = '<b>' + (name ? name.textContent : '') + '</b>' +
+                            (code ? ' <span class="pcode">[' + code + ']</span>' : '') +
+                            '<br>' + {{ _('Points')|htmltojs }} + ': ' + (pts ? pts.value : '100') +
+                            '<div class="pv-status">' + {{ _('Loading statement…')|htmltojs }} + '</div>';
+                        if (code) {
+                            var pvStatus = pv.querySelector('.pv-status');
+                            fetch('/problem/' + encodeURIComponent(code) + '/', {credentials: 'same-origin'})
+                                .then(function (r) {
+                                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                                    return r.text();
+                                })
+                                .then(function (html) {
+                                    var doc = new DOMParser().parseFromString(html, 'text/html');
+                                    var desc = doc.querySelector('.content-description');
+                                    if (!desc) throw new Error('no statement');
+                                    // Rebase relative image/link URLs against the problem page.
+                                    var base = window.location.origin + '/problem/' + encodeURIComponent(code) + '/';
+                                    desc.querySelectorAll('img[src], a[href], video[src], source[src]').forEach(function (el) {
+                                        ['src', 'href'].forEach(function (attr) {
+                                            var v = el.getAttribute(attr);
+                                            if (!v) return;
+                                            if (/^(https?:)?\/\//i.test(v) || /^(data|mailto|javascript|#)/i.test(v)) return;
+                                            try { el.setAttribute(attr, new URL(v, base).href); } catch (e) { /* keep as-is */ }
+                                        });
+                                    });
+                                    pvStatus.remove();
+                                    pv.appendChild(desc);
+                                })
+                                .catch(function () {
+                                    pvStatus.textContent = {{ _('Statement preview unavailable — open the problem page to read the full statement.')|htmltojs }};
+                                });
+                        } else {
+                            pv.querySelector('.pv-status').textContent = {{ _('Open the problem page to read the full statement.')|htmltojs }};
+                        }
+                        pv.dataset.loaded = '1';
+                    }
+                    pv.style.display = 'block';
+                } else {
+                    pv.style.display = 'none';
+                }
+            };
             if (libBtn && slideover) {
                 libBtn.addEventListener('click', function () {
+                    window.cpInsertAt = null;
                     slideover.classList.add('open');
+                    renderLib();
                 });
                 slideover.querySelector('.so-mask').addEventListener('click', function () {
                     slideover.classList.remove('open');
@@ -691,81 +1541,291 @@
                 slideover.querySelector('.so-close').addEventListener('click', function () {
                     slideover.classList.remove('open');
                 });
-                // Search filter
-                var libSearch = document.getElementById('lib-search');
-                if (libSearch) {
-                    libSearch.addEventListener('input', function() {
-                        var q = this.value.toLowerCase();
-                        document.querySelectorAll('#lib-results tr').forEach(function(row) {
-                            var name = (row.dataset.name || '').toLowerCase();
-                            var code = (row.dataset.code || '').toLowerCase();
-                            row.style.display = (!q || name.includes(q) || code.includes(q)) ? '' : 'none';
-                        });
-                    });
+
+                // Library pagination state.
+                var libPage = 0, libPageSize = 10, libSortKey = null, libSortDesc = false;
+
+                function collectLibFilters() {
+                    return {
+                        q: (document.getElementById('lib-search').value || '').toLowerCase(),
+                        org: document.getElementById('lib-f-org').value,
+                        group: document.getElementById('lib-f-group').value,
+                        type: document.getElementById('lib-f-type').value,
+                        diff: document.getElementById('lib-f-diff').value,
+                        ac: document.getElementById('lib-f-ac').value,
+                    };
                 }
-                // Click to select rows
+                function buildFilterOptions() {
+                    var orgs = {}, groups = {}, types = {};
+                    document.querySelectorAll('#lib-results tr[data-pid]').forEach(function (row) {
+                        (row.dataset.org || '').split(';').forEach(function (o) { if (o) orgs[o] = 1; });
+                        if (row.dataset.group) groups[row.dataset.group] = 1;
+                        (row.dataset.types || '').split(';').forEach(function (t) { if (t) types[t] = 1; });
+                    });
+                    var orgSel = document.getElementById('lib-f-org');
+                    orgSel.innerHTML = '<option value="">' + {{ _('All orgs')|htmltojs }} + '</option>' +
+                        Object.keys(orgs).sort().map(function (o) {
+                            return '<option value="' + o.replace(/"/g, '&quot;') + '">' + o + '</option>';
+                        }).join('');
+                    var groupSel = document.getElementById('lib-f-group');
+                    groupSel.innerHTML = '<option value="">' + {{ _('All groups')|htmltojs }} + '</option>' +
+                        Object.keys(groups).sort().map(function (g) {
+                            return '<option value="' + g.replace(/"/g, '&quot;') + '">' + g + '</option>';
+                        }).join('');
+                    var typeSel = document.getElementById('lib-f-type');
+                    typeSel.innerHTML = '<option value="">' + {{ _('All types')|htmltojs }} + '</option>' +
+                        Object.keys(types).sort().map(function (t) {
+                            return '<option value="' + t.replace(/"/g, '&quot;') + '">' + t + '</option>';
+                        }).join('');
+                }
+                function libMatches(row, f) {
+                    var name = (row.dataset.name || '').toLowerCase();
+                    var code = (row.dataset.code || '').toLowerCase();
+                    if (f.q && name.indexOf(f.q) === -1 && code.indexOf(f.q) === -1) return false;
+                    if (f.org && (';' + row.dataset.org).indexOf(';' + f.org) === -1) return false;
+                    if (f.group && row.dataset.group !== f.group) return false;
+                    if (f.type && (row.dataset.types || '').split(';').indexOf(f.type) === -1) return false;
+                    if (f.diff && (row.dataset.diff || 'none') !== f.diff) return false;
+                    if (f.ac) {
+                        var ac = parseFloat(row.dataset.ac || '0');
+                        var parts = f.ac.split('-');
+                        var lo = parseInt(parts[0], 10), hi = parseInt(parts[1], 10);
+                        if (ac < lo || ac >= hi) return false;
+                    }
+                    return true;
+                }
+                function renderLib() {
+                    var tbody = document.getElementById('lib-results');
+                    if (!tbody) return;
+                    // "Added" ids are marked and disabled.
+                    var added = (document.getElementById('problem-ids').value || '').split(',').filter(Boolean);
+                    var rows = Array.prototype.filter.call(tbody.querySelectorAll('tr[data-pid]'), function (row) {
+                        return !row.classList.contains('lib-added');
+                    });
+                    var f = collectLibFilters();
+                    var matched = rows.filter(function (row) { return libMatches(row, f); });
+                    // Sorting.
+                    if (libSortKey) {
+                        matched.sort(function (a, b) {
+                            var va, vb;
+                            if (libSortKey === 'name') { va = (a.dataset.name || ''); vb = (b.dataset.name || ''); }
+                            else if (libSortKey === 'diff') { va = (a.dataset.diff || 'none'); vb = (b.dataset.diff || 'none'); }
+                            else if (libSortKey === 'ac') { va = parseFloat(a.dataset.ac || '0'); vb = parseFloat(b.dataset.ac || '0'); }
+                            else if (libSortKey === 'group') { va = (a.dataset.group || ''); vb = (b.dataset.group || ''); }
+                            else { va = parseInt(a.dataset.pid, 10); vb = parseInt(b.dataset.pid, 10); }
+                            if (va < vb) return libSortDesc ? 1 : -1;
+                            if (va > vb) return libSortDesc ? -1 : 1;
+                            return 0;
+                        });
+                    }
+                    var total = matched.length;
+                    var pages = Math.max(1, Math.ceil(total / libPageSize));
+                    if (libPage >= pages) libPage = pages - 1;
+                    // Hide everything, show the current page slice.
+                    rows.forEach(function (row) { row.style.display = 'none'; });
+                    var slice = matched.slice(libPage * libPageSize, (libPage + 1) * libPageSize);
+                    slice.forEach(function (row) {
+                        var isAdded = added.indexOf(row.dataset.pid) !== -1;
+                        row.style.display = '';
+                        row.classList.toggle('picked', isAdded && row.classList.contains('picked'));
+                        if (isAdded) {
+                            var nameCell = row.querySelector('.ptitle');
+                            if (nameCell && !row.querySelector('.added-flag')) {
+                                var flag = document.createElement('span');
+                                flag.className = 'added-flag';
+                                flag.textContent = ' · ' + {{ _('added')|htmltojs }};
+                                nameCell.appendChild(flag);
+                            }
+                            row.classList.add('added'); // visually dimmed via CSS if desired
+                        } else {
+                            var flagEl = row.querySelector('.added-flag');
+                            if (flagEl) flagEl.remove();
+                            row.classList.remove('added');
+                        }
+                    });
+                    var countEl = document.getElementById('lib-count');
+                    if (countEl) countEl.textContent = {{ _('Selected')|htmltojs }} + ' ' +
+                        tbody.querySelectorAll('tr.picked:not(.added)').length + ' · ' +
+                        {{ _('Showing')|htmltojs }} + ' ' + slice.length + ' / ' + total;
+                    var pager = document.getElementById('lib-pager');
+                    if (pager) {
+                        pager.innerHTML = '<button type="button" data-page="' + (libPage - 1) + '"' +
+                            (libPage <= 0 ? ' disabled' : '') + '>‹</button>' +
+                            ' <span>' + (libPage + 1) + ' / ' + pages + '</span> ' +
+                            '<button type="button" data-page="' + (libPage + 1) + '"' +
+                            (libPage >= pages - 1 ? ' disabled' : '') + '>›</button>';
+                        pager.querySelectorAll('button').forEach(function (btn) {
+                            btn.addEventListener('click', function () {
+                                var p = parseInt(this.dataset.page, 10);
+                                if (p >= 0 && p < pages) { libPage = p; renderLib(); }
+                            });
+                        });
+                    }
+                }
+                // Wire search + filters + sort headers.
+                ['lib-search', 'lib-f-org', 'lib-f-group', 'lib-f-type', 'lib-f-diff', 'lib-f-ac'].forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el) el.addEventListener('change', function () { libPage = 0; renderLib(); });
+                });
+                document.getElementById('lib-search').addEventListener('input', function () { libPage = 0; renderLib(); });
+                slideover.querySelector('.so-table thead').addEventListener('click', function (e) {
+                    var th = e.target.closest('th[data-sort]');
+                    if (!th) return;
+                    var key = th.dataset.sort;
+                    if (libSortKey === key) libSortDesc = !libSortDesc;
+                    else { libSortKey = key; libSortDesc = false; }
+                    renderLib();
+                });
+                // Click to select rows (skip added rows).
                 slideover.querySelector('#lib-results').addEventListener('click', function(e) {
                     var row = e.target.closest('tr[data-pid]');
-                    if (row) row.classList.toggle('picked');
+                    if (row && !row.classList.contains('added')) row.classList.toggle('picked');
                 });
 
-                // +Add button: add picked problems to contest
+                // +Add button: add picked problems to contest (at insert position).
                 slideover.querySelector('.so-foot .btn-primary').addEventListener('click', function() {
-                    var picked = slideover.querySelectorAll('#lib-results tr.picked');
+                    var picked = slideover.querySelectorAll('#lib-results tr.picked:not(.added)');
                     if (!picked.length) return showToast({{ _("No problems selected.")|htmltojs }});
 
-                    var ids = [];
                     var cpList = document.querySelector('.cp-list');
                     var cpEmpty = document.querySelector('.cp-empty');
-                    var cpCount = document.querySelector('.cp-toolbar .count');
                     var hiddenIds = document.getElementById('problem-ids');
-
-                    // Build or update the problem list
-                    if (cpList) cpList.style.display = '';
-                    if (cpEmpty) cpEmpty.style.display = 'none';
-
                     var existingIds = (hiddenIds.value || '').split(',').filter(Boolean);
+                    var newRows = [];
 
                     picked.forEach(function(row) {
                         var pid = row.dataset.pid;
                         if (existingIds.includes(pid)) return;
                         existingIds.push(pid);
-                        ids.push(pid);
+                        newRows.push(row);
+                    });
+                    if (!newRows.length) return showToast({{ _("All selected problems are already added.")|htmltojs }});
 
-                        // Add row to the problem list
-                        if (cpList) {
-                            var r = document.createElement('div');
-                            r.className = 'cp-row';
-                            r.dataset.pid = pid;
-                            r.innerHTML = '<span></span><span class="label-letter">' + String.fromCharCode(64 + existingIds.length) + '</span>' +
-                                '<span class="pname">' + esc(row.dataset.name || 'Problem ' + pid) + '</span>' +
-                                '<span><input type="number" value="100" style="width:48px"></span>' +
-                                '<span>—</span>' +
-                                '<span class="cp-actions"><button type="button" class="btn-icon danger" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button></span>';
+                    if (cpList) cpList.style.display = '';
+                    if (cpEmpty) cpEmpty.style.display = 'none';
+
+                    // Insert position (from the reorder rail) or append.
+                    var insertIndex = window.cpInsertAt;
+                    var children = Array.prototype.filter.call(cpList.children, function (el) {
+                        return el.classList.contains('cp-row') && el.dataset.pid;
+                    });
+                    var insertAfter = null;
+                    if (insertIndex !== null && insertIndex >= 0 && insertIndex < children.length) {
+                        insertAfter = children[insertIndex];
+                    }
+                    newRows.forEach(function (row) {
+                        var r = document.createElement('div');
+                        r.className = 'cp-row';
+                        r.dataset.pid = row.dataset.pid;
+                        r.dataset.code = row.dataset.code || '';
+                        r.setAttribute('draggable', 'true');
+                        r.innerHTML = libRowHtml(row, '?');
+                        if (insertAfter) {
+                            cpList.insertBefore(r, insertAfter.nextSibling);
+                            insertAfter = r; // chain subsequent rows after this one
+                        } else {
                             cpList.appendChild(r);
                         }
                     });
 
                     hiddenIds.value = existingIds.join(',');
-                    if (cpCount) cpCount.textContent = existingIds.length + {{ _(" problems")|htmltojs }};
-
+                    window.cpInsertAt = null;
+                    renumberCpRows();
+                    updateProblemIds();
                     slideover.classList.remove('open');
-                    showToast(existingIds.length + {{ _(" problems added")|htmltojs }});
+                    showToast(newRows.length + {{ _(" problems added")|htmltojs }});
                 });
+                buildFilterOptions();
+            }
 
-                window.updateProblemIds = function() {
-                    var ids = [];
-                    document.querySelectorAll('.cp-list .cp-row').forEach(function(r) {
-                        if (r.dataset.pid) ids.push(r.dataset.pid);
+            // --- Problem list bookkeeping (remove buttons, preview sync) ---
+            // Defined unconditionally: the per-row remove button in the markup
+            // calls updateProblemIds() inline, so it must exist even when the
+            // "From library" slide-over failed to initialise.
+            window.updateProblemIds = function() {
+                var ids = [];
+                document.querySelectorAll('.cp-list .cp-row').forEach(function(r) {
+                    if (r.dataset.pid) ids.push(r.dataset.pid);
+                });
+                document.getElementById('problem-ids').value = ids.join(',');
+                var cnt = document.querySelector('.cp-toolbar .count');
+                if (cnt) cnt.textContent = ids.length + {{ _(" problems")|htmltojs }};
+                if (!ids.length) {
+                    document.querySelector('.cp-list').style.display = 'none';
+                    document.querySelector('.cp-empty').style.display = '';
+                }
+                renumberCpRows();
+                syncPreviewProblems();
+                syncScoreSummary();
+            };
+
+            // --- Drag & drop reorder (4c) ---
+            // HTML5 dnd on the row list: on drop, splice the DOM order and
+            // re-render letters so the submitted order follows the DOM.
+            var cpListEl = document.getElementById('cp-list');
+            if (cpListEl) {
+                var dragPid = null;
+                cpListEl.addEventListener('dragstart', function (e) {
+                    var row = e.target.closest('.cp-row[data-pid]');
+                    if (!row) return;
+                    dragPid = row.dataset.pid;
+                    e.dataTransfer.effectAllowed = 'move';
+                    try { e.dataTransfer.setData('text/plain', dragPid); } catch (err) {}
+                    row.classList.add('dragging');
+                });
+                cpListEl.addEventListener('dragend', function (e) {
+                    var row = e.target.closest('.cp-row');
+                    if (row) row.classList.remove('dragging');
+                    dragPid = null;
+                });
+                cpListEl.addEventListener('dragover', function (e) {
+                    e.preventDefault();
+                    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+                    // Show an insertion indicator on the row being hovered: a
+                    // top/bottom border tells where the dragged row will land.
+                    cpListEl.querySelectorAll('.drop-before, .drop-after').forEach(function (el) {
+                        el.classList.remove('drop-before', 'drop-after');
                     });
-                    document.getElementById('problem-ids').value = ids.join(',');
-                    var cnt = document.querySelector('.cp-toolbar .count');
-                    if (cnt) cnt.textContent = ids.length + {{ _(" problems")|htmltojs }};
-                    if (!ids.length) {
-                        document.querySelector('.cp-list').style.display = 'none';
-                        document.querySelector('.cp-empty').style.display = '';
-                    }
-                };
+                    var row = e.target.closest('.cp-row[data-pid]');
+                    if (!row || row.dataset.pid === dragPid) return;
+                    var rect = row.getBoundingClientRect();
+                    var above = e.clientY < rect.top + rect.height / 2;
+                    row.classList.add(above ? 'drop-before' : 'drop-after');
+                });
+                cpListEl.addEventListener('dragleave', function () {
+                    cpListEl.querySelectorAll('.drop-before, .drop-after').forEach(function (el) {
+                        el.classList.remove('drop-before', 'drop-after');
+                    });
+                });
+                cpListEl.addEventListener('drop', function (e) {
+                    e.preventDefault();
+                    cpListEl.querySelectorAll('.drop-before, .drop-after').forEach(function (el) {
+                        el.classList.remove('drop-before', 'drop-after');
+                    });
+                    if (!dragPid) return;
+                    var targetRow = e.target.closest('.cp-row[data-pid]');
+                    if (!targetRow) return;
+                    var rows = Array.prototype.filter.call(cpListEl.children, function (el) {
+                        return el.classList.contains('cp-row') && el.dataset.pid;
+                    });
+                    var fromIdx = -1, toIdx = -1;
+                    rows.forEach(function (r, i) {
+                        if (r.dataset.pid === dragPid) fromIdx = i;
+                        if (r.dataset.pid === targetRow.dataset.pid) toIdx = i;
+                    });
+                    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+                    // Respect the hovered half: dropping on the top half inserts
+                    // before the target, bottom half after it.
+                    var rect = targetRow.getBoundingClientRect();
+                    var insertAfter = e.clientY >= rect.top + rect.height / 2;
+                    var moved = rows.splice(fromIdx, 1)[0];
+                    if (!insertAfter && fromIdx < toIdx) toIdx--;  // index shifted after removal
+                    rows.splice(insertAfter ? toIdx + 1 : toIdx, 0, moved);
+                    rows.forEach(function (r) { cpListEl.appendChild(r); });
+                    dragPid = null;
+                    renumberCpRows();
+                    updateProblemIds();
+                });
             }
 
             // --- Create new problem button ---
@@ -799,6 +1859,218 @@
                     });
                 });
             }
+
+            // --- Class options depend on the selected organization ---
+            // The class <option>s carry a data-org attribute; selecting an
+            // organization narrows the class dropdown to that org's classes
+            // (and clears a previously picked class that no longer matches).
+            var orgSel = document.getElementById('id_organizations');
+            var classSel = document.getElementById('id_classes');
+            if (orgSel && classSel) {
+                function syncClassOptions() {
+                    var orgId = orgSel.value;
+                    var stale = true;
+                    Array.from(classSel.options).forEach(function (opt) {
+                        var show = !orgId || opt.dataset.org === orgId;
+                        opt.style.display = show ? '' : 'none';
+                        if (show && opt.value && opt.selected) stale = false;
+                    });
+                    if (stale) classSel.value = '';
+                    var classRow = classSel.closest('.form-row');
+                    if (classRow) classRow.style.display = orgId ? '' : 'none';
+                }
+                orgSel.addEventListener('change', syncClassOptions);
+                syncClassOptions();
+            }
+
+            // --- Description RichEditor (③) ---
+            var descMount = document.getElementById('desc-editor-mount');
+            if (descMount && typeof RichEditor !== 'undefined' && RichEditor.html) {
+                try {
+                    descMount.innerHTML = RichEditor.html('desc', {
+                        compact: true,
+                        placeholder: {{ _('Contest description (supports Markdown)')|tojson }},
+                    });
+                    RichEditor.mount();
+                    RichEditor.init();
+                    if ({{ prefill.description|tojson }}) {
+                        RichEditor.setMarkdown('desc', {{ prefill.description|tojson }});
+                    }
+                } catch (err) {
+                    if (window.console && console.error) console.error('desc editor init:', err);
+                }
+            }
+
+            // --- Bottom-bar action buttons (6a): save / continue / another ---
+            var actionInput = document.getElementById('form-action');
+            if (actionInput) {
+                document.querySelectorAll('#bottombar button[data-action]').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        actionInput.value = this.dataset.action;
+                    });
+                });
+            }
+
+            // --- Finalize / Un-finalize (6b) ---
+            function postFinalize(url, confirmMsg, okMsg) {
+                if (!confirm(confirmMsg)) return;
+                var token = document.querySelector('input[name="csrfmiddlewaretoken"]');
+                fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': token ? token.value : ''
+                    },
+                    body: '{}'
+                })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (res.ok) showToast(okMsg);
+                    else showToast(res.error || {{ _('Failed.')|htmltojs }}, true);
+                })
+                .catch(function () {
+                    showToast({{ _('Failed to finalize.')|htmltojs }}, true);
+                });
+            }
+            {% if contest %}
+            var finBtn = document.getElementById('finalize-btn');
+            if (finBtn) {
+                finBtn.addEventListener('click', function () {
+                    postFinalize({{ url('contest_finalize', contest.key)|tojson }},
+                        {{ _('Finalize results? Hidden problem results will be revealed and the latest submissions rejudged.')|tojson }},
+                        {{ _('Finalizing — results will appear shortly.')|htmltojs }});
+                });
+            }
+            var unfinBtn = document.getElementById('unfinalize-btn');
+            if (unfinBtn) {
+                unfinBtn.addEventListener('click', function () {
+                    postFinalize({{ url('contest_unfinalize', contest.key)|tojson }},
+                        {{ _('Un-finalize results? Hidden problem results will be masked again.')|tojson }},
+                        {{ _('Un-finalizing — results will be masked shortly.')|htmltojs }});
+                });
+            }
+
+            // --- SEB .seb upload (⑤, edit mode only) ---
+            var sebBtn = document.getElementById('seb-upload-btn');
+            var sebInput = document.getElementById('seb-upload-input');
+            if (sebBtn && sebInput) {
+                sebBtn.addEventListener('click', function () {
+                    var file = sebInput.files[0];
+                    if (!file) return showToast({{ _('Choose a .seb file first.')|htmltojs }}, true);
+                    var token = document.querySelector('input[name="csrfmiddlewaretoken"]');
+                    var fd = new FormData();
+                    fd.append('seb_config_file', file);
+                    if (token) fd.append('csrfmiddlewaretoken', token.value);
+                    sebBtn.disabled = true;
+                    fetch({{ url('contest_seb_upload', contest.key)|tojson }}, {
+                        method: 'POST',
+                        body: fd,
+                        credentials: 'same-origin'
+                    })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (res.ok) {
+                            showToast({{ _('SEB config uploaded.')|htmltojs }});
+                            // Reload so the new file link appears.
+                            setTimeout(function () { window.location.reload(); }, 800);
+                        } else {
+                            showToast(res.error || {{ _('Upload failed.')|htmltojs }}, true);
+                        }
+                    })
+                    .catch(function () {
+                        showToast({{ _('Upload failed.')|htmltojs }}, true);
+                    })
+                    .finally(function () { sebBtn.disabled = false; });
+                });
+            }
+            {% endif %}
+
+            // --- Draft autosave (6c, create mode only) ---
+            var DRAFT_KEY = 'dkuoj_contest_draft';
+            function collectDraft() {
+                var fd = new FormData(form);
+                var draft = {
+                    name: fd.get('name') || '',
+                    key: fd.get('key') || '',
+                    tags: [],
+                };
+                Array.from(document.getElementById('id_tags').selectedOptions).forEach(function (o) {
+                    draft.tags.push(o.value);
+                });
+                if (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown) {
+                    draft.description = RichEditor.getMarkdown('desc') || '';
+                }
+                return draft;
+            }
+            function applyDraft(draft) {
+                if (!draft) return;
+                var nameEl = document.getElementById('id_name');
+                var keyEl = document.getElementById('id_key');
+                if (nameEl && draft.name) nameEl.value = draft.name;
+                if (keyEl && draft.key) keyEl.value = draft.key;
+                if (draft.tags && draft.tags.length) {
+                    draft.tags.forEach(function (id) {
+                        var opt = document.getElementById('id_tags').querySelector('option[value="' + id + '"]');
+                        if (opt) opt.selected = true;
+                    });
+                    syncTagPills();
+                }
+                if (draft.description && typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
+                    RichEditor.setMarkdown('desc', draft.description);
+                }
+            }
+            if (!{{ 'true' if contest else 'false' }}) {
+                var saveDraftTimer = null;
+                form.addEventListener('input', function () {
+                    if (saveDraftTimer) clearTimeout(saveDraftTimer);
+                    saveDraftTimer = setTimeout(function () {
+                        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(collectDraft())); } catch (err) {}
+                    }, 500);
+                });
+                try {
+                    var saved = localStorage.getItem(DRAFT_KEY);
+                    if (saved) {
+                        var draft = JSON.parse(saved);
+                        if (draft && draft.name) {
+                            var msg = {{ _('Recover the unsaved draft?')|tojson }};
+                            if (confirm(msg)) {
+                                applyDraft(draft);
+                                showToast({{ _('Draft restored.')|htmltojs }});
+                            } else {
+                                localStorage.removeItem(DRAFT_KEY);
+                            }
+                        }
+                    }
+                } catch (err) {}
+            }
+
+            // --- "Save and add another": clear the form but stay put (6a) ---
+            window.resetFormForAnother = function () {
+                if (typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
+                    RichEditor.setMarkdown('desc', '');
+                }
+                form.reset();
+                var actionEl = document.getElementById('form-action');
+                if (actionEl) actionEl.value = 'save';
+                document.getElementById('id_tags').selectedIndex = -1;
+                syncTagPills();
+                var cpListEl2 = document.getElementById('cp-list');
+                if (cpListEl2) {
+                    Array.prototype.forEach.call(cpListEl2.querySelectorAll('.cp-row[data-pid]'), function (r) { r.remove(); });
+                }
+                updateProblemIds();
+                var score = document.getElementById('f-score');
+                if (score) score.value = 100;
+                var nameEl2 = document.getElementById('id_name');
+                if (nameEl2) nameEl2.focus();
+                try { localStorage.removeItem(DRAFT_KEY); } catch (err) {}
+            };
+
+            } catch (e) {
+                // Cosmetic initializers must never break saving (the submit
+                // handler above is already attached). Log and continue.
+                if (window.console && console.error) console.error('contest editor init:', e);
+            }
         });
     </script>
 {% endblock %}
@@ -816,8 +2088,8 @@
                     / {{ _('Edit Assignment') if contest else _('Add Assignment') }}
                 </span>
                 <div class="sp-layout-switch">
-                    <button class="active" data-layout="layout-lr">{{ _('左右') }}</button>
-                    <button data-layout="layout-tb">{{ _('上下') }}</button>
+                    <button class="active" data-layout="layout-lr" title="{{ _('Editor on the left, preview on the right') }}">{{ _('Horizontal') }}</button>
+                    <button data-layout="layout-tb" title="{{ _('Editor on top, preview below') }}">{{ _('Vertical') }}</button>
                 </div>
             </div>
 
@@ -840,7 +2112,17 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Duration') }}</label>
+                                <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Auto-generated from the name — edit it only if you need a specific ID.')) }}</label>
+                                <div class="field">
+                                    <input type="text" id="id_key" name="key" required
+                                           placeholder="{{ _('Auto-generated from name') }}"
+                                           pattern="[a-z0-9]+" maxlength="20"
+                                           value="{{ prefill.key or '' }}">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Duration') }}{{ tip(_('Each participant gets this much time from the moment they start. The assignment closes at the end time below — if the deadline arrives first, the timer stops even with time left. Validity and duration are independent. Once students have joined, the duration can only be increased — shortening it would end their windows mid-run and is blocked.')) }}</label>
                                 <div class="field ac-inline">
                                     <input type="number" id="id_duration_hours" name="duration_hours"
                                            min="0" max="1000" value="{{ prefill.duration_hours if contest else 0 }}">
@@ -848,12 +2130,16 @@
                                     <input type="number" id="id_duration_minutes" name="duration_minutes"
                                            min="0" max="59" value="{{ prefill.duration_minutes if contest else 0 }}">
                                     <span class="unit">{{ _('min') }}</span>
-                                    <span class="unit" style="margin-left:0.5rem;">{{ _('No limit') }}</span>
+                                    <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;margin-left:0.5rem;">
+                                        <input type="checkbox" id="id_duration_none"{% if not contest or not prefill.duration_hours and not prefill.duration_minutes %} checked{% endif %}>
+                                        {{ _('No limit') }}
+                                    </label>
                                 </div>
+                                <div class="dur-note" id="dur-end-warning" style="display:none;margin-top:0.4rem;"></div>
                             </div>
 
-                            <div class="form-row">
-                                <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time.', tz=user_timezone)) }}</label>
+                            <div class="form-row stacked">
+                                <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time. Once students have joined, the end time can only be extended, not brought earlier.', tz=user_timezone)) }}</label>
                                 <div class="field">
                                     <div class="seg" style="margin-bottom:0.45rem;">
                                         <label><input type="radio" name="validity_type" value="range" hidden checked><span>{{ _('Range') }}</span></label>
@@ -878,21 +2164,35 @@
                                                 {% endfor %}
                                             </select>
                                         </span>
-                                        <span class="tz-current">{{ _('Times above shown in %(tz)s', tz=user_timezone) }}</span>
                                     </div>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Target score') }}{{ tip(_('Just a planning aid — the editor warns if the sum of problem points differs from this target. Not saved.')) }}</label>
+                                <div class="field ac-inline">
+                                    <input type="number" id="f-score" min="1" value="{{ prefill.target_score or 100 }}" style="width:80px;">
+                                    <span class="unit">{{ _('pts') }}</span>
                                 </div>
                             </div>
 
                             <div class="form-row">
                                 <label>{{ _('Organization') }}</label>
                                 <div class="field">
-                                    <select id="id_organizations" name="organizations" data-oj-select>
-                                        <option value="">{{ _('— Public —') }}</option>
-                                        {% set prefill_org_ids = (prefill.organizations or []) | map(attribute=0) | list %}
-                                        {% for org in organizations %}
-                                            <option value="{{ org.id }}"{% if org.id in prefill_org_ids %} selected{% endif %}>{{ org.name }}</option>
-                                        {% endfor %}
-                                    </select>
+                                    {# Scoping a contest to an organization needs create_private_contest; without
+                                       it the select is hidden (server also skips the field on save). #}
+                                    {% if 'organizations' in restricted_fields %}
+                                        <div class="ac-help">{{ _('Organization scoping is managed by administrators.') }}</div>
+                                    {% else %}
+                                        <select id="id_organizations" name="organizations" data-oj-select>
+                                            <option value="">{{ _('— Public —') }}</option>
+                                            {% set prefill_org_ids = (prefill.organizations or []) | map(attribute=0) | list %}
+                                            {% for org in organizations %}
+                                                <option value="{{ org.id }}"{% if org.id in prefill_org_ids %} selected{% endif %}>{{ org.name }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <div class="vis-mute-note" id="org-mute-note"></div>
+                                    {% endif %}
                                 </div>
                             </div>
 
@@ -903,26 +2203,18 @@
                                         <option value="">{{ _('Select organization first') }}</option>
                                         {% set prefill_class_ids = (prefill.classes or []) | map(attribute=0) | list %}
                                         {% for cls in classes %}
-                                            <option value="{{ cls.id }}"{% if cls.id in prefill_class_ids %} selected{% endif %}>{{ cls.name }}</option>
+                                            {# data-org drives the client-side org→class cascade (see JS above). #}
+                                            <option value="{{ cls.id }}" data-org="{{ cls.organization_id }}"{% if cls.id in prefill_class_ids %} selected{% endif %}>{{ cls.name }}</option>
                                         {% endfor %}
                                     </select>
+                                    <div class="vis-mute-note" id="class-mute-note"></div>
                                 </div>
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Tags') }}</label>
+                                <label>{{ _('Tags') }}{{ tip(_('Click + to pick existing tags or create a new one on the fly.')) }}</label>
                                 <div class="field">
-                                    <div class="tag-row">
-                                        <div class="tag-pills" id="tag-pills"></div>
-                                        <div class="tag-add-wrap">
-                                            <button type="button" class="tag-add" id="tag-add-btn">+ {{ _('Add') }}</button>
-                                            <div class="tag-suggest" id="tag-suggest">
-                                                {% for tag in tags %}
-                                                <button type="button" data-id="{{ tag.id }}" data-color="{{ tag.color }}">{{ tag.name }}</button>
-                                                {% endfor %}
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <div class="ptype-tags" id="tag-pills"></div>
                                     <select id="id_tags" name="tags" multiple hidden>
                                         {% set prefill_tag_ids = (prefill.tags or []) | map(attribute=0) | list %}
                                         {% for tag in tags %}
@@ -933,27 +2225,53 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('List visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Off = visible only to editors; on = listed for students. This is separate from privacy: an on-list assignment can still be restricted to specific users or organizations.')) }}</label>
+                                <label>{{ _('List visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Org = listed, restricted to the organizations/classes above; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side.')) }}</label>
                                 <div class="field">
-                                    <div class="seg" id="vis-seg">
-                                        <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
-                                        <label><input type="radio" name="vis_mode" value="public"{% if prefill.vis_mode == 'public' %} checked{% endif %}><span>{{ _('Public') }}</span></label>
-                                        <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Org') }}</span></label>
-                                        <label><input type="radio" name="vis_mode" value="private"{% if prefill.vis_mode == 'private' %} checked{% endif %}><span>{{ _('Private') }}</span></label>
-                                    </div>
-                                    <div style="margin-top:0.45rem;">
-                                        <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
-                                            <input type="checkbox" id="id_is_visible" name="is_visible"{% if prefill.is_visible %} checked{% endif %}> {{ _('Publicly visible') }}
-                                        </label>
-                                    </div>
+                                    {% if 'is_visible' in restricted_fields %}
+                                        {# Visibility is admin-managed for this user (no change_contest_visibility
+                                           permission): show the still-editable privacy flags directly instead of the
+                                           seg control, and keep a non-submitted hidden flag so the preview badge
+                                           still reflects the stored is_visible value. #}
+                                        <input type="hidden" id="id_is_visible" value="{% if prefill.is_visible %}true{% else %}false{% endif %}">
+                                        <div class="check-grid">
+                                            <label><input type="checkbox" id="id_is_private" name="is_private"{% if prefill.is_private %} checked{% endif %}> {{ _('Private to listed users') }}</label>
+                                            <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to organizations / classes') }}</label>
+                                        </div>
+                                        <div class="ac-help">{{ _('Whether the assignment is listed is managed by administrators.') }}</div>
+                                    {% else %}
+                                        {% if not can_edit_private and prefill.vis_mode in ('private', 'org') %}
+                                            {# The stored contest is private/org-scoped, but this user lacks
+                                               create_private_contest: show a read-only note instead of a seg
+                                               whose Private/Org options would silently not apply. #}
+                                            <input type="hidden" id="id_is_visible" value="true">
+                                            <input type="hidden" id="id_vis_mode_ro" value="{{ prefill.vis_mode }}">
+                                            <div class="ac-help">
+                                                {{ _('This assignment is restricted to a private audience (managed by administrators).') }}
+                                            </div>
+                                        {% else %}
+                                        <div class="seg" id="vis-seg">
+                                            <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
+                                            <label><input type="radio" name="vis_mode" value="public"{% if prefill.vis_mode == 'public' %} checked{% endif %}><span>{{ _('Public') }}</span></label>
+                                            {% if can_edit_private %}
+                                            <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Org') }}</span></label>
+                                            <label><input type="radio" name="vis_mode" value="private"{% if prefill.vis_mode == 'private' %} checked{% endif %}><span>{{ _('Private') }}</span></label>
+                                            {% endif %}
+                                        </div>
+                                        <div class="ac-help">{{ _('Org / Private restrict access; pick the organizations/classes or users in the sections above / under Advanced → Private users.') }}</div>
+                                        {% endif %}
+                                    {% endif %}
                                 </div>
                             </div>
 
-                            <div class="form-row">
+                            <div class="form-row stacked">
                                 <label>{{ _('Description') }}</label>
                                 <div class="field">
-                                    <textarea id="id_description" name="description" rows="3"
-                                              placeholder="{{ _('Contest description (supports Markdown)') }}"></textarea>
+                                    {# RichEditor mounts here (rich_editor.js); the markdown text lives
+                                       in the editor's internal textarea and is read on submit via
+                                       RichEditor.getMarkdown('desc'). The hidden input is a fallback
+                                       that preserves the stored value if the editor fails to load. #}
+                                    <div id="desc-editor-mount"></div>
+                                    <input type="hidden" id="id_description" name="description" value="{{ prefill.description or '' }}">
                                 </div>
                             </div>
                         </div>
@@ -965,55 +2283,97 @@
                         <div class="form-content">
                             <div class="cp-toolbar">
                                 <button type="button" class="btn-soft"><i class="fa fa-search"></i> {{ _('From library') }}</button>
+                                {# "Create new" opens the Django admin problem editor; hide it for users
+                                   who could not use that page anyway (needs judge.add_problem). #}
+                                {% if perms.judge.add_problem %}
                                 <button type="button" class="btn-soft alt"><i class="fa fa-plus"></i> {{ _('Create new') }}</button>
+                                {% endif %}
                                 <span class="spacer"></span>
-                                <span class="count">{{ prefill.problems|length if prefill.problems else 0 }} {{ _('problems') }}</span>
+                                <span class="count" id="cp-count">{{ prefill.problems|length if prefill.problems else 0 }} {{ _('problems') }}</span>
                             </div>
-                            <div class="cp-list"{% if not prefill.problems %} style="display:none;"{% endif %}>
+                            <div class="cp-list" id="cp-list"{% if not prefill.problems %} style="display:none;"{% endif %}>
                                 <div class="cp-row cp-row-head">
                                     <span></span><span></span>
                                     <span class="pname">{{ _('Problem') }}</span>
-                                    <span>{{ _('Pts') }}</span>
-                                    <span>{{ _('Max') }}</span>
+                                    <span>{{ _('Pts') }}{{ tip(_('Points this problem is worth.')) }}</span>
+                                    <span>{{ _('Max') }}{{ tip(_('Maximum number of submissions allowed for this problem — blank means unlimited.')) }}</span>
                                     <span></span>
                                 </div>
                                 {% for p in prefill.problems %}
-                                <div class="cp-row" data-pid="{{ p.id }}">
-                                    <span></span><span class="label-letter">{{ p.letter }}</span>
+                                <div class="cp-row" data-pid="{{ p.id }}" data-code="{{ p.code }}" draggable="true">
+                                    <span class="cp-drag" title="{{ _('Drag to reorder') }}">⠿</span>
+                                    <span class="label-letter">{{ p.letter }}</span>
                                     <span class="pname">{{ p.name }}</span>
-                                    <span><input type="number" value="{{ p.points }}" style="width:48px"></span>
-                                    <span>—</span>
-                                    <span class="cp-actions"><button type="button" class="btn-icon danger" onclick="this.closest('.cp-row').remove();updateProblemIds()">&times;</button></span>
+                                    <span><input type="number" class="cp-points" value="{{ p.points }}" style="width:48px"></span>
+                                    <span><input type="number" class="cp-max-subs" min="1" placeholder="∞" title="{{ _('Maximum number of submissions allowed for this problem — blank means unlimited.') }}" style="width:60px" value="{{ p.max_submissions }}"></span>
+                                    <span class="cp-actions">
+                                        <button type="button" class="btn-icon" title="{{ _('Preview') }}" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>
+                                        <a class="btn-icon" title="{{ _('Solve') }}" href="{{ url('problem_detail', p.code) }}" target="_blank"><i class="fa fa-external-link"></i></a>
+                                        <button type="button" class="btn-icon danger" title="{{ _('Remove') }}" onclick="this.closest('.cp-row').remove();updateProblemIds()">&times;</button>
+                                    </span>
+                                    {# Per-problem options (admin parity): partial credit, pretest-only,
+                                       max submissions, result visibility and output prefix. #}
+                                    <div class="cp-options">
+                                        <label class="cp-opt"><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}> {{ _('Partial credit') }}</label>
+                                        <label class="cp-opt"><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}> {{ _('Pretest only') }}</label>
+                                        <label class="cp-opt" title="{{ _('What results students can see after judging.') }}">{{ _('Results') }}
+                                            <select class="cp-results">
+                                                <option value=""{% if p.hide_results is none %} selected{% endif %}>{{ _('Default') }}</option>
+                                                <option value="hide"{% if p.hide_results is sameas(true) %} selected{% endif %}>{{ _('Hide') }}</option>
+                                                <option value="show"{% if p.hide_results is sameas(false) %} selected{% endif %}>{{ _('Show') }}</option>
+                                            </select>
+                                        </label>
+                                        <label class="cp-opt" title="{{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.') }}">{{ _('Out prefix') }} <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px" value="{{ p.output_prefix }}"></label>
+                                    </div>
+                                    <div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>
                                 </div>
                                 {% endfor %}
                             </div>
-                            <div class="cp-empty"{% if prefill.problems %} style="display:none;"{% endif %}>{{ _('No problems yet. Hover between rows to insert.') }}</div>
+                            <div class="cp-empty" id="cp-empty"{% if prefill.problems %} style="display:none;"{% endif %}>{{ _('No problems yet. Use “From library” to add problems.') }}</div>
                         </div>
                     </fieldset>
 
                     <!-- ③ Anti-cheating -->
+                    {# Permission-gate the anti-cheat controls: access codes need judge.contest_access_code,
+                       SEB settings need judge.contest_seb_requirement. Restricted controls are hidden and the
+                       server skips them on save (see ContestCreate._restricted_fields), so a curator can never
+                       arm SEB or set a code they lack permission for. #}
+                    {% set can_edit_access_code = 'access_code' not in restricted_fields %}
+                    {% set can_edit_seb = 'seb_required' not in restricted_fields and 'seb_browser_exam_keys' not in restricted_fields and 'seb_config_keys' not in restricted_fields and 'seb_quit_url' not in restricted_fields %}
+                    {% if can_edit_access_code or can_edit_seb %}
                     <fieldset class="module">
                         <h2>{{ _('Anti-cheating') }}</h2>
                         <div class="form-content">
                             <div class="seg" style="margin-bottom:0.6rem;">
+                                {% if can_edit_seb %}
                                 <label><input type="radio" name="cheat_level" value="high" hidden{% if prefill.cheat_level == 'high' %} checked{% endif %}><span>{{ _('High') }}</span></label>
+                                {% endif %}
+                                {% if can_edit_access_code %}
                                 <label><input type="radio" name="cheat_level" value="medium" hidden{% if prefill.cheat_level == 'medium' %} checked{% endif %}><span>{{ _('Medium') }}</span></label>
+                                {% endif %}
                                 <label><input type="radio" name="cheat_level" value="low" hidden{% if prefill.cheat_level == 'low' %} checked{% endif %}><span>{{ _('Low') }}</span></label>
+                                {% if can_edit_seb and can_edit_access_code %}
                                 <label><input type="radio" name="cheat_level" value="custom" hidden{% if prefill.cheat_level == 'custom' %} checked{% endif %}><span>{{ _('Custom') }}</span></label>
+                                {% endif %}
                             </div>
                             <div class="ac-help" style="margin-bottom:0.75rem;">
                                 {{ _('High ≈ SEB exam · Medium ≈ classroom quiz (access code) · Low ≈ open practice') }}
                             </div>
+                            {% if can_edit_access_code %}
                             <div class="form-row" id="cheat-accesscode-row">
                                 <label>{{ _('Access code') }}</label>
                                 <div class="field ac-inline">
+                                    {# Backfill the stored code: without this, reopening an existing contest
+                                       shows an empty field and saving would wipe the access code. #}
                                     <input type="text" id="id_access_code" name="access_code"
-                                           placeholder="{{ _('Optional') }}">
+                                           placeholder="{{ _('Optional') }}" value="{{ prefill.access_code or '' }}">
                                     <button type="button" id="gen-access-code" class="btn-soft">{{ _('Generate') }}</button>
                                 </div>
                             </div>
                             <div class="ac-help">{{ _('Students must enter a code before joining.') }}</div>
+                            {% endif %}
 
+                            {% if can_edit_seb %}
                             <div class="ac-card" id="cheat-seb-section">
                                 <div class="form-row">
                                     <label>{{ _('SEB') }}</label>
@@ -1042,40 +2402,48 @@
                                                 <input type="text" name="seb_quit_url" placeholder="{{ _('https://...') }}" value="{{ prefill.seb_quit_url or '' }}">
                                             </div>
                                         </div>
-                                        {% if contest and contest.seb_config_file %}
-                                        <div class="form-row">
-                                            <label style="width:100px;">{{ _('Config file') }}{{ tip(_('Replace the .seb file in the Django admin (Access → Safe Exam Browser).')) }}</label>
+                                        <div class="form-row" style="margin-bottom:0.4rem;">
+                                            <label style="width:100px;">{{ _('Config file') }}</label>
                                             <div class="field">
-                                                <a href="{{ contest.seb_config_file.url }}" target="_blank">{{ contest.seb_config_file.name }}</a>
+                                                {% if contest %}
+                                                    {% if contest.seb_config_file %}
+                                                    <div class="ac-inline" style="margin-bottom:0.3rem;">
+                                                        <a href="{{ contest.seb_config_file.url }}" target="_blank">{{ contest.seb_config_file.name }}</a>
+                                                        <span class="unit">{{ _('Current file — upload below to replace.') }}</span>
+                                                    </div>
+                                                    {% endif %}
+                                                    <div class="ac-inline">
+                                                        <input type="file" id="seb-upload-input" accept=".seb">
+                                                        <button type="button" class="btn-soft" id="seb-upload-btn">{{ _('Upload .seb') }}</button>
+                                                    </div>
+                                                {% else %}
+                                                    <div class="ac-help">{{ _('Save the assignment first, then upload the .seb file here.') }}</div>
+                                                {% endif %}
                                             </div>
                                         </div>
-                                        {% endif %}
                                     </div>
                                 </div>
                             </div>
+                            {% endif %}
                         </div>
                     </fieldset>
+                    {% else %}
+                    <fieldset class="module">
+                        <h2>{{ _('Anti-cheating') }}</h2>
+                        <div class="form-content">
+                            <div class="ac-help">{{ _('Anti-cheating settings (access code / Safe Exam Browser) are managed by administrators.') }}</div>
+                        </div>
+                    </fieldset>
+                    {% endif %}
 
-                    <!-- ④ Advanced (collapsed by default, click to expand) -->
-                    <details class="ac-advanced">
-                        <summary>{{ _('Advanced') }} <span class="chev"></span></summary>
-                        <div class="fold-body">
+                    <!-- ④ Advanced (collapsed by default; same toggle pattern as the problem editor) -->
+                    <p style="margin:1rem 0;">
+                        <button type="button" class="btn" id="advanced-btn" onclick="toggleAdvanced()">{{ _('Advanced') }}</button>
+                        <span style="font-size:12px;color:var(--muted);margin-left:0.5rem;">{{ _('Advanced settings (format, visibility, roles…)') }}</span>
+                    </p>
+                    <div class="advanced-hidden">
+                        <div class="fold-body adv-outer">
                             <!-- Key -->
-                            <details class="adv-sub" open>
-                                <summary>{{ _('Key') }} <span class="chev"></span></summary>
-                                <div class="fold-body">
-                                    <div class="form-row">
-                                        <label>{{ tip(_('Unique contest ID, lowercase letters and numbers only. Avoid collision with existing contests.')) }}</label>
-                                        <div class="field">
-                                            <input type="text" id="id_key" name="key" required
-                                                   placeholder="{{ _('Auto-generated from name') }}"
-                                                   pattern="[a-z0-9]+" maxlength="20"
-                                                   value="{{ prefill.key or '' }}">
-                                        </div>
-                                    </div>
-                                </div>
-                            </details>
-
                             <!-- Format & scoreboard -->
                             <details class="adv-sub" open>
                                 <summary>{{ _('Format & scoreboard') }} <span class="chev"></span></summary>
@@ -1087,7 +2455,8 @@
                                                 <option value="default"{% if prefill.format_name == 'default' %} selected{% endif %}>{{ _('Default') }}</option>
                                                 <option value="exam"{% if prefill.format_name == 'exam' %} selected{% endif %}>{{ _('Exam') }}</option>
                                                 <option value="icpc"{% if prefill.format_name == 'icpc' %} selected{% endif %}>{{ _('ICPC') }}</option>
-                                                <option value="ioi"{% if prefill.format_name == 'ioi' %} selected{% endif %}>{{ _('IOI') }}</option>
+                                                <option value="ioi16"{% if prefill.format_name == 'ioi16' %} selected{% endif %}>{{ _('IOI') }}</option>
+                                                <option value="ioi"{% if prefill.format_name == 'ioi' %} selected{% endif %}>{{ _('IOI (legacy)') }}</option>
                                                 <option value="atcoder"{% if prefill.format_name == 'atcoder' %} selected{% endif %}>{{ _('AtCoder') }}</option>
                                                 <option value="ecoo"{% if prefill.format_name == 'ecoo' %} selected{% endif %}>{{ _('ECOO') }}</option>
                                             </select>
@@ -1120,6 +2489,7 @@
                                             <span class="unit">{{ _('decimal digits') }}</span>
                                         </div>
                                     </div>
+                                    {% if 'problem_label_script' not in restricted_fields %}
                                     <div class="form-row">
                                         <label>{{ _('Label script') }}</label>
                                         <div class="field">
@@ -1127,13 +2497,15 @@
                                                       placeholder="{{ _('Custom Lua function for problem labels') }}">{{ prefill.problem_label_script or '' }}</textarea>
                                         </div>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </details>
 
                             <!-- Visibility & access -->
-                            <details class="adv-sub">
+                            <details class="adv-sub" open>
                                 <summary>{{ _('Visibility & access') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
+                                    {% if 'private_contestants' not in restricted_fields %}
                                     <div class="form-row">
                                         <label>{{ _('Private users') }}</label>
                                         <div class="field">
@@ -1143,11 +2515,13 @@
                                                 <option value="{{ pid }}" selected>{{ uname }}</option>
                                                 {% endfor %}
                                             </select>
+                                            <div class="vis-mute-note" id="priv-mute-note"></div>
                                             {{ tip(_('Non-empty → the assignment is private to exactly these users.')) }}
                                         </div>
                                     </div>
+                                    {% endif %}
                                     <div class="form-row">
-                                        <label>{{ _('Join orgs') }}</label>
+                                        <label>{{ _('Join orgs') }}{{ tip(_('Who may join — separate from who may see the assignment.')) }}</label>
                                         <div class="field">
                                             <select id="id_join_organizations" name="join_organizations" data-oj-select>
                                                 <option value="">{{ _('— No extra limit —') }}</option>
@@ -1156,15 +2530,16 @@
                                                     <option value="{{ org.id }}"{% if org.id in join_org_ids %} selected{% endif %}>{{ org.name }}</option>
                                                 {% endfor %}
                                             </select>
-                                            {{ tip(_('Who may join — separate from who may see the assignment.')) }}
+                                            <div class="vis-mute-note" id="join-mute-note"></div>
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Org / class privacy') }}</label>
+                                        <label>{{ _('Join restriction') }}</label>
                                         <div class="field">
                                             <div class="check-grid">
-                                                <label><input type="checkbox" id="id_is_private" name="is_private"{% if prefill.is_private %} checked{% endif %}> {{ _('Private to listed users') }}</label>
-                                                <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to organizations / classes') }}</label>
+                                                {# is_private / is_organization_private are driven by the List visibility
+                                                   seg control in Basic information (or by the checkboxes shown in its
+                                                   place when visibility is admin-managed); only the join limit stays here. #}
                                                 <label><input type="checkbox" id="id_limit_join_organizations" name="limit_join_organizations"{% if prefill.limit_join_organizations %} checked{% endif %}> {{ _('Limit who may join (join orgs)') }}</label>
                                             </div>
                                         </div>
@@ -1189,11 +2564,21 @@
                                             </select>
                                         </div>
                                     </div>
+                                    <div class="form-row">
+                                        <label>{{ _('Banned users') }}{{ tip(_('Bans the selected users from joining this contest.')) }}</label>
+                                        <div class="field">
+                                            <select name="banned_users" multiple class="profile-select2" style="width:100%;max-width:500px;">
+                                                {% for pid, uname in prefill.banned_users or [] %}
+                                                <option value="{{ pid }}" selected>{{ uname }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                    </div>
                                 </div>
                             </details>
 
                             <!-- Contest behavior -->
-                            <details class="adv-sub">
+                            <details class="adv-sub" open>
                                 <summary>{{ _('Contest behavior') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
                                     <div class="check-grid">
@@ -1206,6 +2591,7 @@
                                         <label><input type="checkbox" id="id_tester_see_scoreboard" name="tester_see_scoreboard"{% if prefill.tester_see_scoreboard %} checked{% endif %}> {{ _('Testers see scoreboard') }}</label>
                                         <label><input type="checkbox" id="id_show_short_display" name="show_short_display"{% if prefill.show_short_display %} checked{% endif %}> {{ _('Show short settings on contest page') }}</label>
                                     </div>
+                                    {% if 'locked_after' not in restricted_fields %}
                                     <div class="form-row" style="margin-top:0.65rem;">
                                         <label>{{ _('Lock after') }}</label>
                                         <div class="field">
@@ -1214,17 +2600,23 @@
                                             {{ tip(_('Prevent rejudging contest submissions after this time. Blank = unlocked.')) }}
                                         </div>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </details>
 
                             <!-- Rating (optional) -->
-                            <details class="adv-sub">
+                            <details class="adv-sub" open>
                                 <summary>{{ _('Rating (optional)') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
+                                    {# Rating flags need judge.contest_rating; perf-ceiling override needs
+                                       judge.override_performance_ceiling. Both are hidden (and server-skipped)
+                                       when the user lacks the permission. #}
+                                    {% if 'is_rated' not in restricted_fields %}
                                     <div class="check-grid">
                                         <label><input type="checkbox" id="id_is_rated" name="is_rated"{% if prefill.is_rated %} checked{% endif %}> {{ _('Contest rated') }}</label>
                                         <label><input type="checkbox" id="id_rate_all" name="rate_all"{% if prefill.rate_all %} checked{% endif %}> {{ _('Rate users with no submissions') }}</label>
                                     </div>
+                                    {% endif %}
                                     <div class="form-row" style="margin-top:0.5rem;">
                                         <label>{{ _('Floor / ceil') }}</label>
                                         <div class="field ac-inline">
@@ -1233,12 +2625,15 @@
                                             <input type="number" id="id_rating_ceiling" name="rating_ceiling" placeholder="—" style="width:70px;" value="{{ prefill.rating_ceiling or '' }}">
                                         </div>
                                     </div>
+                                    {% if 'performance_ceiling_override' not in restricted_fields %}
                                     <div class="form-row">
                                         <label>{{ _('Perf. ceil') }}</label>
                                         <div class="field">
                                             <input type="number" id="id_performance_ceiling_override" name="performance_ceiling_override" placeholder="{{ _('Auto') }}" value="{{ prefill.performance_ceiling_override or '' }}">
                                         </div>
                                     </div>
+                                    {% endif %}
+                                    {% if 'rate_exclude' not in restricted_fields %}
                                     <div class="form-row">
                                         <label>{{ _('Exclude from ratings') }}</label>
                                         <div class="field">
@@ -1249,12 +2644,13 @@
                                             </select>
                                         </div>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </details>
 
-                            <!-- Details / branding -->
-                            <details class="adv-sub">
-                                <summary>{{ _('Details / branding') }} <span class="chev"></span></summary>
+                            <!-- Branding -->
+                            <details class="adv-sub" open>
+                                <summary>{{ _('Branding') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
                                     <div class="form-row">
                                         <label>{{ _('Summary') }}</label>
@@ -1279,44 +2675,44 @@
                             </details>
 
                             <!-- Roles -->
-                            <details class="adv-sub">
+                            <details class="adv-sub" open>
                                 <summary>{{ _('Roles') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
+                                    {% if 'authors' in restricted_fields %}
+                                    <div class="ac-help" style="margin-bottom:0.5rem;">{{ _('Roles are managed by the assignment authors (or administrators).') }}</div>
+                                    {% else %}
                                     <div class="form-row">
-                                        <label>{{ _('Authors') }}</label>
+                                        <label>{{ _('Authors') }}{{ tip(_('May edit the contest. On create, you are the author.')) }}</label>
                                         <div class="field">
                                             <select name="authors" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.authors or [] %}
                                                 <option value="{{ pid }}" selected>{{ uname }}</option>
                                                 {% endfor %}
                                             </select>
-                                            {{ tip(_('May edit the contest. On create, you are the author.')) }}
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Curators') }}</label>
+                                        <label>{{ _('Curators') }}{{ tip(_('May edit the contest, but are not listed as authors.')) }}</label>
                                         <div class="field">
                                             <select name="curators" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.curators or [] %}
                                                 <option value="{{ pid }}" selected>{{ uname }}</option>
                                                 {% endfor %}
                                             </select>
-                                            {{ tip(_('May edit the contest, but are not listed as authors.')) }}
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Testers') }}</label>
+                                        <label>{{ _('Testers') }}{{ tip(_('May view the contest, but not edit it.')) }}</label>
                                         <div class="field">
                                             <select name="testers" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.testers or [] %}
                                                 <option value="{{ pid }}" selected>{{ uname }}</option>
                                                 {% endfor %}
                                             </select>
-                                            {{ tip(_('May view the contest, but not edit it.')) }}
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Spectators') }}</label>
+                                        <label>{{ _('Spectators') }}{{ tip(_('May view the contest and scoreboard while it runs, but cannot edit.')) }}</label>
                                         <div class="field">
                                             <select name="spectators" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.spectators or [] %}
@@ -1325,31 +2721,29 @@
                                             </select>
                                         </div>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </details>
 
-                            <!-- Justice -->
-                            <details class="adv-sub">
-                                <summary>{{ _('Justice') }} <span class="chev"></span></summary>
-                                <div class="fold-body">
-                                    <div class="form-row">
-                                        <label>{{ _('Banned users') }}</label>
-                                        <div class="field">
-                                            <select name="banned_users" multiple class="profile-select2" style="width:100%;max-width:500px;">
-                                                {% for pid, uname in prefill.banned_users or [] %}
-                                                <option value="{{ pid }}" selected>{{ uname }}</option>
-                                                {% endfor %}
-                                            </select>
-                                            {{ tip(_('Bans the selected users from joining this contest.')) }}
-                                        </div>
-                                    </div>
-                                </div>
-                            </details>
+                            <!-- Banned users now live under Visibility & access -->
                         </div>
+                    </div>
                     </details>
 
                     <div id="bottombar">
-                        <button type="submit" class="btn btn-primary">{{ _('Save assignment') if contest else _('Create assignment') }}</button>
+                        <input type="hidden" name="action" id="form-action" value="save">
+                        <button type="submit" class="btn btn-primary" data-action="save">{{ _('Save assignment') if contest else _('Create assignment') }}</button>
+                        <button type="submit" class="btn" data-action="continue">{{ _('Save and continue editing') }}</button>
+                        {% if not contest %}
+                        <button type="submit" class="btn" data-action="another">{{ _('Save and add another') }}</button>
+                        {% endif %}
+                        {% if contest and perms.judge.edit_all_contest %}
+                            {% if contest.results_finalized %}
+                            <button type="button" class="btn" id="unfinalize-btn">{{ _('Un-finalize results') }}</button>
+                            {% else %}
+                            <button type="button" class="btn" id="finalize-btn">{{ _('Finalize results') }}</button>
+                            {% endif %}
+                        {% endif %}
                         <button type="button" class="btn btn-cancel" onclick="window.location.href='{{ url('contest_list') }}'">{{ _('Cancel') }}</button>
                     </div>
                 </form>
@@ -1405,23 +2799,56 @@
                         <input type="text" id="lib-search" placeholder="{{ _('Search problems...') }}">
                     </div>
                 </div>
+                <div class="so-filters">
+                    <select id="lib-f-org"><option value="">{{ _('All orgs') }}</option></select>
+                    <select id="lib-f-group"><option value="">{{ _('All groups') }}</option></select>
+                    <select id="lib-f-type"><option value="">{{ _('All types') }}</option></select>
+                    <select id="lib-f-diff"><option value="">{{ _('All difficulties') }}</option>
+                        <option value="easy">{{ _('Easy') }}</option>
+                        <option value="medium">{{ _('Medium') }}</option>
+                        <option value="hard">{{ _('Hard') }}</option>
+                        <option value="none">{{ _('None') }}</option>
+                    </select>
+                    <select id="lib-f-ac"><option value="">{{ _('Any AC rate') }}</option>
+                        <option value="0-20">0–20%</option>
+                        <option value="20-40">20–40%</option>
+                        <option value="40-60">40–60%</option>
+                        <option value="60-80">60–80%</option>
+                        <option value="80-100">80–100%</option>
+                    </select>
+                </div>
                 <div class="so-body">
                     <table class="so-table">
                         <thead>
-                            <tr><th>ID</th><th>{{ _('Title') }}</th><th>{{ _('Type') }}</th><th>{{ _('Diff') }}</th><th>AC%</th></tr>
+                            <tr>
+                                <th data-sort="id">ID</th>
+                                <th data-sort="name">{{ _('Title') }}</th>
+                                <th>{{ _('Org') }}</th>
+                                <th data-sort="group">{{ _('Group') }}</th>
+                                <th>{{ _('Type') }}</th>
+                                <th data-sort="diff">{{ _('Diff') }}</th>
+                                <th data-sort="ac">{{ _('AC rate') }}</th>
+                            </tr>
                         </thead>
                         <tbody id="lib-results">
                             {% for problem in problems %}
-                            <tr data-pid="{{ problem.id }}" data-code="{{ problem.code }}" data-name="{{ problem.name }}">
+                            <tr data-pid="{{ problem.id }}" data-code="{{ problem.code }}" data-name="{{ problem.name }}"
+                                data-org="{% for o in problem.organizations.all() %}{{ o.name }};{% endfor %}"
+                                data-group="{{ problem.group.name if problem.group else '' }}"
+                                data-types="{{ problem.types_list|join(';') }}"
+                                data-diff="{{ problem.difficulty or 'none' }}"
+                                data-ac="{{ problem.ac_rate|round(1) }}">
                                 <td>{{ problem.id }}</td>
-                                <td>{{ problem.name }}</td>
-                                <td>{{ problem.types_list.0 or '—' }}</td>
-                                <td>—</td>
-                                <td>—</td>
+                                <td class="ptitle">{{ problem.name }}</td>
+                                <td class="num">{% for o in problem.organizations.all() %}{{ o.name }}{% if not loop.last %}, {% endif %}{% else %}<span class="num">{{ _('Public') }}</span>{% endfor %}</td>
+                                <td class="num">{{ problem.group.name if problem.group else '—' }}</td>
+                                <td class="num">{{ problem.types_list|join(', ') }}</td>
+                                <td class="num">{% if problem.difficulty %}{{ problem.difficulty_label }}{% else %}—{% endif %}</td>
+                                <td class="num">{{ '%.1f'|format(problem.ac_rate) }}%</td>
                             </tr>
                             {% endfor %}
                             {% if not problems %}
-                            <tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
+                            <tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
                             {% endif %}
                         </tbody>
                     </table>
@@ -1429,7 +2856,43 @@
                 <div class="so-foot">
                     <span id="lib-count">{{ _('Selected 0 · Showing 0') }}</span>
                     <span class="spacer"></span>
+                    <div id="lib-pager" class="so-pager"></div>
                     <button type="button" class="btn-primary">{{ _('+ Add') }}</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tag selection / creation dialog (mirrors the problem editor's type modal). -->
+        <div class="qtype-modal hidden" id="tag-modal">
+            <div class="qtype-box" style="width:480px;">
+                <div class="qtype-head">
+                    <h2>{{ _('Select tags') }}</h2>
+                    <button type="button" aria-label="{{ _('Close') }}">×</button>
+                </div>
+                <div style="padding:1rem 1.25rem;">
+                    <input type="text" id="tag-modal-search" maxlength="40"
+                           placeholder="{{ _('Search tags…') }}"
+                           style="width:100%;box-sizing:border-box;padding:0.4rem 0.55rem;border:1px solid var(--admin-border);border-radius:4px;">
+                    <div id="tag-options" style="display:flex;flex-direction:column;gap:0.4rem;max-height:260px;overflow:auto;margin-top:0.6rem;"></div>
+                    <div id="tag-new-form" style="display:none;margin-top:0.75rem;padding-top:0.75rem;border-top:1px dashed var(--admin-border);">
+                        <div style="font-weight:600;font-size:13px;margin-bottom:0.5rem;">{{ _('New tag') }}</div>
+                        <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                            <label style="font-size:12px;">{{ _('Tag name (lowercase letters and hyphens only)') }}
+                                <input type="text" id="nt-tag" maxlength="20"
+                                       placeholder="{{ _('e.g. final-exam') }}"
+                                       style="width:100%;box-sizing:border-box;padding:0.4rem;margin-top:2px;border:1px solid var(--admin-border);border-radius:4px;">
+                            </label>
+                            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                                <button type="button" class="btn btn-primary" id="tag-new-add">{{ _('Add') }}</button>
+                                <button type="button" class="btn" id="tag-new-cancel">{{ _('Cancel') }}</button>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-add-option" style="width:100%;margin-top:0.75rem;" id="tag-new-btn">+ {{ _('New tag') }}</button>
+                </div>
+                <div style="display:flex;justify-content:flex-end;gap:0.5rem;padding:0.75rem 1.25rem;border-top:1px solid var(--admin-border);">
+                    <button type="button" class="btn" id="tag-modal-cancel">{{ _('Cancel') }}</button>
+                    <button type="button" class="btn btn-primary" id="tag-modal-ok">{{ _('OK') }}</button>
                 </div>
             </div>
         </div>

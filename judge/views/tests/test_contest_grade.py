@@ -31,7 +31,7 @@ import tempfile
 from datetime import timedelta
 from unittest import skipUnless
 
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Permission  # noqa: F401 (documented in module docstring)
 from django.http import HttpResponseForbidden
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
@@ -130,17 +130,25 @@ class ContestGradePermissionMatrixTestCase(GradeTestBase):
                                                          expected_status, response.status_code))
 
     def test_editors_get_200(self):
-        """Only actual editors reach the page."""
-        for user in (self.superuser, self.edit_all, self.author, self.curator):
+        """Actual editors reach the page.
+
+        Merged policy (origin/develop): author/curator *membership* is the grant
+        — a curator listed on the contest may grade even without the global
+        ``edit_own_contest`` permission (the Teachers group doesn't carry it).
+        """
+        for user in (self.superuser, self.edit_all, self.author, self.curator,
+                     self.curator_no_perm):
             self._assert_get(user, 200)
 
     def test_non_editors_get_404(self):
-        """Everyone else — including privileged-but-not-editor roles — is 404.
+        """Everyone who is NOT an author/curator — including privileged-but-
+        non-editor roles — is 404.
 
         Tester, spectator and org-admin can *view* contests but must never be
-        able to open the grading workspace.
+        able to open the grading workspace; holding ``edit_own_contest`` without
+        being a member of this contest is likewise not enough.
         """
-        for user in (self.curator_no_perm, self.edit_own_outsider, self.tester,
+        for user in (self.edit_own_outsider, self.tester,
                      self.spectator, self.org_admin, self.student):
             self._assert_get(user, 404)
 
@@ -171,13 +179,16 @@ class ContestGradeSavePermissionMatrixTestCase(GradeTestBase):
         self.assertEqual(response.status_code, 401)
 
     def test_editors_can_save(self):
-        for user in (self.superuser, self.edit_all, self.author, self.curator):
+        # Author/curator membership alone grants grading rights (merged policy);
+        # a curator without the global permission can save too.
+        for user in (self.superuser, self.edit_all, self.author, self.curator,
+                     self.curator_no_perm):
             response = self._post(user, self.submission.id, score=60)
             self.assertEqual(response.status_code, 200, response.content)
             self.assertTrue(response.json()['ok'])
 
     def test_non_editors_get_403(self):
-        for user in (self.curator_no_perm, self.edit_own_outsider, self.tester,
+        for user in (self.edit_own_outsider, self.tester,
                      self.spectator, self.org_admin, self.student):
             response = self._post(user, self.submission.id, score=60)
             self.assertEqual(response.status_code, 403,
@@ -308,55 +319,42 @@ class ContestGradeMutationTestCase(GradeTestBase):
 
     These are the strongest guard against a too-broad ``is_editable_by``: if
     granting ``edit_own_contest`` to a random student suddenly lets them grade,
-    the gate is wrong. If revoking it from a curator keeps them in, the gate is
-    wrong too.
+    the gate is wrong. If *membership* alone doesn't let a curator grade, the
+    gate is wrong too (merged policy: membership is the grant).
     """
 
     def _get_status(self, user):
         return self._client(user).get(self.grade_url).status_code
 
     def test_granting_edit_own_to_non_editor_still_denied(self):
-        """Permission alone is not enough — the user must also be an editor."""
+        """Permission alone is not enough — the user must also be a member."""
         outsider = self.edit_own_outsider
-        self.assertEqual(self._get_status(outsider), 404)  # baseline: denied
         # Already has edit_own_contest but is not an author/curator → still 404.
         self.assertEqual(self._get_status(outsider), 404)
 
     def test_promote_student_to_curator_grants_access(self):
-        """A student + edit_own_contest + curator role → access granted."""
+        """Curator membership alone flips a student into a grader.
+
+        Permission is irrelevant here: being added to the curator list is the
+        grant (merged origin/develop policy).
+        """
         self.assertEqual(self._get_status(self.student), 404)  # baseline
-        perm = Permission.objects.get(codename='edit_own_contest')
-        self.student.user_permissions.add(perm)
-        # Permission without the curator relationship is still not enough…
-        self.assertEqual(self._get_status(self.student), 404)
-        # …but adding the relationship completes the editor identity.
         self.contest.curators.add(self.student.profile)
         self.assertEqual(self._get_status(self.student), 200)
 
-    def test_revoking_edit_own_from_curator_revokes_access(self):
-        """Removing the permission (while still a curator) must revoke access."""
-        self.assertEqual(self._get_status(self.curator), 200)  # baseline
-        self.curator.user_permissions.remove(Permission.objects.get(codename='edit_own_contest'))
-        self.assertEqual(self._get_status(self.curator), 404)
-
     def test_removing_curator_relationship_revokes_access(self):
-        """Removing the curator relationship (while keeping the permission) revokes."""
+        """Removing the curator relationship (even keeping the permission) revokes."""
         self.assertEqual(self._get_status(self.curator), 200)  # baseline
         self.contest.curators.remove(self.curator.profile)
         self.assertEqual(self._get_status(self.curator), 404)
 
-    def test_author_can_grade_without_edit_own(self):
-        """An author with edit_own_contest already covered; now check the flip:
-        an author is an editor, so granting the permission to a *new* author grants access.
-        """
-        new_author = create_user(username='grade_new_author', user_permissions=('edit_own_contest',))
-        self.contest.authors.add(new_author.profile)
-        self.assertEqual(self._get_status(new_author), 200)
+    def test_curator_membership_alone_grants_access(self):
+        """A curator with NO global permission can still grade (course workflow).
 
-    def test_curator_without_permission_never_grades(self):
-        """``curator_no_perm`` is a curator but lacks edit_own_contest → denied,
-        and even granting edit_all to a *different* user doesn't leak to them."""
-        self.assertEqual(self._get_status(self.curator_no_perm), 404)
+        The Teachers group carries no ``edit_own_contest``, so teacher-curators
+        rely on membership alone — this is the load-bearing merged policy.
+        """
+        self.assertEqual(self._get_status(self.curator_no_perm), 200)
         # Sanity: the gate is user-scoped, not contest-scoped-global.
         self.assertEqual(self._get_status(self.edit_all), 200)
 
@@ -546,7 +544,9 @@ class ContestGradeReleaseTestCase(GradeTestBase):
         self.assertFalse(self.contest.results_finalized)
 
     def test_non_editors_get_403(self):
-        for user in (self.curator_no_perm, self.edit_own_outsider, self.tester,
+        # curator_no_perm is intentionally excluded: curator membership alone
+        # grants grading rights under the merged policy (see is_editable_by).
+        for user in (self.edit_own_outsider, self.tester,
                      self.spectator, self.org_admin, self.student):
             response = self._post(user)
             self.assertEqual(response.status_code, 403,

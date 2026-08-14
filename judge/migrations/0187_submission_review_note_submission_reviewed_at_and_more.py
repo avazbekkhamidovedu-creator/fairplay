@@ -7,6 +7,11 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
+        # NOTE: this migration was shipped under this exact name and is already
+        # applied on deployed databases — it must NEVER be renamed (renaming
+        # would make it look unapplied and re-run the ALTER, which then fails
+        # with "Duplicate column"). Graph convergence with origin/develop's
+        # branch lives in 0188_merge_class_offering_and_review_note.
         ("judge", "0186_merge_programming_label_and_file_upload"),
     ]
 

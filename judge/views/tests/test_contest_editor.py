@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timedelta
 
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -67,9 +68,19 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='contest_editor', user_permissions=('edit_all_contest',))
+        # A full contest editor: edit_all_contest plus every granular permission
+        # the Django admin gates behind (contest_rating, lock_contest, access
+        # codes, SEB, visibility, private contests, label script, perf ceiling).
+        # Without them, ContestCreate._restricted_fields correctly refuses to
+        # write those fields — see the permission-gating tests below.
+        cls.editor = create_user(username='contest_editor', user_permissions=(
+            'edit_all_contest', 'contest_rating', 'lock_contest', 'contest_access_code',
+            'contest_seb_requirement', 'create_private_contest', 'change_contest_visibility',
+            'contest_problem_label', 'override_performance_ceiling',
+        ))
         cls.curator = create_user(username='contest_curator', user_permissions=('edit_own_contest',))
         cls.normal = create_user(username='contest_normal')
+        cls.organization = Organization.objects.create(name='Edit Org', slug='edit-org')
 
         _now = timezone.now()
         cls.contest = create_contest(
@@ -369,6 +380,142 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    # ── security: granular permission gating (mirrors the Django admin) ─────
+
+    def test_curator_cannot_escalate_visibility(self):
+        # A curator holding only edit_own_contest must not be able to flip
+        # is_visible (needs change_contest_visibility) — the admin makes the
+        # field read-only for them, and so does the frontend editor.
+        self.client.force_login(self.curator)
+        payload = self._full_payload(is_visible=True)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.is_visible)
+
+    def test_curator_cannot_arm_seb_or_set_access_code(self):
+        # contest_seb_requirement / contest_access_code are separate permissions.
+        self.client.force_login(self.curator)
+        payload = self._full_payload(
+            seb_required=True, seb_browser_exam_keys='a' * 64,
+            access_code='sneaky',
+        )
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.seb_required)
+        self.assertEqual(self.contest.access_code, '')
+
+    def test_curator_cannot_mark_rated_or_lock(self):
+        # contest_rating / lock_contest are separate permissions.
+        self.client.force_login(self.curator)
+        payload = self._full_payload(is_rated=True, rate_all=True, locked_after='2030-01-01T00:00:00Z')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.is_rated)
+        self.assertIsNone(self.contest.locked_after)
+
+    def test_curator_cannot_change_organizations(self):
+        # create_private_contest is required to scope a contest to an org.
+        self.client.force_login(self.curator)
+        payload = self._full_payload(organizations=[self.organization.id])
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.organizations.count(), 0)
+
+    # ── vis_mode seg control is the single source of truth for visibility ──
+
+    def test_vis_mode_public_sets_is_visible(self):
+        self.client.force_login(self.editor)
+        payload = self._full_payload(vis_mode='public')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.is_visible)
+        self.assertFalse(self.contest.is_private)
+        self.assertFalse(self.contest.is_organization_private)
+
+    def test_vis_mode_org_sets_org_private(self):
+        self.client.force_login(self.editor)
+        payload = self._full_payload(vis_mode='org')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.is_visible)
+        self.assertTrue(self.contest.is_organization_private)
+
+    def test_vis_mode_hidden_hides(self):
+        # First make the contest visible, then hide it again via the seg.
+        self.contest.is_visible = True
+        self.contest.save()
+        self.client.force_login(self.editor)
+        payload = self._full_payload(vis_mode='hidden')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.is_visible)
+
+    def test_duration_out_of_range_returns_400(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(self._full_payload(duration_hours=5000)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_curator_cannot_attach_hidden_problem(self):
+        # Security: a curator holding only edit_own_contest must not attach
+        # another teacher's hidden problem to a contest students can see —
+        # the contest detail page would otherwise leak it to them.
+        hidden = create_problem('hidden-attach')  # is_public defaults False
+        self.client.force_login(self.curator)
+        payload = self._full_payload(problems=[{'id': hidden.id}])
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('not allowed', json.loads(response.content)['error'])
+
+    def test_curator_keeps_existing_hidden_problem_when_saving(self):
+        # Regression guard: an admin-attached hidden problem must not block a
+        # curator from saving the contest (existing problems stay allowed).
+        from judge.models import ContestProblem
+        hidden = create_problem('hidden-existing')
+        ContestProblem.objects.create(contest=self.contest, problem=hidden, points=100, order=99)
+        self.client.force_login(self.curator)
+        payload = self._full_payload(problems=[{'id': hidden.id, 'points': 100}])
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.contest_problems.filter(problem=hidden).exists())
+
 
 class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
     """Create mode: newly registered model fields + regression fixes."""
@@ -376,7 +523,12 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='fields_editor', user_permissions=('edit_all_contest',))
+        # Same full editor as ContestEditViewTestCase (see comment there).
+        cls.editor = create_user(username='fields_editor', user_permissions=(
+            'edit_all_contest', 'contest_rating', 'lock_contest', 'contest_access_code',
+            'contest_seb_requirement', 'create_private_contest', 'change_contest_visibility',
+            'contest_problem_label', 'override_performance_ceiling',
+        ))
         cls.user_a = create_user(username='fields_user_a')
         cls.user_b = create_user(username='fields_user_b')
         cls.organization = Organization.objects.create(name='Fields Org', slug='fields-org')
@@ -415,27 +567,48 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertTrue(contest.limit_join_organizations)
 
     def test_seb_fields_saved(self):
+        # Keys must be valid 64-char hex hashes: model validation (full_clean)
+        # is now enforced on save, rejecting anything shorter.
+        bek = 'a' * 64
+        cek = 'b' * 64
         response = self._post(
             name='SEB', key='sebtest',
-            seb_required=True, seb_browser_exam_keys='abc\ndef', seb_config_keys='xyz',
+            seb_required=True, seb_browser_exam_keys=bek + '\n' + cek, seb_config_keys=cek,
             seb_quit_url='https://example.com/quit',
         )
         self.assertEqual(response.status_code, 200, response.content)
         contest = Contest.objects.get(key='sebtest')
         self.assertTrue(contest.seb_required)
-        self.assertEqual(contest.seb_browser_exam_keys, 'abc\ndef')
-        self.assertEqual(contest.seb_config_keys, 'xyz')
+        self.assertEqual(contest.seb_browser_exam_keys, bek + '\n' + cek)
+        self.assertEqual(contest.seb_config_keys, cek)
         self.assertEqual(contest.seb_quit_url, 'https://example.com/quit')
 
+    def test_seb_required_without_keys_returns_400(self):
+        # Regression: seb_required=True used to save with no keys (bricking the
+        # contest for every student); model validation now rejects it.
+        response = self._post(name='SEB Bad', key='sebbad', seb_required=True)
+        self.assertEqual(response.status_code, 400)
+
     def test_format_config_json_saved(self):
-        response = self._post(name='FC', key='fctest', format_config='{"points": [100, 200]}')
-        self.assertEqual(response.status_code, 200)
+        # ICPC accepts a config dict with a validated 'penalty' key — use it to
+        # exercise the JSON round-trip (the default format rejects any config).
+        response = self._post(name='FC', key='fctest', format_name='icpc',
+                              format_config='{"penalty": 20}')
+        self.assertEqual(response.status_code, 200, response.content)
         contest = Contest.objects.get(key='fctest')
-        self.assertEqual(contest.format_config, {'points': [100, 200]})
+        self.assertEqual(contest.format_name, 'icpc')
+        self.assertEqual(contest.format_config, {'penalty': 20})
 
     def test_format_config_invalid_json_returns_400(self):
         response = self._post(name='FC Bad', key='fcbad', format_config='{not json')
         self.assertEqual(response.status_code, 400)
+
+    def test_invalid_format_name_returns_400(self):
+        # Regression: an unregistered format name used to store fine and then
+        # KeyError-crash every page rendering the contest.
+        response = self._post(name='Fmt Bad', key='fmtbad', format_name='not-a-format')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('format', json.loads(response.content)['error'])
 
     def test_profile_m2m_fields_saved(self):
         response = self._post(
@@ -476,9 +649,11 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_create_with_problems_saves_points(self):
-        problem = create_problem('problems-save-test')
+        # The problem must be one the editor may attach (public, or owned by
+        # them) — the visibility rule rejects other teachers' hidden problems.
+        problem = create_problem('problems-save-test', is_public=True)
         response = self._post(name='With Prob', key='withprob', problems=[{'id': problem.id, 'points': 150}])
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.content)
         contest = Contest.objects.get(key='withprob')
         cp = contest.contest_problems.get()
         self.assertEqual(cp.problem, problem)
@@ -487,12 +662,31 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
 
     def test_create_with_problem_ids_backward_compatible(self):
         # The legacy plain-id list (points default to 100) must still work.
-        problem = create_problem('problems-legacy-test')
+        problem = create_problem('problems-legacy-test', is_public=True)
         response = self._post(name='Legacy Prob', key='legacyprob', problem_ids=[problem.id])
         self.assertEqual(response.status_code, 200)
         contest = Contest.objects.get(key='legacyprob')
         cp = contest.contest_problems.get()
         self.assertEqual(cp.points, 100)
+
+    # NOTE: attaching a *hidden* problem is only possible for trusted editors
+    # (edit_all_contest / see_private_problem). Curators are blocked from it —
+    # see ContestEditViewTestCase.test_curator_cannot_attach_hidden_problem.
+
+    def test_create_saves_per_problem_options(self):
+        problem = create_problem('problem-options', is_public=True)
+        response = self._post(
+            name='Opts', key='optstest',
+            problems=[{'id': problem.id, 'points': 200, 'partial': False,
+                       'is_pretested': True, 'max_submissions': 3}],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='optstest')
+        cp = contest.contest_problems.get()
+        self.assertEqual(cp.points, 200)
+        self.assertFalse(cp.partial)
+        self.assertTrue(cp.is_pretested)
+        self.assertEqual(cp.max_submissions, 3)
 
 
 class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
@@ -568,3 +762,589 @@ class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.contest_problems.count(), 0)
+
+    def test_get_renders_max_submissions_input_in_row(self):
+        """The Max submissions input lives in the problem row's Max column,
+        not as a duplicated label in the per-problem options strip below."""
+        response = self.client.get(reverse('contest_edit', args=['probeditcontest']))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn('class="cp-max-subs"', html)
+        # The old duplicated "Max submissions" label was removed from the
+        # options strip; only the header tooltip text (different wording)
+        # may mention max submissions.
+        self.assertNotIn('Max submissions', html)
+        # The options strip still renders the other per-problem settings.
+        for marker in ('cp-partial', 'cp-pretested', 'cp-results', 'cp-out-prefix'):
+            self.assertIn(marker, html)
+
+    def test_post_roundtrips_max_submissions_from_row_input(self):
+        """A max_submissions value sent by the in-row input round-trips to the
+        stored ContestProblem (blank → unlimited)."""
+        response = self.client.post(
+            reverse('contest_edit', args=['probeditcontest']),
+            data=json.dumps(self._full_payload(problems=[
+                {'id': self.problem.id, 'points': 100, 'max_submissions': 5},
+            ])),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.contest_problems.get().max_submissions, 5)
+        # Blank means unlimited.
+        response = self.client.post(
+            reverse('contest_edit', args=['probeditcontest']),
+            data=json.dumps(self._full_payload(problems=[
+                {'id': self.problem.id, 'points': 100, 'max_submissions': ''},
+            ])),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertIsNone(self.contest.contest_problems.get().max_submissions)
+
+
+class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
+    """New editor endpoints: tag create, .seb upload, finalize/unfinalize."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='endpoints_editor', user_permissions=(
+            'edit_all_contest', 'contest_rating', 'lock_contest', 'contest_access_code',
+            'contest_seb_requirement', 'create_private_contest', 'change_contest_visibility',
+            'contest_problem_label', 'override_performance_ceiling',
+        ))
+        cls.curator = create_user(username='endpoints_curator', user_permissions=('edit_own_contest',))
+        cls.normal = create_user(username='endpoints_normal')
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='endpointcontest', name='Endpoint',
+            start_time=_now + timedelta(days=1), end_time=_now + timedelta(days=2),
+            authors=('superuser',),
+            curators=('endpoints_curator',),
+        )
+
+    def setUp(self):
+        self.client = Client()
+
+    # ── tag create ──────────────────────────────────────────────────────────
+
+    def test_tag_create_success(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'midterm'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = json.loads(response.content)
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['tag']['name'], 'midterm')
+        self.assertTrue(data['tag']['id'])
+        self.assertTrue(data['tag']['color'].startswith('#'))
+        self.assertTrue(ContestTag.objects.filter(name='midterm').exists())
+
+    def test_tag_create_rejects_bad_name(self):
+        self.client.force_login(self.editor)
+        for bad in ('Midterm', 'mid term', 'midterm!', '中term'):
+            response = self.client.post(
+                reverse('contest_tag_create'),
+                data=json.dumps({'name': bad}), content_type='application/json',
+            )
+            self.assertEqual(response.status_code, 400, bad)
+
+    def test_tag_create_rejects_too_long(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'a' * 21}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_tag_create_rejects_duplicate(self):
+        ContestTag.objects.create(name='dup-tag', color='#ff0000')
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'dup-tag'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already exists', json.loads(response.content)['error'])
+
+    def test_tag_create_denied_for_normal_user(self):
+        self.client.force_login(self.normal)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'sneaky'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_tag_create_allowed_for_curator(self):
+        # edit_own_contest holders may open the editor, so they may add tags.
+        self.client.force_login(self.curator)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'curator-tag'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+
+    # ── .seb upload ─────────────────────────────────────────────────────────
+
+    def test_seb_upload_success(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('exam.seb', b'SEB config')},
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(json.loads(response.content)['ok'])
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.seb_config_file)
+        # MEDIA_ROOT persists across test runs, so Django's storage may suffix a
+        # duplicate filename (exam_1KexZ2r.seb) — assert the basename loosely.
+        basename = self.contest.seb_config_file.name.rsplit('/', 1)[-1]
+        self.assertTrue(basename.startswith('exam') and basename.endswith('.seb'))
+
+    def test_seb_upload_rejects_bad_extension(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('exam.txt', b'x')},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_seb_upload_rejects_missing_file(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_seb_upload_denied_for_curator_of_other_contest(self):
+        # The curator curates endpointcontest — deny when the contest is not theirs.
+        self.client.force_login(self.curator)
+        _now = timezone.now()
+        create_contest(
+            key='othersebcontest', name='Other SEB',
+            start_time=_now + timedelta(days=1), end_time=_now + timedelta(days=2),
+            authors=('superuser',),
+        )
+        response = self.client.post(
+            reverse('contest_seb_upload', args=['othersebcontest']),
+            data={'seb_config_file': SimpleUploadedFile('exam.seb', b'x')},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    # ── finalize / unfinalize ───────────────────────────────────────────────
+
+    def test_finalize_denied_for_curator(self):
+        self.client.force_login(self.curator)
+        response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 403)
+
+    def test_finalize_denied_for_normal_user(self):
+        self.client.force_login(self.normal)
+        response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 403)
+
+    def test_finalize_allowed_for_editor(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(json.loads(response.content)['ok'])
+
+    def test_unfinalize_allowed_for_editor(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(reverse('contest_unfinalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(json.loads(response.content)['ok'])
+
+
+class ContestEditorActionFieldTestCase(CommonDataMixin, TestCase):
+    """Save actions: save → contest page, continue → editor, another → no redirect."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='action_editor', user_permissions=('edit_all_contest',))
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.editor)
+
+    def _create_payload(self, key='actiontest'):
+        now = timezone.now()
+        return {
+            'name': 'Action Test', 'key': key,
+            'start_time': (now + timedelta(hours=1)).isoformat(),
+            'end_time': (now + timedelta(hours=3)).isoformat(),
+        }
+
+    def test_action_save_redirects_to_contest_view(self):
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps(self._create_payload()), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['action'], 'save')
+        self.assertEqual(data['redirect'], reverse('contest_view', args=['actiontest']))
+
+    def test_action_continue_redirects_to_editor(self):
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps({**self._create_payload(), 'action': 'continue'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['action'], 'continue')
+        self.assertEqual(data['redirect'], reverse('contest_edit', args=['actiontest']))
+
+    def test_action_another_has_no_redirect(self):
+        response = self.client.post(
+            reverse('contest_create'),
+            data=json.dumps({**self._create_payload(), 'action': 'another'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['action'], 'another')
+        self.assertNotIn('redirect', data)
+        # The contest still exists.
+        self.assertTrue(Contest.objects.filter(key='actiontest').exists())
+
+
+class ContestEditorProblemOptionsTestCase(CommonDataMixin, TestCase):
+    """Per-problem output_prefix / hide_results round-trip."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='probopts_editor', user_permissions=('edit_all_contest',))
+        cls.problem = create_problem('probopts-test', is_public=True)
+        cls.contest = create_contest(
+            key='proboptscontest', name='Prob Opts',
+            start_time=timezone.now() + timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=2),
+            authors=('superuser',),
+        )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.editor)
+
+    def _payload(self, **overrides):
+        now = timezone.now()
+        payload = {
+            'name': 'Prob Opts', 'key': 'proboptscontest',
+            'start_time': (now + timedelta(days=1)).isoformat(),
+            'end_time': (now + timedelta(days=2)).isoformat(),
+            'is_visible': False,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_create_saves_output_prefix_and_hide_results(self):
+        response = self.client.post(
+            reverse('contest_edit', args=['proboptscontest']),
+            data=json.dumps(self._payload(problems=[
+                {'id': self.problem.id, 'points': 100, 'output_prefix': 5, 'hide_results': True},
+            ])), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        cp = self.contest.contest_problems.get()
+        self.assertEqual(cp.output_prefix_override, 5)
+        self.assertTrue(cp.hide_results)
+
+    def test_hide_results_three_state(self):
+        for raw, expected in ((None, None), ('default', None), ('hide', True), ('show', False), (False, False)):
+            # Each POST fully replaces the problem list, so re-fetch after save.
+            response = self.client.post(
+                reverse('contest_edit', args=['proboptscontest']),
+                data=json.dumps(self._payload(problems=[
+                    {'id': self.problem.id, 'points': 100, 'hide_results': raw},
+                ])), content_type='application/json',
+            )
+            self.assertEqual(response.status_code, 200, response.content)
+            cp = self.contest.contest_problems.get()
+            self.assertEqual(cp.hide_results, expected, raw)
+
+    def test_prefill_includes_output_prefix_and_hide_results(self):
+        from judge.models import ContestProblem
+        ContestProblem.objects.create(
+            contest=self.contest, problem=self.problem, points=100, order=1,
+            output_prefix_override=7, hide_results=False,
+        )
+        response = self.client.get(reverse('contest_edit', args=['proboptscontest']))
+        self.assertEqual(response.status_code, 200)
+        problems = response.context['prefill']['problems']
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0]['output_prefix'], 7)
+        self.assertEqual(problems[0]['hide_results'], False)
+
+
+class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
+    """"Only extend, never shorten" guard for duration / end_time.
+
+    Once students have joined a contest, shrinking the personal time window
+    or pulling the deadline earlier would retroactively end those students'
+    participation mid-run (the middleware clears their current_contest on the
+    next request). These tests lock in that the server refuses such edits.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='guard_editor', user_permissions=('edit_all_contest',))
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='guardcontest', name='Guard',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=5),
+            authors=('superuser',),
+        )
+        # The contest has a 2h personal time window.
+        cls.contest.time_limit = timedelta(hours=2)
+        cls.contest.save()
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.editor)
+
+    def _payload(self, **overrides):
+        now = timezone.now()
+        payload = {
+            'name': 'Guard', 'key': 'guardcontest',
+            'start_time': (now - timedelta(days=1)).isoformat(),
+            'end_time': (now + timedelta(days=5)).isoformat(),
+            'duration_hours': 2, 'duration_minutes': 0,
+            'is_visible': False,
+        }
+        payload.update(overrides)
+        return payload
+
+    def _add_participant(self):
+        from judge.models import ContestParticipation
+        return ContestParticipation.objects.create(
+            contest=self.contest,
+            user=create_user(username='guard_student_%s' % ContestParticipation.objects.count()).profile,
+            real_start=timezone.now(),
+        )
+
+    # ── no participants yet → any edit allowed ────────────────────────────
+
+    def test_no_participants_allows_shrinking(self):
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=1)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.time_limit, timedelta(hours=1))
+
+    # ── duration: only extend ─────────────────────────────────────────────
+
+    def test_cannot_shrink_duration_with_participants(self):
+        self._add_participant()
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=1)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('only be increased', json.loads(response.content)['error'])
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.time_limit, timedelta(hours=2))  # unchanged
+
+    def test_can_extend_duration_with_participants(self):
+        self._add_participant()
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=3)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.time_limit, timedelta(hours=3))
+
+    def test_cannot_switch_unlimited_to_finite_with_participants(self):
+        # A contest with no personal limit treats that as "already unlimited";
+        # imposing a finite duration later is a shrink and must be refused.
+        # Use a fresh contest so the shared setUpTestData object is untouched.
+        _now = timezone.now()
+        unlimited = create_contest(
+            key='guardunlimited', name='Guard Unlimited',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=5),
+            authors=('superuser',),
+            time_limit=None,
+        )
+        from judge.models import ContestParticipation
+        ContestParticipation.objects.create(
+            contest=unlimited,
+            user=create_user(username='guard_student_unlim').profile,
+            real_start=timezone.now(),
+        )
+        response = self.client.post(
+            reverse('contest_edit', args=['guardunlimited']),
+            data=json.dumps({
+                'name': 'Guard Unlimited', 'key': 'guardunlimited',
+                'start_time': (_now - timedelta(days=1)).isoformat(),
+                'end_time': (_now + timedelta(days=5)).isoformat(),
+                'duration_hours': 2, 'duration_minutes': 0,
+                'is_visible': False,
+            }), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('unlimited', json.loads(response.content)['error'])
+
+    def test_can_remove_finite_duration_with_participants(self):
+        # Removing a personal limit always extends (window becomes "until the
+        # contest ends"), so it stays allowed even with participants.
+        self._add_participant()
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=0, duration_minutes=0)),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertIsNone(self.contest.time_limit)
+
+    # ── end_time: only extend ─────────────────────────────────────────────
+
+    def test_cannot_pull_end_time_earlier_with_participants(self):
+        self._add_participant()
+        now = timezone.now()
+        earlier_end = now + timedelta(days=1)  # was now + 5 days
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(end_time=earlier_end.isoformat())),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('end time', json.loads(response.content)['error'])
+        self.contest.refresh_from_db()
+        self.assertGreater(self.contest.end_time, earlier_end)  # unchanged
+
+    def test_can_push_end_time_later_with_participants(self):
+        self._add_participant()
+        now = timezone.now()
+        later_end = now + timedelta(days=10)  # was now + 5 days
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(end_time=later_end.isoformat())),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.end_time, later_end)
+
+
+class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
+    """Participation deadline computation and the middleware's kick-out rule.
+
+    ``ContestParticipation.end_time`` decides when a student's window ends:
+    min(real_start + time_limit, contest.end_time). Once ``ended`` is true the
+    middleware clears ``profile.current_contest``, which removes the submit
+    entry point (submissions no longer count toward the contest). These tests
+    verify that computation — the gate that "expired students cannot submit".
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='timeout_editor', user_permissions=('edit_all_contest',))
+
+    def _mk_contest(self, time_limit=None, end_delta_days=5):
+        _now = timezone.now()
+        contest = create_contest(
+            key='timeout%s' % self._seq(),
+            name='Timeout',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=end_delta_days),
+            authors=('superuser',),
+        )
+        if time_limit is not None:
+            contest.time_limit = time_limit
+            contest.save()
+        return contest
+
+    _seq_counter = 0
+
+    def _seq(self):
+        ContestTimeoutLogicTestCase._seq_counter += 1
+        return ContestTimeoutLogicTestCase._seq_counter
+
+    def _mk_participation(self, contest, real_start=None):
+        from judge.models import ContestParticipation
+        return ContestParticipation.objects.create(
+            contest=contest,
+            user=create_user(username='timeout_student_%s' % self._seq()).profile,
+            real_start=real_start or timezone.now(),
+        )
+
+    def test_no_limit_follows_contest_end(self):
+        contest = self._mk_contest(time_limit=None)
+        p = self._mk_participation(contest)
+        self.assertEqual(p.end_time, contest.end_time)
+
+    def test_duration_deadline_is_real_start_plus_limit(self):
+        contest = self._mk_contest(time_limit=timedelta(hours=2))
+        now = timezone.now()
+        p = self._mk_participation(contest, real_start=now)
+        self.assertEqual(p.end_time, min(now + timedelta(hours=2), contest.end_time))
+
+    def test_duration_capped_by_contest_end(self):
+        # A 10-day duration on a contest ending in 2 days must cap at contest end.
+        contest = self._mk_contest(time_limit=timedelta(days=10), end_delta_days=2)
+        now = timezone.now()
+        p = self._mk_participation(contest, real_start=now)
+        self.assertEqual(p.end_time, contest.end_time)
+
+    def test_ended_true_after_deadline(self):
+        contest = self._mk_contest(time_limit=timedelta(hours=1))
+        started = timezone.now() - timedelta(hours=2)  # joined 2h ago, limit 1h
+        p = self._mk_participation(contest, real_start=started)
+        self.assertTrue(p.ended)
+
+    def test_not_ended_before_deadline(self):
+        contest = self._mk_contest(time_limit=timedelta(hours=3))
+        started = timezone.now() - timedelta(hours=1)
+        p = self._mk_participation(contest, real_start=started)
+        self.assertFalse(p.ended)
+
+    def test_extending_duration_rescues_participant(self):
+        # The "only extend" rule is meaningful because extending the duration
+        # after a student joined moves their deadline and un-expires them.
+        contest = self._mk_contest(time_limit=timedelta(hours=1))
+        started = timezone.now() - timedelta(hours=2)
+        p = self._mk_participation(contest, real_start=started)
+        self.assertTrue(p.ended)
+        contest.time_limit = timedelta(hours=3)
+        contest.save()
+        # end_time/_now are cached_properties on the participation instance;
+        # drop the cache so the extension is observed (mirrors a fresh request).
+        try:
+            del p.end_time
+            del p._now
+        except AttributeError:
+            pass
+        self.assertFalse(p.ended)
+
+    def test_shrinking_duration_expires_participant(self):
+        # And shrinking it retroactively expires someone mid-run — which is
+        # exactly why the server refuses that edit once participants exist.
+        contest = self._mk_contest(time_limit=timedelta(hours=3))
+        started = timezone.now() - timedelta(hours=2)
+        p = self._mk_participation(contest, real_start=started)
+        self.assertFalse(p.ended)
+        contest.time_limit = timedelta(hours=1)
+        contest.save()
+        # See above: cached_property on the participation must be dropped.
+        try:
+            del p.end_time
+            del p._now
+        except AttributeError:
+            pass
+        self.assertTrue(p.ended)

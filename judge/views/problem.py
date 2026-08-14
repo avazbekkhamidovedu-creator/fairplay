@@ -320,9 +320,14 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             else get_contest_problem(self.object, user.profile)
         )
         context['contest_problem'] = contest_problem
-        if contest_problem:
-            contest = contest_problem.contest
-            # Isolate practice / assignment / exam drafts and UI context.
+        # Drawer list follows the active participation, not whether *this* problem
+        # happens to be in the assignment. After Join, the solving page always
+        # shows the assignment problem set.
+        current_participation = user.profile.current_contest if authed else None
+        workspace_in_contest = current_participation is not None
+        context['workspace_in_contest'] = workspace_in_contest
+        if workspace_in_contest:
+            contest = current_participation.contest
             if contest.format_class.has_hidden_results:
                 context['workspace_mode'] = 'exam'
             else:
@@ -335,7 +340,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             ).order_by('order')
             context['workspace_context_name'] = contest.name
             context['workspace_return_url'] = reverse('contest_view', args=[contest.key])
-            context['workspace_current_order'] = contest_problem.order
+            context['workspace_current_order'] = contest_problem.order if contest_problem else None
         else:
             context['workspace_mode'] = 'practice'
             context['workspace_context_id'] = ''
@@ -456,7 +461,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         context['workspace_attempt_counts'] = {}
         context['workspace_best_points'] = {}
         if authed:
-            if contest_problem:
+            if workspace_in_contest:
                 drawer_problem_ids = [cp.problem_id for cp in context['workspace_problems']]
                 # Assignment drawer: ContestSubmission.points (assignment problem scale).
                 if drawer_problem_ids:
@@ -482,7 +487,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                         context['workspace_best_points'][row['problem_id']] = row['p']
         # Duration countdown only when assignment defines personal time_limit (not window deadline).
         context['workspace_show_timer'] = bool(
-            contest_problem and contest_problem.contest.time_limit is not None,
+            workspace_in_contest and current_participation.contest.time_limit is not None,
         )
         context['workspace_timer_seconds'] = 0
         if context['workspace_show_timer'] and self.request.participation.end_time:
@@ -500,8 +505,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                 id=int(selected_submission_id), problem=self.object,
             )
             # Assignment/exam: only allow loading submissions from the active contest.
-            if contest_problem:
-                selected_qs = selected_qs.filter(contest_object=contest_problem.contest)
+            if workspace_in_contest:
+                selected_qs = selected_qs.filter(contest_object=current_participation.contest)
             selected_submission = selected_qs.first()
             if selected_submission is not None and selected_submission.can_see_detail(user):
                 selected_source = None
@@ -557,8 +562,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                 context['last_msg'] = event.last()
         if authed:
             workspace_subs_qs = Submission.objects.filter(user=self.request.profile, problem=self.object)
-            if contest_problem:
-                workspace_subs_qs = workspace_subs_qs.filter(contest_object=contest_problem.contest)
+            if workspace_in_contest:
+                workspace_subs_qs = workspace_subs_qs.filter(contest_object=current_participation.contest)
             workspace_subs = list(
                 workspace_subs_qs
                 .select_related('language', 'contest_object', 'contest__problem')
@@ -1591,6 +1596,21 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
     def _submission_blocked_response(self):
         """Pre-submit guards shared by every question type. Returns a response if blocked."""
+        # A non-public problem that belongs to an assignment may be READ by
+        # anyone who can access the assignment, but submissions must happen
+        # inside the student's own live window — never as a stray regular
+        # submission outside a contest. Maintainers (authors/editors who can
+        # edit the problem) are exempt so they can still test-submit from the
+        # problem page outside a contest context.
+        if self.contest_problem is None and not self.object.is_public \
+                and not self.object.is_editable_by(self.request.user):
+            from judge.models import ContestProblem
+            if ContestProblem.objects.filter(problem_id=self.object.id).exists():
+                return generic_message(
+                    self.request,
+                    _('Join the assignment to submit'),
+                    _('This problem belongs to an assignment. Enter the assignment to submit a solution.'),
+                )
         if (
             not self.request.user.has_perm('judge.spam_submission')
             and Submission.objects.filter(user=self.request.profile, rejudged_date__isnull=True)
