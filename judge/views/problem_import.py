@@ -702,6 +702,7 @@ class ProblemImportPreviewView(LoginRequiredMixin, View):
             item.preview_options = _preview_options(item)
             item.preview_blanks = _preview_blanks(item)
             item.preview_language_keys = _preview_language_keys(item)
+            item.preview_type_label, item.preview_type_class = _preview_type_presentation(item)
         return render(request, self.template_name, {
             'draft': draft,
             'items': items,
@@ -1178,7 +1179,16 @@ def _item_payload(item):
     payload['preview_options'] = _preview_options(item)
     payload['preview_blanks'] = _preview_blanks(item)
     payload['preview_language_keys'] = _preview_language_keys(item)
+    payload['preview_type_label'], payload['preview_type_class'] = _preview_type_presentation(item)
     return payload
+
+
+def _preview_type_presentation(item):
+    if item.submission_type == ProblemSubmissionType.MCQ and item.is_true_false:
+        return str(_('True/False')), 'regular'
+    label = dict(ProblemImportItem.TYPE_CHOICES).get(item.submission_type, _('Question'))
+    style = 'programming' if item.submission_type == ProblemSubmissionType.CODE else 'regular'
+    return str(label), style
 
 
 def _preview_options(item):
