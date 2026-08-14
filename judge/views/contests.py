@@ -688,6 +688,29 @@ class ContestCreate(LoginRequiredMixin, View):
         # Duration: the frontend edits hours+minutes, the model stores a timedelta.
         contest.time_limit = self._parse_duration(payload)
 
+        # ── Deadline follows a duration increase ────────────────────────────
+        # Editing an existing contest: when the per-student duration grows, the
+        # global deadline must grow by the SAME amount, measured from
+        # max(old deadline, now). Otherwise the increase is silently capped by
+        # the stale deadline and students see no extra time — "duration +1h"
+        # must actually give students +1h. Using ``now`` as the floor also
+        # covers a contest whose deadline already passed: the extension then
+        # starts from the present instead of from a past date.
+        existing = getattr(self, 'contest', None)
+        old_row = None
+        if existing is not None and existing.pk is not None:
+            # IMPORTANT: the old values must come from the DATABASE, not from
+            # ``contest`` — by this point ``_apply_payload`` has already written
+            # the new duration/end_time onto it, and ``self.contest`` IS that
+            # same object, so reading ``existing.time_limit`` would see the new.
+            old_row = type(existing).objects.filter(pk=existing.pk).values('time_limit', 'end_time').first()
+            if old_row:
+                old_limit, old_end = old_row['time_limit'], old_row['end_time']
+                new_limit = contest.time_limit
+                if old_limit is not None and new_limit is not None and new_limit > old_limit \
+                        and old_end is not None:
+                    contest.end_time = max(old_end, timezone.now()) + (new_limit - old_limit)
+
         # ── "Only extend, never shorten" guard ──────────────────────────────
         # Once students have joined (a participation exists), shrinking the
         # duration or pulling the deadline earlier would retroactively end
@@ -700,16 +723,10 @@ class ContestCreate(LoginRequiredMixin, View):
         #   - end_time may only stay equal or move later.
         # This mirrors the frontend validation, but is authoritative — a
         # crafted JSON payload cannot bypass it.
-        # IMPORTANT: the old values must come from the DATABASE, not from
-        # ``contest`` — by this point ``_apply_payload`` has already written
-        # the new duration/end_time onto it, and ``self.contest`` IS that same
-        # object, so reading ``existing.time_limit`` would see the new value.
-        existing = getattr(self, 'contest', None)
-        if existing is not None and existing.pk is not None \
+        if existing is not None and existing.pk is not None and old_row is not None \
                 and existing.users.exists():
-            old_row = type(existing).objects.filter(pk=existing.pk).values('time_limit', 'end_time').first()
-            old_limit = old_row['time_limit'] if old_row else None
-            old_end = old_row['end_time'] if old_row else None
+            old_limit = old_row['time_limit']
+            old_end = old_row['end_time']
             new_limit = contest.time_limit
             if old_limit is None:
                 if new_limit is not None:

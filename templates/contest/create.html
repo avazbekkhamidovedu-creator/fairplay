@@ -1004,26 +1004,46 @@
             if (startInput && endInput && durH && durM) {
                 // Validity (start/end) and Duration are INDEPENDENT settings:
                 // end_time is the global "assignment closes" deadline, time_limit
-                // is the per-student window. end_time is auto-filled as a
-                // *starting point* (start + duration) but is never overwritten
-                // once the teacher edits it manually — this is what allows a
-                // long availability window with a short per-student timer.
+                // is the per-student window. For NEW contests end_time is
+                // auto-filled as start + duration; once the teacher edits it
+                // manually it becomes theirs. For EDITS, a duration *increase*
+                // must also extend the deadline by the same amount, measured
+                // from max(old deadline, now) — mirroring the server rule in
+                // ContestCreate._apply_payload — so students really get the
+                // added time (and an already-passed deadline still extends
+                // from "now").
                 var endWarnEl = document.getElementById('dur-end-warning');
                 function calcEnd() {
                     var s = parseLocalInput(startInput.value);
                     var h = parseInt(durH.value || 0, 10);
                     var m = parseInt(durM.value || 0, 10);
                     if (s && (h > 0 || m > 0)) {
-                        s.setHours(s.getHours() + h);
-                        s.setMinutes(s.getMinutes() + m);
-                        var derived = toLocalInput(s);
-                        // Auto-fill only while the deadline is untouched (empty
-                        // or still the value we derived last time); once the
-                        // teacher sets their own end time we stop overwriting.
-                        if (!endInput.value || endInput.value === endInput.dataset.autoDerived) {
-                            endInput.value = derived;
-                            endInput.dataset.autoDerived = derived;
+                        var newTotal = h * 60 + m;
+                        if (window.DMOJ_IS_EDIT && savedEnd) {
+                            var oldTotal = savedDurH * 60 + savedDurM;
+                            var increase = newTotal - oldTotal;
+                            if (increase > 0) {
+                                // New deadline = max(old deadline, now) + increase.
+                                var base = Math.max(parseLocalInput(savedEnd).getTime(), Date.now());
+                                var d = new Date(base);
+                                d.setMinutes(d.getMinutes() + increase);
+                                endInput.value = toLocalInput(d);
+                            }
+                            // No increase (or a shrink, which the save guard
+                            // rejects anyway) → leave the deadline untouched.
+                        } else {
+                            // Create mode: auto-fill only while the deadline is
+                            // still auto-derived, never overwriting a manual one.
+                            s.setHours(s.getHours() + h);
+                            s.setMinutes(s.getMinutes() + m);
+                            var derived = toLocalInput(s);
+                            if (!endInput.value || endInput.value === endInput.dataset.autoDerived) {
+                                endInput.value = derived;
+                                endInput.dataset.autoDerived = derived;
+                            }
                         }
+                    } else {
+                        endInput.value = '';
                     }
                     syncEndWarning();
                 }

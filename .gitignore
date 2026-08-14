@@ -41,3 +41,6 @@ dmoj/test_settings.py
 # Local STATIC_ROOT (dmoj/local_settings.py) used by compilejsi18n for tests.
 static_test_root/
 .local-backups/
+
+# Runtime uploads (MEDIA_ROOT) — never commit.
+media/

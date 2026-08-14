@@ -1240,6 +1240,59 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.end_time, later_end)
 
+    # ── duration increase extends the deadline ─────────────────────────────
+    # The deadline must follow a duration increase by the same amount, measured
+    # from max(old deadline, now) — otherwise the stale deadline caps the new
+    # timer and students see no extra time ("duration +1h" must be real).
+
+    def test_duration_increase_extends_deadline(self):
+        """Deadline still ahead: new end = old end + increase."""
+        self._add_participant()
+        old_end = self.contest.end_time  # now + 5 days
+        response = self.client.post(
+            reverse('contest_edit', args=['guardcontest']),
+            data=json.dumps(self._payload(duration_hours=3)), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.time_limit, timedelta(hours=3))
+        self.assertEqual(self.contest.end_time, old_end + timedelta(hours=1))
+
+    def test_duration_increase_extends_from_now_when_deadline_passed(self):
+        """Deadline already passed: the extension starts from *now* (the stale
+        past date must not be used as the base, or students still get nothing)."""
+        _now = timezone.now()
+        expired = create_contest(
+            key='guardexpired', name='Guard Expired',
+            start_time=_now - timedelta(days=2),
+            end_time=_now - timedelta(days=2) + timedelta(hours=2),
+            authors=('superuser',),
+            time_limit=timedelta(hours=2),
+        )
+        from judge.models import ContestParticipation
+        ContestParticipation.objects.create(
+            contest=expired,
+            user=create_user(username='guard_student_expired').profile,
+            real_start=_now - timedelta(days=2),
+        )
+        response = self.client.post(
+            reverse('contest_edit', args=['guardexpired']),
+            data=json.dumps({
+                'name': 'Guard Expired', 'key': 'guardexpired',
+                'start_time': (_now - timedelta(days=2)).isoformat(),
+                'end_time': (_now - timedelta(days=2) + timedelta(hours=2)).isoformat(),
+                'duration_hours': 3, 'duration_minutes': 0,
+                'is_visible': False,
+            }), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        expired.refresh_from_db()
+        self.assertEqual(expired.time_limit, timedelta(hours=3))
+        # new end = now + 1h (tolerating wall-clock drift during the request).
+        expected = timezone.now() + timedelta(hours=1)
+        self.assertLess(abs((expired.end_time - expected).total_seconds()), 5)
+        self.assertGreater(expired.end_time, _now)
+
 
 class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
     """Participation deadline computation and the middleware's kick-out rule.
