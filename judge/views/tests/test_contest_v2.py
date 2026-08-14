@@ -5,7 +5,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestTag, ContestSubmission, Organization, Submission
+from judge.models import Contest, ContestTag, Organization, Submission
 from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
 
 

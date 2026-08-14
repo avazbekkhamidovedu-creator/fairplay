@@ -6,13 +6,13 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("judge", "0188_merge_class_offering_and_review_note"),
+        ('judge', '0188_merge_class_offering_and_review_note'),
     ]
 
     operations = [
         migrations.RenameIndex(
-            model_name="adminnotification",
-            new_name="judge_admin_recipie_e0c4fd_idx",
-            old_name="judge_admin_recipi_7f2c1a_idx",
+            model_name='adminnotification',
+            new_name='judge_admin_recipie_e0c4fd_idx',
+            old_name='judge_admin_recipi_7f2c1a_idx',
         ),
     ]
