@@ -2430,7 +2430,7 @@
                                             {% if seb_shown_preset %}
                                             <div class="ac-help">
                                                 <strong>{{ seb_shown_preset.name }}</strong>{% if seb_shown_preset.description %} — {{ seb_shown_preset.description }}{% endif %}
-                                                <a href="{{ seb_shown_preset.config_file.url }}" target="_blank">{{ _('Preview .seb') }}</a>
+                                                <a href="{{ url('seb_preset_config', seb_shown_preset.id) }}">{{ _('Preview .seb') }}</a>
                                             </div>
                                             {% if seb_linked_preset and seb_linked_preset != seb_default_preset %}
                                             <div class="ac-help">
@@ -2467,9 +2467,11 @@
                                             <div class="field">
                                                 {% if contest %}
                                                     {% if contest.seb_config_file %}
+                                                    {# The stored name is a generated object key, not anything a
+                                                       human uploaded, so link the download rather than show it. #}
                                                     <div class="ac-inline" style="margin-bottom:0.3rem;">
-                                                        <a href="{{ contest.seb_config_file.url }}" target="_blank">{{ contest.seb_config_file.name }}</a>
-                                                        <span class="unit">{{ _('Current file — upload below to replace.') }}</span>
+                                                        <a href="{{ url('contest_seb_upload', contest.key) }}">{{ _('Download current .seb') }}</a>
+                                                        <span class="unit">{{ _('Upload below to replace.') }}</span>
                                                     </div>
                                                     {% endif %}
                                                     <div class="ac-inline">

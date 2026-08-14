@@ -27,6 +27,7 @@ from django.utils.decorators import method_decorator
 from django.utils.functional import cached_property
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
+from django.utils.text import slugify
 from django.utils.timezone import make_aware
 from django.utils.translation import gettext as _, gettext_lazy
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -44,6 +45,7 @@ from judge.forms import ContestCloneForm
 from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestTag, \
     Problem, Profile, SEBConfigPreset, Submission
 from judge.models.profile import Class, Organization
+from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
@@ -1304,27 +1306,64 @@ class ContestSEBFileView(LoginRequiredMixin, View):
     writes one of the SEB fields — the user must hold
     ``judge.contest_seb_requirement`` just as ``_restricted_fields`` demands for
     every other SEB write path.
+
+    GET streams the contest's current file back to the same audience. The bytes
+    live in private object storage under a generated key, so there is no URL an
+    editor could link to directly (``querystring_auth`` is off by design — see
+    ``judge/storage/s3.py``); every read goes through Django.
     """
 
-    def post(self, request, *args, **kwargs):
-        contest = get_object_or_404(Contest, key=kwargs['contest'])
+    def _editor_or_error(self, request, contest):
         if not request.user.is_authenticated:
             return JsonResponse({'error': _('Not authenticated.')}, status=401)
         if not contest.is_editable_by(request.user) or \
                 not request.user.has_perm('judge.contest_seb_requirement'):
             return JsonResponse({'error': _('Permission denied.')}, status=403)
+        return None
+
+    def get(self, request, *args, **kwargs):
+        contest = get_object_or_404(Contest, key=kwargs['contest'])
+        denied = self._editor_or_error(request, contest)
+        if denied is not None:
+            return denied
+        if not contest.seb_config_file:
+            raise Http404()
+        try:
+            fh = contest.seb_config_file.open('rb')
+        except StorageUnavailableError:
+            return HttpResponse(_('The file store is temporarily unavailable. Please try again later.'),
+                                status=503, content_type='text/plain')
+        return FileResponse(fh, as_attachment=True, filename=f'{contest.key}.seb',
+                            content_type='application/seb')
+
+    def post(self, request, *args, **kwargs):
+        contest = get_object_or_404(Contest, key=kwargs['contest'])
+        denied = self._editor_or_error(request, contest)
+        if denied is not None:
+            return denied
         if 'seb_config_file' not in request.FILES:
             return JsonResponse({'error': _('No file uploaded.')}, status=400)
         upload = request.FILES['seb_config_file']
         if not upload.name.lower().endswith('.seb'):
             return JsonResponse({'error': _('Only .seb files are accepted.')}, status=400)
+        previous = contest.seb_config_file.name if contest.seb_config_file else ''
         try:
             contest.seb_config_file = upload
             contest.save(update_fields=['seb_config_file'])
-            return JsonResponse({'ok': True, 'name': upload.name})
         except Exception:
             logger.exception('SEB config upload failed for contest %s', contest.key)
             return JsonResponse({'error': _('Failed to upload the file.')}, status=500)
+        # Each upload gets a fresh generated key, so the replaced object would
+        # otherwise linger in the bucket forever with nothing referencing it.
+        # ContestClone copies the field VALUE, so a clone can still point at the
+        # same object — deleting it then would take the clone's config with it.
+        if previous and previous != contest.seb_config_file.name and \
+                not Contest.objects.filter(seb_config_file=previous).exclude(pk=contest.pk).exists():
+            try:
+                contest.seb_config_file.storage.delete(previous)
+            except Exception:
+                logger.exception('could not remove replaced SEB config %s', previous)
+        return JsonResponse({'ok': True, 'name': upload.name})
 
 
 class ContestFinalizeView(LoginRequiredMixin, View):
@@ -3435,12 +3474,43 @@ class ContestSEBConfig(LoginRequiredMixin, ContestMixin, BaseDetailView):
         config_file = self.object.seb_effective_config_file
         if not self.object.seb_required or not config_file:
             raise Http404()
+        try:
+            fh = config_file.open('rb')
+        except StorageUnavailableError:
+            return HttpResponse(_('The file store is temporarily unavailable. Please try again later.'),
+                                status=503, content_type='text/plain')
         return FileResponse(
-            config_file.open('rb'),
+            fh,
             as_attachment=True,
             filename=f'{self.object.key}.seb',
             content_type='application/seb',
         )
+
+
+class SEBPresetConfig(LoginRequiredMixin, View):
+    """Stream a preset's ``.seb`` so an editor can inspect what they are adopting.
+
+    Presets live in private object storage like every other uploaded file, so
+    the editor page cannot link to ``config_file.url``. Gated on the same
+    permission that reveals the SEB controls at all.
+    """
+
+    def get(self, request, *args, **kwargs):
+        if not request.user.has_perm('judge.contest_seb_requirement'):
+            raise PermissionDenied()
+        preset = get_object_or_404(SEBConfigPreset, pk=kwargs['pk'])
+        if not preset.config_file:
+            raise Http404()
+        try:
+            fh = preset.config_file.open('rb')
+        except StorageUnavailableError:
+            return HttpResponse(_('The file store is temporarily unavailable. Please try again later.'),
+                                status=503, content_type='text/plain')
+        # slugify() of a fully non-ASCII name is empty, which would offer the
+        # browser a bare ".seb" dotfile.
+        return FileResponse(fh, as_attachment=True,
+                            filename='%s.seb' % (slugify(preset.name) or 'seb-config'),
+                            content_type='application/seb')
 
 
 class SEBQuit(TitleMixin, TemplateView):

@@ -308,6 +308,8 @@ class ContestSEBPresetTestCase(CommonDataMixin, TestCase):
     def setUpTestData(self):
         super().setUpTestData()
         self.users['preset_student'] = create_user(username='preset_student')
+        self.users['preset_staff'] = create_user(
+            username='preset_staff', user_permissions=('contest_seb_requirement',))
 
         self.preset = SEBConfigPreset(
             name='Site default',
@@ -363,4 +365,28 @@ class ContestSEBPresetTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         # Served under the contest's own name even though the bytes are the preset's.
         self.assertIn('presetexam.seb', response['Content-Disposition'])
+        self.assertEqual(b''.join(response.streaming_content), PRESET_CONFIG_BYTES)
+
+    def test_preset_file_stored_under_generated_key(self):
+        # Presets live in the object store on an opaque key, like submissions.
+        self.assertRegex(self.preset.config_file.name,
+                         r'^seb_configs/\d{4}/\d{2}/presets/[0-9a-f]{32}\.seb$')
+
+    # ------------------------------------------------------------------ #
+    # Preset preview download (editor-facing)                             #
+    # ------------------------------------------------------------------ #
+
+    def test_preset_preview_requires_login(self):
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 302)
+
+    def test_preset_preview_denied_without_permission(self):
+        self.client.force_login(self.users['preset_student'])
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 403)
+
+    def test_preset_preview_allowed_with_permission(self):
+        self.client.force_login(self.users['preset_staff'])
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(b''.join(response.streaming_content), PRESET_CONFIG_BYTES)

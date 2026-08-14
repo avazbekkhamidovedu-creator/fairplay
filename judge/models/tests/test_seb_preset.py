@@ -1,15 +1,17 @@
 import shutil
 import tempfile
+from datetime import datetime
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
-from judge.models import SEBConfigPreset
+from judge.models import SEBConfigPreset, StoredFileRecord
 from judge.models.seb import DEFAULT_PRESET_CACHE_KEY
 from judge.models.tests.util import create_contest
+from judge.storage import generate_seb_config_key
 
 BEK = 'a' * 64
 CFG = 'b' * 64
@@ -108,6 +110,31 @@ class SEBConfigPresetTestCase(TestCase):
         # Renaming does not change any key students' clients are sending.
         preset.description = 'Now with a clearer explanation.'
         preset.full_clean()
+
+    def test_config_file_stored_under_generated_key(self):
+        # The .seb goes to the object store on a generated key, like every other
+        # uploaded file — never MEDIA_ROOT, never the uploaded filename.
+        preset = create_preset(name='Keyed')
+        self.assertRegex(preset.config_file.name,
+                         r'^seb_configs/\d{4}/\d{2}/presets/[0-9a-f]{32}\.seb$')
+        self.assertTrue(StoredFileRecord.objects.filter(path=preset.config_file.name).exists())
+
+
+class SEBConfigKeyTestCase(SimpleTestCase):
+    def test_key_shape(self):
+        # Only year/month are read off `now`, so a naive value is fine here.
+        key = generate_seb_config_key('presets', 'Exam Config.SEB', now=datetime(2026, 3, 9))
+        self.assertRegex(key, r'^seb_configs/2026/03/presets/[0-9a-f]{32}\.seb$')
+
+    def test_scope_is_sanitised(self):
+        # The scope reaches an object key, so a caller-supplied path separator
+        # must not be able to reshape the hierarchy.
+        key = generate_seb_config_key('../../etc/passwd', 'a.seb')
+        self.assertRegex(key, r'^seb_configs/\d{4}/\d{2}/etcpasswd/[0-9a-f]{32}\.seb$')
+
+    def test_unknown_extension_dropped(self):
+        basename = generate_seb_config_key('presets', 'no-extension').rsplit('/', 1)[-1]
+        self.assertRegex(basename, r'^[0-9a-f]{32}$')
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())

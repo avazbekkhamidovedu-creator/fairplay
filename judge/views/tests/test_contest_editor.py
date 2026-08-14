@@ -18,7 +18,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestTag, Organization, SEBConfigPreset
+from judge.models import Contest, ContestTag, Organization, SEBConfigPreset, StoredFileRecord
 from judge.models.seb import DEFAULT_PRESET_CACHE_KEY
 from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
 from judge.views.contests import ContestCreate
@@ -1028,10 +1028,74 @@ class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
         self.assertTrue(json.loads(response.content)['ok'])
         self.contest.refresh_from_db()
         self.assertTrue(self.contest.seb_config_file)
-        # MEDIA_ROOT persists across test runs, so Django's storage may suffix a
-        # duplicate filename (exam_1KexZ2r.seb) — assert the basename loosely.
-        basename = self.contest.seb_config_file.name.rsplit('/', 1)[-1]
-        self.assertTrue(basename.startswith('exam') and basename.endswith('.seb'))
+        # The stored name is a generated object key, never the uploaded filename:
+        # seb_configs/YYYY/MM/contest-<id>/<uuid>.seb
+        name = self.contest.seb_config_file.name
+        self.assertRegex(name, r'^seb_configs/\d{4}/\d{2}/contest-%d/[0-9a-f]{32}\.seb$' % self.contest.id)
+        self.assertNotIn('exam', name)
+        # Every object written through ResilientStorage is tracked for mirroring.
+        self.assertTrue(StoredFileRecord.objects.filter(path=name).exists())
+
+    def test_seb_download_returns_stored_file(self):
+        self.client.force_login(self.editor)
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('exam.seb', b'SEB config bytes')},
+        )
+        response = self.client.get(reverse('contest_seb_upload', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), b'SEB config bytes')
+        self.assertIn('endpointcontest.seb', response['Content-Disposition'])
+
+    def test_seb_download_denied_without_permission(self):
+        self.client.force_login(self.curator)
+        response = self.client.get(reverse('contest_seb_upload', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 403)
+
+    def test_seb_upload_replaces_previous_object(self):
+        self.client.force_login(self.editor)
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('first.seb', b'first')},
+        )
+        self.contest.refresh_from_db()
+        first = self.contest.seb_config_file.name
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('second.seb', b'second')},
+        )
+        self.contest.refresh_from_db()
+        self.assertNotEqual(self.contest.seb_config_file.name, first)
+        # The replaced object is removed rather than orphaned in the bucket.
+        self.assertEqual(
+            StoredFileRecord.objects.get(path=first).status, StoredFileRecord.STATUS_DELETED)
+
+    def test_seb_upload_keeps_object_shared_with_a_clone(self):
+        # ContestClone copies the field value, so two contests can name the same
+        # object. Replacing one must not delete the other's config.
+        self.client.force_login(self.editor)
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('shared.seb', b'shared')},
+        )
+        self.contest.refresh_from_db()
+        shared = self.contest.seb_config_file.name
+        _now = timezone.now()
+        clone = create_contest(
+            key='clonedseb', name='Cloned',
+            start_time=_now + timedelta(days=1), end_time=_now + timedelta(days=2),
+            seb_config_file=shared,
+        )
+
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('new.seb', b'new')},
+        )
+        clone.refresh_from_db()
+        self.assertEqual(clone.seb_config_file.name, shared)
+        self.assertNotEqual(
+            StoredFileRecord.objects.get(path=shared).status, StoredFileRecord.STATUS_DELETED)
+        self.assertEqual(clone.seb_config_file.open('rb').read(), b'shared')
 
     def test_seb_upload_rejects_bad_extension(self):
         self.client.force_login(self.editor)

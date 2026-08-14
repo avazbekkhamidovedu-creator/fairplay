@@ -5,6 +5,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from judge.models.profile import Profile
+from judge.storage import generate_seb_config_key, submission_storage
 from judge.utils.seb import first_invalid_seb_key, parse_seb_keys
 
 __all__ = ['SEBConfigPreset']
@@ -16,6 +17,11 @@ DEFAULT_PRESET_CACHE_TIMEOUT = 86400
 # Sentinel stored in the cache when no default is configured, so "no default"
 # is cached too instead of falling through to a query on every request.
 _NO_DEFAULT = -1
+
+
+def seb_preset_config_upload_to(instance, filename):
+    """upload_to: opaque OSS key (the human-facing label stays on ``name``)."""
+    return generate_seb_config_key('presets', filename)
 
 
 class SEBConfigPreset(models.Model):
@@ -47,7 +53,9 @@ class SEBConfigPreset(models.Model):
     )
     config_file = models.FileField(
         verbose_name=_('SEB config file (.seb)'),
-        upload_to='seb_configs/presets/',
+        storage=submission_storage,
+        upload_to=seb_preset_config_upload_to,
+        max_length=255,
         help_text=_("Built in the SEB Configuration Tool. Set the Start URL to this site's home page so one "
                     'file serves every exam.'),
     )

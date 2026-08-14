@@ -21,7 +21,7 @@ from judge.models import Class, Contest, ContestProblem, ContestSubmission, Prof
 from judge.ratings import rate_contest
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminAceWidget, AdminHeavySelect2MultipleWidget, AdminHeavySelect2Widget, \
-    AdminMartorWidget, AdminSelect2MultipleWidget, AdminSelect2Widget
+    AdminMartorWidget, AdminSelect2MultipleWidget, AdminSelect2Widget, PrivateFileInput
 
 
 class AdminHeavySelect2Widget(AdminHeavySelect2Widget):
@@ -130,6 +130,9 @@ class ContestForm(ModelForm):
             'view_contest_scoreboard': AdminHeavySelect2MultipleWidget(data_view='profile_select2'),
             'view_contest_submissions': AdminHeavySelect2MultipleWidget(data_view='profile_select2'),
             'description': AdminMartorWidget(attrs={'data-markdownfy-url': reverse_lazy('contest_preview')}),
+            # The .seb file lives in private object storage with no linkable URL;
+            # the stock widget would 500 this form on any contest that has one.
+            'seb_config_file': PrivateFileInput,
         }
 
 

@@ -16,6 +16,7 @@ from judge.models.problem import Problem
 from judge.models.profile import Class, Organization, Profile
 from judge.models.submission import Submission
 from judge.ratings import rate_contest
+from judge.storage import generate_seb_config_key, submission_storage
 from judge.utils.seb import first_invalid_seb_key, parse_seb_keys
 
 __all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating']
@@ -24,6 +25,12 @@ __all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'C
 class MinValueOrNoneValidator(MinValueValidator):
     def compare(self, a, b):
         return a is not None and b is not None and super().compare(a, b)
+
+
+def seb_contest_config_upload_to(instance, filename):
+    """upload_to: opaque OSS key. Uploads only happen in edit mode, so the
+    contest already has a pk to shard by."""
+    return generate_seb_config_key('contest-%s' % (instance.pk or 0), filename)
 
 
 class ContestTag(models.Model):
@@ -216,7 +223,9 @@ class Contest(models.Model):
     )
     seb_config_file = models.FileField(
         verbose_name=_('SEB config file (.seb)'),
-        upload_to='seb_configs/',
+        storage=submission_storage,
+        upload_to=seb_contest_config_upload_to,
+        max_length=255,
         blank=True,
         null=True,
         help_text=_('The .seb file students download or launch via sebs:// to enter this exam.'),

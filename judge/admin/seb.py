@@ -1,8 +1,20 @@
 from django.contrib import admin
 from django.db.models import Count
+from django.forms import ModelForm
+from django.urls import reverse
+from django.utils.html import format_html
 from django.utils.translation import gettext, gettext_lazy as _, ngettext
 
 from judge.models import SEBConfigPreset
+from judge.widgets import PrivateFileInput
+
+
+class SEBConfigPresetForm(ModelForm):
+    class Meta:
+        model = SEBConfigPreset
+        fields = '__all__'
+        # Private object storage has no linkable URL — see PrivateFileInput.
+        widgets = {'config_file': PrivateFileInput}
 
 
 class SEBConfigPresetAdmin(admin.ModelAdmin):
@@ -14,15 +26,16 @@ class SEBConfigPresetAdmin(admin.ModelAdmin):
     ``SEBConfigPreset.clean()`` refuses. Use **Duplicate** to version instead.
     """
 
+    form = SEBConfigPresetForm
     list_display = ('name', 'is_default', 'is_active', 'contest_count', 'updated_on', 'updated_by')
     list_filter = ('is_default', 'is_active')
     search_fields = ('name', 'description')
-    readonly_fields = ('updated_on', 'updated_by')
+    readonly_fields = ('current_config_file', 'updated_on', 'updated_by')
     actions = ('duplicate_preset',)
     fieldsets = (
         (None, {'fields': ('name', 'description', 'is_default', 'is_active')}),
         (_('Configuration'), {
-            'fields': ('config_file', 'browser_exam_keys', 'config_keys', 'quit_url'),
+            'fields': ('current_config_file', 'config_file', 'browser_exam_keys', 'config_keys', 'quit_url'),
             'description': _('Build the .seb file in the SEB Configuration Tool with the Start URL set to this '
                              "site's home page, a custom Browser Exam Key under Security, and a Quit URL. Then "
                              'upload it here and paste both key hashes.'),
@@ -36,6 +49,15 @@ class SEBConfigPresetAdmin(admin.ModelAdmin):
     @admin.display(description=_('assignments'), ordering='contest_count_')
     def contest_count(self, obj):
         return obj.contest_count_
+
+    @admin.display(description=_('current file'))
+    def current_config_file(self, obj):
+        # The upload widget cannot show the stored file (no linkable URL), so
+        # offer the permission-checked streaming view instead.
+        if obj is None or not obj.pk or not obj.config_file:
+            return _('No file uploaded yet.')
+        return format_html('<a href="{}">{}</a>', reverse('seb_preset_config', args=(obj.pk,)),
+                           _('Download current .seb'))
 
     def save_model(self, request, obj, form, change):
         obj.updated_by = request.profile
