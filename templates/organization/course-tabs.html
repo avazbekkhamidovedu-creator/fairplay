@@ -1,0 +1,48 @@
+{% extends "tabs-base.html" %}
+
+{% block tabs %}
+    {{ make_tab('course', 'fa-university', url('organization_list'), _('Course')) }}
+    {# Applicants submit via modal; site admins also get a review queue tab below. #}
+    <li class="tab" id="teacher-verification-tab">
+        <a href="javascript:void(0)" id="teacher-verification-btn">
+            <i class="tab-icon fa fa-id-badge"></i> {{ _('Apply as teacher') }}
+        </a>
+    </li>
+    {% if can_review_any %}
+        <li class="tab{% if tab == 'join_requests' %} active{% endif %}">
+            <a href="{{ url('organization_join_requests') }}">
+                <i class="tab-icon fa fa-lock"></i> {{ _('Join requests') }}
+                {% if pending_review_total %}
+                    <span class="course-tab-badge">{{ pending_review_total }}</span>
+                {% endif %}
+            </a>
+        </li>
+    {% endif %}
+    {% if can_review_teachers %}
+        <li class="tab{% if tab == 'teacher_requests' %} active{% endif %}">
+            <a href="{{ url('organization_teacher_requests') }}">
+                <i class="tab-icon fa fa-id-badge"></i> {{ _('Teacher requests') }}
+                {% if pending_teacher_total %}
+                    <span class="course-tab-badge">{{ pending_teacher_total }}</span>
+                {% endif %}
+            </a>
+        </li>
+    {% endif %}
+    {% if can_see_notifications %}
+        <li class="tab{% if tab == 'notifications' %} active{% endif %}">
+            <a href="{{ url('organization_notifications') }}">
+                <i class="tab-icon fa fa-envelope"></i> {{ _('Messages') }}
+                {% if unread_notification_total %}
+                    <span class="course-tab-badge">{{ unread_notification_total }}</span>
+                {% endif %}
+            </a>
+        </li>
+    {% endif %}
+    {% if can_add_course %}
+        <li class="tab tab-action">
+            <a class="course-add-btn" href="{{ url('organization_create') }}">
+                <i class="tab-icon fa fa-plus"></i> {{ _('Add Course') }}
+            </a>
+        </li>
+    {% endif %}
+{% endblock %}

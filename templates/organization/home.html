@@ -1,108 +1,339 @@
-{% extends "common-content.html" %}
+{% extends "base.html" %}
 
-{% block content_media %}
-    <style>
-        .class-list td {
-            vertical-align: middle;
-        }
 
-        .class-list td:first-child {
-            text-align: left;
-            padding: 0.5em 0.5em 0.5em 1em;
-        }
+{% block js_media %}
+<script type="text/javascript">
+$(function () {
+    $('#teacher-verification-btn').on('click', function () {
+        $('#teacher-verification-modal').prop('hidden', false);
+    });
+    $('#teacher-verification-modal .js-close-modal, #join-request-modal .js-close-modal').on('click', function () {
+        $(this).closest('.course-modal').prop('hidden', true);
+    });
+    $('.js-open-join-modal').on('click', function (e) {
+        e.preventDefault();
+        $('#join-request-modal').prop('hidden', false);
+    });
+    $('.js-delete-course').on('click', function () {
+        return confirm({{ _('Delete this course? This cannot be undone.')|htmltojs }});
+    });
+    $('.js-leave-course').on('click', function () {
+        return confirm({{ _('Leave this course? You will also leave all classes under it.')|htmltojs }});
+    });
 
-        .class-list td:last-child {
-            width: 8em;
-        }
+    var $cards = $('.js-class-card');
+    function applyFilters() {
+        var q = ($('#f-class-q').val() || '').toLowerCase();
+        var teacher = $('#f-teacher').val() || '';
+        var session = $('#f-session').val() || '';
+        var sort = $('#f-class-sort').val() || 'session';
+        var group = $('.view-switch button.active').data('group') || 'all';
 
-        .class-description {
-            color: #777;
-        }
-    </style>
-{% endblock %}
-
-{% block content_js_media %}
-    <script type="text/javascript">
-        $(function () {
-            $('.leave-organization').click(function () {
-                return confirm({{ _('Are you sure you want to leave this organization?')|htmltojs }} + '\n' +
-                    {% if organization.is_open %}
-                        {{ _('You will have to rejoin to show up on the organization leaderboard.')|htmltojs }}
-                    {% else %}
-                        {{ _('You will have to request membership in order to join again.')|htmltojs }}
-                    {% endif %}
-                );
-            });
+        var items = $cards.get().map(function (el) {
+            return {
+                el: el,
+                name: (el.getAttribute('data-name') || '').toLowerCase(),
+                teacher: el.getAttribute('data-teacher') || '',
+                session: el.getAttribute('data-session') || '',
+                year: el.getAttribute('data-year') || '',
+                teacherLabel: el.getAttribute('data-teacher-label') || '',
+                sessionLabel: el.getAttribute('data-session-label') || ''
+            };
         });
-    </script>
+
+        items.forEach(function (it) {
+            var show = true;
+            if (q && it.name.indexOf(q) < 0 && it.teacherLabel.toLowerCase().indexOf(q) < 0 &&
+                it.sessionLabel.toLowerCase().indexOf(q) < 0) show = false;
+            if (teacher && it.teacher !== teacher) show = false;
+            if (session && it.session !== session) show = false;
+            $(it.el).toggle(show);
+            it.show = show;
+        });
+
+        items.sort(function (a, b) {
+            if (sort === 'teacher') return a.teacherLabel.localeCompare(b.teacherLabel) || a.name.localeCompare(b.name);
+            if (sort === 'year') return b.year.localeCompare(a.year) || a.teacherLabel.localeCompare(b.teacherLabel);
+            if (sort === 'session') return b.sessionLabel.localeCompare(a.sessionLabel) || a.name.localeCompare(b.name);
+            return a.name.localeCompare(b.name);
+        });
+
+        var $root = $('#class-root');
+        $root.empty();
+        var visible = items.filter(function (it) { return it.show; });
+        if (!visible.length) {
+            $root.append($('<div class="empty"/>').text({{ _('No classes match your filters.')|htmltojs }}));
+            return;
+        }
+
+        function appendGrid(list, $parent) {
+            var $grid = $('<div class="class-grid"/>');
+            list.forEach(function (it) { $grid.append(it.el); $(it.el).show(); });
+            $parent.append($grid);
+        }
+
+        if (group === 'teacher' || group === 'session') {
+            var keyFn = group === 'teacher'
+                ? function (it) { return it.teacherLabel || {{ _('TBA')|htmltojs }}; }
+                : function (it) { return it.sessionLabel || {{ _('Session TBA')|htmltojs }}; };
+            var groups = {};
+            visible.forEach(function (it) {
+                var k = keyFn(it);
+                if (!groups[k]) groups[k] = [];
+                groups[k].push(it);
+            });
+            Object.keys(groups).sort().forEach(function (k) {
+                var $block = $('<div class="group-block"/>');
+                $block.append(
+                    $('<div class="group-title"/>').append(
+                        document.createTextNode(k + ' '),
+                        $('<span class="group-meta"/>').text(
+                            groups[k].length + ' ' + {{ _('classes')|htmltojs }}
+                        )
+                    )
+                );
+                appendGrid(groups[k], $block);
+                $root.append($block);
+            });
+        } else {
+            appendGrid(visible, $root);
+        }
+    }
+
+    $('#f-class-q').on('input', applyFilters);
+    $('#f-teacher, #f-session, #f-class-sort').on('change', applyFilters);
+    $('.view-switch button').on('click', function () {
+        $('.view-switch button').removeClass('active');
+        $(this).addClass('active');
+        applyFilters();
+    });
+});
+</script>
 {% endblock %}
 
-{% block info_float %}
-    {% if request.user.is_authenticated %}
-        {% if request.profile in organization %}
-            <form method="post" action="{{ url('leave_organization', organization.id, organization.slug) }}">
-                {% csrf_token %}
-                <input type="submit" class="unselectable button full leave-organization" value="{{ _('Leave organization') }}">
-            </form>
-        {% elif organization.is_open %}
-            <form method="post" action="{{ url('join_organization', organization.id, organization.slug) }}">
-                {% csrf_token %}
-                <input type="submit" class="unselectable button full" value="{{ _('Join organization') }}">
-            </form>
-        {% else %}
-            <a href="{{ url('request_organization', organization.id, organization.slug) }}"
-               class="unselectable button full">{{ _('Request membership') }}</a>
-        {% endif %}
-        <hr>
-    {% endif %}
+{% block title_ruler %}{% endblock %}
 
-    {% if can_edit %}
-        <div><a href="{{ url('edit_organization', organization.id, organization.slug) }}">{{ _('Edit organization') }}</a></div>
-        <div><a href="{{ url('organization_import_users', organization.id, organization.slug) }}">{{ _('Import Users') }}</a></div>
-        <div><a href="{{ url('organization_create_class', organization.id, organization.slug) }}">{{ _('Create Class') }}</a></div>
-    {% endif %}
+{% block title_row %}
+    {% set tab = 'course' %}
+    {% set title = _('Course') %}
+    {% set title_url = url('organization_list') %}
+    {% set title_crumb = organization.short_name or organization.name %}
+    {% include "organization/course-tabs.html" %}
+{% endblock %}
 
-    {% if can_review_requests %}
-        <div>
-            <a href="{{ url('organization_requests_pending', organization.id, organization.slug) }}">{{ _('View requests') }}</a>
+{% block body %}
+<div class="course-redesign course-detail oj-ui">
+    {% include "messages.html" %}
+
+    <div class="hero">
+        <div class="hero-main">
+            <h1>{{ organization.name }}</h1>
+            {% if organization.short_name %}
+                <div class="hero-code">{{ organization.short_name }}</div>
+            {% endif %}
+            {% cache 3600 'organization_html' organization.id MATH_ENGINE %}
+                <div class="hero-about content-description">
+                    {{ organization.about|markdown('organization-about', MATH_ENGINE)|reference|str|safe }}
+                </div>
+            {% endcache %}
         </div>
-    {% endif %}
 
-    {% if perms.judge.change_organization %}
-        <div>
-            <a href="{{ url('admin:judge_organization_change', organization.id) }}">{{ _('Admin organization') }}</a>
-        </div>
-    {% endif %}
-
-    <div>
-        <a href="{{ organization.get_users_url() }}">{{ _('View members') }}</a>
+        <aside class="action-panel">
+            <h2>{{ _('Action') }}</h2>
+            <div class="action-body">
+                {% if can_edit %}
+                    <div class="manage-links">
+                        <a class="action-link" href="{{ url('edit_organization', organization.id, organization.slug) }}">
+                            <i class="fa fa-pencil"></i> {{ _('Edit course') }}
+                        </a>
+                        <form method="post" action="{{ url('organization_delete', organization.id, organization.slug) }}">
+                            {% csrf_token %}
+                            <button type="submit" class="action-link danger js-delete-course">
+                                <i class="fa fa-trash"></i> {{ _('Delete course') }}
+                            </button>
+                        </form>
+                        <a class="action-link" href="{{ url('organization_create_class', organization.id, organization.slug) }}">
+                            <i class="fa fa-plus"></i> {{ _('Add class') }}
+                        </a>
+                    </div>
+                {% elif can_manage %}
+                    <a class="button" href="#class-root">{{ _('Open classes') }}</a>
+                {% elif request.user.is_authenticated %}
+                    {% if request.profile in organization %}
+                        <a class="button" href="#class-root">{{ _('Open classes') }}</a>
+                        <form method="post" action="{{ url('leave_organization', organization.id, organization.slug) }}">
+                            {% csrf_token %}
+                            <button type="submit" class="button secondary js-leave-course">{{ _('Leave course') }}</button>
+                        </form>
+                    {% elif user_pending %}
+                        <button type="button" class="button disabled" disabled>{{ _('Pending membership') }}</button>
+                    {% elif organization.is_open %}
+                        <form method="post" action="{{ url('join_organization', organization.id, organization.slug) }}">
+                            {% csrf_token %}
+                            <button type="submit" class="button">{{ _('Join course') }}</button>
+                        </form>
+                    {% elif join_request_form %}
+                        <button type="button" class="button js-open-join-modal">{{ _('Request membership') }}</button>
+                    {% else %}
+                        <p class="muted">{{ _('This course is not open for applications yet (no classes available).') }}</p>
+                    {% endif %}
+                {% else %}
+                    <p class="muted">{{ _('Log in to join this course.') }}</p>
+                {% endif %}
+            </div>
+        </aside>
     </div>
-{% endblock %}
 
-{% block description %}
-    {% cache 3600 'organization_html' organization.id MATH_ENGINE %}
-        {{ organization.about|markdown('organization-about', MATH_ENGINE)|reference|str|safe }}
-    {% endcache %}
+    <div class="class-section">
+        <h2>{{ _('Class') }}</h2>
+        <div class="class-toolbar">
+            <div>
+                <label for="f-class-q">{{ _('Search class / session') }}</label>
+                <input id="f-class-q" type="text" placeholder="{{ _('Session 1 / Fall / lab') }}">
+            </div>
+            <div>
+                <label for="f-teacher">{{ _('Administrator') }}</label>
+                <select id="f-teacher" class="oj-select">
+                    <option value="">{{ _('All administrators') }}</option>
+                    {% for t in class_teachers %}
+                        <option value="{{ t.id }}">{{ t.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="f-session">{{ _('Session') }}</label>
+                <select id="f-session" class="oj-select">
+                    <option value="">{{ _('All sessions') }}</option>
+                    {% for s in class_sessions %}
+                        <option value="{{ s }}">{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="f-class-sort">{{ _('Sort by') }}</label>
+                <select id="f-class-sort" class="oj-select">
+                    <option value="session">{{ _('Latest session') }}</option>
+                    <option value="teacher">{{ _('Administrator') }}</option>
+                    <option value="year">{{ _('Year') }}</option>
+                </select>
+            </div>
+        </div>
 
-    {% if classes %}
-        <hr>
-        <table class="table striped class-list">
-            <thead><tr><th>{{ _('Class') }}</th><th></th></tr></thead>
-            <tbody>
-                {% for class in classes %}
-                    <tr>
-                        <td>
-                            <a href="{{ class.get_absolute_url() }}">{{ class.name }}</a>
-                            <div class="class-description">{{ class.description }}</div>
-                        </td>
-                        <td>{% if class.joined %}
-                            {{ _('Joined') }}
-                        {% else -%}
-                            <a class="button" href="{{ class.get_join_url() }}">{{ _('Request to join') }}</a>
-                        {%- endif %}</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    {% endif %}
+        <div class="view-switch" role="group" aria-label="{{ _('Class view') }}">
+            <button type="button" class="active" data-group="all">{{ _('All') }}</button>
+            <button type="button" data-group="teacher">{{ _('By administrator') }}</button>
+            <button type="button" data-group="session">{{ _('By session') }}</button>
+        </div>
+
+        <div id="class-root">
+            {% if classes %}
+                <div class="class-grid">
+                    {% for class in classes %}
+                        <div class="class-card js-class-card"
+                             data-name="{{ class.name }}"
+                             data-teacher="{{ class.instructor_id or '' }}"
+                             data-teacher-label="{{ class.instructor_name }}"
+                             data-session="{{ class.session_key }}"
+                             data-session-label="{{ class.session_label or '' }}"
+                             data-year="{{ class.academic_year or '' }}">
+                            {% if class.review_pending_count %}
+                                <a class="class-pending"
+                                   href="{{ url('organization_join_requests') }}?status=P&course={{ organization.id }}&class={{ class.id }}"
+                                   title="{{ _('Pending class join requests') }}">{{ class.review_pending_count }}</a>
+                            {% endif %}
+                            <div class="class-label">{{ class.instructor_name }}</div>
+                            <div class="class-name">
+                                {% if can_manage or can_edit or class.joined or class.user_pending %}
+                                    <a href="{{ class.get_absolute_url() }}">{{ class.card_title }}</a>
+                                {% elif request.user.is_authenticated and request.profile in organization %}
+                                    <a href="{{ class.get_join_url() }}">{{ class.card_title }}</a>
+                                {% else %}
+                                    <span title="{{ _('Join course first') }}">{{ class.card_title }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="class-meta class-meta-stack">
+                                <div class="line">
+                                    <i class="fa fa-map-marker"></i>
+                                    <span>
+                                        {% if can_manage or can_edit or class.joined %}
+                                            {{ class.location_line or _('Location TBA') }}
+                                        {% else %}
+                                            {{ _('Join class to view location') }}
+                                        {% endif %}
+                                    </span>
+                                </div>
+                                <div class="line">
+                                    <i class="fa fa-clock-o"></i>
+                                    <span>{{ class.schedule_line or _('Dates TBA') }}</span>
+                                </div>
+                                <div class="line">
+                                    <i class="fa fa-tasks"></i>
+                                    <span>
+                                        {% if can_manage or can_edit or class.joined %}
+                                            {{ class.materials_line }}
+                                        {% else %}
+                                            {{ _('Assignments & materials inside') }}
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="class-actions">
+                                {% if can_manage or can_edit or class.joined %}
+                                    <a class="button" href="{{ class.get_absolute_url() }}">{{ _('Open class') }}</a>
+                                {% elif class.user_pending %}
+                                    <span class="button disabled">{{ _('Pending class join') }}</span>
+                                {% elif request.user.is_authenticated and request.profile in organization %}
+                                    <a class="button" href="{{ class.get_join_url() }}">{{ _('Request to join') }}</a>
+                                {% else %}
+                                    <span class="button disabled">{{ _('Join course first') }}</span>
+                                {% endif %}
+                                {% if class.user_can_edit %}
+                                    <a class="button secondary" href="{{ url('class_edit', organization.id, organization.slug, class.id, class.slug) }}">
+                                        <i class="fa fa-pencil"></i> {{ _('Edit') }}
+                                    </a>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty">{{ _('No classes yet.') }}
+                    {% if can_edit %}
+                        <a href="{{ url('organization_create_class', organization.id, organization.slug) }}">{{ _('Add class') }}</a>
+                    {% endif %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% include "organization/teacher-verification-modal.html" %}
+
+{% if join_request_form %}
+<div id="join-request-modal" class="course-modal" hidden>
+    <div class="course-modal-backdrop js-close-modal"></div>
+    <div class="course-modal-dialog" role="dialog" aria-labelledby="join-title">
+        <h2 id="join-title">{{ _('Request course membership') }}</h2>
+        <form method="post" action="{{ url('request_organization', organization.id, organization.slug) }}" class="join-modal-form">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.path }}">
+            {% if join_request_form.non_field_errors() %}
+                <div class="form-errors">{{ join_request_form.non_field_errors() }}</div>
+            {% endif %}
+            {% if join_request_form.show_classes %}
+                <label for="{{ join_request_form.class_.id_for_label }}">{{ _('Target class') }}</label>
+                {{ join_request_form.class_ }}
+                {{ join_request_form.class_.errors }}
+            {% endif %}
+            <label for="{{ join_request_form.reason.id_for_label }}">{{ _('Reason') }}</label>
+            {{ join_request_form.reason }}
+            {{ join_request_form.reason.errors }}
+            <p style="margin-top: 0.85rem;">
+                <button type="submit" class="button">{{ _('Submit request') }}</button>
+                <button type="button" class="button js-close-modal">{{ _('Cancel') }}</button>
+            </p>
+        </form>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
