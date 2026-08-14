@@ -505,24 +505,15 @@ class Contest(models.Model):
 
     # Also skips access check
     def is_spectatable_by(self, user):
-        """Only privileged roles may spectate (view without participating).
-
-        Regular students get no spectate path: they either join a live window
-        or are turned away (window over / before start / banned). Spectating is
-        a review capability for staff (``see_private_contest`` /
-        ``edit_all_contest``), editors, testers, explicit spectators and org
-        admins of the contest's organizations.
-        """
         if not user.is_authenticated:
             return False
-        if user.has_perm('judge.see_private_contest') or user.has_perm('judge.edit_all_contest'):
+
+        if user.profile.id in self.editor_ids or user.profile.id in self.tester_ids:
             return True
-        pid = user.profile.id
-        if pid in self.editor_ids or pid in self.tester_ids or pid in self.spectator_ids:
-            return True
-        if self.is_viewable_by_org_admin(user):
-            return True
-        return False
+
+        if self.limit_join_organizations:
+            return self.join_organizations.filter(id__in=user.profile.organizations.all()).exists()
+        return True
 
     def is_accessible_by(self, user):
         try:

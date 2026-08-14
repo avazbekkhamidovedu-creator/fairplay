@@ -304,6 +304,61 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'id="fp-group"', html=False)
         self.assertIn('workspace_organizations', response.context)
 
+    def test_anonymous_problem_detail_stays_in_practice(self):
+        # `authed and current_contest` is False for guests; that must not be
+        # treated as an active participation (bool has no .contest).
+        response = Client().get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['workspace_in_contest'])
+        self.assertEqual(response.context['workspace_mode'], 'practice')
+
+    def test_assignment_drawer_stays_on_contest_for_other_problems(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+
+        on_assignment = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(on_assignment.context['workspace_mode'], 'assignment')
+        self.assertTrue(on_assignment.context['workspace_in_contest'])
+        self.assertEqual(
+            [cp.problem.code for cp in on_assignment.context['workspace_problems']],
+            [self.problem.code],
+        )
+
+        # Public problem outside this assignment must not switch the drawer to practice.
+        outside = self.client.get(reverse('problem_detail', args=[self.mcq.code]))
+        self.assertEqual(outside.context['workspace_mode'], 'assignment')
+        self.assertTrue(outside.context['workspace_in_contest'])
+        self.assertEqual(
+            [cp.problem.code for cp in outside.context['workspace_problems']],
+            [self.problem.code],
+        )
+
+    def test_expired_live_window_rejoins_as_spectator(self):
+        from judge.models import ContestParticipation
+
+        contest = create_contest(
+            key='wsexpired', name='Expired Window',
+            start_time=timezone.now() - timezone.timedelta(hours=2),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            time_limit=timezone.timedelta(minutes=1),
+            is_visible=True,
+            authors=('workspace-author',),
+        )
+        create_contest_participation(
+            contest=contest, user=self.user.profile,
+            real_start=timezone.now() - timezone.timedelta(hours=1),
+        )
+        self.user.profile.current_contest = None
+        self.user.profile.save()
+
+        response = self.client.post(reverse('contest_join', args=[contest.key]))
+        self.assertEqual(response.status_code, 302)
+        self.user.profile.refresh_from_db()
+        self.assertIsNotNone(self.user.profile.current_contest)
+        self.assertTrue(self.user.profile.current_contest.spectate)
+        self.assertEqual(self.user.profile.current_contest.virtual, ContestParticipation.SPECTATE)
+
     def test_assignment_workspace_exposes_context_id_for_drafts(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
         self.user.profile.current_contest = participation

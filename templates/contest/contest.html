@@ -384,7 +384,7 @@
         {% endif %}
     </div>
 
-    {% if request.user.is_superuser or is_editor or is_tester or is_org_admin or contest.ended or contest.started %}
+    {% if contest.ended or request.user.is_superuser or is_editor or is_tester or (is_spectator and contest.started) or is_org_admin %}
         <hr>
         <div class="contest-problems">
             <h2 style="margin-bottom: 0.2em"><i class="fa fa-fw fa-question-circle"></i>{{ _('Problems') }} </h2>
@@ -404,7 +404,7 @@
                 {% for problem in contest_problems %}
                     <tr>
                         <td>
-                            {% if problem.is_public or request.user.is_superuser or is_editor or request.participation or contest.started %}
+                            {% if problem.is_public or request.user.is_superuser or is_editor %}
                                 <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>
                             {% else %}
                                 {{ problem.i18n_name or problem.name }}

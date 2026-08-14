@@ -1,25 +1,16 @@
 {% extends "base.html" %}
-
-
 {% block title %}{{ title }}{% endblock %}
+{% block html_class %}ide-page{% endblock %}
+{% block body_class %}ide-page{% endblock %}
+{% block title_row %}{% endblock %}
+{% block title_ruler %}{% endblock %}
 
 {% block js_media %}
-    {# Monaco via CDN (same major as problem-workspace's monaco-editor ^0.52; no local vendoring). #}
+    {# Same locally vendored Monaco as the problem workspace (jsDelivr is blocked on campus). #}
     <script type="text/javascript">
-        window.MONACO_VS_URL = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
-        // Cross-origin workers need a same-origin blob proxy (standard Monaco CDN pattern).
-        window.MonacoEnvironment = {
-            getWorkerUrl: function() {
-                var vs = window.MONACO_VS_URL;
-                var base = vs.replace(/\/vs\/?$/, '/');
-                return URL.createObjectURL(new Blob([
-                    "self.MonacoEnvironment={baseUrl:" + JSON.stringify(base) + "};",
-                    "importScripts(" + JSON.stringify(vs + '/base/worker/workerMain.js') + ");"
-                ], {type: 'text/javascript'}));
-            }
-        };
+        window.MONACO_VS_URL = '{{ static("libs/monaco/vs") }}';
     </script>
-    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+    <script type="text/javascript" src="{{ static('libs/monaco/vs/loader.js') }}"></script>
     {% if REQUIRE_JAX %}
         {% include "mathjax-load.html" %}
     {% endif %}
@@ -377,7 +368,11 @@
                 resizeEditors();
 
                 // Initialize with default language
+                {% if default_lang %}
                 $('#language-select').val({{ default_lang.id }}).trigger('change');
+                {% else %}
+                $('#language-select').trigger('change');
+                {% endif %}
             }
 
             window.require.config({paths: {vs: window.MONACO_VS_URL}});
@@ -393,6 +388,43 @@
 
 {% block media %}
     <style>
+        html.ide-page, body.ide-page {
+            height: 100%;
+            overflow: hidden;
+        }
+        body.ide-page #page-container {
+            margin: 0;
+            min-height: 0;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        body.ide-page #page-container > br,
+        body.ide-page footer { display: none; }
+        body.ide-page #content {
+            margin: 0;
+            width: 100%;
+            max-width: none;
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        body.ide-page #content-body {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            padding: 0;
+        }
+        .ide-app {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            height: calc(100dvh - var(--nav-height, 52px));
+        }
+
         .ide-header {
             padding: 15px 20px;
             background: var(--header-bg, #f8f9fa);
@@ -446,7 +478,8 @@
             display: flex;
             gap: 10px;
             padding: 10px;
-            height: calc(100vh - 200px);
+            flex: 1;
+            min-height: 0;
         }
 
         .ide-left {
@@ -574,13 +607,14 @@
 {% endblock %}
 
 {% block body %}
+    <div class="ide-app">
     <div class="ide-header">
         <h1>{{ _('IDE') }}</h1>
         <div class="ide-controls">
             <select id="language-select">
                 {% for lang in languages %}
                     <option value="{{ lang.id }}" data-ace="{{ lang.ace }}" data-monaco="{{ lang.ace }}"
-                            {% if lang.id == default_lang.id %}selected{% endif %}>
+                            {% if default_lang and lang.id == default_lang.id %}selected{% endif %}>
                         {{ lang.name }}
                     </option>
                 {% endfor %}
@@ -616,5 +650,6 @@
                 </div>
             </div>
         </div>
+    </div>
     </div>
 {% endblock %}
