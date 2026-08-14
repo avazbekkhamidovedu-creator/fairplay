@@ -22,8 +22,8 @@ from django.views.generic.detail import SingleObjectMixin, SingleObjectTemplateR
 from reversion import revisions
 
 from judge.forms import ClassAssignmentsForm, ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
-from judge.models import AdminNotification, Class, ClassMaterial, Contest, Organization, OrganizationRequest, \
-    Profile, InstructorVerificationRequest
+from judge.models import AdminNotification, Class, ClassMaterial, Contest, InstructorVerificationRequest, \
+    Organization, OrganizationRequest, Profile
 from judge.models.notification import SITE_ADMINISTRATORS_GROUP
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, notify_instructor_verification, unread_notification_count,
@@ -1889,6 +1889,7 @@ class ClassMaterialDownloadView(LoginRequiredMixin, View):
             handle, as_attachment=True, filename=material.name,
             content_type='application/octet-stream',
         )
+
 
 class ClassLinkAssignmentsView(LoginRequiredMixin, TitleMixin, FormView):
     """Link contests to a class as Assignments (site UI, not Django admin)."""

@@ -1,8 +1,9 @@
 # Generated manually: class materials reuse submission_storage (OSS), same as file-upload.
 
+from django.db import migrations, models
+
 import judge.models.profile
 import judge.storage
-from django.db import migrations, models
 
 
 class Migration(migrations.Migration):

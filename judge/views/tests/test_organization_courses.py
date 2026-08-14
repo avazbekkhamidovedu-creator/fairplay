@@ -1,7 +1,7 @@
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
-from judge.models import Class, OrganizationRequest, InstructorVerificationRequest
+from judge.models import Class, ClassMaterial, InstructorVerificationRequest, OrganizationRequest
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.views.organization import safe_redirect_url
 
@@ -174,7 +174,6 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
         cls.outsider = create_user(username='class_outsider')
         cls.member.profile.organizations.add(cls.org)
         cls.member.profile.classes.add(cls.klass)
-        from judge.models import ClassMaterial
         from django.core.files.base import ContentFile
         cls.material = ClassMaterial.objects.create(
             class_obj=cls.klass,
@@ -294,6 +293,8 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
         self.assertEqual(record.status, StoredFileRecord.STATUS_DELETED)
         self.assertTrue(path.startswith('class_materials/'))
 
+
+class LeaveCourseClearsClassesTest(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()

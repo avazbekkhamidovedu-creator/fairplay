@@ -302,7 +302,8 @@ urlpatterns = [
 
     path('organizations/', organization.OrganizationList.as_view(), name='organization_list'),
     path('organizations/new/', organization.CreateOrganization.as_view(), name='organization_create'),
-    path('organizations/requests/', organization.InstructorJoinRequestsView.as_view(), name='organization_join_requests'),
+    path('organizations/requests/', organization.InstructorJoinRequestsView.as_view(),
+         name='organization_join_requests'),
     path('organizations/notifications/', organization.AdminNotificationInboxView.as_view(),
          name='organization_notifications'),
     path('organizations/instructor-requests/', organization.InstructorVerificationInboxView.as_view(),
