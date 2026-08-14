@@ -6,12 +6,13 @@ from judge.models.comment import Comment, CommentLock, CommentVote
 from judge.models.contest import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestSubmission, \
     ContestTag, Rating
 from judge.models.interface import BlogPost, MiscConfig, NavigationBar, validate_regex
+from judge.models.notification import AdminNotification, TeacherVerificationRequest
 from judge.models.problem import LanguageLimit, License, Problem, ProblemClarification, ProblemGroup, \
     ProblemPointsVote, ProblemSubmissionType, ProblemTemplate, ProblemTranslation, ProblemType, Solution, \
     SubmissionSourceAccess, TranslatedProblemQuerySet
 from judge.models.problem_data import CHECKERS, ProblemData, ProblemHarness, ProblemTestCase, problem_data_storage, \
     problem_directory_file
-from judge.models.profile import Class, Organization, OrganizationRequest, Profile, WebAuthnCredential
+from judge.models.profile import Class, ClassMaterial, Organization, OrganizationRequest, Profile, WebAuthnCredential
 from judge.models.question import ProblemBlank, ProblemFileConfig, ProblemFillBlankConfig, ProblemImportDraft, \
     ProblemImportImage, ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, \
     SubmissionFile

@@ -11,16 +11,18 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import RegexValidator
 from django.db.models import Q
-from django.forms import BooleanField, CharField, ChoiceField, Form, ModelForm, MultipleChoiceField
+from django.forms import BooleanField, CharField, ChoiceField, Form, ModelForm, ModelMultipleChoiceField, \
+    MultipleChoiceField
 from django.urls import reverse_lazy
+from django.utils import timezone
 from django.utils.text import format_lazy
 from django.utils.translation import gettext_lazy as _, ngettext_lazy
 
-from judge.models import Contest, Language, Organization, Problem, ProblemPointsVote, Profile, Submission, \
+from judge.models import Class, Contest, Language, Organization, Problem, ProblemPointsVote, Profile, Submission, \
     WebAuthnCredential
 from judge.utils.mail import validate_email_domain
 from judge.utils.subscription import newsletter_id
-from judge.widgets import AceWidget, MartorWidget, Select2MultipleWidget, Select2Widget
+from judge.widgets import AceWidget, HeavySelect2MultipleWidget, MartorWidget, Select2MultipleWidget, Select2Widget
 
 TOTP_CODE_LENGTH = 6
 
@@ -290,12 +292,177 @@ class ShortAnswerSubmitForm(Form):
         super().__init__(*args, **kwargs)
 
 
-class EditOrganizationForm(ModelForm):
+class OrganizationSiteForm(ModelForm):
+    """Front-end create/edit course form: no slug field (auto-generated), RichEditor description."""
+
     class Meta:
         model = Organization
-        fields = ['about', 'logo_override_image', 'admins']
-        widgets = {'admins': Select2MultipleWidget(attrs={'style': 'width: 200px'})}
-        widgets['about'] = MartorWidget(attrs={'data-markdownfy-url': reverse_lazy('organization_preview')})
+        fields = ['name', 'short_name', 'about', 'is_open', 'class_required', 'slots', 'admins',
+                  'logo_override_image']
+        labels = {
+            'name': _('Course name'),
+            'short_name': _('Short name'),
+            'about': _('Course description'),
+            'is_open': _('Is open organization?'),
+            'class_required': _('Class membership required'),
+            'slots': _('Maximum size'),
+            'admins': _('Course administrators'),
+            'logo_override_image': _('Logo override image'),
+        }
+        help_texts = {
+            'is_open': _('If checked, students can join without approval. Cannot combine with class required.'),
+            'class_required': _('If checked, students must select a class when requesting membership.'),
+            'slots': _('Optional. Maximum members for private courses.'),
+            'admins': _('Optional. The creator is always added as a teacher. Add others who can edit this course '
+                        'and review join requests.'),
+        }
+        widgets = {
+            'about': forms.Textarea(attrs={
+                'rows': 12,
+                'class': 'rich-editor-source',
+                'data-rich-editor': 'course-about',
+            }),
+            'slots': forms.NumberInput(attrs={'min': 1, 'placeholder': _('Optional')}),
+            'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['admins'].required = False
+        if 'slots' in self.fields:
+            self.fields['slots'].required = False
+        if 'logo_override_image' in self.fields:
+            self.fields['logo_override_image'].required = False
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get('class_required') and cleaned.get('is_open'):
+            raise ValidationError(_('Class membership cannot be enforced when the course has open enrollment.'))
+        return cleaned
+
+
+class EditOrganizationForm(OrganizationSiteForm):
+    pass
+
+
+class ClassSiteForm(ModelForm):
+    """Front-end create/edit class form aligned with the class-form demo modules."""
+
+    TERM_SESSION_CHOICES = (
+        ('', _('Select…')),
+        ('Fall - Session 1', _('Fall - Session 1')),
+        ('Fall - Session 2', _('Fall - Session 2')),
+        ('Spring - Session 1', _('Spring - Session 1')),
+        ('Spring - Session 2', _('Spring - Session 2')),
+    )
+
+    member_csv = forms.FileField(
+        required=False,
+        label=_('Import members CSV'),
+        help_text=_('Optional. CSV with a username column; rows are added to Members on save.'),
+    )
+
+    class Meta:
+        model = Class
+        fields = [
+            'name', 'description',
+            'academic_year', 'term_session', 'credits', 'location', 'start_date', 'end_date',
+            'admins', 'members', 'access_code', 'is_active',
+        ]
+        labels = {
+            'name': _('Name'),
+            'description': _('Description'),
+            'academic_year': _('Academic year'),
+            'term_session': _('Term and session'),
+            'credits': _('Credits'),
+            'location': _('Location or Canvas link'),
+            'start_date': _('Class start'),
+            'end_date': _('Class end'),
+            'admins': _('Class administrators'),
+            'members': _('Members'),
+            'access_code': _('Class access code'),
+            'is_active': _('Class is active'),
+        }
+        help_texts = {
+            'admins': _('Optional. The creator is always added as a class administrator.'),
+            'members': _('Search course members or users. Use Import CSV to bulk-add usernames.'),
+            'access_code': _('Optional.'),
+            'location': _('Room, building, or a Canvas / meeting URL.'),
+        }
+        widgets = {
+            'description': forms.Textarea(attrs={
+                'rows': 10,
+                'class': 'rich-editor-source',
+                'data-rich-editor': 'class-description',
+            }),
+            'academic_year': forms.Select(attrs={'class': 'oj-select'}),
+            'term_session': forms.Select(attrs={'class': 'oj-select'}),
+            'credits': forms.NumberInput(attrs={'class': 'oj-input', 'min': '0', 'step': '0.5'}),
+            'location': forms.TextInput(attrs={'class': 'oj-input', 'placeholder': 'IB 204'}),
+            'start_date': forms.DateInput(attrs={'class': 'oj-input', 'type': 'date'}),
+            'end_date': forms.DateInput(attrs={'class': 'oj-input', 'type': 'date'}),
+            'access_code': forms.TextInput(attrs={'class': 'oj-input', 'maxlength': '7'}),
+            'name': forms.TextInput(attrs={'class': 'oj-input', 'placeholder': _('CS201 2026 Spring Session 1')}),
+            'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
+            'members': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        year = timezone.now().year
+        year_choices = [('', _('Select…'))]
+        for start in range(year + 1, year - 4, -1):
+            label = '%d-%d' % (start, start + 1)
+            year_choices.append((label, label))
+        self.fields['academic_year'].widget.choices = year_choices
+        self.fields['term_session'].widget.choices = list(self.TERM_SESSION_CHOICES)
+        for name in (
+            'admins', 'members', 'access_code', 'description', 'academic_year', 'term_session',
+            'credits', 'location', 'start_date', 'end_date',
+        ):
+            if name in self.fields:
+                self.fields[name].required = False
+
+    def clean_name(self):
+        name = self.cleaned_data['name']
+        qs = Class.objects.filter(name=name)
+        if self.instance and self.instance.pk:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise ValidationError(_(
+                'A class with this name already exists. Class names must be unique across the site.',
+            ))
+        return name
+
+    def clean(self):
+        cleaned = super().clean()
+        start = cleaned.get('start_date')
+        end = cleaned.get('end_date')
+        if start and end and end < start:
+            self.add_error('end_date', _('The end date must be after the start date.'))
+        return cleaned
+
+
+class ClassAssignmentsForm(Form):
+    """Link existing contests to a class as Assignments (no Django-admin dependency)."""
+
+    contests = ModelMultipleChoiceField(
+        queryset=Contest.objects.none(),
+        required=False,
+        label=_('Assignments'),
+        help_text=_('Choose contests to show under this class’s Assignments tab. '
+                    'Create or edit contest content from Contests; this only links them here.'),
+        widget=HeavySelect2MultipleWidget(data_view='contest_select2', attrs={'style': 'width: 100%'}),
+    )
+
+    def __init__(self, *args, class_obj=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.class_obj = class_obj
+        self.fields['contests'].queryset = Contest.objects.order_by('-start_time')
+        if class_obj is not None and class_obj.pk:
+            self.fields['contests'].initial = list(
+                Contest.objects.filter(classes=class_obj).values_list('id', flat=True),
+            )
 
 
 class CustomAuthenticationForm(AuthenticationForm):

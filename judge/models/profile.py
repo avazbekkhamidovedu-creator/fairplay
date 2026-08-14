@@ -28,7 +28,7 @@ from judge.models.runtime import Language
 from judge.ratings import rating_class
 from judge.utils.two_factor import webauthn_decode
 
-__all__ = ['Class', 'Organization', 'Profile', 'OrganizationRequest', 'WebAuthnCredential']
+__all__ = ['Class', 'ClassMaterial', 'Organization', 'Profile', 'OrganizationRequest', 'WebAuthnCredential']
 
 
 class EncryptedNullCharField(EncryptedCharField):
@@ -106,6 +106,13 @@ class Class(models.Model):
     name = models.CharField(max_length=128, verbose_name=_('class name'), unique=True)
     slug = models.SlugField(max_length=128, verbose_name=_('class slug'), help_text=_('Class name shown in URLs.'))
     description = models.TextField(verbose_name=_('class description'), blank=True)
+    academic_year = models.CharField(max_length=16, verbose_name=_('academic year'), blank=True, default='')
+    term_session = models.CharField(max_length=64, verbose_name=_('term and session'), blank=True, default='')
+    credits = models.DecimalField(verbose_name=_('credits'), max_digits=4, decimal_places=1,
+                                  null=True, blank=True)
+    location = models.CharField(max_length=255, verbose_name=_('location or Canvas link'), blank=True, default='')
+    start_date = models.DateField(verbose_name=_('class start'), null=True, blank=True)
+    end_date = models.DateField(verbose_name=_('class end'), null=True, blank=True)
     is_active = models.BooleanField(verbose_name=_('is class active'), default=True)
     access_code = models.CharField(max_length=7, verbose_name=_('access code'), null=True, blank=True,
                                    help_text=_('Student access code.'))
@@ -125,6 +132,10 @@ class Class(models.Model):
         return (cls.objects.filter(organization__admins=user.profile) |
                 cls.objects.filter(admins=user.profile)).distinct()
 
+    def clean(self):
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValidationError({'end_date': _('The end date must be after the start date.')})
+
     def __str__(self):
         return _('%(class)s in %(organization)s') % {'class': self.name, 'organization': self.organization.name}
 
@@ -138,11 +149,85 @@ class Class(models.Model):
     def _url_args(self):
         return self.organization.id, self.organization.slug, self.id, self.slug
 
+    @property
+    def offering_label(self):
+        parts = [p for p in (self.academic_year, self.term_session) if p]
+        return ', '.join(parts)
+
+    @property
+    def schedule_label(self):
+        if self.start_date and self.end_date:
+            return '%s – %s' % (self.start_date.isoformat(), self.end_date.isoformat())
+        if self.start_date:
+            return _('Starts %s') % self.start_date.isoformat()
+        if self.end_date:
+            return _('Ends %s') % self.end_date.isoformat()
+        return ''
+
     class Meta:
         ordering = ['organization', 'name']
         verbose_name = _('class')
         verbose_name_plural = _('classes')
         constraints = [UniqueConstraint(fields=['name'], condition=Q(is_active=True), name='unique_active_name')]
+
+
+def class_material_upload_to(instance, filename):
+    return 'class_materials/%s/%s' % (instance.class_obj_id or 'tmp', filename)
+
+
+class ClassMaterial(models.Model):
+    """File or folder listed under a class Materials tab."""
+
+    class_obj = models.ForeignKey(
+        Class, verbose_name=_('class'), related_name='materials', on_delete=models.CASCADE,
+    )
+    parent = models.ForeignKey(
+        'self', verbose_name=_('parent folder'), null=True, blank=True,
+        related_name='children', on_delete=models.CASCADE,
+    )
+    name = models.CharField(max_length=255, verbose_name=_('name'))
+    is_folder = models.BooleanField(verbose_name=_('is folder'), default=False)
+    file = models.FileField(
+        verbose_name=_('file'), upload_to=class_material_upload_to, null=True, blank=True, max_length=512,
+    )
+    uploaded_by = models.ForeignKey(
+        'Profile', verbose_name=_('uploaded by'), null=True, blank=True,
+        related_name='uploaded_class_materials', on_delete=models.SET_NULL,
+    )
+    created = models.DateTimeField(verbose_name=_('created'), auto_now_add=True)
+    modified = models.DateTimeField(verbose_name=_('modified'), auto_now=True)
+
+    class Meta:
+        ordering = ['-is_folder', 'name']
+        verbose_name = _('class material')
+        verbose_name_plural = _('class materials')
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def size_label(self):
+        if self.is_folder or not self.file:
+            return '—'
+        try:
+            size = self.file.size
+        except (OSError, ValueError):
+            return '—'
+        if size < 1024:
+            return '%d B' % size
+        if size < 1024 * 1024:
+            return '%d KB' % max(1, round(size / 1024))
+        return '%.1f MB' % (size / (1024 * 1024))
+
+    @property
+    def external_url(self):
+        """Legacy rows may store an http(s) link in name with no uploaded file."""
+        if self.is_folder or self.file:
+            return ''
+        name = (self.name or '').strip()
+        if name.startswith('http://') or name.startswith('https://'):
+            return name
+        return ''
 
 
 class Profile(models.Model):
@@ -393,6 +478,13 @@ class OrganizationRequest(models.Model):
     ))
     request_class = models.ForeignKey(Class, verbose_name=_('class'), on_delete=models.CASCADE, null=True, blank=True)
     reason = models.TextField(verbose_name=_('reason'))
+    # True: approving grants course membership (and class if set).
+    # False: class-only request from an existing course member — revoke must not kick them from the course.
+    grants_organization = models.BooleanField(
+        verbose_name=_('grants course membership'),
+        default=True,
+        help_text=_('If false, this request only adds class membership for an existing course member.'),
+    )
 
     def clean(self):
         if self.organization.class_required and self.request_class is None:

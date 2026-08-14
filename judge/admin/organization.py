@@ -7,6 +7,7 @@ from django.utils.translation import gettext, gettext_lazy as _
 from reversion.admin import VersionAdmin
 
 from judge.models import Organization
+from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget
 
 
@@ -22,6 +23,10 @@ class ClassAdmin(VersionAdmin):
     list_display = ('name', 'organization', 'is_active')
     prepopulated_fields = {'slug': ('name',)}
     form = ClassForm
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        sync_class_members_to_organization(form.instance)
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
