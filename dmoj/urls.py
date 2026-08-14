@@ -301,12 +301,14 @@ urlpatterns = [
     ])),
 
     path('organizations/', organization.OrganizationList.as_view(), name='organization_list'),
+    path('organizations/new/', organization.CreateOrganization.as_view(), name='organization_create'),
     path('organization/<int:pk>-<slug:slug>', include([
         path('', organization.OrganizationHome.as_view(), name='organization_home'),
         path('/users', organization.OrganizationUsers.as_view(), name='organization_users'),
         path('/join', organization.JoinOrganization.as_view(), name='join_organization'),
         path('/leave', organization.LeaveOrganization.as_view(), name='leave_organization'),
         path('/edit', organization.EditOrganization.as_view(), name='edit_organization'),
+        path('/delete', organization.DeleteOrganization.as_view(), name='organization_delete'),
         path('/kick', organization.KickUserWidgetView.as_view(), name='organization_user_kick'),
         path('/import/users', organization.OrganizationImportUsers.as_view(), name='organization_import_users'),
         path('/class/create', organization.CreateClass.as_view(), name='organization_create_class'),
@@ -326,6 +328,8 @@ urlpatterns = [
         path('/class/<int:cpk>-<slug:cslug>', include([
             path('', organization.ClassHome.as_view(), name='class_home'),
             path('/join', organization.RequestJoinClass.as_view(), name='class_join'),
+            path('/edit', organization.EditClass.as_view(), name='class_edit'),
+            path('/delete', organization.DeleteClass.as_view(), name='class_delete'),
         ])),
 
         path('/', lambda _, pk, slug: HttpResponsePermanentRedirect(reverse('organization_home', args=[pk, slug]))),
