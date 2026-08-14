@@ -30,7 +30,7 @@ import unittest
 from datetime import timedelta
 from unittest import mock
 
-from django.test import Client, TestCase
+from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
