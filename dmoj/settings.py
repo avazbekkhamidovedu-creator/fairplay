@@ -332,9 +332,13 @@ MIDDLEWARE = (
     'django.contrib.redirects.middleware.RedirectFallbackMiddleware',
 )
 
-IMPERSONATE_CUSTOM_ALLOW = 'judge.impersonation.can_impersonate'
-IMPERSONATE_CUSTOM_USER_QUERYSET = 'judge.impersonation.get_impersonable_users'
-IMPERSONATE_DISABLE_LOGGING = True
+# django-impersonate reads this single dict only; flat IMPERSONATE_* names are ignored,
+# which would silently fall back to "any staff user may impersonate anyone".
+IMPERSONATE = {
+    'CUSTOM_ALLOW': 'judge.impersonation.can_impersonate',
+    'CUSTOM_USER_QUERYSET': 'judge.impersonation.get_impersonable_users',
+    'DISABLE_LOGGING': True,
+}
 
 ACCOUNT_ACTIVATION_DAYS = 7
 
@@ -594,6 +598,12 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'resources'),
 ]
 STATIC_URL = '/static/'
+
+# User uploads. Django's defaults are both empty, which makes MEDIA_ROOT resolve against
+# the server process CWD and leaves MEDIA_URL unusable as a URL prefix. Deployments that
+# serve uploads through Nginx should override MEDIA_ROOT to point at that location.
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # Define a cache
 CACHES = {}
