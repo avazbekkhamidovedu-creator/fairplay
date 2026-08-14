@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -1413,3 +1413,163 @@ class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
         except AttributeError:
             pass
         self.assertTrue(p.ended)
+
+
+@override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+class ContestExtensionReadmissionTestCase(CommonDataMixin, TestCase):
+    """Teacher extends duration → expired students are re-admitted.
+
+    Regression for the production bug where a student could SEE the extended
+    remaining time but clicking any problem returned "No such problem" (404).
+    Root cause: when a student's window ended, the middleware cleared
+    ``profile.current_contest``; the extension un-expired the participation
+    (``real_start`` shifted) but nothing restored ``current_contest``, and
+    ``Problem.is_accessible_by`` only admits contest problems while it is set.
+
+    Access is asserted via ``Problem.is_accessible_by`` (the exact gate behind
+    the 404) rather than a full page render, which hits a pre-existing Django
+    4.2 + Python 3.14 template bug unrelated to this feature.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.editor = create_user(username='readmit_editor', user_permissions=('edit_all_contest',))
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='readmitcontest', name='Readmit',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=5),
+            authors=('superuser',),
+            is_visible=True,
+            time_limit=timedelta(hours=2),
+        )
+        cls.problem = create_problem('readmit-problem')  # is_public defaults False
+        from judge.models import ContestProblem
+        ContestProblem.objects.create(contest=cls.contest, problem=cls.problem, points=100, order=1)
+
+    def setUp(self):
+        self.client = Client()
+
+    def _payload(self, **overrides):
+        now = timezone.now()
+        payload = {
+            'name': 'Readmit', 'key': 'readmitcontest',
+            'start_time': (now - timedelta(days=1)).isoformat(),
+            'end_time': (now + timedelta(days=5)).isoformat(),
+            'duration_hours': 2, 'duration_minutes': 0,
+            'is_visible': False,
+        }
+        payload.update(overrides)
+        return payload
+
+    def _extend_duration(self):
+        self.client.force_login(self.editor)
+        return self.client.post(
+            reverse('contest_edit', args=['readmitcontest']),
+            data=json.dumps(self._payload(duration_hours=3)), content_type='application/json',
+        )
+
+    def _expired_student(self, username='readmit_student'):
+        """A student whose 2h window ran out 1h ago; middleware cleared the session."""
+        profile = create_user(username=username).profile
+        participation = ContestParticipation.objects.create(
+            contest=self.contest, user=profile,
+            real_start=timezone.now() - timedelta(hours=3),  # deadline = now - 1h
+        )
+        profile.current_contest = participation
+        profile.save()
+        profile.update_contest()  # simulates the middleware kick-out
+        profile.refresh_from_db()
+        self.assertIsNone(profile.current_contest)
+        return profile, participation
+
+    def test_extended_student_is_readmitted_and_can_open_problem(self):
+        """The exact production bug: expired student, teacher extends → the
+        student must be back in the contest and able to open its problems."""
+        profile, participation = self._expired_student()
+        response = self._extend_duration()
+        self.assertEqual(response.status_code, 200, response.content)
+        profile.refresh_from_db()
+        self.assertEqual(profile.current_contest_id, participation.id)  # re-admitted
+        # The access gate behind the "No such problem" 404 now admits them.
+        self.assertTrue(self.problem.is_accessible_by(profile.user))
+
+    def test_valid_window_with_cleared_session_is_readmitted(self):
+        """The actual production scenario: the student's window is STILL valid
+        (never expired) but current_contest was cleared (e.g. the middleware
+        dropped it while the contest was briefly inaccessible). A duration
+        increase must restore the session — this is the case the original
+        rescue-only fix missed."""
+        profile = create_user(username='readmit_valid').profile
+        participation = ContestParticipation.objects.create(
+            contest=self.contest, user=profile,
+            real_start=timezone.now() - timedelta(minutes=30),  # deadline still ahead
+        )
+        profile.current_contest = None  # session missing for an unrelated reason
+        profile.save()
+        response = self._extend_duration()
+        self.assertEqual(response.status_code, 200, response.content)
+        profile.refresh_from_db()
+        self.assertEqual(profile.current_contest_id, participation.id)  # session restored
+        self.assertTrue(self.problem.is_accessible_by(profile.user))
+
+    def test_removing_limit_restores_missing_session(self):
+        """Removing the personal duration (window → until contest end) is also
+        an extension, so it must restore missing sessions the same way."""
+        profile = create_user(username='readmit_unlimited').profile
+        participation = ContestParticipation.objects.create(
+            contest=self.contest, user=profile,
+            real_start=timezone.now() - timedelta(minutes=30),
+        )
+        profile.current_contest = None
+        profile.save()
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_edit', args=['readmitcontest']),
+            data=json.dumps(self._payload(duration_hours=0, duration_minutes=0)),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        profile.refresh_from_db()
+        self.assertEqual(profile.current_contest_id, participation.id)
+
+    def test_student_in_another_contest_is_not_hijacked(self):
+        """An expired student who moved on to a different contest keeps their
+        current session — the extension of the old contest must not override it."""
+        profile, _ = self._expired_student(username='readmit_busy')
+        other = create_contest(
+            key='readmitother', name='Other',
+            start_time=timezone.now() - timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=5),
+            authors=('superuser',),
+            time_limit=timedelta(hours=2),
+        )
+        other_participation = ContestParticipation.objects.create(
+            contest=other, user=profile, real_start=timezone.now(),
+        )
+        profile.current_contest = other_participation
+        profile.save()
+        response = self._extend_duration()
+        self.assertEqual(response.status_code, 200, response.content)
+        profile.refresh_from_db()
+        self.assertEqual(profile.current_contest_id, other_participation.id)  # untouched
+
+    def test_active_student_keeps_current_contest(self):
+        """A student mid-window is untouched: extension keeps their session."""
+        profile = create_user(username='readmit_active').profile
+        participation = ContestParticipation.objects.create(
+            contest=self.contest, user=profile, real_start=timezone.now(),
+        )
+        profile.current_contest = participation
+        profile.save()
+        response = self._extend_duration()
+        self.assertEqual(response.status_code, 200, response.content)
+        profile.refresh_from_db()
+        self.assertEqual(profile.current_contest_id, participation.id)  # unchanged
+
+    def test_expired_student_without_extension_stays_locked_out(self):
+        """Positive control: without a teacher extension the expired student
+        stays locked out (404) — the fix must not over-grant access."""
+        profile, _ = self._expired_student(username='readmit_locked')
+        self.assertFalse(self.problem.is_accessible_by(profile.user))

@@ -551,7 +551,10 @@ class ContestCreate(LoginRequiredMixin, View):
         try:
             hours = int(payload.get('duration_hours', 0) or 0)
             minutes = int(payload.get('duration_minutes', 0) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: json.loads('1e309') yields float('inf') — int(inf)
+            # overflows. A hostile body must 400 with a readable message,
+            # never 500 the worker.
             raise ValidationError(_('Invalid duration.'))
         if not (hours or minutes):
             return None
@@ -648,7 +651,8 @@ class ContestCreate(LoginRequiredMixin, View):
             value = payload.get(field)
             try:
                 parsed = int(value) if value not in (None, '') else None
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
+                # OverflowError guards float('inf') payloads (json.loads('1e309')).
                 parsed = None
             if parsed is None:
                 # Fall back to the model's default: points_precision is NOT NULL
@@ -726,7 +730,7 @@ class ContestCreate(LoginRequiredMixin, View):
                     _now = timezone.now()
                     shifted = []
                     for participation in existing.users.exclude(
-                            virtual=ContestParticipation.SPECTATE).only('id', 'real_start'):
+                            virtual=ContestParticipation.SPECTATE).only('id', 'real_start', 'virtual', 'user_id'):
                         if participation.real_start is None:
                             continue
                         old_deadline = min(participation.real_start + old_limit, old_end)
@@ -734,6 +738,7 @@ class ContestCreate(LoginRequiredMixin, View):
                         shifted.append(participation)
                     if shifted:
                         ContestParticipation.objects.bulk_update(shifted, ['real_start'])
+                        self._restore_missing_sessions(shifted)
 
         # ── "Only extend, never shorten" guard ──────────────────────────────
         # Once students have joined (a participation exists), shrinking the
@@ -759,8 +764,12 @@ class ContestCreate(LoginRequiredMixin, View):
                           'increased — it cannot be changed from unlimited to a fixed time.'))
             elif new_limit is None:
                 # Removing a personal limit is always an extension (the window
-                # becomes "until the contest ends"), so it is allowed.
-                pass
+                # becomes "until the contest ends"), so it is allowed. It also
+                # extends every joined student's window — restore missing
+                # sessions the same way the duration-increase path does.
+                self._restore_missing_sessions(
+                    existing.users.exclude(virtual=ContestParticipation.SPECTATE)
+                    .only('id', 'virtual', 'user_id'))
             elif new_limit < old_limit:
                 raise ValidationError(
                     _('Students have already joined. The duration can only be '
@@ -770,6 +779,46 @@ class ContestCreate(LoginRequiredMixin, View):
                     _('Students have already joined. The end time can only be '
                       'extended, not brought earlier.'))
         return contest
+
+    @staticmethod
+    def _restore_missing_sessions(participations):
+        """Re-point each participation's owner at it when they have no session.
+
+        The middleware clears ``profile.current_contest`` as soon as a
+        student's window ends (or the contest becomes temporarily
+        inaccessible), and nothing ever sets it back — yet
+        ``Problem.is_accessible_by()`` only admits contest problems while
+        ``current_contest`` is set. So a teacher extending a contest's window
+        (duration increase or limit removal) must also restore the session:
+        otherwise the student can SEE the extended timer but gets
+        "No such problem" 404s when clicking into any problem.
+
+        Only profiles that are not currently inside ANY contest are touched
+        (``current_contest_id is None``) — a student who moved on to another
+        contest, or is currently spectating/re-joined elsewhere, is never
+        hijacked. When a profile has several matching participations (live +
+        virtual), the live (``virtual=0``) one wins. Restored sessions that
+        turn out ended are harmless: the middleware re-clears them on the
+        student's next request.
+        """
+        participations = list(participations)
+        if not participations:
+            return
+        profiles = {p.id: p for p in Profile.objects.filter(
+            id__in={p.user_id for p in participations})}
+        restored = []
+        seen = set()
+        for participation in sorted(
+                participations, key=lambda p: p.virtual != ContestParticipation.LIVE):
+            profile = profiles.get(participation.user_id)
+            if profile is None or profile.id in seen:
+                continue
+            seen.add(profile.id)
+            if profile.current_contest_id is None:
+                profile.current_contest = participation
+                restored.append(profile)
+        if restored:
+            Profile.objects.bulk_update(restored, ['current_contest'])
 
     def _save_m2m(self, contest, payload):
         """Fully replace each submitted many-to-many field with the given ids.
@@ -2111,12 +2160,77 @@ class ContestGradeSave(ContestMixin, DetailView):
         submission.reviewed_by = request.profile
         submission.reviewed_at = timezone.now()
         submission.save(update_fields=['points', 'review_note', 'reviewed_by', 'reviewed_at'])
+        # Propagate the manual grade into the student-visible contest score.
+        # The contest formats compute each problem's points from
+        # ContestSubmission.points (via participation.recompute_results), so
+        # writing only Submission.points would leave the student's
+        # scoreboard / ranking / per-problem display on the machine score —
+        # the teacher's override would be visible only on this page.
+        contest_submission = submission.contest_or_none
+        if contest_submission is not None:
+            contest_submission.points = score
+            contest_submission.save(update_fields=['points'])
+            contest_submission.participation.recompute_results()
         return JsonResponse({
             'ok': True,
             'submission': submission_id,
             'score': score,
             'total': total,
             'note': submission.review_note,
+        })
+
+
+class ContestGradeStatus(ContestMixin, DetailView):
+    """JSON status for one grade-page submission (teacher-side).
+
+    The grade page polls this endpoint after queueing a rejudge so the
+    teacher sees the fresh verdict / score without a manual page reload.
+    Read-only, same authorization contract as ``ContestGradeSave`` (401
+    anonymous, 403 authenticated non-editor, 404 unknown submission).
+    """
+
+    http_method_names = ['get']
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
+        if not self.object.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        try:
+            submission_id = int(request.GET.get('submission'))
+        except (TypeError, ValueError):
+            return JsonResponse({'error': _('Invalid input.')}, status=400)
+        try:
+            submission = Submission.objects.filter(contest_object=self.object, id=submission_id) \
+                .select_related('language', 'reviewed_by__user') \
+                .prefetch_related('test_cases').get()
+        except Submission.DoesNotExist:
+            return JsonResponse({'error': _('Submission not found.')}, status=404)
+        return JsonResponse({
+            'ok': True,
+            'id': submission.id,
+            'status': submission.status,
+            'result': submission.result,
+            'points': submission.points,
+            'total': submission.case_total or submission.problem.points,
+            'time': submission.time,
+            'memory': submission.memory,
+            'is_graded': submission.is_graded,
+            'review_note': submission.review_note or '',
+            'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
+            'test_cases': [
+                {
+                    'case': tc.case,
+                    'status': tc.status,
+                    'time': tc.time,
+                    'memory': tc.memory,
+                    'points': tc.points,
+                } for tc in submission.test_cases.all()
+            ],
         })
 
 

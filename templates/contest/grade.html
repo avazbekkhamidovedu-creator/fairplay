@@ -14,7 +14,7 @@
         /* Grade workspace — mirrors the grading.html reference on --oj-* tokens (dark-aware).
            Layout is intentionally a simple two-column grid (kept stable per design review);
            the CONTENT is enriched to match the reference: badges, problem stem, answer
-           result summary, review note (评语), Release / Rejudge actions. */
+           result summary, review note, Release / Rejudge actions. */
         .grade-head {
             display: flex;
             justify-content: space-between;
@@ -222,7 +222,7 @@
             color: var(--oj-text);
             font-size: 13px;
         }
-        /* Problem stem (题面): plain pre-wrapped text — escaped, never raw HTML. */
+        /* Problem stem: plain pre-wrapped text — escaped, never raw HTML. */
         .gd-stem {
             white-space: pre-wrap;
             word-break: break-word;
@@ -252,7 +252,7 @@
             background: var(--oj-surface);
             color: var(--oj-text);
         }
-        /* Review note (评语) textarea. */
+        /* Review note textarea. */
         .gd-note {
             width: 100%;
             box-sizing: border-box;
@@ -290,6 +290,7 @@
             var saveUrl = {{ url('contest_grade_save', contest.key)|tojson }};
             var releaseUrl = {{ url('contest_grade_release', contest.key)|tojson }};
             var rejudgeUrl = {{ url('submission_rejudge')|tojson }};
+            var statusUrl = {{ url('contest_grade_status', contest.key)|tojson }};
             var released = {{ 'true' if grade_released else 'false' }};
             // Rejudge additionally needs staff + the rejudge_submission perm
             // (enforced server-side by the widget too); disable the button when absent.
@@ -404,7 +405,7 @@
                         '</div></div>' +
                     '</div>';
 
-                // Problem statement (题面)
+                // Problem statement
                 var desc = problemMeta(s.problem);
                 html += '<div class="gd-section"><h4>{{ _('Problem description') }}</h4>' +
                     '<div class="gd-section-card gd-stem">' + esc(desc ? desc.description : '') + '</div></div>';
@@ -435,14 +436,14 @@
                         '</tbody></table></div></div>';
                 }
 
-                // Manual score + review note (评分与评语)
+                // Manual score + review note
                 html += '<div class="gd-section"><h4>{{ _('Manual grading') }}</h4><div class="gd-section-card">' +
                     '<div class="gd-score-row">' +
                         '<label>{{ _('Score') }}</label>' +
                         '<input type="number" id="g-score" min="0" max="' + (s.total || 0) + '" value="' + (s.points != null ? s.points : 0) + '" step="0.01">' +
                         '<span>/ ' + (s.total || 0) + '</span>' +
                         '<button type="button" class="btn btn-primary" id="btn-save-score">{{ _('Save grading') }}</button>' +
-                        '<span class="muted">{{ _('Submit grading 后需 Release 才会更新学生前台最新分') }}</span>' +
+                        '<span class="muted">{{ _('Manual grades are only pushed to students after Release.') }}</span>' +
                     '</div>' +
                     '<label style="display:block;margin-top:0.6rem;font-size:12px;color:var(--oj-text-muted);">{{ _('Review note') }}</label>' +
                     '<textarea id="g-note" class="gd-note" placeholder="{{ _('Write review comment...') }}">' + esc(s.review_note || '') + '</textarea>' +
@@ -499,14 +500,69 @@
             });
 
             // ── Toolbar: Rejudge (needs staff + rejudge_submission) ─────────
+            // Queueing only schedules the judge — the verdict lands asynchronously.
+            // Poll the per-submission status endpoint until the judge finishes,
+            // then patch the in-memory row and re-render so the teacher sees the
+            // fresh result without a manual page reload.
+            var rejudgePollTimer = null;
+
+            function applySubmissionUpdate(res) {
+                for (var i = 0; i < submissions.length; i++) {
+                    if (submissions[i].id === res.id) {
+                        submissions[i].status = res.status;
+                        submissions[i].result = res.result;
+                        submissions[i].points = res.points;
+                        submissions[i].total = res.total;
+                        submissions[i].time = res.time;
+                        submissions[i].memory = res.memory;
+                        submissions[i].test_cases = res.test_cases || [];
+                        submissions[i].review_note = res.review_note || '';
+                        submissions[i].reviewed_by = res.reviewed_by;
+                        break;
+                    }
+                }
+                renderList();
+                renderDetail();
+            }
+
+            function pollRejudgeResult(id) {
+                var tries = 0;
+                if (rejudgePollTimer) clearInterval(rejudgePollTimer);
+                rejudgePollTimer = setInterval(function () {
+                    tries++;
+                    $.get(statusUrl, {submission: id}).done(function (res) {
+                        if (!res.ok || res.id !== id) return;  // keep polling
+                        if (res.is_graded || tries >= 30) {     // ~60s cap
+                            clearInterval(rejudgePollTimer);
+                            rejudgePollTimer = null;
+                            $('#btn-rejudge').prop('disabled', !canRejudge);
+                            applySubmissionUpdate(res);
+                            if (res.is_graded) {
+                                $('#left-summary').append(' · <span class="badge badge-done">{{ _('Rejudge finished') }}: ' +
+                                    esc(res.result || '?') + ' · ' +
+                                    (res.points != null ? esc(res.points) + ' / ' + (res.total || '—') : '—') + '</span>');
+                            } else {
+                                alert('{{ _('Rejudge is taking unusually long — refresh the page to see the result.') }}');
+                            }
+                        }
+                    }).fail(function () {
+                        clearInterval(rejudgePollTimer);
+                        rejudgePollTimer = null;
+                        $('#btn-rejudge').prop('disabled', !canRejudge);
+                    });
+                }, 2000);
+            }
+
             $('#btn-rejudge').on('click', function () {
                 if (!selectedId) return;
                 var $btn = $(this).prop('disabled', true);
                 $.post(rejudgeUrl, {id: selectedId}).done(function () {
                     alert('{{ _('Rejudge queued') }}');
+                    pollRejudgeResult(selectedId);
                 }).fail(function (xhr) {
                     alert('{{ _('Rejudge failed') }} (' + xhr.status + ')');
-                }).always(function () { $btn.prop('disabled', !canRejudge); });
+                    $btn.prop('disabled', !canRejudge);
+                });
             });
 
             refreshReleaseButton();
