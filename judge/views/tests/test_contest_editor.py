@@ -10,15 +10,31 @@ rather than password authentication.
 import json
 from datetime import datetime, timedelta
 
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestTag, Organization
+from judge.models import Contest, ContestTag, Organization, SEBConfigPreset
+from judge.models.seb import DEFAULT_PRESET_CACHE_KEY
 from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
 from judge.views.contests import ContestCreate
+
+PRESET_BEK = 'e' * 64
+PRESET_CFG = 'f' * 64
+
+
+def _create_preset(**kwargs):
+    """The site-default SEB configuration an instructor can adopt in one click."""
+    kwargs.setdefault('is_default', True)
+    preset = SEBConfigPreset(name='Editor default', browser_exam_keys=PRESET_BEK,
+                             config_keys=PRESET_CFG, **kwargs)
+    preset.config_file.save('editor_default.seb', ContentFile(b'SEB config'), save=False)
+    preset.save()
+    return preset
 
 
 class ContestEditorHelperTestCase(TestCase):
@@ -412,6 +428,20 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertFalse(self.contest.seb_required)
         self.assertEqual(self.contest.access_code, '')
 
+    def test_curator_cannot_adopt_default_seb_preset(self):
+        # seb_preset is gated by the same permission as the rest of the SEB
+        # fields, so the one-click checkbox is not a way around it.
+        _create_preset()
+        self.client.force_login(self.curator)
+        payload = self._full_payload(seb_required=True, seb_use_default=True)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertIsNone(self.contest.seb_preset)
+
     def test_curator_cannot_mark_rated_or_lock(self):
         # contest_rating / lock_contest are separate permissions.
         self.client.force_login(self.curator)
@@ -537,6 +567,9 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
     def setUp(self):
         self.client = Client()
         self.client.force_login(self.editor)
+        # The default-preset pointer is cached outside the test transaction, so
+        # it would otherwise leak between tests.
+        cache.delete(DEFAULT_PRESET_CACHE_KEY)
 
     def _post(self, **overrides):
         now = timezone.now()
@@ -588,6 +621,51 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         # contest for every student); model validation now rejects it.
         response = self._post(name='SEB Bad', key='sebbad', seb_required=True)
         self.assertEqual(response.status_code, 400)
+
+    def test_seb_use_default_arms_contest_in_one_save(self):
+        # The whole point of the preset: no keys typed, no .seb uploaded, and
+        # the contest still passes Contest.clean() on the very first save.
+        preset = _create_preset()
+        response = self._post(name='SEB Default', key='sebdefault',
+                              seb_required=True, seb_use_default=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='sebdefault')
+        self.assertEqual(contest.seb_preset, preset)
+        self.assertEqual(contest.seb_browser_exam_keys, '')
+        self.assertEqual(contest.seb_allowed_bek(), [PRESET_BEK])
+
+    def test_seb_use_default_without_a_default_returns_400(self):
+        response = self._post(name='SEB No Default', key='sebnodefault',
+                              seb_required=True, seb_use_default=True)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('No default Safe Exam Browser configuration',
+                      json.loads(response.content)['error'])
+
+    def test_seb_use_default_ignores_inactive_preset(self):
+        _create_preset(is_active=False)
+        response = self._post(name='SEB Inactive', key='sebinactive',
+                              seb_required=True, seb_use_default=True)
+        self.assertEqual(response.status_code, 400)
+
+    def test_seb_use_default_unset_clears_preset(self):
+        preset = _create_preset()
+        self._post(name='SEB Clear', key='sebclear', seb_required=True, seb_use_default=True)
+        contest = Contest.objects.get(key='sebclear')
+        self.assertEqual(contest.seb_preset, preset)
+        response = self.client.post(
+            reverse('contest_edit', args=['sebclear']),
+            data=json.dumps({
+                'name': 'SEB Clear', 'key': 'sebclear',
+                'start_time': contest.start_time.isoformat(),
+                'end_time': contest.end_time.isoformat(),
+                'seb_required': True, 'seb_use_default': False,
+                'seb_browser_exam_keys': 'c' * 64, 'seb_config_keys': 'd' * 64,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        contest.refresh_from_db()
+        self.assertIsNone(contest.seb_preset)
 
     def test_format_config_json_saved(self):
         # ICPC accepts a config dict with a validated 'penalty' key — use it to

@@ -563,7 +563,10 @@
                  'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
                  'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
                  'show_short_display', 'is_private', 'is_organization_private',
-                 'limit_join_organizations', 'seb_required'].forEach(function(f) {
+                 'limit_join_organizations', 'seb_required',
+                 // Not a model field: the server resolves it to Contest.seb_preset
+                 // (the site default) so the client never names a preset id.
+                 'seb_use_default'].forEach(function(f) {
                     data[f] = fd.has(f);
                 });
 
@@ -1424,7 +1427,37 @@
                 // Keep the SEB-required checkbox in sync with the seg control
                 var sebReq = document.getElementById('id_seb_required');
                 if (sebReq) sebReq.checked = (v === 'high' || v === 'custom');
+                // Arming SEB with no configuration of its own would fail
+                // validation, so "High" also opts into the site default —
+                // unless this assignment already has keys or a preset.
+                if (sebReq && sebReq.checked && sebDefault && !sebDefault.disabled &&
+                        !sebDefault.checked && !sebHasOwnConfig()) {
+                    sebDefault.checked = true;
+                }
+                syncSebDefault();
             }
+
+            // --- SEB default configuration checkbox ---
+            var sebDefault = document.getElementById('id_seb_use_default');
+            var sebManualRows = document.getElementById('seb-manual-rows');
+            function sebHasOwnConfig() {
+                // True when the instructor has already supplied their own keys
+                // (or uploaded a .seb), in which case we must not silently
+                // switch them onto the default.
+                if (!sebManualRows) return false;
+                var filled = sebManualRows.querySelectorAll('textarea, input[type="text"]');
+                for (var i = 0; i < filled.length; i++) {
+                    if ((filled[i].value || '').trim()) return true;
+                }
+                return {% if is_edit and contest.seb_config_file %}true{% else %}false{% endif %};
+            }
+            function syncSebDefault() {
+                if (!sebDefault || !sebManualRows) return;
+                sebManualRows.style.display = sebDefault.checked ? 'none' : '';
+            }
+            if (sebDefault) sebDefault.addEventListener('change', syncSebDefault);
+            syncSebDefault();
+
             cheatRadios.forEach(function(r) { r.addEventListener('change', updateCheatFields); });
             updateCheatFields();
 
@@ -2374,6 +2407,29 @@
                                         <div class="ac-help" style="margin-bottom:0.4rem;">
                                             {{ _('Staff always bypass. At least one Browser Exam Key hash is required when SEB is on.') }}
                                         </div>
+                                        {# The one-click path: point this assignment at the .seb configuration
+                                           published by the site administrator, so the instructor never has to
+                                           build one or transcribe key hashes. Ticking it hides the manual
+                                           fields below; unticking restores the fully custom path. #}
+                                        <div class="ac-card" id="seb-default-row" style="margin-bottom:0.5rem;">
+                                            <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.25rem;">
+                                                <input type="checkbox" id="id_seb_use_default" name="seb_use_default"
+                                                       {%- if not seb_default_preset %} disabled{% endif %}
+                                                       {%- if prefill.seb_use_default %} checked{% endif %}>
+                                                {{ _('Use the default configuration') }}
+                                            </label>
+                                            {% if seb_default_preset %}
+                                            <div class="ac-help">
+                                                <strong>{{ seb_default_preset.name }}</strong>{% if seb_default_preset.description %} — {{ seb_default_preset.description }}{% endif %}
+                                                <a href="{{ seb_default_preset.config_file.url }}" target="_blank">{{ _('Preview .seb') }}</a>
+                                            </div>
+                                            {% else %}
+                                            <div class="ac-help">
+                                                {{ _('No default configuration has been published yet. Ask a site administrator to add one, or fill in the fields below yourself.') }}
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                        <div id="seb-manual-rows">
                                         <div class="form-row" style="margin-bottom:0.4rem;">
                                             <label style="width:100px;">{{ _('Browser keys') }}</label>
                                             <div class="field">
@@ -2407,10 +2463,11 @@
                                                         <button type="button" class="btn-soft" id="seb-upload-btn">{{ _('Upload .seb') }}</button>
                                                     </div>
                                                 {% else %}
-                                                    <div class="ac-help">{{ _('Save the assignment first, then upload the .seb file here.') }}</div>
+                                                    <div class="ac-help">{{ _('Save the assignment first, then upload the .seb file here — or tick "use the default configuration" above and skip this entirely.') }}</div>
                                                 {% endif %}
                                             </div>
                                         </div>
+                                        </div>{# /#seb-manual-rows #}
                                     </div>
                                 </div>
                             </div>

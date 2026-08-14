@@ -276,10 +276,12 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         (_('Access'), {'fields': ('access_code', 'private_contestants', 'organizations', 'classes',
                                   'join_organizations', 'view_contest_scoreboard', 'view_contest_submissions')}),
         (_('Safe Exam Browser'), {
-            'fields': ('seb_required', 'seb_browser_exam_keys', 'seb_config_keys',
+            'fields': ('seb_required', 'seb_preset', 'seb_browser_exam_keys', 'seb_config_keys',
                        'seb_config_file', 'seb_quit_url'),
             'description': _('Restrict the contest to clients running Safe Exam Browser. '
-                             'Staff (editors, testers, spectators, org admins) always bypass.'),
+                             'Staff (editors, testers, spectators, org admins) always bypass. '
+                             'Pick a preset to inherit a published configuration; the fields below '
+                             'override it per contest.'),
         }),
         (_('Justice'), {'fields': ('banned_users',)}),
     )
@@ -422,7 +424,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         if not request.user.has_perm('judge.contest_access_code'):
             readonly += ['access_code']
         if not request.user.has_perm('judge.contest_seb_requirement'):
-            readonly += ['seb_required', 'seb_browser_exam_keys', 'seb_config_keys',
+            readonly += ['seb_required', 'seb_preset', 'seb_browser_exam_keys', 'seb_config_keys',
                          'seb_config_file', 'seb_quit_url']
         if not request.user.has_perm('judge.create_private_contest'):
             readonly += ['private_contestants', 'organizations']
