@@ -144,6 +144,18 @@
             <section class="class-form-module">
                 <h2>{{ _('People') }}</h2>
                 <div class="class-form-grid">
+                    <div class="class-form-field">
+                        <label for="{{ form.instructor_names.id_for_label }}">{{ form.instructor_names.label }}</label>
+                        {{ form.instructor_names }}
+                        {% if form.instructor_names.help_text %}<div class="helptext">{{ form.instructor_names.help_text }}</div>{% endif %}
+                        {{ form.instructor_names.errors }}
+                    </div>
+                    <div class="class-form-field">
+                        <label for="{{ form.ta_names.id_for_label }}">{{ form.ta_names.label }}</label>
+                        {{ form.ta_names }}
+                        {% if form.ta_names.help_text %}<div class="helptext">{{ form.ta_names.help_text }}</div>{% endif %}
+                        {{ form.ta_names.errors }}
+                    </div>
                     <div class="class-form-field full">
                         <label for="{{ form.admins.id_for_label }}">{{ form.admins.label }}</label>
                         {{ form.admins }}

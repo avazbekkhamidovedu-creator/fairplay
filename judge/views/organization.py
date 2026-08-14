@@ -494,28 +494,16 @@ class OrganizationList(TitleMixin, ListView):
                     Organization.admins.through.objects.filter(profile=profile)
                     .values_list('organization_id', flat=True),
                 )
-        # Prefetch teachers for card display (org admins).
-        admin_map = {}
-        if orgs:
-            through = Organization.admins.through
-            for row in through.objects.filter(organization_id__in=[o.id for o in orgs]).select_related(
-                'profile__user',
-            ):
-                admin_map.setdefault(row.organization_id, []).append(row.profile)
+        # Prefetch instructors for card display (display names, not course admins).
         for org in orgs:
             org.user_joined = org.id in joined_ids
             org.user_pending = org.id in pending_ids and not org.user_joined
             org.review_pending_count = org_pending_counts.get(org.id, 0)
             org.can_edit = org.id in editable_ids or can_all
             org.can_manage = org.id in manage_ids
-            teachers = admin_map.get(org.id, [])
-            names = []
-            for t in teachers[:2]:
-                names.append(t.user.username)
-            if len(teachers) > 2:
-                names.append('+%d' % (len(teachers) - 2))
+            names = org.instructor_name_list
             org.teacher_line = ', '.join(names) if names else _('TBA')
-            org.teacher_count = len(teachers)
+            org.teacher_count = len(names)
         context['organizations'] = orgs
         context.update(course_inbox_chrome_context(self.request))
         # Keep list-page review totals (already computed above) if chrome helper differs.
@@ -587,20 +575,18 @@ class OrganizationHome(OrganizationDetailView):
         sessions = set()
         for cls in class_list:
             cls.user_pending = cls.id in pending_class_ids and not cls.joined
-            admins = list(cls.admins.all())
-            if admins:
-                cls.instructor_id = str(admins[0].id)
-                cls.instructor_name = admins[0].user.username
-                teachers[admins[0].id] = admins[0].user.username
+            instructor_names = cls.instructor_name_list
+            if not instructor_names:
+                instructor_names = self.object.instructor_name_list
+            if instructor_names:
+                # Filter key is the primary instructor display name (first listed).
+                cls.instructor_id = instructor_names[0]
+                cls.instructor_name = ', '.join(instructor_names)
+                for name in instructor_names:
+                    teachers[name] = name
             else:
-                org_admins = list(self.object.admins.all()[:1])
-                if org_admins:
-                    cls.instructor_id = str(org_admins[0].id)
-                    cls.instructor_name = org_admins[0].user.username
-                    teachers[org_admins[0].id] = org_admins[0].user.username
-                else:
-                    cls.instructor_id = ''
-                    cls.instructor_name = _('TBA')
+                cls.instructor_id = ''
+                cls.instructor_name = _('TBA')
 
             meta = parse_class_description_meta(cls.description)
             session_label = cls.term_session or meta['session_label']
@@ -664,7 +650,7 @@ class OrganizationHome(OrganizationDetailView):
             cls.capacity_display = org_slots if org_slots else '—'
             cls.user_can_edit = bool(
                 context['can_edit'] or
-                (profile is not None and any(a.id == profile.id for a in admins)),
+                (profile is not None and cls.admins.filter(id=profile.id).exists()),
             )
             cls.review_pending_count = 0
             if cls.session_label:
@@ -1381,6 +1367,8 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
             admins = list(org.admins.select_related('user').all()[:5])
         context['class_admins'] = admins
         context['admin_names'] = ', '.join(a.user.username for a in admins) if admins else _('Not set')
+        context['instructor_names'] = self.object.instructor_display or _('Not set')
+        context['ta_names'] = self.object.ta_display or _('Not set')
         context['member_count'] = self.object.members.count() if can_view_content else None
         context['not_set'] = _('Not set')
 

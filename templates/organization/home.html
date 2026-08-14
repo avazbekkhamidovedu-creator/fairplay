@@ -27,7 +27,7 @@ $(function () {
         var teacher = $('#f-teacher').val() || '';
         var session = $('#f-session').val() || '';
         var sort = $('#f-class-sort').val() || 'session';
-        var group = $('.view-switch button.active').data('group') || 'all';
+        var group = $('.view-switch button.active').data('group') || 'session';
 
         var items = $cards.get().map(function (el) {
             return {
@@ -107,6 +107,7 @@ $(function () {
         $(this).addClass('active');
         applyFilters();
     });
+    applyFilters();
 });
 </script>
 {% endblock %}
@@ -192,9 +193,9 @@ $(function () {
                 <input id="f-class-q" type="text" placeholder="{{ _('Session 1 / Fall / lab') }}">
             </div>
             <div>
-                <label for="f-teacher">{{ _('Administrator') }}</label>
+                <label for="f-teacher">{{ _('Instructor') }}</label>
                 <select id="f-teacher" class="oj-select">
-                    <option value="">{{ _('All administrators') }}</option>
+                    <option value="">{{ _('All instructors') }}</option>
                     {% for t in class_teachers %}
                         <option value="{{ t.id }}">{{ t.username }}</option>
                     {% endfor %}
@@ -213,16 +214,16 @@ $(function () {
                 <label for="f-class-sort">{{ _('Sort by') }}</label>
                 <select id="f-class-sort" class="oj-select">
                     <option value="session">{{ _('Latest session') }}</option>
-                    <option value="teacher">{{ _('Administrator') }}</option>
+                    <option value="teacher">{{ _('Instructor') }}</option>
                     <option value="year">{{ _('Year') }}</option>
                 </select>
             </div>
         </div>
 
         <div class="view-switch" role="group" aria-label="{{ _('Class view') }}">
-            <button type="button" class="active" data-group="all">{{ _('All') }}</button>
-            <button type="button" data-group="teacher">{{ _('By administrator') }}</button>
-            <button type="button" data-group="session">{{ _('By session') }}</button>
+            <button type="button" class="active" data-group="session">{{ _('By session') }}</button>
+            <button type="button" data-group="teacher">{{ _('By instructor') }}</button>
+            <button type="button" data-group="all">{{ _('All') }}</button>
         </div>
 
         <div id="class-root">

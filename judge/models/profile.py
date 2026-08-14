@@ -1,6 +1,7 @@
 import base64
 import hmac
 import json
+import re
 import secrets
 import struct
 from operator import mul
@@ -29,6 +30,18 @@ from judge.ratings import rating_class
 from judge.utils.two_factor import webauthn_decode
 
 __all__ = ['Class', 'ClassMaterial', 'Organization', 'Profile', 'OrganizationRequest', 'WebAuthnCredential']
+
+
+def _split_person_names(raw):
+    """Split comma / semicolon / newline separated display names."""
+    if not raw:
+        return []
+    names = []
+    for part in re.split(r'[,;\n]+', raw):
+        name = part.strip()
+        if name:
+            names.append(name)
+    return names
 
 
 class EncryptedNullCharField(EncryptedCharField):
@@ -61,10 +74,18 @@ class Organization(models.Model):
                                                        'viewing the organization.'))
     class_required = models.BooleanField(verbose_name=_('class membership required'), default=False,
                                          help_text=_('Whether members are compelled to select a class when joining.'))
+    instructor_names = models.CharField(
+        max_length=512, verbose_name=_('instructors'), blank=True, default='',
+        help_text=_('Display names shown on course cards (comma-separated). Separate from course administrators.'),
+    )
 
     def clean(self):
         if self.class_required and self.is_open:
             raise ValidationError(_('Class membership cannot be enforced when organization has open enrollment.'))
+
+    @property
+    def instructor_name_list(self):
+        return _split_person_names(self.instructor_names)
 
     def __contains__(self, item):
         if isinstance(item, int):
@@ -120,6 +141,14 @@ class Class(models.Model):
                                     help_text=_('Those who can approve membership to this class.'))
     members = models.ManyToManyField('Profile', verbose_name=_('members'), blank=True,
                                      related_name='classes', related_query_name='class')
+    instructor_names = models.CharField(
+        max_length=512, verbose_name=_('instructors'), blank=True, default='',
+        help_text=_('Instructor display names (comma-separated).'),
+    )
+    ta_names = models.CharField(
+        max_length=512, verbose_name=_('teaching assistants'), blank=True, default='',
+        help_text=_('TA display names (comma-separated).'),
+    )
 
     @classmethod
     def get_visible_classes(cls, user):
@@ -153,6 +182,24 @@ class Class(models.Model):
     def offering_label(self):
         parts = [p for p in (self.academic_year, self.term_session) if p]
         return ', '.join(parts)
+
+    @property
+    def instructor_name_list(self):
+        return _split_person_names(self.instructor_names)
+
+    @property
+    def ta_name_list(self):
+        return _split_person_names(self.ta_names)
+
+    @property
+    def instructor_display(self):
+        names = self.instructor_name_list
+        return ', '.join(names) if names else ''
+
+    @property
+    def ta_display(self):
+        names = self.ta_name_list
+        return ', '.join(names) if names else ''
 
     @property
     def schedule_label(self):

@@ -128,6 +128,12 @@
                 <h2>{{ _('Administration') }}</h2>
                 <div class="class-form-grid">
                     <div class="class-form-field full">
+                        <label for="{{ form.instructor_names.id_for_label }}">{{ form.instructor_names.label }}</label>
+                        {{ form.instructor_names }}
+                        {% if form.instructor_names.help_text %}<div class="helptext">{{ form.instructor_names.help_text }}</div>{% endif %}
+                        {{ form.instructor_names.errors }}
+                    </div>
+                    <div class="class-form-field full">
                         <label for="{{ form.admins.id_for_label }}">{{ form.admins.label }}</label>
                         {{ form.admins }}
                         {% if form.admins.help_text %}<div class="helptext">{{ form.admins.help_text }}</div>{% endif %}
