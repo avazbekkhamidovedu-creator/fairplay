@@ -7,10 +7,10 @@ class Migration(migrations.Migration):
 
     dependencies = [
         (
-            "judge",
-            "0189_rename_judge_admin_recipi_7f2c1a_idx_judge_admin_recipie_e0c4fd_idx",
+            'judge',
+            '0189_rename_judge_admin_recipi_7f2c1a_idx_judge_admin_recipie_e0c4fd_idx',
         ),
-        ("judge", "0192_instructor_verification_granted_flags"),
+        ('judge', '0192_instructor_verification_granted_flags'),
     ]
 
     operations = []

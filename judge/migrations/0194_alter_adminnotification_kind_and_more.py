@@ -7,68 +7,68 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("judge", "0193_merge_20260814_2006"),
+        ('judge', '0193_merge_20260814_2006'),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name="adminnotification",
-            name="kind",
+            model_name='adminnotification',
+            name='kind',
             field=models.CharField(
                 choices=[
-                    ("instructor_verify", "Instructor verification"),
-                    ("course_join", "Course join request"),
-                    ("class_join", "Class join request"),
+                    ('instructor_verify', 'Instructor verification'),
+                    ('course_join', 'Course join request'),
+                    ('class_join', 'Class join request'),
                 ],
                 db_index=True,
                 max_length=32,
-                verbose_name="kind",
+                verbose_name='kind',
             ),
         ),
         migrations.AlterField(
-            model_name="instructorverificationrequest",
-            name="organization",
+            model_name='instructorverificationrequest',
+            name='organization',
             field=models.ForeignKey(
                 blank=True,
                 null=True,
                 on_delete=django.db.models.deletion.CASCADE,
-                related_name="instructor_verification_requests",
-                to="judge.organization",
-                verbose_name="course",
+                related_name='instructor_verification_requests',
+                to='judge.organization',
+                verbose_name='course',
             ),
         ),
         migrations.AlterField(
-            model_name="instructorverificationrequest",
-            name="request_class",
+            model_name='instructorverificationrequest',
+            name='request_class',
             field=models.ForeignKey(
                 blank=True,
                 null=True,
                 on_delete=django.db.models.deletion.CASCADE,
-                related_name="instructor_verification_requests",
-                to="judge.class",
-                verbose_name="class",
+                related_name='instructor_verification_requests',
+                to='judge.class',
+                verbose_name='class',
             ),
         ),
         migrations.AlterField(
-            model_name="instructorverificationrequest",
-            name="reviewed_by",
+            model_name='instructorverificationrequest',
+            name='reviewed_by',
             field=models.ForeignKey(
                 blank=True,
                 null=True,
                 on_delete=django.db.models.deletion.SET_NULL,
-                related_name="reviewed_instructor_verifications",
-                to="judge.profile",
-                verbose_name="reviewed by",
+                related_name='reviewed_instructor_verifications',
+                to='judge.profile',
+                verbose_name='reviewed by',
             ),
         ),
         migrations.AlterField(
-            model_name="instructorverificationrequest",
-            name="user",
+            model_name='instructorverificationrequest',
+            name='user',
             field=models.ForeignKey(
                 on_delete=django.db.models.deletion.CASCADE,
-                related_name="instructor_verification_requests",
-                to="judge.profile",
-                verbose_name="user",
+                related_name='instructor_verification_requests',
+                to='judge.profile',
+                verbose_name='user',
             ),
         ),
     ]

@@ -7,61 +7,65 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("judge", "0194_alter_adminnotification_kind_and_more"),
+        ('judge', '0194_alter_adminnotification_kind_and_more'),
     ]
 
     operations = [
         migrations.CreateModel(
-            name="ProblemCodeConfig",
+            name='ProblemCodeConfig',
             fields=[
                 (
-                    "id",
+                    'id',
                     models.AutoField(
                         auto_created=True,
                         primary_key=True,
                         serialize=False,
-                        verbose_name="ID",
+                        verbose_name='ID',
                     ),
                 ),
                 (
-                    "ai_enabled",
+                    'ai_enabled',
                     models.BooleanField(
                         default=False,
-                        help_text="After the judge grades the test cases, also ask the configured model to score the submitted code against the rubric below.",
-                        verbose_name="enable AI rubric scoring",
+                        help_text='After the judge grades the test cases, also ask the configured '
+                                  'model to score the submitted code against the rubric below.',
+                        verbose_name='enable AI rubric scoring',
                     ),
                 ),
                 (
-                    "ai_rubric",
+                    'ai_rubric',
                     models.TextField(
                         blank=True,
-                        help_text="Grading guidance sent to the model (never shown to students).",
-                        verbose_name="AI rubric",
+                        help_text='Grading guidance sent to the model (never shown to students).',
+                        verbose_name='AI rubric',
                     ),
                 ),
                 (
-                    "grading_table",
+                    'grading_table',
                     models.JSONField(
                         blank=True,
                         default=None,
-                        help_text='Sub-question breakdown: a list of {"name", "max_points", "strictness": "strict|normal|lenient"} objects. When set, the LLM grades each sub-question independently; otherwise the code is graded as a single whole.',
+                        help_text='Sub-question breakdown: a list of {"name", "max_points", '
+                                  '"strictness": "strict|normal|lenient"} objects. When set, the LLM '
+                                  'grades each sub-question independently; otherwise the code is '
+                                  'graded as a single whole.',
                         null=True,
-                        verbose_name="grading table",
+                        verbose_name='grading table',
                     ),
                 ),
                 (
-                    "problem",
+                    'problem',
                     models.OneToOneField(
                         on_delete=django.db.models.deletion.CASCADE,
-                        related_name="code_config",
-                        to="judge.problem",
-                        verbose_name="problem",
+                        related_name='code_config',
+                        to='judge.problem',
+                        verbose_name='problem',
                     ),
                 ),
             ],
             options={
-                "verbose_name": "code AI configuration",
-                "verbose_name_plural": "code AI configurations",
+                'verbose_name': 'code AI configuration',
+                'verbose_name_plural': 'code AI configurations',
             },
         ),
     ]
