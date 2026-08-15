@@ -29,9 +29,10 @@ import shutil
 import subprocess
 import tempfile
 from datetime import timedelta
-from unittest import skipUnless
+from unittest import mock, skipUnless
 
 from django.contrib.auth.models import Permission  # noqa: F401 (documented in module docstring)
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import HttpResponseForbidden
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
@@ -565,3 +566,83 @@ class ContestGradeReleaseTestCase(GradeTestBase):
         self._client(self.curator).get(self.release_url)
         self.contest.refresh_from_db()
         self.assertFalse(self.contest.results_finalized)
+
+
+class ContestGradeFileUploadTestCase(GradeTestBase):
+    """File-upload submissions expose a download link (never their source) on the grade page."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        # A FILE problem + submission carrying a SubmissionFile upload.
+        cls.file_problem = create_problem('grade-file-prob', submission_type='F', points=10)
+        ContestProblem.objects.create(contest=cls.contest, problem=cls.file_problem, points=10, order=2)
+        cls.file_submission = Submission.objects.create(
+            user=cls.student.profile, problem=cls.file_problem,
+            language=Language.objects.get(key='PY3'),
+            result='QU', status='D', contest_object=cls.contest,
+            points=0.0, case_total=10,
+        )
+        # SubmissionFile.file uses submission_storage; point it at a temp dir.
+        from django.core.files.storage import FileSystemStorage
+        from judge.models import SubmissionFile
+        from judge.storage.resilient import ResilientStorage
+        tmp = tempfile.TemporaryDirectory()
+        cls._tmp = tmp
+        storage = ResilientStorage(primary=FileSystemStorage(location=tmp.name), backup=None)
+        cls._patch = mock.patch.object(SubmissionFile._meta.get_field('file'), 'storage', storage)
+        cls._patch.start()
+        cls.upload = SubmissionFile.objects.create(
+            submission=cls.file_submission,
+            file=SimpleUploadedFile('report.pdf', b'%PDF-1.4 hello'),
+            original_name='report.pdf',
+            size=14,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            cls._patch.stop()
+            cls._tmp.cleanup()
+        finally:
+            super().tearDownClass()
+
+    def test_file_submission_serializes_upload_not_source(self):
+        response = self._client(self.curator).get(self.grade_url)
+        self.assertEqual(response.status_code, 200)
+        subs = json.loads(re.search(r'var submissions = (\[.*?\]);', response.content.decode(), re.S).group(1))
+        file_row = next(s for s in subs if s['id'] == self.file_submission.id)
+        self.assertEqual(file_row['problem_type'], 'F')
+        self.assertIsNotNone(file_row['upload'])
+        self.assertEqual(file_row['upload']['original_name'], 'report.pdf')
+        self.assertEqual(file_row['upload']['download_url'],
+                         reverse('submission_file_download', args=(self.file_submission.id,)))
+        # File submissions carry no source; the page must not embed a code block for them.
+        self.assertEqual(file_row['source'], '')
+
+    def test_non_file_submission_has_no_upload_key(self):
+        response = self._client(self.curator).get(self.grade_url)
+        subs = json.loads(re.search(r'var submissions = (\[.*?\]);', response.content.decode(), re.S).group(1))
+        code_row = next(s for s in subs if s['id'] == self.submission.id)
+        self.assertIsNone(code_row['upload'])
+
+    def test_attempts_filter_dropdown_rendered(self):
+        """The MCQ/attempt aggregation dropdown is present for every grade page."""
+        response = self._client(self.curator).get(self.grade_url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn('id="f-attempts"', html)
+        self.assertIn('Highest score', html)
+        self.assertIn('Last submission', html)
+
+
+class ContestGradeAttemptAggregationTestCase(GradeTestBase):
+    """Payload carries ``problem_type`` so the frontend can aggregate MCQ attempts (best/latest)."""
+
+    def test_payload_includes_problem_type_per_submission(self):
+        response = self._client(self.curator).get(self.grade_url)
+        self.assertEqual(response.status_code, 200)
+        subs = json.loads(re.search(r'var submissions = (\[.*?\]);', response.content.decode(), re.S).group(1))
+        self.assertGreaterEqual(len(subs), 1)
+        for s in subs:
+            self.assertIn('problem_type', s)

@@ -41,10 +41,10 @@ from django.views.generic import View
 from reversion import revisions
 
 from judge.models import (Class, Language, LanguageLimit, License, Organization, Problem, ProblemBlank,
-                          ProblemClarification, ProblemFileConfig, ProblemFillBlankConfig, ProblemGroup,
-                          ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
-                          ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution,
-                          SubmissionSourceAccess)
+                          ProblemClarification, ProblemCodeConfig, ProblemFileConfig, ProblemFillBlankConfig,
+                          ProblemGroup, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig,
+                          ProblemSubmissionType, ProblemTemplate, ProblemTranslation, ProblemType, Profile,
+                          Solution, SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
@@ -59,6 +59,19 @@ _DIFFICULTY_FULL_NAMES = {
     'hard': 'Hard',
 }
 
+# Controlled vocabulary of algorithm / solution tags the AI tag suggester may propose.
+# The AI must pick ONLY from these (plus existing knowledge tags in the DB); it may not invent
+# new labels or echo answer-format / difficulty chips.  Kept deliberately short and conventional
+# so the tag space stays uniform across problems instead of drifting with each model response.
+_KNOWLEDGE_TAG_VOCABULARY = (
+    'dp', 'dfs', 'bfs', 'greedy', 'math', 'graph', 'tree', 'string', 'sorting', 'binary search',
+    'two pointers', 'hash map', 'stack', 'queue', 'heap', 'recursion', 'backtracking',
+    'divide and conquer', 'dynamic programming', 'number theory', 'combinatorics', 'geometry',
+    'polynomial', 'linear algebra', 'probability', 'simulation', 'prefix sum', 'bit manipulation',
+    'shortest path', 'minimum spanning tree', 'topological sort', 'union find', 'segment tree',
+    'sliding window', 'linked list', 'array', 'matrix', 'binary tree', 'search', 'intervals',
+)
+
 
 def _problem_type_code(text):
     code = re.sub(r'[^\w\-]+', '-', (text or '').strip().lower())[:20].strip('-')
@@ -68,6 +81,51 @@ def _problem_type_code(text):
 def _reserved_auto_labels():
     """Format/difficulty auto-chip labels that must not be stored as knowledge tags."""
     return Problem.reserved_auto_type_labels()
+
+
+def _knowledge_type_labels():
+    """Display labels of existing knowledge ProblemTypes (format/difficulty chips excluded).
+
+    This is the authoritative candidate set for AI tag suggestions: answer-format rows
+    (``programming``, ``fill_in_blank``, ``short-answer``, difficulty levels, translated chip
+    labels) are filtered out so the model can never return a question-type tag.
+    """
+    reserved = _reserved_auto_labels()
+    labels = []
+    for t in ProblemType.objects.order_by('full_name', 'name').values('name', 'full_name'):
+        ptype = ProblemType(name=t['name'], full_name=t['full_name'])
+        if Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+            labels.append(t['full_name'] or t['name'])
+    return labels
+
+
+def _tag_suggestion_candidates():
+    """Merge DB knowledge tags with the controlled vocabulary (deduped, ordered)."""
+    existing = _knowledge_type_labels()
+    seen = set()
+    out = []
+    for label in list(existing) + list(_KNOWLEDGE_TAG_VOCABULARY):
+        key = (label or '').casefold()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(label)
+    return out
+
+
+def _normalize_tag_label(label):
+    """Return the canonical display form of a suggested tag, or None if not acceptable.
+
+    Rejects answer-format / difficulty chips (``fill_in_blank``, ``Programming``, ``Easy`` …),
+    arbitrary new labels outside the vocabulary, and anything longer than 40 chars — the model
+    may only choose from the curated candidate set, keeping the tag space uniform.
+    """
+    text = (label or '').strip().strip('.').strip()
+    if not text or len(text) > 100:
+        return None
+    for candidate in _tag_suggestion_candidates():
+        if text.casefold() == candidate.casefold():
+            return candidate
+    return None
 
 
 def _can_create_any(user):
@@ -296,6 +354,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ProblemBlank.objects.filter(problem=problem).delete()
         ProblemFillBlankConfig.objects.filter(problem=problem).delete()
         ProblemShortAnswerConfig.objects.filter(problem=problem).delete()
+        ProblemCodeConfig.objects.filter(problem=problem).delete()
         # Only the per-problem upload settings go; SubmissionFile rows are student data and are
         # deliberately left alone.
         ProblemFileConfig.objects.filter(problem=problem).delete()
@@ -339,6 +398,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['memory_limit'] = round((problem.memory_limit or 0) / 1024, 2)  # KB -> MB
             data['languages'] = list(problem.allowed_languages.values_list('key', flat=True))
             data['testcases'] = self._read_testcases(problem)
+            code_config = getattr(problem, 'code_config', None)
+            data['ai'] = bool(code_config and code_config.ai_enabled)
+            data['rubric'] = (code_config.ai_rubric if code_config else '') or ''
+            data['gradingTable'] = code_config.grading_table if code_config else None
             try:
                 data['checker'] = problem.data_files.checker or ''
             except Exception:
@@ -1004,6 +1067,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
 
+            # Supplementary AI rubric scoring config (test-case judging is unchanged).
+            self._save_code_config(problem, payload)
+
             checker = payload.get('checker') or ''
             if zip_upload is not None:
                 self._save_testcases_from_zip(
@@ -1014,6 +1080,30 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             elif sync_cases and (cleaned_cases or payload.get('edit_code')):
                 self._save_testcases(problem, cleaned_cases or [], checker=checker)
         return problem
+
+    def _save_code_config(self, problem, payload):
+        """Persist the supplementary AI rubric config for a code problem.
+
+        The AI score is informational (stored as extra test-case rows); it never changes the
+        judge's AC/WA verdict, so an absent or disabled config is a no-op.
+        """
+        ai_enabled = bool(payload.get('ai'))
+        rubric = (payload.get('rubric') or '').strip()
+        grading_table = payload.get('gradingTable') or None
+
+        config = getattr(problem, 'code_config', None)
+        if not ai_enabled and config is None:
+            return
+        if config is None:
+            ProblemCodeConfig.objects.create(
+                problem=problem, ai_enabled=True,
+                ai_rubric=rubric, grading_table=grading_table,
+            )
+        else:
+            config.ai_enabled = ai_enabled
+            config.ai_rubric = rubric
+            config.grading_table = grading_table
+            config.save(update_fields=['ai_enabled', 'ai_rubric', 'grading_table'])
 
     def _attach_languages(self, problem, payload):
         # No selection (or an all-invalid selection) means "all languages allowed" so the problem
@@ -1582,34 +1672,51 @@ class ProblemCreateV2AIProblemTypeView(LoginRequiredMixin, View):
     def _suggest(self, description):
         from judge import llm
 
-        existing = list(ProblemType.objects.order_by('full_name', 'name').values('name', 'full_name'))
-        labels = [t['full_name'] or t['name'] for t in existing]
+        # Candidate set = existing knowledge tags + the controlled algorithm vocabulary.
+        # Answer-format / difficulty chips (fill_in_blank, Programming, Easy, …) are excluded
+        # here AND re-filtered after parsing, so a format tag can never be suggested.
+        candidates = _tag_suggestion_candidates()
 
         if llm.is_configured():
             try:
                 messages = [
                     {'role': 'system', 'content': (
-                        'You classify competitive-programming / educational problems. '
-                        'Reply with 1-3 short category labels from this list when possible, '
-                        'comma-separated. If none fit, suggest one new short label (≤20 chars). '
-                        'Existing labels: ' + ', '.join(labels[:80])
+                        'You classify competitive-programming / educational problems by the '
+                        'algorithm or solution technique they exercise (e.g. dynamic programming, '
+                        'depth-first search, polynomial math).\n'
+                        'Rules:\n'
+                        '- Reply with 1-3 labels, comma-separated, chosen ONLY from the provided '
+                        'candidate list.\n'
+                        '- NEVER invent labels that are not in the candidate list.\n'
+                        '- NEVER use question-format tags (programming, fill-in-the-blank, '
+                        'multiple-choice, short answer, true/false) or difficulty tags '
+                        '(easy, medium, hard) or anything unrelated to the solution method.\n'
+                        '- If nothing fits well, reply with a single most-relevant candidate '
+                        'instead of inventing new ones.\n'
+                        'Candidate labels: ' + ', '.join(candidates)
                     )},
                     {'role': 'user', 'content': description[:4000]},
                 ]
                 text = llm.chat(messages, max_tokens=64).text.strip()
                 picked = []
+                seen = set()
                 for part in text.replace('\n', ',').split(','):
-                    label = part.strip().strip('.')
-                    if not label:
+                    label = _normalize_tag_label(part)
+                    if label is None:
                         continue
-                    match = next((t for t in existing if label.lower() in (t['full_name'] or '').lower()
-                                  or label.lower() in t['name'].lower()), None)
-                    if match:
-                        picked.append({'name': match['name'], 'full': match['full_name'] or match['name'],
-                                       'existing': True})
-                    elif len(label) <= 100:
-                        code = label[:20].replace(' ', '-').lower()
-                        picked.append({'name': code, 'full': label, 'existing': False})
+                    key = label.casefold()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    # Prefer the DB knowledge tag row when the label already exists; otherwise
+                    # the frontend creates the ProblemType row from the vocabulary label on save.
+                    existing = next((t for t in _knowledge_type_labels()
+                                     if t.casefold() == label.casefold()), None)
+                    picked.append({
+                        'name': _problem_type_code(existing or label),
+                        'full': existing or label,
+                        'existing': existing is not None,
+                    })
                     if len(picked) >= 3:
                         break
                 if picked:
@@ -1617,17 +1724,17 @@ class ProblemCreateV2AIProblemTypeView(LoginRequiredMixin, View):
             except Exception:
                 pass
 
+        # No LLM / failed call: fall back to substring matching against knowledge tags only.
         compact = description.lower()
         picked = []
-        for t in existing:
-            for token in (t['full_name'] or '', t['name']):
-                if token and token.lower() in compact:
-                    picked.append({'name': t['name'], 'full': t['full_name'] or t['name'], 'existing': True})
-                    break
+        for label in _knowledge_type_labels():
+            if label.lower() in compact:
+                picked.append({'name': _problem_type_code(label), 'full': label, 'existing': True})
             if len(picked) >= 3:
                 break
         if picked:
             return picked
+        # Last resort: a generic tag is preferable to inventing a question-type tag.
         return [{'name': 'general', 'full': 'General', 'existing': False}]
 
 

@@ -42,7 +42,7 @@ from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
 from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestTag, \
-    Problem, Profile, Submission
+    Problem, ProblemSubmissionType, Profile, Submission
 from judge.models.profile import Class, Organization
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
@@ -475,7 +475,8 @@ class ContestCreate(LoginRequiredMixin, View):
     def dispatch(self, request, *args, **kwargs):
         """Route to create or edit mode and enforce the matching permission.
 
-        - Create mode (no ``contest`` kwarg) requires ``judge.edit_all_contest``.
+        - Create mode (no ``contest`` kwarg) requires ``judge.create_private_contest``
+          (``edit_all_contest`` remains a superset for full editors).
         - Edit mode (``contest`` kwarg) requires ``is_editable_by``, which also
           admits ``edit_own_contest`` holders who are curators of the contest.
         """
@@ -489,7 +490,8 @@ class ContestCreate(LoginRequiredMixin, View):
         else:
             if not request.user.is_authenticated:
                 return redirect_to_login(request.get_full_path())
-            if not request.user.has_perm('judge.edit_all_contest'):
+            if not (request.user.has_perm('judge.create_private_contest')
+                    or request.user.has_perm('judge.edit_all_contest')):
                 raise PermissionDenied
         return super().dispatch(request, *args, **kwargs)
 
@@ -2074,6 +2076,19 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                 source = sub.source.source
             except Submission.source.RelatedObjectDoesNotExist:
                 source = ''
+            # File-upload submissions carry no source; expose the uploaded file
+            # (name/size/download URL) so the grade page can render a download link.
+            upload_info = None
+            if sub.problem.submission_type == ProblemSubmissionType.FILE:
+                try:
+                    upload = sub.upload
+                    upload_info = {
+                        'original_name': upload.original_name,
+                        'size': upload.size,
+                        'download_url': reverse('submission_file_download', args=(sub.id,)),
+                    }
+                except Exception:
+                    upload_info = None
             # `sub.contest` is the per-participation ContestSubmission row; a
             # None means this submission was not part of a live/virtual run.
             contest_submission = sub.contest_or_none
@@ -2081,6 +2096,7 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                 'id': sub.id,
                 'user': sub.user.user.username,
                 'problem': sub.problem.code,
+                'problem_type': sub.problem.submission_type,
                 'lang': sub.language.short_name or sub.language.key,
                 'date': sub.date.strftime('%Y-%m-%d %H:%M'),
                 'result': sub.short_status,
@@ -2089,6 +2105,7 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                 'time': sub.time,
                 'memory': sub.memory,
                 'source': source,
+                'upload': upload_info,
                 'test_cases': [
                     {
                         'case': tc.case,
@@ -2096,6 +2113,10 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                         'time': tc.time,
                         'memory': tc.memory,
                         'points': tc.points,
+                        # batch=-1 marks supplementary AI rubric rows (teacher-only feedback).
+                        'batch': tc.batch,
+                        'feedback': tc.feedback or '',
+                        'extended_feedback': tc.extended_feedback or '',
                     } for tc in sub.test_cases.all()
                 ],
                 # Manual-grading metadata (评分与评语 state).

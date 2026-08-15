@@ -160,6 +160,17 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
                 ),
             ),
             'normal_user': create_user(username='normal_user'),
+            # Holds only create_private_contest (no edit_all_contest): the "Add
+            # assignment" entry must be granted by this permission alone.
+            'contest_creator': create_user(
+                username='contest_creator',
+                user_permissions=('create_private_contest',),
+            ),
+            # edit_own_contest but NOT create_private_contest: must NOT see the create entry.
+            'edit_own_only': create_user(
+                username='edit_own_only',
+                user_permissions=('edit_own_contest',),
+            ),
         })
 
         cls.organization = Organization.objects.create(name='Test Org', slug='test-org')
@@ -182,6 +193,31 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['normal_user'])
         response = self.client.get(reverse('contest_create'))
         self.assertEqual(response.status_code, 403)
+
+    def test_create_private_contest_grants_access(self):
+        """A user holding only ``create_private_contest`` (no ``edit_all_contest``)
+        may open the contest creator — the "Add assignment" entry follows this permission."""
+        self.client.force_login(self.users['contest_creator'])
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_edit_own_contest_without_create_is_denied(self):
+        """``edit_own_contest`` alone must NOT grant the creator entry."""
+        self.client.force_login(self.users['edit_own_only'])
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_assignment_tab_gated_on_create_private_contest(self):
+        """The 'Add Assignment' tab renders for create_private_contest holders and is absent
+        otherwise (list page uses contest-list-tabs.html)."""
+        self.client.force_login(self.users['contest_creator'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertIn('/contests/create/', html)
+        self.assertIn('Add Assignment', html)
+
+        self.client.force_login(self.users['edit_own_only'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertNotIn('/contests/create/', html)
 
     def test_post_success(self):
         self.client.force_login(self.users['staff_contest_edit_all'])

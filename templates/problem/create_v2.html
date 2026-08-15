@@ -361,8 +361,8 @@
             </div>
           </div>
 
-          <!-- AI Grading (short-answer / fill-blank only) -->
-          <div class="form-row type-panel" data-for="short,blank" id="ai-row" style="display:none;">
+          <!-- AI Grading (short-answer / fill-blank / programming) -->
+          <div class="form-row type-panel" data-for="short,blank,programming" id="ai-row" style="display:none;">
             <label>{{ _('AI Grading') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
@@ -370,6 +370,30 @@
               </label>
               <div class="help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. Requires LITELLM_API_BASE to be set.') }}</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
+                <!-- Grading Table (shown when AI grading is on) -->
+                <div id="grading-table-panel" style="margin-bottom:0.75rem;">
+                  <label style="display:block;font-weight:600;font-size:12px;margin-bottom:0.35rem;">{{ _('Grading Table') }}</label>
+                  <div class="grading-table-section">
+                    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
+                      <button type="button" class="btn-mini btn-mini-primary" id="btn-ai-decompose"
+                              onclick="runAIDecompose()">{{ _('Auto-generate') }}</button>
+                      <span id="decompose-status" style="font-size:11px;color:var(--muted);display:none;"></span>
+                    </div>
+                    <table class="grading-table" id="grading-table">
+                      <thead>
+                        <tr><th>{{ _('Sub-question') }}</th><th>{{ _('Points') }}</th><th>{{ _('Strictness') }}</th><th></th></tr>
+                      </thead>
+                      <tbody id="grading-tbody">
+                        <tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">
+                          {{ _('Click Auto-generate to let the AI analyse the problem and suggest sub-questions, or add rows manually below.') }}
+                        </td></tr>
+                      </tbody>
+                    </table>
+                    <div style="margin-top:0.35rem;display:flex;gap:0.4rem;">
+                      <button type="button" class="btn-mini" onclick="addSubQuestion()">+ {{ _('Add sub-question') }}</button>
+                    </div>
+                  </div>
+                </div>
                 <div style="font-weight:600;font-size:12px;margin-bottom:0.35rem;">{{ _('Rubric (sent to the model; never shown to students)') }}</div>
                 <textarea id="f-rubric" rows="3" placeholder="{{ _('e.g. Correctly identifying the time complexity gives 60%%, proving stability gives 40%%...') }}" style="width:100%;font-family:inherit;"></textarea>
                 <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.4rem;white-space:nowrap;">
@@ -389,31 +413,6 @@
               <div class="stem-block">
                 <label class="block-label" id="stem-label">{{ _('Description') }} <span class="req">*</span></label>
                 <div data-rich-mount="stem" data-toolbar="full" data-placeholder="{{ _('Enter the problem statement; ~x^2~ or $$x^2$$ math supported…') }}"></div>
-              </div>
-
-              <!-- Grading Table (short-answer / fill-blank, shown when AI grading is on) -->
-              <div class="type-panel" data-for="short,blank" id="grading-table-panel" style="display:none;">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _('Grading Table') }}</label>
-                <div class="grading-table-section">
-                  <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
-                    <button type="button" class="btn-mini btn-mini-primary" id="btn-ai-decompose"
-                            onclick="runAIDecompose()">{{ _('Auto-generate') }}</button>
-                    <span id="decompose-status" style="font-size:11px;color:var(--muted);display:none;"></span>
-                  </div>
-                  <table class="grading-table" id="grading-table">
-                    <thead>
-                      <tr><th>{{ _('Sub-question') }}</th><th>{{ _('Points') }}</th><th>{{ _('Strictness') }}</th><th></th></tr>
-                    </thead>
-                    <tbody id="grading-tbody">
-                      <tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">
-                        {{ _('Click Auto-generate to let the AI analyse the problem and suggest sub-questions, or add rows manually below.') }}
-                      </td></tr>
-                    </tbody>
-                  </table>
-                  <div style="margin-top:0.35rem;display:flex;gap:0.4rem;">
-                    <button type="button" class="btn-mini" onclick="addSubQuestion()">+ {{ _('Add sub-question') }}</button>
-                  </div>
-                </div>
               </div>
 
               <!-- Single-choice / multiple-choice -->
@@ -1670,12 +1669,9 @@
       const partialOn = document.getElementById('f-partial').checked;
       const partialConf = document.getElementById('partial-conf');
       const aiOn = document.getElementById('f-ai').checked;
+      // The grading table lives inside ai-conf now (above the rubric), so it
+      // follows the same checkbox without extra per-element bookkeeping.
       document.getElementById('ai-conf').style.display = aiOn ? 'block' : 'none';
-      const gradingPanel = document.getElementById('grading-table-panel');
-      if (gradingPanel) {
-        const isGradingType = currentType === 'short' || currentType === 'blank';
-        gradingPanel.style.display = (aiOn && isGradingType) ? '' : 'none';
-      }
       if (aiOn) {
         updateGradingTableState();
         // Auto-populate grading table from blanks for fill-blank type

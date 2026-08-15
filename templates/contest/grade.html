@@ -324,13 +324,40 @@
                 var q = $('#f-queue').val();
                 var problem = $('#f-problem').val();
                 var user = $('#f-user').val().trim().toLowerCase();
-                return submissions.filter(function (s) {
+                var attempts = $('#f-attempts').val();
+                var rows = submissions.filter(function (s) {
                     if (problem && s.problem !== problem) return false;
                     if (user && (s.user || '').toLowerCase().indexOf(user) < 0) return false;
                     if (q === 'graded' && s.points == null) return false;
                     if (q === 'ungraded' && s.points != null) return false;
                     return true;
                 });
+                // Attempts aggregation: collapse multiple submissions per (user, problem)
+                // to either the highest-scoring or the latest one.  ``submissions`` is ordered
+                // newest-first, so the latest is the first row seen; for highest we compare points.
+                if (attempts === 'latest' || attempts === 'best') {
+                    var seen = {};
+                    var out = [];
+                    for (var i = 0; i < rows.length; i++) {
+                        var key = rows[i].user + '\u0000' + rows[i].problem;
+                        if (key in seen) continue;
+                        seen[key] = true;
+                        if (attempts === 'latest') {
+                            out.push(rows[i]);
+                        } else {
+                            // Highest score: scan ahead for the max-points row for this (user, problem).
+                            var best = rows[i];
+                            for (var j = i + 1; j < rows.length; j++) {
+                                var k2 = rows[j].user + '\u0000' + rows[j].problem;
+                                if (k2 !== key) continue;
+                                if ((rows[j].points || 0) > (best.points || 0)) best = rows[j];
+                            }
+                            out.push(best);
+                        }
+                    }
+                    rows = out;
+                }
+                return rows;
             }
 
             function refreshReleaseButton() {
@@ -420,15 +447,31 @@
                         '<div><div class="rs-label">{{ _('Memory') }}</div><div class="rs-value">' + esc(s.memory != null ? s.memory : '—') + '</div></div>' +
                     '</div></div></div>';
 
-                // Submitted source
-                html += '<div class="gd-section"><h4>{{ _('Source') }}</h4><div class="gd-source">' + esc(s.source || 'No source.') + '</div></div>';
+                // Submitted answer: file-upload types expose a download link; everything else
+                // shows the source. The upload URL points at the private-storage download view.
+                if (s.upload && s.upload.download_url) {
+                    var sizeText = s.upload.size != null ? (s.upload.size / 1024).toFixed(1) + ' KB' : '';
+                    html += '<div class="gd-section"><h4>{{ _('Uploaded file') }}</h4><div class="gd-section-card">' +
+                        '<a class="btn" href="' + esc(s.upload.download_url) + '" download>' +
+                            '<i class="fa fa-download"></i> ' + esc(s.upload.original_name || 'download') +
+                        '</a>' +
+                        (sizeText ? ' <span class="muted">' + esc(sizeText) + '</span>' : '') +
+                    '</div></div>';
+                } else {
+                    html += '<div class="gd-section"><h4>{{ _('Source') }}</h4><div class="gd-source">' + esc(s.source || 'No source.') + '</div></div>';
+                }
 
                 // Test cases (if any)
                 if (s.test_cases && s.test_cases.length) {
                     html += '<div class="gd-section"><h4>{{ _('Test cases') }}</h4><div class="gd-section-card">' +
                         '<table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Time') }}</th><th>{{ _('Memory') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
                         s.test_cases.map(function (tc) {
-                            return '<tr><td>' + tc.case + '</td><td>' + esc(tc.status) + '</td><td>' +
+                            // batch -1 marks supplementary AI rubric rows (teacher-only); show
+                            // their sub-question name instead of a bare case number.
+                            var label = (tc.batch === -1 && tc.feedback)
+                                ? '<span title="' + esc(tc.extended_feedback || '') + '">' + esc(tc.feedback) + '</span>'
+                                : tc.case;
+                            return '<tr><td>' + label + '</td><td>' + esc(tc.status) + '</td><td>' +
                                 (tc.time != null ? Number(tc.time).toFixed(2) + 's' : '—') + '</td><td>' +
                                 (tc.memory != null ? esc(tc.memory) : '—') + '</td><td>' +
                                 (tc.points != null ? tc.points : '—') + '</td></tr>';
@@ -475,7 +518,7 @@
             }
 
             // ── Filter events ───────────────────────────────────────────────
-            $('#f-queue, #f-problem').on('change', function () {
+            $('#f-queue, #f-problem, #f-attempts').on('change', function () {
                 selectedId = null;
                 renderList();
                 renderDetail();
@@ -612,6 +655,14 @@
                     <div class="wide">
                         <label>{{ _('User') }}</label>
                         <input id="f-user" placeholder="{{ _('Search user') }}">
+                    </div>
+                    <div>
+                        <label>{{ _('Attempts') }}</label>
+                        <select id="f-attempts" data-oj-select>
+                            <option value="all">{{ _('All attempts') }}</option>
+                            <option value="best">{{ _('Highest score') }}</option>
+                            <option value="latest">{{ _('Last submission') }}</option>
+                        </select>
                     </div>
                     <div class="wide muted" id="left-summary"></div>
                 </div>

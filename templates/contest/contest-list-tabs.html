@@ -21,11 +21,10 @@
 {% block tabs %}
     {{ make_tab('list', 'fa-list', url('contest_list'), _('List')) }}
     {{ make_tab('calendar', 'fa-calendar', url('contest_calendar', now.year, now.month), _('Calendar')) }}
-    {% if perms.judge.edit_all_contest %}
+    {% if perms.judge.create_private_contest %}
         {{ make_tab('create', 'fa-plus', url('contest_create'), _('Add Assignment')) }}
-    {% elif perms.judge.edit_own_contest %}
-        {# Users who may only edit their own contests cannot use the frontend
-           creator (edit_all_contest required); keep their Django admin entry. #}
+    {% elif perms.judge.edit_all_contest %}
+        {# Legacy fallback: full editors without the create permission still get an entry. #}
         {{ make_tab('admin', 'fa-edit', url('admin:judge_contest_changelist'), _('Admin')) }}
     {% endif %}
 {% endblock %}

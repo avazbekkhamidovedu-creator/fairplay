@@ -158,6 +158,10 @@ def group_test_cases(cases):
     max_execution_time = 0.0
     last = None
     for case in cases:
+        # Supplementary AI rubric rows (batch=-1, see question_types.code.AI_GRADE_BATCH) are
+        # teacher-only feedback; exclude them from the student-facing status aggregation.
+        if case.batch == -1:
+            continue
         if case.time:
             max_execution_time = max(max_execution_time, case.time)
         if case.batch != last and buf:
