@@ -50,7 +50,10 @@ class AIHintViewTestCase(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_unconfigured_backend_rejected(self):
-        response = self.client.post(self.url)
+        # Explicitly simulate "no LLM configured" rather than relying on the host's settings —
+        # a host with a configured-but-unreachable LLM would otherwise make a real call.
+        with mock.patch.object(ai_hints, 'is_configured', return_value=False):
+            response = self.client.post(self.url)
         self.assertEqual(response.status_code, 503)
 
     @override_settings(**AZURE_SETTINGS)

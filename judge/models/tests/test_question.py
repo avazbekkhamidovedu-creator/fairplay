@@ -1,4 +1,5 @@
 import json
+from unittest import mock
 
 from django.test import TestCase
 
@@ -208,7 +209,10 @@ class ShortAnswerGradingTestCase(CommonDataMixin, TestCase):
             language=Language.get_answer_language(),
         )
         SubmissionSource.objects.create(submission=sub, source=json.dumps({'text': 'SYN SYN-ACK ACK'}))
-        grade_internally(sub)
+        # Deterministically force the "AI unavailable" path: a configured-but-unreachable LLM
+        # (e.g. in the production container) would otherwise trigger a real model call.
+        with mock.patch('judge.llm.is_configured', return_value=False):
+            grade_internally(sub)
         sub.refresh_from_db()
         self.assertEqual(sub.result, 'IR')
         self.assertEqual(sub.points, 0)
