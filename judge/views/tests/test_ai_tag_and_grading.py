@@ -113,6 +113,14 @@ class AISuggestTestCase(TestCase):
             suggestions = self.view._suggest('Write an essay about history.')
         self.assertEqual(suggestions, [{'name': 'general', 'full': 'General', 'existing': False}])
 
+    def test_llm_configured_but_unreachable_raises(self):
+        """A configured-but-unreachable model must NOT silently fall back — the caller turns the
+        raised error into a 503 so the user knows the AI did not actually run."""
+        with mock.patch('judge.llm.is_configured', return_value=True), \
+                mock.patch('judge.llm.chat', side_effect=Exception('connection refused')):
+            with self.assertRaises(Exception):
+                self.view._suggest('some problem')
+
 
 class AISuggestEndpointTestCase(CommonDataMixin, TestCase):
     """The HTTP endpoint never leaks format/difficulty tags in its response."""
@@ -135,6 +143,30 @@ class AISuggestEndpointTestCase(CommonDataMixin, TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['suggestions'])
+
+    def test_endpoint_503_when_llm_unreachable(self):
+        """A configured model that fails to answer surfaces a 503 with a friendly message instead
+        of silently returning heuristic suggestions."""
+        with mock.patch('judge.llm.is_configured', return_value=True), \
+                mock.patch('judge.llm.chat', side_effect=Exception('connection refused')):
+            response = self.client.post(
+                reverse('problem_create_v2_ai_problem_type'),
+                data=json.dumps({'description': 'Solve a problem with Simple Math.'}),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertIn('error', response.json())
+
+    def test_difficulty_endpoint_503_when_llm_unreachable(self):
+        with mock.patch('judge.llm.is_configured', return_value=True), \
+                mock.patch('judge.llm.chat', side_effect=Exception('connection refused')):
+            response = self.client.post(
+                reverse('problem_create_v2_ai_difficulty'),
+                data=json.dumps({'description': 'A somewhat complex problem statement.'}),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertIn('error', response.json())
 
 
 class SharedAIGradingHelpersTestCase(TestCase):

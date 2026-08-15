@@ -325,7 +325,12 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
             log.success = False
             log.error_message = str(e)[:2000]
             log.save()
-            return JsonResponse({'error': f'AI hint unavailable: {e}'}, status=503)
+            # Never leak backend internals (exception types, endpoints) to the student — log the
+            # detail server-side and return a stable, friendly message instead.
+            import logging
+            logging.getLogger(__name__).warning('AI hint failed for submission %d: %s', submission.id, e)
+            return JsonResponse(
+                {'error': 'Could not reach the AI service. Please try again later.'}, status=503)
 
         log.save()
         return JsonResponse({'hint': result.hint_text, 'remaining': ai_hints.get_remaining(request.profile.id)})

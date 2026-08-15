@@ -87,3 +87,15 @@ class AIHintViewTestCase(TestCase):
         self.assertFalse(log.success)
         self.assertIn('API down', log.error_message)
         self.assertEqual(ai_hints.get_remaining(self.user.profile.id), 5)
+
+    @override_settings(**AZURE_SETTINGS)
+    def test_failed_hint_does_not_leak_internal_error(self):
+        """The student-facing message must be stable and friendly — never expose the internal
+        exception text (endpoint names, exception types) that could aid probing."""
+        with mock.patch.object(ai_hints, 'get_hint', side_effect=RuntimeError('APITimeoutError at https://10.0.0.1')):
+            response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 503)
+        body = response.json()['error']
+        self.assertNotIn('APITimeoutError', body)
+        self.assertNotIn('10.0.0.1', body)
+        self.assertIn('Could not reach the AI service', body)

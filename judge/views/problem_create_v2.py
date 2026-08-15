@@ -1517,28 +1517,34 @@ class ProblemCreateV2AIDifficultyView(LoginRequiredMixin, View):
         if not description:
             return JsonResponse({'error': _('Please enter problem content first.')}, status=400)
 
-        level = self._classify(description)
+        try:
+            level = self._classify(description)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('AI difficulty classification failed')
+            return JsonResponse({'error': _('Could not reach the AI service. '
+                                            'Please check your connection and try again.')}, status=503)
         return JsonResponse({'level': level, 'label': {'easy': 'Easy', 'medium': 'Medium', 'hard': 'Hard'}[level]})
 
     def _classify(self, description):
         from judge import llm
 
+        # Only call the LLM when it is configured; a configured-but-unreachable model is an error
+        # (surfaced to the user as 503) rather than a silent fallback that pretends the AI worked.
         if llm.is_configured():
-            try:
-                messages = [
-                    {'role': 'system', 'content': (
-                        'You classify educational/problem difficulty. Reply with exactly one word: '
-                        'easy, medium, or hard. No other text.'
-                    )},
-                    {'role': 'user', 'content': description[:4000]},
-                ]
-                text = llm.chat(messages, max_tokens=16).text.strip().lower()
-                for level in ('easy', 'medium', 'hard'):
-                    if level in text:
-                        return level
-            except Exception:
-                pass
+            messages = [
+                {'role': 'system', 'content': (
+                    'You classify educational/problem difficulty. Reply with exactly one word: '
+                    'easy, medium, or hard. No other text.'
+                )},
+                {'role': 'user', 'content': description[:4000]},
+            ]
+            text = llm.chat(messages, max_tokens=16).text.strip().lower()
+            for level in ('easy', 'medium', 'hard'):
+                if level in text:
+                    return level
 
+        # Heuristic fallback (no LLM configured, or the model returned no usable label).
         compact = description.replace(' ', '')
         if len(compact) < 80:
             return 'easy'
@@ -1666,7 +1672,13 @@ class ProblemCreateV2AIProblemTypeView(LoginRequiredMixin, View):
         if not description:
             return JsonResponse({'error': _('Please enter problem content first.')}, status=400)
 
-        suggestions = self._suggest(description)
+        try:
+            suggestions = self._suggest(description)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('AI tag suggestion failed')
+            return JsonResponse({'error': _('Could not reach the AI service. '
+                                            'Please check your connection and try again.')}, status=503)
         return JsonResponse({'suggestions': suggestions})
 
     def _suggest(self, description):
@@ -1677,54 +1689,54 @@ class ProblemCreateV2AIProblemTypeView(LoginRequiredMixin, View):
         # here AND re-filtered after parsing, so a format tag can never be suggested.
         candidates = _tag_suggestion_candidates()
 
+        # Only call the LLM when configured; a configured-but-unreachable model raises (surfaced
+        # as 503) instead of silently falling back and pretending the AI produced the tags.
         if llm.is_configured():
-            try:
-                messages = [
-                    {'role': 'system', 'content': (
-                        'You classify competitive-programming / educational problems by the '
-                        'algorithm or solution technique they exercise (e.g. dynamic programming, '
-                        'depth-first search, polynomial math).\n'
-                        'Rules:\n'
-                        '- Reply with 1-3 labels, comma-separated, chosen ONLY from the provided '
-                        'candidate list.\n'
-                        '- NEVER invent labels that are not in the candidate list.\n'
-                        '- NEVER use question-format tags (programming, fill-in-the-blank, '
-                        'multiple-choice, short answer, true/false) or difficulty tags '
-                        '(easy, medium, hard) or anything unrelated to the solution method.\n'
-                        '- If nothing fits well, reply with a single most-relevant candidate '
-                        'instead of inventing new ones.\n'
-                        'Candidate labels: ' + ', '.join(candidates)
-                    )},
-                    {'role': 'user', 'content': description[:4000]},
-                ]
-                text = llm.chat(messages, max_tokens=64).text.strip()
-                picked = []
-                seen = set()
-                for part in text.replace('\n', ',').split(','):
-                    label = _normalize_tag_label(part)
-                    if label is None:
-                        continue
-                    key = label.casefold()
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    # Prefer the DB knowledge tag row when the label already exists; otherwise
-                    # the frontend creates the ProblemType row from the vocabulary label on save.
-                    existing = next((t for t in _knowledge_type_labels()
-                                     if t.casefold() == label.casefold()), None)
-                    picked.append({
-                        'name': _problem_type_code(existing or label),
-                        'full': existing or label,
-                        'existing': existing is not None,
-                    })
-                    if len(picked) >= 3:
-                        break
-                if picked:
-                    return picked
-            except Exception:
-                pass
+            messages = [
+                {'role': 'system', 'content': (
+                    'You classify competitive-programming / educational problems by the '
+                    'algorithm or solution technique they exercise (e.g. dynamic programming, '
+                    'depth-first search, polynomial math).\n'
+                    'Rules:\n'
+                    '- Reply with 1-3 labels, comma-separated, chosen ONLY from the provided '
+                    'candidate list.\n'
+                    '- NEVER invent labels that are not in the candidate list.\n'
+                    '- NEVER use question-format tags (programming, fill-in-the-blank, '
+                    'multiple-choice, short answer, true/false) or difficulty tags '
+                    '(easy, medium, hard) or anything unrelated to the solution method.\n'
+                    '- If nothing fits well, reply with a single most-relevant candidate '
+                    'instead of inventing new ones.\n'
+                    'Candidate labels: ' + ', '.join(candidates)
+                )},
+                {'role': 'user', 'content': description[:4000]},
+            ]
+            text = llm.chat(messages, max_tokens=64).text.strip()
+            picked = []
+            seen = set()
+            for part in text.replace('\n', ',').split(','):
+                label = _normalize_tag_label(part)
+                if label is None:
+                    continue
+                key = label.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Prefer the DB knowledge tag row when the label already exists; otherwise
+                # the frontend creates the ProblemType row from the vocabulary label on save.
+                existing = next((t for t in _knowledge_type_labels()
+                                 if t.casefold() == label.casefold()), None)
+                picked.append({
+                    'name': _problem_type_code(existing or label),
+                    'full': existing or label,
+                    'existing': existing is not None,
+                })
+                if len(picked) >= 3:
+                    break
+            if picked:
+                return picked
 
-        # No LLM / failed call: fall back to substring matching against knowledge tags only.
+        # No LLM configured (or the model returned no usable label): fall back to substring
+        # matching against knowledge tags only.
         compact = description.lower()
         picked = []
         for label in _knowledge_type_labels():
