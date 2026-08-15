@@ -54,16 +54,6 @@ $(function () {
 <div class="course-redesign oj-ui">
     {% include "messages.html" %}
 
-    <div class="inbox-subtabs">
-        {% if can_review_any %}
-            <a class="inbox-subtab" href="{{ url('organization_join_requests') }}">{{ _('Join requests') }}</a>
-        {% endif %}
-        <a class="inbox-subtab active" href="{{ url('organization_instructor_requests') }}">{{ _('Instructor verification') }}</a>
-        {% if can_see_notifications %}
-            <a class="inbox-subtab" href="{{ url('organization_notifications') }}">{{ _('Messages') }}</a>
-        {% endif %}
-    </div>
-
     <p class="empty" style="text-align:left;margin:0 0 0.85rem">{{ _('Review applications to instruct a specific course class. Approve makes them instructor of that class and grants staff access; Reject or Revoke removes that class instructor role (and staff if they have no other instructor classes); Reopen returns a request to Pending.') }}</p>
 
     <div class="join-toolbar">

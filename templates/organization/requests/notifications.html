@@ -43,16 +43,6 @@ $(function () {
 <div class="course-redesign oj-ui">
     {% include "messages.html" %}
 
-    <div class="inbox-subtabs">
-        {% if can_review_any %}
-            <a class="inbox-subtab" href="{{ url('organization_join_requests') }}">{{ _('Join requests') }}</a>
-        {% endif %}
-        {% if can_review_instructors %}
-            <a class="inbox-subtab" href="{{ url('organization_instructor_requests') }}">{{ _('Instructor verification') }}</a>
-        {% endif %}
-        <a class="inbox-subtab active" href="{{ url('organization_notifications') }}">{{ _('Messages') }}</a>
-    </div>
-
     <div class="join-toolbar">
         <form class="join-requests-filters" method="get" action="">
             <div>
