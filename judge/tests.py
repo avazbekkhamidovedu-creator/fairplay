@@ -942,7 +942,7 @@ class IndexMatchingTests(StdlibTestCase):
             {'name': 'Part 2: Explain', 'max_points': 2.0, 'strictness': 'lenient'},
         ]
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_index_match_uses_correct_max_points(self, mock_llm, mock_call):
         """Even if LLM rephrases names, index matching picks correct max_points."""
@@ -981,7 +981,7 @@ class IndexMatchingTests(StdlibTestCase):
         # Names preserved from LLM output (for feedback display)
         self.assertEqual(calibrated[0]['name'], 'Part 1: Solving the equation')
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_extra_sub_scores_get_default_max(self, mock_llm, mock_call):
         """If LLM returns more items than sub_questions, extras get max_pts=1.0."""
@@ -1029,7 +1029,7 @@ class ShortAnswerGradingIntegrationTests(TestCase):
     def setUp(self):
         self.grader = ShortAnswerQuestionType()
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_no_llm_configured_returns_none(self, mock_llm, _mock_call):
         mock_llm.is_configured.return_value = False
@@ -1037,7 +1037,7 @@ class ShortAnswerGradingIntegrationTests(TestCase):
         result = self.grader._grade_ai(problem, None, 'anything')
         self.assertIsNone(result)
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_llm_returns_invalid_json_returns_none(self, mock_llm, mock_call):
         mock_llm.is_configured.return_value = True
@@ -1057,7 +1057,7 @@ class ShortAnswerGradingIntegrationTests(TestCase):
                 result = self.grader._grade_ai(problem, config, 'test')
         self.assertIsNone(result)
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_empty_sub_scores_returns_none(self, mock_llm, mock_call):
         mock_llm.is_configured.return_value = True
@@ -1077,7 +1077,7 @@ class ShortAnswerGradingIntegrationTests(TestCase):
                 result = self.grader._grade_ai(problem, config, 'test')
         self.assertIsNone(result)
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_full_scoring_with_calibration(self, mock_llm, mock_call):
         """Verify that a simple one-sub-question answer passes through calibration."""
@@ -1121,7 +1121,7 @@ class FillBlankGradingIntegrationTests(TestCase):
     def setUp(self):
         self.grader = FillBlankQuestionType()
 
-    @mock.patch('judge.question_types.fill_blank.FillBlankQuestionType._call_llm')
+    @mock.patch('judge.question_types.fill_blank.call_llm')
     @mock.patch('judge.llm')
     def test_index_matching_picks_correct_max_points(self, mock_llm, mock_call):
         mock_llm.is_configured.return_value = True
@@ -1159,7 +1159,7 @@ class FillBlankGradingIntegrationTests(TestCase):
         self.assertEqual(result.cases[0]['total'], 1.0)
         self.assertEqual(result.cases[1]['total'], 1.0)
 
-    @mock.patch('judge.question_types.fill_blank.FillBlankQuestionType._call_llm')
+    @mock.patch('judge.question_types.fill_blank.call_llm')
     @mock.patch('judge.llm')
     def test_grading_table_mismatch_logs_warning(self, mock_llm, mock_call):
         """When grading_table length ≠ blanks length, should auto-generate + warn."""
@@ -1198,7 +1198,7 @@ class FillBlankGradingIntegrationTests(TestCase):
         self.assertTrue(any('grading_table has 1 entries' in msg for msg in log_cm.output),
                         f'Expected warning about grading_table mismatch, got: {log_cm.output}')
 
-    @mock.patch('judge.question_types.fill_blank.FillBlankQuestionType._call_llm')
+    @mock.patch('judge.question_types.fill_blank.call_llm')
     @mock.patch('judge.llm')
     def test_no_blanks_returns_none(self, mock_llm, _mock_call):
         mock_llm.is_configured.return_value = True
@@ -1208,7 +1208,7 @@ class FillBlankGradingIntegrationTests(TestCase):
         result = self.grader._grade_ai(problem, config, [], [])
         self.assertIsNone(result)
 
-    @mock.patch('judge.question_types.fill_blank.FillBlankQuestionType._call_llm')
+    @mock.patch('judge.question_types.fill_blank.call_llm')
     @mock.patch('judge.llm')
     def test_llm_call_failure_returns_none(self, mock_llm, mock_call):
         mock_llm.is_configured.return_value = True
