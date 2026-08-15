@@ -203,6 +203,12 @@
     /* AI difficulty assessment. */
     #diff-ai-box { margin-top: 0.5rem; }
     .diff-ai-result { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 12px; background: #ede7f6; color: #5e35b1; border: 1px solid #d1c4e9; border-radius: 14px; padding: 0.15rem 0.6rem; margin-left: 0.5rem; }
+
+    /* AI Grading: stack the label above the field. The section holds a grading table
+       plus a rubric and a checkbox, which reads better full-width than beside a 160px label. */
+    #ai-row { flex-direction: column; align-items: stretch; }
+    #ai-row > label { width: auto; padding-top: 0; margin-bottom: 0.35rem; }
+    #ai-row > .field { width: 100%; }
     {% if import_editor_mode %}
     #navigation,
     #page-container > br,
