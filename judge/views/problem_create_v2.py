@@ -354,6 +354,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 data['type'] = 'multiple' if (config and config.multiple_select) else 'single'
                 data['multiple'] = bool(config and config.multiple_select)
                 data['options'] = [{'text': o['text'], 'correct': o['is_correct']} for o in options]
+                if config and config.multiple_select:
+                    data['mcqScoring'] = config.scoring_mode or ProblemMCQConfig.SCORE_PROPORTIONAL
+                    data['mcqUnderselectPoints'] = config.underselect_points
         elif st == ProblemSubmissionType.FILL_BLANK:
             data['type'] = 'blank'
             config = getattr(problem, 'fill_blank_config', None)
@@ -364,7 +367,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['gradingTable'] = config.grading_table if config else None
             # ProblemBlank stores accepted answers one-per-line and the create page now edits them
             # the same way (one accepted answer per line in a textarea), so pass them through as-is.
-            data['blanks'] = list(problem.blanks.order_by('order').values_list('answers', flat=True))
+            data['blanks'] = [
+                {'answers': blank.answers, 'points': blank.points}
+                for blank in problem.blanks.order_by('order')
+            ]
         elif st == ProblemSubmissionType.SHORT_ANSWER:
             data['type'] = 'short'
             config = getattr(problem, 'short_answer_config', None)
@@ -516,6 +522,34 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _positive_or_none(self, value):
+        """Parse a score input; empty / missing / non-positive means “use the even split”."""
+        if value is None or value == '':
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    def _iter_blank_payload(self, payload):
+        """Yield ``(answers_text, points)`` from create-v2 ``blanks`` (strings or objects)."""
+        for item in payload.get('blanks') or []:
+            if isinstance(item, dict):
+                answers = item.get('answers') or item.get('text') or ''
+                points = self._num(item.get('points'), 1)
+            else:
+                answers = item
+                points = 1
+            if isinstance(answers, (list, tuple)):
+                answers = '\n'.join(str(part) for part in answers if part is not None and str(part).strip())
+            elif not isinstance(answers, str):
+                answers = str(answers) if answers is not None else ''
+            answers = answers.strip()
+            if not answers:
+                continue
+            yield answers, points if points > 0 else 1
 
     def _resolve_group(self, payload):
         gid = payload.get('group_id')
@@ -1211,7 +1245,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
-            problem.partial = bool(payload.get('partial')) if multiple else False
+            problem.partial = True if multiple else False
             problem.group = self._resolve_group(payload)
             apply_simple_problem_defaults(problem)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
@@ -1223,8 +1257,18 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
 
+            scoring_mode = ProblemMCQConfig.SCORE_PROPORTIONAL
+            underselect_points = None
+            if multiple:
+                raw_mode = payload.get('mcqScoring') or scoring_mode
+                if raw_mode in (ProblemMCQConfig.SCORE_PROPORTIONAL, ProblemMCQConfig.SCORE_UNDERSELECT):
+                    scoring_mode = raw_mode
+                underselect_points = self._positive_or_none(payload.get('mcqUnderselectPoints'))
+                if scoring_mode != ProblemMCQConfig.SCORE_UNDERSELECT:
+                    underselect_points = None
             ProblemMCQConfig.objects.create(
-                problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')))
+                problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')),
+                scoring_mode=scoring_mode, underselect_points=underselect_points)
             for index, option in enumerate(options):
                 ProblemMCQOption.objects.create(
                     problem=problem, order=index,
@@ -1274,7 +1318,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         user = request.user
         if not user.has_perm('judge.create_private_problem'):
             raise PermissionError(_('You do not have permission to create this problem type.'))
-        blanks = [b for b in (payload.get('blanks') or []) if (b or '').strip()]
+        blanks = list(self._iter_blank_payload(payload))
         if not blanks:
             raise ValueError(_('Please provide at least one blank answer.'))
 
@@ -1309,10 +1353,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 grading_table=payload.get('gradingTable') or None,
             )
             # The create page enters accepted answers one-per-line per blank; ProblemBlank stores
-            # them the same way (the grader splits on newlines).
-            for index, answers in enumerate(blanks):
+            # them the same way (the grader splits on newlines). Per-blank points apply when
+            # problem.partial is on.
+            for index, (answers, points) in enumerate(blanks):
                 normalized = '\n'.join(line.strip() for line in answers.splitlines() if line.strip())
-                ProblemBlank.objects.create(problem=problem, order=index, answers=normalized)
+                ProblemBlank.objects.create(
+                    problem=problem, order=index, answers=normalized, points=points)
         return problem
 
     # ------------------------------------------------------------------ short answer

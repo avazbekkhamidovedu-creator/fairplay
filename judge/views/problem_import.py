@@ -947,10 +947,18 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
             blanks = payload.get('blanks') or []
             if not isinstance(blanks, list):
                 raise ValueError(_('Blank answers must be a list.'))
-            item.blanks = _serialize_fill_blanks([
-                {'label': '', 'answers': _split_lines(str(answer or '').replace('|', '\n'))}
-                for answer in blanks if str(answer or '').strip()
-            ])
+            blank_blocks = []
+            for answer in blanks:
+                if isinstance(answer, dict):
+                    text = answer.get('answers') or answer.get('text') or ''
+                else:
+                    text = answer
+                if isinstance(text, (list, tuple)):
+                    text = '\n'.join(str(part) for part in text if part is not None and str(part).strip())
+                text = str(text or '').strip()
+                if text:
+                    blank_blocks.append({'label': '', 'answers': _split_lines(text.replace('|', '\n'))})
+            item.blanks = _serialize_fill_blanks(blank_blocks)
             item.rubric = (payload.get('rubric') or '').strip()
             item.grading_table = json.dumps(payload.get('gradingTable')) if payload.get('gradingTable') else ''
         elif editor_type == 'short':
