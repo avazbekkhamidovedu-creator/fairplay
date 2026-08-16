@@ -42,9 +42,9 @@ from reversion import revisions
 
 from judge.models import (Class, Language, LanguageLimit, License, Organization, Problem, ProblemBlank,
                           ProblemClarification, ProblemFileConfig, ProblemFillBlankConfig, ProblemGroup,
-                          ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType,
-                          ProblemTemplate, ProblemTranslation, ProblemType, Profile, Solution,
-                          SubmissionSourceAccess)
+                          ProblemHarness, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig,
+                          ProblemSubmissionType, ProblemTemplate, ProblemTranslation, ProblemType, Profile,
+                          Solution, SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
@@ -145,6 +145,17 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'create_problem_group_url': reverse('problem_create_v2_problem_group'),
             'create_organization_url': reverse('problem_create_v2_organization'),
             'can_create_organization': can_edit_organizations,
+            'harness_languages_json': (
+                json.dumps([
+                    {'id': lang.id, 'key': lang.key, 'name': lang.name, 'ace': lang.ace}
+                    for lang in Language.objects.filter(
+                        common_name__in=['Java', 'Python'],
+                    ).order_by('common_name', 'key')
+                ])
+                .replace('<', '\\u003c')
+                .replace('>', '\\u003e')
+                .replace('&', '\\u0026')
+            ),
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'ai_decompose_url': reverse('problem_create_v2_ai_decompose'),
             'problem_list_url': reverse('problem_list'),
@@ -307,6 +318,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ProblemFileConfig.objects.filter(problem=problem).delete()
         if clear_cases:
             problem.cases.all().delete()
+        # Called after submission_type is updated; drop harness when leaving programming.
+        if problem.submission_type != ProblemSubmissionType.CODE:
+            ProblemHarness.objects.filter(problem=problem).delete()
 
     def _build_edit_data(self, problem):
         """Serialize an existing problem into the shape the add-page JS expects (see collectData)."""
@@ -347,8 +361,21 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['testcases'] = self._read_testcases(problem)
             try:
                 data['checker'] = problem.data_files.checker or ''
+                data['zip_files'] = self._zip_member_names(problem.data_files.zipfile)
             except Exception:
                 data['checker'] = ''
+                data['zip_files'] = []
+            harness = ProblemHarness.objects.filter(problem=problem).select_related('language').first()
+            if harness is not None:
+                data['harness'] = {
+                    'language_id': harness.language_id,
+                    'language': harness.language.key,
+                    'harness_code': harness.harness_code or '',
+                    'skip_precompile': harness.skip_precompile,
+                    'run_student_main': harness.run_student_main,
+                }
+            else:
+                data['harness'] = None
         elif st == ProblemSubmissionType.MCQ:
             config = getattr(problem, 'mcq_config', None)
             options = list(problem.mcq_options.order_by('order').values('text', 'is_correct'))
@@ -891,86 +918,19 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return path.rsplit('/', 1)[-1] if path else ''
 
     @staticmethod
-    def _zip_dirname(path):
-        path = (path or '').replace('\\', '/')
-        if '/' not in path:
-            return ''
-        return path.rsplit('/', 1)[0]
-
-    @staticmethod
-    def _zip_natural_key(name):
-        return re.sub(r'(\d+)', lambda m: m.group(1).zfill(10), (name or '').lower())
-
-    @classmethod
-    def _pair_zip_entries(cls, paths):
-        """Pair zip member paths into input/output cases (same rules as create_v2.js)."""
-        usable = []
-        for path in paths:
-            if not path or path.endswith('/'):
-                continue
-            base = cls._zip_basename(path)
-            if base.startswith('.') or '__MACOSX' in path.replace('\\', '/'):
-                continue
-            usable.append(path.replace('\\', '/'))
-
-        by_dir = {}
-        for path in usable:
-            by_dir.setdefault(cls._zip_dirname(path), []).append(path)
-
-        pairs = []
-        used = set()
-
-        for directory in sorted(by_dir):
-            files = by_dir[directory]
-            lower_map = {cls._zip_basename(p).lower(): p for p in files}
-            for in_path in files:
-                if in_path in used:
-                    continue
-                base = cls._zip_basename(in_path)
-                lower = base.lower()
-                out_base = None
-                m = re.match(r'^(.+)\.in\.txt$', lower)
-                if m:
-                    stem = m.group(1)
-                    for candidate in (stem + '.out.txt', stem + '.ans.txt'):
-                        if candidate in lower_map and lower_map[candidate] not in used:
-                            out_base = candidate
-                            break
-                else:
-                    m = re.match(r'^(.+)\.in$', lower)
-                    if m:
-                        stem = m.group(1)
-                        for candidate in (stem + '.out', stem + '.ans', stem + '.out.txt', stem + '.ans.txt'):
-                            if candidate in lower_map and lower_map[candidate] not in used:
-                                out_base = candidate
-                                break
-                    else:
-                        m = re.match(r'^input(\d+)\.txt$', lower)
-                        if m:
-                            for candidate in ('output' + m.group(1) + '.txt', 'output' + m.group(1) + '.out'):
-                                if candidate in lower_map and lower_map[candidate] not in used:
-                                    out_base = candidate
-                                    break
-                        else:
-                            m = re.match(r'^in(\d+)\.txt$', lower)
-                            if m:
-                                for candidate in ('out' + m.group(1) + '.txt', 'ans' + m.group(1) + '.txt'):
-                                    if candidate in lower_map and lower_map[candidate] not in used:
-                                        out_base = candidate
-                                        break
-                if not out_base:
-                    continue
-                out_path = lower_map[out_base]
-                used.add(in_path)
-                used.add(out_path)
-                pairs.append({
-                    'input': in_path,
-                    'output': out_path,
-                    'sort_key': cls._zip_natural_key(directory + '/' + base),
-                })
-
-        pairs.sort(key=lambda item: item['sort_key'])
-        return pairs
+    def _zip_member_names(zipfile_field):
+        """Non-directory members of an uploaded ProblemData zip, as classic valid_files."""
+        if not zipfile_field:
+            return []
+        try:
+            with ZipFile(zipfile_field.path, 'r') as zf:
+                return [
+                    name.replace('\\', '/')
+                    for name in zf.namelist()
+                    if name and not name.endswith('/')
+                ]
+        except (BadZipfile, OSError, ValueError):
+            return []
 
     def _create_code(self, request, payload, name, problem=None, zip_upload=None):
         user = request.user
@@ -1021,8 +981,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     meta_cases=cleaned_cases if cleaned_cases is not None else [],
                     checker=checker,
                 )
+            elif sync_cases and payload.get('zip_mode'):
+                self._save_testcase_matches(problem, cleaned_cases or [], checker=checker)
             elif sync_cases and (cleaned_cases or payload.get('edit_code')):
                 self._save_testcases(problem, cleaned_cases or [], checker=checker)
+            if 'harness' in payload:
+                self._save_harness(problem, payload)
         return problem
 
     def _attach_languages(self, problem, payload):
@@ -1066,12 +1030,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         data.checker = checker_value
 
     def _save_testcases_from_zip(self, problem, uploaded_zip, meta_cases=None, checker=''):
-        """Persist cases from an uploaded archive the same way classic test_data stores zipfile.
+        """Store the archive as classic test_data does; cases reference zip members the user picked.
 
-        ``meta_cases`` supplies points/pretest (and optional preferred names) by index; file bytes
-        always come from the zip so large packages never need to ride in the JSON body.
+        The zip is not re-paired by filename conventions. ``meta_cases`` supplies
+        ``input_file`` / ``output_file`` / points / pretest for each Normal case.
         """
-        from judge.models import ProblemData, ProblemTestCase
+        from judge.models import ProblemData
         from judge.utils.problem_data import ProblemDataCompiler
 
         if not uploaded_zip:
@@ -1080,10 +1044,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if not zip_name.lower().endswith('.zip'):
             raise ValueError(_("Zip files must end in '.zip'"))
 
-        # Pair before mutating storage so a bad archive fails without clearing existing data.
         try:
             with ZipFile(uploaded_zip, 'r') as zf:
-                pairs = self._pair_zip_entries(zf.namelist())
+                namelist = [name.replace('\\', '/') for name in zf.namelist() if name and not name.endswith('/')]
         except BadZipfile:
             raise
         except Exception:
@@ -1092,35 +1055,89 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             if hasattr(uploaded_zip, 'seek'):
                 uploaded_zip.seek(0)
 
-        if not pairs:
-            raise ValueError(_('No paired test files found in the zip '
-                               '(supported: N.in/N.out, N.in.txt/N.out.txt, inputN.txt/outputN.txt).'))
-
+        valid = set(namelist)
         meta_cases = meta_cases or []
+        self._write_zip_matched_cases(problem, meta_cases, valid)
         self._clear_problem_data_files(problem)
-        problem.cases.filter(type='C').delete()
-
-        valid_files = []
-        for order, pair in enumerate(pairs, start=1):
-            meta = meta_cases[order - 1] if order - 1 < len(meta_cases) else {}
-            in_name = pair['input']
-            out_name = pair['output']
-            valid_files += [in_name, out_name]
-            ProblemTestCase.objects.create(
-                dataset=problem, order=order, type='C',
-                input_file=in_name, output_file=out_name,
-                points=int(self._num(meta.get('points'), 0)),
-                is_pretest=bool(meta.get('pretest')),
-                checker=(meta.get('checker') or '')[:10],
-            )
 
         data, _created = ProblemData.objects.get_or_create(problem=problem)
         self._apply_checker(data, checker)
-        # Same FileField path as classic ProblemDataForm zip upload.
         data.zipfile.save(zip_name, uploaded_zip, save=False)
         data.save()
         problem.__dict__.pop('data_files', None)
-        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
+        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), namelist)
+
+    def _save_testcase_matches(self, problem, testcases, checker=''):
+        """Keep the existing zip and update which members each case uses (classic test_data)."""
+        from judge.models import ProblemData
+        from judge.utils.problem_data import ProblemDataCompiler
+
+        try:
+            data = problem.data_files
+        except ProblemData.DoesNotExist:
+            data = None
+        if data is None or not data.zipfile:
+            raise ValueError(_('Upload a zip of test files before matching input and output.'))
+
+        namelist = self._zip_member_names(data.zipfile)
+        self._write_zip_matched_cases(problem, testcases, set(namelist))
+        self._apply_checker(data, checker)
+        data.save()
+        problem.__dict__.pop('data_files', None)
+        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), namelist)
+
+    def _write_zip_matched_cases(self, problem, testcases, valid_names):
+        from judge.models import ProblemTestCase
+
+        prepared = []
+        for tc in testcases or []:
+            in_name = (tc.get('input_file') or '').replace('\\', '/').strip()
+            out_name = (tc.get('output_file') or '').replace('\\', '/').strip()
+            if in_name and in_name not in valid_names:
+                raise ValueError(_('Input file "%s" is not in the zip.') % in_name)
+            if out_name and out_name not in valid_names:
+                raise ValueError(_('Output file "%s" is not in the zip.') % out_name)
+            prepared.append((in_name, out_name, tc))
+
+        problem.cases.filter(type='C').delete()
+        for order, (in_name, out_name, tc) in enumerate(prepared, start=1):
+            ProblemTestCase.objects.create(
+                dataset=problem, order=order, type='C',
+                input_file=in_name, output_file=out_name,
+                points=int(self._num(tc.get('points'), 0)),
+                is_pretest=bool(tc.get('pretest')),
+                checker=(tc.get('checker') or '')[:10],
+            )
+
+    def _save_harness(self, problem, payload):
+        """Persist at most one harness, matching classic test_data formset max_num=1."""
+        harness = payload.get('harness')
+        ProblemHarness.objects.filter(problem=problem).delete()
+        if not harness or harness.get('delete'):
+            return
+        code = (harness.get('harness_code') or '').strip()
+        if not code:
+            return
+        lang = None
+        language_id = harness.get('language_id')
+        language_key = (harness.get('language') or '').strip()
+        qs = Language.objects.filter(common_name__in=['Java', 'Python'])
+        if language_id not in (None, ''):
+            try:
+                lang = qs.filter(pk=int(language_id)).first()
+            except (TypeError, ValueError):
+                lang = None
+        if lang is None and language_key:
+            lang = qs.filter(key=language_key).first()
+        if lang is None:
+            raise ValueError(_('Please select a harness language.'))
+        ProblemHarness.objects.create(
+            problem=problem,
+            language=lang,
+            harness_code=code,
+            skip_precompile=bool(harness.get('skip_precompile')),
+            run_student_main=bool(harness.get('run_student_main')),
+        )
 
     def _save_testcases(self, problem, testcases, checker=''):
         """Persist inline cases as loose files + a data.zip so the classic test_data page stays in sync.

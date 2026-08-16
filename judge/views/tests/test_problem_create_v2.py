@@ -11,9 +11,9 @@ from django.urls import reverse
 from reversion.models import Version
 
 from judge.models import (Language, LanguageLimit, License, Problem, ProblemClarification, ProblemData,
-                          ProblemFileConfig, ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig,
-                          ProblemTemplate, ProblemTestCase, ProblemTranslation, ProblemType, Solution,
-                          problem_data_storage)
+                          ProblemFileConfig, ProblemFillBlankConfig, ProblemHarness, ProblemMCQConfig,
+                          ProblemShortAnswerConfig, ProblemTemplate, ProblemTestCase, ProblemTranslation,
+                          ProblemType, Solution, problem_data_storage)
 from judge.models.tests.util import CommonDataMixin, create_organization, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
@@ -1154,13 +1154,39 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             self.assertIn('sample.in', zf.namelist())
             self.assertEqual(zf.read('sample.in').decode('utf-8'), '1\n')
 
-    def test_pair_zip_entries_dat_in_out(self):
-        pairs = ProblemCreateV2View._pair_zip_entries([
-            'dat10.in', 'dat10.out', 'dat2.in', 'dat2.out', 'dat1.in', 'dat1.out',
-            '__MACOSX/._dat1.in', '.DS_Store',
-        ])
-        self.assertEqual([p['input'] for p in pairs], ['dat1.in', 'dat2.in', 'dat10.in'])
-        self.assertEqual(pairs[0]['output'], 'dat1.out')
+    def test_zip_keeps_user_file_matches(self):
+        """Classic test_data: zip is stored as-is; cases use the files the user picked."""
+        self.client.force_login(self.users['staff_adder'])
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr('odd.txt', '1\n')
+            zf.writestr('even.txt', '2\n')
+            zf.writestr('notes.md', 'ignore\n')
+        buf.seek(0)
+        payload = {
+            'type': 'programming',
+            'name': 'Manual match',
+            'description': 'user picks files',
+            'points': 10,
+            'group_id': self.group.id,
+            'testcases': [
+                {'input_file': 'odd.txt', 'output_file': 'even.txt', 'points': 10, 'pretest': True},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data={
+                'payload': json.dumps(payload),
+                'testcase_zip': SimpleUploadedFile('cases.zip', buf.read(), content_type='application/zip'),
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        case = problem.cases.get(type='C')
+        self.assertEqual(case.input_file, 'odd.txt')
+        self.assertEqual(case.output_file, 'even.txt')
+        with zipfile.ZipFile(problem.data_files.zipfile.path) as zf:
+            self.assertEqual(set(zf.namelist()), {'odd.txt', 'even.txt', 'notes.md'})
 
     def test_create_code_with_multipart_zip(self):
         """Large ZIP path: metadata in JSON field, archive as multipart file (classic limits)."""
@@ -1209,7 +1235,8 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             self.assertEqual(zf.read('dat1.in').decode('utf-8'), '1 2\n')
             self.assertEqual(zf.read('dat2.out').decode('utf-8'), '9\n')
 
-    def test_multipart_zip_rejects_unpaired(self):
+    def test_multipart_zip_allows_unmatched_files(self):
+        """Uploading a zip only unpacks it; unmatched members do not have to form pairs."""
         self.client.force_login(self.users['staff_adder'])
         buf = BytesIO()
         with zipfile.ZipFile(buf, 'w') as zf:
@@ -1217,7 +1244,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         buf.seek(0)
         payload = {
             'type': 'programming',
-            'name': 'Bad Zip',
+            'name': 'Zip only',
             'description': 'x',
             'points': 1,
             'group_id': self.group.id,
@@ -1227,8 +1254,48 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             reverse('problem_create_v2'),
             data={
                 'payload': json.dumps(payload),
-                'testcase_zip': SimpleUploadedFile('bad.zip', buf.read(), content_type='application/zip'),
+                'testcase_zip': SimpleUploadedFile('lone.zip', buf.read(), content_type='application/zip'),
             },
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('paired', response.json()['error'].lower())
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertFalse(problem.cases.filter(type='C').exists())
+        self.assertTrue(bool(problem.data_files.zipfile))
+
+    def test_programming_saves_harness(self):
+        lang = Language.objects.filter(common_name='Python').first()
+        self.assertIsNotNone(lang)
+        self.client.force_login(self.users['staff_adder'])
+        payload = {
+            'type': 'programming',
+            'name': 'Harnessed',
+            'description': 'with harness',
+            'points': 5,
+            'group_id': self.group.id,
+            'harness': {
+                'language_id': lang.id,
+                'harness_code': 'def check():\n    pass\n',
+                'skip_precompile': True,
+                'run_student_main': False,
+            },
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        harness = ProblemHarness.objects.get(problem=problem)
+        self.assertEqual(harness.language_id, lang.id)
+        self.assertTrue(harness.skip_precompile)
+        self.assertIn('def check', harness.harness_code)
+
+    def test_edit_page_links_to_test_data(self):
+        problem = self._make_code_problem()
+        self.client.force_login(self.users['staff_adder'])
+        response = self.client.get(reverse('problem_edit_v2', args=[problem.code]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse('problem_data', args=[problem.code]))
+        self.assertContains(response, 'Edit test data')
+        self.assertContains(response, 'Harness')

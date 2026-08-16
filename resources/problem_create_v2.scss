@@ -1095,6 +1095,10 @@ fieldset.module .form-content { padding: 1rem; }
 .pcv2 .tc-file-btn { color: var(--oj-link); background: var(--oj-info-soft); }
 .pcv2 .tc-file-btn:hover { color: var(--oj-link); background: var(--oj-info-soft); }
 .pcv2 .tc-file-btn.manual { color: var(--oj-text); }
+.pcv2 .tc-file-select { width: 100%; min-width: 8rem; }
+.pcv2 .tc-harness { margin-top: 1rem; border-top: 1px solid var(--admin-border); padding-top: 0.75rem; }
+.pcv2 .tc-harness summary { cursor: pointer; font-weight: 600; }
+.pcv2 .tc-admin-link { margin: 0 0 0.75rem; }
 
 /* Custom file picker — avoids browser-native locale file-button chrome */
 .pcv2 .file-pick {
