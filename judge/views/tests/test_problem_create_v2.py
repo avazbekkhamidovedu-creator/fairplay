@@ -14,7 +14,7 @@ from judge.models import (Language, LanguageLimit, License, Problem, ProblemClar
                           ProblemFileConfig, ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig,
                           ProblemTemplate, ProblemTestCase, ProblemTranslation, ProblemType, Solution,
                           problem_data_storage)
-from judge.models.tests.util import CommonDataMixin, create_user
+from judge.models.tests.util import CommonDataMixin, create_organization, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
 
@@ -43,6 +43,119 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
 
         self.client.force_login(self.users['creator'])
         self.assertEqual(self.client.get(reverse('problem_create_v2')).status_code, 200)
+
+    def test_create_page_uses_public_visible_label(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertContains(response, 'Public visible')
+        self.assertNotContains(response, 'publicly visible')
+
+    def test_course_dropdown_lists_all_courses(self):
+        """Match main admin organization_select2: any course is listed, not just memberships."""
+        member_org = create_organization(name='Member Course')
+        admin_only_org = create_organization(name='Admin Only Course')
+        outsider_org = create_organization(name='Other Course')
+        creator = self.users['creator']
+        creator.profile.organizations.add(member_org)
+        admin_only_org.admins.add(creator.profile)
+
+        self.client.force_login(creator)
+        response = self.client.get(reverse('problem_create_v2'))
+        names = {org['name'] for org in response.context['organizations']}
+        self.assertTrue(response.context['can_create_organization'])
+        self.assertTrue(response.context['can_change_public'])
+        self.assertIn(member_org.name, names)
+        self.assertIn(admin_only_org.name, names)
+        self.assertIn(outsider_org.name, names)
+        self.assertNotRegex(response.content.decode(), r'<select[^>]*id="f-org"[^>]*disabled')
+
+    def test_course_field_readonly_without_create_private_problem(self):
+        staff = create_user(
+            username='staff_code_only',
+            is_staff=True,
+            user_permissions=('add_problem', 'edit_own_problem'),
+        )
+        self.client.force_login(staff)
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['can_create_organization'])
+        self.assertFalse(response.context['can_change_public'])
+        self.assertContains(response, 'id="f-org"', html=False)
+        self.assertRegex(response.content.decode(), r'<select[^>]*id="f-org"[^>]*disabled')
+
+    def test_create_private_problem_can_attach_any_course(self):
+        org = create_organization(name='Unrelated Course')
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Org scoped',
+            'description': 'Any course is allowed.',
+            'points': 5,
+            'group_id': self.group.id,
+            'organizations': [org.id],
+            'is_public': True,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertTrue(problem.organizations.filter(id=org.id).exists())
+        self.assertTrue(problem.is_organization_private)
+        self.assertTrue(problem.is_public)
+
+    def test_create_private_cannot_make_fully_public_without_course(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Fully public',
+            'description': 'Needs change_public_visibility.',
+            'points': 5,
+            'group_id': self.group.id,
+            'is_public': True,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_without_create_private_cannot_attach_course(self):
+        org = create_organization(name='Blocked Course')
+        staff = create_user(
+            username='staff_no_org',
+            is_staff=True,
+            user_permissions=('add_problem', 'edit_own_problem'),
+        )
+        self.client.force_login(staff)
+        payload = {
+            'type': 'programming',
+            'name': 'No org',
+            'description': 'Staff cannot assign courses.',
+            'points': 10,
+            'group_id': self.group.id,
+            'organizations': [org.id],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertFalse(problem.organizations.exists())
+        self.assertFalse(problem.is_organization_private)
 
     def test_create_mcq_via_json(self):
         self.client.force_login(self.users['creator'])

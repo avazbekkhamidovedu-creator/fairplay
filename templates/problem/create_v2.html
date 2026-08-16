@@ -295,7 +295,7 @@
             <label>{{ _('Courses') }}</label>
             <div class="field">
               <div class="select-with-add">
-                <select multiple id="f-org" class="org-select2" style="width:100%;max-width:500px;">
+                <select multiple id="f-org" class="org-select2" style="width:100%;max-width:500px;"{% if not can_create_organization %} disabled{% endif %}>
                   {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
                 </select>
                 {% if can_create_organization %}
@@ -312,7 +312,7 @@
             </div>
           </div>
           <div class="form-row">
-            <label>{{ _('publicly visible') }}</label>
+            <label>{{ _('Public visible') }}</label>
             <div class="field">
               <input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}>
             </div>
@@ -657,7 +657,7 @@
           <h2>{{ _('Classes') }}</h2>
           <div class="form-content">
             <div class="form-row"><label>{{ _('Classes') }}</label><div class="field">
-              <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"></select>
+              <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"{% if not can_create_organization %} disabled{% endif %}></select>
               <div class="help">{{ _('Only classes belonging to the selected courses are listed') }}</div>
             </div></div>
           </div>

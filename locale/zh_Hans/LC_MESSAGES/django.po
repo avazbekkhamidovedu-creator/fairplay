@@ -982,6 +982,9 @@ msgstr "时间限制"
 msgid "publicly visible"
 msgstr "公开"
 
+msgid "Public visible"
+msgstr "公开"
+
 #: judge/models/contest.py:94
 msgid "Should be set even for organization-private contests, where it determines whether the contest is visible to members of the specified organizations."
 msgstr "组织内竞赛也需公开，否则责组织成员无法查看本竞赛。"

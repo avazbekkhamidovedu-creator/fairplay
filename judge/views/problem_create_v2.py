@@ -109,8 +109,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
     def get_context(self, request):
         user = request.user
         profile = request.profile
-        # Organizations the teacher may scope the problem to (their own memberships).
-        orgs = list(profile.organizations.values('id', 'name')) if profile else []
+        # Match original admin organization_select2 on main: any course is selectable.
+        orgs = list(Organization.objects.order_by('name').values('id', 'name'))
+        can_edit_organizations = user.has_perm('judge.create_private_problem')
         return {
             'title': _('Add problem'),
             'organizations': orgs,
@@ -129,7 +130,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
             'can_create_file': user.has_perm('judge.create_private_problem'),
             'can_import_excel_problems': user.has_perm('judge.create_private_problem'),
-            'can_change_public': user.has_perm('judge.change_public_visibility'),
+            # Match ProblemAdmin.get_readonly_fields on main: is_public is editable with
+            # create_private_problem or change_public_visibility; save still requires an
+            # organization unless the user has change_public_visibility.
+            'can_change_public': (
+                can_edit_organizations or user.has_perm('judge.change_public_visibility')
+            ),
             'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
             'can_full_markup': user.has_perm('judge.problem_full_markup'),
             'default_group_id': default_problem_group().id,
@@ -138,7 +144,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'create_problem_type_url': reverse('problem_create_v2_problem_type'),
             'create_problem_group_url': reverse('problem_create_v2_problem_group'),
             'create_organization_url': reverse('problem_create_v2_organization'),
-            'can_create_organization': user.has_perm('judge.create_private_problem'),
+            'can_create_organization': can_edit_organizations,
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'ai_decompose_url': reverse('problem_create_v2_ai_decompose'),
             'problem_list_url': reverse('problem_list'),
@@ -620,7 +626,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         elif not problem.types.exists():
             problem.types.add(default_problem_type())
 
-    def _attach_orgs(self, problem, payload):
+    def _attach_orgs(self, problem, payload, user):
+        # Match ProblemAdmin.get_readonly_fields: organizations is read-only without
+        # create_private_problem. Users who can edit the field may assign any course.
+        if not user.has_perm('judge.create_private_problem'):
+            return
         ids = payload.get('organizations') or []
         problem.organizations.set(Organization.objects.filter(pk__in=ids))
 
@@ -721,7 +731,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if is_create or 'banned_users' in payload:
             problem.banned_users.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('banned_users'))))
 
-        if is_create or 'classes' in payload:
+        if user.has_perm('judge.create_private_problem') and (is_create or 'classes' in payload):
             org_ids = list(problem.organizations.values_list('id', flat=True))
             class_ids = self._profile_ids(payload.get('classes'))  # reuse int parser
             class_qs = Class.get_visible_classes(request.user).filter(pk__in=class_ids)
@@ -999,7 +1009,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
             self._attach_types(problem, payload)
             self._attach_languages(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1218,7 +1228,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1258,7 +1268,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1295,7 +1305,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1339,7 +1349,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1397,7 +1407,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
