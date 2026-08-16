@@ -612,10 +612,12 @@
                     <div class="help">{{ _('If enabled, student code is the entry point; harness provides hidden APIs.') }}</div>
                   </div>
                 </div>
-                <div class="form-row">
+                <div class="form-row" style="align-items:flex-start;">
                   <label>{{ _('Harness Code') }}</label>
                   <div class="field">
-                    <textarea id="f-harness-code" rows="10" style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;" placeholder="{{ _('Hidden test code compiled/run with the student submission.') }}"></textarea>
+                    <div id="f-harness-monaco" class="harness-monaco"></div>
+                    <textarea id="f-harness-code" rows="10" hidden spellcheck="false" placeholder="{{ _('Hidden test code compiled/run with the student submission.') }}"></textarea>
+                    <div class="help">{{ _('Hidden test code compiled/run with the student submission.') }}</div>
                   </div>
                 </div>
               </details>
@@ -919,6 +921,7 @@
     const EDIT_CODE = '{{ edit_code }}';
     const TEST_DATA_URL = '{{ test_data_url }}';
     const HARNESS_LANGUAGES = {{ harness_languages_json|default('[]')|safe }};
+    const MONACO_VS_URL = '{{ static("libs/monaco/vs") }}';
     const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
     const IMPORT_EDITOR_MODE = {{ 'true' if import_editor_mode else 'false' }};
@@ -1274,6 +1277,7 @@
       if (type === 'programming' && document.getElementById('tc-body') && !document.getElementById('tc-body').children.length) {
         /* keep empty until user adds / imports; do not auto-seed */
       }
+      if (type === 'programming') layoutHarnessMonaco();
 
       renderScoreConf();
       renderPreview();
@@ -1636,11 +1640,86 @@
       const sel = document.getElementById('f-harness-lang');
       if (!sel) return;
       sel.innerHTML = '<option value=""></option>' + (HARNESS_LANGUAGES || []).map(lang =>
-        `<option value="${escapeAttr(String(lang.id))}" data-key="${escapeAttr(lang.key)}">${escapeHtml(lang.name)}</option>`
+        `<option value="${escapeAttr(String(lang.id))}" data-key="${escapeAttr(lang.key)}" data-ace="${escapeAttr(lang.ace || '')}">${escapeHtml(lang.name)}</option>`
       ).join('');
     }
+    const ACE_TO_MONACO = {
+      c_cpp: 'cpp', cpp: 'cpp', c: 'c', csharp: 'csharp', golang: 'go', go: 'go',
+      java: 'java', javascript: 'javascript', python: 'python', rust: 'rust',
+      ruby: 'ruby', php: 'php', kotlin: 'kotlin', swift: 'swift', typescript: 'typescript',
+    };
+    let harnessEditor = null;
+    function harnessMonacoLang() {
+      const sel = document.getElementById('f-harness-lang');
+      const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+      const ace = (opt && opt.dataset.ace) || '';
+      if (ACE_TO_MONACO[ace]) return ACE_TO_MONACO[ace];
+      if (ace) return ace;
+      const name = ((opt && opt.textContent) || '').toLowerCase();
+      if (name.indexOf('python') >= 0) return 'python';
+      if (name.indexOf('java') >= 0 && name.indexOf('script') < 0) return 'java';
+      return 'java';
+    }
+    function harnessCodeValue() {
+      if (harnessEditor) return harnessEditor.getValue();
+      const ta = document.getElementById('f-harness-code');
+      return ta ? ta.value : '';
+    }
+    function setHarnessCode(value) {
+      const ta = document.getElementById('f-harness-code');
+      if (ta) ta.value = value || '';
+      if (harnessEditor) harnessEditor.setValue(value || '');
+    }
+    function syncHarnessMonacoLanguage() {
+      if (!harnessEditor || !window.monaco) return;
+      window.monaco.editor.setModelLanguage(harnessEditor.getModel(), harnessMonacoLang());
+    }
+    function layoutHarnessMonaco() {
+      if (harnessEditor && harnessEditor.layout) {
+        requestAnimationFrame(() => harnessEditor.layout());
+      }
+    }
+    function initHarnessMonaco() {
+      const mount = document.getElementById('f-harness-monaco');
+      const ta = document.getElementById('f-harness-code');
+      if (!mount || !ta || !MONACO_VS_URL) return;
+      const langSel = document.getElementById('f-harness-lang');
+      if (langSel) langSel.addEventListener('change', syncHarnessMonacoLanguage);
+      const box = document.getElementById('tc-harness');
+      if (box) box.addEventListener('toggle', () => { if (box.open) layoutHarnessMonaco(); });
+      const loader = document.createElement('script');
+      loader.src = MONACO_VS_URL.replace(/\/?$/, '/') + 'loader.js';
+      loader.onload = function () {
+        if (!window.require) return;
+        window.require.config({ paths: { vs: MONACO_VS_URL } });
+        window.require(['vs/editor/editor.main'], function () {
+          const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+          harnessEditor = window.monaco.editor.create(mount, {
+            value: ta.value,
+            language: harnessMonacoLang(),
+            theme: darkQuery.matches ? 'vs-dark' : 'vs',
+            automaticLayout: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            fontSize: 13,
+            wordWrap: 'on',
+          });
+          harnessEditor.onDidChangeModelContent(function () {
+            ta.value = harnessEditor.getValue();
+          });
+          if (darkQuery.addEventListener) {
+            darkQuery.addEventListener('change', () => {
+              window.monaco.editor.setTheme(darkQuery.matches ? 'vs-dark' : 'vs');
+            });
+          }
+          layoutHarnessMonaco();
+        });
+      };
+      loader.onerror = function () { mount.hidden = true; ta.hidden = false; };
+      document.head.appendChild(loader);
+    }
     function collectHarness() {
-      const code = ((document.getElementById('f-harness-code') || {}).value || '');
+      const code = harnessCodeValue();
       const lang = document.getElementById('f-harness-lang');
       return {
         language_id: lang ? lang.value : '',
@@ -1654,15 +1733,15 @@
     function fillHarness(h) {
       fillHarnessLanguages();
       const lang = document.getElementById('f-harness-lang');
-      const code = document.getElementById('f-harness-code');
       const skip = document.getElementById('f-harness-skip');
       const main = document.getElementById('f-harness-main');
       const box = document.getElementById('tc-harness');
       if (!h) {
         if (lang) lang.value = '';
-        if (code) code.value = '';
+        setHarnessCode('');
         if (skip) skip.checked = false;
         if (main) main.checked = false;
+        syncHarnessMonacoLanguage();
         return;
       }
       if (lang) {
@@ -1672,10 +1751,12 @@
           if (opt) lang.value = opt.value;
         }
       }
-      if (code) code.value = h.harness_code || '';
+      setHarnessCode(h.harness_code || '');
+      syncHarnessMonacoLanguage();
       if (skip) skip.checked = !!h.skip_precompile;
       if (main) main.checked = !!h.run_student_main;
       if (box && (h.harness_code || h.language_id)) box.open = true;
+      layoutHarnessMonaco();
     }
 
     /* ---------- Composite subquestions ---------- */
@@ -2687,6 +2768,7 @@
     initProfilePickers();
     initClassPicker();
     fillHarnessLanguages();
+    initHarnessMonaco();
     bindEditorialCollapse();
 
     (function bindAdvancedFilePick() {

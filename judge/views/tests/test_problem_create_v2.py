@@ -1302,3 +1302,5 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         self.assertContains(response, reverse('problem_data', args=[problem.code]))
         self.assertContains(response, 'Edit test data')
         self.assertContains(response, 'Harness')
+        self.assertContains(response, 'id="f-harness-monaco"')
+        self.assertContains(response, 'libs/monaco/vs')
