@@ -458,10 +458,20 @@ ul.problem-list {
         align-items: flex-start;
     }
 
+    .filter-row-conditions {
+        flex-wrap: nowrap;
+        align-items: center;
+
+        > .filter-label {
+            padding-top: 0;
+        }
+    }
+
     .filter-controls {
         display: flex;
-        flex-wrap: wrap;
-        gap: 16px 24px;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 8px 12px;
         flex: 1;
         min-width: 0;
     }
@@ -481,10 +491,33 @@ ul.problem-list {
         flex-shrink: 0;
     }
 
+    /* Native <select> placeholder before Select2 init (see list.html inline CSS). */
+    #filter-format,
+    #filter-difficulty,
+    #filter-course,
+    #filter-knowledge,
+    #status-filter {
+        visibility: hidden;
+        height: var(--oj-control-height);
+        max-height: var(--oj-control-height);
+        overflow: hidden;
+        box-sizing: border-box;
+    }
+
+    #filter-format { width: 140px; }
+    #filter-difficulty { width: 120px; }
+    #filter-course { width: 150px; }
+    #filter-knowledge { width: 100%; }
+    #status-filter { width: 100px; }
+
     .ac-range {
         display: flex;
         align-items: center;
         gap: 6px;
+
+        .input-num {
+            width: 56px;
+        }
     }
 
     .ac-range-sep,
@@ -660,26 +693,32 @@ ul.problem-list {
     }
 }
 
-/* ── Knowledge filter (placeholder) ── */
+/* ── Knowledge filter: always-visible hot tags ── */
 .problem-list-redesign {
     .knowledge-filter {
         display: flex;
-        align-items: flex-start;
-        gap: 10px;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
         flex: 1;
-        flex-wrap: wrap;
+        min-width: 0;
+
+        > .select2-container {
+            width: 100% !important;
+        }
+
+        .select2-container .select2-selection--multiple {
+            min-height: var(--oj-control-height);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+        }
     }
 
-    .knowledge-selected {
+    .knowledge-picker {
         display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        flex: 1;
-        min-height: 32px;
-        padding: 4px 8px;
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        align-items: center;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
     }
 
     /* Select2 local multi-selects: compact fixed width so Filters stay one row. */
@@ -695,7 +734,7 @@ ul.problem-list {
 
     .filter-controls .select,
     .filter-controls .select2-container--dmoj .select2-selection--single {
-        min-width: 110px;
+        min-width: 100px;
         height: var(--oj-control-height);
         box-sizing: border-box;
     }
@@ -714,11 +753,6 @@ ul.problem-list {
 
     .filter-controls .select2-container--dmoj .select2-selection--single .select2-selection__arrow {
         height: 100%;
-    }
-
-    .knowledge-placeholder {
-        color: var(--text-muted);
-        font-size: var(--oj-font-size);
     }
 }
 
@@ -1240,8 +1274,7 @@ ul.problem-list {
     .sort-btn { color: var(--text); }
     .sort-link { color: inherit; }
 
-    /* Align the row label with the first line of its controls. */
-    .filter-row-conditions > .filter-label,
+    /* Align the Tags row label with the first line of chips. */
     .knowledge-row > .filter-label {
         padding-top: 8px;
     }
@@ -1369,35 +1402,18 @@ ul.problem-list {
     }
 }
 
-/* ── Knowledge-point picker (ported from reference) ── */
+/* ── Knowledge tags (always-visible local multi-select chips) ── */
 .problem-list-redesign {
-    .knowledge-picker {
-        margin: -4px 0 12px 68px;
-        padding: 0;
-        overflow: hidden;
-    }
-
-    .knowledge-picker-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--border);
-
-        .input {
-            flex: 1;
-            max-width: 220px;
-        }
-    }
-
     .knowledge-picker-body {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        padding: 14px;
         max-height: 220px;
         overflow-y: auto;
+    }
+
+    .knowledge-picker:not(.is-expanded) .knowledge-tag:not(.is-hot):not(.active) {
+        display: none;
     }
 
     .knowledge-tag {
@@ -1407,6 +1423,7 @@ ul.problem-list {
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         background: var(--bg);
+        font: inherit;
         font-size: var(--oj-font-size-sm);
         color: var(--text);
         cursor: pointer;
@@ -1436,31 +1453,22 @@ ul.problem-list {
         margin: 0;
     }
 
-    .knowledge-picker-footer {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 10px;
-        padding: 10px 14px;
-        border-top: 1px solid var(--border);
-
-        span:first-child {
-            margin-right: auto;
-            font-size: var(--oj-font-size-sm);
-            color: var(--text-muted);
-        }
+    .knowledge-show-more {
+        padding: 0;
+        min-height: 0;
     }
 }
 
 @media (max-width: 768px) {
     .problem-list-redesign {
-        .knowledge-picker {
-            margin-left: 0;
-        }
-
         .filter-row {
             flex-direction: column;
             align-items: stretch;
+        }
+
+        .filter-row-conditions,
+        .filter-controls {
+            flex-wrap: wrap;
         }
 
         .filter-label {
