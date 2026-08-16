@@ -44,3 +44,7 @@ static_test_root/
 
 # Runtime uploads (MEDIA_ROOT) — never commit.
 media/
+# Local fallback for submission_storage when DMOJ_S3_ENDPOINT_URL is empty
+# (dev/CI); tests that write uploads land real files here.
+submission_files/
+submission_files_backup/

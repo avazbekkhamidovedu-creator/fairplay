@@ -12,10 +12,10 @@ from django.urls import reverse
 from reversion.models import Version
 
 from judge.models import (Language, LanguageLimit, License, Problem, ProblemClarification, ProblemData,
-                          ProblemFileConfig, ProblemFillBlankConfig, ProblemMCQConfig, ProblemShortAnswerConfig,
-                          ProblemTemplate, ProblemTestCase, ProblemTranslation, ProblemType, Solution,
-                          problem_data_storage)
-from judge.models.tests.util import CommonDataMixin, create_user
+                          ProblemFileConfig, ProblemFillBlankConfig, ProblemHarness, ProblemMCQConfig,
+                          ProblemShortAnswerConfig, ProblemTemplate, ProblemTestCase, ProblemTranslation,
+                          ProblemType, Solution, problem_data_storage)
+from judge.models.tests.util import CommonDataMixin, create_organization, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
 
@@ -45,6 +45,122 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['creator'])
         self.assertEqual(self.client.get(reverse('problem_create_v2')).status_code, 200)
 
+    def test_create_page_uses_public_visible_label(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertContains(response, 'Public visible')
+        self.assertNotContains(response, 'publicly visible')
+        self.assertContains(response, 'Editorial')
+        self.assertContains(response, 'data-rich-mount="editorial"')
+        self.assertNotContains(response, 'data-rich-mount="explain"')
+
+    def test_course_dropdown_lists_all_courses(self):
+        """Match main admin organization_select2: any course is listed, not just memberships."""
+        member_org = create_organization(name='Member Course')
+        admin_only_org = create_organization(name='Admin Only Course')
+        outsider_org = create_organization(name='Other Course')
+        creator = self.users['creator']
+        creator.profile.organizations.add(member_org)
+        admin_only_org.admins.add(creator.profile)
+
+        self.client.force_login(creator)
+        response = self.client.get(reverse('problem_create_v2'))
+        names = {org['name'] for org in response.context['organizations']}
+        self.assertTrue(response.context['can_create_organization'])
+        self.assertTrue(response.context['can_change_public'])
+        self.assertIn(member_org.name, names)
+        self.assertIn(admin_only_org.name, names)
+        self.assertIn(outsider_org.name, names)
+        self.assertNotRegex(response.content.decode(), r'<select[^>]*id="f-org"[^>]*disabled')
+
+    def test_course_field_readonly_without_create_private_problem(self):
+        staff = create_user(
+            username='staff_code_only',
+            is_staff=True,
+            user_permissions=('add_problem', 'edit_own_problem'),
+        )
+        self.client.force_login(staff)
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['can_create_organization'])
+        self.assertFalse(response.context['can_change_public'])
+        self.assertContains(response, 'id="f-org"', html=False)
+        self.assertRegex(response.content.decode(), r'<select[^>]*id="f-org"[^>]*disabled')
+
+    def test_create_private_problem_can_attach_any_course(self):
+        org = create_organization(name='Unrelated Course')
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Org scoped',
+            'description': 'Any course is allowed.',
+            'points': 5,
+            'group_id': self.group.id,
+            'organizations': [org.id],
+            'is_public': True,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertTrue(problem.organizations.filter(id=org.id).exists())
+        self.assertTrue(problem.is_organization_private)
+        self.assertTrue(problem.is_public)
+
+    def test_create_private_cannot_make_fully_public_without_course(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Fully public',
+            'description': 'Needs change_public_visibility.',
+            'points': 5,
+            'group_id': self.group.id,
+            'is_public': True,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_without_create_private_cannot_attach_course(self):
+        org = create_organization(name='Blocked Course')
+        staff = create_user(
+            username='staff_no_org',
+            is_staff=True,
+            user_permissions=('add_problem', 'edit_own_problem'),
+        )
+        self.client.force_login(staff)
+        payload = {
+            'type': 'programming',
+            'name': 'No org',
+            'description': 'Staff cannot assign courses.',
+            'points': 10,
+            'group_id': self.group.id,
+            'organizations': [org.id],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertFalse(problem.organizations.exists())
+        self.assertFalse(problem.is_organization_private)
+
     def test_create_mcq_via_json(self):
         self.client.force_login(self.users['creator'])
         payload = {
@@ -69,6 +185,63 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         problem = Problem.objects.get(code=body['code'])
         self.assertEqual(problem.name, 'HTTP vs TCP')
         self.assertTrue(ProblemMCQConfig.objects.filter(problem=problem, multiple_select=False).exists())
+
+    def test_create_multiple_choice_defaults_to_proportional_scoring(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'multiple',
+            'name': 'Pick two',
+            'description': 'Select all that apply.',
+            'points': 10,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': True},
+                {'text': 'C', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertTrue(problem.partial)
+        config = ProblemMCQConfig.objects.get(problem=problem)
+        self.assertTrue(config.multiple_select)
+        self.assertEqual(config.scoring_mode, 'proportional')
+        self.assertIsNone(config.underselect_points)
+
+    def test_create_multiple_choice_underselect_scoring(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'multiple',
+            'name': 'Underselect',
+            'description': 'Select all that apply.',
+            'points': 10,
+            'group_id': self.group.id,
+            'mcqScoring': 'underselect',
+            'mcqUnderselectPoints': 2,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': True},
+                {'text': 'C', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        config = ProblemMCQConfig.objects.get(problem=problem)
+        self.assertEqual(config.scoring_mode, 'underselect')
+        self.assertEqual(config.underselect_points, 2)
+        data = ProblemCreateV2View()._build_edit_data(problem)
+        self.assertEqual(data['mcqScoring'], 'underselect')
+        self.assertEqual(data['mcqUnderselectPoints'], 2)
 
     def test_create_code_with_testcases(self):
         self.client.force_login(self.users['staff_adder'])
@@ -502,6 +675,27 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem.blanks.count(), 1)
         # Each line is one accepted answer for the newline-splitting grader.
         self.assertEqual(problem.blanks.first().answers.splitlines(), ['Paris', 'paris'])
+
+    def test_create_fill_blank_persists_per_blank_points(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'blank', 'name': 'Weighted blanks', 'description': 'Two blanks.',
+            'points': 10, 'partial': True, 'group_id': self.group.id,
+            'blanks': [
+                {'answers': 'Paris', 'points': 7},
+                {'answers': '1789', 'points': 3},
+            ],
+        }
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertTrue(problem.partial)
+        blanks = list(problem.blanks.order_by('order'))
+        self.assertEqual([b.points for b in blanks], [7, 3])
+        data = ProblemCreateV2View()._build_edit_data(problem)
+        self.assertEqual(data['blanks'][0]['points'], 7)
+        self.assertEqual(data['blanks'][1]['answers'], '1789')
 
     def test_create_fill_blank_ai_mode(self):
         # With ai=True the config records AI grading + rubric; grading itself falls back to exact
@@ -1051,13 +1245,39 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             self.assertIn('sample.in', zf.namelist())
             self.assertEqual(zf.read('sample.in').decode('utf-8'), '1\n')
 
-    def test_pair_zip_entries_dat_in_out(self):
-        pairs = ProblemCreateV2View._pair_zip_entries([
-            'dat10.in', 'dat10.out', 'dat2.in', 'dat2.out', 'dat1.in', 'dat1.out',
-            '__MACOSX/._dat1.in', '.DS_Store',
-        ])
-        self.assertEqual([p['input'] for p in pairs], ['dat1.in', 'dat2.in', 'dat10.in'])
-        self.assertEqual(pairs[0]['output'], 'dat1.out')
+    def test_zip_keeps_user_file_matches(self):
+        """Classic test_data: zip is stored as-is; cases use the files the user picked."""
+        self.client.force_login(self.users['staff_adder'])
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr('odd.txt', '1\n')
+            zf.writestr('even.txt', '2\n')
+            zf.writestr('notes.md', 'ignore\n')
+        buf.seek(0)
+        payload = {
+            'type': 'programming',
+            'name': 'Manual match',
+            'description': 'user picks files',
+            'points': 10,
+            'group_id': self.group.id,
+            'testcases': [
+                {'input_file': 'odd.txt', 'output_file': 'even.txt', 'points': 10, 'pretest': True},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data={
+                'payload': json.dumps(payload),
+                'testcase_zip': SimpleUploadedFile('cases.zip', buf.read(), content_type='application/zip'),
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        case = problem.cases.get(type='C')
+        self.assertEqual(case.input_file, 'odd.txt')
+        self.assertEqual(case.output_file, 'even.txt')
+        with zipfile.ZipFile(problem.data_files.zipfile.path) as zf:
+            self.assertEqual(set(zf.namelist()), {'odd.txt', 'even.txt', 'notes.md'})
 
     def test_create_code_with_multipart_zip(self):
         """Large ZIP path: metadata in JSON field, archive as multipart file (classic limits)."""
@@ -1106,7 +1326,8 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             self.assertEqual(zf.read('dat1.in').decode('utf-8'), '1 2\n')
             self.assertEqual(zf.read('dat2.out').decode('utf-8'), '9\n')
 
-    def test_multipart_zip_rejects_unpaired(self):
+    def test_multipart_zip_allows_unmatched_files(self):
+        """Uploading a zip only unpacks it; unmatched members do not have to form pairs."""
         self.client.force_login(self.users['staff_adder'])
         buf = BytesIO()
         with zipfile.ZipFile(buf, 'w') as zf:
@@ -1114,7 +1335,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         buf.seek(0)
         payload = {
             'type': 'programming',
-            'name': 'Bad Zip',
+            'name': 'Zip only',
             'description': 'x',
             'points': 1,
             'group_id': self.group.id,
@@ -1124,8 +1345,118 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             reverse('problem_create_v2'),
             data={
                 'payload': json.dumps(payload),
-                'testcase_zip': SimpleUploadedFile('bad.zip', buf.read(), content_type='application/zip'),
+                'testcase_zip': SimpleUploadedFile('lone.zip', buf.read(), content_type='application/zip'),
             },
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('paired', response.json()['error'].lower())
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertFalse(problem.cases.filter(type='C').exists())
+        self.assertTrue(bool(problem.data_files.zipfile))
+
+    def test_programming_saves_harness(self):
+        lang = Language.objects.filter(common_name='Python').first()
+        self.assertIsNotNone(lang)
+        self.client.force_login(self.users['staff_adder'])
+        payload = {
+            'type': 'programming',
+            'name': 'Harnessed',
+            'description': 'with harness',
+            'points': 5,
+            'group_id': self.group.id,
+            'harness': {
+                'language_id': lang.id,
+                'harness_code': 'def check():\n    pass\n',
+                'skip_precompile': True,
+                'run_student_main': False,
+            },
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        harness = ProblemHarness.objects.get(problem=problem)
+        self.assertEqual(harness.language_id, lang.id)
+        self.assertTrue(harness.skip_precompile)
+        self.assertIn('def check', harness.harness_code)
+
+    def test_edit_page_links_to_test_data(self):
+        problem = self._make_code_problem()
+        self.client.force_login(self.users['staff_adder'])
+        response = self.client.get(reverse('problem_edit_v2', args=[problem.code]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse('problem_data', args=[problem.code]))
+        self.assertContains(response, 'Edit test data')
+        self.assertContains(response, 'Harness')
+        self.assertContains(response, 'id="f-harness-monaco"')
+        self.assertContains(response, 'libs/monaco/vs')
+
+
+class ProblemCreateV2CapitalizedDifficultyTestCase(CommonDataMixin, TestCase):
+    """Reuse Admin-seeded Easy/Medium/Hard category IDs instead of requiring lowercase names."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.group = default_problem_group()
+        cls.users.update({
+            'staff_adder': create_user(
+                username='caps_diff_creator',
+                is_staff=True,
+                user_permissions=('add_problem', 'create_private_problem', 'change_public_visibility',
+                                  'edit_own_problem'),
+            ),
+        })
+        ProblemType.objects.create(name='Easy', full_name='Easy')
+        ProblemType.objects.create(name='Hard', full_name='Hard')
+
+    def _save_programming(self, name, difficulty):
+        return self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'programming',
+                'name': name,
+                'description': 'difficulty should display after save',
+                'points': 10,
+                'is_public': True,
+                'group_id': self.group.id,
+                'difficulty': difficulty,
+                'problemTypes': [],
+                'testcases': [
+                    {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+                ],
+            }),
+            content_type='application/json',
+        )
+
+    def test_save_easy_reuses_capitalized_type(self):
+        self.client.force_login(self.users['staff_adder'])
+        response = self._save_programming('test-program-noOrg', 'easy')
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        type_names = list(problem.types.values_list('name', flat=True))
+        self.assertEqual(type_names.count('Easy'), 1)
+        self.assertNotIn('easy', type_names)
+        self.assertEqual(problem.difficulty, 'easy')
+        self.assertEqual(ProblemType.objects.filter(name__iexact='easy').count(), 1)
+
+        list_resp = self.client.get(reverse('problem_list'))
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertContains(list_resp, 'diff-easy', html=False)
+
+    def test_save_hard_reuses_capitalized_type(self):
+        self.client.force_login(self.users['staff_adder'])
+        response = self._save_programming('test-program-hard', 'hard')
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        type_names = list(problem.types.values_list('name', flat=True))
+        self.assertEqual(type_names.count('Hard'), 1)
+        self.assertNotIn('hard', type_names)
+        self.assertEqual(problem.difficulty, 'hard')
+        self.assertEqual(ProblemType.objects.filter(name__iexact='hard').count(), 1)
+
+        list_resp = self.client.get(reverse('problem_list'))
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertContains(list_resp, 'diff-hard', html=False)

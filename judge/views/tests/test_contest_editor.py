@@ -10,15 +10,31 @@ rather than password authentication.
 import json
 from datetime import datetime, timedelta
 
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestParticipation, ContestTag, Organization
+from judge.models import Contest, ContestParticipation, ContestTag, Organization, SEBConfigPreset, StoredFileRecord
+from judge.models.seb import DEFAULT_PRESET_CACHE_KEY
 from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
 from judge.views.contests import ContestCreate
+
+PRESET_BEK = 'e' * 64
+PRESET_CFG = 'f' * 64
+
+
+def _create_preset(**kwargs):
+    """The site-default SEB configuration an instructor can adopt in one click."""
+    kwargs.setdefault('is_default', True)
+    preset = SEBConfigPreset(name='Editor default', browser_exam_keys=PRESET_BEK,
+                             config_keys=PRESET_CFG, **kwargs)
+    preset.config_file.save('editor_default.seb', ContentFile(b'SEB config'), save=False)
+    preset.save()
+    return preset
 
 
 class ContestEditorHelperTestCase(TestCase):
@@ -412,6 +428,20 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertFalse(self.contest.seb_required)
         self.assertEqual(self.contest.access_code, '')
 
+    def test_curator_cannot_adopt_default_seb_preset(self):
+        # seb_preset is gated by the same permission as the rest of the SEB
+        # fields, so the one-click checkbox is not a way around it.
+        _create_preset()
+        self.client.force_login(self.curator)
+        payload = self._full_payload(seb_required=True, seb_use_default=True)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.contest.refresh_from_db()
+        self.assertIsNone(self.contest.seb_preset)
+
     def test_curator_cannot_mark_rated_or_lock(self):
         # contest_rating / lock_contest are separate permissions.
         self.client.force_login(self.curator)
@@ -537,6 +567,9 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
     def setUp(self):
         self.client = Client()
         self.client.force_login(self.editor)
+        # The default-preset pointer is cached outside the test transaction, so
+        # it would otherwise leak between tests.
+        cache.delete(DEFAULT_PRESET_CACHE_KEY)
 
     def _post(self, **overrides):
         now = timezone.now()
@@ -588,6 +621,101 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         # contest for every student); model validation now rejects it.
         response = self._post(name='SEB Bad', key='sebbad', seb_required=True)
         self.assertEqual(response.status_code, 400)
+
+    def test_seb_use_default_arms_contest_in_one_save(self):
+        # The whole point of the preset: no keys typed, no .seb uploaded, and
+        # the contest still passes Contest.clean() on the very first save.
+        preset = _create_preset()
+        response = self._post(name='SEB Default', key='sebdefault',
+                              seb_required=True, seb_use_default=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='sebdefault')
+        self.assertEqual(contest.seb_preset, preset)
+        self.assertEqual(contest.seb_browser_exam_keys, '')
+        self.assertEqual(contest.seb_allowed_bek(), [PRESET_BEK])
+
+    def test_seb_use_default_without_a_default_returns_400(self):
+        response = self._post(name='SEB No Default', key='sebnodefault',
+                              seb_required=True, seb_use_default=True)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('No default Safe Exam Browser configuration',
+                      json.loads(response.content)['error'])
+
+    def test_seb_use_default_ignores_inactive_preset(self):
+        _create_preset(is_active=False)
+        response = self._post(name='SEB Inactive', key='sebinactive',
+                              seb_required=True, seb_use_default=True)
+        self.assertEqual(response.status_code, 400)
+
+    def _edit_seb(self, contest, **overrides):
+        data = {
+            'name': contest.name, 'key': contest.key,
+            'start_time': contest.start_time.isoformat(),
+            'end_time': contest.end_time.isoformat(),
+            'seb_required': True,
+        }
+        data.update(overrides)
+        return self.client.post(
+            reverse('contest_edit', args=[contest.key]),
+            data=json.dumps(data), content_type='application/json',
+        )
+
+    def test_resave_keeps_existing_preset_when_default_changes(self):
+        # Publishing a newer default must not silently re-point an existing
+        # assignment: that changes its Config Key and 403s every student
+        # already inside SEB.
+        original = _create_preset()
+        self._post(name='SEB Keep', key='sebkeep', seb_required=True, seb_use_default=True)
+        contest = Contest.objects.get(key='sebkeep')
+        self.assertEqual(contest.seb_preset, original)
+
+        newer = SEBConfigPreset(name='Newer default', browser_exam_keys='1' * 64,
+                                config_keys='2' * 64, is_default=True)
+        newer.config_file.save('newer.seb', ContentFile(b'SEB config'), save=False)
+        newer.save()
+        self.assertEqual(SEBConfigPreset.get_default(), newer)
+
+        response = self._edit_seb(contest, seb_use_default=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        contest.refresh_from_db()
+        self.assertEqual(contest.seb_preset, original)
+
+    def test_resave_keeps_preset_after_default_retired(self):
+        # A disabled checkbox is not submitted, so an unrelated save used to
+        # arrive as seb_use_default=False and silently drop the link. The
+        # control now stays enabled whenever a link exists.
+        preset = _create_preset()
+        self._post(name='SEB Retired', key='sebretired', seb_required=True, seb_use_default=True)
+        contest = Contest.objects.get(key='sebretired')
+
+        SEBConfigPreset.objects.filter(pk=preset.pk).update(is_active=False)
+        cache.delete(DEFAULT_PRESET_CACHE_KEY)
+        self.assertIsNone(SEBConfigPreset.get_default())
+
+        response = self._edit_seb(contest, seb_use_default=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        contest.refresh_from_db()
+        self.assertEqual(contest.seb_preset, preset)
+
+    def test_seb_use_default_unset_clears_preset(self):
+        preset = _create_preset()
+        self._post(name='SEB Clear', key='sebclear', seb_required=True, seb_use_default=True)
+        contest = Contest.objects.get(key='sebclear')
+        self.assertEqual(contest.seb_preset, preset)
+        response = self.client.post(
+            reverse('contest_edit', args=['sebclear']),
+            data=json.dumps({
+                'name': 'SEB Clear', 'key': 'sebclear',
+                'start_time': contest.start_time.isoformat(),
+                'end_time': contest.end_time.isoformat(),
+                'seb_required': True, 'seb_use_default': False,
+                'seb_browser_exam_keys': 'c' * 64, 'seb_config_keys': 'd' * 64,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        contest.refresh_from_db()
+        self.assertIsNone(contest.seb_preset)
 
     def test_format_config_json_saved(self):
         # ICPC accepts a config dict with a validated 'penalty' key — use it to
@@ -900,10 +1028,74 @@ class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
         self.assertTrue(json.loads(response.content)['ok'])
         self.contest.refresh_from_db()
         self.assertTrue(self.contest.seb_config_file)
-        # MEDIA_ROOT persists across test runs, so Django's storage may suffix a
-        # duplicate filename (exam_1KexZ2r.seb) — assert the basename loosely.
-        basename = self.contest.seb_config_file.name.rsplit('/', 1)[-1]
-        self.assertTrue(basename.startswith('exam') and basename.endswith('.seb'))
+        # The stored name is a generated object key, never the uploaded filename:
+        # seb_configs/YYYY/MM/contest-<id>/<uuid>.seb
+        name = self.contest.seb_config_file.name
+        self.assertRegex(name, r'^seb_configs/\d{4}/\d{2}/contest-%d/[0-9a-f]{32}\.seb$' % self.contest.id)
+        self.assertNotIn('exam', name)
+        # Every object written through ResilientStorage is tracked for mirroring.
+        self.assertTrue(StoredFileRecord.objects.filter(path=name).exists())
+
+    def test_seb_download_returns_stored_file(self):
+        self.client.force_login(self.editor)
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('exam.seb', b'SEB config bytes')},
+        )
+        response = self.client.get(reverse('contest_seb_upload', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), b'SEB config bytes')
+        self.assertIn('endpointcontest.seb', response['Content-Disposition'])
+
+    def test_seb_download_denied_without_permission(self):
+        self.client.force_login(self.curator)
+        response = self.client.get(reverse('contest_seb_upload', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 403)
+
+    def test_seb_upload_replaces_previous_object(self):
+        self.client.force_login(self.editor)
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('first.seb', b'first')},
+        )
+        self.contest.refresh_from_db()
+        first = self.contest.seb_config_file.name
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('second.seb', b'second')},
+        )
+        self.contest.refresh_from_db()
+        self.assertNotEqual(self.contest.seb_config_file.name, first)
+        # The replaced object is removed rather than orphaned in the bucket.
+        self.assertEqual(
+            StoredFileRecord.objects.get(path=first).status, StoredFileRecord.STATUS_DELETED)
+
+    def test_seb_upload_keeps_object_shared_with_a_clone(self):
+        # ContestClone copies the field value, so two contests can name the same
+        # object. Replacing one must not delete the other's config.
+        self.client.force_login(self.editor)
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('shared.seb', b'shared')},
+        )
+        self.contest.refresh_from_db()
+        shared = self.contest.seb_config_file.name
+        _now = timezone.now()
+        clone = create_contest(
+            key='clonedseb', name='Cloned',
+            start_time=_now + timedelta(days=1), end_time=_now + timedelta(days=2),
+            seb_config_file=shared,
+        )
+
+        self.client.post(
+            reverse('contest_seb_upload', args=['endpointcontest']),
+            data={'seb_config_file': SimpleUploadedFile('new.seb', b'new')},
+        )
+        clone.refresh_from_db()
+        self.assertEqual(clone.seb_config_file.name, shared)
+        self.assertNotEqual(
+            StoredFileRecord.objects.get(path=shared).status, StoredFileRecord.STATUS_DELETED)
+        self.assertEqual(clone.seb_config_file.open('rb').read(), b'shared')
 
     def test_seb_upload_rejects_bad_extension(self):
         self.client.force_login(self.editor)

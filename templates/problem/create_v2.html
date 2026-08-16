@@ -13,11 +13,11 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
   {# Same pattern as base.html DARK_STYLE_CSS: rebuild page styles with vars-dark. #}
   <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
-  <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}" media="(prefers-color-scheme: dark)">
   {% include "problem/add-problem-menu-assets.html" %}
 
   <!-- Math formulas: block $$...$$ / \[...\]; inline \(...\) (legacy ~...~ remains supported). -->
@@ -107,6 +107,17 @@
     .tc-collapse-summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; color: var(--muted); transition: transform 0.15s; }
     .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
     .tc-body-wrap { border-top: 1px solid var(--admin-border); padding: 0.75rem 0.85rem 0.9rem; }
+    .editorial-collapse { margin: 0; }
+    .editorial-collapse > summary {
+      background: var(--admin-header); color: var(--admin-header-text); margin: 0; padding: 0.55rem 1rem;
+      font-size: 1.1em; font-weight: 600; cursor: pointer; list-style: none; user-select: none;
+      border-bottom: 1px solid var(--admin-header-border);
+      border-radius: var(--oj-radius-md, 6px) var(--oj-radius-md, 6px) 0 0;
+    }
+    .editorial-collapse > summary::-webkit-details-marker { display: none; }
+    .editorial-collapse > summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; transition: transform 0.15s; }
+    .editorial-collapse[open] > summary::before { transform: rotate(90deg); }
+    .editorial-collapse:not([open]) > summary { border-bottom: none; border-radius: var(--oj-radius-md, 6px); }
 
     /* ZIP case preview: compact and shows both input and output. */
     .tc-drawer-mask {
@@ -169,13 +180,6 @@
     .unsaved-note { font-size: 12px; color: var(--muted); padding: 0.35rem 1rem 0.6rem; }
     .radio-list label { display: block; font-weight: normal; width: auto; padding: 0.2rem 0; }
     .inline-num input { width: 70px; }
-
-    /* Collapsible solution explanation. */
-    .explain-collapse > summary { list-style: none; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--muted); padding: 0.2rem 0; display: flex; align-items: center; gap: 0.4rem; }
-    .explain-collapse > summary::-webkit-details-marker { display: none; }
-    .explain-collapse .chev { transition: transform 0.15s; }
-    .explain-collapse[open] .chev { transform: rotate(90deg); }
-    .explain-collapse .ec-body { margin-top: 0.6rem; }
 
     /* Formulas and subquestions in the preview. */
     .pv-sub { border-top: 1px dashed #e0e0e0; margin-top: 1rem; padding-top: 0.8rem; }
@@ -301,7 +305,7 @@
             <label>{{ _('Courses') }}</label>
             <div class="field">
               <div class="select-with-add">
-                <select multiple id="f-org" class="org-select2" style="width:100%;max-width:500px;">
+                <select multiple id="f-org" class="org-select2" style="width:100%;max-width:500px;"{% if not can_create_organization %} disabled{% endif %}>
                   {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
                 </select>
                 {% if can_create_organization %}
@@ -318,7 +322,7 @@
             </div>
           </div>
           <div class="form-row">
-            <label>{{ _('publicly visible') }}</label>
+            <label>{{ _('Public visible') }}</label>
             <div class="field">
               <input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}>
             </div>
@@ -355,15 +359,37 @@
             <div class="field"><input type="number" id="f-points" value="1" min="0" step="0.5" style="max-width:120px;"></div>
           </div>
 
-          <!-- Partial scores (multiple-choice and fill-blank only). -->
-          <div class="form-row type-panel" data-for="multiple,blank" id="partial-row" style="display:none;">
+          <!-- Fill-blank: optional per-blank points. -->
+          <div class="form-row type-panel" data-for="blank" id="partial-row" style="display:none;">
             <label>{{ _('Partial scoring') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
                 <input type="checkbox" id="f-partial" onchange="syncPartialFromMain(); renderScoreConf()"> {{ _('Allow partial scoring') }}
               </label>
-              <div class="help" id="partial-sub"></div>
+              <div class="help" id="partial-sub">{{ _('Each blank is scored separately; set points next to each blank under Answers.') }}</div>
               <div id="partial-conf" class="score-conf" style="display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Multiple choice: two partial-credit rules (no extra checkbox). -->
+          <div class="form-row type-panel" data-for="multiple" id="mcq-scoring-row" style="display:none;">
+            <label>{{ _('Scoring method') }}</label>
+            <div class="field">
+              <div class="radio-list" id="mcq-scoring-list">
+                <label>
+                  <input type="radio" name="mcq-scoring" value="underselect">
+                  {{ _('Under-select credit:') }}
+                  {{ _('each correct choice earns') }}
+                  <span class="inline-num"><input type="number" id="f-mcq-underselect-points" min="0" step="0.5" placeholder="" onfocus="document.querySelector('input[name=mcq-scoring][value=underselect]').checked = true;"></span>
+                  {{ _('points; a wrong choice scores 0') }}
+                </label>
+                <label>
+                  <input type="radio" name="mcq-scoring" value="proportional" checked>
+                  {{ _('Proportional credit:') }}
+                  {{ _('score = full points × (correct − wrong) / number of correct options, minimum 0') }}
+                </label>
+              </div>
+              <div class="help">{{ _('Leave per-choice points empty to split the question evenly among correct options.') }}</div>
             </div>
           </div>
 
@@ -499,27 +525,60 @@
               <div class="type-panel" data-for="other" style="display:none;">
                 <div class="blank-hints">{{ _('Other type only records the statement and notes for offline/manual grading; it is not auto-judged.') }}</div>
               </div>
-
-              <!-- Editorial shortcut → Advanced Solution.content -->
-              <div class="type-panel" data-for="single,multiple,truefalse,short,blank,programming,file">
-                <details class="explain-collapse">
-                  <summary><span class="chev">▸</span> {{ _("Explanation") }} <span style="font-weight:normal;color:var(--muted);">{{ _("(optional; saved as Solution editorial)") }}</span></summary>
-                  <div class="ec-body">
-                    <div data-rich-mount="explain" data-toolbar="mini" data-placeholder="{{ _('Enter the editorial / explanation…') }}"></div>
-                    <p class="unsaved-note">{{ _('Synced with Advanced → Solution content on save.') }}</p>
-                  </div>
-                </details>
-              </div>
         </div>
       </fieldset>
 
-      <!-- Code problem test cases: inline entry or ZIP, without embedding the legacy page. -->
+      <!-- Same Solution model as classic admin; label matches the student Editorial tab. -->
+      <fieldset class="module type-panel" data-for="single,multiple,truefalse,short,blank,programming,file">
+        <details class="editorial-collapse" id="editorial-collapse">
+        <summary>{{ _('Editorial') }}</summary>
+        <div class="form-content">
+          <div class="form-row">
+            <label>{{ _('Is public') }}</label>
+            <div class="field">
+              <input type="checkbox" id="f-sol-public">
+              <div class="help">{{ _('Publish the editorial') }}</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>{{ _('Publish on') }}</label>
+            <div class="field">
+              <input type="text" id="f-sol-publish" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM">
+              <div class="help">{{ _('Students can read it after this time, once it is public. Hidden during assignments/contests.') }}</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>{{ _('Authors') }}</label>
+            <div class="field">
+              <select multiple id="f-sol-authors" class="profile-select2" style="width:100%;max-width:500px;"></select>
+            </div>
+          </div>
+          <div class="form-row" style="align-items:flex-start;">
+            <label>{{ _('Content') }}</label>
+            <div class="field">
+              <div data-rich-mount="editorial" data-toolbar="mini" data-placeholder="{{ _('Enter the editorial…') }}"></div>
+              <div class="help">{{ _('Shown on the student problem page as the Editorial tab.') }}</div>
+            </div>
+          </div>
+        </div>
+        </details>
+      </fieldset>
+
+      <!-- Code problem test cases: zip members + file matching, same model as classic test_data. -->
       <fieldset class="module type-panel" data-for="programming" style="display:none;">
         <h2>{{ _("Test cases") }}</h2>
         <div class="form-content">
           <details class="tc-collapse" id="tc-collapse" open>
             <summary class="tc-collapse-summary">{{ _("Test data settings (click to collapse)") }}</summary>
             <div class="tc-body-wrap">
+              {% if test_data_url %}
+                <p class="help tc-admin-link">
+                  <a href="{{ test_data_url }}" target="_blank" rel="noopener">{{ _('Edit test data') }}</a>
+                  — {{ _('Opens the original test-data page (generator, batches, harness, and zip file matching).') }}
+                </p>
+              {% else %}
+                <p class="help tc-admin-link">{{ _('After you save this programming problem, a link to the original test-data editor will appear here.') }}</p>
+              {% endif %}
               <div class="tc-toolbar">
                 <button type="button" class="btn" onclick="addTestCase()">+ {{ _("Add case") }}</button>
                 <label class="btn" style="cursor:pointer;margin:0;">
@@ -541,7 +600,7 @@
                 </label>
                 <span id="tc-zip-status" style="color:var(--muted);"></span>
               </div>
-              <p class="help" style="margin:0.4rem 0 0.6rem;">{{ _('Case weights are relative. With Partial on, score scales by passed/total weights; with Partial off, only full AC earns problem Points.') }}</p>
+              <p class="help" style="margin:0.4rem 0 0.6rem;">{{ _('Upload a zip to list its files, then pick input and output for each case. Case weights are relative.') }}</p>
               <div style="overflow-x:auto;">
                 <table class="tc-table" id="tc-table">
                   <thead>
@@ -557,6 +616,38 @@
                   <tbody id="tc-body"></tbody>
                 </table>
               </div>
+              <details class="tc-harness" id="tc-harness"{% if not test_data_url %} open{% endif %}>
+                <summary>{{ _('Harness') }}</summary>
+                <p class="help">{{ _("Hidden test code that wraps student submissions. Students can download this via 'Download Tester'. Only one harness per problem is supported.") }}</p>
+                <div class="form-row">
+                  <label>{{ _('Language') }}</label>
+                  <div class="field">
+                    <select id="f-harness-lang"></select>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label></label>
+                  <div class="field">
+                    <label><input type="checkbox" id="f-harness-skip"> {{ _('Skip pre-compilation') }}</label>
+                    <div class="help">{{ _('Enable if student code references classes/functions only defined in the harness (e.g., hidden APIs).') }}</div>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label></label>
+                  <div class="field">
+                    <label><input type="checkbox" id="f-harness-main"> {{ _('Run student main') }}</label>
+                    <div class="help">{{ _('If enabled, student code is the entry point; harness provides hidden APIs.') }}</div>
+                  </div>
+                </div>
+                <div class="form-row" style="align-items:flex-start;">
+                  <label>{{ _('Harness Code') }}</label>
+                  <div class="field">
+                    <div id="f-harness-monaco" class="harness-monaco"></div>
+                    <textarea id="f-harness-code" rows="10" hidden spellcheck="false" placeholder="{{ _('Hidden test code compiled/run with the student submission.') }}"></textarea>
+                    <div class="help">{{ _('Hidden test code compiled/run with the student submission.') }}</div>
+                  </div>
+                </div>
+              </details>
             </div>
           </details>
         </div>
@@ -662,7 +753,7 @@
           <h2>{{ _('Classes') }}</h2>
           <div class="form-content">
             <div class="form-row"><label>{{ _('Classes') }}</label><div class="field">
-              <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"></select>
+              <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"{% if not can_create_organization %} disabled{% endif %}></select>
               <div class="help">{{ _('Only classes belonging to the selected courses are listed') }}</div>
             </div></div>
           </div>
@@ -749,18 +840,6 @@
             </tbody>
           </table>
           <p class="unsaved-note">{{ _('Shown on the problem page (same as classic ProblemClarification).') }}</p>
-        </div>
-
-        <div class="inline-group">
-          <h2>{{ _('Solution') }}</h2>
-          <div class="form-content" style="padding:0.75rem 1rem;">
-            <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-sol-public"><div class="help">{{ _('Publish the solution') }}</div></div></div>
-            <div class="form-row"><label>{{ _('Publish on') }}</label><div class="field"><input type="text" id="f-sol-publish" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"></div></div>
-            <div class="form-row"><label>{{ _('Authors') }}</label><div class="field">
-              <select multiple id="f-sol-authors" class="profile-select2" style="width:100%;max-width:500px;"></select>
-            </div></div>
-            <div class="form-row"><label>{{ _('Content') }}</label><div class="field"><textarea id="f-sol-content" rows="4" placeholder="{{ _('Solution / editorial body (also editable via Explanation above)') }}" style="width:100%;"></textarea></div></div>
-          </div>
         </div>
 
         <div class="inline-group">
@@ -867,6 +946,9 @@
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
     const CAN_CREATE_FILE = {{ 'true' if can_create_file else 'false' }};
     const EDIT_CODE = '{{ edit_code }}';
+    const TEST_DATA_URL = '{{ test_data_url }}';
+    const HARNESS_LANGUAGES = {{ harness_languages_json|default('[]')|safe }};
+    const MONACO_VS_URL = '{{ static("libs/monaco/vs") }}';
     const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
     const IMPORT_EDITOR_MODE = {{ 'true' if import_editor_mode else 'false' }};
@@ -1222,6 +1304,7 @@
       if (type === 'programming' && document.getElementById('tc-body') && !document.getElementById('tc-body').children.length) {
         /* keep empty until user adds / imports; do not auto-seed */
       }
+      if (type === 'programming') layoutHarnessMonaco();
 
       renderScoreConf();
       renderPreview();
@@ -1283,16 +1366,86 @@
       renderScoreConf(); renderPreview();
     }
 
-    /* ---------- Test cases (inline entry and ZIP filename mode) ---------- */
-    // Soft warning only: save uploads the archive as a file (same path as classic test_data).
-    const TC_ZIP_WARN_TOTAL = 8 * 1024 * 1024;
-    let tcDrawerTarget = null; // { tr }
-    let pendingZipFile = null; // original File from <input>, reused on save when unchanged
+    /* ---------- Test cases (classic zip unpack + file matching) ---------- */
+    let pendingZipFile = null; // original File from <input>, reused on save
+    let zipFiles = []; // zip namelist shown in input/output selects
+    let tcDrawerTarget = null;
 
     function renumberTestCases() {
       const rows = document.querySelectorAll('#tc-body tr');
       rows.forEach((tr, i) => { tr.children[0].textContent = String(i + 1); });
       tcSeq = rows.length;
+    }
+
+    function usableZipPaths(paths) {
+      return (paths || []).filter(p => {
+        if (!p || String(p).endsWith('/')) return false;
+        const base = basename(p);
+        if (base.startsWith('.') || String(p).includes('__MACOSX')) return false;
+        return true;
+      }).sort((a, b) => {
+        const ka = naturalKey(a), kb = naturalKey(b);
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+    }
+
+    function fileSelectHtml(kind, selected) {
+      const opts = ['<option value=""></option>'].concat(zipFiles.map(p => (
+        `<option value="${escapeAttr(p)}"${p === selected ? ' selected' : ''}>${escapeHtml(p)}</option>`
+      )));
+      return `<select class="tc-file-select" data-kind="${kind}">${opts.join('')}</select>`;
+    }
+
+    function matchingOutName(inName) {
+      if (!inName) return '';
+      const guess = inName.replace(/in(?!.*?in)/, 'out');
+      if (zipFiles.indexOf(guess) >= 0) return guess;
+      const alt = inName.replace(/in(?!.*?in)/, 'ans');
+      if (zipFiles.indexOf(alt) >= 0) return alt;
+      return '';
+    }
+
+    function bindFileSelects(tr) {
+      const inSel = tr.querySelector('.tc-file-select[data-kind="input"]');
+      const outSel = tr.querySelector('.tc-file-select[data-kind="output"]');
+      if (!inSel || !outSel) return;
+      inSel.addEventListener('change', () => {
+        if (!outSel.value) {
+          const guess = matchingOutName(inSel.value);
+          if (guess) outSel.value = guess;
+        }
+      });
+    }
+
+    function fillSelect(sel, selected) {
+      const val = selected != null ? selected : sel.value;
+      sel.innerHTML = '<option value=""></option>' + zipFiles.map(p =>
+        `<option value="${escapeAttr(p)}">${escapeHtml(p)}</option>`).join('');
+      sel.value = zipFiles.indexOf(val) >= 0 ? val : '';
+    }
+
+    function applyZipFilesToRows() {
+      document.querySelectorAll('#tc-body tr').forEach(tr => {
+        let inSel = tr.querySelector('.tc-file-select[data-kind="input"]');
+        let outSel = tr.querySelector('.tc-file-select[data-kind="output"]');
+        if (!inSel) {
+          const inBtn = tr.querySelector('.tc-file-btn[data-kind="input"]');
+          const outBtn = tr.querySelector('.tc-file-btn[data-kind="output"]');
+          const inF = tr.querySelector('.tc-fname[data-kind="input"]');
+          const outF = tr.querySelector('.tc-fname[data-kind="output"]');
+          const inName = (inBtn && inBtn.dataset.file) || (inF && inF.value) || '';
+          const outName = (outBtn && outBtn.dataset.file) || (outF && outF.value) || '';
+          tr.dataset.mode = 'zip';
+          const inCell = tr.querySelector('.tc-in');
+          const outCell = tr.querySelector('.tc-out');
+          if (inCell) inCell.innerHTML = fileSelectHtml('input', inName);
+          if (outCell) outCell.innerHTML = fileSelectHtml('output', outName);
+          bindFileSelects(tr);
+        } else {
+          fillSelect(inSel);
+          fillSelect(outSel);
+        }
+      });
     }
 
     function fileCellHtml(kind, fileName, isZip) {
@@ -1313,44 +1466,36 @@
     function addTestCase(opts) {
       const points = (opts && opts.points != null) ? opts.points : 10;
       const pretest = !!(opts && opts.pretest);
-      const fromZip = !!(opts && (opts.input_file || opts.output_file || opts.fromZip));
       const inName = (opts && opts.input_file) || '';
       const outName = (opts && opts.output_file) || '';
+      const useZip = zipFiles.length > 0 || !!(opts && (opts.fromZip || inName || outName) && !opts.input && !opts.output);
       const tr = document.createElement('tr');
-      tr.dataset.mode = fromZip ? 'zip' : 'manual';
-      tr.innerHTML = `
+      tr.dataset.mode = useZip ? 'zip' : 'manual';
+      if (useZip) {
+        tr.innerHTML = `
         <td></td>
-        <td class="tc-in">${fromZip
-          ? fileCellHtml('input', inName, true)
-          : `<textarea class="tc-content" data-kind="input" placeholder="stdin"></textarea>
-             <input type="hidden" class="tc-fname" data-kind="input" value="">`}
-        </td>
-        <td class="tc-out">${fromZip
-          ? fileCellHtml('output', outName, true)
-          : `<textarea class="tc-content" data-kind="output" placeholder="expected"></textarea>
-             <input type="hidden" class="tc-fname" data-kind="output" value="">`}
-        </td>
+        <td class="tc-in">${fileSelectHtml('input', inName)}</td>
+        <td class="tc-out">${fileSelectHtml('output', outName)}</td>
         <td><input type="number" class="tc-points" value="${points}" min="0"></td>
         <td style="text-align:center;"><input type="checkbox" class="tc-pretest" title="${gettext('Mark as sample/pretest')}"${pretest ? ' checked' : ''}></td>
         <td><button type="button" class="btn-icon" onclick="removeTestCaseRow(this)">×</button></td>`;
-      document.getElementById('tc-body').appendChild(tr);
-      if (opts) {
+        bindFileSelects(tr);
+      } else {
+        tr.innerHTML = `
+        <td></td>
+        <td class="tc-in"><textarea class="tc-content" data-kind="input" placeholder="stdin"></textarea>
+             <input type="hidden" class="tc-fname" data-kind="input" value="${escapeAttr(inName)}"></td>
+        <td class="tc-out"><textarea class="tc-content" data-kind="output" placeholder="expected"></textarea>
+             <input type="hidden" class="tc-fname" data-kind="output" value="${escapeAttr(outName)}"></td>
+        <td><input type="number" class="tc-points" value="${points}" min="0"></td>
+        <td style="text-align:center;"><input type="checkbox" class="tc-pretest" title="${gettext('Mark as sample/pretest')}"${pretest ? ' checked' : ''}></td>
+        <td><button type="button" class="btn-icon" onclick="removeTestCaseRow(this)">×</button></td>`;
         const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
         const outTa = tr.querySelector('textarea.tc-content[data-kind="output"]');
-        if (inTa && opts.input != null) inTa.value = opts.input;
-        if (outTa && opts.output != null) outTa.value = opts.output;
-        if (!fromZip) {
-          const inF = tr.querySelector('.tc-fname[data-kind="input"]');
-          const outF = tr.querySelector('.tc-fname[data-kind="output"]');
-          if (inF && opts.input_file) inF.value = opts.input_file;
-          if (outF && opts.output_file) outF.value = opts.output_file;
-        }
+        if (inTa && opts && opts.input != null) inTa.value = opts.input;
+        if (outTa && opts && opts.output != null) outTa.value = opts.output;
       }
-      if (fromZip) {
-        tr.querySelectorAll('.tc-file-btn').forEach(btn => {
-          btn.addEventListener('click', () => openTcDrawer(tr));
-        });
-      }
+      document.getElementById('tc-body').appendChild(tr);
       renumberTestCases();
       return tr;
     }
@@ -1402,12 +1547,13 @@
     }
 
     function syncPendingZipState() {
-      const hasZipRow = [...document.querySelectorAll('#tc-body tr')].some(tr => tr.dataset.mode === 'zip');
-      if (!hasZipRow) pendingZipFile = null;
+      // Zip membership is independent of case rows, matching classic test_data.
     }
 
     function collectTestCases() {
       return [...document.querySelectorAll('#tc-body tr')].map(tr => {
+        const inSel = tr.querySelector('.tc-file-select[data-kind="input"]');
+        const outSel = tr.querySelector('.tc-file-select[data-kind="output"]');
         const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
         const outTa = tr.querySelector('textarea.tc-content[data-kind="output"]');
         const inBtn = tr.querySelector('.tc-file-btn[data-kind="input"]');
@@ -1417,8 +1563,8 @@
         return {
           input: inTa ? inTa.value : '',
           output: outTa ? outTa.value : '',
-          input_file: (inBtn && inBtn.dataset.file) || (inF && inF.value) || '',
-          output_file: (outBtn && outBtn.dataset.file) || (outF && outF.value) || '',
+          input_file: (inSel && inSel.value) || (inBtn && inBtn.dataset.file) || (inF && inF.value) || '',
+          output_file: (outSel && outSel.value) || (outBtn && outBtn.dataset.file) || (outF && outF.value) || '',
           points: Number((tr.querySelector('.tc-points') || {}).value || 0),
           pretest: !!(tr.querySelector('.tc-pretest') || {}).checked,
           fromZip: tr.dataset.mode === 'zip',
@@ -1479,61 +1625,6 @@
       return i >= 0 ? path.slice(0, i) : '';
     }
 
-    /** Pair zip entries into {input, output, sortKey} using common OJ naming. */
-    function pairZipEntries(paths) {
-      const usable = paths.filter(p => {
-        if (!p || p.endsWith('/')) return false;
-        const base = basename(p);
-        if (base.startsWith('.') || p.includes('__MACOSX')) return false;
-        return true;
-      });
-      const byDir = {};
-      usable.forEach(p => {
-        const d = dirname(p);
-        (byDir[d] || (byDir[d] = [])).push(p);
-      });
-
-      const pairs = [];
-      const used = new Set();
-
-      function tryMatch(dir, files) {
-        const lowerMap = {};
-        files.forEach(p => { lowerMap[basename(p).toLowerCase()] = p; });
-
-        files.forEach(inPath => {
-          if (used.has(inPath)) return;
-          const base = basename(inPath);
-          const lower = base.toLowerCase();
-          let outBase = null;
-          let m;
-
-          if ((m = lower.match(/^(.+)\.in\.txt$/))) {
-            const stem = m[1];
-            outBase = [stem + '.out.txt', stem + '.ans.txt'].find(c => lowerMap[c] && !used.has(lowerMap[c]));
-          } else if ((m = lower.match(/^(.+)\.in$/))) {
-            const stem = m[1];
-            outBase = [stem + '.out', stem + '.ans', stem + '.out.txt', stem + '.ans.txt']
-              .find(c => lowerMap[c] && !used.has(lowerMap[c]));
-          } else if ((m = lower.match(/^input(\d+)\.txt$/))) {
-            outBase = ['output' + m[1] + '.txt', 'output' + m[1] + '.out']
-              .find(c => lowerMap[c] && !used.has(lowerMap[c]));
-          } else if ((m = lower.match(/^in(\d+)\.txt$/))) {
-            outBase = ['out' + m[1] + '.txt', 'ans' + m[1] + '.txt']
-              .find(c => lowerMap[c] && !used.has(lowerMap[c]));
-          }
-          if (!outBase) return;
-          const outPath = lowerMap[outBase];
-          used.add(inPath);
-          used.add(outPath);
-          pairs.push({ input: inPath, output: outPath, sortKey: naturalKey(dir + '/' + base) });
-        });
-      }
-
-      Object.keys(byDir).sort().forEach(d => tryMatch(d, byDir[d]));
-      pairs.sort((a, b) => a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0);
-      return pairs;
-    }
-
     async function importZipFile(file) {
       if (!file) return;
       if (typeof JSZip === 'undefined') {
@@ -1544,56 +1635,20 @@
         setZipStatus(gettext('Please choose a .zip file.'), true);
         return;
       }
-      const body = document.getElementById('tc-body');
-      const hasRows = body && body.children.length > 0;
-      if (hasRows && !confirm(gettext('Importing a zip will replace the current test cases. Continue?'))) {
-        document.getElementById('tc-zip-input').value = '';
-        return;
-      }
 
-      setZipStatus(interpolate(gettext('Parsing %s …'), [file.name]));
+      setZipStatus(interpolate(gettext('Reading %s …'), [file.name]));
       try {
         const zip = await JSZip.loadAsync(file);
-        const paths = Object.keys(zip.files);
-        const pairs = pairZipEntries(paths);
-        if (!pairs.length) {
-          setZipStatus(gettext('No pairable test files found (supports N.in/N.out, N.in.txt/N.out.txt, inputN.txt/outputN.txt).'), true);
+        const paths = usableZipPaths(Object.keys(zip.files));
+        if (!paths.length) {
+          setZipStatus(gettext('The zip has no files to match.'), true);
           return;
         }
-
-        let total = 0;
-        const cases = [];
-        for (const pair of pairs) {
-          const inEntry = zip.files[pair.input];
-          const outEntry = zip.files[pair.output];
-          if (inEntry.dir || outEntry.dir) continue;
-          const input = await inEntry.async('string');
-          const output = await outEntry.async('string');
-          total += input.length + output.length;
-          cases.push({
-            input, output,
-            // Keep zip-relative paths so save/re-upload matches classic valid_files / namelist.
-            input_file: pair.input.replace(/\\/g, '/'),
-            output_file: pair.output.replace(/\\/g, '/'),
-            fromZip: true,
-            points: 1,
-            pretest: false,
-          });
-        }
-        if (!cases.length) {
-          setZipStatus(gettext('No readable text test cases in the zip.'), true);
-          return;
-        }
-
-        body.innerHTML = '';
-        tcSeq = 0;
         pendingZipFile = file;
-        cases.forEach(tc => addTestCase(tc));
-        let msg = interpolate(gettext('Imported %s pairs (saved as a ZIP file upload, same limits as legacy test_data).'), [cases.length]);
-        if (total > TC_ZIP_WARN_TOTAL) {
-          msg += ' ' + gettext('Preview content is large; the browser may be slow, but save still uploads the ZIP file.');
-        }
-        setZipStatus(msg);
+        zipFiles = paths;
+        applyZipFilesToRows();
+        if (!document.querySelector('#tc-body tr')) addTestCase({ fromZip: true });
+        setZipStatus(interpolate(gettext('Loaded %s files. Pick input and output for each case.'), [paths.length]));
       } catch (err) {
         console.error('[tc-zip]', err);
         pendingZipFile = null;
@@ -1607,6 +1662,129 @@
       const input = document.getElementById('tc-zip-input');
       if (input) input.addEventListener('change', () => importZipFile(input.files && input.files[0]));
     })();
+
+    function fillHarnessLanguages() {
+      const sel = document.getElementById('f-harness-lang');
+      if (!sel) return;
+      sel.innerHTML = '<option value=""></option>' + (HARNESS_LANGUAGES || []).map(lang =>
+        `<option value="${escapeAttr(String(lang.id))}" data-key="${escapeAttr(lang.key)}" data-ace="${escapeAttr(lang.ace || '')}">${escapeHtml(lang.name)}</option>`
+      ).join('');
+    }
+    const ACE_TO_MONACO = {
+      c_cpp: 'cpp', cpp: 'cpp', c: 'c', csharp: 'csharp', golang: 'go', go: 'go',
+      java: 'java', javascript: 'javascript', python: 'python', rust: 'rust',
+      ruby: 'ruby', php: 'php', kotlin: 'kotlin', swift: 'swift', typescript: 'typescript',
+    };
+    let harnessEditor = null;
+    function harnessMonacoLang() {
+      const sel = document.getElementById('f-harness-lang');
+      const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+      const ace = (opt && opt.dataset.ace) || '';
+      if (ACE_TO_MONACO[ace]) return ACE_TO_MONACO[ace];
+      if (ace) return ace;
+      const name = ((opt && opt.textContent) || '').toLowerCase();
+      if (name.indexOf('python') >= 0) return 'python';
+      if (name.indexOf('java') >= 0 && name.indexOf('script') < 0) return 'java';
+      return 'java';
+    }
+    function harnessCodeValue() {
+      if (harnessEditor) return harnessEditor.getValue();
+      const ta = document.getElementById('f-harness-code');
+      return ta ? ta.value : '';
+    }
+    function setHarnessCode(value) {
+      const ta = document.getElementById('f-harness-code');
+      if (ta) ta.value = value || '';
+      if (harnessEditor) harnessEditor.setValue(value || '');
+    }
+    function syncHarnessMonacoLanguage() {
+      if (!harnessEditor || !window.monaco) return;
+      window.monaco.editor.setModelLanguage(harnessEditor.getModel(), harnessMonacoLang());
+    }
+    function layoutHarnessMonaco() {
+      if (harnessEditor && harnessEditor.layout) {
+        requestAnimationFrame(() => harnessEditor.layout());
+      }
+    }
+    function initHarnessMonaco() {
+      const mount = document.getElementById('f-harness-monaco');
+      const ta = document.getElementById('f-harness-code');
+      if (!mount || !ta || !MONACO_VS_URL) return;
+      const langSel = document.getElementById('f-harness-lang');
+      if (langSel) langSel.addEventListener('change', syncHarnessMonacoLanguage);
+      const box = document.getElementById('tc-harness');
+      if (box) box.addEventListener('toggle', () => { if (box.open) layoutHarnessMonaco(); });
+      const loader = document.createElement('script');
+      loader.src = MONACO_VS_URL.replace(/\/?$/, '/') + 'loader.js';
+      loader.onload = function () {
+        if (!window.require) return;
+        window.require.config({ paths: { vs: MONACO_VS_URL } });
+        window.require(['vs/editor/editor.main'], function () {
+          const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+          harnessEditor = window.monaco.editor.create(mount, {
+            value: ta.value,
+            language: harnessMonacoLang(),
+            theme: darkQuery.matches ? 'vs-dark' : 'vs',
+            automaticLayout: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            fontSize: 13,
+            wordWrap: 'on',
+          });
+          harnessEditor.onDidChangeModelContent(function () {
+            ta.value = harnessEditor.getValue();
+          });
+          if (darkQuery.addEventListener) {
+            darkQuery.addEventListener('change', () => {
+              window.monaco.editor.setTheme(darkQuery.matches ? 'vs-dark' : 'vs');
+            });
+          }
+          layoutHarnessMonaco();
+        });
+      };
+      loader.onerror = function () { mount.hidden = true; ta.hidden = false; };
+      document.head.appendChild(loader);
+    }
+    function collectHarness() {
+      const code = harnessCodeValue();
+      const lang = document.getElementById('f-harness-lang');
+      return {
+        language_id: lang ? lang.value : '',
+        language: lang && lang.selectedOptions[0] ? (lang.selectedOptions[0].dataset.key || '') : '',
+        harness_code: code,
+        skip_precompile: !!(document.getElementById('f-harness-skip') || {}).checked,
+        run_student_main: !!(document.getElementById('f-harness-main') || {}).checked,
+        delete: !code.trim(),
+      };
+    }
+    function fillHarness(h) {
+      fillHarnessLanguages();
+      const lang = document.getElementById('f-harness-lang');
+      const skip = document.getElementById('f-harness-skip');
+      const main = document.getElementById('f-harness-main');
+      const box = document.getElementById('tc-harness');
+      if (!h) {
+        if (lang) lang.value = '';
+        setHarnessCode('');
+        if (skip) skip.checked = false;
+        if (main) main.checked = false;
+        syncHarnessMonacoLanguage();
+        return;
+      }
+      if (lang) {
+        if (h.language_id) lang.value = String(h.language_id);
+        else if (h.language) {
+          const opt = [...lang.options].find(o => o.dataset.key === h.language);
+          if (opt) lang.value = opt.value;
+        }
+      }
+      setHarnessCode(h.harness_code || '');
+      syncHarnessMonacoLanguage();
+      if (skip) skip.checked = !!h.skip_precompile;
+      if (main) main.checked = !!h.run_student_main;
+      if (box && (h.harness_code || h.language_id)) box.open = true;
+      layoutHarnessMonaco();
+    }
 
     /* ---------- Composite subquestions ---------- */
     function addSub(type) {
@@ -1698,27 +1876,34 @@
       }
 
       const subEl = document.getElementById('partial-sub');
-      if (currentType === 'programming') subEl.textContent = gettext('Partial score uses relative case weights (passed / total); weights need not equal problem Points');
-      else if (currentType === 'multiple') subEl.textContent = gettext('Partial credit for under-selection; wrong selections follow the rule below');
-      else if (currentType === 'short') subEl.textContent = gettext('AI / keyword scoring awards a score between 0 and full points');
-      else if (currentType === 'blank') subEl.textContent = gettext('Each blank is scored separately; points for each correct blank');
+      if (subEl) {
+        if (currentType === 'programming') subEl.textContent = gettext('Partial score uses relative case weights (passed / total); weights need not equal problem Points');
+        else if (currentType === 'short') subEl.textContent = gettext('AI / keyword scoring awards a score between 0 and full points');
+        else if (currentType === 'blank') subEl.textContent = gettext('Each blank is scored separately; set points next to each blank under Answers.');
+      }
 
-      partialConf.style.display = partialOn ? 'block' : 'none';
-      if (partialOn) {
-        if (currentType === 'multiple') {
-          partialConf.innerHTML = `<div class="radio-list">
-            <label><input type="radio" name="pmode" checked> ${gettext('Under-select credit:')} ${gettext('each correct choice earns')} <span class="inline-num"><input type="number" value="0.5" step="0.5"></span> ${gettext('points; any wrong choice scores 0')}</label>
-            <label><input type="radio" name="pmode"> ${gettext('Proportional credit: score = full points × (correct − wrong) / number of correct options, minimum 0')}</label>
-          </div>`;
-        } else if (currentType === 'blank') {
+      if (currentType === 'blank') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Per-blank points are enabled; set points for each blank under Answers above.')}</div>`;
           document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'inline-flex');
-        } else if (currentType === 'short') {
+        } else {
+          document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'none');
+        }
+      } else if (currentType === 'short') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Short-answer partial scoring depends on <b>AI grading</b> or keyword matching (configure tiers in the AI grading Rubric below).')}</div>`;
-        } else if (currentType === 'programming') {
+        }
+      } else if (currentType === 'programming') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Programming partial score uses relative case weights (passed / total). Set Weight per case below; they need not sum to problem Points. Batch subtasks supported.')}</div>`;
         }
-      } else if (currentType === 'blank') {
+      } else if (partialConf) {
+        partialConf.style.display = 'none';
+      }
+      if (currentType !== 'blank') {
         document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'none');
       }
       renderPreview();
@@ -1936,6 +2121,15 @@
         ensureOption(document.getElementById('f-authors'), CURRENT_PROFILE.id, CURRENT_PROFILE.username, true);
       }
     }
+    function bindEditorialCollapse() {
+      const box = document.getElementById('editorial-collapse');
+      if (!box) return;
+      box.addEventListener('toggle', () => {
+        if (!box.open || !window.jQuery) return;
+        const sel = document.getElementById('f-sol-authors');
+        if (sel) jQuery(sel).trigger('change.select2');
+      });
+    }
     function initOrgPicker() {
       const sel = document.getElementById('f-org');
       if (!sel || !window.jQuery || !jQuery.fn.select2) return;
@@ -2126,18 +2320,13 @@
         short_circuit: !!(document.getElementById('f-short-circuit') || {}).checked,
         edit_reason: ((document.getElementById('f-edit-reason') || {}).value || '').trim(),
         clarifications: collectClarifications(),
-        solution: (function () {
-          const ta = ((document.getElementById('f-sol-content') || {}).value || '').trim();
-          const explain = (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown)
-            ? (RichEditor.getMarkdown('explain') || '').trim() : '';
-          return {
-            is_public: !!(document.getElementById('f-sol-public') || {}).checked,
-            publish_on: (document.getElementById('f-sol-publish') || {}).value || '',
-            authors: selectedIds(document.getElementById('f-sol-authors')),
-            // Explanation editor is a shortcut into Solution.content.
-            content: ta || explain,
-          };
-        })(),
+        solution: {
+          is_public: !!(document.getElementById('f-sol-public') || {}).checked,
+          publish_on: (document.getElementById('f-sol-publish') || {}).value || '',
+          authors: selectedIds(document.getElementById('f-sol-authors')),
+          content: (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown)
+            ? (RichEditor.getMarkdown('editorial') || '').trim() : '',
+        },
         translations: collectTranslations(),
       };
     }
@@ -2165,10 +2354,9 @@
       if (d.solution) {
         setChk('f-sol-public', d.solution.is_public);
         setVal('f-sol-publish', d.solution.publish_on || '');
-        setVal('f-sol-content', d.solution.content || '');
         (d.solution.authors || []).forEach(u => ensureOption(document.getElementById('f-sol-authors'), u.id, u.username, true));
-        if (d.solution.content && typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
-          try { RichEditor.setMarkdown('explain', d.solution.content); } catch (e) { /* mount may lag */ }
+        if (typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
+          try { RichEditor.setMarkdown('editorial', d.solution.content || ''); } catch (e) { /* mount may lag */ }
         }
       }
       if (d.translations && d.translations.length) {
@@ -2193,7 +2381,8 @@
         group_id: document.getElementById('f-group').value,
         points: document.getElementById('f-points').value,
         is_public: document.getElementById('f-public').checked,
-        partial: !!(document.getElementById('f-partial') && document.getElementById('f-partial').checked)
+        partial: currentType === 'multiple'
+          || !!(document.getElementById('f-partial') && document.getElementById('f-partial').checked)
           || !!(document.getElementById('f-partial-code') && document.getElementById('f-partial-code').checked),
         ai: document.getElementById('f-ai').checked,
         rubric: (document.getElementById('f-rubric') || {}).value || '',
@@ -2207,6 +2396,12 @@
       if (currentType === 'single' || currentType === 'multiple') {
         data.multiple = currentType === 'multiple';
         data.options = [...document.querySelectorAll('#options .option-row')].map(op => ({ text: getOptionText(op).trim(), correct: op.querySelector('.option-marker input').checked }));
+        if (currentType === 'multiple') {
+          data.mcqScoring = (document.querySelector('input[name="mcq-scoring"]:checked') || {}).value || 'proportional';
+          const under = document.getElementById('f-mcq-underselect-points');
+          const raw = under ? String(under.value || '').trim() : '';
+          data.mcqUnderselectPoints = raw === '' ? null : Number(raw);
+        }
       } else if (currentType === 'truefalse') {
         data.tfAnswer = document.querySelector('input[name="tf"]:checked').value;
       } else if (currentType === 'short') {
@@ -2216,7 +2411,12 @@
         data.fileMaxSizeMb = document.getElementById('f-file-size').value;
         data.fileInstructions = document.getElementById('f-file-instructions').value;
       } else if (currentType === 'blank') {
-        data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer')].map(t => t.value.trim());
+        data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer-row')].map(row => {
+          const answers = ((row.querySelector('.blank-answer') || {}).value || '').trim();
+          const ptsEl = row.querySelector('.blank-pts input');
+          const raw = ptsEl ? String(ptsEl.value || '').trim() : '';
+          return { answers: answers, points: raw === '' ? 1 : Number(raw) };
+        }).filter(b => b.answers);
         data.trimWhitespace = (document.getElementById('f-blank-trim') || {}).checked !== false;
         data.caseSensitive = !!(document.getElementById('f-blank-case') || {}).checked;
       } else if (currentType === 'compound') {
@@ -2227,6 +2427,8 @@
         data.languages = [...document.querySelectorAll('#f-langs .lang-cb:checked')].map(c => c.value);
         data.checker = (document.getElementById('tc-checker') || {}).value || '';
         data.testcases = collectTestCases();
+        data.zip_mode = zipFiles.length > 0;
+        data.harness = collectHarness();
         data.language_limits = collectLangLimits();
         data.templates = collectTemplates();
       }
@@ -2255,7 +2457,13 @@
         if (d.type === 'single' && correct > 1) return 'Single-choice questions may only have one correct answer.';
       }
       if (d.type === 'short' && !d.shortAnswer) return 'Please provide a reference answer.';
-      if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(b => b))) return 'Please provide at least one fill-in-the-blank answer.';
+      if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(function (b) {
+        if (!b) return false;
+        if (typeof b === 'string') return !!b.trim();
+        var answers = b.answers;
+        if (Array.isArray(answers)) return answers.some(function (x) { return String(x || '').trim(); });
+        return !!(answers && String(answers).trim());
+      }))) return 'Please provide at least one fill-in-the-blank answer.';
       if (d.type === 'file' && !(Number(d.fileMaxSizeMb) > 0)) return 'Please enter a maximum file size greater than zero.';
       if (d.type === 'compound' && (!d.subs || !d.subs.length)) return 'Please add at least one sub-problem.';
       // AI grading requires a grading table
@@ -2303,6 +2511,8 @@
         const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
       { const tb = document.getElementById('tc-body'); if (tb) tb.innerHTML = ''; }
       pendingZipFile = null;
+      zipFiles = [];
+      fillHarness(null);
       document.getElementById('sub-list').innerHTML = '';
       document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
       optionSeq = blankSeq = tcSeq = subSeq = 0; draftSaved = false;
@@ -2310,36 +2520,31 @@
     }
     async function prepareSaveRequest(data) {
       const cases = data.testcases || [];
-      const rows = [...document.querySelectorAll('#tc-body tr')];
-      const needsZipUpload = data.type === 'programming' && cases.length > 0 &&
-        (pendingZipFile || rows.some(tr => tr.dataset.mode === 'zip'));
-      if (!needsZipUpload) {
-        return {
-          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
-          body: JSON.stringify(data),
-        };
+      const zipMode = !!data.zip_mode;
+      if (data.type === 'programming' && pendingZipFile) {
+        data.testcases = cases.map(tc => ({
+          input_file: tc.input_file || '',
+          output_file: tc.output_file || '',
+          points: tc.points,
+          pretest: tc.pretest,
+        }));
+        const fd = new FormData();
+        fd.append('payload', JSON.stringify(data));
+        fd.append('testcase_zip', pendingZipFile, pendingZipFile.name || 'data.zip');
+        return { headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd };
       }
-      const dirty = rows.some(tr => tr.querySelector('.tc-file-btn.dirty'));
-      const hasManual = rows.some(tr => tr.dataset.mode === 'manual');
-      let zipBlob;
-      let zipName = 'data.zip';
-      if (pendingZipFile && !dirty && !hasManual) {
-        zipBlob = pendingZipFile;
-        zipName = pendingZipFile.name || zipName;
-      } else {
-        zipBlob = await buildTestcaseZipBlob(cases);
+      if (zipMode && data.testcases) {
+        data.testcases = cases.map(tc => ({
+          input_file: tc.input_file || '',
+          output_file: tc.output_file || '',
+          points: tc.points,
+          pretest: tc.pretest,
+        }));
       }
-      // Metadata only in JSON — file bytes travel as multipart (classic test_data limits).
-      data.testcases = cases.map(tc => ({
-        input_file: tc.input_file || '',
-        output_file: tc.output_file || '',
-        points: tc.points,
-        pretest: tc.pretest,
-      }));
-      const fd = new FormData();
-      fd.append('payload', JSON.stringify(data));
-      fd.append('testcase_zip', zipBlob, zipName);
-      return { headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd };
+      return {
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify(data),
+      };
     }
 
     function submitForm(action) {
@@ -2539,6 +2744,13 @@
           rows[rows.length - 1].querySelector('.option-marker input').checked = !!o.correct;
         });
         refreshOptionMarkers();
+        if (d.type === 'multiple') {
+          const mode = d.mcqScoring || 'proportional';
+          const radio = document.querySelector(`input[name="mcq-scoring"][value="${mode}"]`);
+          if (radio) radio.checked = true;
+          const under = document.getElementById('f-mcq-underselect-points');
+          if (under) under.value = (d.mcqUnderselectPoints != null && d.mcqUnderselectPoints !== '') ? d.mcqUnderselectPoints : '';
+        }
       } else if (d.type === 'truefalse') {
         const tf = document.querySelector(`input[name="tf"][value="${d.tfAnswer || 'true'}"]`);
         if (tf) tf.checked = true;
@@ -2546,8 +2758,13 @@
         const list = document.getElementById('blank-answers'); list.innerHTML = ''; blankSeq = 0;
         (d.blanks || []).forEach(ans => {
           addBlank();
-          const areas = list.querySelectorAll('.blank-answer');
-          areas[areas.length - 1].value = ans || '';
+          const rows = list.querySelectorAll('.blank-answer-row');
+          const row = rows[rows.length - 1];
+          const text = (ans && typeof ans === 'object') ? (ans.answers || '') : (ans || '');
+          const pts = (ans && typeof ans === 'object') ? ans.points : null;
+          row.querySelector('.blank-answer').value = text;
+          const ptsInput = row.querySelector('.blank-pts input');
+          if (ptsInput && pts != null && pts !== '') ptsInput.value = pts;
         });
         if (!(d.blanks || []).length) addBlank();
         const trimCb = document.getElementById('f-blank-trim'); if (trimCb) trimCb.checked = d.trimWhitespace !== false;
@@ -2568,23 +2785,28 @@
         });
         const chk = document.getElementById('tc-checker');
         if (chk) chk.value = d.checker || '';
+        zipFiles = usableZipPaths(d.zip_files || []);
+        pendingZipFile = null;
+        if (zipFiles.length) {
+          setZipStatus(interpolate(gettext('Loaded %s files. Pick input and output for each case.'), [zipFiles.length]));
+        }
         const tb = document.getElementById('tc-body');
         if (tb) {
           tb.innerHTML = '';
           tcSeq = 0;
           (d.testcases || []).forEach(tc => {
-            const hasNames = !!(tc.input_file || tc.output_file);
             addTestCase({
-              input: tc.input || '',
-              output: tc.output || '',
+              input: zipFiles.length ? '' : (tc.input || ''),
+              output: zipFiles.length ? '' : (tc.output || ''),
               input_file: tc.input_file || '',
               output_file: tc.output_file || '',
               points: tc.points != null ? tc.points : 0,
               pretest: !!tc.pretest,
-              fromZip: hasNames,
+              fromZip: zipFiles.length > 0,
             });
           });
         }
+        fillHarness(d.harness);
       }
       hydrateAdvanced(d);
       renderScoreConf();
@@ -2606,6 +2828,9 @@
     initOrgPicker();
     initProfilePickers();
     initClassPicker();
+    fillHarnessLanguages();
+    initHarnessMonaco();
+    bindEditorialCollapse();
 
     (function bindAdvancedFilePick() {
       const input = document.getElementById('f-md-upload');

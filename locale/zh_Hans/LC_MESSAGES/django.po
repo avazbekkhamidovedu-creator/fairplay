@@ -982,6 +982,48 @@ msgstr "时间限制"
 msgid "publicly visible"
 msgstr "公开"
 
+msgid "Public visible"
+msgstr "公开"
+
+msgid "After you save this programming problem, a link to the original test-data editor will appear here."
+msgstr "保存编程题后，这里会出现指向原测试数据编辑页的链接。"
+
+msgid "Opens the original test-data page (generator, batches, harness, and zip file matching)."
+msgstr "打开原测试数据页（生成器、测试组、Harness，以及 zip 文件匹配）。"
+
+msgid "Upload a zip to list its files, then pick input and output for each case. Case weights are relative."
+msgstr "上传 zip 后会列出其中的文件，再为每组测试点选择输入和输出。分值为相对权重。"
+
+msgid "Publish the editorial"
+msgstr "公开题解"
+
+msgid "Students can read it after this time, once it is public. Hidden during assignments/contests."
+msgstr "公开后且到达该时间，学生才可阅读。作业/竞赛进行中不会显示。"
+
+msgid "Enter the editorial…"
+msgstr "请输入题解…"
+
+msgid "Shown on the student problem page as the Editorial tab."
+msgstr "显示在学生做题页的「题解」标签中。"
+
+msgid "Loaded %s files. Pick input and output for each case."
+msgstr "已载入 %s 个文件。请为每组测试点选择输入和输出。"
+
+msgid "The zip has no files to match."
+msgstr "该 zip 中没有可匹配的文件。"
+
+msgid "Harness"
+msgstr "Harness"
+
+msgid "Skip pre-compilation"
+msgstr "跳过预编译"
+
+msgid "Run student main"
+msgstr "运行学生 main"
+
+msgid "Harness Code"
+msgstr "Harness 代码"
+
 #: judge/models/contest.py:94
 msgid "Should be set even for organization-private contests, where it determines whether the contest is visible to members of the specified organizations."
 msgstr "组织内竞赛也需公开，否则责组织成员无法查看本竞赛。"
@@ -4530,6 +4572,10 @@ msgstr "课程"
 msgid "All courses"
 msgstr "全部课程"
 
+#: templates/problem/list.html templates/problem/workspace.html
+msgid "Public"
+msgstr "公共"
+
 #: templates/problem/create_v2.html
 msgid "Courses"
 msgstr "课程"
@@ -5154,6 +5200,10 @@ msgid "All types"
 msgstr "全部题型"
 
 #: templates/problem/list.html
+msgid "All tags"
+msgstr "全部标签"
+
+#: templates/problem/list.html
 msgid "Difficulty"
 msgstr "难度"
 
@@ -5196,6 +5246,14 @@ msgstr "选择"
 #: templates/problem/list.html
 msgid "Search..."
 msgstr "搜索…"
+
+#: templates/problem/list.html
+msgid "Show more"
+msgstr "展开"
+
+#: templates/problem/list.html
+msgid "Show less"
+msgstr "收起"
 
 #: templates/problem/list.html
 msgid "No knowledge points yet."
@@ -6757,6 +6815,10 @@ msgid "Leave blank for a public problem (requires permission); selecting an orga
 msgstr "留空则为公开题（需相应权限）；选择组织后为该组织私有"
 
 #: problem create_v2 / rich_editor i18n
+msgid "Choice question"
+msgstr "选择题"
+
+#: problem create_v2 / rich_editor i18n
 msgid "Multiple choice"
 msgstr "多选题"
 
@@ -6815,6 +6877,38 @@ msgstr "页面错误："
 #: problem create_v2 / rich_editor i18n
 msgid "Partial scoring"
 msgstr "部分分"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Scoring method"
+msgstr "计分方式"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Under-select credit:"
+msgstr "少选给分："
+
+#: problem create_v2 / rich_editor i18n
+msgid "Proportional credit:"
+msgstr "比例计分："
+
+#: problem create_v2 / rich_editor i18n
+msgid "each correct choice earns"
+msgstr "每对一项得"
+
+#: problem create_v2 / rich_editor i18n
+msgid "points; a wrong choice scores 0"
+msgstr "分；错选不得分"
+
+#: problem create_v2 / rich_editor i18n
+msgid "score = full points × (correct − wrong) / number of correct options, minimum 0"
+msgstr "得分 = 满分 × (对 − 错) / 正确选项数，最低为 0"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Leave per-choice points empty to split the question evenly among correct options."
+msgstr "每项分留空则按满分均分到各正确选项。"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Each blank is scored separately; set points next to each blank under Answers."
+msgstr "每个空单独计分；在上方答案处为每个空设定分数。"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Plain-text summary for meta description"

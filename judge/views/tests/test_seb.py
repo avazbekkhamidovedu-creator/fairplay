@@ -7,13 +7,18 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import ContestParticipation
+from judge.models import ContestParticipation, SEBConfigPreset
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, create_user
 
 BEK = hashlib.sha256(b'browser exam key').hexdigest()
 CFG = hashlib.sha256(b'config key').hexdigest()
 
 SEB_CONFIG_BYTES = b'<plist>fake seb config</plist>'
+
+PRESET_BEK = hashlib.sha256(b'preset browser exam key').hexdigest()
+PRESET_CFG = hashlib.sha256(b'preset config key').hexdigest()
+
+PRESET_CONFIG_BYTES = b'<plist>fake preset seb config</plist>'
 
 
 def bek_header(path, key=BEK):
@@ -293,3 +298,95 @@ class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
     def test_quit_page_anonymous(self):
         response = self.client.get(reverse('seb_quit'))
         self.assertContains(response, 'Exam finished')
+
+
+@override_settings(COMPRESS_ENABLED=False, MEDIA_ROOT=tempfile.mkdtemp())
+class ContestSEBPresetTestCase(CommonDataMixin, TestCase):
+    """A contest carrying no SEB config of its own, inheriting a site preset."""
+
+    @classmethod
+    def setUpTestData(self):
+        super().setUpTestData()
+        self.users['preset_student'] = create_user(username='preset_student')
+        self.users['preset_staff'] = create_user(
+            username='preset_staff', user_permissions=('contest_seb_requirement',))
+
+        self.preset = SEBConfigPreset(
+            name='Site default',
+            browser_exam_keys=PRESET_BEK,
+            config_keys=PRESET_CFG,
+            quit_url='https://example.com/quit',
+            is_default=True,
+        )
+        self.preset.config_file.save('default.seb', ContentFile(PRESET_CONFIG_BYTES), save=False)
+        self.preset.save()
+
+        self.preset_contest = create_contest(
+            key='presetexam',
+            is_visible=True,
+            seb_required=True,
+            seb_preset=self.preset,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(cls._overridden_settings['MEDIA_ROOT'], ignore_errors=True)
+
+    def setUp(self):
+        self.client = Client()
+
+    def enter_contest(self, username, contest):
+        profile = self.users[username].profile
+        profile.current_contest = create_contest_participation(contest=contest, user=profile)
+        profile.save()
+        self.client.force_login(self.users[username])
+
+    def test_blocked_without_seb(self):
+        self.enter_contest('preset_student', self.preset_contest)
+        response = self.client.get(reverse('home'))
+        self.assertContains(response, 'Safe Exam Browser required', status_code=403)
+
+    def test_allowed_with_preset_bek_header(self):
+        self.enter_contest('preset_student', self.preset_contest)
+        path = reverse('home')
+        response = self.client.get(path, **bek_header(path, PRESET_BEK))
+        self.assertEqual(response.status_code, 200)
+
+    def test_allowed_with_preset_config_key_header(self):
+        self.enter_contest('preset_student', self.preset_contest)
+        path = reverse('home')
+        response = self.client.get(path, **cfg_header(path, PRESET_CFG))
+        self.assertEqual(response.status_code, 200)
+
+    def test_config_download_serves_preset_file(self):
+        self.client.force_login(self.users['preset_student'])
+        response = self.client.get(reverse('contest_seb_config', args=('presetexam',)))
+        self.assertEqual(response.status_code, 200)
+        # Served under the contest's own name even though the bytes are the preset's.
+        self.assertIn('presetexam.seb', response['Content-Disposition'])
+        self.assertEqual(b''.join(response.streaming_content), PRESET_CONFIG_BYTES)
+
+    def test_preset_file_stored_under_generated_key(self):
+        # Presets live in the object store on an opaque key, like submissions.
+        self.assertRegex(self.preset.config_file.name,
+                         r'^seb_configs/\d{4}/\d{2}/presets/[0-9a-f]{32}\.seb$')
+
+    # ------------------------------------------------------------------ #
+    # Preset preview download (editor-facing)                             #
+    # ------------------------------------------------------------------ #
+
+    def test_preset_preview_requires_login(self):
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 302)
+
+    def test_preset_preview_denied_without_permission(self):
+        self.client.force_login(self.users['preset_student'])
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 403)
+
+    def test_preset_preview_allowed_with_permission(self):
+        self.client.force_login(self.users['preset_staff'])
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), PRESET_CONFIG_BYTES)

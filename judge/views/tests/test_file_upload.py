@@ -245,17 +245,95 @@ class FileUploadGradeDownloadTestCase(FileUploadBase):
         self.sub.refresh_from_db()
         self.assertNotEqual(self.sub.result, 'IE')
 
-    def test_status_page_shows_grade_form_and_download(self):
-        # Editor sees the inline grade form, the download link, and the awaiting-grading note.
+    def test_status_page_shows_download_not_grade_form(self):
+        # Result page: download + awaiting grading. Teacher grading UI is not here.
         self.client.force_login(self.users['creator'])
         response = self.client.get(reverse('submission_status', args=[self.sub.id]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, reverse('submission_file_grade', args=[self.sub.id]))
         self.assertContains(response, reverse('submission_file_download', args=[self.sub.id]))
         self.assertContains(response, 'Awaiting grading')
+        self.assertNotContains(response, 'Grade this submission')
+        self.assertNotContains(response, reverse('submission_file_grade', args=[self.sub.id]))
+        self.assertNotContains(response, 'waiting for a suitable judge')
+        self.assertNotContains(response, 'Abort')
 
-        # A non-editor viewer does not get the grade form.
         self.client.force_login(self.users['normal'])
         response = self.client.get(reverse('submission_status', args=[self.sub.id]))
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, reverse('submission_file_grade', args=[self.sub.id]))
+        self.assertContains(response, reverse('submission_file_download', args=[self.sub.id]))
+        self.assertNotContains(response, 'Grade this submission')
+
+
+class FileUploadWorkspaceTestCase(FileUploadBase):
+    def setUp(self):
+        super().setUp()
+        self.problem = self.make_problem(code='wsfile')
+        config = self.problem.file_config
+        config.instructions = 'Please upload a PDF report.'
+        config.max_file_size = 5 * 1024 * 1024
+        config.save()
+
+    def test_workspace_shows_upload_hints(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_detail', args=['wsfile']))
+        self.assertContains(response, 'id="workspace"')
+        self.assertContains(response, 'Please upload a PDF report.')
+        self.assertContains(response, 'Allowed types:')
+        self.assertContains(response, 'pdf')
+        self.assertContains(response, 'Max size:')
+        self.assertContains(response, '5 MB')
+        self.assertContains(response, 'type="file"')
+        self.assertContains(response, 'multipart/form-data')
+        self.assertContains(response, 'data-is-file="1"')
+
+    def test_workspace_result_has_download_and_awaiting_grading(self):
+        self.client.force_login(self.users['normal'])
+        sub = Submission.objects.create(
+            user=self.users['normal'].profile, problem=self.problem,
+            language=Language.get_answer_language(), status='QU',
+        )
+        SubmissionFile.objects.create(
+            submission=sub, file=_pdf(), original_name='report.pdf', size=14,
+        )
+        response = self.client.get(
+            reverse('problem_detail', args=['wsfile']) + '?submission=%d' % sub.id,
+        )
+        self.assertContains(response, reverse('submission_file_download', args=[sub.id]))
+        self.assertContains(response, 'Download uploaded file')
+        self.assertContains(response, 'report.pdf')
+        self.assertContains(response, 'Awaiting grading')
+        self.assertContains(response, 'File submitted')
+        self.assertNotContains(response, 'waiting for a suitable judge')
+        self.assertNotContains(response, 'Grade this submission')
+        self.assertNotContains(response, 'id="test-cases"')
+
+    def test_workspace_submit_json_includes_file_download(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.post(
+            reverse('problem_submit', args=['wsfile']),
+            {'workspace': '1', 'file': _pdf()},
+            HTTP_X_WORKSPACE_SUBMIT='1',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        download = reverse('submission_file_download', args=[payload['submission_id']])
+        self.assertEqual(payload['file_upload']['name'], 'report.pdf')
+        self.assertIn(download, payload['file_upload']['url'])
+        self.assertFalse(payload['is_graded'])
+        status = self.client.get(payload['status_url'])
+        self.assertEqual(status.status_code, 200)
+        body = status.json()
+        self.assertEqual(body['file_upload']['name'], 'report.pdf')
+        self.assertIn(download, body['file_upload']['url'])
+
+    def test_workspace_submit_oversize_keeps_size_error(self):
+        self.problem.file_config.max_file_size = 1024
+        self.problem.file_config.save()
+        self.client.force_login(self.users['normal'])
+        response = self.client.post(
+            reverse('problem_submit', args=['wsfile']),
+            {'workspace': '1', 'file': _pdf(content=b'x' * 4096)},
+            HTTP_X_WORKSPACE_SUBMIT='1',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('too large', response.json()['error'].lower())

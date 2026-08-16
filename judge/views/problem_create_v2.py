@@ -42,7 +42,7 @@ from reversion import revisions
 
 from judge.models import (Class, Language, LanguageLimit, License, Organization, Problem, ProblemBlank,
                           ProblemClarification, ProblemCodeConfig, ProblemFileConfig, ProblemFillBlankConfig,
-                          ProblemGroup, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig,
+                          ProblemGroup, ProblemHarness, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig,
                           ProblemSubmissionType, ProblemTemplate, ProblemTranslation, ProblemType, Profile,
                           Solution, SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
@@ -167,8 +167,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
     def get_context(self, request):
         user = request.user
         profile = request.profile
-        # Organizations the teacher may scope the problem to (their own memberships).
-        orgs = list(profile.organizations.values('id', 'name')) if profile else []
+        # Match original admin organization_select2 on main: any course is selectable.
+        orgs = list(Organization.objects.order_by('name').values('id', 'name'))
+        can_edit_organizations = user.has_perm('judge.create_private_problem')
         return {
             'title': _('Add problem'),
             'organizations': orgs,
@@ -187,7 +188,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
             'can_create_file': user.has_perm('judge.create_private_problem'),
             'can_import_excel_problems': user.has_perm('judge.create_private_problem'),
-            'can_change_public': user.has_perm('judge.change_public_visibility'),
+            # Match ProblemAdmin.get_readonly_fields on main: is_public is editable with
+            # create_private_problem or change_public_visibility; save still requires an
+            # organization unless the user has change_public_visibility.
+            'can_change_public': (
+                can_edit_organizations or user.has_perm('judge.change_public_visibility')
+            ),
             'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
             'can_full_markup': user.has_perm('judge.problem_full_markup'),
             'default_group_id': default_problem_group().id,
@@ -196,7 +202,18 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'create_problem_type_url': reverse('problem_create_v2_problem_type'),
             'create_problem_group_url': reverse('problem_create_v2_problem_group'),
             'create_organization_url': reverse('problem_create_v2_organization'),
-            'can_create_organization': user.has_perm('judge.create_private_problem'),
+            'can_create_organization': can_edit_organizations,
+            'harness_languages_json': (
+                json.dumps([
+                    {'id': lang.id, 'key': lang.key, 'name': lang.name, 'ace': lang.ace}
+                    for lang in Language.objects.filter(
+                        common_name__in=['Java', 'Python'],
+                    ).order_by('common_name', 'key')
+                ])
+                .replace('<', '\\u003c')
+                .replace('>', '\\u003e')
+                .replace('&', '\\u0026')
+            ),
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'ai_decompose_url': reverse('problem_create_v2_ai_decompose'),
             'problem_list_url': reverse('problem_list'),
@@ -360,6 +377,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ProblemFileConfig.objects.filter(problem=problem).delete()
         if clear_cases:
             problem.cases.all().delete()
+        # Called after submission_type is updated; drop harness when leaving programming.
+        if problem.submission_type != ProblemSubmissionType.CODE:
+            ProblemHarness.objects.filter(problem=problem).delete()
 
     def _build_edit_data(self, problem):
         """Serialize an existing problem into the shape the add-page JS expects (see collectData)."""
@@ -404,8 +424,21 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['gradingTable'] = code_config.grading_table if code_config else None
             try:
                 data['checker'] = problem.data_files.checker or ''
+                data['zip_files'] = self._zip_member_names(problem.data_files.zipfile)
             except Exception:
                 data['checker'] = ''
+                data['zip_files'] = []
+            harness = ProblemHarness.objects.filter(problem=problem).select_related('language').first()
+            if harness is not None:
+                data['harness'] = {
+                    'language_id': harness.language_id,
+                    'language': harness.language.key,
+                    'harness_code': harness.harness_code or '',
+                    'skip_precompile': harness.skip_precompile,
+                    'run_student_main': harness.run_student_main,
+                }
+            else:
+                data['harness'] = None
         elif st == ProblemSubmissionType.MCQ:
             config = getattr(problem, 'mcq_config', None)
             options = list(problem.mcq_options.order_by('order').values('text', 'is_correct'))
@@ -417,6 +450,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 data['type'] = 'multiple' if (config and config.multiple_select) else 'single'
                 data['multiple'] = bool(config and config.multiple_select)
                 data['options'] = [{'text': o['text'], 'correct': o['is_correct']} for o in options]
+                if config and config.multiple_select:
+                    data['mcqScoring'] = config.scoring_mode or ProblemMCQConfig.SCORE_PROPORTIONAL
+                    data['mcqUnderselectPoints'] = config.underselect_points
         elif st == ProblemSubmissionType.FILL_BLANK:
             data['type'] = 'blank'
             config = getattr(problem, 'fill_blank_config', None)
@@ -427,7 +463,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['gradingTable'] = config.grading_table if config else None
             # ProblemBlank stores accepted answers one-per-line and the create page now edits them
             # the same way (one accepted answer per line in a textarea), so pass them through as-is.
-            data['blanks'] = list(problem.blanks.order_by('order').values_list('answers', flat=True))
+            data['blanks'] = [
+                {'answers': blank.answers, 'points': blank.points}
+                for blank in problem.blanks.order_by('order')
+            ]
         elif st == ProblemSubmissionType.SHORT_ANSWER:
             data['type'] = 'short'
             config = getattr(problem, 'short_answer_config', None)
@@ -580,6 +619,34 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         except (TypeError, ValueError):
             return default
 
+    def _positive_or_none(self, value):
+        """Parse a score input; empty / missing / non-positive means “use the even split”."""
+        if value is None or value == '':
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    def _iter_blank_payload(self, payload):
+        """Yield ``(answers_text, points)`` from create-v2 ``blanks`` (strings or objects)."""
+        for item in payload.get('blanks') or []:
+            if isinstance(item, dict):
+                answers = item.get('answers') or item.get('text') or ''
+                points = self._num(item.get('points'), 1)
+            else:
+                answers = item
+                points = 1
+            if isinstance(answers, (list, tuple)):
+                answers = '\n'.join(str(part) for part in answers if part is not None and str(part).strip())
+            elif not isinstance(answers, str):
+                answers = str(answers) if answers is not None else ''
+            answers = answers.strip()
+            if not answers:
+                continue
+            yield answers, points if points > 0 else 1
+
     def _resolve_group(self, payload):
         gid = payload.get('group_id')
         if gid:
@@ -663,18 +730,27 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 seen.add(ptype.pk)
                 resolved.append(ptype)
 
-        diff_name = (payload.get('difficulty') or '').strip().lower()
+        diff_name = Problem.canonical_difficulty_name(payload.get('difficulty'))
         if diff_name in Problem.DIFFICULTY_TYPE_NAMES:
-            diff_type, _created = ProblemType.objects.get_or_create(
-                name=diff_name,
-                defaults={'full_name': _DIFFICULTY_FULL_NAMES[diff_name]},
-            )
+            diff_type = ProblemType.objects.filter(name__iexact=diff_name).first()
+            if diff_type is None:
+                diff_type = ProblemType.objects.filter(
+                    full_name__iexact=_DIFFICULTY_FULL_NAMES[diff_name],
+                ).first()
+            if diff_type is None:
+                diff_type, _created = ProblemType.objects.get_or_create(
+                    name=diff_name,
+                    defaults={'full_name': _DIFFICULTY_FULL_NAMES[diff_name]},
+                )
             if diff_type.pk not in seen:
                 resolved.append(diff_type)
                 seen.add(diff_type.pk)
         else:
             # Older clients omit difficulty — keep any existing easy/medium/hard row.
-            existing_diff = problem.types.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).first()
+            existing_diff = next(
+                (ptype for ptype in problem.types.all() if Problem.is_difficulty_problem_type(ptype)),
+                None,
+            )
             if existing_diff is not None and existing_diff.pk not in seen:
                 resolved.append(existing_diff)
 
@@ -683,7 +759,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         elif not problem.types.exists():
             problem.types.add(default_problem_type())
 
-    def _attach_orgs(self, problem, payload):
+    def _attach_orgs(self, problem, payload, user):
+        # Match ProblemAdmin.get_readonly_fields: organizations is read-only without
+        # create_private_problem. Users who can edit the field may assign any course.
+        if not user.has_perm('judge.create_private_problem'):
+            return
         ids = payload.get('organizations') or []
         problem.organizations.set(Organization.objects.filter(pk__in=ids))
 
@@ -784,7 +864,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if is_create or 'banned_users' in payload:
             problem.banned_users.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('banned_users'))))
 
-        if is_create or 'classes' in payload:
+        if user.has_perm('judge.create_private_problem') and (is_create or 'classes' in payload):
             org_ids = list(problem.organizations.values_list('id', flat=True))
             class_ids = self._profile_ids(payload.get('classes'))  # reuse int parser
             class_qs = Class.get_visible_classes(request.user).filter(pk__in=class_ids)
@@ -944,86 +1024,19 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return path.rsplit('/', 1)[-1] if path else ''
 
     @staticmethod
-    def _zip_dirname(path):
-        path = (path or '').replace('\\', '/')
-        if '/' not in path:
-            return ''
-        return path.rsplit('/', 1)[0]
-
-    @staticmethod
-    def _zip_natural_key(name):
-        return re.sub(r'(\d+)', lambda m: m.group(1).zfill(10), (name or '').lower())
-
-    @classmethod
-    def _pair_zip_entries(cls, paths):
-        """Pair zip member paths into input/output cases (same rules as create_v2.js)."""
-        usable = []
-        for path in paths:
-            if not path or path.endswith('/'):
-                continue
-            base = cls._zip_basename(path)
-            if base.startswith('.') or '__MACOSX' in path.replace('\\', '/'):
-                continue
-            usable.append(path.replace('\\', '/'))
-
-        by_dir = {}
-        for path in usable:
-            by_dir.setdefault(cls._zip_dirname(path), []).append(path)
-
-        pairs = []
-        used = set()
-
-        for directory in sorted(by_dir):
-            files = by_dir[directory]
-            lower_map = {cls._zip_basename(p).lower(): p for p in files}
-            for in_path in files:
-                if in_path in used:
-                    continue
-                base = cls._zip_basename(in_path)
-                lower = base.lower()
-                out_base = None
-                m = re.match(r'^(.+)\.in\.txt$', lower)
-                if m:
-                    stem = m.group(1)
-                    for candidate in (stem + '.out.txt', stem + '.ans.txt'):
-                        if candidate in lower_map and lower_map[candidate] not in used:
-                            out_base = candidate
-                            break
-                else:
-                    m = re.match(r'^(.+)\.in$', lower)
-                    if m:
-                        stem = m.group(1)
-                        for candidate in (stem + '.out', stem + '.ans', stem + '.out.txt', stem + '.ans.txt'):
-                            if candidate in lower_map and lower_map[candidate] not in used:
-                                out_base = candidate
-                                break
-                    else:
-                        m = re.match(r'^input(\d+)\.txt$', lower)
-                        if m:
-                            for candidate in ('output' + m.group(1) + '.txt', 'output' + m.group(1) + '.out'):
-                                if candidate in lower_map and lower_map[candidate] not in used:
-                                    out_base = candidate
-                                    break
-                        else:
-                            m = re.match(r'^in(\d+)\.txt$', lower)
-                            if m:
-                                for candidate in ('out' + m.group(1) + '.txt', 'ans' + m.group(1) + '.txt'):
-                                    if candidate in lower_map and lower_map[candidate] not in used:
-                                        out_base = candidate
-                                        break
-                if not out_base:
-                    continue
-                out_path = lower_map[out_base]
-                used.add(in_path)
-                used.add(out_path)
-                pairs.append({
-                    'input': in_path,
-                    'output': out_path,
-                    'sort_key': cls._zip_natural_key(directory + '/' + base),
-                })
-
-        pairs.sort(key=lambda item: item['sort_key'])
-        return pairs
+    def _zip_member_names(zipfile_field):
+        """Non-directory members of an uploaded ProblemData zip, as classic valid_files."""
+        if not zipfile_field:
+            return []
+        try:
+            with ZipFile(zipfile_field.path, 'r') as zf:
+                return [
+                    name.replace('\\', '/')
+                    for name in zf.namelist()
+                    if name and not name.endswith('/')
+                ]
+        except (BadZipfile, OSError, ValueError):
+            return []
 
     def _create_code(self, request, payload, name, problem=None, zip_upload=None):
         user = request.user
@@ -1062,7 +1075,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
             self._attach_types(problem, payload)
             self._attach_languages(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1077,8 +1090,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     meta_cases=cleaned_cases if cleaned_cases is not None else [],
                     checker=checker,
                 )
+            elif sync_cases and payload.get('zip_mode'):
+                self._save_testcase_matches(problem, cleaned_cases or [], checker=checker)
             elif sync_cases and (cleaned_cases or payload.get('edit_code')):
                 self._save_testcases(problem, cleaned_cases or [], checker=checker)
+            if 'harness' in payload:
+                self._save_harness(problem, payload)
         return problem
 
     def _save_code_config(self, problem, payload):
@@ -1146,12 +1163,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         data.checker = checker_value
 
     def _save_testcases_from_zip(self, problem, uploaded_zip, meta_cases=None, checker=''):
-        """Persist cases from an uploaded archive the same way classic test_data stores zipfile.
+        """Store the archive as classic test_data does; cases reference zip members the user picked.
 
-        ``meta_cases`` supplies points/pretest (and optional preferred names) by index; file bytes
-        always come from the zip so large packages never need to ride in the JSON body.
+        The zip is not re-paired by filename conventions. ``meta_cases`` supplies
+        ``input_file`` / ``output_file`` / points / pretest for each Normal case.
         """
-        from judge.models import ProblemData, ProblemTestCase
+        from judge.models import ProblemData
         from judge.utils.problem_data import ProblemDataCompiler
 
         if not uploaded_zip:
@@ -1160,10 +1177,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if not zip_name.lower().endswith('.zip'):
             raise ValueError(_("Zip files must end in '.zip'"))
 
-        # Pair before mutating storage so a bad archive fails without clearing existing data.
         try:
             with ZipFile(uploaded_zip, 'r') as zf:
-                pairs = self._pair_zip_entries(zf.namelist())
+                namelist = [name.replace('\\', '/') for name in zf.namelist() if name and not name.endswith('/')]
         except BadZipfile:
             raise
         except Exception:
@@ -1172,35 +1188,89 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             if hasattr(uploaded_zip, 'seek'):
                 uploaded_zip.seek(0)
 
-        if not pairs:
-            raise ValueError(_('No paired test files found in the zip '
-                               '(supported: N.in/N.out, N.in.txt/N.out.txt, inputN.txt/outputN.txt).'))
-
+        valid = set(namelist)
         meta_cases = meta_cases or []
+        self._write_zip_matched_cases(problem, meta_cases, valid)
         self._clear_problem_data_files(problem)
-        problem.cases.filter(type='C').delete()
-
-        valid_files = []
-        for order, pair in enumerate(pairs, start=1):
-            meta = meta_cases[order - 1] if order - 1 < len(meta_cases) else {}
-            in_name = pair['input']
-            out_name = pair['output']
-            valid_files += [in_name, out_name]
-            ProblemTestCase.objects.create(
-                dataset=problem, order=order, type='C',
-                input_file=in_name, output_file=out_name,
-                points=int(self._num(meta.get('points'), 0)),
-                is_pretest=bool(meta.get('pretest')),
-                checker=(meta.get('checker') or '')[:10],
-            )
 
         data, _created = ProblemData.objects.get_or_create(problem=problem)
         self._apply_checker(data, checker)
-        # Same FileField path as classic ProblemDataForm zip upload.
         data.zipfile.save(zip_name, uploaded_zip, save=False)
         data.save()
         problem.__dict__.pop('data_files', None)
-        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
+        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), namelist)
+
+    def _save_testcase_matches(self, problem, testcases, checker=''):
+        """Keep the existing zip and update which members each case uses (classic test_data)."""
+        from judge.models import ProblemData
+        from judge.utils.problem_data import ProblemDataCompiler
+
+        try:
+            data = problem.data_files
+        except ProblemData.DoesNotExist:
+            data = None
+        if data is None or not data.zipfile:
+            raise ValueError(_('Upload a zip of test files before matching input and output.'))
+
+        namelist = self._zip_member_names(data.zipfile)
+        self._write_zip_matched_cases(problem, testcases, set(namelist))
+        self._apply_checker(data, checker)
+        data.save()
+        problem.__dict__.pop('data_files', None)
+        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), namelist)
+
+    def _write_zip_matched_cases(self, problem, testcases, valid_names):
+        from judge.models import ProblemTestCase
+
+        prepared = []
+        for tc in testcases or []:
+            in_name = (tc.get('input_file') or '').replace('\\', '/').strip()
+            out_name = (tc.get('output_file') or '').replace('\\', '/').strip()
+            if in_name and in_name not in valid_names:
+                raise ValueError(_('Input file "%s" is not in the zip.') % in_name)
+            if out_name and out_name not in valid_names:
+                raise ValueError(_('Output file "%s" is not in the zip.') % out_name)
+            prepared.append((in_name, out_name, tc))
+
+        problem.cases.filter(type='C').delete()
+        for order, (in_name, out_name, tc) in enumerate(prepared, start=1):
+            ProblemTestCase.objects.create(
+                dataset=problem, order=order, type='C',
+                input_file=in_name, output_file=out_name,
+                points=int(self._num(tc.get('points'), 0)),
+                is_pretest=bool(tc.get('pretest')),
+                checker=(tc.get('checker') or '')[:10],
+            )
+
+    def _save_harness(self, problem, payload):
+        """Persist at most one harness, matching classic test_data formset max_num=1."""
+        harness = payload.get('harness')
+        ProblemHarness.objects.filter(problem=problem).delete()
+        if not harness or harness.get('delete'):
+            return
+        code = (harness.get('harness_code') or '').strip()
+        if not code:
+            return
+        lang = None
+        language_id = harness.get('language_id')
+        language_key = (harness.get('language') or '').strip()
+        qs = Language.objects.filter(common_name__in=['Java', 'Python'])
+        if language_id not in (None, ''):
+            try:
+                lang = qs.filter(pk=int(language_id)).first()
+            except (TypeError, ValueError):
+                lang = None
+        if lang is None and language_key:
+            lang = qs.filter(key=language_key).first()
+        if lang is None:
+            raise ValueError(_('Please select a harness language.'))
+        ProblemHarness.objects.create(
+            problem=problem,
+            language=lang,
+            harness_code=code,
+            skip_precompile=bool(harness.get('skip_precompile')),
+            run_student_main=bool(harness.get('run_student_main')),
+        )
 
     def _save_testcases(self, problem, testcases, checker=''):
         """Persist inline cases as loose files + a data.zip so the classic test_data page stays in sync.
@@ -1301,20 +1371,30 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
-            problem.partial = bool(payload.get('partial')) if multiple else False
+            problem.partial = True if multiple else False
             problem.group = self._resolve_group(payload)
             apply_simple_problem_defaults(problem)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
 
+            scoring_mode = ProblemMCQConfig.SCORE_PROPORTIONAL
+            underselect_points = None
+            if multiple:
+                raw_mode = payload.get('mcqScoring') or scoring_mode
+                if raw_mode in (ProblemMCQConfig.SCORE_PROPORTIONAL, ProblemMCQConfig.SCORE_UNDERSELECT):
+                    scoring_mode = raw_mode
+                underselect_points = self._positive_or_none(payload.get('mcqUnderselectPoints'))
+                if scoring_mode != ProblemMCQConfig.SCORE_UNDERSELECT:
+                    underselect_points = None
             ProblemMCQConfig.objects.create(
-                problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')))
+                problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')),
+                scoring_mode=scoring_mode, underselect_points=underselect_points)
             for index, option in enumerate(options):
                 ProblemMCQOption.objects.create(
                     problem=problem, order=index,
@@ -1348,7 +1428,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1364,7 +1444,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         user = request.user
         if not user.has_perm('judge.create_private_problem'):
             raise PermissionError(_('You do not have permission to create this problem type.'))
-        blanks = [b for b in (payload.get('blanks') or []) if (b or '').strip()]
+        blanks = list(self._iter_blank_payload(payload))
         if not blanks:
             raise ValueError(_('Please provide at least one blank answer.'))
 
@@ -1385,7 +1465,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1399,10 +1479,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 grading_table=payload.get('gradingTable') or None,
             )
             # The create page enters accepted answers one-per-line per blank; ProblemBlank stores
-            # them the same way (the grader splits on newlines).
-            for index, answers in enumerate(blanks):
+            # them the same way (the grader splits on newlines). Per-blank points apply when
+            # problem.partial is on.
+            for index, (answers, points) in enumerate(blanks):
                 normalized = '\n'.join(line.strip() for line in answers.splitlines() if line.strip())
-                ProblemBlank.objects.create(problem=problem, order=index, answers=normalized)
+                ProblemBlank.objects.create(
+                    problem=problem, order=index, answers=normalized, points=points)
         return problem
 
     # ------------------------------------------------------------------ short answer
@@ -1429,7 +1511,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1487,7 +1569,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)

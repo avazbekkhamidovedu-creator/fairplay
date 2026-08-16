@@ -47,6 +47,20 @@ def _accepted_set(blank, config):
     return result
 
 
+def _blank_weights(blanks):
+    """Positive point weights per blank; fall back to 1 each if none are set."""
+    weights = []
+    for blank in blanks:
+        try:
+            pts = float(blank.points)
+        except (TypeError, ValueError, AttributeError):
+            pts = 1.0
+        weights.append(pts if pts > 0 else 1.0)
+    if blanks and not any(weights):
+        return [1.0] * len(blanks)
+    return weights
+
+
 @register
 class FillBlankQuestionType(QuestionType):
     submission_type = ProblemSubmissionType.FILL_BLANK
@@ -103,16 +117,18 @@ class FillBlankQuestionType(QuestionType):
 
     def _grade_exact(self, config, blanks, answers):
         cases = []
+        weights = _blank_weights(blanks)
         case_points = 0
         for index, blank in enumerate(blanks):
             given = answers[index] if index < len(answers) else ''
             correct = _normalize(given, config) in _accepted_set(blank, config)
-            if correct:
-                case_points += 1
+            weight = weights[index]
+            earned = weight if correct else 0
+            case_points += earned
             cases.append({'case': index + 1, 'status': 'AC' if correct else 'WA',
-                          'points': 1 if correct else 0, 'total': 1})
+                          'points': earned, 'total': weight})
 
-        case_total = len(blanks)
+        case_total = sum(weights)
         # Always emit granular per-blank points; the all-or-nothing gating is applied downstream
         # by problem.partial (finalize_submission) and contest_problem.partial (update_contest),
         # exactly like code and MCQ problems.
@@ -141,10 +157,10 @@ class FillBlankQuestionType(QuestionType):
                     'auto-generating sub-questions from problem.points instead. '
                     'grading_table=%s, problem.points=%s',
                     len(grading_table), len(blanks), grading_table, problem.points)
-            pts_per_blank = float(problem.points) / len(blanks) if problem.points else 1.0
+            weights = _blank_weights(blanks)
             sub_questions = [
                 {'name': blank.label or f'Blank {i + 1}',
-                 'max_points': pts_per_blank,
+                 'max_points': weights[i],
                  'strictness': 'normal'}
                 for i, blank in enumerate(blanks)
             ]

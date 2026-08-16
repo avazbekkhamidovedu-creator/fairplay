@@ -947,10 +947,18 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
             blanks = payload.get('blanks') or []
             if not isinstance(blanks, list):
                 raise ValueError(_('Blank answers must be a list.'))
-            item.blanks = _serialize_fill_blanks([
-                {'label': '', 'answers': _split_lines(str(answer or '').replace('|', '\n'))}
-                for answer in blanks if str(answer or '').strip()
-            ])
+            blank_blocks = []
+            for answer in blanks:
+                if isinstance(answer, dict):
+                    text = answer.get('answers') or answer.get('text') or ''
+                else:
+                    text = answer
+                if isinstance(text, (list, tuple)):
+                    text = '\n'.join(str(part) for part in text if part is not None and str(part).strip())
+                text = str(text or '').strip()
+                if text:
+                    blank_blocks.append({'label': '', 'answers': _split_lines(text.replace('|', '\n'))})
+            item.blanks = _serialize_fill_blanks(blank_blocks)
             item.rubric = (payload.get('rubric') or '').strip()
             item.grading_table = json.dumps(payload.get('gradingTable')) if payload.get('gradingTable') else ''
         elif editor_type == 'short':
@@ -1698,7 +1706,7 @@ def _apply_editor_configuration(request, item, problem):
         # Excel parsing can prefill only organizations. Apply those explicit
         # fields without treating the partial payload as a complete editor save.
         if 'organizations' in saved_payload:
-            ProblemCreateV2View()._attach_orgs(problem, saved_payload)
+            ProblemCreateV2View()._attach_orgs(problem, saved_payload, request.user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
         return
@@ -1718,7 +1726,7 @@ def _apply_editor_configuration(request, item, problem):
     problem.is_public = editor._resolve_public(request.user, bool(payload.get('is_public')), payload)
     problem.save()
     editor._attach_types(problem, payload)
-    editor._attach_orgs(problem, payload)
+    editor._attach_orgs(problem, payload, request.user)
     if item.submission_type == ProblemSubmissionType.CODE:
         editor._attach_languages(problem, payload)
     problem.is_organization_private = problem.organizations.exists()

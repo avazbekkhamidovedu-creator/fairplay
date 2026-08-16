@@ -14,7 +14,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Case, CharField, Count, F, FilteredRelation, Max, Prefetch, Q, When
 from django.db.models.functions import Coalesce
 from django.db.utils import ProgrammingError
@@ -110,6 +110,59 @@ def workspace_display_points(submission, request):
         if contest_sub is not None:
             return contest_sub.points
     return submission.points
+
+
+def workspace_display_points_total(submission, request):
+    """Max score shown next to Workspace Result: assignment problem points, else problem.points."""
+    if getattr(request, 'in_contest', False):
+        contest_sub = submission.contest_or_none
+        if contest_sub is not None:
+            return contest_sub.problem.points
+        contest_problem = get_contest_problem(submission.problem, getattr(request, 'profile', None))
+        if contest_problem is not None:
+            return contest_problem.points
+    return submission.problem.points
+
+
+PUBLIC_COURSE_FILTER = 'public'
+
+
+def course_filter_organizations(user):
+    """Courses shown in course filters: the user's memberships (and orgs they admin).
+
+    Users who can see every organization-private problem get the full catalog so they
+    can still filter by a course they are not enrolled in.
+    """
+    qs = Organization.objects.order_by('name')
+    if not getattr(user, 'is_authenticated', False):
+        return []
+    if (
+        user.has_perm('judge.see_private_problem')
+        or user.has_perm('judge.see_organization_problem')
+        or (user.has_perm('judge.edit_own_problem') and user.has_perm('judge.edit_all_problem'))
+    ):
+        return list(qs)
+    profile = user.profile
+    member_ids = profile.organizations.values_list('id', flat=True)
+    admin_ids = Organization.admins.through.objects.filter(profile=profile).values('organization_id')
+    return list(qs.filter(Q(id__in=member_ids) | Q(id__in=admin_ids)).distinct())
+
+
+def get_workspace_file_upload(submission):
+    """Download metadata for a file-upload submission, or None."""
+    if getattr(getattr(submission, 'problem', None), 'submission_type', None) != 'F':
+        return None
+    try:
+        upload = submission.upload
+    except ObjectDoesNotExist:
+        return None
+    if not upload:
+        return None
+    return {
+        'url': reverse('submission_file_download', args=(submission.id,)),
+        'name': upload.original_name,
+        'size': upload.size,
+    }
 
 
 def get_workspace_answer_display(submission):
@@ -432,17 +485,22 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         from judge.question_types import all_types, get_grader
         workspace_grader = get_grader(self.object.submission_type)
         context['workspace_is_code'] = workspace_grader.routes_to_bridge
+        context['workspace_is_file'] = self.object.submission_type == ProblemSubmissionType.FILE
+        context['workspace_is_mcq'] = self.object.submission_type == ProblemSubmissionType.MCQ
+        try:
+            context['workspace_file_config'] = (
+                self.object.file_config if context['workspace_is_file'] else None
+            )
+        except ObjectDoesNotExist:
+            context['workspace_file_config'] = None
         context['workspace_submission_type_label'] = str(workspace_grader.label)
-        # Match problem-list redesign filters: multi format (MCQ expanded), course, tags.
+        # Match problem-list redesign filters: one option per submission_type (MCQ = choice question).
         workspace_format_options = []
         for grader in all_types():
             if grader.submission_type == ProblemSubmissionType.MCQ:
                 workspace_format_options.append({
-                    'code': ProblemSubmissionType.MCQ, 'label': str(grader.label),
+                    'code': ProblemSubmissionType.MCQ, 'label': str(_('Choice question')),
                 })
-                workspace_format_options.append({'code': 'single', 'label': str(_('Single choice'))})
-                workspace_format_options.append({'code': 'multiple', 'label': str(_('Multiple choice'))})
-                workspace_format_options.append({'code': 'truefalse', 'label': str(_('True/False'))})
             else:
                 workspace_format_options.append({
                     'code': grader.submission_type, 'label': str(grader.label),
@@ -452,7 +510,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             {'code': name, 'label': Problem.difficulty_display(name)}
             for name in Problem.DIFFICULTY_TYPE_NAMES
         ]
-        context['workspace_organizations'] = list(Organization.objects.order_by('name'))
+        context['workspace_organizations'] = course_filter_organizations(user)
+        context['workspace_public_course_value'] = PUBLIC_COURSE_FILTER
         reserved_kp = Problem.reserved_auto_type_labels()
         context['workspace_knowledge_types'] = [
             t for t in ProblemType.objects.order_by('full_name')
@@ -460,21 +519,41 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         ]
         context['workspace_attempt_counts'] = {}
         context['workspace_best_points'] = {}
+        context['workspace_exam_hide_scores'] = False
         if authed:
             if workspace_in_contest:
+                contest = current_participation.contest
+                context['workspace_exam_hide_scores'] = (
+                    contest.format_class.has_hidden_results and not contest.results_finalized
+                )
                 drawer_problem_ids = [cp.problem_id for cp in context['workspace_problems']]
-                # Assignment drawer: ContestSubmission.points (assignment problem scale).
+                # Exam scoreboard uses latest for hidden types; assignment (and exam code) uses best.
+                latest_ids = set()
+                if contest.format_class.has_hidden_results:
+                    latest_ids = {
+                        cp.problem_id for cp in context['workspace_problems'] if cp.score_uses_latest
+                    }
                 if drawer_problem_ids:
+                    counts, best, latest = {}, {}, {}
                     for row in (
                         ContestSubmission.objects.filter(
                             participation=self.request.participation,
                             problem__problem_id__in=drawer_problem_ids,
                         )
-                        .values('problem__problem_id')
-                        .annotate(c=Count('id'), p=Max('points'))
+                        .values('problem__problem_id', 'points', 'submission__date', 'id')
+                        .order_by('submission__date', 'id')
                     ):
-                        context['workspace_attempt_counts'][row['problem__problem_id']] = row['c']
-                        context['workspace_best_points'][row['problem__problem_id']] = row['p']
+                        pid = row['problem__problem_id']
+                        counts[pid] = counts.get(pid, 0) + 1
+                        pts = row['points']
+                        if pid not in best or pts > best[pid]:
+                            best[pid] = pts
+                        latest[pid] = pts
+                    for pid, n in counts.items():
+                        context['workspace_attempt_counts'][pid] = n
+                        context['workspace_best_points'][pid] = (
+                            latest[pid] if pid in latest_ids else best[pid]
+                        )
             else:
                 drawer_problem_ids = [p.id for p in context['workspace_problems']]
                 if drawer_problem_ids:
@@ -500,7 +579,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         selected_submission_id = self.request.GET.get('submission')
         if authed and selected_submission_id and selected_submission_id.isdigit():
             selected_qs = Submission.objects.select_related(
-                'source', 'contest_object', 'contest__problem',
+                'source', 'upload', 'problem', 'contest_object', 'contest__problem',
             ).prefetch_related('problem__mcq_options', 'problem__blanks').filter(
                 id=int(selected_submission_id), problem=self.object,
             )
@@ -524,6 +603,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                     'result_class': None if results_hidden else selected_submission.result_class,
                     'long_status': None if results_hidden else selected_submission.long_status,
                     'points': None if results_hidden else display_points,
+                    'points_total': workspace_display_points_total(selected_submission, self.request),
                     'time': None if results_hidden else selected_submission.time,
                     'memory': None if results_hidden else selected_submission.memory,
                     'source': selected_source,
@@ -531,6 +611,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                         get_workspace_answer_display(selected_submission)
                         if selected_source is not None else []
                     ),
+                    'file_upload': get_workspace_file_upload(selected_submission),
                     'results_hidden': results_hidden,
                     'is_graded': selected_submission.is_graded,
                     'id_secret': selected_submission.id_secret,
@@ -810,11 +891,15 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
     context_object_name = 'problems'
     template_name = 'problem/list.html'
     paginate_by = 20
+    # Tags picker: show the most-used knowledge points first, then the rest behind
+    # "Show more". Keep this small enough that the default chip row stays scannable.
+    KNOWLEDGE_PICKER_HOT_COUNT = 12
     sql_sort = frozenset(('points', 'ac_rate', 'user_count', 'code', 'date'))
     manual_sort = frozenset(('name', 'solved', 'type', 'editorial'))
     all_sorts = sql_sort | manual_sort
     default_desc = frozenset(('points', 'ac_rate', 'user_count', 'date'))
     default_sort = 'code'
+    PUBLIC_COURSE_FILTER = 'public'
 
     def get_paginator(self, queryset, per_page, orphans=0, allow_empty_first_page=True, **kwargs):
         paginator = DiggPaginator(
@@ -867,14 +952,50 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             return None
         return self.request.profile
 
+    def get_title(self):
+        if self.in_contest:
+            return _('%(assignment)s — Problems') % {'assignment': self.contest.name}
+        return super().get_title()
+
+    def get_content_title(self):
+        if self.in_contest:
+            return self.contest.name
+        return super().get_content_title()
+
+    @staticmethod
+    def _assignment_problem_stats(contest):
+        """Per-problem Users / AC rate from this assignment's live submissions.
+
+        Users = distinct students who submitted the problem in this assignment.
+        AC rate = AC submissions / all submissions in this assignment.
+        Practice / global submissions are ignored (``contest_object`` filter).
+        """
+        rows = (
+            Submission.objects.filter(contest_object=contest)
+            .values('problem_id')
+            .annotate(
+                user_count=Count('user', distinct=True),
+                submission_total=Count('id'),
+                submission_ac=Count('id', filter=Q(result='AC')),
+            )
+        )
+        stats = {}
+        for row in rows:
+            total = row['submission_total']
+            stats[row['problem_id']] = {
+                'user_count': row['user_count'],
+                'ac_rate': (100.0 * row['submission_ac'] / total) if total else 0.0,
+            }
+        return stats
+
     def get_contest_queryset(self):
         participation = self.profile.current_contest
         contest = participation.contest
+        stats = self._assignment_problem_stats(contest)
 
         queryset = (
-            contest.contest_problems.select_related('problem__group')
+            contest.contest_problems.select_related('problem')
             .defer('problem__description')
-            .annotate(user_count=Count('submission__participation', distinct=True))
             .annotate(
                 i18n_translation=FilteredRelation(
                     'problem__translations',
@@ -898,15 +1019,16 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             except (KeyError, TypeError, ValueError):
                 user_problem_cell = mark_safe('<td>???</td>')
 
+            problem_stats = stats.get(cp.problem_id, {'user_count': 0, 'ac_rate': 0.0})
             result.append({
                 'id': cp.problem_id,
                 'code': cp.problem.code,
                 'name': cp.problem.name,
                 'i18n_name': cp.i18n_name,
-                'group': {'full_name': cp.problem.group.full_name},
                 'points': cp.points,
                 'partial': cp.partial,
-                'user_count': cp.user_count,
+                'user_count': problem_stats['user_count'],
+                'ac_rate': problem_stats['ac_rate'],
                 'user_problem_cell': user_problem_cell,
             })
 
@@ -922,6 +1044,15 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 )
             return queryset
         return queryset.search(query, queryset.BOOLEAN).extra(order_by=['-relevance'])
+
+    def _problem_type_counts(self):
+        """Map ProblemType id → distinct visible-problem count for picker badges."""
+        base_visible = Problem.objects.filter(self.get_visible_problems_filter())
+        return {
+            row['types']: row['count']
+            for row in base_visible.values('types').annotate(count=Count('pk', distinct=True))
+            if row['types'] is not None
+        }
 
     def get_visible_problems_filter(self):
         user = self.request.user
@@ -953,29 +1084,40 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 )
         return filter
 
+    def get_course_filter_organizations(self):
+        """Courses shown in the list filter: the user's memberships (and orgs they admin).
+
+        Users who can see every organization-private problem get the full catalog so they
+        can still filter by a course they are not enrolled in.
+        """
+        user = self.request.user
+        qs = Organization.objects.order_by('name')
+        if not user.is_authenticated:
+            return []
+        if (
+            user.has_perm('judge.see_private_problem')
+            or user.has_perm('judge.see_organization_problem')
+            or (user.has_perm('judge.edit_own_problem') and user.has_perm('judge.edit_all_problem'))
+        ):
+            return list(qs)
+        profile = user.profile
+        member_ids = profile.organizations.values_list('id', flat=True)
+        admin_ids = Organization.admins.through.objects.filter(profile=profile).values('organization_id')
+        return list(qs.filter(Q(id__in=member_ids) | Q(id__in=admin_ids)).distinct())
+
     def get_format_options(self):
         """Answer-format filter options as ``(code, label, Q)`` tuples.
 
-        MCQ is a single ``submission_type`` but authored as single / multiple / true-false, so it is
-        expanded here (via ``mcq_config``) into three distinct, filterable options.
+        MCQ is one ``submission_type`` covering single choice, multiple choice, and true/false;
+        the list filter exposes it as a single "Choice question" option.
         """
         from judge.models import ProblemSubmissionType
         from judge.question_types import all_types
         options = []
         for t in all_types():
             if t.submission_type == ProblemSubmissionType.MCQ:
-                # Whole-MCQ option: matches any MCQ, including legacy ones without an mcq_config row.
-                options.append((ProblemSubmissionType.MCQ, str(t.label),
+                options.append((ProblemSubmissionType.MCQ, str(_('Choice question')),
                                 Q(submission_type=ProblemSubmissionType.MCQ)))
-                # Plus the finer single / multiple / true-false breakdown.
-                options.append(('single', _('Single choice'),
-                                Q(submission_type=ProblemSubmissionType.MCQ,
-                                  mcq_config__is_true_false=False, mcq_config__multiple_select=False)))
-                options.append(('multiple', _('Multiple choice'),
-                                Q(submission_type=ProblemSubmissionType.MCQ,
-                                  mcq_config__is_true_false=False, mcq_config__multiple_select=True)))
-                options.append(('truefalse', _('True/False'),
-                                Q(submission_type=ProblemSubmissionType.MCQ, mcq_config__is_true_false=True)))
             else:
                 options.append((t.submission_type, str(t.label), Q(submission_type=t.submission_type)))
         return options
@@ -1015,14 +1157,19 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             queryset = queryset.filter(has_public_editorial=True)
         if self.category is not None:
             queryset = queryset.filter(group__id=self.category)
-        if self.selected_organizations:
-            # Multi-select within organizations is OR (union).
-            queryset = queryset.filter(organizations__in=self.selected_organizations)
+        if self.selected_organizations or self.filter_public_course:
+            # Multi-select within Course is OR: chosen courses and/or fully public problems.
+            org_q = Q()
+            if self.selected_organizations:
+                org_q |= Q(organizations__in=self.selected_organizations)
+            if self.filter_public_course:
+                org_q |= Q(is_public=True, is_organization_private=False)
+            queryset = queryset.filter(org_q)
         if self.selected_types:
             # Within a filter dimension multi-select is OR; dimensions combine with AND.
             # Difficulty and tags/knowledge points both use OR within their selected ids.
             difficulty_ids = set(
-                ProblemType.objects.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).values_list('id', flat=True),
+                ProblemType.objects.filter(Problem.difficulty_type_q()).values_list('id', flat=True),
             )
             selected_difficulty = [t for t in self.selected_types if t in difficulty_ids]
             selected_other = [t for t in self.selected_types if t not in difficulty_ids]
@@ -1080,8 +1227,9 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         context['full_text'] = 0 if self.in_contest else int(self.full_text)
         context['category'] = self.category
         context['categories'] = ProblemGroup.objects.all()
-        context['organizations'] = list(Organization.objects.order_by('name'))
+        context['organizations'] = self.get_course_filter_organizations()
         context['selected_organizations'] = self.selected_organizations
+        context['filter_public_course'] = self.filter_public_course
         if self.show_types:
             # Tags (knowledge points) come from the ProblemType taxonomy.
             all_problem_types = list(ProblemType.objects.all())
@@ -1091,8 +1239,11 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             # ordered easiest -> hardest.
             difficulty_order = {name: i for i, name in enumerate(Problem.DIFFICULTY_TYPE_NAMES)}
             difficulty_types = sorted(
-                (t for t in all_problem_types if t.name in Problem.DIFFICULTY_TYPE_NAMES),
-                key=lambda t: difficulty_order.get(t.name, len(difficulty_order)),
+                (t for t in all_problem_types if Problem.is_difficulty_problem_type(t)),
+                key=lambda t: difficulty_order.get(
+                    Problem.canonical_difficulty_name(t.name) or Problem.canonical_difficulty_name(t.full_name),
+                    len(difficulty_order),
+                ),
             )
             # Knowledge points: exclude format/difficulty rows and leftover auto-chip ProblemTypes.
             reserved_labels = Problem.reserved_auto_type_labels()
@@ -1100,6 +1251,14 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 t for t in all_problem_types
                 if Problem.is_knowledge_problem_type(t, reserved_labels=reserved_labels)
             ]
+            # Badge counts + default order: highest frequency first so the collapsed
+            # picker can show hot tags without listing the whole taxonomy.
+            type_counts = self._problem_type_counts()
+            knowledge_types.sort(
+                key=lambda t: (-type_counts.get(t.id, 0), (t.full_name or t.name or '').casefold()),
+            )
+            context['type_counts'] = type_counts
+            context['knowledge_hot_count'] = self.KNOWLEDGE_PICKER_HOT_COUNT
             context['difficulty_types'] = difficulty_types
             context['knowledge_types'] = knowledge_types
             difficulty_ids = {t.id for t in difficulty_types}
@@ -1109,7 +1268,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 i for i in self.selected_types if i in knowledge_ids
             ]
             # The answer format is driven by the authoritative submission_type discriminator
-            # (MCQ expanded into single / multiple / true-false); offer the question types the
+            # (MCQ is one "Choice question" option); offer the question types the
             # system actually supports end-to-end.
             context['format_types'] = [{'code': code, 'label': label}
                                        for code, label, q in self.get_format_options()]
@@ -1168,15 +1327,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             context['current_sort_label'] = sort_labels.get(self.order.lstrip('-'), '')
             context['current_sort_desc'] = self.order.startswith('-')
 
-            base_visible = Problem.objects.filter(self.get_visible_problems_filter())
-
-            # Per-type problem counts for the tags picker badges.
-            context['type_counts'] = {
-                row['types']: row['count']
-                for row in base_visible.values('types').annotate(count=Count('pk', distinct=True))
-                if row['types'] is not None
-            }
-
             # Progress ring: solved vs total within the current filtered scope.
             completed = set(context['completed_problem_ids'])
             context['progress_total'] = context['page_obj'].paginator.count
@@ -1198,6 +1348,8 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 self.contest.SCOREBOARD_AFTER_PARTICIPATION,
                 self.contest.SCOREBOARD_HIDDEN,
             )
+            context['title_url'] = reverse('contest_view', args=[self.contest.key])
+            context['title_crumb'] = _('Problems')
         return context
 
     def get_noui_slider_points(self):
@@ -1250,6 +1402,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         self.selected_types = []
         self.selected_formats = []
         self.selected_organizations = []
+        self.filter_public_course = False
 
         # This actually copies into the instance dictionary...
         self.all_sorts = set(self.all_sorts)
@@ -1266,14 +1419,17 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             valid_formats = {code for code, label, q in self.get_format_options()}
             self.selected_formats = [c for c in request.GET.getlist('format') if c in valid_formats]
         # UI label is "Course"; accept both `course` and legacy `organization`.
+        # `public` is a sentinel for fully public problems (not private to any course).
         if 'course' in request.GET or 'organization' in request.GET:
-            try:
-                self.selected_organizations = list(map(
-                    int,
-                    request.GET.getlist('course') or request.GET.getlist('organization'),
-                ))
-            except ValueError:
-                pass
+            raw_courses = request.GET.getlist('course') or request.GET.getlist('organization')
+            for raw in raw_courses:
+                if str(raw).lower() == self.PUBLIC_COURSE_FILTER:
+                    self.filter_public_course = True
+                    continue
+                try:
+                    self.selected_organizations.append(int(raw))
+                except (TypeError, ValueError):
+                    pass
 
         self.point_start = safe_float_or_none(request.GET.get('point_start'))
         self.point_end = safe_float_or_none(request.GET.get('point_end'))
@@ -1558,7 +1714,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             if self.is_code and not (form.data.get('source') or '').strip():
                 message = _('Source code cannot be empty.')
             elif not self.is_code:
-                non_empty = False
+                non_empty = bool(self.request.FILES)
                 for key, value in form.data.items():
                     if key in ('csrfmiddlewaretoken', 'workspace', 'parent'):
                         continue
@@ -1587,8 +1743,12 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 'status': submission.status,
                 'result': None if hidden else submission.result,
                 'results_hidden': hidden,
+                'is_graded': submission.is_graded,
+                'points': None if hidden else workspace_display_points(submission, self.request),
+                'points_total': workspace_display_points_total(submission, self.request),
                 'source': source,
                 'answer_display': get_workspace_answer_display(submission) if source is not None else [],
+                'file_upload': get_workspace_file_upload(submission),
                 'status_url': reverse('problem_workspace_submission_status', args=(self.object.code, submission.id)),
             })
         return super().form_valid(form)
@@ -1672,9 +1832,15 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         blocked = self._submission_blocked_response()
         if blocked is not None:
             return blocked
-        if self.is_code:
-            return self._code_form_valid(form)
-        return self._noncode_form_valid(form)
+        try:
+            if self.is_code:
+                return self._code_form_valid(form)
+            return self._noncode_form_valid(form)
+        except IntegrityError:
+            if self._wants_workspace_json():
+                logging.getLogger('judge.problem').exception('Workspace submit failed')
+                return self._workspace_json_error(_('Submit failed.'), status=500)
+            raise
 
     def _code_form_valid(self, form):
         if not self.object.allowed_languages.filter(id=form.cleaned_data['language'].id).exists():
@@ -2211,7 +2377,7 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
         problem = self.get_object()
         submission = get_object_or_404(
             Submission.objects.select_related(
-                'source', 'contest_object', 'contest__problem', 'user__user',
+                'source', 'upload', 'problem', 'contest_object', 'contest__problem', 'user__user',
             ).prefetch_related('problem__mcq_options', 'problem__blanks'),
             id=kwargs['submission'], problem=problem,
         )
@@ -2251,12 +2417,14 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
             'result': None if hidden else submission.result,
             'result_class': None if hidden else submission.result_class,
             'points': None if hidden else workspace_display_points(submission, request),
+            'points_total': workspace_display_points_total(submission, request),
             'time': None if hidden else submission.time,
             'memory': None if hidden else submission.memory,
             'results_hidden': hidden,
             'is_graded': submission.is_graded,
             'source': source,
             'answer_display': answer_display,
+            'file_upload': get_workspace_file_upload(submission),
             'comments_html': comments_html,
             'id_secret': submission.id_secret,
             'status_url': reverse(

@@ -238,6 +238,7 @@ else:
                     'children': [
                         'judge.ContestParticipation',
                         'judge.ContestTag',
+                        'judge.SEBConfigPreset',
                     ],
                 },
                 ('judge.Ticket', 'fa-bell'),

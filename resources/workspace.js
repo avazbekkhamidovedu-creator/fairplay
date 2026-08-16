@@ -152,6 +152,13 @@
       return padded.indexOf(' ' + needle + ' ') !== -1;
     });
   }
+  function matchesCourse(item, courses) {
+    if (!courses.length) return true;
+    var wantPublic = courses.indexOf('public') !== -1;
+    var orgIds = courses.filter(function (code) { return code !== 'public'; });
+    if (wantPublic && item.dataset.public === '1') return true;
+    return orgIds.length ? tokenHit(item.dataset.orgs, orgIds) : false;
+  }
   function matchesFormat(item, formats) {
     if (!formats.length) return true;
     var type = item.dataset.type || '';
@@ -176,7 +183,7 @@
       return (!q || item.textContent.toLowerCase().indexOf(q) !== -1)
         && matchesFormat(item, formats)
         && (!diffs.length || diffs.indexOf(item.dataset.diff || '') !== -1)
-        && tokenHit(item.dataset.orgs, courses)
+        && matchesCourse(item, courses)
         && tokenHit(item.dataset.kp, tags)
         && (!status
           || item.dataset.status === status
@@ -453,6 +460,18 @@
   function isCodeProblem() {
     return app.dataset.isCode === '1';
   }
+  function isFileProblem() {
+    return app.dataset.isFile === '1';
+  }
+  function isMcqProblem() {
+    return app.dataset.isMcq === '1';
+  }
+  function formatScorePart(n) {
+    if (n == null || n === '') return '-';
+    var num = Number(n);
+    if (!isFinite(num)) return String(n);
+    return String(parseFloat(num.toFixed(3)));
+  }
   function resultClassFromStatus(status) {
     var code = status.result || status.status || '';
     if (code === 'AC' && status.case_points != null && status.case_total != null
@@ -468,10 +487,44 @@
     span.textContent = code || '?';
     parent.appendChild(span);
   }
+  function renderFileUploadStatus(status) {
+    ensureResultStructure();
+    var main = $('#workspace-result-main');
+    if (!main) return;
+    main.textContent = '';
+    var wrap = document.createElement('div');
+    wrap.className = 'ws-result-summary';
+    var heading = document.createElement('h3');
+    heading.textContent = gettext('File submitted');
+    wrap.appendChild(heading);
+    if (status.results_hidden) {
+      var hiddenMsg = document.createElement('p');
+      hiddenMsg.textContent = gettext('Your submission has been received. Results for this problem are hidden until the contest is finalized.');
+      wrap.appendChild(hiddenMsg);
+    } else if (status.is_graded === false || status.is_graded == null) {
+      var waiting = document.createElement('p');
+      waiting.className = 'file-awaiting-grading';
+      waiting.textContent = gettext('Awaiting grading');
+      wrap.appendChild(waiting);
+    } else {
+      var score = document.createElement('p');
+      var scoreLabel = document.createElement('b');
+      scoreLabel.textContent = gettext('Score') + ': ';
+      score.appendChild(scoreLabel);
+      score.appendChild(document.createTextNode(status.points == null ? '-' : String(status.points)));
+      wrap.appendChild(score);
+    }
+    main.appendChild(wrap);
+    updateFileUploadResult(status.file_upload);
+  }
   function renderFormalStatus(status) {
     ensureResultStructure();
     var main = $('#workspace-result-main');
     if (!main) return;
+    if (isFileProblem()) {
+      renderFileUploadStatus(status);
+      return;
+    }
     main.textContent = '';
     var wrap = document.createElement('div');
     wrap.className = 'ws-result-summary';
@@ -484,6 +537,7 @@
       wrap.appendChild(hiddenMsg);
       main.appendChild(wrap);
       updateSubmittedSource(status.source, status.answer_display);
+      updateFileUploadResult(status.file_upload);
       return;
     }
     var heading = document.createElement('h3');
@@ -493,7 +547,7 @@
     label.textContent = gettext('Result') + ': ';
     line.appendChild(label);
     appendResultCode(line, status.result || status.status, resultClassFromStatus(status));
-    if (status.points != null) {
+    if (status.points != null && !isMcqProblem()) {
       line.appendChild(document.createTextNode(' · ' + status.points));
     }
     wrap.appendChild(heading);
@@ -502,6 +556,15 @@
       var detail = document.createElement('p');
       detail.textContent = gettext('Resources') + ': ' + (status.time || 0) + 's, ' + (status.memory || 0) + 'KB';
       wrap.appendChild(detail);
+    } else if (isMcqProblem()) {
+      var score = document.createElement('p');
+      var scoreLabel = document.createElement('b');
+      scoreLabel.textContent = gettext('Score') + ':';
+      score.appendChild(scoreLabel);
+      score.appendChild(document.createTextNode(
+        ' ' + formatScorePart(status.points) + ' / ' + formatScorePart(status.points_total)
+      ));
+      wrap.appendChild(score);
     } else {
       var score = document.createElement('p');
       score.textContent = gettext('Score') + ': ' + (status.points == null ? '-' : status.points);
@@ -509,6 +572,7 @@
     }
     main.appendChild(wrap);
     updateSubmittedSource(status.source, status.answer_display);
+    updateFileUploadResult(status.file_upload);
   }
   function formatAnswerDisplay(rows) {
     if (!rows || !rows.length) return '';
@@ -525,6 +589,13 @@
       var main = document.createElement('div');
       main.id = 'workspace-result-main';
       box.insertBefore(main, box.firstChild);
+    }
+    if (!$('#workspace-result-file')) {
+      var fileBlock = document.createElement('div');
+      fileBlock.id = 'workspace-result-file';
+      fileBlock.className = 'ws-result-file';
+      fileBlock.hidden = true;
+      box.appendChild(fileBlock);
     }
     if (!$('#workspace-result-source')) {
       var sourceBlock = document.createElement('div');
@@ -578,6 +649,30 @@
     if (summary) summary.textContent = gettext('Submitted source');
     var details = block.querySelector('details.result-source-details');
     if (details) details.open = false;
+    block.hidden = false;
+  }
+  function updateFileUploadResult(fileUpload) {
+    var block = $('#workspace-result-file');
+    if (!block) return;
+    if (!fileUpload || !fileUpload.url) {
+      block.hidden = true;
+      block.textContent = '';
+      return;
+    }
+    block.textContent = '';
+    var line = document.createElement('p');
+    var link = document.createElement('a');
+    link.className = 'tool-btn';
+    link.href = fileUpload.url;
+    link.textContent = gettext('Download uploaded file');
+    line.appendChild(link);
+    if (fileUpload.name) {
+      var name = document.createElement('span');
+      name.className = 'ws-file-name';
+      name.textContent = fileUpload.name;
+      line.appendChild(name);
+    }
+    block.appendChild(line);
     block.hidden = false;
   }
   function syncCommentBody(form) {
@@ -664,6 +759,7 @@
       });
   }
   function appendTestcasesPanel(submissionId) {
+    if (isFileProblem() || isMcqProblem()) return Promise.resolve();
     ensureResultStructure();
     var main = $('#workspace-result-main');
     var baseUrl = app.dataset.testcasesUrl;
@@ -696,7 +792,7 @@
     formalEventReceiver = null;
   }
   function statusIsPending(status) {
-    if (!status) return false;
+    if (!status || isFileProblem()) return false;
     if (status.is_graded === true) return false;
     if (status.is_graded === false) return true;
     return status.status === 'QU' || status.status === 'P' || status.status === 'G';
@@ -706,14 +802,17 @@
     if (status.source || (status.answer_display && status.answer_display.length)) {
       updateSubmittedSource(status.source, status.answer_display);
     }
+    if (status.file_upload) updateFileUploadResult(status.file_upload);
     if (status.comments_html != null) updateResultComments(status.comments_html);
     // Code + visible results: classic testcase HTML (siblings source/comments stay).
     // Non-code: keep Judging results summary, then append AI/testcase HTML when present.
     if (status.id && isCodeProblem() && !status.results_hidden) {
       refreshResultPanel(status.id);
-    } else {
+    } else if (!isFileProblem()) {
       renderFormalStatus(status);
       if (status.id && !status.results_hidden) appendTestcasesPanel(status.id);
+    } else {
+      renderFormalStatus(status);
     }
     if (!statusIsPending(status)) {
       stopFormalWatch();
@@ -770,7 +869,7 @@
     });
   }
   function pollFormal(url, button) {
-    if (!url) return;
+    if (!url || isFileProblem()) return;
     stopFormalWatch();
     var attempts = 0;
     var lastStatus = null;
@@ -904,14 +1003,15 @@
     $('#tab-result') && $('#tab-result').classList.remove('tab-hidden');
     activateTab('result');
     // Code: hydrate full testcase table. Non-code: keep SSR summary and append AI/testcase HTML.
+    // File uploads are human-graded: do not poll or inject judge-queue HTML.
     if (isCodeProblem()) {
       refreshResultPanel(app.dataset.submissionId);
-    } else {
+    } else if (!isFileProblem()) {
       appendTestcasesPanel(app.dataset.submissionId);
     }
-    if (app.dataset.submissionGraded !== '1' && app.dataset.statusUrl) {
+    if (!isFileProblem() && app.dataset.submissionGraded !== '1' && app.dataset.statusUrl) {
       pollFormal(app.dataset.statusUrl, null);
-    } else if (app.dataset.statusUrl && !isCodeProblem()) {
+    } else if (app.dataset.statusUrl && !isCodeProblem() && !isFileProblem()) {
       // Refresh comments + readable answer for SSR-selected non-code submission.
       fetch(app.dataset.statusUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
         .then(function (response) { return response.json(); })
@@ -1011,6 +1111,7 @@
             if (source || (payload.answer_display && payload.answer_display.length)) {
               updateSubmittedSource(source ? sourceValue() : payload.source, payload.answer_display);
             }
+            if (payload.file_upload) updateFileUploadResult(payload.file_upload);
             if (payload.comments_html != null) updateResultComments(payload.comments_html);
             if (isCodeProblem() && !payload.results_hidden) {
               refreshResultPanel(payload.submission_id);
@@ -1027,7 +1128,12 @@
             el.classList.toggle('active', el.dataset.sub === 'my');
           });
           loadSubScope('my');
-          pollFormal(payload.status_url, button);
+          if (isFileProblem()) {
+            app.dataset.submissionGraded = '1';
+            if (button && !timerExpired) button.disabled = false;
+          } else {
+            pollFormal(payload.status_url, button);
+          }
         })
         .catch(function (error) {
           if (button) button.disabled = false;

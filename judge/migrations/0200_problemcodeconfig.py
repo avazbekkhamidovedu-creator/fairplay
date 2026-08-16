@@ -7,7 +7,8 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('judge', '0194_alter_adminnotification_kind_and_more'),
+        ('judge', '0199_alter_adminnotification_kind_and_more'),
+        ('judge', '0197_mcq_scoring_and_blank_points'),
     ]
 
     operations = [
