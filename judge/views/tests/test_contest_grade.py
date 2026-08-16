@@ -646,3 +646,100 @@ class ContestGradeAttemptAggregationTestCase(GradeTestBase):
         self.assertGreaterEqual(len(subs), 1)
         for s in subs:
             self.assertIn('problem_type', s)
+
+
+class ContestGradeWorkspaceLayoutTestCase(GradeTestBase):
+    """The grade page now uses the problem-workspace shell (``ws-app`` /
+    ``ws-toolbar`` / slide-in drawer / split panes) instead of the old two-column
+    grid. The Django test client does not execute JavaScript, so these tests pin
+    the *static* layout contract the workspace JS relies on: shell classes,
+    toolbar actions, drawer filters, pane mounts and the rich-editor assets.
+    """
+
+    def _page_html(self):
+        response = self._client(self.curator).get(self.grade_url)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    def test_workspace_shell_present(self):
+        html = self._page_html()
+        for element in (
+            'id="grade-app"', 'class="ws-app"',
+            'class="ws-toolbar"',
+            'id="ws-body"', 'class="ws-body layout-lr"',
+            'id="ws-drawer"', 'class="ws-drawer grade-drawer"',
+            'id="drawer-backdrop"',
+            'id="pane-left"', 'class="ws-pane ws-pane-left"',
+            'id="pane-right"', 'class="ws-pane ws-pane-right"',
+            'id="ws-splitter"', 'class="ws-splitter"',
+            'id="grade-right"',
+            'id="grade-result-pane"', 'id="grade-review-pane"',
+            'id="grade-v-splitter"',
+        ):
+            self.assertIn(element, html, 'missing workspace shell element: %s' % element)
+
+    def test_toolbar_actions_present(self):
+        html = self._page_html()
+        for element in (
+            'id="btn-overview"', 'id="ctx-home"', 'id="btn-prev"', 'id="btn-next"',
+            'id="layout-toggle"', 'id="layout-mode"',
+            'id="btn-release"', 'id="btn-rejudge"', 'id="btn-submit-current"',
+        ):
+            self.assertIn(element, html, 'missing toolbar element: %s' % element)
+        # The context label links back to the contest detail page.
+        self.assertIn('href="%s"' % reverse('contest_view', args=[self.contest.key]), html)
+
+    def test_drawer_filters_present(self):
+        html = self._page_html()
+        for element in (
+            'id="f-queue"', 'id="f-part"', 'id="f-problem"', 'id="f-user"',
+            'id="f-attempts"', 'id="left-summary"', 'id="drawer-progress"',
+            'id="drawer-close"', 'id="submission-list"',
+        ):
+            self.assertIn(element, html, 'missing drawer element: %s' % element)
+        # The problem filter carries every contest problem as a server-side option.
+        self.assertIn('value="%s"' % self.problem.code, html)
+
+    def test_filter_option_sets(self):
+        html = self._page_html()
+        # Queue: all / final versions / ungraded / graded.
+        for option in ('value="all"', 'value="final"', 'value="ungraded"', 'value="graded"'):
+            self.assertIn(option, html, 'missing queue option: %s' % option)
+        # Participation: live / virtual.
+        for option in ('value="live"', 'value="virtual"'):
+            self.assertIn(option, html, 'missing participation option: %s' % option)
+        # Attempts aggregation: best / latest.
+        for option in ('value="best"', 'value="latest"'):
+            self.assertIn(option, html, 'missing attempts option: %s' % option)
+
+    def test_pane_mounts_present(self):
+        html = self._page_html()
+        for element in (
+            'id="pane-left-body"', 'id="left-hint"',
+            'id="result-body"', 'id="result-hint"',
+            'id="review-body"', 'id="review-editor-mount"',
+        ):
+            self.assertIn(element, html, 'missing pane mount: %s' % element)
+
+    def test_fullscreen_workspace_class(self):
+        """html_class / body_class carry ``workspace-page`` (full-screen shell,
+        same as the problem workspace page)."""
+        self.assertIn('workspace-page', self._page_html())
+
+    def test_initial_empty_states(self):
+        html = self._page_html()
+        self.assertIn('Select a submission on the left to start grading.', html)
+        self.assertIn('Select a submission to see its judging result.', html)
+
+    def test_rich_editor_assets_loaded(self):
+        html = self._page_html()
+        self.assertIn('rich_editor.css', html)
+        self.assertIn('rich_editor.js', html)
+
+    def test_script_block_and_json_vars_present(self):
+        """The single inline script block still carries the |tojson payloads the
+        JS renders from (regex contract shared with ContestGradePayloadTestCase)."""
+        html = self._page_html()
+        self.assertIn('<script type="text/javascript">', html)
+        self.assertIsNotNone(re.search(r'var submissions = (\[.*?\]);', html, re.S))
+        self.assertIsNotNone(re.search(r'var problems = (\[.*?\]);', html, re.S))
