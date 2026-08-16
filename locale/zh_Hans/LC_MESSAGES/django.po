@@ -994,6 +994,18 @@ msgstr "打开原测试数据页（生成器、测试组、Harness，以及 zip 
 msgid "Upload a zip to list its files, then pick input and output for each case. Case weights are relative."
 msgstr "上传 zip 后会列出其中的文件，再为每组测试点选择输入和输出。分值为相对权重。"
 
+msgid "Publish the editorial"
+msgstr "公开题解"
+
+msgid "Students can read it after this time, once it is public. Hidden during assignments/contests."
+msgstr "公开后且到达该时间，学生才可阅读。作业/竞赛进行中不会显示。"
+
+msgid "Enter the editorial…"
+msgstr "请输入题解…"
+
+msgid "Shown on the student problem page as the Editorial tab."
+msgstr "显示在学生做题页的「题解」标签中。"
+
 msgid "Loaded %s files. Pick input and output for each case."
 msgstr "已载入 %s 个文件。请为每组测试点选择输入和输出。"
 

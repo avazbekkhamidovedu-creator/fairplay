@@ -49,6 +49,9 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('problem_create_v2'))
         self.assertContains(response, 'Public visible')
         self.assertNotContains(response, 'publicly visible')
+        self.assertContains(response, 'Editorial')
+        self.assertContains(response, 'data-rich-mount="editorial"')
+        self.assertNotContains(response, 'data-rich-mount="explain"')
 
     def test_course_dropdown_lists_all_courses(self):
         """Match main admin organization_select2: any course is listed, not just memberships."""

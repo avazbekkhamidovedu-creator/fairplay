@@ -107,6 +107,17 @@
     .tc-collapse-summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; color: var(--muted); transition: transform 0.15s; }
     .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
     .tc-body-wrap { border-top: 1px solid var(--admin-border); padding: 0.75rem 0.85rem 0.9rem; }
+    .editorial-collapse { margin: 0; }
+    .editorial-collapse > summary {
+      background: var(--admin-header); color: var(--admin-header-text); margin: 0; padding: 0.55rem 1rem;
+      font-size: 1.1em; font-weight: 600; cursor: pointer; list-style: none; user-select: none;
+      border-bottom: 1px solid var(--admin-header-border);
+      border-radius: var(--oj-radius-md, 6px) var(--oj-radius-md, 6px) 0 0;
+    }
+    .editorial-collapse > summary::-webkit-details-marker { display: none; }
+    .editorial-collapse > summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; transition: transform 0.15s; }
+    .editorial-collapse[open] > summary::before { transform: rotate(90deg); }
+    .editorial-collapse:not([open]) > summary { border-bottom: none; border-radius: var(--oj-radius-md, 6px); }
 
     /* ZIP case preview: compact and shows both input and output. */
     .tc-drawer-mask {
@@ -169,13 +180,6 @@
     .unsaved-note { font-size: 12px; color: var(--muted); padding: 0.35rem 1rem 0.6rem; }
     .radio-list label { display: block; font-weight: normal; width: auto; padding: 0.2rem 0; }
     .inline-num input { width: 70px; }
-
-    /* Collapsible solution explanation. */
-    .explain-collapse > summary { list-style: none; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--muted); padding: 0.2rem 0; display: flex; align-items: center; gap: 0.4rem; }
-    .explain-collapse > summary::-webkit-details-marker { display: none; }
-    .explain-collapse .chev { transition: transform 0.15s; }
-    .explain-collapse[open] .chev { transform: rotate(90deg); }
-    .explain-collapse .ec-body { margin-top: 0.6rem; }
 
     /* Formulas and subquestions in the preview. */
     .pv-sub { border-top: 1px dashed #e0e0e0; margin-top: 1rem; padding-top: 0.8rem; }
@@ -494,18 +498,43 @@
               <div class="type-panel" data-for="other" style="display:none;">
                 <div class="blank-hints">{{ _('Other type only records the statement and notes for offline/manual grading; it is not auto-judged.') }}</div>
               </div>
-
-              <!-- Editorial shortcut → Advanced Solution.content -->
-              <div class="type-panel" data-for="single,multiple,truefalse,short,blank,programming,file">
-                <details class="explain-collapse">
-                  <summary><span class="chev">▸</span> {{ _("Explanation") }} <span style="font-weight:normal;color:var(--muted);">{{ _("(optional; saved as Solution editorial)") }}</span></summary>
-                  <div class="ec-body">
-                    <div data-rich-mount="explain" data-toolbar="mini" data-placeholder="{{ _('Enter the editorial / explanation…') }}"></div>
-                    <p class="unsaved-note">{{ _('Synced with Advanced → Solution content on save.') }}</p>
-                  </div>
-                </details>
-              </div>
         </div>
+      </fieldset>
+
+      <!-- Same Solution model as classic admin; label matches the student Editorial tab. -->
+      <fieldset class="module type-panel" data-for="single,multiple,truefalse,short,blank,programming,file">
+        <details class="editorial-collapse" id="editorial-collapse">
+        <summary>{{ _('Editorial') }}</summary>
+        <div class="form-content">
+          <div class="form-row">
+            <label>{{ _('Is public') }}</label>
+            <div class="field">
+              <input type="checkbox" id="f-sol-public">
+              <div class="help">{{ _('Publish the editorial') }}</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>{{ _('Publish on') }}</label>
+            <div class="field">
+              <input type="text" id="f-sol-publish" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM">
+              <div class="help">{{ _('Students can read it after this time, once it is public. Hidden during assignments/contests.') }}</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>{{ _('Authors') }}</label>
+            <div class="field">
+              <select multiple id="f-sol-authors" class="profile-select2" style="width:100%;max-width:500px;"></select>
+            </div>
+          </div>
+          <div class="form-row" style="align-items:flex-start;">
+            <label>{{ _('Content') }}</label>
+            <div class="field">
+              <div data-rich-mount="editorial" data-toolbar="mini" data-placeholder="{{ _('Enter the editorial…') }}"></div>
+              <div class="help">{{ _('Shown on the student problem page as the Editorial tab.') }}</div>
+            </div>
+          </div>
+        </div>
+        </details>
       </fieldset>
 
       <!-- Code problem test cases: zip members + file matching, same model as classic test_data. -->
@@ -782,18 +811,6 @@
             </tbody>
           </table>
           <p class="unsaved-note">{{ _('Shown on the problem page (same as classic ProblemClarification).') }}</p>
-        </div>
-
-        <div class="inline-group">
-          <h2>{{ _('Solution') }}</h2>
-          <div class="form-content" style="padding:0.75rem 1rem;">
-            <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-sol-public"><div class="help">{{ _('Publish the solution') }}</div></div></div>
-            <div class="form-row"><label>{{ _('Publish on') }}</label><div class="field"><input type="text" id="f-sol-publish" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"></div></div>
-            <div class="form-row"><label>{{ _('Authors') }}</label><div class="field">
-              <select multiple id="f-sol-authors" class="profile-select2" style="width:100%;max-width:500px;"></select>
-            </div></div>
-            <div class="form-row"><label>{{ _('Content') }}</label><div class="field"><textarea id="f-sol-content" rows="4" placeholder="{{ _('Solution / editorial body (also editable via Explanation above)') }}" style="width:100%;"></textarea></div></div>
-          </div>
         </div>
 
         <div class="inline-group">
@@ -1992,6 +2009,15 @@
         ensureOption(document.getElementById('f-authors'), CURRENT_PROFILE.id, CURRENT_PROFILE.username, true);
       }
     }
+    function bindEditorialCollapse() {
+      const box = document.getElementById('editorial-collapse');
+      if (!box) return;
+      box.addEventListener('toggle', () => {
+        if (!box.open || !window.jQuery) return;
+        const sel = document.getElementById('f-sol-authors');
+        if (sel) jQuery(sel).trigger('change.select2');
+      });
+    }
     function initOrgPicker() {
       const sel = document.getElementById('f-org');
       if (!sel || !window.jQuery || !jQuery.fn.select2) return;
@@ -2182,18 +2208,13 @@
         short_circuit: !!(document.getElementById('f-short-circuit') || {}).checked,
         edit_reason: ((document.getElementById('f-edit-reason') || {}).value || '').trim(),
         clarifications: collectClarifications(),
-        solution: (function () {
-          const ta = ((document.getElementById('f-sol-content') || {}).value || '').trim();
-          const explain = (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown)
-            ? (RichEditor.getMarkdown('explain') || '').trim() : '';
-          return {
-            is_public: !!(document.getElementById('f-sol-public') || {}).checked,
-            publish_on: (document.getElementById('f-sol-publish') || {}).value || '',
-            authors: selectedIds(document.getElementById('f-sol-authors')),
-            // Explanation editor is a shortcut into Solution.content.
-            content: ta || explain,
-          };
-        })(),
+        solution: {
+          is_public: !!(document.getElementById('f-sol-public') || {}).checked,
+          publish_on: (document.getElementById('f-sol-publish') || {}).value || '',
+          authors: selectedIds(document.getElementById('f-sol-authors')),
+          content: (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown)
+            ? (RichEditor.getMarkdown('editorial') || '').trim() : '',
+        },
         translations: collectTranslations(),
       };
     }
@@ -2221,10 +2242,9 @@
       if (d.solution) {
         setChk('f-sol-public', d.solution.is_public);
         setVal('f-sol-publish', d.solution.publish_on || '');
-        setVal('f-sol-content', d.solution.content || '');
         (d.solution.authors || []).forEach(u => ensureOption(document.getElementById('f-sol-authors'), u.id, u.username, true));
-        if (d.solution.content && typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
-          try { RichEditor.setMarkdown('explain', d.solution.content); } catch (e) { /* mount may lag */ }
+        if (typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
+          try { RichEditor.setMarkdown('editorial', d.solution.content || ''); } catch (e) { /* mount may lag */ }
         }
       }
       if (d.translations && d.translations.length) {
@@ -2667,6 +2687,7 @@
     initProfilePickers();
     initClassPicker();
     fillHarnessLanguages();
+    bindEditorialCollapse();
 
     (function bindAdvancedFilePick() {
       const input = document.getElementById('f-md-upload');
