@@ -50,6 +50,23 @@
 .ws-app .ws-toolbar .tool-btn i,
 .ws-app .ws-toolbar .layout-toggle i { color: inherit !important; }
 .ws-toolbar .icon-only { width: 34px; padding: 0; }
+.ws-toolbar-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .35rem .55rem;
+  min-width: 0;
+}
+.ws-toolbar.has-leave {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+}
+.ws-toolbar-center { justify-self: center; }
+.ws-toolbar.has-leave .submit-cluster {
+  justify-self: end;
+  margin-left: 0;
+}
 .ws-toolbar .ctx-label {
   color: var(--oj-text);
   font-size: 1.05rem;
@@ -835,6 +852,32 @@
 .answer-form .ws-answer-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .answer-form .ws-short-answer .rich-editor { min-height: 12rem; max-height: 20rem; }
 .answer-form .ws-short-answer .rich-editor-body { min-height: 8rem; max-height: 16rem; overflow: auto; }
+.ws-file-upload .file-upload-instructions,
+.ws-file-upload .ws-file-upload-lead {
+  margin: 0 0 .85rem;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.ws-file-upload .help-text {
+  margin: .65rem 0 0;
+  color: var(--oj-text-muted);
+  font-size: var(--oj-font-size-sm, 12px);
+}
+.ws-file-upload input[type='file'] {
+  display: block;
+  max-width: 100%;
+}
+.ws-result-file {
+  margin: .75rem 0 0;
+}
+.ws-result-file .ws-file-name {
+  margin-left: .55rem;
+  color: var(--oj-text-muted);
+}
+.file-awaiting-grading {
+  margin: .45rem 0 0;
+  color: var(--oj-text-muted);
+}
 .ws-license { margin: 1rem 0; }
 .workspace-run-output {
   min-height: 6rem;
@@ -930,6 +973,21 @@
   color: #fff !important;
 }
 
+.ws-app .ws-toolbar button.leave-btn.tool-btn {
+  border-color: var(--oj-danger);
+  background: var(--oj-surface);
+  color: var(--oj-danger) !important;
+  font-weight: 700;
+}
+.ws-app .ws-toolbar button.leave-btn.tool-btn:hover {
+  background: var(--oj-danger);
+  color: #fff !important;
+  border-color: var(--oj-danger);
+}
+.ws-app .ws-toolbar button.leave-btn.tool-btn i {
+  color: inherit !important;
+}
+
 /* RichEditor toolbar — widgets.scss forces white button text; scoped like pcv2. */
 .ws-app .editor-mode-tabs button,
 .ws-app .editor-mode-tabs button.mode-btn {
@@ -997,6 +1055,8 @@
   .ws-pane-left { flex-basis: 55%; border-right: 0; border-bottom: 1px solid var(--oj-border); }
   .ws-splitter { cursor: row-resize; }
   .ws-toolbar { padding-inline: .6rem; }
+  .ws-toolbar.has-leave { display: flex; }
+  .ws-toolbar.has-leave .submit-cluster { margin-left: auto; }
   .ws-toolbar .ctx-label { max-width: 9rem; }
   .ws-filter-panel.open,
   .ws-filter-panel.exposed { grid-template-columns: 1fr; }

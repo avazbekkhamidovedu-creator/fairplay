@@ -30,6 +30,9 @@
       };
     </script>
   {% endif %}
+  {% if workspace_in_contest %}
+    {% include "contest/media-js.html" %}
+  {% endif %}
 {% endblock %}
 {% block body %}
 <div class="ws-app" id="workspace"
@@ -38,6 +41,7 @@
      data-problem="{{ problem.code }}"
      data-select2-theme="{{ DMOJ_SELECT2_THEME }}"
      data-is-code="{{ '1' if workspace_is_code else '0' }}"
+     data-is-file="{{ '1' if workspace_is_file else '0' }}"
      data-run-url="{{ url('problem_workspace_run', problem.code) }}"
      data-subs-url="{{ url('problem_workspace_submissions', problem.code) }}"
      data-testcases-url="{{ url('submission_testcases_query') }}"
@@ -49,23 +53,31 @@
      data-event-poll="{{ EVENT_DAEMON_POLL_LOCATION }}"
      {% if ai_hints_possible %}data-ai-hints-possible="1" data-ai-hints-remaining="{{ ai_hints_remaining }}"{% if workspace_submission %} data-ai-hint-url="{{ url('submission_ai_hint', workspace_submission.id) }}"{% endif %}{% endif %}
      {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}data-image-upload-url="{{ url('martor_image_uploader') }}"{% endif %}>
-  <div class="ws-toolbar">
-    <button class="tool-btn icon-only" type="button" id="btn-overview" aria-expanded="false" title="{{ _('Problem set') }}" aria-label="{{ _('Problem set') }}">
-      <span class="ws-overview-icon" aria-hidden="true">
-        <svg viewBox="0 0 16 14" width="16" height="14" focusable="false">
-          <rect x="0" y="1" width="16" height="2" rx="0.6"/>
-          <polygon points="0,5.2 3.4,7 0,8.8"/>
-          <rect x="4.6" y="6" width="11.4" height="2" rx="0.6"/>
-          <rect x="0" y="11" width="16" height="2" rx="0.6"/>
-        </svg>
+  <div class="ws-toolbar{% if workspace_in_contest %} has-leave{% endif %}">
+    <div class="ws-toolbar-left">
+      <button class="tool-btn icon-only" type="button" id="btn-overview" aria-expanded="false" title="{{ _('Problem set') }}" aria-label="{{ _('Problem set') }}">
+        <span class="ws-overview-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 14" width="16" height="14" focusable="false">
+            <rect x="0" y="1" width="16" height="2" rx="0.6"/>
+            <polygon points="0,5.2 3.4,7 0,8.8"/>
+            <rect x="4.6" y="6" width="11.4" height="2" rx="0.6"/>
+            <rect x="0" y="11" width="16" height="2" rx="0.6"/>
+          </svg>
+        </span>
+      </button>
+      <a class="ctx-label" href="{{ workspace_return_url }}">{{ workspace_context_name }}</a>
+      <span class="nav-arrows">
+        <button class="tool-btn icon-only" id="btn-prev" type="button" title="{{ _('Previous problem') }}"><i class="fa fa-chevron-left"></i></button>
+        <button class="tool-btn icon-only" id="btn-next" type="button" title="{{ _('Next problem') }}"><i class="fa fa-chevron-right"></i></button>
       </span>
-    </button>
-    <a class="ctx-label" href="{{ workspace_return_url }}">{{ workspace_context_name }}</a>
-    <span class="nav-arrows">
-      <button class="tool-btn icon-only" id="btn-prev" type="button" title="{{ _('Previous problem') }}"><i class="fa fa-chevron-left"></i></button>
-      <button class="tool-btn icon-only" id="btn-next" type="button" title="{{ _('Next problem') }}"><i class="fa fa-chevron-right"></i></button>
-    </span>
-    <div class="ws-layout-switch"><button class="layout-toggle" type="button" id="layout-toggle"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button></div>
+      <div class="ws-layout-switch"><button class="layout-toggle" type="button" id="layout-toggle"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button></div>
+    </div>
+    {% if workspace_in_contest %}
+      <div class="ws-toolbar-center">
+        {% set leave_variant = 'toolbar' %}
+        {% include "contest/leave-form.html" %}
+      </div>
+    {% endif %}
     <div class="submit-cluster">
       {% if form %}<button class="tool-btn submit-btn" type="button" id="btn-submit"{% if workspace_is_code and not form.fields.language.queryset.exists() %} disabled{% endif %}{% if workspace_show_timer and workspace_timer_seconds <= 0 %} disabled{% endif %}><i class="fa fa-cloud-upload"></i> {{ _('Submit') }}</button>{% endif %}
       {% if workspace_show_timer %}
@@ -398,7 +410,16 @@
             <div id="workspace-result-main">
               {% if workspace_submission %}
                 <div class="ws-result-summary">
-                  {% if workspace_submission.results_hidden %}
+                  {% if workspace_is_file %}
+                    <h3>{{ _('File submitted') }}</h3>
+                    {% if workspace_submission.results_hidden %}
+                      <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
+                    {% elif not workspace_submission.is_graded %}
+                      <p class="file-awaiting-grading">{{ _('Awaiting grading') }}</p>
+                    {% else %}
+                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points }}</p>
+                    {% endif %}
+                  {% elif workspace_submission.results_hidden %}
                     <h3>{{ _('Results hidden') }}</h3>
                     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
                   {% else %}
@@ -417,7 +438,15 @@
                   {% endif %}
                 </div>
               {% else %}
-                <p class="ws-result-empty">{{ _('Submit a solution to see its judging status here.') }}</p>
+                <p class="ws-result-empty">{% if workspace_is_file %}{{ _('Submit a file to see it here.') }}{% else %}{{ _('Submit a solution to see its judging status here.') }}{% endif %}</p>
+              {% endif %}
+            </div>
+            <div id="workspace-result-file" class="ws-result-file"{% if not workspace_submission or not workspace_submission.file_upload %} hidden{% endif %}>
+              {% if workspace_submission and workspace_submission.file_upload %}
+                <p>
+                  <a class="tool-btn" href="{{ workspace_submission.file_upload.url }}">{{ _('Download uploaded file') }}</a>
+                  <span class="ws-file-name">{{ workspace_submission.file_upload.name }}</span>
+                </p>
               {% endif %}
             </div>
             <div id="workspace-result-source" class="source-block"{% if not workspace_submission or not (workspace_submission.source or workspace_submission.answer_display) %} hidden{% endif %}>
@@ -537,6 +566,26 @@
                        data-placeholder="{{ _('Enter your answer; $$math$$ supported…') }}"></div>
                   <textarea name="answer" id="id_answer" class="ws-answer-hidden" hidden>{{ form.answer.value()|default('', true) }}</textarea>
                 </div>
+              {% elif problem.submission_type == 'F' %}
+                <div class="ws-file-upload">
+                  {% if workspace_file_config and workspace_file_config.instructions %}
+                    <div class="file-upload-instructions">{{ workspace_file_config.instructions }}</div>
+                  {% else %}
+                    <p class="ws-file-upload-lead">{{ _('Upload one file as your answer.') }}</p>
+                  {% endif %}
+                  {{ form.file.errors }}
+                  {{ form.file }}
+                  {% if workspace_file_config %}
+                    <p class="help-text">
+                      {% if workspace_file_config.allowed_extension_list() %}
+                        {{ _('Allowed types:') }} {{ workspace_file_config.allowed_extension_list()|join(', ') }}.
+                      {% endif %}
+                      {% if workspace_file_config.max_file_size %}
+                        {{ _('Max size:') }} {{ workspace_file_config.max_file_size // 1048576 }} MB.
+                      {% endif %}
+                    </p>
+                  {% endif %}
+                </div>
               {% else %}
                 {{ form.as_p() }}
               {% endif %}
@@ -558,8 +607,8 @@
     <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="RichEditor.onImagePicked(event)">
     <script src="{{ static('rich_editor.js') }}"></script>
   {% endif %}
-  {% if workspace_submission and not workspace_submission.is_graded %}
+  {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
-  <script src="{{ static('workspace.js') }}"></script>
+  <script src="{{ static('workspace.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}

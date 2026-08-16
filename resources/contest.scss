@@ -164,12 +164,19 @@ form.contest-join-pseudotab {
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
 
-    input {
+    input, button {
         display: inline;
         border: none;
         padding: 0;
         background: none;
+        font: inherit;
         font-weight: 600;
+        color: inherit;
+        cursor: pointer;
+
+        .fa {
+            padding-right: 0.3em;
+        }
     }
 }
 

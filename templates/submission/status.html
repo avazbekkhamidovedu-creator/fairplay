@@ -6,7 +6,7 @@
 {% endblock %}
 {% block js_media %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
-    {% if not submission.is_graded and last_msg and submission.results_visible_to(request.user) %}
+    {% if not submission.is_graded and last_msg and submission.results_visible_to(request.user) and submission.problem.submission_type != 'F' %}
         <script type="text/javascript">
             $(function () {
                 var blocked = false, request = false, terminalReceived = false;
@@ -69,7 +69,7 @@
             });
         </script>
     {% endif %}
-    {% if not submission.is_graded %}
+    {% if not submission.is_graded and submission.problem.submission_type != 'F' %}
         <script type="text/javascript">
             $(function () {
                 $(document).keydown(function(e) {
@@ -101,46 +101,25 @@
     {% if request.user == submission.user.user or perms.judge.resubmit_other %}
         <div><a href="{{ url('problem_submit', submission.problem.code, submission.id) }}">{{ _('Resubmit') }}</a></div>
     {% endif %}
-    {% if perms.judge.rejudge_submission and not submission.is_locked %}
-        {% compress js %}
-            <script type="text/javascript">
-                window.confirm_and_rejudge = function (form) {
-                    if (confirm({{ _('Are you sure you want to rejudge?')|htmltojs }})) {
-                        form.submit();
-                    }
-                };
-            </script>
-        {% endcompress %}
-        <div>
-            <form action="{{ url('submission_rejudge') }}" method="post">
-                {% csrf_token %}
-                <a href="#" onclick="confirm_and_rejudge(parentNode)">{{ _('Rejudge') }}</a>
-                <input type="hidden" name="id" value="{{ submission.id }}">
-                <input type="hidden" name="path" value="{{ url('submission_status', submission.id) }}">
-            </form>
-        </div>
-    {% endif %}
-
-    {% if submission.problem.submission_type == 'F' and submission.problem.is_editable_by(request.user) %}
-        <div id="file-grade" style="margin-top: 1em;">
-            <hr class="half-hr">
-            <h4>{{ _('Grade this submission') }}</h4>
-            <form action="{{ url('submission_file_grade', submission.id) }}" method="post" class="form-area">
-                {% csrf_token %}
-                <div style="margin-bottom: 0.5em;">
-                    <label for="grade-points">{{ _('Points') }} (0–{{ submission.problem.points }})</label><br>
-                    <input type="number" step="any" min="0" max="{{ submission.problem.points }}"
-                           id="grade-points" name="points"
-                           value="{{ submission.points if submission.points is not none else '' }}">
-                </div>
-                <div style="margin-bottom: 0.5em;">
-                    <label for="grade-feedback">{{ _('Feedback (optional)') }}</label><br>
-                    <textarea id="grade-feedback" name="feedback" rows="3" style="width:100%;">{{ submission.error or '' }}</textarea>
-                </div>
-                <input type="submit" value="{{ _('Save grade') }}" class="button">
-            </form>
-        </div>
-    {% endif %}
+    {% if submission.problem.submission_type != 'F' and perms.judge.rejudge_submission and not submission.is_locked %}
+            {% compress js %}
+                <script type="text/javascript">
+                    window.confirm_and_rejudge = function (form) {
+                        if (confirm({{ _('Are you sure you want to rejudge?')|htmltojs }})) {
+                            form.submit();
+                        }
+                    };
+                </script>
+            {% endcompress %}
+            <div>
+                <form action="{{ url('submission_rejudge') }}" method="post">
+                    {% csrf_token %}
+                    <a href="#" onclick="confirm_and_rejudge(parentNode)">{{ _('Rejudge') }}</a>
+                    <input type="hidden" name="id" value="{{ submission.id }}">
+                    <input type="hidden" name="path" value="{{ url('submission_status', submission.id) }}">
+                </form>
+            </div>
+        {% endif %}
 
     <br>
     <hr class="half-hr">
@@ -201,6 +180,7 @@
     </script>
     {% endif %}
 
+    {% if submission.problem.submission_type != 'F' %}
     <div id="test-cases">{% include "submission/status-testcases.html" %}</div>
 
     {% if not submission.is_graded %}
@@ -217,6 +197,7 @@
                 </form>
             </div>
         {% endif %}
+    {% endif %}
     {% endif %}
     {% if enable_comments %}
         <br>

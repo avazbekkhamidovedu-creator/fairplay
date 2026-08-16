@@ -8,6 +8,8 @@
 {% if not submission.results_visible_to(request.user) %}
     <h3>{{ _('Results hidden') }}</h3>
     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
+{% elif submission.problem.submission_type == 'F' %}
+    {# File uploads wait for a human grader, not a judge or AI. #}
 {% elif submission.status != 'IE' %}
     {% if submission.status == 'QU' %}
         <div class="ai-grading-loading">
@@ -298,7 +300,7 @@
 
 {# --- QU status polling fallback (in case WebSocket doesn't fire) --- #}
 {# Workspace embeds poll via workspace.js; avoid full-page reload there. #}
-{% if submission.status == 'QU' and not workspace_embed %}
+{% if submission.status == 'QU' and not workspace_embed and submission.problem.submission_type != 'F' %}
 <script>
 (function() {
     var pollCount = 0;

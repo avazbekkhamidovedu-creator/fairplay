@@ -406,12 +406,21 @@
                         textExtraction: function (node) {
                             node = $(node);
                             var text = node.text().replace(/^\s+|\s+$/g, '');
-                            return (node.hasClass('p') ? text.replace(/p$/, '') : text);
+                            if (node.hasClass('p')) {
+                                return text.replace(/p$/, '');
+                            }
+                            if (node.hasClass('ac-rate')) {
+                                return text.replace(/%$/, '');
+                            }
+                            return text;
                         }
                     });
                 });
             </script>
         {% endcompress %}
+    {% endif %}
+    {% if request.in_contest %}
+        {% include "contest/media-js.html" %}
     {% endif %}
 {% endblock %}
 
@@ -472,9 +481,9 @@
                             <th class="score">{{ _('Score') }}</th>
                         {% endif %}
                         <th class="problem">{{ _('Problem') }}</th>
-                        <th class="category">{{ _('Category') }}</th>
                         <th class="points">{{ _('Points') }}</th>
                         <th class="users">{{ _('Users') }}</th>
+                        <th class="ac-rate">{{ _('AC Rate') }}</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -486,16 +495,22 @@
                             <td class="problem">
                                 <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>
                             </td>
-                            <td class="category">{{ problem.group.full_name }}</td>
                             <td class="p">{{ problem.points|floatformat }}{% if problem.partial %}p{% endif %}</td>
                             <td class="users">
-                                <a href="{{ url('ranked_submissions', problem.code) }}">
-                                    {% if not hide_contest_scoreboard %}
+                                {% if not hide_contest_scoreboard %}
+                                    <a href="{{ url('contest_ranked_submissions', request.participation.contest.key, problem.code) }}">
                                         {{ problem.user_count }}
-                                    {% else %}
-                                        ???
-                                    {% endif %}
-                                </a>
+                                    </a>
+                                {% else %}
+                                    ???
+                                {% endif %}
+                            </td>
+                            <td class="ac-rate">
+                                {% if not hide_contest_scoreboard %}
+                                    {{ problem.ac_rate|floatformat(1) }}%
+                                {% else %}
+                                    ???
+                                {% endif %}
                             </td>
                         </tr>
                     {% endfor %}

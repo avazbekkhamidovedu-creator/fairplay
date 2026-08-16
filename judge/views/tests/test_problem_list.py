@@ -1,8 +1,16 @@
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
-from judge.models import ProblemMCQConfig
-from judge.models.tests.util import CommonDataMixin, create_problem
+from judge.models import ContestSubmission, Language, ProblemMCQConfig, Submission
+from judge.models.tests.util import (
+    CommonDataMixin,
+    create_contest,
+    create_contest_participation,
+    create_contest_problem,
+    create_problem,
+    create_user,
+)
 
 
 class ProblemListFormatFilterTest(CommonDataMixin, TestCase):
@@ -102,3 +110,104 @@ class ProblemListMCQSubtypeFilterTest(CommonDataMixin, TestCase):
         self.assertIn(b'mcq-single', content)
         self.assertIn(b'mcq-tf', content)
         self.assertNotIn(b'mcq-multi', content)
+
+
+class AssignmentProblemListTestCase(TestCase):
+    """Join-an-assignment problem list: title, columns, and assignment-scoped stats."""
+
+    fixtures = ['language_all.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.student = create_user(username='assign-student')
+        cls.classmate = create_user(username='assign-classmate')
+        cls.outsider = create_user(username='assign-outsider')
+        cls.language = Language.objects.get(key='PY3')
+        cls.problem = create_problem(
+            code='assign-p1', name='Assignment P1', is_public=True, ac_rate=99.0, user_count=50,
+        )
+        cls.other = create_problem(
+            code='assign-p2', name='Not In Assignment', is_public=True, ac_rate=10.0,
+        )
+        cls.contest = create_contest(
+            key='assignlist', name='Homework Live Stats',
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            is_visible=True,
+        )
+        cls.contest_problem = create_contest_problem(
+            contest=cls.contest, problem=cls.problem, points=80, order=1,
+        )
+
+        student_part = create_contest_participation(contest=cls.contest, user=cls.student.profile)
+        classmate_part = create_contest_participation(contest=cls.contest, user=cls.classmate.profile)
+        cls.student.profile.current_contest = student_part
+        cls.student.profile.save()
+
+        ac = Submission.objects.create(
+            user=cls.student.profile, problem=cls.problem, language=cls.language,
+            result='AC', status='D', points=80, contest_object=cls.contest,
+        )
+        ContestSubmission.objects.create(
+            submission=ac, problem=cls.contest_problem, participation=student_part, points=80,
+        )
+        wa = Submission.objects.create(
+            user=cls.classmate.profile, problem=cls.problem, language=cls.language,
+            result='WA', status='D', points=0, contest_object=cls.contest,
+        )
+        ContestSubmission.objects.create(
+            submission=wa, problem=cls.contest_problem, participation=classmate_part, points=0,
+        )
+        # Practice / global attempt must not affect assignment Users or AC rate.
+        Submission.objects.create(
+            user=cls.outsider.profile, problem=cls.problem, language=cls.language,
+            result='AC', status='D', points=100, contest_object=None,
+        )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.student)
+
+    def test_heading_uses_assignment_name_before_problems(self):
+        response = self.client.get(reverse('problem_list'))
+        self.assertContains(response, 'Homework Live Stats')
+        self.assertContains(response, 'Problems')
+        self.assertContains(response, reverse('contest_view', args=[self.contest.key]))
+        self.assertEqual(response.context['content_title'], 'Homework Live Stats')
+        self.assertEqual(response.context['title_crumb'], 'Problems')
+
+    def test_columns_are_score_problem_points_users_ac_rate(self):
+        response = self.client.get(reverse('problem_list'))
+        self.assertContains(response, '>Score<')
+        self.assertContains(response, '>Problem<')
+        self.assertContains(response, '>Points<')
+        self.assertContains(response, '>Users<')
+        self.assertContains(response, '>AC Rate<')
+        self.assertNotContains(response, '>Category<')
+        self.assertContains(response, 'Assignment P1')
+        self.assertNotContains(response, 'Not In Assignment')
+        self.assertContains(response, '80')
+
+    def test_users_and_ac_rate_use_live_assignment_submissions(self):
+        response = self.client.get(reverse('problem_list'))
+        problems = list(response.context['problems'])
+        self.assertEqual(len(problems), 1)
+        row = problems[0]
+        self.assertEqual(row['code'], 'assign-p1')
+        # Two assignment participants submitted; the outsider's practice AC is ignored.
+        self.assertEqual(row['user_count'], 2)
+        # 1 AC + 1 WA in this assignment → 50%, not the stored global 99%.
+        self.assertEqual(row['ac_rate'], 50.0)
+        self.assertContains(response, '50.0%')
+        self.assertNotContains(response, '99.0%')
+        ranked = reverse('contest_ranked_submissions', args=[self.contest.key, self.problem.code])
+        self.assertContains(response, ranked)
+        self.assertNotContains(response, reverse('ranked_submissions', args=[self.problem.code]))
+
+    def test_list_row_shows_leave_button(self):
+        response = self.client.get(reverse('problem_list'))
+        leave = reverse('contest_leave', args=[self.contest.key])
+        self.assertContains(response, 'fa-list')
+        self.assertContains(response, leave)
+        self.assertContains(response, 'assignment-leave-form')
+        self.assertContains(response, 'Leave')

@@ -50,5 +50,13 @@
             var match = (this.getAttribute('action') || '').match(/\/contest\/([^\/]+)\/leave\/?$/);
             if (match) dkuojClearAssignmentDrafts(match[1]);
         });
+
+        $('form.assignment-leave-form').on('submit', function () {
+            var $btn = $(this).find('button, input[type=submit]');
+            if ($btn.hasClass('leaving-forever') || $btn.hasClass('seb-submit-exit')) {
+                return;
+            }
+            return confirm({{ _('Are you sure you want to leave?')|htmltojs }});
+        });
     });
 </script>

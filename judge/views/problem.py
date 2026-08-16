@@ -14,7 +14,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Case, CharField, Count, F, FilteredRelation, Max, Prefetch, Q, When
 from django.db.models.functions import Coalesce
 from django.db.utils import ProgrammingError
@@ -110,6 +110,23 @@ def workspace_display_points(submission, request):
         if contest_sub is not None:
             return contest_sub.points
     return submission.points
+
+
+def get_workspace_file_upload(submission):
+    """Download metadata for a file-upload submission, or None."""
+    if getattr(getattr(submission, 'problem', None), 'submission_type', None) != 'F':
+        return None
+    try:
+        upload = submission.upload
+    except ObjectDoesNotExist:
+        return None
+    if not upload:
+        return None
+    return {
+        'url': reverse('submission_file_download', args=(submission.id,)),
+        'name': upload.original_name,
+        'size': upload.size,
+    }
 
 
 def get_workspace_answer_display(submission):
@@ -432,6 +449,13 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         from judge.question_types import all_types, get_grader
         workspace_grader = get_grader(self.object.submission_type)
         context['workspace_is_code'] = workspace_grader.routes_to_bridge
+        context['workspace_is_file'] = self.object.submission_type == ProblemSubmissionType.FILE
+        try:
+            context['workspace_file_config'] = (
+                self.object.file_config if context['workspace_is_file'] else None
+            )
+        except ObjectDoesNotExist:
+            context['workspace_file_config'] = None
         context['workspace_submission_type_label'] = str(workspace_grader.label)
         # Match problem-list redesign filters: multi format (MCQ expanded), course, tags.
         workspace_format_options = []
@@ -500,7 +524,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         selected_submission_id = self.request.GET.get('submission')
         if authed and selected_submission_id and selected_submission_id.isdigit():
             selected_qs = Submission.objects.select_related(
-                'source', 'contest_object', 'contest__problem',
+                'source', 'upload', 'problem', 'contest_object', 'contest__problem',
             ).prefetch_related('problem__mcq_options', 'problem__blanks').filter(
                 id=int(selected_submission_id), problem=self.object,
             )
@@ -531,6 +555,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                         get_workspace_answer_display(selected_submission)
                         if selected_source is not None else []
                     ),
+                    'file_upload': get_workspace_file_upload(selected_submission),
                     'results_hidden': results_hidden,
                     'is_graded': selected_submission.is_graded,
                     'id_secret': selected_submission.id_secret,
@@ -867,14 +892,50 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             return None
         return self.request.profile
 
+    def get_title(self):
+        if self.in_contest:
+            return _('%(assignment)s — Problems') % {'assignment': self.contest.name}
+        return super().get_title()
+
+    def get_content_title(self):
+        if self.in_contest:
+            return self.contest.name
+        return super().get_content_title()
+
+    @staticmethod
+    def _assignment_problem_stats(contest):
+        """Per-problem Users / AC rate from this assignment's live submissions.
+
+        Users = distinct students who submitted the problem in this assignment.
+        AC rate = AC submissions / all submissions in this assignment.
+        Practice / global submissions are ignored (``contest_object`` filter).
+        """
+        rows = (
+            Submission.objects.filter(contest_object=contest)
+            .values('problem_id')
+            .annotate(
+                user_count=Count('user', distinct=True),
+                submission_total=Count('id'),
+                submission_ac=Count('id', filter=Q(result='AC')),
+            )
+        )
+        stats = {}
+        for row in rows:
+            total = row['submission_total']
+            stats[row['problem_id']] = {
+                'user_count': row['user_count'],
+                'ac_rate': (100.0 * row['submission_ac'] / total) if total else 0.0,
+            }
+        return stats
+
     def get_contest_queryset(self):
         participation = self.profile.current_contest
         contest = participation.contest
+        stats = self._assignment_problem_stats(contest)
 
         queryset = (
-            contest.contest_problems.select_related('problem__group')
+            contest.contest_problems.select_related('problem')
             .defer('problem__description')
-            .annotate(user_count=Count('submission__participation', distinct=True))
             .annotate(
                 i18n_translation=FilteredRelation(
                     'problem__translations',
@@ -898,15 +959,16 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             except (KeyError, TypeError, ValueError):
                 user_problem_cell = mark_safe('<td>???</td>')
 
+            problem_stats = stats.get(cp.problem_id, {'user_count': 0, 'ac_rate': 0.0})
             result.append({
                 'id': cp.problem_id,
                 'code': cp.problem.code,
                 'name': cp.problem.name,
                 'i18n_name': cp.i18n_name,
-                'group': {'full_name': cp.problem.group.full_name},
                 'points': cp.points,
                 'partial': cp.partial,
-                'user_count': cp.user_count,
+                'user_count': problem_stats['user_count'],
+                'ac_rate': problem_stats['ac_rate'],
                 'user_problem_cell': user_problem_cell,
             })
 
@@ -1198,6 +1260,8 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 self.contest.SCOREBOARD_AFTER_PARTICIPATION,
                 self.contest.SCOREBOARD_HIDDEN,
             )
+            context['title_url'] = reverse('contest_view', args=[self.contest.key])
+            context['title_crumb'] = _('Problems')
         return context
 
     def get_noui_slider_points(self):
@@ -1559,7 +1623,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             if self.is_code and not (form.data.get('source') or '').strip():
                 message = _('Source code cannot be empty.')
             elif not self.is_code:
-                non_empty = False
+                non_empty = bool(self.request.FILES)
                 for key, value in form.data.items():
                     if key in ('csrfmiddlewaretoken', 'workspace', 'parent'):
                         continue
@@ -1588,8 +1652,10 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 'status': submission.status,
                 'result': None if hidden else submission.result,
                 'results_hidden': hidden,
+                'is_graded': submission.is_graded,
                 'source': source,
                 'answer_display': get_workspace_answer_display(submission) if source is not None else [],
+                'file_upload': get_workspace_file_upload(submission),
                 'status_url': reverse('problem_workspace_submission_status', args=(self.object.code, submission.id)),
             })
         return super().form_valid(form)
@@ -1673,9 +1739,15 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         blocked = self._submission_blocked_response()
         if blocked is not None:
             return blocked
-        if self.is_code:
-            return self._code_form_valid(form)
-        return self._noncode_form_valid(form)
+        try:
+            if self.is_code:
+                return self._code_form_valid(form)
+            return self._noncode_form_valid(form)
+        except IntegrityError:
+            if self._wants_workspace_json():
+                logging.getLogger('judge.problem').exception('Workspace submit failed')
+                return self._workspace_json_error(_('Submit failed.'), status=500)
+            raise
 
     def _code_form_valid(self, form):
         if not self.object.allowed_languages.filter(id=form.cleaned_data['language'].id).exists():
@@ -2212,7 +2284,7 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
         problem = self.get_object()
         submission = get_object_or_404(
             Submission.objects.select_related(
-                'source', 'contest_object', 'contest__problem', 'user__user',
+                'source', 'upload', 'problem', 'contest_object', 'contest__problem', 'user__user',
             ).prefetch_related('problem__mcq_options', 'problem__blanks'),
             id=kwargs['submission'], problem=problem,
         )
@@ -2258,6 +2330,7 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
             'is_graded': submission.is_graded,
             'source': source,
             'answer_display': answer_display,
+            'file_upload': get_workspace_file_upload(submission),
             'comments_html': comments_html,
             'id_secret': submission.id_secret,
             'status_url': reverse(

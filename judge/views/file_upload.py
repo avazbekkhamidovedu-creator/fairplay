@@ -37,7 +37,11 @@ def submission_file_download(request, submission):
 
 @require_POST
 def submission_file_grade(request, submission):
-    """Teacher inline grading for a file-upload submission."""
+    """Teacher grading for a file-upload submission.
+
+    The student result page no longer hosts this form; a dedicated grade page will
+    call this endpoint later. The URL is kept so that page can reuse it.
+    """
     sub = get_object_or_404(Submission.objects.select_related('problem'), id=submission)
     if not (request.user.is_authenticated and sub.problem.is_editable_by(request.user)):
         raise PermissionDenied()

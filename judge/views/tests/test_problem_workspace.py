@@ -368,6 +368,24 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-context-id="%s"' % self.contest.key)
         self.assertContains(response, 'id="workspace-submit-form"')
 
+    def test_assignment_toolbar_puts_leave_on_submit_row(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'ws-toolbar has-leave')
+        self.assertContains(response, 'ws-toolbar-center')
+        self.assertContains(response, 'id="btn-submit"')
+        self.assertContains(response, reverse('contest_leave', args=[self.contest.key]))
+        self.assertContains(response, 'assignment-leave-form')
+        self.assertContains(response, 'Leave')
+
+    def test_practice_workspace_has_no_leave_button(self):
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(response.context['workspace_mode'], 'practice')
+        self.assertNotContains(response, 'assignment-leave-form')
+        self.assertNotContains(response, reverse('contest_leave', args=[self.contest.key]))
+
     def test_practice_workspace_form_disables_browser_autocomplete(self):
         response = self.client.get(reverse('problem_detail', args=[self.mcq.code]))
         self.assertEqual(response.context['workspace_mode'], 'practice')
