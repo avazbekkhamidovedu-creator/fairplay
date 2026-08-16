@@ -420,3 +420,22 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertTrue(stale_rows)
         self.assertNotIn('999002', stale_rows[0]['value'])
         self.assertIn('no longer available', stale_rows[0]['value'])
+
+    def test_ai_hints_tab_unavailable_copy_is_simple(self):
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'AI hints are not available for this problem.')
+        self.assertNotContains(response, 'complexity budget')
+        self.assertNotContains(response, 'smallest counterexample')
+        self.assertNotContains(response, 'input-output relation')
+        self.assertNotContains(response, 'classic status page')
+
+    def test_ai_hints_tab_available_copy_is_simple(self):
+        problem = create_problem(code='ws-ai-hint', is_public=True, ai_hints_enabled=True)
+        with mock.patch('judge.ai_hints.is_configured', return_value=True):
+            response = self.client.get(reverse('problem_detail', args=[problem.code]))
+        self.assertContains(response, 'These hints help you think.')
+        self.assertContains(response, 'Submit a solution first.')
+        self.assertContains(response, 'Get AI Hint')
+        self.assertNotContains(response, 'classic status page')
+        self.assertNotContains(response, 'non-AC formal')
+        self.assertNotContains(response, 'complexity budget')

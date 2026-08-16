@@ -376,16 +376,10 @@
           {% with license=problem.license %}{% if license %}<p class="ws-license"><a href="{{ url('license', license.key) }}">{{ license.display or license.name }}</a></p>{% endif %}{% endwith %}
         </div>
         <div class="ws-tab-panel" id="panel-ai">
-          <div class="alert alert-info">{{ _('Use these hints to guide your thinking. They do not reveal an answer or source code.') }}</div>
           {% if not ai_hints_possible %}
-            <p class="ws-info-muted">{{ _('AI Hints are not enabled for this problem, or the hint service is not configured.') }}</p>
-            <ul>
-              <li>{{ _('Identify the input-output relation and edge cases.') }}</li>
-              <li>{{ _('Set a complexity budget before writing code.') }}</li>
-              <li>{{ _('Validate the smallest counterexample before submitting.') }}</li>
-            </ul>
+            <p class="ws-info-muted">{{ _('AI hints are not available for this problem.') }}</p>
           {% else %}
-            <p class="sub-hint">{{ _('After a non-AC formal submission finishes judging, you can request a hint (same quota as the classic status page).') }}</p>
+            <p>{{ _('These hints help you think. They will not give the answer or code.') }}</p>
             {% set hint_ready = workspace_submission and workspace_submission.result and workspace_submission.result != 'AC' and workspace_submission.result != 'AB' %}
             <div id="ai-hint-section" class="ai-hint-section"{% if not hint_ready %} hidden{% endif %}>
               <button type="button" class="tool-btn" id="ai-hint-btn"{% if ai_hints_remaining == 0 %} disabled{% endif %}>
@@ -395,7 +389,7 @@
               <div id="ai-hint-result" class="ai-hint-result" hidden></div>
             </div>
             <p id="ai-hint-waiting" class="ws-info-muted"{% if hint_ready %} hidden{% endif %}>
-              {{ _('Submit a solution that is not Accepted to unlock AI Hints for that submission.') }}
+              {{ _('Submit a solution first. After it is judged and not accepted, you can request a hint.') }}
             </p>
           {% endif %}
         </div>
