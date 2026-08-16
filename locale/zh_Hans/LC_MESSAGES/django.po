@@ -4530,6 +4530,10 @@ msgstr "课程"
 msgid "All courses"
 msgstr "全部课程"
 
+#: templates/problem/list.html templates/problem/workspace.html
+msgid "Public"
+msgstr "公共"
+
 #: templates/problem/create_v2.html
 msgid "Courses"
 msgstr "课程"

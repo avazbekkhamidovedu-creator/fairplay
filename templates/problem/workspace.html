@@ -42,6 +42,7 @@
      data-select2-theme="{{ DMOJ_SELECT2_THEME }}"
      data-is-code="{{ '1' if workspace_is_code else '0' }}"
      data-is-file="{{ '1' if workspace_is_file else '0' }}"
+     data-is-mcq="{{ '1' if workspace_is_mcq else '0' }}"
      data-run-url="{{ url('problem_workspace_run', problem.code) }}"
      data-subs-url="{{ url('problem_workspace_submissions', problem.code) }}"
      data-testcases-url="{{ url('submission_testcases_query') }}"
@@ -120,6 +121,7 @@
             <div class="filter-block">
               <label class="filter-label" for="fp-course">{{ _('Course') }}</label>
               <select id="fp-course" multiple data-placeholder="{{ _('All courses') }}">
+                <option value="{{ workspace_public_course_value }}">{{ _('Public') }}</option>
                 {% for org in workspace_organizations %}<option value="{{ org.id }}">{{ org.name }}</option>{% endfor %}
               </select>
             </div>
@@ -161,10 +163,16 @@
       <div class="ws-drawer-body" id="drawer-problems">
         {% for item in workspace_problems %}
           {% set item_problem = item.problem if workspace_in_contest else item %}
-          {% set row_status = 'solved' if item_problem.id in completed_problem_ids else ('attempted' if item_problem.id in attempted_problems else 'unsolved') %}
           {% set row_points = item.points if workspace_in_contest else item_problem.points %}
           {% set row_attempts = workspace_attempt_counts.get(item_problem.id, 0) %}
           {% set row_best = workspace_best_points.get(item_problem.id) %}
+          {% set row_hide_score = workspace_in_contest and workspace_exam_hide_scores and item.results_hidden %}
+          {% set row_status = 'solved' if item_problem.id in completed_problem_ids else ('attempted' if item_problem.id in attempted_problems else 'unsolved') %}
+          {% if row_hide_score %}
+            {% set row_status = 'attempted' if row_attempts else 'unsolved' %}
+          {% elif workspace_mode == 'exam' and row_attempts %}
+            {% set row_status = 'solved' if row_best is not none and row_best >= row_points else 'attempted' %}
+          {% endif %}
           {% set row_diff = item_problem.difficulty %}
           <a class="drawer-problem{% if item_problem.code == problem.code %} active{% endif %}"
              href="{{ item_problem.get_absolute_url() }}"
@@ -172,6 +180,7 @@
              data-type="{{ item_problem.submission_type }}"
              data-format="{{ item_problem.format_filter_code }}"
              data-orgs="{% for org in item_problem.organizations.all() %}{{ org.id }} {% endfor %}"
+             data-public="{{ '1' if item_problem.is_public and not item_problem.is_organization_private else '0' }}"
              data-ac="{{ item_problem.ac_rate }}"
              data-diff="{{ row_diff or '' }}"
              data-kp="{% for tid in item_problem.knowledge_type_ids %}{{ tid }} {% endfor %}"
@@ -200,10 +209,14 @@
               </span>
             </span>
             <span class="drawer-score{% if row_status == 'solved' %} got{% elif row_status == 'attempted' %} tried{% endif %}">
-              {% if row_status == 'solved' %}
-                {{ (row_best if row_best is not none else row_points)|floatformat(0) }}/{{ row_points|floatformat(0) }}
+              {% if row_hide_score %}
+                —/{{ row_points|floatformat(-3) }}
+              {% elif workspace_mode == 'exam' and row_attempts %}
+                {{ (row_best if row_best is not none else 0)|floatformat(-3) }}/{{ row_points|floatformat(-3) }}
+              {% elif row_status == 'solved' %}
+                {{ (row_best if row_best is not none else row_points)|floatformat(-3) }}/{{ row_points|floatformat(-3) }}
               {% else %}
-                —/{{ row_points|floatformat(0) }}
+                —/{{ row_points|floatformat(-3) }}
               {% endif %}
             </span>
           </a>
@@ -430,10 +443,12 @@
                             title="{{ workspace_submission.long_status or workspace_submission.result or '' }}">
                         {{ workspace_submission.result or workspace_submission.status or '?' }}
                       </span>
-                      {% if workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}
+                      {% if not workspace_is_mcq and workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}
                     </p>
                     {% if workspace_is_code %}
                       <p><b>{{ _('Resources') }}:</b> {{ workspace_submission.time|default(0) }}s, {{ workspace_submission.memory|default(0) }}KB</p>
+                    {% elif workspace_is_mcq %}
+                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points|floatformat(-3) }} / {{ workspace_submission.points_total|floatformat(-3) }}</p>
                     {% endif %}
                   {% endif %}
                 </div>

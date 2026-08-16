@@ -8,8 +8,8 @@
 {% if not submission.results_visible_to(request.user) %}
     <h3>{{ _('Results hidden') }}</h3>
     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
-{% elif submission.problem.submission_type == 'F' %}
-    {# File uploads wait for a human grader, not a judge or AI. #}
+{% elif submission.problem.submission_type in ('F', 'M') %}
+    {# File uploads wait for a human grader. MCQ uses the summary (Result + Score), not fake test cases. #}
 {% elif submission.status != 'IE' %}
     {% if submission.status == 'QU' %}
         <div class="ai-grading-loading">

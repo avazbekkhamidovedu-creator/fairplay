@@ -112,6 +112,42 @@ def workspace_display_points(submission, request):
     return submission.points
 
 
+def workspace_display_points_total(submission, request):
+    """Max score shown next to Workspace Result: assignment problem points, else problem.points."""
+    if getattr(request, 'in_contest', False):
+        contest_sub = submission.contest_or_none
+        if contest_sub is not None:
+            return contest_sub.problem.points
+        contest_problem = get_contest_problem(submission.problem, getattr(request, 'profile', None))
+        if contest_problem is not None:
+            return contest_problem.points
+    return submission.problem.points
+
+
+PUBLIC_COURSE_FILTER = 'public'
+
+
+def course_filter_organizations(user):
+    """Courses shown in course filters: the user's memberships (and orgs they admin).
+
+    Users who can see every organization-private problem get the full catalog so they
+    can still filter by a course they are not enrolled in.
+    """
+    qs = Organization.objects.order_by('name')
+    if not getattr(user, 'is_authenticated', False):
+        return []
+    if (
+        user.has_perm('judge.see_private_problem')
+        or user.has_perm('judge.see_organization_problem')
+        or (user.has_perm('judge.edit_own_problem') and user.has_perm('judge.edit_all_problem'))
+    ):
+        return list(qs)
+    profile = user.profile
+    member_ids = profile.organizations.values_list('id', flat=True)
+    admin_ids = Organization.admins.through.objects.filter(profile=profile).values('organization_id')
+    return list(qs.filter(Q(id__in=member_ids) | Q(id__in=admin_ids)).distinct())
+
+
 def get_workspace_file_upload(submission):
     """Download metadata for a file-upload submission, or None."""
     if getattr(getattr(submission, 'problem', None), 'submission_type', None) != 'F':
@@ -450,6 +486,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         workspace_grader = get_grader(self.object.submission_type)
         context['workspace_is_code'] = workspace_grader.routes_to_bridge
         context['workspace_is_file'] = self.object.submission_type == ProblemSubmissionType.FILE
+        context['workspace_is_mcq'] = self.object.submission_type == ProblemSubmissionType.MCQ
         try:
             context['workspace_file_config'] = (
                 self.object.file_config if context['workspace_is_file'] else None
@@ -476,7 +513,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             {'code': name, 'label': Problem.difficulty_display(name)}
             for name in Problem.DIFFICULTY_TYPE_NAMES
         ]
-        context['workspace_organizations'] = list(Organization.objects.order_by('name'))
+        context['workspace_organizations'] = course_filter_organizations(user)
+        context['workspace_public_course_value'] = PUBLIC_COURSE_FILTER
         reserved_kp = Problem.reserved_auto_type_labels()
         context['workspace_knowledge_types'] = [
             t for t in ProblemType.objects.order_by('full_name')
@@ -484,21 +522,41 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         ]
         context['workspace_attempt_counts'] = {}
         context['workspace_best_points'] = {}
+        context['workspace_exam_hide_scores'] = False
         if authed:
             if workspace_in_contest:
+                contest = current_participation.contest
+                context['workspace_exam_hide_scores'] = (
+                    contest.format_class.has_hidden_results and not contest.results_finalized
+                )
                 drawer_problem_ids = [cp.problem_id for cp in context['workspace_problems']]
-                # Assignment drawer: ContestSubmission.points (assignment problem scale).
+                # Exam scoreboard uses latest for hidden types; assignment (and exam code) uses best.
+                latest_ids = set()
+                if contest.format_class.has_hidden_results:
+                    latest_ids = {
+                        cp.problem_id for cp in context['workspace_problems'] if cp.score_uses_latest
+                    }
                 if drawer_problem_ids:
+                    counts, best, latest = {}, {}, {}
                     for row in (
                         ContestSubmission.objects.filter(
                             participation=self.request.participation,
                             problem__problem_id__in=drawer_problem_ids,
                         )
-                        .values('problem__problem_id')
-                        .annotate(c=Count('id'), p=Max('points'))
+                        .values('problem__problem_id', 'points', 'submission__date', 'id')
+                        .order_by('submission__date', 'id')
                     ):
-                        context['workspace_attempt_counts'][row['problem__problem_id']] = row['c']
-                        context['workspace_best_points'][row['problem__problem_id']] = row['p']
+                        pid = row['problem__problem_id']
+                        counts[pid] = counts.get(pid, 0) + 1
+                        pts = row['points']
+                        if pid not in best or pts > best[pid]:
+                            best[pid] = pts
+                        latest[pid] = pts
+                    for pid, n in counts.items():
+                        context['workspace_attempt_counts'][pid] = n
+                        context['workspace_best_points'][pid] = (
+                            latest[pid] if pid in latest_ids else best[pid]
+                        )
             else:
                 drawer_problem_ids = [p.id for p in context['workspace_problems']]
                 if drawer_problem_ids:
@@ -548,6 +606,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                     'result_class': None if results_hidden else selected_submission.result_class,
                     'long_status': None if results_hidden else selected_submission.long_status,
                     'points': None if results_hidden else display_points,
+                    'points_total': workspace_display_points_total(selected_submission, self.request),
                     'time': None if results_hidden else selected_submission.time,
                     'memory': None if results_hidden else selected_submission.memory,
                     'source': selected_source,
@@ -1653,6 +1712,8 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 'result': None if hidden else submission.result,
                 'results_hidden': hidden,
                 'is_graded': submission.is_graded,
+                'points': None if hidden else workspace_display_points(submission, self.request),
+                'points_total': workspace_display_points_total(submission, self.request),
                 'source': source,
                 'answer_display': get_workspace_answer_display(submission) if source is not None else [],
                 'file_upload': get_workspace_file_upload(submission),
@@ -2324,6 +2385,7 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
             'result': None if hidden else submission.result,
             'result_class': None if hidden else submission.result_class,
             'points': None if hidden else workspace_display_points(submission, request),
+            'points_total': workspace_display_points_total(submission, request),
             'time': None if hidden else submission.time,
             'memory': None if hidden else submission.memory,
             'results_hidden': hidden,

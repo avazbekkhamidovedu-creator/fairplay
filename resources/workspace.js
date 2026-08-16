@@ -152,6 +152,13 @@
       return padded.indexOf(' ' + needle + ' ') !== -1;
     });
   }
+  function matchesCourse(item, courses) {
+    if (!courses.length) return true;
+    var wantPublic = courses.indexOf('public') !== -1;
+    var orgIds = courses.filter(function (code) { return code !== 'public'; });
+    if (wantPublic && item.dataset.public === '1') return true;
+    return orgIds.length ? tokenHit(item.dataset.orgs, orgIds) : false;
+  }
   function matchesFormat(item, formats) {
     if (!formats.length) return true;
     var type = item.dataset.type || '';
@@ -176,7 +183,7 @@
       return (!q || item.textContent.toLowerCase().indexOf(q) !== -1)
         && matchesFormat(item, formats)
         && (!diffs.length || diffs.indexOf(item.dataset.diff || '') !== -1)
-        && tokenHit(item.dataset.orgs, courses)
+        && matchesCourse(item, courses)
         && tokenHit(item.dataset.kp, tags)
         && (!status
           || item.dataset.status === status
@@ -456,6 +463,15 @@
   function isFileProblem() {
     return app.dataset.isFile === '1';
   }
+  function isMcqProblem() {
+    return app.dataset.isMcq === '1';
+  }
+  function formatScorePart(n) {
+    if (n == null || n === '') return '-';
+    var num = Number(n);
+    if (!isFinite(num)) return String(n);
+    return String(parseFloat(num.toFixed(3)));
+  }
   function resultClassFromStatus(status) {
     var code = status.result || status.status || '';
     if (code === 'AC' && status.case_points != null && status.case_total != null
@@ -531,7 +547,7 @@
     label.textContent = gettext('Result') + ': ';
     line.appendChild(label);
     appendResultCode(line, status.result || status.status, resultClassFromStatus(status));
-    if (status.points != null) {
+    if (status.points != null && !isMcqProblem()) {
       line.appendChild(document.createTextNode(' · ' + status.points));
     }
     wrap.appendChild(heading);
@@ -540,6 +556,15 @@
       var detail = document.createElement('p');
       detail.textContent = gettext('Resources') + ': ' + (status.time || 0) + 's, ' + (status.memory || 0) + 'KB';
       wrap.appendChild(detail);
+    } else if (isMcqProblem()) {
+      var score = document.createElement('p');
+      var scoreLabel = document.createElement('b');
+      scoreLabel.textContent = gettext('Score') + ':';
+      score.appendChild(scoreLabel);
+      score.appendChild(document.createTextNode(
+        ' ' + formatScorePart(status.points) + ' / ' + formatScorePart(status.points_total)
+      ));
+      wrap.appendChild(score);
     } else {
       var score = document.createElement('p');
       score.textContent = gettext('Score') + ': ' + (status.points == null ? '-' : status.points);
@@ -734,7 +759,7 @@
       });
   }
   function appendTestcasesPanel(submissionId) {
-    if (isFileProblem()) return Promise.resolve();
+    if (isFileProblem() || isMcqProblem()) return Promise.resolve();
     ensureResultStructure();
     var main = $('#workspace-result-main');
     var baseUrl = app.dataset.testcasesUrl;

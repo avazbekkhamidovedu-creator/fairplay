@@ -18,6 +18,7 @@ from judge.models.tests.util import (
     create_contest,
     create_contest_participation,
     create_contest_problem,
+    create_organization,
     create_problem,
     create_user,
 )
@@ -304,6 +305,19 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'id="fp-group"', html=False)
         self.assertIn('workspace_organizations', response.context)
 
+    def test_practice_course_filter_lists_membership_and_public(self):
+        mine = create_organization(name='WsMine')
+        other = create_organization(name='WsOther')
+        self.user.profile.organizations.add(mine)
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        names = {org.name for org in response.context['workspace_organizations']}
+        self.assertIn(mine.name, names)
+        self.assertNotIn(other.name, names)
+        self.assertContains(response, 'value="%s"' % response.context['workspace_public_course_value'], html=False)
+        self.assertContains(response, mine.name)
+        self.assertNotContains(response, other.name)
+        self.assertContains(response, 'data-public="1"', html=False)
+
     def test_anonymous_problem_detail_stays_in_practice(self):
         # `authed and current_contest` is False for guests; that must not be
         # treated as an active participation (bool has no .contest).
@@ -457,3 +471,107 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'classic status page')
         self.assertNotContains(response, 'non-AC formal')
         self.assertNotContains(response, 'complexity budget')
+
+    def test_mcq_result_shows_verdict_and_score_over_max(self):
+        self.mcq.points = 10
+        self.mcq.save(update_fields=['points'])
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=self.mcq, language=Language.get_answer_language(),
+            result='WA', status='D', points=0, time=0, memory=0,
+        )
+        SubmissionSource.objects.create(
+            submission=submission,
+            source=json.dumps({'selected': [self.mcq_opt_wrong.id]}),
+        )
+        status = self.client.get(reverse(
+            'problem_workspace_submission_status', args=[self.mcq.code, submission.id],
+        ))
+        self.assertEqual(status.status_code, 200)
+        body = status.json()
+        self.assertEqual(body['result'], 'WA')
+        self.assertEqual(body['points'], 0)
+        self.assertEqual(body['points_total'], 10)
+        detail = self.client.get(
+            reverse('problem_detail', args=[self.mcq.code]) + '?submission=%d' % submission.id,
+        )
+        self.assertContains(detail, 'Judging results')
+        self.assertContains(detail, 'case-WA')
+        self.assertContains(detail, 'Score:')
+        self.assertContains(detail, '0 / 10')
+        self.assertNotContains(detail, ' · 0')
+        self.assertNotContains(detail, 'Execution results')
+        self.assertNotContains(detail, 'Execution Results')
+        self.assertNotContains(detail, 'Test case #')
+
+    def test_exam_drawer_hides_mcq_score_until_finalize(self):
+        exam = create_contest(
+            key='wsexamhide', name='Workspace Exam',
+            format_name='exam', is_visible=True,
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            authors=('workspace-author',),
+        )
+        exam_mcq = create_contest_problem(contest=exam, problem=self.mcq, points=10, order=1)
+        participation = create_contest_participation(contest=exam, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=self.mcq, language=Language.get_answer_language(),
+            result='AC', status='D', points=10, contest_object=exam, time=0, memory=0,
+        )
+        ContestSubmission.objects.create(
+            submission=submission, problem=exam_mcq, participation=participation, points=10,
+        )
+
+        hidden = self.client.get(reverse('problem_detail', args=[self.mcq.code]))
+        self.assertEqual(hidden.context['workspace_mode'], 'exam')
+        self.assertTrue(hidden.context['workspace_exam_hide_scores'])
+        self.assertContains(hidden, 'drawer-score tried')
+        self.assertContains(hidden, '—/10')
+        self.assertContains(hidden, 'attempted-problem-color')
+        self.assertNotContains(hidden, 'solved-problem-color')
+        self.assertNotContains(hidden, '10/10')
+
+        exam.results_finalized = True
+        exam.save(update_fields=['results_finalized'])
+        shown = self.client.get(reverse('problem_detail', args=[self.mcq.code]))
+        self.assertFalse(shown.context['workspace_exam_hide_scores'])
+        self.assertContains(shown, 'drawer-score got')
+        self.assertContains(shown, '10/10')
+        self.assertContains(shown, 'solved-problem-color')
+
+    def test_exam_drawer_uses_latest_mcq_score_after_finalize(self):
+        exam = create_contest(
+            key='wsexamlatest', name='Workspace Exam Latest',
+            format_name='exam', is_visible=True,
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            authors=('workspace-author',),
+            results_finalized=True,
+        )
+        exam_mcq = create_contest_problem(contest=exam, problem=self.mcq, points=10, order=1)
+        participation = create_contest_participation(contest=exam, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        first = Submission.objects.create(
+            user=self.user.profile, problem=self.mcq, language=Language.get_answer_language(),
+            result='AC', status='D', points=10, contest_object=exam, time=0, memory=0,
+        )
+        ContestSubmission.objects.create(
+            submission=first, problem=exam_mcq, participation=participation, points=10,
+        )
+        Submission.objects.filter(id=first.id).update(date=timezone.now() - timezone.timedelta(minutes=5))
+        latest = Submission.objects.create(
+            user=self.user.profile, problem=self.mcq, language=Language.get_answer_language(),
+            result='WA', status='D', points=0, contest_object=exam, time=0, memory=0,
+        )
+        ContestSubmission.objects.create(
+            submission=latest, problem=exam_mcq, participation=participation, points=0,
+        )
+
+        response = self.client.get(reverse('problem_detail', args=[self.mcq.code]))
+        self.assertEqual(response.context['workspace_best_points'][self.mcq.id], 0)
+        self.assertContains(response, 'drawer-score tried')
+        self.assertContains(response, '0/10')
+        self.assertContains(response, 'attempted-problem-color')
+        self.assertNotContains(response, 'solved-problem-color')
