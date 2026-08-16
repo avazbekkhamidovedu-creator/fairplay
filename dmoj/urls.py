@@ -247,6 +247,7 @@ urlpatterns = [
     ])),
 
     path('seb/quit/', contests.SEBQuit.as_view(), name='seb_quit'),
+    path('seb/presets/<int:pk>/config/', contests.SEBPresetConfig.as_view(), name='seb_preset_config'),
 
     path('contests/', paged_list_view(contests.ContestListV2, 'contest_list')),
     path('contests/legacy/', paged_list_view(contests.ContestList, 'contest_list_legacy')),

@@ -116,7 +116,7 @@ class ContestMiddleware(object):
                 contest = previous.contest
                 if contest.seb_required and not contest.user_bypasses_seb(request.user) \
                         and not _seb_block_exempt(request.path, contest):
-                    return HttpResponseRedirect(contest.seb_quit_url or reverse('seb_quit'))
+                    return HttpResponseRedirect(contest.seb_effective_quit_url or reverse('seb_quit'))
         else:
             request.in_contest = False
             request.participation = None

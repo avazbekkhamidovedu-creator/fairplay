@@ -23,6 +23,10 @@ INSTRUCTOR_PERMISSION_CODENAMES = (
     'delete_class',
     'create_private_problem',
     'edit_own_problem',
+    # Lets instructors arm Safe Exam Browser on their own assignments. Without
+    # it the entire SEB card is hidden from them (ContestCreate._restricted_fields),
+    # so they could not even opt into the site default configuration.
+    'contest_seb_requirement',
 )
 TEACHER_PERMISSION_CODENAMES = INSTRUCTOR_PERMISSION_CODENAMES
 
