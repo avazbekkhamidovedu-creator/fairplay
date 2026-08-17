@@ -6,26 +6,26 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("judge", "0200_problemcodeconfig"),
+        ('judge', '0200_problemcodeconfig'),
     ]
 
     operations = [
         migrations.AddField(
-            model_name="problemfillblankconfig",
-            name="requires_manual_review",
+            model_name='problemfillblankconfig',
+            name='requires_manual_review',
             field=models.BooleanField(
                 default=False,
-                help_text="Keep AI-graded submissions in the pending queue until a teacher reviews them on the grade page (the AI score is stored, but the submission is only marked graded once a teacher saves a manual grade).",
-                verbose_name="require teacher review after AI scoring",
+                help_text='Keep AI-graded submissions in the pending queue until a teacher reviews them on the grade page (the AI score is stored, but the submission is only marked graded once a teacher saves a manual grade).',
+                verbose_name='require teacher review after AI scoring',
             ),
         ),
         migrations.AddField(
-            model_name="problemshortanswerconfig",
-            name="requires_manual_review",
+            model_name='problemshortanswerconfig',
+            name='requires_manual_review',
             field=models.BooleanField(
                 default=False,
-                help_text="Keep AI-graded submissions in the pending queue until a teacher reviews them on the grade page (the AI score is stored, but the submission is only marked graded once a teacher saves a manual grade).",
-                verbose_name="require teacher review after AI scoring",
+                help_text='Keep AI-graded submissions in the pending queue until a teacher reviews them on the grade page (the AI score is stored, but the submission is only marked graded once a teacher saves a manual grade).',
+                verbose_name='require teacher review after AI scoring',
             ),
         ),
     ]
