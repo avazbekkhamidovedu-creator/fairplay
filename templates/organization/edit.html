@@ -79,14 +79,14 @@
                 <h2>{{ _('Course identity') }}</h2>
                 <div class="class-form-grid">
                     <div class="class-form-field">
-                        <label for="{{ form.name.id_for_label }}">{{ form.name.label }} <span aria-hidden="true">*</span></label>
-                        {{ form.name }}
-                        {{ form.name.errors }}
-                    </div>
-                    <div class="class-form-field">
                         <label for="{{ form.short_name.id_for_label }}">{{ form.short_name.label }} <span aria-hidden="true">*</span></label>
                         {{ form.short_name }}
                         {{ form.short_name.errors }}
+                    </div>
+                    <div class="class-form-field">
+                        <label for="{{ form.name.id_for_label }}">{{ form.name.label }} <span aria-hidden="true">*</span></label>
+                        {{ form.name }}
+                        {{ form.name.errors }}
                     </div>
                     <div class="class-form-field full">
                         <label for="{{ form.about.id_for_label }}">{{ form.about.label }}</label>
@@ -128,16 +128,16 @@
                 <h2>{{ _('Administration') }}</h2>
                 <div class="class-form-grid">
                     <div class="class-form-field full">
-                        <label for="{{ form.instructor_names.id_for_label }}">{{ form.instructor_names.label }}</label>
-                        {{ form.instructor_names }}
-                        {% if form.instructor_names.help_text %}<div class="helptext">{{ form.instructor_names.help_text }}</div>{% endif %}
-                        {{ form.instructor_names.errors }}
-                    </div>
-                    <div class="class-form-field full">
                         <label for="{{ form.admins.id_for_label }}">{{ form.admins.label }}</label>
                         {{ form.admins }}
                         {% if form.admins.help_text %}<div class="helptext">{{ form.admins.help_text }}</div>{% endif %}
                         {{ form.admins.errors }}
+                    </div>
+                    <div class="class-form-field full">
+                        <label for="{{ form.instructors.id_for_label }}">{{ form.instructors.label }}</label>
+                        {{ form.instructors }}
+                        {% if form.instructors.help_text %}<div class="helptext">{{ form.instructors.help_text }}</div>{% endif %}
+                        {{ form.instructors.errors }}
                     </div>
                     <div class="class-form-field full">
                         <label for="{{ form.logo_override_image.id_for_label }}">{{ form.logo_override_image.label }}</label>

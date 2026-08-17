@@ -6,8 +6,7 @@ from judge.models.profile import Profile
 
 # Auth group that receives instructor-verification applications.
 SITE_ADMINISTRATORS_GROUP = 'Site Administrators'
-# Optional site-wide group for creating courses / private problems (manual grant only).
-# Instructor verification no longer adds users here — approval is scoped to one class.
+# Site-wide Teacher group: create courses / private problems / classes (after admin approval).
 INSTRUCTORS_GROUP = 'Instructors'
 # Backward-compatible alias (historical migrations / older code).
 TEACHERS_GROUP = INSTRUCTORS_GROUP
@@ -44,7 +43,18 @@ ensure_teachers_group = ensure_instructors_group
 
 
 class InstructorVerificationRequest(models.Model):
-    """Request to instruct a specific course class (not site-wide Instructors access)."""
+    """Teacher / class-instructor verification request.
+
+    - kind=teacher: site-wide Teacher (Instructors group). Not bound to a course.
+    - kind=class_instructor: instruct one course class (class.admins only).
+    """
+
+    KIND_TEACHER = 'teacher'
+    KIND_CLASS_INSTRUCTOR = 'class_instructor'
+    KIND_CHOICES = (
+        (KIND_TEACHER, _('Teacher (site-wide)')),
+        (KIND_CLASS_INSTRUCTOR, _('Class instructor')),
+    )
 
     STATES = (
         ('P', _('Pending')),
@@ -55,6 +65,10 @@ class InstructorVerificationRequest(models.Model):
     user = models.ForeignKey(
         Profile, verbose_name=_('user'), related_name='instructor_verification_requests',
         on_delete=models.CASCADE,
+    )
+    kind = models.CharField(
+        max_length=32, verbose_name=_('kind'), choices=KIND_CHOICES,
+        default=KIND_CLASS_INSTRUCTOR, db_index=True,
     )
     organization = models.ForeignKey(
         'judge.Organization', verbose_name=_('course'),
@@ -83,6 +97,10 @@ class InstructorVerificationRequest(models.Model):
         verbose_name=_('granted staff'), default=False,
         help_text=_('True if approval flipped user.is_staff from False to True.'),
     )
+    granted_instructors_group = models.BooleanField(
+        verbose_name=_('granted Instructors group'), default=False,
+        help_text=_('True if approval added the user to the site-wide Instructors group.'),
+    )
 
     class Meta:
         verbose_name = _('instructor verification request')
@@ -90,12 +108,18 @@ class InstructorVerificationRequest(models.Model):
         ordering = ('-time',)
 
     def __str__(self):
-        return 'InstructorVerification(%s, %s, class=%s)' % (
-            self.user_id, self.state, self.request_class_id,
+        return 'InstructorVerification(%s, %s, kind=%s, class=%s)' % (
+            self.user_id, self.state, self.kind, self.request_class_id,
         )
 
     @property
+    def is_site_teacher_request(self):
+        return self.kind == self.KIND_TEACHER
+
+    @property
     def target_label(self):
+        if self.kind == self.KIND_TEACHER:
+            return _('site-wide teacher access')
         org = self.organization
         klass = self.request_class
         if org is None and klass is None:
@@ -171,5 +195,5 @@ class AdminNotification(models.Model):
         if self.organization_request_id:
             return reverse('organization_join_requests') + '?status=P'
         if self.instructor_verification_id:
-            return reverse('organization_instructor_requests') + '?status=P'
-        return reverse('organization_notifications')
+            return reverse('organization_join_requests') + '?status=P'
+        return reverse('organization_join_requests')

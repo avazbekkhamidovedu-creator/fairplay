@@ -297,26 +297,27 @@ class OrganizationSiteForm(ModelForm):
 
     class Meta:
         model = Organization
-        fields = ['name', 'short_name', 'about', 'is_open', 'class_required', 'slots', 'instructor_names',
-                  'admins', 'logo_override_image']
+        fields = ['short_name', 'name', 'about', 'is_open', 'class_required', 'slots',
+                  'admins', 'instructors', 'logo_override_image']
         labels = {
+            'short_name': _('Course code'),
             'name': _('Course name'),
-            'short_name': _('Short name'),
             'about': _('Course description'),
             'is_open': _('Is open organization?'),
             'class_required': _('Class membership required'),
             'slots': _('Maximum size'),
-            'instructor_names': _('Instructors'),
             'admins': _('Course administrators'),
+            'instructors': _('Course instructors'),
             'logo_override_image': _('Logo override image'),
         }
         help_texts = {
             'is_open': _('If checked, students can join without approval. Cannot combine with class required.'),
             'class_required': _('If checked, students must select a class when requesting membership.'),
             'slots': _('Optional. Maximum members for private courses.'),
-            'instructor_names': _('Comma-separated names shown on the course list (not the same as administrators).'),
-            'admins': _('Optional. The creator is always added as an instructor. Add others who can edit this course '
-                        'and review join requests.'),
+            'admins': _('People who can edit this course and review join requests. '
+                        'The creator is included by default and can add co-administrators.'),
+            'instructors': _('Teachers on this course. Defaults to the creator; site teachers are added '
+                            'automatically when their course join request is approved.'),
         }
         widgets = {
             'about': forms.Textarea(attrs={
@@ -325,22 +326,20 @@ class OrganizationSiteForm(ModelForm):
                 'data-rich-editor': 'course-about',
             }),
             'slots': forms.NumberInput(attrs={'min': 1, 'placeholder': _('Optional')}),
-            'instructor_names': forms.TextInput(attrs={
-                'class': 'oj-input',
-                'placeholder': _('e.g. Alice Smith, Bob Lee'),
-            }),
             'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
+            'instructors': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['admins'].required = False
         if 'slots' in self.fields:
             self.fields['slots'].required = False
         if 'logo_override_image' in self.fields:
             self.fields['logo_override_image'].required = False
-        if 'instructor_names' in self.fields:
-            self.fields['instructor_names'].required = False
+        if 'admins' in self.fields:
+            self.fields['admins'].required = False
+        if 'instructors' in self.fields:
+            self.fields['instructors'].required = False
         # RichEditor mounts a visual editor; the Django textarea stays hidden.
         # HTML5 "required" on that hidden control blocks submit before JS can
         # copy markdown back — validate emptiness in clean_about instead.
@@ -353,9 +352,6 @@ class OrganizationSiteForm(ModelForm):
             raise ValidationError(_('This field is required.'))
         return about
 
-    def clean_instructor_names(self):
-        return (self.cleaned_data.get('instructor_names') or '').strip()
-
     def clean(self):
         cleaned = super().clean()
         if cleaned.get('class_required') and cleaned.get('is_open'):
@@ -364,6 +360,7 @@ class OrganizationSiteForm(ModelForm):
 
 
 class EditOrganizationForm(OrganizationSiteForm):
+    """Edit course uses the same fields as create (admins + instructors)."""
     pass
 
 

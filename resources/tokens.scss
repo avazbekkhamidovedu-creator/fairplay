@@ -70,25 +70,25 @@ $oj-rated-text: #fff;
     --oj-surface-soft: #{$color_primary10};
     --oj-surface-muted: #{$color_primary25};
 
-    /* Course card header accents — Canvas dashboard palette (15). */
-    --oj-course-tint-1: #BD3C14;
-    --oj-course-tint-2: #E62429;
-    --oj-course-tint-3: #BA2083;
-    --oj-course-tint-4: #65499D;
-    --oj-course-tint-5: #8F3E97;
-    --oj-course-tint-6: #17478B;
-    --oj-course-tint-7: #1770AB;
-    --oj-course-tint-8: #2063C1;
-    --oj-course-tint-9: #00828E;
-    --oj-course-tint-10: #048660;
-    --oj-course-tint-11: #03893D;
-    --oj-course-tint-12: #996E00;
-    --oj-course-tint-13: #BF5811;
-    --oj-course-tint-14: #CF4A00;
-    --oj-course-tint-15: #C54396;
-    /* Always light text on saturated headers (both themes). */
-    --oj-course-tint-text: #fff;
-    --oj-course-tint-text-muted: rgba(255, 255, 255, 0.85);
+    /* Course card header accents — soft pastel palette (15). */
+    --oj-course-tint-1: #FCE8E0;
+    --oj-course-tint-2: #FCE4E4;
+    --oj-course-tint-3: #F9E0F0;
+    --oj-course-tint-4: #EDE8F5;
+    --oj-course-tint-5: #F3E5F5;
+    --oj-course-tint-6: #E3EAF4;
+    --oj-course-tint-7: #E0F0F8;
+    --oj-course-tint-8: #E3EDF9;
+    --oj-course-tint-9: #E0F4F5;
+    --oj-course-tint-10: #E0F3EC;
+    --oj-course-tint-11: #E0F4E8;
+    --oj-course-tint-12: #F5F0E0;
+    --oj-course-tint-13: #F8EBE0;
+    --oj-course-tint-14: #FCE9E0;
+    --oj-course-tint-15: #F7E5F0;
+    /* Dark text on light pastel headers (both themes). */
+    --oj-course-tint-text: #2c3340;
+    --oj-course-tint-text-muted: rgba(44, 51, 64, 0.72);
     --oj-course-label: #{$color_link75};
 
     /* Difficulty badges (problem list & sidebar) */

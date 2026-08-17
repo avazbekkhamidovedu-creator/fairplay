@@ -2,38 +2,25 @@
 
 {% block tabs %}
     {{ make_tab('course', 'fa-university', url('organization_list'), _('Course')) }}
-    {# Applicants submit via modal; site admins also get a review queue tab below. #}
-    <li class="tab" id="instructor-verification-tab">
-        <a href="javascript:void(0)" id="instructor-verification-btn">
-            <i class="tab-icon fa fa-id-badge"></i> {{ _('Apply as instructor') }}
-        </a>
-    </li>
+    {% if can_apply_teacher %}
+        <li class="tab" id="instructor-verification-tab">
+            <a href="javascript:void(0)" id="instructor-verification-btn">
+                <i class="tab-icon fa fa-id-badge"></i> {{ _('Apply as teacher') }}
+            </a>
+        </li>
+    {% elif pending_teacher_apply %}
+        <li class="tab">
+            <a href="javascript:void(0)" class="disabled" title="{{ _('Your teacher application is pending review.') }}">
+                <i class="tab-icon fa fa-id-badge"></i> {{ _('Teacher application pending') }}
+            </a>
+        </li>
+    {% endif %}
     {% if can_review_any %}
         <li class="tab{% if tab == 'join_requests' %} active{% endif %}">
             <a href="{{ url('organization_join_requests') }}">
                 <i class="tab-icon fa fa-lock"></i> {{ _('Join requests') }}
                 {% if pending_review_total %}
                     <span class="course-tab-badge">{{ pending_review_total }}</span>
-                {% endif %}
-            </a>
-        </li>
-    {% endif %}
-    {% if can_review_instructors %}
-        <li class="tab{% if tab == 'instructor_requests' %} active{% endif %}">
-            <a href="{{ url('organization_instructor_requests') }}">
-                <i class="tab-icon fa fa-id-badge"></i> {{ _('Instructor requests') }}
-                {% if pending_instructor_total %}
-                    <span class="course-tab-badge">{{ pending_instructor_total }}</span>
-                {% endif %}
-            </a>
-        </li>
-    {% endif %}
-    {% if can_see_notifications %}
-        <li class="tab{% if tab == 'notifications' %} active{% endif %}">
-            <a href="{{ url('organization_notifications') }}">
-                <i class="tab-icon fa fa-envelope"></i> {{ _('Messages') }}
-                {% if unread_notification_total %}
-                    <span class="course-tab-badge">{{ unread_notification_total }}</span>
                 {% endif %}
             </a>
         </li>

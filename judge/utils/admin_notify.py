@@ -115,18 +115,31 @@ def notify_class_join(org_request):
 
 def notify_instructor_verification(verification):
     actor = verification.user
-    target = verification.target_label or _('a class')
-    title = _('Instructor request: %(user)s → %(target)s') % {
-        'user': actor.username, 'target': target,
-    }
-    body = _('%(user)s applied to instruct %(target)s.') % {
-        'user': actor.username, 'target': target,
-    }
+    if getattr(verification, 'kind', None) == verification.KIND_TEACHER:
+        title = _('Teacher application: %(user)s') % {'user': actor.username}
+        body = _('%(user)s applied for site-wide teacher access (create problems and courses).') % {
+            'user': actor.username,
+        }
+        recipients = site_administrator_profiles()
+    else:
+        target = verification.target_label or _('a class')
+        title = _('Class instructor request: %(user)s → %(target)s') % {
+            'user': actor.username, 'target': target,
+        }
+        body = _('%(user)s applied to instruct %(target)s.') % {
+            'user': actor.username, 'target': target,
+        }
+        # Course administrators review class-instructor applications for their course.
+        recipients = []
+        if verification.organization_id:
+            recipients = list(verification.organization.admins.all())
+        if not recipients:
+            recipients = list(site_administrator_profiles())
     if verification.reason:
         body += '\n' + verification.reason
-    link = reverse('organization_instructor_requests') + '?status=P'
+    link = reverse('organization_join_requests') + '?status=P'
     return notify_profiles(
-        site_administrator_profiles(),
+        recipients,
         kind=AdminNotification.KIND_INSTRUCTOR_VERIFY,
         title=title,
         body=body,

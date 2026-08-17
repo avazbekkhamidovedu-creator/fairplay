@@ -54,7 +54,7 @@ $(function () {
 <div class="course-redesign oj-ui">
     {% include "messages.html" %}
 
-    <p class="empty" style="text-align:left;margin:0 0 0.85rem">{{ _('Review applications to instruct a specific course class. Approve makes them instructor of that class and grants staff access; Reject or Revoke removes that class instructor role (and staff if they have no other instructor classes); Reopen returns a request to Pending.') }}</p>
+    <p class="empty" style="text-align:left;margin:0 0 0.85rem">{{ _('Site administrators review site-wide teacher applications. Course administrators review class-instructor applications for their own courses. Teachers who join a course can view all classes read-only and create new classes; Approve as class instructor grants edit rights for that class (for co-teaching).') }}</p>
 
     <div class="join-toolbar">
         <form class="join-requests-filters" method="get" action="">
@@ -92,6 +92,7 @@ $(function () {
                     <tr>
                         <th><input type="checkbox" id="select-all"></th>
                         <th>{{ _('User') }}</th>
+                        <th>{{ _('Type') }}</th>
                         <th>{{ _('Course / class') }}</th>
                         <th>{{ _('Reason') }}</th>
                         <th>{{ _('Time') }}</th>
@@ -105,6 +106,10 @@ $(function () {
                     <tr>
                         <td><input type="checkbox" class="req-select" name="request_ids" value="{{ req.id }}"></td>
                         <td><a href="{{ url('user_page', req.user.username) }}">{{ req.user.username }}</a></td>
+                        <td>
+                            {% if req.kind == 'teacher' %}{{ _('Teacher') }}
+                            {% else %}{{ _('Class instructor') }}{% endif %}
+                        </td>
                         <td>{% if req.target_label %}{{ req.target_label }}{% else %}—{% endif %}</td>
                         <td class="note-body">{{ req.reason }}</td>
                         <td>{{ req.time }}</td>

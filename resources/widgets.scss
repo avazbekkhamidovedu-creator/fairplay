@@ -101,18 +101,44 @@ input {
     }
 
     &[type=checkbox] {
+        -webkit-appearance: none;
         appearance: none;
         vertical-align: middle;
-        border: 1px solid $color_primary50;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        width: 1.1em;
+        height: 1.1em;
+        margin: 0;
+        border: 1.5px solid $color_primary50;
         background: $color_primary0;
-        border-radius: 2px;
-        width: 0.95em;
-        height: 0.95em;
+        border-radius: 3px;
         cursor: pointer;
+        position: relative;
+
+        &:hover {
+            border-color: $highlight_blue;
+        }
+
+        &:focus-visible {
+            outline: 2px solid rgba($highlight_blue, 0.45);
+            outline-offset: 2px;
+        }
 
         &:checked {
-            appearance: auto;
-            accent-color: $highlight_blue;
+            border-color: $highlight_blue;
+            background: $highlight_blue;
+
+            &::after {
+                content: '';
+                position: absolute;
+                left: 0.28em;
+                top: 0.05em;
+                width: 0.28em;
+                height: 0.55em;
+                border: solid #fff;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+            }
         }
     }
 }

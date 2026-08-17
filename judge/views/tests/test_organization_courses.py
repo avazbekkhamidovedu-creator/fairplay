@@ -366,7 +366,7 @@ class SyncClassMembersToOrgTest(CommonDataMixin, TestCase):
 
 
 class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
-    """Instructor apply is per course/class; approval grants class admin only."""
+    """Site-wide teacher vs class-instructor verification."""
 
     @classmethod
     def setUpTestData(cls):
@@ -388,109 +388,86 @@ class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
         )
         cls.applicant = create_user(username='instructor_applicant')
 
-    def test_submit_requires_course_and_class(self):
-        self.client.force_login(self.applicant)
-        response = self.client.post(reverse('organization_instructor_verification'), {
-            'reason': 'I instruct this session',
-        })
-        self.assertEqual(response.status_code, 302)
-        self.assertFalse(InstructorVerificationRequest.objects.filter(user=self.applicant.profile).exists())
-
-    def test_submit_and_approve_grants_only_that_class(self):
+    def test_teacher_submit_and_approve_grants_instructors_group(self):
         from django.contrib.auth.models import Group
-        from judge.models.notification import INSTRUCTORS_GROUP
+        from judge.models.notification import INSTRUCTORS_GROUP, ensure_instructors_group
 
+        ensure_instructors_group()
         self.client.force_login(self.applicant)
         response = self.client.post(reverse('organization_instructor_verification'), {
-            'organization': self.org.id,
-            'request_class': self.klass.id,
-            'reason': 'I instruct CS101 Spring',
+            'kind': 'teacher',
+            'reason': 'I teach at DKU',
         })
         self.assertEqual(response.status_code, 302)
         req = InstructorVerificationRequest.objects.get(user=self.applicant.profile, state='P')
-        self.assertEqual(req.request_class_id, self.klass.id)
-        self.assertEqual(req.organization_id, self.org.id)
+        self.assertEqual(req.kind, InstructorVerificationRequest.KIND_TEACHER)
+        self.assertIsNone(req.request_class_id)
 
         self.client.force_login(self.users['superuser'])
         response = self.client.post(
-            reverse('organization_instructor_requests'),
-            {'action': 'approve', 'request_ids': [str(req.id)]},
+            reverse('organization_join_requests'),
+            {'action': 'approve', 'request_ids': ['v:%d' % req.id]},
         )
         self.assertEqual(response.status_code, 302)
         req.refresh_from_db()
         self.assertEqual(req.state, 'A')
-        self.assertTrue(self.klass.admins.filter(id=self.applicant.profile.id).exists())
-        self.assertFalse(self.other.admins.filter(id=self.applicant.profile.id).exists())
-        self.assertTrue(self.applicant.profile.organizations.filter(id=self.org.id).exists())
-        # Must not become course administrator.
+        self.assertTrue(req.granted_instructors_group)
+        instructors = Group.objects.get(name=INSTRUCTORS_GROUP)
+        self.assertTrue(instructors.user_set.filter(id=self.applicant.id).exists())
+        self.applicant.refresh_from_db()
+        self.assertTrue(self.applicant.is_staff)
+        # Not automatically a class or course admin.
+        self.assertFalse(self.klass.admins.filter(id=self.applicant.profile.id).exists())
         self.assertFalse(self.org.admins.filter(id=self.applicant.profile.id).exists())
-        self.applicant.refresh_from_db()
-        self.assertTrue(self.applicant.is_staff)
-        req.refresh_from_db()
-        self.assertTrue(req.granted_staff)
-        self.assertTrue(req.granted_class_admin)
-        instructors = Group.objects.filter(name=INSTRUCTORS_GROUP).first()
-        if instructors is not None:
-            self.assertFalse(instructors.user_set.filter(id=self.applicant.id).exists())
 
-        # Class instructor can open their class, not the sibling class.
-        self.client.force_login(self.applicant)
-        ok = self.client.get(self.klass.get_absolute_url())
-        self.assertEqual(ok.status_code, 200)
-        blocked = self.client.get(self.other.get_absolute_url())
-        self.assertEqual(blocked.status_code, 403)
-        # Cannot open course edit (course administrator only).
-        edit = self.client.get(reverse('edit_organization', args=[self.org.id, self.org.slug]))
-        self.assertIn(edit.status_code, (403, 302))
-
-    def test_revoke_removes_class_admin(self):
-        req = InstructorVerificationRequest.objects.create(
-            user=self.applicant.profile,
-            organization=self.org,
-            request_class=self.klass,
-            reason='instruct',
-            state='A',
-            granted_class_admin=True,
-            granted_staff=True,
+    def test_site_teacher_joining_class_becomes_instructor(self):
+        from judge.models.notification import ensure_instructors_group
+        from judge.views.organization import (
+            grant_site_teacher_role, profile_can_access_class, profile_manages_class,
+            profile_can_view_class_content,
         )
-        self.klass.admins.add(self.applicant.profile)
+
+        ensure_instructors_group()
+        grant_site_teacher_role(self.applicant.profile)
         self.org.members.add(self.applicant.profile)
-        self.applicant.is_staff = True
-        self.applicant.save(update_fields=['is_staff'])
+        # Course teacher may open/view every class read-only, but not edit.
+        self.assertTrue(profile_can_access_class(self.applicant.profile, self.klass, self.applicant))
+        self.assertTrue(profile_can_access_class(self.applicant.profile, self.other, self.applicant))
+        self.assertTrue(profile_can_view_class_content(self.applicant.profile, self.klass, self.applicant))
+        self.assertFalse(profile_manages_class(self.applicant.profile, self.klass, self.applicant))
+        self.client.force_login(self.applicant)
+        response = self.client.get(self.klass.get_absolute_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Apply as class instructor')
+        # Sibling class also openable.
+        self.assertEqual(self.client.get(self.other.get_absolute_url()).status_code, 200)
+        # Students still cannot open classes they did not join.
+        student = self.users['normal']
+        self.org.members.add(student.profile)
+        self.assertFalse(profile_can_access_class(student.profile, self.klass, student))
 
-        self.client.force_login(self.users['superuser'])
-        response = self.client.post(
-            reverse('organization_instructor_requests') + '?status=A',
-            {'action': 'reject', 'request_ids': [str(req.id)]},
-        )
-        self.assertEqual(response.status_code, 302)
-        self.assertFalse(self.klass.admins.filter(id=self.applicant.profile.id).exists())
-        # Course membership kept after revoke.
-        self.assertTrue(self.applicant.profile.organizations.filter(id=self.org.id).exists())
-        self.applicant.refresh_from_db()
-        self.assertFalse(self.applicant.is_staff)
+    def test_site_teacher_course_join_adds_course_instructor(self):
+        from judge.models.notification import ensure_instructors_group
+        from judge.views.organization import grant_site_teacher_role, maybe_add_course_instructor
 
-    def test_revoke_preserves_unrelated_staff(self):
-        """Staff granted outside instructor approval must survive revoke."""
-        self.applicant.is_staff = True
-        self.applicant.save(update_fields=['is_staff'])
-        req = InstructorVerificationRequest.objects.create(
-            user=self.applicant.profile,
-            organization=self.org,
-            request_class=self.klass,
-            reason='already staff',
-            state='A',
-            granted_class_admin=True,
-            granted_staff=False,
-        )
-        self.klass.admins.add(self.applicant.profile)
+        ensure_instructors_group()
+        grant_site_teacher_role(self.applicant.profile)
+        self.org.members.add(self.applicant.profile)
+        maybe_add_course_instructor(self.applicant.profile, self.org)
+        self.assertTrue(self.org.instructors.filter(id=self.applicant.profile.id).exists())
+        # Students without teacher status are not added.
+        student = self.users['normal']
+        maybe_add_course_instructor(student.profile, self.org)
+        self.assertFalse(self.org.instructors.filter(id=student.profile.id).exists())
 
-        self.client.force_login(self.users['superuser'])
-        response = self.client.post(
-            reverse('organization_instructor_requests') + '?status=A',
-            {'action': 'reject', 'request_ids': [str(req.id)]},
-        )
-        self.assertEqual(response.status_code, 302)
-        self.assertFalse(self.klass.admins.filter(id=self.applicant.profile.id).exists())
-        self.applicant.refresh_from_db()
-        self.assertTrue(self.applicant.is_staff)
+    def test_teacher_member_can_create_class(self):
+        from judge.models.notification import ensure_instructors_group
+        from judge.views.organization import grant_site_teacher_role
+
+        ensure_instructors_group()
+        grant_site_teacher_role(self.applicant.profile)
+        self.org.members.add(self.applicant.profile)
+        self.client.force_login(self.applicant)
+        url = reverse('organization_create_class', args=[self.org.id, self.org.slug])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
