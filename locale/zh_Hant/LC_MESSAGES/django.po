@@ -5097,10 +5097,6 @@ msgid "All courses"
 msgstr "全部課程"
 
 #: templates/problem/list.html
-msgid "Public"
-msgstr "公共"
-
-#: templates/problem/list.html
 msgid "All types"
 msgstr "全部題型"
 
