@@ -357,7 +357,6 @@
         .grade-stem {
             line-height: 1.65;
             font-size: 13.5px;
-            white-space: pre-wrap;
             word-break: break-word;
         }
         .gd-source-card { padding: 0; overflow: hidden; background: #111827 !important; }
@@ -372,6 +371,26 @@
             overflow: auto;
         }
         .gd-upload { padding: 0.6rem 0.8rem; }
+        /* Readable answer rows for MCQ / fill-blank / short-answer submissions
+           (rendered instead of the raw JSON payload). */
+        .gd-answer { padding: 0.7rem 0.9rem; background: #111827; }
+        .gd-answer-row {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.3rem 0;
+            color: #e5e7eb;
+            font-size: 13px;
+            line-height: 1.5;
+            border-bottom: 1px solid #1f2937;
+        }
+        .gd-answer-row:last-child { border-bottom: none; }
+        .gd-answer-label {
+            flex-shrink: 0;
+            color: #9ca3af;
+            font-weight: 600;
+            min-width: 3.5rem;
+        }
+        .gd-answer-value { word-break: break-word; white-space: pre-wrap; }
 
         /* ── Right pane: result (top) + grading (bottom) ─────────────────── */
         .grade-right {
@@ -571,8 +590,11 @@
                     if (part === 'live' && s.virtual) return false;
                     if (part === 'virtual' && !s.virtual) return false;
                     if (q === 'final' && !s.is_latest) return false;
-                    if (q === 'ungraded' && s.points != null) return false;
-                    if (q === 'graded' && s.points == null) return false;
+                    // "Ungraded" = awaiting teacher review (pending), not merely
+                    // missing a score: a code submission still in the judge queue
+                    // will resolve itself and is not part of the grading worklist.
+                    if (q === 'ungraded' && !s.is_pending) return false;
+                    if (q === 'graded' && (s.points == null || s.is_pending)) return false;
                     return true;
                 });
                 // Attempts aggregation: collapse multiple submissions per (user, problem)
@@ -605,7 +627,13 @@
 
             function submissionBadges(s) {
                 var bits = '';
-                if (s.points == null) bits += '<span class="badge badge-review">pending</span>';
+                // "Pending" means awaiting teacher review (see the payload's
+                // is_pending): file uploads with no score, or AI-graded
+                // fill-blank/short-answer problems flagged "require teacher
+                // review after AI scoring". A code submission still in the
+                // judge queue is NOT pending — it resolves automatically.
+                if (s.is_pending) bits += '<span class="badge badge-review">pending</span>';
+                else if (s.points == null) bits += '<span class="badge badge-review">awaiting judge</span>';
                 else bits += '<span class="badge badge-done">graded</span>';
                 if (s.is_latest) bits += '<span class="badge badge-final">final</span>';
                 if (released) bits += '<span class="badge badge-released">released</span>';
@@ -659,6 +687,16 @@
                         (s.upload.size != null ? ' <span class="muted">' + (s.upload.size / 1024).toFixed(1) + ' KB</span>' : '') +
                         '</div>';
                 }
+                // MCQ / fill-blank / short-answer: show the human-readable answer
+                // rows (same rendering as the student workspace), not the raw JSON
+                // payload stored in SubmissionSource.
+                if (s.answer_display && s.answer_display.length) {
+                    return '<div class="gd-answer">' + s.answer_display.map(function (item) {
+                        return '<div class="gd-answer-row">' +
+                            (item.label ? '<span class="gd-answer-label">' + esc(item.label) + '</span>' : '') +
+                            '<span class="gd-answer-value">' + esc(item.value) + '</span></div>';
+                    }).join('') + '</div>';
+                }
                 return '<pre class="source-code">' + esc(s.source || '{{ _('No source.') }}') + '</pre>';
             }
 
@@ -703,7 +741,7 @@
                         '</select>' +
                     '</div></div></div>' +
                     '<div class="grade-section"><h4>{{ _('Problem description') }}</h4>' +
-                        '<div class="grade-card grade-stem">' + esc(desc ? desc.description : '') + '</div></div>' +
+                        '<div class="grade-card grade-stem">' + (desc && desc.description_html ? desc.description_html : esc(desc ? desc.description : '')) + '</div></div>' +
                     '<div class="grade-section grade-source-block"><h4>{{ _('Submitted source') }}</h4>' +
                         '<div class="grade-card gd-source-card">' + renderAnswerSource(s) + '</div></div>';
 
