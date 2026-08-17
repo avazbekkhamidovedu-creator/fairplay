@@ -1698,7 +1698,7 @@ def _apply_editor_configuration(request, item, problem):
         # Excel parsing can prefill only organizations. Apply those explicit
         # fields without treating the partial payload as a complete editor save.
         if 'organizations' in saved_payload:
-            ProblemCreateV2View()._attach_orgs(problem, saved_payload)
+            ProblemCreateV2View()._attach_orgs(problem, saved_payload, request.user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
         return
@@ -1718,7 +1718,7 @@ def _apply_editor_configuration(request, item, problem):
     problem.is_public = editor._resolve_public(request.user, bool(payload.get('is_public')), payload)
     problem.save()
     editor._attach_types(problem, payload)
-    editor._attach_orgs(problem, payload)
+    editor._attach_orgs(problem, payload, request.user)
     if item.submission_type == ProblemSubmissionType.CODE:
         editor._attach_languages(problem, payload)
     problem.is_organization_private = problem.organizations.exists()

@@ -982,6 +982,48 @@ msgstr "时间限制"
 msgid "publicly visible"
 msgstr "公开"
 
+msgid "Public visible"
+msgstr "公开"
+
+msgid "After you save this programming problem, a link to the original test-data editor will appear here."
+msgstr "保存编程题后，这里会出现指向原测试数据编辑页的链接。"
+
+msgid "Opens the original test-data page (generator, batches, harness, and zip file matching)."
+msgstr "打开原测试数据页（生成器、测试组、Harness，以及 zip 文件匹配）。"
+
+msgid "Upload a zip to list its files, then pick input and output for each case. Case weights are relative."
+msgstr "上传 zip 后会列出其中的文件，再为每组测试点选择输入和输出。分值为相对权重。"
+
+msgid "Publish the editorial"
+msgstr "公开题解"
+
+msgid "Students can read it after this time, once it is public. Hidden during assignments/contests."
+msgstr "公开后且到达该时间，学生才可阅读。作业/竞赛进行中不会显示。"
+
+msgid "Enter the editorial…"
+msgstr "请输入题解…"
+
+msgid "Shown on the student problem page as the Editorial tab."
+msgstr "显示在学生做题页的「题解」标签中。"
+
+msgid "Loaded %s files. Pick input and output for each case."
+msgstr "已载入 %s 个文件。请为每组测试点选择输入和输出。"
+
+msgid "The zip has no files to match."
+msgstr "该 zip 中没有可匹配的文件。"
+
+msgid "Harness"
+msgstr "Harness"
+
+msgid "Skip pre-compilation"
+msgstr "跳过预编译"
+
+msgid "Run student main"
+msgstr "运行学生 main"
+
+msgid "Harness Code"
+msgstr "Harness 代码"
+
 #: judge/models/contest.py:94
 msgid "Should be set even for organization-private contests, where it determines whether the contest is visible to members of the specified organizations."
 msgstr "组织内竞赛也需公开，否则责组织成员无法查看本竞赛。"
