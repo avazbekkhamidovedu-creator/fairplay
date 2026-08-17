@@ -2156,12 +2156,19 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
             Submission.objects.filter(contest_object=contest)
             .select_related('user__user', 'problem', 'language',
                             'reviewed_by__user', 'contest__participation')
-            .prefetch_related('test_cases')
+            .prefetch_related('test_cases', 'problem__fill_blank_config', 'problem__short_answer_config')
             .order_by('-date')
         )
         context['grade_submissions'] = submissions
         # Problem library for the grade page: code → display name + statement,
         # so the detail pane can render the problem description ("题面").
+        # ``description_html`` is rendered with the site's markdown pipeline
+        # (escaped + sanitized server-side) so the grade page can inject it
+        # directly instead of escaping raw markdown source.
+        from judge.jinja2.markdown import markdown as render_markdown
+        math_engine = getattr(getattr(self.request, 'profile', None), 'math_engine', None)
+        if math_engine == 'auto':
+            math_engine = getattr(settings, 'MATHOID_DEFAULT_TYPE', 'jax')
         problems = list(contest.contest_problems.order_by('order').select_related('problem'))
         context['grade_problems'] = [
             {
@@ -2170,6 +2177,8 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                 'letter': chr(65 + idx) if len(problems) <= 26 else '',
                 'points': cp.points,
                 'description': cp.problem.description or '',
+                'description_html': str(render_markdown(
+                    cp.problem.description or '', cp.problem.markdown_style, math_engine)),
             }
             for idx, cp in enumerate(problems)
         ]
@@ -2179,6 +2188,9 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
 
         payload = []
         latest_seen = set()
+        # Reuse the workspace's human-readable answer rows for non-code types.
+        from judge.views.problem import get_workspace_answer_display
+        from judge.question_types import get_grader
         for sub in submissions:
             # "Latest version" marker: the first row seen per (user, problem)
             # because the queryset is ordered newest-first.
@@ -2205,6 +2217,45 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
             # `sub.contest` is the per-participation ContestSubmission row; a
             # None means this submission was not part of a live/virtual run.
             contest_submission = sub.contest_or_none
+            # Score display must mirror what students see (workspace_display_points /
+            # workspace_display_points_total): when the submission belongs to a
+            # contest, the denominator is the ASSIGNMENT-specified points
+            # (ContestProblem.points), not the problem's own scale — a teacher
+            # may weight a 100-pt problem as 20 pts in an assignment, and the
+            # numerator is the contest-scaled ContestSubmission.points. Falling
+            # back to case_total/problem.points only for standalone submissions.
+            if contest_submission is not None:
+                display_points = contest_submission.points
+                display_total = contest_submission.problem.points
+            else:
+                display_points = sub.points
+                display_total = sub.case_total or sub.problem.points
+            # Non-code answers (MCQ / fill-blank / short-answer) are stored as a
+            # JSON payload in SubmissionSource; surface the human-readable rows
+            # exactly like the student workspace does, so the teacher sees the
+            # answer (not raw JSON) in the "Submitted source" pane.
+            answer_display = get_workspace_answer_display(sub) if source else []
+            # "Pending" queue semantics: a submission awaits teacher review when
+            #   * it belongs to a manually-graded type (file upload) and has no
+            #     points yet, or
+            #   * its problem is AI-graded with "require teacher review after AI
+            #     scoring" checked in the problem editor — the AI score is stored
+            #     but the submission stays in the pending queue until a teacher
+            #     reviews it on the grade page.
+            # Everything else with points == null (e.g. a code submission still
+            # in the judge queue) is NOT pending — it resolves automatically.
+            if sub.points is None:
+                is_pending = get_grader(sub.problem.submission_type).is_manual
+            elif sub.reviewed_by is not None:
+                is_pending = False
+            else:
+                # Only fill-blank / short-answer problems carry the flag today
+                # (the problem editor's AI section). No import needed: both
+                # configs are reverse OneToOne accessors that return None when
+                # the problem is not of that type.
+                config = getattr(sub.problem, 'fill_blank_config', None) or \
+                    getattr(sub.problem, 'short_answer_config', None)
+                is_pending = bool(config and config.requires_manual_review)
             payload.append({
                 'id': sub.id,
                 'user': sub.user.user.username,
@@ -2213,11 +2264,13 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                 'lang': sub.language.short_name or sub.language.key,
                 'date': sub.date.strftime('%Y-%m-%d %H:%M'),
                 'result': sub.short_status,
-                'points': sub.points,
-                'total': sub.case_total or sub.problem.points,
+                'points': display_points,
+                'total': display_total,
                 'time': sub.time,
                 'memory': sub.memory,
                 'source': source,
+                'answer_display': answer_display,
+                'is_pending': is_pending,
                 'upload': upload_info,
                 'test_cases': [
                     {
@@ -2282,8 +2335,14 @@ class ContestGradeSave(ContestMixin, DetailView):
             return JsonResponse({'error': _('Submission not found.')}, status=404)
 
         # Clamp the manual score to [0, max] so a typo (−50 or 10⁹) can never
-        # produce a nonsensical grade.
-        total = submission.case_total or submission.problem.points
+        # produce a nonsensical grade. The ceiling mirrors what the student sees
+        # (assignment-specified ContestProblem.points when this submission is part
+        # of a contest, else the problem's own scale) — see ContestGrade.
+        contest_submission = submission.contest_or_none
+        if contest_submission is not None:
+            total = contest_submission.problem.points
+        else:
+            total = submission.case_total or submission.problem.points
         score = min(max(score, 0), total)
         submission.points = score
         # Save the review note (评语) alongside the score. The note is only
@@ -2300,7 +2359,6 @@ class ContestGradeSave(ContestMixin, DetailView):
         # writing only Submission.points would leave the student's
         # scoreboard / ranking / per-problem display on the machine score —
         # the teacher's override would be visible only on this page.
-        contest_submission = submission.contest_or_none
         if contest_submission is not None:
             contest_submission.points = score
             contest_submission.save(update_fields=['points'])
@@ -2344,13 +2402,19 @@ class ContestGradeStatus(ContestMixin, DetailView):
                 .prefetch_related('test_cases').get()
         except Submission.DoesNotExist:
             return JsonResponse({'error': _('Submission not found.')}, status=404)
+        contest_submission = submission.contest_or_none
+        total = contest_submission.problem.points if contest_submission is not None \
+            else (submission.case_total or submission.problem.points)
+        # Mirror the grade payload's point scale (contest-scaled when part of
+        # the assignment) so a polled rejudge result agrees with the row shown.
+        points = contest_submission.points if contest_submission is not None else submission.points
         return JsonResponse({
             'ok': True,
             'id': submission.id,
             'status': submission.status,
             'result': submission.result,
-            'points': submission.points,
-            'total': submission.case_total or submission.problem.points,
+            'points': points,
+            'total': total,
             'time': submission.time,
             'memory': submission.memory,
             'is_graded': submission.is_graded,
