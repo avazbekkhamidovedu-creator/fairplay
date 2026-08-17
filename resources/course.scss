@@ -851,9 +851,16 @@
     .action-panel .button {
         display: block;
         width: 100%;
+        max-width: 100%;
         box-sizing: border-box;
         text-align: center;
         margin: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        line-height: 1.35;
+        height: auto;
+        min-height: 0;
     }
 
     .action-panel .button.disabled {
@@ -1529,10 +1536,37 @@
     line-height: 1.45;
 }
 
-.course-redesign .class-form-field.checkbox-row label.checkbox input {
-    width: auto;
-    min-height: 0;
-    margin-top: 0.2rem;
+.course-redesign .class-form-field.checkbox-row label.checkbox input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 1.15em;
+    height: 1.15em;
+    min-width: 1.15em;
+    min-height: 1.15em;
+    margin-top: 0.15rem;
+    border: 1.5px solid var(--oj-border, #808080);
+    background: var(--oj-surface, #fff);
+    border-radius: 3px;
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.course-redesign .class-form-field.checkbox-row label.checkbox input[type="checkbox"]:checked {
+    border-color: var(--oj-info, #2980b9);
+    background: var(--oj-info, #2980b9);
+}
+
+.course-redesign .class-form-field.checkbox-row label.checkbox input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    left: 0.3em;
+    top: 0.06em;
+    width: 0.28em;
+    height: 0.55em;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
 }
 
 .course-redesign .class-form-field input[type="text"],

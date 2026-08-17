@@ -153,9 +153,24 @@ $(function () {
                                 <i class="fa fa-trash"></i> {{ _('Delete course') }}
                             </button>
                         </form>
+                        {% if can_create_class %}
+                            <a class="action-link" href="{{ url('organization_create_class', organization.id, organization.slug) }}">
+                                <i class="fa fa-plus"></i> {{ _('Add class') }}
+                            </a>
+                        {% endif %}
+                    </div>
+                {% elif can_create_class %}
+                    <div class="manage-links">
+                        <a class="button" href="#class-root">{{ _('Open classes') }}</a>
                         <a class="action-link" href="{{ url('organization_create_class', organization.id, organization.slug) }}">
                             <i class="fa fa-plus"></i> {{ _('Add class') }}
                         </a>
+                        {% if request.profile in organization %}
+                            <form method="post" action="{{ url('leave_organization', organization.id, organization.slug) }}">
+                                {% csrf_token %}
+                                <button type="submit" class="button secondary js-leave-course">{{ _('Leave course') }}</button>
+                            </form>
+                        {% endif %}
                     </div>
                 {% elif can_manage %}
                     <a class="button" href="#class-root">{{ _('Open classes') }}</a>
@@ -187,6 +202,9 @@ $(function () {
 
     <div class="class-section">
         <h2>{{ _('Class') }}</h2>
+        {% if not can_view_course %}
+            <p class="muted">{{ _('Join this course to see classes, assignments, and shared materials.') }}</p>
+        {% else %}
         <div class="class-toolbar">
             <div>
                 <label for="f-class-q">{{ _('Search class / session') }}</label>
@@ -299,12 +317,13 @@ $(function () {
                 </div>
             {% else %}
                 <div class="empty">{{ _('No classes yet.') }}
-                    {% if can_edit %}
+                    {% if can_create_class %}
                         <a href="{{ url('organization_create_class', organization.id, organization.slug) }}">{{ _('Add class') }}</a>
                     {% endif %}
                 </div>
             {% endif %}
         </div>
+        {% endif %}
     </div>
 </div>
 

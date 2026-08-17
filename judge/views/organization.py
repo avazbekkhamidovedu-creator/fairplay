@@ -24,9 +24,11 @@ from reversion import revisions
 from judge.forms import ClassAssignmentsForm, ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
 from judge.models import AdminNotification, Class, ClassMaterial, Contest, InstructorVerificationRequest, \
     Organization, OrganizationRequest, Profile
-from judge.models.notification import SITE_ADMINISTRATORS_GROUP
+from judge.models.notification import (
+    INSTRUCTORS_GROUP, SITE_ADMINISTRATORS_GROUP, ensure_instructors_group,
+)
 from judge.utils.admin_notify import (
-    notify_class_join, notify_course_join, notify_instructor_verification, unread_notification_count,
+    notify_class_join, notify_course_join, notify_instructor_verification,
 )
 from judge.utils.import_export import process_user_csv
 from judge.utils.organization_membership import sync_class_members_to_organization
@@ -92,9 +94,12 @@ def plain_text_summary(text, max_len=160):
 def remove_profile_from_organization(profile, org):
     """Leave course and drop all class memberships under that course."""
     profile.organizations.remove(org)
+    org.instructors.remove(profile)
     class_ids = list(org.classes.values_list('id', flat=True))
     if class_ids:
         profile.classes.remove(*class_ids)
+        for klass in org.classes.filter(id__in=class_ids):
+            klass.admins.remove(profile)
     cache.delete(make_template_fragment_key('org_member_count', (org.id,)))
 
 
@@ -146,6 +151,44 @@ def profile_manages_organization(profile, org, user=None):
     return profile_is_org_admin(profile, org)
 
 
+def profile_is_site_teacher(profile, user=None):
+    """Approved site-wide Teacher (Instructors group / create-course permission)."""
+    user = user or (profile.user if profile is not None else None)
+    if user is None or not user.is_authenticated:
+        return False
+    if user.has_perm('judge.add_organization'):
+        return True
+    return user.groups.filter(name=INSTRUCTORS_GROUP).exists()
+
+
+def profile_is_org_member(profile, org):
+    return bool(profile and org.members.filter(id=profile.id).exists())
+
+
+def profile_can_view_course(profile, org, user=None):
+    """See course content (classes list / shared materials context).
+
+    Members, course admins, class instructors of this course, and site editors.
+    Non-members may still open a limited join page separately.
+    """
+    if user_can_edit_all_organizations(user):
+        return True
+    if profile is None or org is None:
+        return False
+    if profile_is_org_admin(profile, org) or profile_is_org_member(profile, org):
+        return True
+    return Class.objects.filter(organization=org, admins=profile).exists()
+
+
+def profile_can_create_class(profile, org, user=None):
+    """Course admins, or site teachers who are already course members."""
+    if profile_manages_organization(profile, org, user):
+        return True
+    if profile is None or org is None:
+        return False
+    return profile_is_site_teacher(profile, user) and profile_is_org_member(profile, org)
+
+
 def profile_is_class_admin(profile, class_obj):
     return bool(profile and class_obj.admins.filter(id=profile.id).exists())
 
@@ -169,12 +212,20 @@ def profile_has_pending_class_request(profile, class_obj):
 
 
 def profile_can_access_class(profile, class_obj, user=None, *, allow_pending=True):
-    """Who may open the class detail page (not necessarily materials)."""
+    """Who may open the class detail page (not necessarily edit).
+
+    - Class/course managers and class members (students) as before.
+    - Site teachers who are course members may open every class in that course
+      (read-only unless they are also class instructors).
+    """
     if profile_manages_class(profile, class_obj, user):
         return True
     if profile is None:
         return False
     if class_obj.members.filter(id=profile.id).exists():
+        return True
+    org = class_obj.organization
+    if profile_is_site_teacher(profile, user) and profile_is_org_member(profile, org):
         return True
     if allow_pending and profile_has_pending_class_request(profile, class_obj):
         return True
@@ -182,10 +233,19 @@ def profile_can_access_class(profile, class_obj, user=None, *, allow_pending=Tru
 
 
 def profile_can_view_class_content(profile, class_obj, user=None):
-    """Members and managers may see students / materials / full class body."""
+    """Who may see materials / assignments / students list (view only).
+
+    Same audience as profile_can_access_class for teachers-in-course and members;
+    editing still requires profile_manages_class.
+    """
     if profile_manages_class(profile, class_obj, user):
         return True
-    return bool(profile and class_obj.members.filter(id=profile.id).exists())
+    if profile is None:
+        return False
+    if class_obj.members.filter(id=profile.id).exists():
+        return True
+    org = class_obj.organization
+    return profile_is_site_teacher(profile, user) and profile_is_org_member(profile, org)
 
 
 def pending_requests_for_reviewer(profile, user=None, organization=None):
@@ -209,13 +269,46 @@ def users_for_template(users, order):
                   .select_related('user').defer('about', 'user_script', 'notes'))
 
 
-def user_can_review_instructor_verifications(user):
-    """Site Administrators group, edit_all_organization, or superuser."""
+def user_can_review_site_teacher_verifications(user):
+    """Site-wide teacher applications: Site Administrators / edit_all / superuser."""
     if not user or not user.is_authenticated:
         return False
     if user.is_superuser or user.has_perm('judge.edit_all_organization'):
         return True
     return user.groups.filter(name=SITE_ADMINISTRATORS_GROUP).exists()
+
+
+def instructor_verifications_for_reviewer(profile, user=None):
+    """Verification requests this reviewer may see/act on.
+
+    - Site admins: all teacher + class-instructor requests.
+    - Course admins: class-instructor requests for courses they administer only.
+    """
+    qs = InstructorVerificationRequest.objects.select_related(
+        'user__user', 'reviewed_by__user', 'organization', 'request_class',
+    )
+    if user_can_review_site_teacher_verifications(user):
+        return qs
+    if profile is None:
+        return InstructorVerificationRequest.objects.none()
+    admin_org_ids = set(Organization.objects.filter(admins=profile).values_list('id', flat=True))
+    if not admin_org_ids:
+        return InstructorVerificationRequest.objects.none()
+    return qs.filter(
+        kind=InstructorVerificationRequest.KIND_CLASS_INSTRUCTOR,
+        organization_id__in=admin_org_ids,
+    )
+
+
+def user_can_review_instructor_verifications(user, profile=None):
+    """Who may open the teacher/class-instructor review inbox."""
+    if user_can_review_site_teacher_verifications(user):
+        return True
+    if not user or not user.is_authenticated:
+        return False
+    if profile is None:
+        profile = getattr(user, 'profile', None)
+    return bool(profile and Organization.objects.filter(admins=profile).exists())
 
 
 def instructor_apply_catalog():
@@ -244,52 +337,108 @@ def instructor_apply_catalog():
 
 
 def course_inbox_chrome_context(request):
-    """Shared Course tab chrome: join-request / instructor-request / message badges."""
+    """Shared Course tab chrome: unified Join requests badge (+ Apply as teacher)."""
     profile = request.profile if request.user.is_authenticated else None
     can_all = user_can_edit_all_organizations(request.user)
     reviewable = orgs_reviewable_by(profile) if profile is not None else Organization.objects.none()
     can_review_any = bool(profile is not None and (reviewable.exists() or can_all))
-    pending_review_total = pending_requests_for_reviewer(
+    pending_join_total = pending_requests_for_reviewer(
         profile, request.user,
     ).count() if can_review_any else 0
-    can_review_instructors = user_can_review_instructor_verifications(request.user)
+    can_review_instructors = user_can_review_instructor_verifications(request.user, profile)
     pending_instructor_total = (
-        InstructorVerificationRequest.objects.filter(state='P').count() if can_review_instructors else 0
+        instructor_verifications_for_reviewer(profile, request.user).filter(state='P').count()
+        if can_review_instructors else 0
     )
-    unread = unread_notification_count(profile)
-    can_see_notifications = bool(
-        profile is not None and (
-            can_review_any or can_review_instructors or unread or
-            AdminNotification.objects.filter(recipient=profile).exists() or
-            request.user.is_superuser
-        ),
-    )
+    can_review_inbox = can_review_any or can_review_instructors
+    pending_review_total = pending_join_total + pending_instructor_total
+    is_site_teacher = profile_is_site_teacher(profile, request.user)
+    pending_teacher_apply = False
+    if profile is not None and not is_site_teacher:
+        pending_teacher_apply = InstructorVerificationRequest.objects.filter(
+            user=profile, kind=InstructorVerificationRequest.KIND_TEACHER, state='P',
+        ).exists()
     admin_email = settings.ADMINS[0][1] if settings.ADMINS else ''
     return {
-        'can_review_any': can_review_any,
-        'pending_review_total': pending_review_total,
+        'can_review_any': can_review_inbox,
+        'can_review_joins': can_review_any,
         'can_review_instructors': can_review_instructors,
+        'pending_review_total': pending_review_total,
+        'pending_join_total': pending_join_total,
         'pending_instructor_total': pending_instructor_total,
-        'can_see_notifications': can_see_notifications,
-        'unread_notification_total': unread,
+        'can_see_notifications': False,
+        'unread_notification_total': 0,
         'can_add_course': request.user.is_authenticated and (
             request.user.is_superuser or request.user.has_perm('judge.add_organization')
         ),
+        'is_site_teacher': is_site_teacher,
+        'can_apply_teacher': request.user.is_authenticated and not is_site_teacher and not pending_teacher_apply,
+        'pending_teacher_apply': pending_teacher_apply,
         'admin_email': admin_email or getattr(settings, 'SITE_ADMIN_EMAIL', '') or 'admin@example.com',
         'instructor_apply_catalog': instructor_apply_catalog() if request.user.is_authenticated else [],
     }
+
+
+def grant_site_teacher_role(profile):
+    """Add profile to Instructors group (+ staff if needed). Returns (granted_group, granted_staff)."""
+    if profile is None:
+        return False, False
+    user = profile.user
+    if user is None:
+        return False, False
+    group = ensure_instructors_group()
+    already = user.groups.filter(id=group.id).exists()
+    if not already:
+        user.groups.add(group)
+    granted_staff = False
+    if not user.is_staff:
+        user.is_staff = True
+        user.save(update_fields=['is_staff'])
+        granted_staff = True
+    return (not already), granted_staff
+
+
+def revoke_site_teacher_role(profile, *, excluding_verification=None):
+    """Remove Instructors group / staff only when this approval recorded those grants."""
+    if profile is None:
+        return
+    verification = excluding_verification
+    user = profile.user
+    if user is None:
+        return
+
+    if verification is None or verification.granted_instructors_group:
+        others = InstructorVerificationRequest.objects.filter(
+            user=profile, state='A', kind=InstructorVerificationRequest.KIND_TEACHER,
+            granted_instructors_group=True,
+        )
+        if verification is not None:
+            others = others.exclude(pk=verification.pk)
+        if not others.exists():
+            group = ensure_instructors_group()
+            user.groups.remove(group)
+
+    if verification is not None and verification.granted_staff:
+        others = InstructorVerificationRequest.objects.filter(
+            user=profile, state='A', granted_staff=True,
+        ).exclude(pk=verification.pk)
+        if not others.exists() and user.is_staff and not user.is_superuser:
+            user.is_staff = False
+            user.save(update_fields=['is_staff'])
 
 
 def grant_class_instructor_role(profile, class_obj):
     """Make profile an instructor for one class (class admin + course member + staff).
 
     Returns (granted_class_admin, granted_staff) describing what this call changed.
+    Does NOT grant site-wide Instructors group (use grant_site_teacher_role for that).
     """
     if profile is None or class_obj is None:
         return False, False
     already_admin = class_obj.admins.filter(id=profile.id).exists()
     class_obj.admins.add(profile)
     class_obj.organization.members.add(profile)
+    class_obj.members.add(profile)
     granted_class_admin = not already_admin
     granted_staff = False
     user = profile.user
@@ -298,6 +447,29 @@ def grant_class_instructor_role(profile, class_obj):
         user.save(update_fields=['is_staff'])
         granted_staff = True
     return granted_class_admin, granted_staff
+
+
+def promote_site_teacher_on_class_join(profile, class_obj):
+    """No longer auto-grants class instructor.
+
+    Site teachers who join a course can open all classes read-only; editing a
+    class requires Apply as class instructor (or creating the class).
+    Still ensures they appear on Organization.instructors.
+    """
+    if profile is None or class_obj is None:
+        return False
+    return maybe_add_course_instructor(profile, class_obj.organization)
+
+
+def maybe_add_course_instructor(profile, org):
+    """Add site teachers to Organization.instructors when they join a course."""
+    if profile is None or org is None:
+        return False
+    user = profile.user
+    if not profile_is_site_teacher(profile, user):
+        return False
+    org.instructors.add(profile)
+    return True
 
 
 def revoke_class_instructor_role(profile, class_obj, *, excluding_verification=None):
@@ -322,6 +494,7 @@ def revoke_class_instructor_role(profile, class_obj, *, excluding_verification=N
         # this class as an approved instructor request.
         remove_admin = not InstructorVerificationRequest.objects.filter(
             user=profile, state='A', request_class=class_obj,
+            kind=InstructorVerificationRequest.KIND_CLASS_INSTRUCTOR,
         ).exclude(pk=verification.pk).exists()
     if remove_admin:
         class_obj.admins.remove(profile)
@@ -338,56 +511,83 @@ def revoke_class_instructor_role(profile, class_obj, *, excluding_verification=N
 
 
 def apply_instructor_verification_action(verification, action, reviewer):
-    """approve / reject / reopen a class-scoped InstructorVerificationRequest. Returns True if changed."""
+    """approve / reject / reopen teacher or class-instructor requests. Returns True if changed."""
+    kind = verification.kind or InstructorVerificationRequest.KIND_CLASS_INSTRUCTOR
+
     if action == 'approve':
         if verification.state not in ('P', 'R'):
             return False
-        if verification.request_class_id is None:
-            return False
-        granted_class_admin, granted_staff = grant_class_instructor_role(
-            verification.user, verification.request_class,
-        )
-        verification.state = 'A'
-        verification.reviewed_by = reviewer
-        verification.reviewed_time = timezone.now()
-        verification.granted_class_admin = granted_class_admin
-        verification.granted_staff = granted_staff
-        verification.save()
+        if kind == InstructorVerificationRequest.KIND_TEACHER:
+            granted_group, granted_staff = grant_site_teacher_role(verification.user)
+            verification.state = 'A'
+            verification.reviewed_by = reviewer
+            verification.reviewed_time = timezone.now()
+            verification.granted_instructors_group = granted_group
+            verification.granted_staff = granted_staff
+            verification.granted_class_admin = False
+            verification.save()
+        else:
+            if verification.request_class_id is None:
+                return False
+            granted_class_admin, granted_staff = grant_class_instructor_role(
+                verification.user, verification.request_class,
+            )
+            verification.state = 'A'
+            verification.reviewed_by = reviewer
+            verification.reviewed_time = timezone.now()
+            verification.granted_class_admin = granted_class_admin
+            verification.granted_staff = granted_staff
+            verification.granted_instructors_group = False
+            verification.save()
         AdminNotification.objects.filter(
             instructor_verification=verification, read_at__isnull=True,
         ).update(read_at=timezone.now())
         return True
+
     if action == 'reject':
         if verification.state not in ('P', 'A'):
             return False
         if verification.state == 'A':
-            revoke_class_instructor_role(
-                verification.user, verification.request_class,
-                excluding_verification=verification,
-            )
+            if kind == InstructorVerificationRequest.KIND_TEACHER:
+                revoke_site_teacher_role(
+                    verification.user, excluding_verification=verification,
+                )
+            else:
+                revoke_class_instructor_role(
+                    verification.user, verification.request_class,
+                    excluding_verification=verification,
+                )
         verification.state = 'R'
         verification.reviewed_by = reviewer
         verification.reviewed_time = timezone.now()
         verification.granted_class_admin = False
         verification.granted_staff = False
+        verification.granted_instructors_group = False
         verification.save()
         AdminNotification.objects.filter(
             instructor_verification=verification, read_at__isnull=True,
         ).update(read_at=timezone.now())
         return True
+
     if action == 'reopen':
         if verification.state not in ('A', 'R'):
             return False
         if verification.state == 'A':
-            revoke_class_instructor_role(
-                verification.user, verification.request_class,
-                excluding_verification=verification,
-            )
+            if kind == InstructorVerificationRequest.KIND_TEACHER:
+                revoke_site_teacher_role(
+                    verification.user, excluding_verification=verification,
+                )
+            else:
+                revoke_class_instructor_role(
+                    verification.user, verification.request_class,
+                    excluding_verification=verification,
+                )
         verification.state = 'P'
         verification.reviewed_by = reviewer
         verification.reviewed_time = timezone.now()
         verification.granted_class_admin = False
         verification.granted_staff = False
+        verification.granted_instructors_group = False
         verification.save()
         return True
     return False
@@ -490,7 +690,7 @@ class OrganizationMixin(object):
                                        _('Could not find such organization.'))
 
     def can_edit_organization(self, org=None):
-        """Can edit course settings / create classes: course administrator or site-wide editor."""
+        """Can edit course settings: course administrator or site-wide editor."""
         if org is None:
             org = self.object
         if not self.request.user.is_authenticated:
@@ -498,6 +698,14 @@ class OrganizationMixin(object):
         if user_can_edit_all_organizations(self.request.user):
             return True
         return profile_is_org_admin(self.request.profile, org)
+
+    def can_create_class(self, org=None):
+        """Course admins, or site teachers who are members of this course."""
+        if org is None:
+            org = self.object
+        if not self.request.user.is_authenticated:
+            return False
+        return profile_can_create_class(self.request.profile, org, self.request.user)
 
     def can_manage_organization(self, org=None):
         """Course-level manage (same scope as course administrators, not class instructors)."""
@@ -625,6 +833,8 @@ class OrganizationHome(OrganizationDetailView):
         can_all = user_can_edit_all_organizations(self.request.user)
         context['can_edit'] = self.can_edit_organization()
         context['can_manage'] = self.can_manage_organization()
+        context['can_create_class'] = self.can_create_class()
+        context['can_view_course'] = profile_can_view_course(profile, self.object, self.request.user)
         context['can_review_requests'] = not self.object.is_open and self.request.user.is_authenticated and (
             self.object.can_review_all_requests(self.request.profile) or
             self.object.can_review_class_requests(self.request.profile) or
@@ -755,8 +965,14 @@ class OrganizationHome(OrganizationDetailView):
                 context['can_edit'] or
                 (profile is not None and cls.admins.filter(id=profile.id).exists()),
             )
-            # Per-class open: do not use course-wide can_manage (that would unlock every class).
-            cls.user_can_open = bool(cls.user_can_edit or cls.joined)
+            # Site teachers in the course may open every class (read-only).
+            # Students only open classes they joined; edit still needs class admin.
+            teacher_viewer = bool(
+                profile is not None and
+                profile_is_site_teacher(profile, self.request.user) and
+                profile_is_org_member(profile, self.object),
+            )
+            cls.user_can_open = bool(cls.user_can_edit or cls.joined or teacher_viewer)
             cls.review_pending_count = 0
             if cls.session_label:
                 sessions.add(cls.session_label)
@@ -837,6 +1053,7 @@ class JoinOrganization(OrganizationMembershipChange):
 
         profile.organizations.add(org)
         profile.save()
+        maybe_add_course_instructor(profile, org)
         cache.delete(make_template_fragment_key('org_member_count', (org.id,)))
 
 
@@ -1008,8 +1225,10 @@ class OrganizationRequestView(OrganizationRequestBaseView):
                     # Class membership always implies course membership.
                     if getattr(obj, 'grants_organization', True) or obj.request_class_id:
                         obj.user.organizations.add(obj.organization)
+                        maybe_add_course_instructor(obj.user, obj.organization)
                     if obj.request_class:
                         obj.user.classes.add(obj.request_class)
+                        promote_site_teacher_on_class_join(obj.user, obj.request_class)
                     approved += 1
                 elif obj.state == 'R':
                     rejected += 1
@@ -1040,7 +1259,7 @@ class OrganizationRequestLog(OrganizationRequestBaseView):
 
 
 class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
-    """Cross-course join-request inbox for instructors (Status dropdown + Course/Class filters)."""
+    """Unified inbox: course/class joins + teacher / class-instructor applications."""
 
     template_name = 'organization/requests/inbox.html'
     title = gettext_lazy('Join requests')
@@ -1055,22 +1274,80 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
     def _can_review_all(self, request):
         return request.user.has_perm('judge.edit_all_organization') or request.user.is_superuser
 
-    def _inbox_queryset(self, request):
-        profile = request.profile
-        qs = self._reviewable_queryset(profile)
+    def _can_review_joins(self, request):
+        if self._can_review_all(request):
+            return True
+        return orgs_reviewable_by(request.profile).exists()
+
+    def _can_review_verifications(self, request):
+        return user_can_review_instructor_verifications(request.user, request.profile)
+
+    def _can_access_inbox(self, request):
+        return self._can_review_joins(request) or self._can_review_verifications(request)
+
+    def _join_queryset(self, request):
+        if not self._can_review_joins(request):
+            return OrganizationRequest.objects.none()
+        qs = self._reviewable_queryset(request.profile)
         if self._can_review_all(request):
             qs = OrganizationRequest.objects.select_related(
                 'user__user', 'organization', 'request_class',
             ).order_by('-time')
         return qs
 
+    def _verification_queryset(self, request):
+        if not self._can_review_verifications(request):
+            return InstructorVerificationRequest.objects.none()
+        return instructor_verifications_for_reviewer(request.profile, request.user).order_by('-time')
+
+    @staticmethod
+    def _join_row(obj):
+        if obj.request_class_id:
+            applied_kind = 'class'
+            target = obj.request_class.name
+        else:
+            applied_kind = 'course'
+            target = obj.organization.short_name or obj.organization.name
+        return {
+            'box_id': 'j:%d' % obj.id,
+            'source': 'join',
+            'applied_kind': applied_kind,
+            'obj': obj,
+            'user': obj.user,
+            'time': obj.time,
+            'reason': obj.reason,
+            'state': obj.state,
+            'organization': obj.organization,
+            'request_class': obj.request_class,
+            'target_label': target,
+            'detail_url': reverse(
+                'request_organization_detail',
+                args=(obj.organization.id, obj.organization.slug, obj.id),
+            ),
+        }
+
+    @staticmethod
+    def _verification_row(obj):
+        applied_kind = 'teacher' if obj.kind == InstructorVerificationRequest.KIND_TEACHER else 'class_instructor'
+        return {
+            'box_id': 'v:%d' % obj.id,
+            'source': 'verification',
+            'applied_kind': applied_kind,
+            'obj': obj,
+            'user': obj.user,
+            'time': obj.time,
+            'reason': obj.reason,
+            'state': obj.state,
+            'organization': obj.organization,
+            'request_class': obj.request_class,
+            'target_label': obj.target_label,
+            'detail_url': '',
+        }
+
     def get(self, request, *args, **kwargs):
-        profile = request.profile
-        can_all = self._can_review_all(request)
-        if not can_all and not orgs_reviewable_by(profile).exists():
+        if not self._can_access_inbox(request):
             return generic_message(request, _('Access Denied'),
                                    _('You do not have permission to review join requests.'), status=403)
-        qs = self._inbox_queryset(request)
 
         status = request.GET.get('status') or 'P'
         if status not in ('P', 'A', 'R', 'all'):
@@ -1078,32 +1355,59 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
         course_id = safe_int(request.GET.get('course'))
         class_id = safe_int(request.GET.get('class'))
         kind = request.GET.get('kind') or ''
-        if kind not in ('', 'course', 'class'):
+        if kind not in ('', 'course', 'class', 'teacher', 'class_instructor'):
             kind = ''
         q = (request.GET.get('q') or '').strip()
 
+        join_qs = self._join_queryset(request)
+        ivr_qs = self._verification_queryset(request)
+
         if status != 'all':
-            qs = qs.filter(state=status)
+            join_qs = join_qs.filter(state=status)
+            ivr_qs = ivr_qs.filter(state=status)
         if course_id:
-            qs = qs.filter(organization_id=course_id)
+            join_qs = join_qs.filter(organization_id=course_id)
+            ivr_qs = ivr_qs.filter(organization_id=course_id)
         if class_id:
-            qs = qs.filter(request_class_id=class_id)
+            join_qs = join_qs.filter(request_class_id=class_id)
+            ivr_qs = ivr_qs.filter(request_class_id=class_id)
         if kind == 'course':
-            qs = qs.filter(request_class__isnull=True)
+            join_qs = join_qs.filter(request_class__isnull=True)
+            ivr_qs = ivr_qs.none()
         elif kind == 'class':
-            qs = qs.filter(request_class__isnull=False)
+            join_qs = join_qs.filter(request_class__isnull=False)
+            ivr_qs = ivr_qs.none()
+        elif kind == 'teacher':
+            join_qs = join_qs.none()
+            ivr_qs = ivr_qs.filter(kind=InstructorVerificationRequest.KIND_TEACHER)
+        elif kind == 'class_instructor':
+            join_qs = join_qs.none()
+            ivr_qs = ivr_qs.filter(kind=InstructorVerificationRequest.KIND_CLASS_INSTRUCTOR)
         if q:
-            qs = qs.filter(
+            join_qs = join_qs.filter(
+                Q(user__user__username__icontains=q) |
+                Q(reason__icontains=q) |
+                Q(organization__name__icontains=q) |
+                Q(organization__short_name__icontains=q),
+            )
+            ivr_qs = ivr_qs.filter(
                 Q(user__user__username__icontains=q) |
                 Q(reason__icontains=q) |
                 Q(organization__name__icontains=q) |
                 Q(organization__short_name__icontains=q),
             )
 
+        rows = [self._join_row(obj) for obj in join_qs]
+        rows.extend(self._verification_row(obj) for obj in ivr_qs)
+        rows.sort(key=lambda row: row['time'] or timezone.now(), reverse=True)
+
+        profile = request.profile
+        can_all = self._can_review_all(request)
         if can_all:
             courses = Organization.objects.order_by('name')
             classes = Class.objects.select_related('organization').order_by('organization__name', 'name')
         else:
+            # Course admins + class instructors (orgs_reviewable_by already covers admins).
             courses = orgs_reviewable_by(profile).order_by('name')
             classes = Class.objects.filter(
                 Q(organization__admins=profile) | Q(admins=profile),
@@ -1111,10 +1415,10 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
         if course_id:
             classes = classes.filter(organization_id=course_id)
 
-        pending_review_total = self._inbox_queryset(request).filter(state='P').count()
+        chrome = course_inbox_chrome_context(request)
         ctx = {
             'title': self.title,
-            'requests': qs,
+            'requests': rows,
             'status': status,
             'course_id': course_id,
             'class_id': class_id,
@@ -1124,58 +1428,63 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
             'classes': classes,
             'inbox_panel': 'joins',
         }
-        ctx.update(course_inbox_chrome_context(request))
+        ctx.update(chrome)
         ctx['can_review_any'] = True
-        ctx['pending_review_total'] = pending_review_total
         return self.render_to_response(ctx)
 
     def post(self, request, *args, **kwargs):
-        profile = request.profile
-        can_all = self._can_review_all(request)
-        if not can_all and not orgs_reviewable_by(profile).exists():
+        if not self._can_access_inbox(request):
             return generic_message(request, _('Access Denied'),
                                    _('You do not have permission to review join requests.'), status=403)
         action = request.POST.get('action')
-        ids = []
+        join_ids = []
+        ivr_ids = []
         for raw in request.POST.getlist('request_ids'):
-            try:
-                ids.append(int(raw))
-            except (TypeError, ValueError):
-                continue
-        # Single-id fallback (optional).
-        if not ids:
-            raw_one = request.POST.get('request_id')
-            try:
-                if raw_one:
-                    ids.append(int(raw_one))
-            except (TypeError, ValueError):
-                pass
+            raw = (raw or '').strip()
+            if raw.startswith('j:'):
+                try:
+                    join_ids.append(int(raw[2:]))
+                except (TypeError, ValueError):
+                    pass
+            elif raw.startswith('v:'):
+                try:
+                    ivr_ids.append(int(raw[2:]))
+                except (TypeError, ValueError):
+                    pass
+            else:
+                # Backward-compatible bare join ids.
+                try:
+                    join_ids.append(int(raw))
+                except (TypeError, ValueError):
+                    pass
 
-        qs = list(self._inbox_queryset(request).filter(id__in=ids))
-        approved = rejected = reopened = 0
+        approved = rejected = reopened = deleted = 0
 
         def grant_membership(obj):
-            # Class membership always implies course membership.
             if obj.grants_organization or obj.request_class_id:
                 obj.user.organizations.add(obj.organization)
+                maybe_add_course_instructor(obj.user, obj.organization)
             if obj.request_class:
                 obj.user.classes.add(obj.request_class)
+                promote_site_teacher_on_class_join(obj.user, obj.request_class)
             cache.delete(make_template_fragment_key('org_member_count', (obj.organization_id,)))
 
         def revoke_membership(obj):
-            # Class-only revoke: drop that class, keep course membership.
-            # Course revoke: leave course and clear all classes under it.
             if obj.grants_organization:
                 remove_profile_from_organization(obj.user, obj.organization)
             elif obj.request_class:
                 obj.user.classes.remove(obj.request_class)
+                obj.request_class.admins.remove(obj.user)
             else:
                 cache.delete(make_template_fragment_key('org_member_count', (obj.organization_id,)))
                 return
             cache.delete(make_template_fragment_key('org_member_count', (obj.organization_id,)))
 
+        join_qs = list(self._join_queryset(request).filter(id__in=join_ids))
+        ivr_qs = list(self._verification_queryset(request).filter(id__in=ivr_ids))
+
         if action == 'approve':
-            candidates = [obj for obj in qs if obj.state in ('P', 'R')]
+            candidates = [obj for obj in join_qs if obj.state in ('P', 'R')]
             by_org = {}
             for obj in candidates:
                 by_org.setdefault(obj.organization_id, []).append(obj)
@@ -1205,8 +1514,11 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
                 obj.save()
                 grant_membership(obj)
                 approved += 1
+            for obj in ivr_qs:
+                if apply_instructor_verification_action(obj, 'approve', request.profile):
+                    approved += 1
         elif action == 'reject':
-            for obj in qs:
+            for obj in join_qs:
                 if obj.state not in ('P', 'A'):
                     continue
                 if obj.state == 'A':
@@ -1214,8 +1526,11 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
                 obj.state = 'R'
                 obj.save()
                 rejected += 1
+            for obj in ivr_qs:
+                if apply_instructor_verification_action(obj, 'reject', request.profile):
+                    rejected += 1
         elif action == 'reopen':
-            for obj in qs:
+            for obj in join_qs:
                 if obj.state not in ('A', 'R'):
                     continue
                 if obj.state == 'A':
@@ -1223,9 +1538,14 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
                 obj.state = 'P'
                 obj.save()
                 reopened += 1
+            for obj in ivr_qs:
+                if apply_instructor_verification_action(obj, 'reopen', request.profile):
+                    reopened += 1
         elif action == 'delete':
-            deleted = 0
-            for obj in qs:
+            for obj in join_qs:
+                obj.delete()
+                deleted += 1
+            for obj in ivr_qs:
                 obj.delete()
                 deleted += 1
             if deleted:
@@ -1233,6 +1553,9 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
                     request,
                     ngettext('Deleted %d request.', 'Deleted %d requests.', deleted) % deleted,
                 )
+            return HttpResponseRedirect(request.get_full_path())
+        else:
+            messages.error(request, _('Unknown action.'))
             return HttpResponseRedirect(request.get_full_path())
 
         if approved:
@@ -1274,7 +1597,9 @@ class CreateOrganization(LoginRequiredMixin, TitleMixin, FormView):
     def get_form(self, form_class=None):
         form = super().get_form(form_class)
         if self.request.method == 'GET':
-            form.fields['admins'].initial = [self.request.profile.pk]
+            creator = self.request.profile
+            form.fields['admins'].initial = [creator.pk]
+            form.fields['instructors'].initial = [creator.pk]
         return form
 
     def get_context_data(self, **kwargs):
@@ -1291,7 +1616,9 @@ class CreateOrganization(LoginRequiredMixin, TitleMixin, FormView):
             org.about = org.about or ''
             org.save()
             form.save_m2m()
+            # Creator is always course admin + instructor (even if cleared in the form).
             org.admins.add(self.request.profile)
+            org.instructors.add(self.request.profile)
             revisions.set_comment(_('Created course from site'))
             revisions.set_user(self.request.user)
         messages.success(self.request, _('Course "%s" created successfully.') % org.name)
@@ -1425,6 +1752,9 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
         joined = False
         user_pending = False
         in_org = False
+        is_site_teacher = False
+        can_apply_class_instructor = False
+        pending_class_instructor = False
         if profile is not None:
             in_org = org.members.filter(id=profile.id).exists()
             joined = self.object.members.filter(id=profile.id).exists()
@@ -1433,6 +1763,16 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
                 profile_has_pending_class_request(profile, self.object)
             )
             can_edit = profile_manages_class(profile, self.object, self.request.user)
+            is_site_teacher = profile_is_site_teacher(profile, self.request.user)
+            pending_class_instructor = InstructorVerificationRequest.objects.filter(
+                user=profile,
+                request_class=self.object,
+                kind=InstructorVerificationRequest.KIND_CLASS_INSTRUCTOR,
+                state='P',
+            ).exists()
+            can_apply_class_instructor = bool(
+                is_site_teacher and in_org and not can_edit and not pending_class_instructor,
+            )
         can_view_content = profile_can_view_class_content(profile, self.object, self.request.user)
         context['can_edit'] = can_edit
         context['can_manage'] = can_edit or profile_manages_organization(profile, org, self.request.user)
@@ -1440,6 +1780,9 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
         context['class_pending'] = user_pending
         context['in_organization'] = in_org
         context['can_view_content'] = can_view_content
+        context['is_site_teacher'] = is_site_teacher
+        context['can_apply_class_instructor'] = can_apply_class_instructor
+        context['pending_class_instructor'] = pending_class_instructor
         context['is_admin'] = False  # Don't allow kicking here
         context['instructor_apply_org_id'] = org.id
         context['instructor_apply_class_id'] = self.object.id
@@ -1641,7 +1984,7 @@ class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
 
     def dispatch(self, request, *args, **kwargs):
         self.object = self.get_object()
-        if not self.can_edit_organization():
+        if not self.can_create_class():
             return generic_message(request, _('Access Denied'),
                                    _('You do not have permission to create classes for this organization.'), status=403)
         return super().dispatch(request, *args, **kwargs)
@@ -2019,33 +2362,48 @@ class OrganizationImportUsers(LoginRequiredMixin, OrganizationMixin, FormView):
 
 
 class InstructorVerificationForm(Form):
+    """Site-wide teacher apply, or class-instructor apply (kind selects required fields)."""
+
+    kind = forms.ChoiceField(
+        choices=InstructorVerificationRequest.KIND_CHOICES,
+        initial=InstructorVerificationRequest.KIND_TEACHER,
+    )
     organization = forms.ModelChoiceField(
         queryset=Organization.objects.all(),
         label=gettext_lazy('Course'),
+        required=False,
     )
     request_class = forms.ModelChoiceField(
         queryset=Class.objects.filter(is_active=True),
         label=gettext_lazy('Class / session'),
+        required=False,
     )
     reason = forms.CharField(
         widget=forms.Textarea(attrs={'rows': 4, 'class': 'oj-input'}),
-        label=gettext_lazy('Why do you need to instruct this class?'),
+        label=gettext_lazy('Reason'),
         max_length=2000,
     )
 
     def clean(self):
         cleaned = super().clean()
+        kind = cleaned.get('kind') or InstructorVerificationRequest.KIND_TEACHER
         org = cleaned.get('organization')
         klass = cleaned.get('request_class')
-        if org is not None and klass is not None and klass.organization_id != org.id:
+        if kind == InstructorVerificationRequest.KIND_TEACHER:
+            cleaned['organization'] = None
+            cleaned['request_class'] = None
+            return cleaned
+        if org is None or klass is None:
+            raise forms.ValidationError(_('Please choose a course and class/session.'))
+        if klass.organization_id != org.id:
             raise forms.ValidationError(_('Selected class does not belong to that course.'))
-        if klass is not None and not klass.is_active:
+        if not klass.is_active:
             raise forms.ValidationError(_('That class is not active.'))
         return cleaned
 
 
 class InstructorVerificationSubmitView(LoginRequiredMixin, View):
-    """POST-only: apply to teach one course class; notify Site Administrators."""
+    """POST-only: apply as site-wide teacher, or as instructor of one class."""
 
     http_method_names = ['post']
 
@@ -2059,13 +2417,39 @@ class InstructorVerificationSubmitView(LoginRequiredMixin, View):
         if not form.is_valid():
             messages.error(
                 request,
-                _('Please choose a course, class/session, and a short reason.'),
+                _('Please provide a short reason (and course/class for class-instructor requests).'),
             )
             return HttpResponseRedirect(next_url)
 
         profile = request.profile
-        org = form.cleaned_data['organization']
-        klass = form.cleaned_data['request_class']
+        kind = form.cleaned_data['kind']
+        org = form.cleaned_data.get('organization')
+        klass = form.cleaned_data.get('request_class')
+
+        if kind == InstructorVerificationRequest.KIND_TEACHER:
+            if profile_is_site_teacher(profile, request.user):
+                messages.info(request, _('You already have teacher access.'))
+                return HttpResponseRedirect(next_url)
+            if InstructorVerificationRequest.objects.filter(
+                user=profile, kind=InstructorVerificationRequest.KIND_TEACHER, state='P',
+            ).exists():
+                messages.info(request, _('You already have a pending teacher application.'))
+                return HttpResponseRedirect(next_url)
+            verification = InstructorVerificationRequest.objects.create(
+                user=profile,
+                kind=InstructorVerificationRequest.KIND_TEACHER,
+                organization=None,
+                request_class=None,
+                reason=form.cleaned_data['reason'].strip(),
+                state='P',
+            )
+            notify_instructor_verification(verification)
+            messages.success(
+                request,
+                _('Your teacher application was sent to site administrators. '
+                  'Once approved you can create problems and courses.'),
+            )
+            return HttpResponseRedirect(next_url)
 
         if profile_is_class_admin(profile, klass):
             messages.info(request, _('You already instruct this class.'))
@@ -2079,6 +2463,7 @@ class InstructorVerificationSubmitView(LoginRequiredMixin, View):
 
         if InstructorVerificationRequest.objects.filter(
             user=profile, request_class=klass, state='P',
+            kind=InstructorVerificationRequest.KIND_CLASS_INSTRUCTOR,
         ).exists():
             messages.info(
                 request,
@@ -2088,6 +2473,7 @@ class InstructorVerificationSubmitView(LoginRequiredMixin, View):
 
         verification = InstructorVerificationRequest.objects.create(
             user=profile,
+            kind=InstructorVerificationRequest.KIND_CLASS_INSTRUCTOR,
             organization=org,
             request_class=klass,
             reason=form.cleaned_data['reason'].strip(),
@@ -2096,162 +2482,29 @@ class InstructorVerificationSubmitView(LoginRequiredMixin, View):
         notify_instructor_verification(verification)
         messages.success(
             request,
-            _('Your request to instruct %(target)s was sent to site administrators.') % {
+            _('Your request to instruct %(target)s was sent to the course administrators.') % {
                 'target': verification.target_label or klass.name,
             },
         )
         return HttpResponseRedirect(next_url)
 
 
-class AdminNotificationInboxView(LoginRequiredMixin, TitleMixin, View):
-    """Simple message inbox (instructor verification + join notifications)."""
-
-    template_name = 'organization/requests/notifications.html'
-    title = gettext_lazy('Messages')
-
-    def render_to_response(self, context):
-        from django.shortcuts import render
-        return render(self.request, self.template_name, context)
-
-    def _can_access(self, request):
-        chrome = course_inbox_chrome_context(request)
-        return chrome['can_see_notifications'] or chrome['can_review_any'] or request.user.is_superuser
+class AdminNotificationInboxView(LoginRequiredMixin, View):
+    """Legacy Messages inbox — redirects into unified Join requests."""
 
     def get(self, request, *args, **kwargs):
-        if not self._can_access(request):
-            return generic_message(request, _('Access Denied'),
-                                   _('You do not have permission to view this inbox.'), status=403)
-        profile = request.profile
-        status = request.GET.get('status') or 'unread'
-        qs = AdminNotification.objects.filter(recipient=profile).select_related(
-            'actor__user', 'organization_request__organization', 'organization_request__user__user',
-            'instructor_verification__user__user',
-        )
-        if status == 'unread':
-            qs = qs.filter(read_at__isnull=True)
-        elif status == 'read':
-            qs = qs.filter(read_at__isnull=False)
-        # else all
-        ctx = {
-            'title': self.title,
-            'notifications': list(qs[:200]),
-            'status': status,
-            'inbox_panel': 'messages',
-        }
-        ctx.update(course_inbox_chrome_context(request))
-        return self.render_to_response(ctx)
+        return HttpResponseRedirect(reverse('organization_join_requests'))
 
-    def post(self, request, *args, **kwargs):
-        if not self._can_access(request):
-            return generic_message(request, _('Access Denied'),
-                                   _('You do not have permission to view this inbox.'), status=403)
-        profile = request.profile
-        action = request.POST.get('action')
-        ids = []
-        for raw in request.POST.getlist('notification_ids'):
-            try:
-                ids.append(int(raw))
-            except (TypeError, ValueError):
-                continue
-        qs = AdminNotification.objects.filter(recipient=profile, id__in=ids)
-
-        if action == 'mark_read':
-            qs.filter(read_at__isnull=True).update(read_at=timezone.now())
-            messages.success(request, _('Marked as read.'))
-        elif action == 'mark_unread':
-            qs.update(read_at=None)
-            messages.success(request, _('Marked as unread.'))
-        else:
-            messages.error(request, _('Unknown action.'))
-
-        return HttpResponseRedirect(reverse('organization_notifications') + '?status=' + (
-            request.GET.get('status') or 'unread'
-        ))
+    post = get
 
 
-class InstructorVerificationInboxView(LoginRequiredMixin, TitleMixin, View):
-    """Site-admin inbox for instructor verification (Pending / Approve / Reject / Reopen)."""
-
-    template_name = 'organization/requests/instructor_inbox.html'
-    title = gettext_lazy('Instructor verification')
-
-    def render_to_response(self, context):
-        from django.shortcuts import render
-        return render(self.request, self.template_name, context)
-
-    def dispatch(self, request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            return self.handle_no_permission()
-        if not user_can_review_instructor_verifications(request.user):
-            return generic_message(request, _('Access Denied'),
-                                   _('You do not have permission to review instructor verification.'), status=403)
-        return super().dispatch(request, *args, **kwargs)
+class InstructorVerificationInboxView(LoginRequiredMixin, View):
+    """Legacy Teacher verification inbox — redirects into unified Join requests."""
 
     def get(self, request, *args, **kwargs):
-        status = request.GET.get('status') or 'P'
-        if status not in ('P', 'A', 'R', 'all'):
-            status = 'P'
-        qs = InstructorVerificationRequest.objects.select_related(
-            'user__user', 'reviewed_by__user', 'organization', 'request_class',
-        ).order_by('-time')
-        if status != 'all':
-            qs = qs.filter(state=status)
-        ctx = {
-            'title': self.title,
-            'requests': qs,
-            'status': status,
-            'inbox_panel': 'instructors',
-        }
-        ctx.update(course_inbox_chrome_context(request))
-        return self.render_to_response(ctx)
+        return HttpResponseRedirect(reverse('organization_join_requests'))
 
-    def post(self, request, *args, **kwargs):
-        action = request.POST.get('action')
-        ids = []
-        for raw in request.POST.getlist('request_ids'):
-            try:
-                ids.append(int(raw))
-            except (TypeError, ValueError):
-                continue
-        qs = list(
-            InstructorVerificationRequest.objects.filter(id__in=ids).select_related('user__user'),
-        )
-        approved = rejected = reopened = 0
-        reviewer = request.profile
-        if action == 'approve':
-            for obj in qs:
-                if apply_instructor_verification_action(obj, 'approve', reviewer):
-                    approved += 1
-        elif action == 'reject':
-            for obj in qs:
-                if apply_instructor_verification_action(obj, 'reject', reviewer):
-                    rejected += 1
-        elif action == 'reopen':
-            for obj in qs:
-                if apply_instructor_verification_action(obj, 'reopen', reviewer):
-                    reopened += 1
-        else:
-            messages.error(request, _('Unknown action.'))
-            return HttpResponseRedirect(request.get_full_path())
-
-        if approved:
-            messages.success(
-                request,
-                ngettext('Approved %d instructor request.', 'Approved %d instructor requests.', approved) % approved,
-            )
-        if rejected:
-            messages.success(
-                request,
-                ngettext('Rejected %d instructor request.', 'Rejected %d instructor requests.', rejected) % rejected,
-            )
-        if reopened:
-            messages.success(
-                request,
-                ngettext('Reopened %d instructor request.', 'Reopened %d instructor requests.', reopened) % reopened,
-            )
-        if action in ('approve', 'reject', 'reopen') and not approved and not rejected and not reopened:
-            messages.error(request, _('No eligible requests selected for that action.'))
-        return HttpResponseRedirect(request.get_full_path())
+    post = get
 
 
 # Backward-compatible aliases (teacher → instructor rename).
