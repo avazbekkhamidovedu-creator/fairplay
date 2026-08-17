@@ -104,9 +104,9 @@
 <div class="course-redesign oj-ui">
     <form id="course-list-filters" class="filters" method="get" action="" role="search">
         <div>
-            <label for="f-q">{{ _('Course name / short name') }}</label>
+            <label for="f-q">{{ _('Course code / course name') }}</label>
             <input id="f-q" type="text" name="q" value="{{ filter_q }}"
-                   placeholder="{{ _('e.g. course name or short name') }}"
+                   placeholder="{{ _('e.g. course code or course name') }}"
                    autocomplete="off">
         </div>
         <div>
@@ -129,7 +129,7 @@
         <div>
             <label for="f-sort">{{ _('Sort by') }}</label>
             <select id="f-sort" name="sort" class="oj-select">
-                <option value="short_name" {% if filter_sort == 'short_name' %}selected{% endif %}>{{ _('Short name') }}</option>
+                <option value="short_name" {% if filter_sort == 'short_name' %}selected{% endif %}>{{ _('Course code') }}</option>
                 <option value="name" {% if filter_sort == 'name' %}selected{% endif %}>{{ _('Course name') }}</option>
                 <option value="classes" {% if filter_sort == 'classes' %}selected{% endif %}>{{ _('Class count') }}</option>
                 <option value="instructors" {% if filter_sort == 'instructors' %}selected{% endif %}>{{ _('Instructor count') }}</option>
@@ -166,9 +166,6 @@
                                     {% if org.class_count == 1 %}{{ _('1 class') }}
                                     {% else %}{{ _('%(count)d classes', count=org.class_count) }}{% endif %}
                                 </span>
-                            </div>
-                            <div class="line"><i class="fa fa-user-circle-o"></i>
-                                <span>{{ org.instructor_line }}</span>
                             </div>
                         </div>
                     </div>

@@ -21,7 +21,6 @@
                 $form.find('.req-select[value="' + id + '"]').prop('checked', true);
                 $form.find('#bulk-action').val(action);
                 $form.trigger('submit');
-                // Reset if submit was blocked (e.g. validation alert).
                 $(this).val('');
             });
             $('.js-bulk-submit').on('click', function () {
@@ -55,6 +54,8 @@
 <div class="course-redesign oj-ui">
     {% include "messages.html" %}
 
+    <p class="empty" style="text-align:left;margin:0 0 0.85rem">{{ _('All applications appear here: course/class membership, site-wide teacher access, and class-instructor requests.') }}</p>
+
     <div class="join-toolbar">
         <form class="join-requests-filters" method="get" action="">
             <div>
@@ -67,11 +68,13 @@
                 </select>
             </div>
             <div>
-                <label for="f-kind">{{ _('Target') }}</label>
+                <label for="f-kind">{{ _('Type') }}</label>
                 <select id="f-kind" name="kind" class="oj-select" onchange="this.form.submit()">
-                    <option value="" {% if not kind %}selected{% endif %}>{{ _('Membership + Class join') }}</option>
+                    <option value="" {% if not kind %}selected{% endif %}>{{ _('All types') }}</option>
                     <option value="course" {% if kind == 'course' %}selected{% endif %}>{{ _('Course membership') }}</option>
                     <option value="class" {% if kind == 'class' %}selected{% endif %}>{{ _('Class join') }}</option>
+                    <option value="teacher" {% if kind == 'teacher' %}selected{% endif %}>{{ _('Teacher access') }}</option>
+                    <option value="class_instructor" {% if kind == 'class_instructor' %}selected{% endif %}>{{ _('Class instructor') }}</option>
                 </select>
             </div>
             <div>
@@ -113,6 +116,7 @@
                 <tr>
                     <th><input type="checkbox" id="select-all"></th>
                     <th>{{ _('User') }}</th>
+                    <th>{{ _('Type') }}</th>
                     <th>{{ _('Applied') }}</th>
                     <th>{{ _('Target') }}</th>
                     <th>{{ _('Reason') }}</th>
@@ -123,23 +127,39 @@
                 <tbody>
                 {% for req in requests %}
                     <tr>
-                        <td><input type="checkbox" name="request_ids" value="{{ req.id }}" class="req-select"></td>
+                        <td><input type="checkbox" name="request_ids" value="{{ req.box_id }}" class="req-select"></td>
                         <td>{{ link_user(req.user) }}</td>
                         <td>
-                            <a href="{{ url('request_organization_detail', req.organization.id, req.organization.slug, req.id) }}">
-                                {{ req.time|date(_("N j, Y, H:i")) }}
-                            </a>
+                            {% if req.applied_kind == 'course' %}{{ _('Course membership') }}
+                            {% elif req.applied_kind == 'class' %}{{ _('Class join') }}
+                            {% elif req.applied_kind == 'teacher' %}{{ _('Teacher access') }}
+                            {% else %}{{ _('Class instructor') }}{% endif %}
                         </td>
                         <td>
-                            {% if req.request_class %}
+                            {% if req.detail_url %}
+                                <a href="{{ req.detail_url }}">{{ req.time|date(_("N j, Y, H:i")) }}</a>
+                            {% else %}
+                                {{ req.time|date(_("N j, Y, H:i")) }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if req.applied_kind == 'class' and req.request_class %}
                                 <span class="join-target class"><i class="fa fa-users"></i>
                                     {{ _('Class') }} ·
                                     <a href="{{ req.request_class.get_absolute_url() }}">{{ req.request_class.name }}</a>
                                 </span>
-                            {% else %}
+                            {% elif req.applied_kind == 'course' and req.organization %}
                                 <span class="join-target"><i class="fa fa-university"></i>
                                     {{ _('Course membership') }} ·
                                     <a href="{{ req.organization.get_absolute_url() }}">{{ req.organization.short_name }}</a>
+                                </span>
+                            {% elif req.applied_kind == 'class_instructor' %}
+                                <span class="join-target class"><i class="fa fa-id-badge"></i>
+                                    {{ req.target_label or '—' }}
+                                </span>
+                            {% else %}
+                                <span class="join-target"><i class="fa fa-id-badge"></i>
+                                    {{ _('Site-wide teacher access') }}
                                 </span>
                             {% endif %}
                         </td>
@@ -151,7 +171,7 @@
                             {% endif %}
                         </td>
                         <td class="join-row-actions">
-                            <select class="oj-select js-row-action-select" data-id="{{ req.id }}"
+                            <select class="oj-select js-row-action-select" data-id="{{ req.box_id }}"
                                     aria-label="{{ _('Action') }}">
                                 {% if req.state == 'P' %}
                                     <option value="" selected>{{ _('Pending') }}</option>
@@ -208,6 +228,5 @@
         <div class="empty">{{ _('No join requests match your filters.') }}</div>
     {% endif %}
 </div>
-
 {% include "organization/instructor-verification-modal.html" %}
 {% endblock %}

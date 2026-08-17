@@ -3,7 +3,7 @@
 {% block js_media %}
 <script type="text/javascript">
 $(function () {
-    $('#instructor-verification-btn').on('click', function () {
+    $('#instructor-verification-btn, #class-instructor-verification-btn').on('click', function () {
         $('#instructor-verification-modal').prop('hidden', false);
     });
     $('#instructor-verification-modal .js-close-modal').on('click', function () {
@@ -150,8 +150,10 @@ $(function () {
                         <p class="muted">{{ _('You are a member of this class.') }}</p>
                     {% elif class_pending %}
                         <button type="button" class="button disabled" disabled>{{ _('Pending class join') }}</button>
-                    {% elif in_organization %}
+                    {% elif in_organization and not is_site_teacher %}
                         <a class="button" href="{{ url('class_join', organization.id, organization.slug, object.id, object.slug) }}">{{ _('Request to join') }}</a>
+                    {% elif in_organization and is_site_teacher %}
+                        <p class="muted">{{ _('You can view this class as a course teacher (read-only). Apply as class instructor to edit.') }}</p>
                     {% elif organization.is_open %}
                         <form method="post" action="{{ url('join_organization', organization.id, organization.slug) }}">
                             {% csrf_token %}
@@ -159,6 +161,13 @@ $(function () {
                         </form>
                     {% else %}
                         <a class="button" href="{{ url('request_organization', organization.id, organization.slug) }}">{{ _('Join course first') }}</a>
+                    {% endif %}
+                    {% if can_apply_class_instructor %}
+                        <button type="button" class="button secondary" id="class-instructor-verification-btn" style="margin-top:0.5rem">
+                            {{ _('Apply as class instructor') }}
+                        </button>
+                    {% elif pending_class_instructor %}
+                        <button type="button" class="button disabled" disabled style="margin-top:0.5rem">{{ _('Instructor application pending') }}</button>
                     {% endif %}
                 {% endif %}
             </div>

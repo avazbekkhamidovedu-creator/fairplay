@@ -63,6 +63,11 @@ class Organization(models.Model):
     about = models.TextField(verbose_name=_('organization description'))
     admins = models.ManyToManyField('Profile', verbose_name=_('administrators'), related_name='admin_of',
                                     help_text=_('Those who can edit this organization.'))
+    instructors = models.ManyToManyField(
+        'Profile', verbose_name=_('course instructors'), blank=True,
+        related_name='instructor_of',
+        help_text=_('Teachers associated with this course (auto-added when a site teacher joins).'),
+    )
     creation_date = models.DateTimeField(verbose_name=_('creation date'), auto_now_add=True)
     is_open = models.BooleanField(verbose_name=_('is open organization?'),
                                   help_text=_('Allow joining organization.'), default=True)
