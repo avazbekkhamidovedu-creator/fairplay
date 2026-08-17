@@ -28,7 +28,7 @@ from judge.models.notification import (
     INSTRUCTORS_GROUP, SITE_ADMINISTRATORS_GROUP, ensure_instructors_group,
 )
 from judge.utils.admin_notify import (
-    notify_class_join, notify_course_join, notify_instructor_verification, unread_notification_count,
+    notify_class_join, notify_course_join, notify_instructor_verification,
 )
 from judge.utils.import_export import process_user_csv
 from judge.utils.organization_membership import sync_class_members_to_organization
@@ -1771,7 +1771,7 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
                 state='P',
             ).exists()
             can_apply_class_instructor = bool(
-                is_site_teacher and in_org and not can_edit and not pending_class_instructor
+                is_site_teacher and in_org and not can_edit and not pending_class_instructor,
             )
         can_view_content = profile_can_view_class_content(profile, self.object, self.request.user)
         context['can_edit'] = can_edit

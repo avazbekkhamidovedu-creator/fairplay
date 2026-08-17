@@ -316,8 +316,10 @@ class OrganizationSiteForm(ModelForm):
             'slots': _('Optional. Maximum members for private courses.'),
             'admins': _('People who can edit this course and review join requests. '
                         'The creator is included by default and can add co-administrators.'),
-            'instructors': _('Teachers on this course. Defaults to the creator; site teachers are added '
-                            'automatically when their course join request is approved.'),
+            'instructors': _(
+                'Teachers on this course. Defaults to the creator; site teachers are added '
+                'automatically when their course join request is approved.',
+            ),
         }
         widgets = {
             'about': forms.Textarea(attrs={
