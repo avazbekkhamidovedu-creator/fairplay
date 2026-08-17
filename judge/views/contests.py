@@ -43,7 +43,7 @@ from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
 from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestTag, \
-    Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission
+    Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade
 from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
@@ -2156,7 +2156,8 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
             Submission.objects.filter(contest_object=contest)
             .select_related('user__user', 'problem', 'language',
                             'reviewed_by__user', 'contest__participation')
-            .prefetch_related('test_cases', 'problem__fill_blank_config', 'problem__short_answer_config')
+            .prefetch_related('test_cases', 'problem__fill_blank_config',
+                              'problem__short_answer_config', 'manual_grade')
             .order_by('-date')
         )
         context['grade_submissions'] = submissions
@@ -2182,9 +2183,12 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
             }
             for idx, cp in enumerate(problems)
         ]
-        # Whether grades are currently released to students (drives the
-        # Release / Unrelease toolbar button state).
-        context['grade_released'] = contest.results_finalized
+        # Release state for the "Release All" toolbar button: how many manual
+        # grades exist and how many are still unreleased (students keep seeing
+        # their machine score until the teacher releases the override).
+        manual_grades = SubmissionManualGrade.objects.filter(submission__contest_object=contest)
+        context['grade_released_count'] = manual_grades.filter(released=True).count()
+        context['grade_unreleased_count'] = manual_grades.filter(released=False).count()
 
         payload = []
         latest_seen = set()
@@ -2230,6 +2234,24 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
             else:
                 display_points = sub.points
                 display_total = sub.case_total or sub.problem.points
+            # Manual override state (see SubmissionManualGrade): the *actual*
+            # score always prefers the manual grade; the *student-visible* score
+            # only switches to it once ``released``. ``machine_points`` is the
+            # machine score in the same scale, so the UI can show what the
+            # student still sees while the override is unreleased.
+            manual_grade = sub.manual_grade_override
+            if manual_grade is not None and manual_grade.points is not None:
+                manual_points = manual_grade.points
+                machine_points = manual_grade.machine_points
+                released = manual_grade.released
+                # For standalone submissions the manual score is not folded into a
+                # ContestSubmission row, so surface it directly as the actual score.
+                if contest_submission is None:
+                    display_points = manual_points
+            else:
+                manual_points = None
+                machine_points = display_points
+                released = False
             # Non-code answers (MCQ / fill-blank / short-answer) are stored as a
             # JSON payload in SubmissionSource; surface the human-readable rows
             # exactly like the student workspace does, so the teacher sees the
@@ -2237,14 +2259,16 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
             answer_display = get_workspace_answer_display(sub) if source else []
             # "Pending" queue semantics: a submission awaits teacher review when
             #   * it belongs to a manually-graded type (file upload) and has no
-            #     points yet, or
+            #     manual grade yet, or
             #   * its problem is AI-graded with "require teacher review after AI
             #     scoring" checked in the problem editor — the AI score is stored
             #     but the submission stays in the pending queue until a teacher
             #     reviews it on the grade page.
             # Everything else with points == null (e.g. a code submission still
             # in the judge queue) is NOT pending — it resolves automatically.
-            if sub.points is None:
+            if manual_grade is not None:
+                is_pending = False
+            elif sub.points is None:
                 is_pending = get_grader(sub.problem.submission_type).is_manual
             elif sub.reviewed_by is not None:
                 is_pending = False
@@ -2289,6 +2313,11 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                 'review_note': sub.review_note or '',
                 'reviewed_by': sub.reviewed_by.user.username if sub.reviewed_by else None,
                 'reviewed_at': sub.reviewed_at.strftime('%Y-%m-%d %H:%M') if sub.reviewed_at else None,
+                # Manual override + release state (drives the per-submission
+                # "released" badge and the student-visible score hint).
+                'manual_points': manual_points,
+                'machine_points': machine_points,
+                'released': released,
                 # Participation kind: virtual runs are marked with a "V" badge.
                 'virtual': bool(contest_submission and contest_submission.participation_id
                                 and contest_submission.participation.virtual),
@@ -2341,34 +2370,56 @@ class ContestGradeSave(ContestMixin, DetailView):
         contest_submission = submission.contest_or_none
         if contest_submission is not None:
             total = contest_submission.problem.points
+            machine_points = contest_submission.points
         else:
             total = submission.case_total or submission.problem.points
+            machine_points = submission.points
         score = min(max(score, 0), total)
-        submission.points = score
-        # Save the review note (评语) alongside the score. The note is only
-        # written by graders on this endpoint; it is not student-editable.
+
+        # The manual override lives in its own table and NEVER overwrites the
+        # machine score (``Submission.points`` / ``ContestSubmission.points``).
+        # ``machine_points`` snapshots the machine score (in the grade page's
+        # display scale) the first time the teacher grades, so the student-facing
+        # workspace can keep showing the machine score until ``released``.
+        existing = SubmissionManualGrade.objects.filter(submission=submission).first()
+        if existing is not None:
+            if existing.machine_points is None:
+                existing.machine_points = machine_points
+            existing.points = score
+            existing.save(update_fields=['points', 'machine_points'])
+            grade = existing
+        else:
+            grade = SubmissionManualGrade.objects.create(
+                submission=submission, points=score, machine_points=machine_points,
+            )
+
+        # Audit fields (评语 + who/when) stay on the submission, unchanged.
         note = request.POST.get('note')
         if note is not None:
             submission.review_note = note
         submission.reviewed_by = request.profile
         submission.reviewed_at = timezone.now()
-        submission.save(update_fields=['points', 'review_note', 'reviewed_by', 'reviewed_at'])
-        # Propagate the manual grade into the student-visible contest score.
-        # The contest formats compute each problem's points from
-        # ContestSubmission.points (via participation.recompute_results), so
-        # writing only Submission.points would leave the student's
-        # scoreboard / ranking / per-problem display on the machine score —
-        # the teacher's override would be visible only on this page.
+        submission.save(update_fields=['review_note', 'reviewed_by', 'reviewed_at'])
+
+        # Fold the manual override into the contest's *actual* score: the contest
+        # formats compute each problem's points from ContestSubmission.points (via
+        # participation.recompute_results), so ranking / standings / exports pick
+        # up the override immediately — "actual score always prefers the manual
+        # grade". The student's own workspace display gates this behind `released`.
         if contest_submission is not None:
             contest_submission.points = score
             contest_submission.save(update_fields=['points'])
             contest_submission.participation.recompute_results()
+
         return JsonResponse({
             'ok': True,
             'submission': submission_id,
             'score': score,
             'total': total,
             'note': submission.review_note,
+            'released': grade.released,
+            'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
+            'reviewed_at': submission.reviewed_at.strftime('%Y-%m-%d %H:%M') if submission.reviewed_at else None,
         })
 
 
@@ -2407,7 +2458,15 @@ class ContestGradeStatus(ContestMixin, DetailView):
             else (submission.case_total or submission.problem.points)
         # Mirror the grade payload's point scale (contest-scaled when part of
         # the assignment) so a polled rejudge result agrees with the row shown.
-        points = contest_submission.points if contest_submission is not None else submission.points
+        # A manual override always wins (actual score), including for standalone
+        # submissions where it is not folded into a ContestSubmission row.
+        manual_grade = submission.manual_grade_override
+        if manual_grade is not None and manual_grade.points is not None:
+            points = manual_grade.points
+        elif contest_submission is not None:
+            points = contest_submission.points
+        else:
+            points = submission.points
         return JsonResponse({
             'ok': True,
             'id': submission.id,
@@ -2420,6 +2479,7 @@ class ContestGradeStatus(ContestMixin, DetailView):
             'is_graded': submission.is_graded,
             'review_note': submission.review_note or '',
             'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
+            'released': bool(manual_grade and manual_grade.released),
             'test_cases': [
                 {
                     'case': tc.case,
@@ -2433,11 +2493,14 @@ class ContestGradeStatus(ContestMixin, DetailView):
 
 
 class ContestGradeRelease(ContestMixin, DetailView):
-    """Release / unrelease grades for a contest (teacher-side).
+    """Release all manual grades for a contest (teacher-side).
 
-    Mirrors the "Release" button of the grading.html reference: releasing sets
-    ``Contest.results_finalized``, which reveals hidden (exam-style) results to
-    students and folds them into the scoreboard; unreleasing hides them again.
+    The grade page's "Release All" button: it flips ``released=True`` on every
+    manual grade (``SubmissionManualGrade``) belonging to this contest. Until a
+    submission's override is released, the student keeps seeing their machine
+    score; after it, the student-visible score switches to the manual grade.
+    (This is per-submission and independent of ``Contest.results_finalized``,
+    which remains the exam-format hidden-results flag.)
     The status contract matches ``ContestGradeSave``: 401 anonymous, 403
     authenticated non-editor, 200 editor.
     """
@@ -2454,11 +2517,10 @@ class ContestGradeRelease(ContestMixin, DetailView):
         raise Http404()
 
     def post(self, request, *args, **kwargs):
-        # Toggle: a second release call unreleases (idempotent UI state lives
-        # in the button label, so the server only flips the boolean).
-        self.object.results_finalized = not self.object.results_finalized
-        self.object.save(update_fields=['results_finalized'])
-        return JsonResponse({'ok': True, 'released': self.object.results_finalized})
+        updated = SubmissionManualGrade.objects.filter(
+            submission__contest_object=self.object,
+        ).update(released=True)
+        return JsonResponse({'ok': True, 'released': True, 'count': updated})
 
 
 def make_contest_ranking_profile(contest, participation, contest_problems):

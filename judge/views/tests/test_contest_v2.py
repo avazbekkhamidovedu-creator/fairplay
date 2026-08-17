@@ -423,11 +423,12 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
 
 
 class ContestDetailSolvedStatusTestCase(TestCase):
-    """Detail page: green checkmark for problems solved *within the contest*.
+    """Detail page solved/attempted context + that the status column is removed.
 
-    Also covers the exam-style gating (a hidden result must not leak through the
-    checkmark before ``results_finalized``) and the "No description." placeholder
-    for contests without a statement.
+    The solved/attempted *context* sets are still computed (server-side gating for
+    exam-style hidden results), but the assignment page no longer renders them to
+    students — the "Status" column was removed so students cannot directly observe
+    a per-problem status that would bypass the hidden-results permission design.
 
     Rendered with social + comments disabled so the page only goes through the
     Jinja2 engine — on Python 3.14 + Django 4.2 the Django-DTL error path crashes
@@ -486,14 +487,14 @@ class ContestDetailSolvedStatusTestCase(TestCase):
         self.assertIn(self.attempted_problem.id, attempted)
 
     @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
-    def test_solved_problem_renders_green_check(self):
+    def test_status_column_removed(self):
+        """The assignment page no longer renders solved/attempted status to
+        students — it must not bypass the hidden-results permission design."""
         response = self._get_detail()
         html = response.content.decode()
-        # The AC problem's row carries a solved checkmark icon.
-        self.assertIn('solved-problem-color fa fa-check-circle', html)
-        # The WA-only problem must not render one.
-        check_rows = html.count('solved-problem-color fa fa-check-circle')
-        self.assertEqual(check_rows, 1)
+        self.assertNotIn('solved-problem-color fa fa-check-circle', html)
+        self.assertNotIn('attempted-problem-color fa fa-minus-circle', html)
+        self.assertNotIn('col-status', html)
 
     @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
     def test_empty_description_renders_placeholder(self):
