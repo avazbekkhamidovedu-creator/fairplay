@@ -268,6 +268,42 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         ))
         self.assertEqual(codes, {'filter-easy', 'filter-hard', 'filter-alpha'})
 
+    def test_course_filter_lists_membership_and_public(self):
+        mine = create_organization(name='My Filter Course')
+        other = create_organization(name='Other Filter Course')
+        self.users['normal'].profile.organizations.add(mine)
+        context = self._context(self.users['normal'], {})
+        names = {org.name for org in context['organizations']}
+        self.assertIn(mine.name, names)
+        self.assertNotIn(other.name, names)
+        self.assertFalse(context['filter_public_course'])
+
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_list'))
+        self.assertContains(response, 'value="public"', html=False)
+        self.assertContains(response, mine.name)
+        self.assertNotContains(response, other.name)
+
+    def test_public_course_filter_excludes_org_private(self):
+        org = create_organization(name='PrivCourse')
+        self.users['normal'].profile.organizations.add(org)
+        self.problem_easy.is_organization_private = True
+        self.problem_easy.save()
+        self.problem_easy.organizations.add(org)
+
+        public_codes = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'course': ['public'], 'filtered': '1'},
+        ))
+        self.assertNotIn('filter-easy', public_codes)
+        self.assertIn('filter-hard', public_codes)
+
+        course_codes = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'course': [str(org.id)], 'filtered': '1'},
+        ))
+        self.assertEqual(course_codes, {'filter-easy'})
+
     def test_ac_rate_range_filter(self):
         codes = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
@@ -400,7 +436,16 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         self.assertContains(response, 'id="filter-difficulty"', html=False)
         self.assertContains(response, 'id="filter-course"', html=False)
         self.assertContains(response, 'id="status-filter"', html=False)
+        self.assertContains(response, 'id="filter-knowledge"', html=False)
         self.assertContains(response, 'id="knowledge-picker"', html=False)
+        self.assertContains(response, 'id="knowledge-picker-body"', html=False)
+        self.assertNotContains(response, 'id="knowledge-search"', html=False)
+        self.assertNotContains(response, 'id="knowledge-selected"', html=False)
+        self.assertNotContains(response, 'id="toggle-knowledge-picker"', html=False)
+        self.assertNotContains(response, 'id="close-knowledge"', html=False)
+        self.assertNotContains(response, 'id="clear-knowledge"', html=False)
+        self.assertNotContains(response, 'knowledge-picker-footer', html=False)
+        self.assertNotContains(response, 'Click to choose tags (multiple)', html=False)
         self.assertContains(response, 'class="difficulty-badge', html=False)
         self.assertContains(response, 'Programming', html=False)
         self.assertNotContains(response, 'group-tabs', html=False)
@@ -414,16 +459,17 @@ class ProblemListFilterTestCase(ProblemListTestBase):
 
         difficulty_names = {t.name for t in context['difficulty_types']}
         knowledge_names = {t.name for t in context['knowledge_types']}
-        # Format options come from the registered question types (submission_type), exposed as
-        # {'code', 'label'} dicts, not from the ProblemType taxonomy. MCQ is additionally broken
-        # down into single / multiple / true-false pseudo-codes on top of the whole-MCQ option.
+        # Format options come from the registered question types (submission_type).
+        # MCQ is one option ("Choice question") covering single / multiple / true-false.
         format_codes = {f['code'] for f in context['format_types']}
+        format_labels = {f['label'] for f in context['format_types']}
 
         self.assertEqual(difficulty_names, {'easy', 'medium', 'hard'})
-        self.assertEqual(
-            format_codes,
-            {t.submission_type for t in all_types()} | {'single', 'multiple', 'truefalse'},
-        )
+        self.assertEqual(format_codes, {t.submission_type for t in all_types()})
+        self.assertIn('Choice question', format_labels)
+        self.assertNotIn('Multiple choice', format_labels)
+        self.assertNotIn('Single choice', format_labels)
+        self.assertNotIn('True/False', format_labels)
         self.assertIn('dp', knowledge_names)
         self.assertIn('greedy', knowledge_names)
         # Format- and difficulty-named ProblemTypes are not surfaced as knowledge points.
@@ -450,6 +496,23 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         self.assertIn('organizations', context)
         self.assertGreaterEqual(context['type_counts'].get(self.type_ids['dp'], 0), 3)
         self.assertNotIn('total_problem_count', context)
+
+    def test_knowledge_types_ordered_by_problem_count(self):
+        context = self._context(self.users['normal'], {})
+        counts = [context['type_counts'].get(t.id, 0) for t in context['knowledge_types']]
+        self.assertEqual(counts, sorted(counts, reverse=True))
+        names = [t.name for t in context['knowledge_types']]
+        self.assertLess(names.index('dp'), names.index('greedy'))
+        self.assertEqual(context['knowledge_hot_count'], ProblemList.KNOWLEDGE_PICKER_HOT_COUNT)
+
+    def test_knowledge_picker_collapses_low_frequency_tags(self):
+        hot = ProblemList.KNOWLEDGE_PICKER_HOT_COUNT
+        for i in range(hot + 3):
+            create_problem_type(name='extra-tag-%02d' % i, full_name='Extra Tag %02d' % i)
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_list'))
+        self.assertContains(response, 'id="knowledge-show-more"', html=False)
+        self.assertContains(response, 'is-hot', html=False)
 
     def test_m2m_filters_do_not_duplicate_rows(self):
         """M2M course/tag JOINs can multiply rows; list/count must stay distinct."""

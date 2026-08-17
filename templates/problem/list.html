@@ -47,6 +47,21 @@
             padding: 6px 12px;
             cursor: pointer;
         }
+        /* Hide native <select>s until Select2 replaces them. Without this, a
+           filter submit flashes every option stacked in the filter row. */
+        #filter-format, #filter-difficulty, #filter-course, #filter-knowledge, #status-filter {
+            visibility: hidden;
+            height: 34px;
+            max-height: 34px;
+            overflow: hidden;
+            box-sizing: border-box;
+            vertical-align: middle;
+        }
+        #filter-format { width: 140px; }
+        #filter-difficulty { width: 120px; }
+        #filter-course { width: 150px; }
+        #filter-knowledge { width: 100%; }
+        #status-filter { width: 100px; }
     </style>
     {% include "problem/add-problem-menu-assets.html" %}
     <style>
@@ -157,79 +172,73 @@
                 var select2Opts = {
                     theme: '{{ DMOJ_SELECT2_THEME }}',
                     multiple: true,
-                    width: '180px',
+                    width: '140px',
                     matcher: idAndTextMatcher,
                 };
-                var $filterSelects = $('#filter-format, #filter-difficulty, #filter-course');
+                var $filterSelects = $('#filter-format, #filter-difficulty, #filter-course, #filter-knowledge');
                 $('#filter-format').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All types')|htmltojs }},
                 })).css({visibility: 'visible'});
                 $('#filter-difficulty').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All difficulties')|htmltojs }},
-                    width: '150px',
+                    width: '120px',
                 })).css({visibility: 'visible'});
                 $('#filter-course').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All courses')|htmltojs }},
-                    width: '200px',
+                    width: '150px',
+                })).css({visibility: 'visible'});
+                $('#filter-knowledge').select2($.extend({}, select2Opts, {
+                    placeholder: {{ _('All tags')|htmltojs }},
+                    width: '100%',
                 })).css({visibility: 'visible'});
                 // Status: Select2 single (same theme as other filters; avoid native OS menu).
                 $('#status-filter').select2({
                     theme: '{{ DMOJ_SELECT2_THEME }}',
                     minimumResultsForSearch: Infinity,
-                    width: '120px',
+                    width: '100px',
                 }).css({visibility: 'visible'});
 
-                function refreshKnowledge() {
-                    var $sel = $('#knowledge-selected');
-                    if (!$sel.length) return;
-                    $sel.find('.chip').remove();
-                    var $ph = $sel.find('.knowledge-placeholder');
-                    var n = 0;
-                    $('#knowledge-picker-body .knowledge-tag').each(function () {
-                        var $tag = $(this);
-                        var on = $tag.find('input[type=checkbox]').prop('checked');
-                        $tag.toggleClass('active', on);
-                        if (on) {
-                            n++;
-                            var id = $tag.find('input').val();
-                            $('<span class="chip" data-kp="' + id + '"></span>')
-                                .text($tag.data('label'))
-                                .append('<button type="button" data-kp-remove="' + id + '" aria-label="x">\u00d7</button>')
-                                .insertBefore($ph);
-                        }
-                    });
-                    $ph.prop('hidden', n > 0);
-                    $('#knowledge-picker .kp-n').text(n);
+                var kpExpanded = false;
+
+                function selectedKnowledgeIds() {
+                    var cur = $('#filter-knowledge').val() || [];
+                    if (!$.isArray(cur)) cur = [cur];
+                    return cur.map(String);
                 }
 
-                $('#toggle-knowledge-picker').click(function (e) {
-                    e.stopPropagation();
-                    var $p = $('#knowledge-picker');
-                    $p.prop('hidden', !$p.prop('hidden'));
-                });
-                $('#close-knowledge').click(function () { $('#knowledge-picker').prop('hidden', true); });
-                $('#knowledge-picker-body input[type=checkbox]').change(function () {
-                    refreshKnowledge();
-                    if (filtersReady) go();
-                });
-                $('#clear-knowledge').click(function () {
-                    $('#knowledge-picker-body input[type=checkbox]').prop('checked', false);
-                    refreshKnowledge();
-                    if (filtersReady) go();
-                });
-                $('#knowledge-selected').on('click', 'button[data-kp-remove]', function () {
-                    var id = $(this).data('kp-remove');
-                    $('#knowledge-picker-body input[value="' + id + '"]').prop('checked', false);
-                    refreshKnowledge();
-                    if (filtersReady) go();
-                });
-                $('#knowledge-search').on('input', function () {
-                    var q = $(this).val().trim().toLowerCase();
+                function applyKnowledgeVisibility() {
+                    var selected = selectedKnowledgeIds();
                     $('#knowledge-picker-body .knowledge-tag').each(function () {
-                        $(this).toggle(!q || ($(this).data('name') + '').indexOf(q) !== -1);
+                        var $tag = $(this);
+                        $tag.toggleClass('active', selected.indexOf(String($tag.data('id'))) !== -1);
                     });
+                    $('#knowledge-picker').toggleClass('is-expanded', kpExpanded);
+                    var $more = $('#knowledge-show-more');
+                    if ($more.length) {
+                        $more.text(kpExpanded ? $more.data('less') : $more.data('more'));
+                        $more.attr('aria-expanded', kpExpanded ? 'true' : 'false');
+                    }
+                }
+
+                function toggleKnowledgeId(id) {
+                    id = String(id);
+                    var cur = selectedKnowledgeIds();
+                    var next = cur.indexOf(id) === -1
+                        ? cur.concat([id])
+                        : cur.filter(function (v) { return v !== id; });
+                    $('#filter-knowledge').val(next).trigger('change');
+                }
+
+                $('#knowledge-show-more').click(function (e) {
+                    e.preventDefault();
+                    kpExpanded = !kpExpanded;
+                    applyKnowledgeVisibility();
                 });
-                $('#knowledge-search').keypress(function (e) { if (e.which === 13) e.preventDefault(); });
+                $('#knowledge-picker-body').on('click', '.knowledge-tag', function (e) {
+                    e.preventDefault();
+                    toggleKnowledgeId($(this).data('id'));
+                });
+                $('#filter-knowledge').on('change', applyKnowledgeVisibility);
 
                 setTimeout(function () {
                     filtersReady = true;
@@ -253,9 +262,6 @@
 
                 $(document).click(function (e) {
                     if (!$(e.target).closest('.dropdown').length) $('.dropdown-menu').prop('hidden', true);
-                    if (!$(e.target).closest('.knowledge-filter').length && !$(e.target).closest('#knowledge-picker').length) {
-                        $('#knowledge-picker').prop('hidden', true);
-                    }
                 });
 
                 function removeSelectValue($sel, value) {
@@ -270,12 +276,7 @@
                     var value = $(this).data('value');
                     if (field === 'type') {
                         removeSelectValue($('#filter-difficulty'), value);
-                        var $tag = $('#knowledge-picker-body input[value="' + value + '"]');
-                        if ($tag.length) {
-                            $tag.prop('checked', false);
-                            refreshKnowledge();
-                            if (filtersReady) go();
-                        }
+                        removeSelectValue($('#filter-knowledge'), value);
                     } else if (field === 'format') removeSelectValue($('#filter-format'), value);
                     else if (field === 'course' || field === 'organization') removeSelectValue($('#filter-course'), value);
                     else if (field === 'status') { $('#status-filter').val('').trigger('change'); return; }
@@ -286,7 +287,7 @@
                     else if (field === 'hide_solved') { $('input[name=hide_solved]').prop('checked', false); go(); }
                 });
 
-                refreshKnowledge();
+                applyKnowledgeVisibility();
 
                 // Keyword search: debounce live submit, keep Enter immediate.
                 var searchTimer = null;
@@ -531,7 +532,7 @@
                             <select id="filter-difficulty" name="type" multiple>
                                 {% for type in difficulty_types %}
                                     <option value="{{ type.id }}" {% if type.id in selected_difficulty_types %}selected{% endif %}>
-                                        {{ difficulty_labels.get(type.name, type.full_name) }}
+                                        {{ difficulty_labels.get(type.name|lower, type.full_name) }}
                                     </option>
                                 {% endfor %}
                             </select>
@@ -540,6 +541,7 @@
                         <div class="filter-group">
                             <span class="filter-group-label">{{ _('Course') }}</span>
                             <select id="filter-course" name="course" multiple>
+                                <option value="public" {% if filter_public_course %}selected{% endif %}>{{ _('Public') }}</option>
                                 {% for org in organizations %}
                                     <option value="{{ org.id }}" {% if org.id in selected_organizations %}selected{% endif %}>{{ org.name }}</option>
                                 {% endfor %}
@@ -574,37 +576,31 @@
                 <div class="filter-row knowledge-row">
                     <label class="filter-label">{{ _('Tags') }}</label>
                     <div class="knowledge-filter">
-                        <div class="knowledge-selected" id="knowledge-selected">
-                            {% for type in knowledge_types %}{% if type.id in selected_knowledge_types %}
-                                <span class="chip" data-kp="{{ type.id }}">{{ user_trans(type.full_name) }}<button type="button" data-kp-remove="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
-                            {% endif %}{% endfor %}
-                            <span class="knowledge-placeholder"{% if selected_knowledge_types %} hidden{% endif %}>{{ _('Click to choose tags (multiple)') }}</span>
+                        <select id="filter-knowledge" name="type" multiple>
+                            {% for type in knowledge_types %}
+                                <option value="{{ type.id }}" {% if type.id in selected_knowledge_types %}selected{% endif %}>
+                                    {{ user_trans(type.full_name) }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="knowledge-picker" id="knowledge-picker">
+                            <div class="knowledge-picker-body" id="knowledge-picker-body">
+                                {% for type in knowledge_types %}
+                                    <button type="button"
+                                            class="knowledge-tag{% if type.id in selected_knowledge_types %} active{% endif %}{% if loop.index <= knowledge_hot_count %} is-hot{% endif %}"
+                                            data-id="{{ type.id }}">
+                                        <span class="knowledge-tag-name">{{ user_trans(type.full_name) }}</span><span class="badge">{{ type_counts.get(type.id, 0) }}</span>
+                                    </button>
+                                {% else %}
+                                    <p class="knowledge-empty">{{ _('No tags yet.') }}</p>
+                                {% endfor %}
+                            </div>
+                            {% if knowledge_types|length > knowledge_hot_count %}
+                                <button type="button" class="btn-text knowledge-show-more" id="knowledge-show-more"
+                                        data-more="{{ _('Show more') }}" data-less="{{ _('Show less') }}"
+                                        aria-expanded="false">{{ _('Show more') }}</button>
+                            {% endif %}
                         </div>
-                        <button type="button" class="btn btn-outline btn-sm" id="toggle-knowledge-picker">{{ _('Choose') }}</button>
-                    </div>
-                </div>
-                <div class="knowledge-picker card" id="knowledge-picker" hidden>
-                    <div class="knowledge-picker-header">
-                        <span>{{ _('Tags') }}</span>
-                        <input type="text" id="knowledge-search" class="input" placeholder="{{ _('Search...') }}" autocomplete="off">
-                    </div>
-                    <div class="knowledge-picker-body" id="knowledge-picker-body">
-                        {% for type in knowledge_types %}
-                            <label class="knowledge-tag{% if type.id in selected_knowledge_types %} active{% endif %}"
-                                   data-name="{{ user_trans(type.full_name)|lower }}"
-                                   data-label="{{ user_trans(type.full_name) }}">
-                                <input type="checkbox" name="type" value="{{ type.id }}"
-                                       {% if type.id in selected_knowledge_types %}checked{% endif %} hidden>
-                                <span class="knowledge-tag-name">{{ user_trans(type.full_name) }}</span><span class="badge">{{ type_counts.get(type.id, 0) }}</span>
-                            </label>
-                        {% else %}
-                            <p class="knowledge-empty">{{ _('No tags yet.') }}</p>
-                        {% endfor %}
-                    </div>
-                    <div class="knowledge-picker-footer">
-                        <span><span class="kp-n">0</span> {{ _('selected') }}</span>
-                        <button type="button" class="btn-text" id="clear-knowledge">{{ _('Clear') }}</button>
-                        <button type="button" class="btn btn-primary btn-sm" id="close-knowledge">{{ _('Done') }}</button>
                     </div>
                 </div>
 
@@ -633,13 +629,16 @@
                 <div class="filter-row selected-row">
                     <span class="filter-label">{{ _('Selected') }}</span>
                     <div class="chip-list" id="active-chips">
-                        {% set has_chip = selected_types or selected_formats or selected_organizations or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text or hide_solved %}
+                        {% set has_chip = selected_types or selected_formats or selected_organizations or filter_public_course or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text or hide_solved %}
                         {% for f in format_types %}{% if f.code in selected_formats %}
                             <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
                         {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}
-                            <span class="chip">{{ difficulty_labels.get(type.name, type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
+                            <span class="chip">{{ difficulty_labels.get(type.name|lower, type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
+                        {% if filter_public_course %}
+                            <span class="chip">{{ _('Public') }}<button type="button" data-field="course" data-value="public" aria-label="{{ _('Remove') }}">&times;</button></span>
+                        {% endif %}
                         {% for org in organizations %}{% if org.id in selected_organizations %}
                             <span class="chip">{{ org.name }}<button type="button" data-field="course" data-value="{{ org.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
