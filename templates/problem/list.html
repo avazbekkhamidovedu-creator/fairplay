@@ -60,7 +60,7 @@
         #filter-format { width: 140px; }
         #filter-difficulty { width: 120px; }
         #filter-course { width: 150px; }
-        #filter-knowledge { width: 100%; }
+        #filter-knowledge { width: clamp(280px, 48%, 560px); max-width: 100%; }
         #status-filter { width: 100px; }
     </style>
     {% include "problem/add-problem-menu-assets.html" %}
@@ -189,8 +189,11 @@
                 })).css({visibility: 'visible'});
                 $('#filter-knowledge').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All tags')|htmltojs }},
-                    width: '100%',
                 })).css({visibility: 'visible'});
+                var $knowledgeSelect2 = $('#filter-knowledge').data('select2');
+                if ($knowledgeSelect2 && $knowledgeSelect2.$container) {
+                    $knowledgeSelect2.$container.css('width', '');
+                }
                 // Status: Select2 single (same theme as other filters; avoid native OS menu).
                 $('#status-filter').select2({
                     theme: '{{ DMOJ_SELECT2_THEME }}',
@@ -245,7 +248,7 @@
                     $filterSelects.add('#status-filter').on('change', function () {
                         if (filtersReady) go();
                     });
-                    $form.find('input[name=full_text], input[name=search_full], input[name=hide_solved]').change(function () {
+                    $form.find('input[name=full_text], input[name=search_full]').change(function () {
                         if (filtersReady) go();
                     });
                     $form.find('input[name=ac_min], input[name=ac_max]').on('change', function () {
@@ -284,7 +287,6 @@
                     else if (field === 'search') { $('input[name=search]').val(''); go(); }
                     else if (field === 'full_text') { $('input[name=full_text]').prop('checked', false); go(); }
                     else if (field === 'search_full') { $('input[name=search_full]').prop('checked', false); go(); }
-                    else if (field === 'hide_solved') { $('input[name=hide_solved]').prop('checked', false); go(); }
                 });
 
                 applyKnowledgeVisibility();
@@ -528,6 +530,8 @@
             {# Marker that the form was actually submitted, so checkbox defaults (e.g. search_full) can be applied only on first visit. #}
             <input type="hidden" name="filtered" value="1">
             {% set difficulty_labels = {'easy': _('Easy'), 'medium': _('Medium'), 'hard': _('Hard')} %}
+            {% set knowledge_hot_count = knowledge_hot_count|default(12) %}
+            {% set filter_public_course = filter_public_course|default(false) %}
 
             <section class="card filter-card">
                 <div class="filter-row filter-row-conditions">
@@ -633,18 +637,12 @@
                         <input type="checkbox" name="search_full" value="1" {% if search_full %}checked{% endif %}>
                         <span>{{ _('Search statements') }}</span>
                     </label>
-                    {% if request.user.is_authenticated %}
-                        <label class="checkbox-inline">
-                            <input type="checkbox" name="hide_solved" value="1" {% if hide_solved %}checked{% endif %}>
-                            <span>{{ _('Hide solved problems') }}</span>
-                        </label>
-                    {% endif %}
                 </div>
 
                 <div class="filter-row selected-row">
                     <span class="filter-label">{{ _('Selected') }}</span>
                     <div class="chip-list" id="active-chips">
-                        {% set has_chip = selected_types or selected_formats or selected_organizations or filter_public_course or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text or hide_solved %}
+                        {% set has_chip = selected_types or selected_formats or selected_organizations or filter_public_course or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text %}
                         {% for f in format_types %}{% if f.code in selected_formats %}
                             <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
@@ -673,9 +671,6 @@
                         {% endif %}
                         {% if full_text %}
                             <span class="chip">{{ _('Full text search') }}<button type="button" data-field="full_text" aria-label="{{ _('Remove') }}">&times;</button></span>
-                        {% endif %}
-                        {% if hide_solved %}
-                            <span class="chip">{{ _('Hide solved problems') }}<button type="button" data-field="hide_solved" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}
                         {% if not has_chip %}
                             <span class="chip-placeholder">{{ _('No filters applied') }}</span>

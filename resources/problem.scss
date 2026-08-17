@@ -507,7 +507,7 @@ ul.problem-list {
     #filter-format { width: 140px; }
     #filter-difficulty { width: 120px; }
     #filter-course { width: 150px; }
-    #filter-knowledge { width: 100%; }
+    #filter-knowledge { width: clamp(280px, 48%, 560px); max-width: 100%; }
     #status-filter { width: 100px; }
 
     .ac-range {
@@ -704,7 +704,9 @@ ul.problem-list {
         min-width: 0;
 
         > .select2-container {
-            width: 100% !important;
+            width: clamp(280px, 48%, 560px);
+            max-width: 100%;
+            align-self: flex-start;
         }
 
         .select2-container .select2-selection--multiple {
@@ -1473,6 +1475,12 @@ ul.problem-list {
 
         .filter-label {
             min-width: auto;
+        }
+
+        #filter-knowledge,
+        .knowledge-filter > .select2-container {
+            width: 100%;
+            max-width: 100%;
         }
 
         .toolbar {
