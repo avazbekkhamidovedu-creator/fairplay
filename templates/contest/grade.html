@@ -88,7 +88,7 @@
             padding-left: .85rem;
             border-left: 1px solid var(--oj-border, #ccc);
         }
-        /* Centered "Release All" button (mirrors the workspace's Leave button). */
+        /* Centered "Release All" button (green — releasing is a positive action). */
         .ws-toolbar.has-leave {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -96,18 +96,18 @@
         }
         .ws-toolbar-center { justify-self: center; }
         .ws-toolbar.has-leave .grade-actions { justify-self: end; margin-left: 0; }
-        .ws-app .ws-toolbar button.leave-btn.tool-btn {
-            border-color: var(--oj-danger, #c0392b);
+        .ws-app .ws-toolbar button.release-btn.tool-btn {
+            border-color: var(--oj-success, #2e7d32);
             background: var(--oj-surface, #fff);
-            color: var(--oj-danger, #c0392b) !important;
+            color: var(--oj-success, #2e7d32) !important;
             font-weight: 700;
         }
-        .ws-app .ws-toolbar button.leave-btn.tool-btn:hover {
-            background: var(--oj-danger, #c0392b);
+        .ws-app .ws-toolbar button.release-btn.tool-btn:hover {
+            background: var(--oj-success, #2e7d32);
             color: #fff !important;
-            border-color: var(--oj-danger, #c0392b);
+            border-color: var(--oj-success, #2e7d32);
         }
-        .ws-app .ws-toolbar button.leave-btn.tool-btn i { color: inherit !important; }
+        .ws-app .ws-toolbar button.release-btn.tool-btn i { color: inherit !important; }
         /* Collapsible sections (e.g. Problem description — collapsed by default). */
         .gd-collapse-toggle {
             cursor: pointer;
@@ -317,7 +317,8 @@
         .badge-review { background: #fff3e0; color: #e65100; }
         .badge-done { background: #e8f5e9; color: #2e7d32; }
         .badge-final { background: #e3f2fd; color: #1565c0; }
-        .badge-released { background: #ede7f6; color: #4527a0; }
+        .badge-manual { background: #e8f5e9; color: #2e7d32; }
+        .badge-manual-hidden { background: #eee; color: #666; }
         .badge-hidden { background: #eee; color: #666; }
 
         .grade-empty {
@@ -578,6 +579,17 @@
             var canRejudge = {{ 'true' if request.user.is_staff and request.user.has_perm('judge.rejudge_submission') else 'false' }};
             var selectedId = null;
             var filteredRows = [];
+            // Deep-link: ?submission=<id> (from the submission list's "grade" link)
+            // pre-selects that submission; renderList() falls back to the first
+            // row if the id is absent or filtered out. Show all submissions so
+            // a deep-linked non-final attempt is still visible.
+            try {
+                var urlSub = new URLSearchParams(window.location.search).get('submission');
+                if (urlSub) {
+                    selectedId = parseInt(urlSub, 10);
+                    $('#f-queue').val('all');
+                }
+            } catch (e) { /* ignore — deep-link is best-effort */ }
 
             function esc(s) {
                 return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -680,10 +692,12 @@
                 else if (s.points == null) bits += '<span class="badge badge-review">awaiting judge</span>';
                 else bits += '<span class="badge badge-done">graded</span>';
                 if (s.is_latest) bits += '<span class="badge badge-final">final</span>';
+                // Mark manually-overridden scores; the color encodes whether the
+                // override has been released (green = shown to student) or not.
                 if (s.manual_points != null) {
                     bits += s.released
-                        ? '<span class="badge badge-released">released</span>'
-                        : '<span class="badge badge-hidden">unreleased</span>';
+                        ? '<span class="badge badge-manual" title="{{ _('Manual grade released to student') }}">manual</span>'
+                        : '<span class="badge badge-manual-hidden" title="{{ _('Manual grade, not yet released') }}">manual</span>';
                 }
                 if (s.virtual) bits += '<span class="badge badge-hidden">V</span>';
                 return bits;
@@ -1059,6 +1073,9 @@
             $('#btn-save-current').on('click', saveCurrent);
 
             $('#btn-release').on('click', function () {
+                if (!confirm({{ _('Release all manual grades to students? Students will then see the adjusted scores and teacher feedback.')|htmltojs }})) {
+                    return;
+                }
                 var $btn = $(this).prop('disabled', true);
                 $.post(releaseUrl).done(function (res) {
                     if (!res.ok) { alert(res.error || '{{ _('Failed') }}'); return; }
@@ -1169,7 +1186,7 @@
                 </div>
             </div>
             <div class="ws-toolbar-center">
-                <button type="button" class="tool-btn leave-btn" id="btn-release" title="{{ _('Reveal every saved manual grade to students') }}"><i class="fa fa-flag-checkered"></i> {{ _('Release All') }}</button>
+                <button type="button" class="tool-btn release-btn" id="btn-release" title="{{ _('Reveal every saved manual grade to students') }}"><i class="fa fa-flag-checkered"></i> {{ _('Release All') }}</button>
             </div>
             <div class="grade-actions">
                 <button type="button" class="tool-btn" id="btn-rejudge" disabled title="{{ _('Requires staff + rejudge permission') }}"><i class="fa fa-refresh"></i> {{ _('Rejudge') }}</button>
