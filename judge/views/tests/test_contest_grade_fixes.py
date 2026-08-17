@@ -37,6 +37,7 @@ from judge.models import (
     ProblemFillBlankConfig,
     ProblemShortAnswerConfig,
     Submission,
+    SubmissionManualGrade,
     SubmissionSource,
 )
 from judge.models.tests.util import create_problem, create_user
@@ -430,3 +431,59 @@ class GradePageFilterDefaultsTestCase(GradeTestBase):
         self.assertEqual(response.status_code, 200)
         html = response.content.decode('utf-8')
         self.assertIn('<option value="live" selected>', html)
+
+
+class ManualGradePriorityTestCase(GradeTestBase):
+    """Manual grade override: separate table, actual score prefers it, and the
+    student-visible score only switches to it after release."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.participation = ContestParticipation.objects.create(
+            contest=cls.contest, user=cls.student.profile, real_start=timezone.now(),
+        )
+        cls.cp = ContestProblem.objects.get(contest=cls.contest, problem=cls.problem)
+        cls.contest_submission = ContestSubmission.objects.create(
+            submission=cls.submission, problem=cls.cp,
+            participation=cls.participation, points=50.0,
+        )
+
+    def test_save_keeps_machine_points_and_stores_manual_grade(self):
+        response = self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '88'})
+        self.assertEqual(response.status_code, 200)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 50.0)  # machine untouched
+        grade = SubmissionManualGrade.objects.get(submission=self.submission)
+        self.assertEqual(grade.points, 88.0)
+        self.assertFalse(grade.released)
+        self.assertEqual(grade.machine_points, 50.0)
+        # The actual contest score folds the override in immediately.
+        self.contest_submission.refresh_from_db()
+        self.assertEqual(self.contest_submission.points, 88.0)
+
+    def test_release_all_reveals_manual_grade(self):
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '88'})
+        grade = SubmissionManualGrade.objects.get(submission=self.submission)
+        self.assertFalse(grade.released)
+        response = self._client(self.curator).post(self.release_url)
+        self.assertEqual(response.status_code, 200)
+        grade.refresh_from_db()
+        self.assertTrue(grade.released)
+
+    def test_workspace_shows_machine_until_released(self):
+        from judge.views.problem import workspace_display_points
+        request = type('Req', (), {'in_contest': True})()
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '88'})
+
+        sub = Submission.objects.get(id=self.submission.id)
+        # Not released: the student still sees the machine score (50).
+        self.assertEqual(workspace_display_points(sub, request), 50.0)
+
+        SubmissionManualGrade.objects.filter(submission=sub).update(released=True)
+        sub = Submission.objects.get(id=self.submission.id)
+        # Released: the student now sees the manual override (88).
+        self.assertEqual(workspace_display_points(sub, request), 88.0)

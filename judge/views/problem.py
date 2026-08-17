@@ -104,10 +104,22 @@ def get_contest_submission_count(problem, profile, virtual):
 
 
 def workspace_display_points(submission, request):
-    """Score shown in Workspace: assignment uses ContestSubmission.points, else problem scale."""
+    """Score shown in Workspace: assignment uses ContestSubmission.points, else problem scale.
+
+    A teacher's manual override (SubmissionManualGrade) only takes over the
+    student-visible score once it is ``released``; until then the student keeps
+    seeing the machine score (the ``machine_points`` snapshot captured at
+    grading time).
+    """
     if getattr(request, 'in_contest', False):
         contest_sub = submission.contest_or_none
         if contest_sub is not None:
+            manual_grade = submission.manual_grade_override
+            if manual_grade is not None:
+                if manual_grade.points is not None and manual_grade.released:
+                    return manual_grade.points
+                if manual_grade.machine_points is not None:
+                    return manual_grade.machine_points
             return contest_sub.points
     return submission.points
 
@@ -648,10 +660,12 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             workspace_subs = list(
                 workspace_subs_qs
                 .select_related('language', 'contest_object', 'contest__problem')
+                .prefetch_related('manual_grade')
                 .order_by('-date')[:20],
             )
             for submission in workspace_subs:
                 submission.display_points = workspace_display_points(submission, self.request)
+                submission.display_points_total = workspace_display_points_total(submission, self.request)
             context['workspace_submissions'] = workspace_subs
         else:
             context['workspace_submissions'] = []

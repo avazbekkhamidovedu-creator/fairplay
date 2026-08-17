@@ -19,7 +19,8 @@ from judge.models.question import ProblemBlank, ProblemCodeConfig, ProblemFileCo
 from judge.models.runtime import Judge, Language, RuntimeVersion
 from judge.models.seb import SEBConfigPreset
 from judge.models.stored_file import StoredFileRecord
-from judge.models.submission import SUBMISSION_RESULT, Submission, SubmissionSource, SubmissionTestCase
+from judge.models.submission import SUBMISSION_RESULT, Submission, SubmissionManualGrade, SubmissionSource, \
+    SubmissionTestCase
 from judge.models.ticket import Ticket, TicketMessage
 
 revisions.register(Profile, exclude=['points', 'last_access', 'ip', 'rating'])

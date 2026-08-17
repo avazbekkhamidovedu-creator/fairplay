@@ -12,6 +12,8 @@
         {%- elif submission.is_graded -%}
             {%- if submission.status in ('IE', 'CE', 'AB') -%}
                 ----
+            {%- elif submission.display_points is not none -%}
+                {{ submission.display_points|floatformat(0) }} / {{ submission.display_points_total|floatformat(0) }}
             {%- else -%}
                 {{ submission.case_points|floatformat(0) }} / {{ submission.case_total|floatformat(0) }}
             {%- endif -%}
