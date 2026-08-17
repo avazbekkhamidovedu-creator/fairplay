@@ -56,7 +56,7 @@ class ProblemListFormatFilterTest(CommonDataMixin, TestCase):
 
 
 class ProblemListMCQSubtypeFilterTest(CommonDataMixin, TestCase):
-    """MCQ is one submission_type but the list breaks it into single / multiple / true-false."""
+    """MCQ subtypes share submission_type M; the list filter is one "Choice question" option."""
 
     @classmethod
     def setUpTestData(self):
@@ -67,7 +67,7 @@ class ProblemListMCQSubtypeFilterTest(CommonDataMixin, TestCase):
             code='mcq-multi', name='Multi MCQ', is_public=True, submission_type='M')
         self.truefalse = create_problem(
             code='mcq-tf', name='TF MCQ', is_public=True, submission_type='M')
-        # A legacy MCQ with no mcq_config row: must still match the whole-MCQ filter.
+        # A legacy MCQ with no mcq_config row: must still match the choice-question filter.
         self.legacy = create_problem(
             code='mcq-legacy', name='Legacy MCQ', is_public=True, submission_type='M')
         ProblemMCQConfig.objects.create(
@@ -81,35 +81,16 @@ class ProblemListMCQSubtypeFilterTest(CommonDataMixin, TestCase):
         self.client.force_login(self.users['normal'])
         return self.client.get(reverse('problem_list') + query).content
 
-    def test_filter_single_choice(self):
-        content = self._content('?format=single')
-        self.assertIn(b'mcq-single', content)
-        self.assertNotIn(b'mcq-multi', content)
-        self.assertNotIn(b'mcq-tf', content)
-        self.assertNotIn(b'mcq-legacy', content)
-
-    def test_filter_multiple_choice(self):
-        content = self._content('?format=multiple')
-        self.assertIn(b'mcq-multi', content)
-        self.assertNotIn(b'mcq-single', content)
-        self.assertNotIn(b'mcq-tf', content)
-
-    def test_filter_true_false(self):
-        content = self._content('?format=truefalse')
-        self.assertIn(b'mcq-tf', content)
-        self.assertNotIn(b'mcq-single', content)
-        self.assertNotIn(b'mcq-multi', content)
-
-    def test_whole_mcq_filter_covers_all_subtypes(self):
+    def test_choice_question_filter_covers_all_mcq_subtypes(self):
         content = self._content('?format=M')
         for code in (b'mcq-single', b'mcq-multi', b'mcq-tf', b'mcq-legacy'):
             self.assertIn(code, content)
 
-    def test_combining_subtypes(self):
+    def test_legacy_subtype_query_params_are_ignored(self):
+        # single / multiple / truefalse are no longer filter codes; unknown values are dropped.
         content = self._content('?format=single&format=truefalse')
-        self.assertIn(b'mcq-single', content)
-        self.assertIn(b'mcq-tf', content)
-        self.assertNotIn(b'mcq-multi', content)
+        for code in (b'mcq-single', b'mcq-multi', b'mcq-tf', b'mcq-legacy'):
+            self.assertIn(code, content)
 
 
 class AssignmentProblemListTestCase(TestCase):

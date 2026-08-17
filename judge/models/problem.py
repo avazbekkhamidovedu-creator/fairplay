@@ -236,6 +236,43 @@ class Problem(models.Model):
     # Problem types whose name marks the difficulty level, ordered from easiest to hardest.
     # These are surfaced as a dedicated difficulty column/filter rather than as tags.
     DIFFICULTY_TYPE_NAMES = ('easy', 'medium', 'hard')
+    # Admin / older seeds often store the category ID as "Easy" rather than "easy".
+    # MySQL unique lookups are case-insensitive, so get_or_create(name='easy') reuses
+    # that row, but Python `name in DIFFICULTY_TYPE_NAMES` would miss it.
+    DIFFICULTY_NAME_ALIASES = {
+        'easy': 'easy',
+        'medium': 'medium',
+        'hard': 'hard',
+        'difficult': 'hard',  # Excel import header used difficult:2
+        '简单': 'easy',
+        '中等': 'medium',
+        '困难': 'hard',
+    }
+
+    @classmethod
+    def canonical_difficulty_name(cls, value):
+        """Map a ProblemType name/full_name to easy/medium/hard, or None."""
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        return cls.DIFFICULTY_NAME_ALIASES.get(text.casefold()) or cls.DIFFICULTY_NAME_ALIASES.get(text)
+
+    @classmethod
+    def is_difficulty_problem_type(cls, problem_type):
+        return (
+            cls.canonical_difficulty_name(problem_type.name) is not None
+            or cls.canonical_difficulty_name(problem_type.full_name) is not None
+        )
+
+    @classmethod
+    def difficulty_type_q(cls):
+        """ORM filter that matches canonical, capitalized, and alias difficulty IDs."""
+        query = Q()
+        for alias in cls.DIFFICULTY_NAME_ALIASES:
+            query |= Q(name__iexact=alias)
+        return query
 
     @classmethod
     def is_knowledge_type_name(cls, name):
@@ -308,7 +345,7 @@ class Problem(models.Model):
     @classmethod
     def is_knowledge_problem_type(cls, problem_type, reserved_labels=None):
         """True if this ProblemType should appear in the Tags / knowledge column."""
-        if problem_type.name in cls.FORMAT_TYPE_NAMES or problem_type.name in cls.DIFFICULTY_TYPE_NAMES:
+        if problem_type.name in cls.FORMAT_TYPE_NAMES or cls.is_difficulty_problem_type(problem_type):
             return False
         if problem_type.name.casefold() in cls.AUTO_TYPE_NAME_SLUGS:
             return False
@@ -385,8 +422,16 @@ class Problem(models.Model):
 
     @cached_property
     def difficulty(self):
-        # The difficulty type name (one of DIFFICULTY_TYPE_NAMES) attached to this problem, or None.
-        names = {t.name for t in self.types.all() if t.name in Problem.DIFFICULTY_TYPE_NAMES}
+        # Canonical easy/medium/hard attached to this problem, or None.
+        # Match name and full_name case-insensitively so Admin-seeded "Easy" rows still display.
+        names = set()
+        for problem_type in self.types.all():
+            canon = (
+                self.canonical_difficulty_name(problem_type.name)
+                or self.canonical_difficulty_name(problem_type.full_name)
+            )
+            if canon:
+                names.add(canon)
         for name in Problem.DIFFICULTY_TYPE_NAMES:
             if name in names:
                 return name

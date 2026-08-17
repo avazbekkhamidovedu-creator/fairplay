@@ -5158,6 +5158,10 @@ msgid "All types"
 msgstr "全部题型"
 
 #: templates/problem/list.html
+msgid "All tags"
+msgstr "全部标签"
+
+#: templates/problem/list.html
 msgid "Difficulty"
 msgstr "难度"
 
@@ -5200,6 +5204,14 @@ msgstr "选择"
 #: templates/problem/list.html
 msgid "Search..."
 msgstr "搜索…"
+
+#: templates/problem/list.html
+msgid "Show more"
+msgstr "展开"
+
+#: templates/problem/list.html
+msgid "Show less"
+msgstr "收起"
 
 #: templates/problem/list.html
 msgid "No knowledge points yet."
@@ -6759,6 +6771,10 @@ msgstr "继承全局"
 #: problem create_v2 / rich_editor i18n
 msgid "Leave blank for a public problem (requires permission); selecting an organization makes it private to that organization"
 msgstr "留空则为公开题（需相应权限）；选择组织后为该组织私有"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Choice question"
+msgstr "选择题"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Multiple choice"

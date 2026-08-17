@@ -634,18 +634,27 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 seen.add(ptype.pk)
                 resolved.append(ptype)
 
-        diff_name = (payload.get('difficulty') or '').strip().lower()
+        diff_name = Problem.canonical_difficulty_name(payload.get('difficulty'))
         if diff_name in Problem.DIFFICULTY_TYPE_NAMES:
-            diff_type, _created = ProblemType.objects.get_or_create(
-                name=diff_name,
-                defaults={'full_name': _DIFFICULTY_FULL_NAMES[diff_name]},
-            )
+            diff_type = ProblemType.objects.filter(name__iexact=diff_name).first()
+            if diff_type is None:
+                diff_type = ProblemType.objects.filter(
+                    full_name__iexact=_DIFFICULTY_FULL_NAMES[diff_name],
+                ).first()
+            if diff_type is None:
+                diff_type, _created = ProblemType.objects.get_or_create(
+                    name=diff_name,
+                    defaults={'full_name': _DIFFICULTY_FULL_NAMES[diff_name]},
+                )
             if diff_type.pk not in seen:
                 resolved.append(diff_type)
                 seen.add(diff_type.pk)
         else:
             # Older clients omit difficulty — keep any existing easy/medium/hard row.
-            existing_diff = problem.types.filter(name__in=Problem.DIFFICULTY_TYPE_NAMES).first()
+            existing_diff = next(
+                (ptype for ptype in problem.types.all() if Problem.is_difficulty_problem_type(ptype)),
+                None,
+            )
             if existing_diff is not None and existing_diff.pk not in seen:
                 resolved.append(existing_diff)
 

@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
-from judge.models import Language, LanguageLimit, Problem, ProblemData, Submission
+from judge.models import Language, LanguageLimit, Problem, ProblemData, ProblemType, Submission
 from judge.models.problem import VotePermission, disallowed_characters_validator
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_organization, create_problem, create_problem_type, create_solution, create_user
@@ -522,6 +522,41 @@ class ProblemDifficultyPropertiesTestCase(CommonDataMixin, TestCase):
         self.assertFalse(Problem.is_knowledge_type_name('single-choice'))
         self.assertFalse(Problem.is_knowledge_type_name('easy'))
         self.assertFalse(Problem.is_knowledge_type_name('hard'))
+
+
+class CapitalizedDifficultyTypeTestCase(CommonDataMixin, TestCase):
+    """MySQL treats Easy and easy as the same unique name; this suite only seeds capitalized IDs."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        create_problem_type(name='Easy', full_name='Easy')
+        create_problem_type(name='Medium', full_name='Medium')
+        create_problem_type(name='Hard', full_name='Hard')
+        create_problem_type(name='dp', full_name='Dynamic Programming')
+        cls.easy_problem = create_problem(
+            code='diff-caps-easy',
+            is_public=True,
+            types=('Easy', 'dp'),
+        )
+        cls.hard_problem = create_problem(
+            code='diff-caps-hard',
+            is_public=True,
+            types=('Hard', 'dp'),
+        )
+
+    def test_difficulty_recognizes_capitalized_category_ids(self):
+        self.assertEqual(self.easy_problem.difficulty, 'easy')
+        self.assertEqual(self.easy_problem.difficulty_label, 'Easy')
+        self.assertEqual(self.hard_problem.difficulty, 'hard')
+        self.assertEqual(self.hard_problem.difficulty_label, 'Hard')
+        self.assertEqual(self.easy_problem.knowledge_types_list, ['Dynamic Programming'])
+        self.assertTrue(Problem.is_difficulty_problem_type(ProblemType.objects.get(name='Easy')))
+        self.assertTrue(Problem.is_difficulty_problem_type(ProblemType.objects.get(name='Hard')))
+        self.assertEqual(Problem.canonical_difficulty_name('Easy'), 'easy')
+        self.assertEqual(Problem.canonical_difficulty_name('Hard'), 'hard')
+        self.assertEqual(Problem.canonical_difficulty_name('difficult'), 'hard')
+        self.assertEqual(Problem.canonical_difficulty_name('困难'), 'hard')
 
 
 class DisallowedCharactersValidatorTestCase(SimpleTestCase):

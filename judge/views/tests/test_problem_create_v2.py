@@ -1197,3 +1197,71 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn('paired', response.json()['error'].lower())
+
+
+class ProblemCreateV2CapitalizedDifficultyTestCase(CommonDataMixin, TestCase):
+    """Reuse Admin-seeded Easy/Medium/Hard category IDs instead of requiring lowercase names."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.group = default_problem_group()
+        cls.users.update({
+            'staff_adder': create_user(
+                username='caps_diff_creator',
+                is_staff=True,
+                user_permissions=('add_problem', 'create_private_problem', 'change_public_visibility',
+                                  'edit_own_problem'),
+            ),
+        })
+        ProblemType.objects.create(name='Easy', full_name='Easy')
+        ProblemType.objects.create(name='Hard', full_name='Hard')
+
+    def _save_programming(self, name, difficulty):
+        return self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'programming',
+                'name': name,
+                'description': 'difficulty should display after save',
+                'points': 10,
+                'is_public': True,
+                'group_id': self.group.id,
+                'difficulty': difficulty,
+                'problemTypes': [],
+                'testcases': [
+                    {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+                ],
+            }),
+            content_type='application/json',
+        )
+
+    def test_save_easy_reuses_capitalized_type(self):
+        self.client.force_login(self.users['staff_adder'])
+        response = self._save_programming('test-program-noOrg', 'easy')
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        type_names = list(problem.types.values_list('name', flat=True))
+        self.assertEqual(type_names.count('Easy'), 1)
+        self.assertNotIn('easy', type_names)
+        self.assertEqual(problem.difficulty, 'easy')
+        self.assertEqual(ProblemType.objects.filter(name__iexact='easy').count(), 1)
+
+        list_resp = self.client.get(reverse('problem_list'))
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertContains(list_resp, 'diff-easy', html=False)
+
+    def test_save_hard_reuses_capitalized_type(self):
+        self.client.force_login(self.users['staff_adder'])
+        response = self._save_programming('test-program-hard', 'hard')
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        type_names = list(problem.types.values_list('name', flat=True))
+        self.assertEqual(type_names.count('Hard'), 1)
+        self.assertNotIn('hard', type_names)
+        self.assertEqual(problem.difficulty, 'hard')
+        self.assertEqual(ProblemType.objects.filter(name__iexact='hard').count(), 1)
+
+        list_resp = self.client.get(reverse('problem_list'))
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertContains(list_resp, 'diff-hard', html=False)

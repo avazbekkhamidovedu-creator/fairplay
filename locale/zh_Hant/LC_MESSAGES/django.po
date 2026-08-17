@@ -5090,8 +5090,20 @@ msgid "Public"
 msgstr "公共"
 
 #: templates/problem/list.html
+msgid "All courses"
+msgstr "全部課程"
+
+#: templates/problem/list.html
+msgid "Public"
+msgstr "公共"
+
+#: templates/problem/list.html
 msgid "All types"
 msgstr "全部題型"
+
+#: templates/problem/list.html
+msgid "All tags"
+msgstr "全部標籤"
 
 #: templates/problem/list.html
 msgid "Difficulty"
@@ -5136,6 +5148,14 @@ msgstr "選擇"
 #: templates/problem/list.html
 msgid "Search..."
 msgstr "搜尋…"
+
+#: templates/problem/list.html
+msgid "Show more"
+msgstr "展開"
+
+#: templates/problem/list.html
+msgid "Show less"
+msgstr "收起"
 
 #: templates/problem/list.html
 msgid "No knowledge points yet."
