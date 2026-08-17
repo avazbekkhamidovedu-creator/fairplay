@@ -884,6 +884,15 @@ class ContestCreate(LoginRequiredMixin, View):
         problems are preserved unless explicitly edited; an explicit empty
         list clears them.
 
+        Rows are **upserted, never deleted-and-recreated**: ContestSubmission
+        rows point at ContestProblem with ``on_delete=CASCADE``, so the old
+        delete-then-recreate approach cascade-deleted every ContestSubmission
+        (and the ``contest_submission_delete`` signal then detached each
+        ``Submission.contest_object``) on *any* edit — submissions silently
+        vanished from the grade page / workspace / exports after a pure
+        duration change. Only problems genuinely removed from the submitted
+        list are deleted.
+
         **Security:** only problems the editor may see may be attached. The
         problem picker already filters to ``_visible_problems_for``; this check
         is the server-side backstop against a crafted request attaching another
@@ -910,8 +919,9 @@ class ContestCreate(LoginRequiredMixin, View):
             allowed_ids = set(Problem.get_visible_problems(user).values_list('id', flat=True)) \
                 | set(contest.contest_problems.values_list('problem_id', flat=True))
 
-        ContestProblem.objects.filter(contest=contest).delete()
-        order = 1
+        # Parse the full submitted list first so a security rejection aborts
+        # before any row is created/updated.
+        parsed = []
         for item in problems:
             if isinstance(item, dict):
                 pid = item.get('id')
@@ -959,12 +969,33 @@ class ContestCreate(LoginRequiredMixin, View):
                 hide_results = False
             else:
                 hide_results = None
-            ContestProblem.objects.create(
-                contest=contest, problem=problem, points=points, order=order,
-                partial=partial, is_pretested=is_pretested, max_submissions=max_submissions,
-                output_prefix_override=output_prefix, hide_results=hide_results,
-            )
-            order += 1
+            parsed.append((problem, points, partial, is_pretested,
+                           max_submissions, output_prefix, hide_results))
+
+        # Upsert (never delete-and-recreate). ContestSubmission.problem points
+        # at ContestProblem with on_delete=CASCADE, so wiping the rows here
+        # would cascade-delete every ContestSubmission and the
+        # contest_submission_delete signal would then detach each
+        # Submission.contest_object — silently erasing every prior submission
+        # from the grade page / workspace / exports on any edit (even a pure
+        # duration change). Only problems genuinely removed from the list may
+        # be deleted; everything else is updated in place so the FK links stay.
+        existing = {cp.problem_id: cp for cp in contest.contest_problems.all()}
+        submitted_ids = {problem.id for problem, *_ in parsed}
+        ContestProblem.objects.filter(contest=contest).exclude(problem_id__in=submitted_ids).delete()
+        for order, (problem, points, partial, is_pretested,
+                    max_submissions, output_prefix, hide_results) in enumerate(parsed, 1):
+            cp = existing.get(problem.id)
+            if cp is None:
+                cp = ContestProblem(contest=contest, problem=problem)
+            cp.points = points
+            cp.partial = partial
+            cp.is_pretested = is_pretested
+            cp.max_submissions = max_submissions
+            cp.output_prefix_override = output_prefix
+            cp.hide_results = hide_results
+            cp.order = order
+            cp.save()
 
     # ── create / update ─────────────────────────────────────────────────────
 
