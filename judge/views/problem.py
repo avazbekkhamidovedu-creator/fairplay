@@ -151,6 +151,12 @@ def workspace_review_note_html(submission):
     return str(render_markdown(submission.review_note, 'default'))
 
 
+def workspace_manual_released(submission):
+    """Whether this submission's manual override has been released to the student."""
+    manual_grade = submission.manual_grade_override
+    return manual_grade is not None and manual_grade.released
+
+
 PUBLIC_COURSE_FILTER = 'public'
 
 
@@ -641,6 +647,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                     'file_upload': get_workspace_file_upload(selected_submission),
                     'results_hidden': results_hidden,
                     'is_graded': selected_submission.is_graded,
+                    'released': workspace_manual_released(selected_submission),
                     'review_note_html': workspace_review_note_html(selected_submission),
                     'id_secret': selected_submission.id_secret,
                     'status_url': reverse(
@@ -2456,6 +2463,7 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
             'answer_display': answer_display,
             'file_upload': get_workspace_file_upload(submission),
             'comments_html': comments_html,
+            'released': workspace_manual_released(submission),
             'review_note_html': workspace_review_note_html(submission),
             'id_secret': submission.id_secret,
             'status_url': reverse(
@@ -2534,6 +2542,7 @@ class ProblemWorkspaceSubmissionsList(LoginRequiredMixin, ProblemMixin, SingleOb
             # page load computes for its workspace submissions.
             submission.display_points = workspace_display_points(submission, request)
             submission.display_points_total = workspace_display_points_total(submission, request)
+            submission.display_released = workspace_manual_released(submission)
             html = render_to_string(
                 'problem/workspace-submission-row.html',
                 {

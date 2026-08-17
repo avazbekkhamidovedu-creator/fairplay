@@ -317,8 +317,8 @@
         .badge-review { background: #fff3e0; color: #e65100; }
         .badge-done { background: #e8f5e9; color: #2e7d32; }
         .badge-final { background: #e3f2fd; color: #1565c0; }
-        .badge-manual { background: #e8f5e9; color: #2e7d32; }
-        .badge-manual-hidden { background: #eee; color: #666; }
+        .badge-released { background: #e8f5e9; color: #2e7d32; }
+        .badge-manual { background: #eee; color: #666; }
         .badge-hidden { background: #eee; color: #666; }
 
         .grade-empty {
@@ -692,12 +692,14 @@
                 else if (s.points == null) bits += '<span class="badge badge-review">awaiting judge</span>';
                 else bits += '<span class="badge badge-done">graded</span>';
                 if (s.is_latest) bits += '<span class="badge badge-final">final</span>';
-                // Mark manually-overridden scores; the color encodes whether the
-                // override has been released (green = shown to student) or not.
-                if (s.manual_points != null) {
-                    bits += s.released
-                        ? '<span class="badge badge-manual" title="{{ _('Manual grade released to student') }}">manual</span>'
-                        : '<span class="badge badge-manual-hidden" title="{{ _('Manual grade, not yet released') }}">manual</span>';
+                // "manual" tag: the teacher changed the score (manual != machine).
+                if (s.manual_points != null && s.manual_points !== s.machine_points) {
+                    bits += '<span class="badge badge-manual" title="{{ _('Manual grade differs from the machine score') }}">manual</span>';
+                }
+                // "release" tag: the score is visible to the student — either no
+                // manual override (machine score always shown) or a released one.
+                if (s.manual_points == null || s.released) {
+                    bits += '<span class="badge badge-released" title="{{ _('Released to student') }}">release</span>';
                 }
                 if (s.virtual) bits += '<span class="badge badge-hidden">V</span>';
                 return bits;
@@ -920,12 +922,13 @@
                 if (!s) return;
                 var scoreEl = document.getElementById('g-score');
                 if (!scoreEl) return;
+                var entered = parseFloat(scoreEl.value);
                 $.post(saveUrl, {
                     submission: s.id,
                     score: scoreEl.value,
                     note: getReviewMarkdown()
                 }).done(function (res) {
-                    if (!res.ok) { alert(res.error || '{{ _('Failed to save') }}'); return; }
+                    if (!res.ok) { window.showToast(res.error || '{{ _('Failed to save') }}', 'error'); return; }
                     for (var i = 0; i < submissions.length; i++) {
                         if (submissions[i].id === res.submission) {
                             submissions[i].points = res.score;
@@ -951,7 +954,13 @@
                     renderList();
                     renderLeft();
                     renderRight();
-                }).fail(function () { alert('{{ _('Failed to save grading') }}'); });
+                    // Feedback only after the server confirms the DB write.
+                    if (!isNaN(entered) && entered !== res.score) {
+                        window.showToast('{{ _('Score adjusted to') }} ' + res.score + ' / ' + res.total, 'error');
+                    } else {
+                        window.showToast('{{ _('Grade saved') }}', 'success');
+                    }
+                }).fail(function () { window.showToast('{{ _('Failed to save grading') }}', 'error'); });
             }
 
             function moveSelection(delta) {
@@ -1078,7 +1087,7 @@
                 }
                 var $btn = $(this).prop('disabled', true);
                 $.post(releaseUrl).done(function (res) {
-                    if (!res.ok) { alert(res.error || '{{ _('Failed') }}'); return; }
+                    if (!res.ok) { window.showToast(res.error || '{{ _('Failed') }}', 'error'); return; }
                     // Mark every in-memory manual grade as released.
                     for (var i = 0; i < submissions.length; i++) {
                         if (submissions[i].manual_points != null) submissions[i].released = true;
@@ -1091,7 +1100,8 @@
                     renderList();
                     renderLeft();
                     renderRight();
-                }).fail(function () { alert('{{ _('Failed to release grades') }}'); })
+                    window.showToast('{{ _('Grades released') }}', 'success');
+                }).fail(function () { window.showToast('{{ _('Failed to release grades') }}', 'error'); })
                   .always(function () { $btn.prop('disabled', false); });
             });
 
