@@ -107,6 +107,13 @@ class ProblemMCQOption(models.Model):
 
 class ProblemMCQConfig(models.Model):
     """Per-problem multiple-choice settings."""
+    SCORE_PROPORTIONAL = 'proportional'
+    SCORE_UNDERSELECT = 'underselect'
+    SCORE_MODE_CHOICES = (
+        (SCORE_PROPORTIONAL, _('Proportional credit')),
+        (SCORE_UNDERSELECT, _('Under-select credit')),
+    )
+
     problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='mcq_config', on_delete=CASCADE)
     multiple_select = models.BooleanField(
         verbose_name=_('allow multiple answers'), default=False,
@@ -117,6 +124,14 @@ class ProblemMCQConfig(models.Model):
     shuffle_options = models.BooleanField(
         verbose_name=_('shuffle options per student'), default=False,
         help_text=_('Present choices in a different, stable order for each student to deter copying.'))
+    scoring_mode = models.CharField(
+        verbose_name=_('scoring method'), max_length=16, choices=SCORE_MODE_CHOICES,
+        default=SCORE_PROPORTIONAL,
+        help_text=_('How a multiple-select question awards partial credit. Ignored for single-answer questions.'))
+    underselect_points = models.FloatField(
+        verbose_name=_('points per correct choice'), null=True, blank=True, default=None,
+        help_text=_('In under-select mode, points awarded for each correctly selected option. '
+                    'Leave empty to split the question points evenly among correct options.'))
 
     def __str__(self):
         return _('MCQ config for %s') % self.problem.code
@@ -147,6 +162,9 @@ class ProblemBlank(models.Model):
     answers = models.TextField(
         verbose_name=_('accepted answers'),
         help_text=_('One accepted answer per line; any of them counts as correct.'))
+    points = models.FloatField(
+        verbose_name=_('points'), default=1,
+        help_text=_('Points awarded when this blank is correct. Used when the problem allows partial credit.'))
     label = models.CharField(
         verbose_name=_('label'), max_length=100, blank=True,
         help_text=_('Optional label shown next to the input; defaults to "Blank N".'))

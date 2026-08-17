@@ -4572,7 +4572,7 @@ msgstr "课程"
 msgid "All courses"
 msgstr "全部课程"
 
-#: templates/problem/list.html
+#: templates/problem/list.html templates/problem/workspace.html
 msgid "Public"
 msgstr "公共"
 
@@ -6877,6 +6877,38 @@ msgstr "页面错误："
 #: problem create_v2 / rich_editor i18n
 msgid "Partial scoring"
 msgstr "部分分"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Scoring method"
+msgstr "计分方式"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Under-select credit:"
+msgstr "少选给分："
+
+#: problem create_v2 / rich_editor i18n
+msgid "Proportional credit:"
+msgstr "比例计分："
+
+#: problem create_v2 / rich_editor i18n
+msgid "each correct choice earns"
+msgstr "每对一项得"
+
+#: problem create_v2 / rich_editor i18n
+msgid "points; a wrong choice scores 0"
+msgstr "分；错选不得分"
+
+#: problem create_v2 / rich_editor i18n
+msgid "score = full points × (correct − wrong) / number of correct options, minimum 0"
+msgstr "得分 = 满分 × (对 − 错) / 正确选项数，最低为 0"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Leave per-choice points empty to split the question evenly among correct options."
+msgstr "每项分留空则按满分均分到各正确选项。"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Each blank is scored separately; set points next to each blank under Answers."
+msgstr "每个空单独计分；在上方答案处为每个空设定分数。"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Plain-text summary for meta description"

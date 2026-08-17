@@ -353,15 +353,37 @@
             <div class="field"><input type="number" id="f-points" value="1" min="0" step="0.5" style="max-width:120px;"></div>
           </div>
 
-          <!-- Partial scores (multiple-choice and fill-blank only). -->
-          <div class="form-row type-panel" data-for="multiple,blank" id="partial-row" style="display:none;">
+          <!-- Fill-blank: optional per-blank points. -->
+          <div class="form-row type-panel" data-for="blank" id="partial-row" style="display:none;">
             <label>{{ _('Partial scoring') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
                 <input type="checkbox" id="f-partial" onchange="syncPartialFromMain(); renderScoreConf()"> {{ _('Allow partial scoring') }}
               </label>
-              <div class="help" id="partial-sub"></div>
+              <div class="help" id="partial-sub">{{ _('Each blank is scored separately; set points next to each blank under Answers.') }}</div>
               <div id="partial-conf" class="score-conf" style="display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Multiple choice: two partial-credit rules (no extra checkbox). -->
+          <div class="form-row type-panel" data-for="multiple" id="mcq-scoring-row" style="display:none;">
+            <label>{{ _('Scoring method') }}</label>
+            <div class="field">
+              <div class="radio-list" id="mcq-scoring-list">
+                <label>
+                  <input type="radio" name="mcq-scoring" value="underselect">
+                  {{ _('Under-select credit:') }}
+                  {{ _('each correct choice earns') }}
+                  <span class="inline-num"><input type="number" id="f-mcq-underselect-points" min="0" step="0.5" placeholder="" onfocus="document.querySelector('input[name=mcq-scoring][value=underselect]').checked = true;"></span>
+                  {{ _('points; a wrong choice scores 0') }}
+                </label>
+                <label>
+                  <input type="radio" name="mcq-scoring" value="proportional" checked>
+                  {{ _('Proportional credit:') }}
+                  {{ _('score = full points × (correct − wrong) / number of correct options, minimum 0') }}
+                </label>
+              </div>
+              <div class="help">{{ _('Leave per-choice points empty to split the question evenly among correct options.') }}</div>
             </div>
           </div>
 
@@ -1852,27 +1874,34 @@
       }
 
       const subEl = document.getElementById('partial-sub');
-      if (currentType === 'programming') subEl.textContent = gettext('Partial score uses relative case weights (passed / total); weights need not equal problem Points');
-      else if (currentType === 'multiple') subEl.textContent = gettext('Partial credit for under-selection; wrong selections follow the rule below');
-      else if (currentType === 'short') subEl.textContent = gettext('AI / keyword scoring awards a score between 0 and full points');
-      else if (currentType === 'blank') subEl.textContent = gettext('Each blank is scored separately; points for each correct blank');
+      if (subEl) {
+        if (currentType === 'programming') subEl.textContent = gettext('Partial score uses relative case weights (passed / total); weights need not equal problem Points');
+        else if (currentType === 'short') subEl.textContent = gettext('AI / keyword scoring awards a score between 0 and full points');
+        else if (currentType === 'blank') subEl.textContent = gettext('Each blank is scored separately; set points next to each blank under Answers.');
+      }
 
-      partialConf.style.display = partialOn ? 'block' : 'none';
-      if (partialOn) {
-        if (currentType === 'multiple') {
-          partialConf.innerHTML = `<div class="radio-list">
-            <label><input type="radio" name="pmode" checked> ${gettext('Under-select credit:')} ${gettext('each correct choice earns')} <span class="inline-num"><input type="number" value="0.5" step="0.5"></span> ${gettext('points; any wrong choice scores 0')}</label>
-            <label><input type="radio" name="pmode"> ${gettext('Proportional credit: score = full points × (correct − wrong) / number of correct options, minimum 0')}</label>
-          </div>`;
-        } else if (currentType === 'blank') {
+      if (currentType === 'blank') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Per-blank points are enabled; set points for each blank under Answers above.')}</div>`;
           document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'inline-flex');
-        } else if (currentType === 'short') {
+        } else {
+          document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'none');
+        }
+      } else if (currentType === 'short') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Short-answer partial scoring depends on <b>AI grading</b> or keyword matching (configure tiers in the AI grading Rubric below).')}</div>`;
-        } else if (currentType === 'programming') {
+        }
+      } else if (currentType === 'programming') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Programming partial score uses relative case weights (passed / total). Set Weight per case below; they need not sum to problem Points. Batch subtasks supported.')}</div>`;
         }
-      } else if (currentType === 'blank') {
+      } else if (partialConf) {
+        partialConf.style.display = 'none';
+      }
+      if (currentType !== 'blank') {
         document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'none');
       }
       renderPreview();
@@ -2350,7 +2379,8 @@
         group_id: document.getElementById('f-group').value,
         points: document.getElementById('f-points').value,
         is_public: document.getElementById('f-public').checked,
-        partial: !!(document.getElementById('f-partial') && document.getElementById('f-partial').checked)
+        partial: currentType === 'multiple'
+          || !!(document.getElementById('f-partial') && document.getElementById('f-partial').checked)
           || !!(document.getElementById('f-partial-code') && document.getElementById('f-partial-code').checked),
         ai: document.getElementById('f-ai').checked,
         rubric: (document.getElementById('f-rubric') || {}).value || '',
@@ -2364,6 +2394,12 @@
       if (currentType === 'single' || currentType === 'multiple') {
         data.multiple = currentType === 'multiple';
         data.options = [...document.querySelectorAll('#options .option-row')].map(op => ({ text: getOptionText(op).trim(), correct: op.querySelector('.option-marker input').checked }));
+        if (currentType === 'multiple') {
+          data.mcqScoring = (document.querySelector('input[name="mcq-scoring"]:checked') || {}).value || 'proportional';
+          const under = document.getElementById('f-mcq-underselect-points');
+          const raw = under ? String(under.value || '').trim() : '';
+          data.mcqUnderselectPoints = raw === '' ? null : Number(raw);
+        }
       } else if (currentType === 'truefalse') {
         data.tfAnswer = document.querySelector('input[name="tf"]:checked').value;
       } else if (currentType === 'short') {
@@ -2373,7 +2409,12 @@
         data.fileMaxSizeMb = document.getElementById('f-file-size').value;
         data.fileInstructions = document.getElementById('f-file-instructions').value;
       } else if (currentType === 'blank') {
-        data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer')].map(t => t.value.trim());
+        data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer-row')].map(row => {
+          const answers = ((row.querySelector('.blank-answer') || {}).value || '').trim();
+          const ptsEl = row.querySelector('.blank-pts input');
+          const raw = ptsEl ? String(ptsEl.value || '').trim() : '';
+          return { answers: answers, points: raw === '' ? 1 : Number(raw) };
+        }).filter(b => b.answers);
         data.trimWhitespace = (document.getElementById('f-blank-trim') || {}).checked !== false;
         data.caseSensitive = !!(document.getElementById('f-blank-case') || {}).checked;
       } else if (currentType === 'compound') {
@@ -2414,7 +2455,13 @@
         if (d.type === 'single' && correct > 1) return 'Single-choice questions may only have one correct answer.';
       }
       if (d.type === 'short' && !d.shortAnswer) return 'Please provide a reference answer.';
-      if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(b => b))) return 'Please provide at least one fill-in-the-blank answer.';
+      if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(function (b) {
+        if (!b) return false;
+        if (typeof b === 'string') return !!b.trim();
+        var answers = b.answers;
+        if (Array.isArray(answers)) return answers.some(function (x) { return String(x || '').trim(); });
+        return !!(answers && String(answers).trim());
+      }))) return 'Please provide at least one fill-in-the-blank answer.';
       if (d.type === 'file' && !(Number(d.fileMaxSizeMb) > 0)) return 'Please enter a maximum file size greater than zero.';
       if (d.type === 'compound' && (!d.subs || !d.subs.length)) return 'Please add at least one sub-problem.';
       // AI grading requires a grading table
@@ -2695,6 +2742,13 @@
           rows[rows.length - 1].querySelector('.option-marker input').checked = !!o.correct;
         });
         refreshOptionMarkers();
+        if (d.type === 'multiple') {
+          const mode = d.mcqScoring || 'proportional';
+          const radio = document.querySelector(`input[name="mcq-scoring"][value="${mode}"]`);
+          if (radio) radio.checked = true;
+          const under = document.getElementById('f-mcq-underselect-points');
+          if (under) under.value = (d.mcqUnderselectPoints != null && d.mcqUnderselectPoints !== '') ? d.mcqUnderselectPoints : '';
+        }
       } else if (d.type === 'truefalse') {
         const tf = document.querySelector(`input[name="tf"][value="${d.tfAnswer || 'true'}"]`);
         if (tf) tf.checked = true;
@@ -2702,8 +2756,13 @@
         const list = document.getElementById('blank-answers'); list.innerHTML = ''; blankSeq = 0;
         (d.blanks || []).forEach(ans => {
           addBlank();
-          const areas = list.querySelectorAll('.blank-answer');
-          areas[areas.length - 1].value = ans || '';
+          const rows = list.querySelectorAll('.blank-answer-row');
+          const row = rows[rows.length - 1];
+          const text = (ans && typeof ans === 'object') ? (ans.answers || '') : (ans || '');
+          const pts = (ans && typeof ans === 'object') ? ans.points : null;
+          row.querySelector('.blank-answer').value = text;
+          const ptsInput = row.querySelector('.blank-pts input');
+          if (ptsInput && pts != null && pts !== '') ptsInput.value = pts;
         });
         if (!(d.blanks || []).length) addBlank();
         const trimCb = document.getElementById('f-blank-trim'); if (trimCb) trimCb.checked = d.trimWhitespace !== false;

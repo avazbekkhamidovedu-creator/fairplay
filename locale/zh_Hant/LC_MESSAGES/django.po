@@ -5088,6 +5088,10 @@ msgstr "全部題目"
 msgid "Filters"
 msgstr "篩選"
 
+#: templates/problem/list.html templates/problem/workspace.html
+msgid "Public"
+msgstr "公共"
+
 #: templates/problem/list.html
 msgid "All courses"
 msgstr "全部課程"

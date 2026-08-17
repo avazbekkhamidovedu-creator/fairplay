@@ -185,6 +185,63 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem.name, 'HTTP vs TCP')
         self.assertTrue(ProblemMCQConfig.objects.filter(problem=problem, multiple_select=False).exists())
 
+    def test_create_multiple_choice_defaults_to_proportional_scoring(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'multiple',
+            'name': 'Pick two',
+            'description': 'Select all that apply.',
+            'points': 10,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': True},
+                {'text': 'C', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertTrue(problem.partial)
+        config = ProblemMCQConfig.objects.get(problem=problem)
+        self.assertTrue(config.multiple_select)
+        self.assertEqual(config.scoring_mode, 'proportional')
+        self.assertIsNone(config.underselect_points)
+
+    def test_create_multiple_choice_underselect_scoring(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'multiple',
+            'name': 'Underselect',
+            'description': 'Select all that apply.',
+            'points': 10,
+            'group_id': self.group.id,
+            'mcqScoring': 'underselect',
+            'mcqUnderselectPoints': 2,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': True},
+                {'text': 'C', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        config = ProblemMCQConfig.objects.get(problem=problem)
+        self.assertEqual(config.scoring_mode, 'underselect')
+        self.assertEqual(config.underselect_points, 2)
+        data = ProblemCreateV2View()._build_edit_data(problem)
+        self.assertEqual(data['mcqScoring'], 'underselect')
+        self.assertEqual(data['mcqUnderselectPoints'], 2)
+
     def test_create_code_with_testcases(self):
         self.client.force_login(self.users['staff_adder'])
         payload = {
@@ -611,6 +668,27 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem.blanks.count(), 1)
         # Each line is one accepted answer for the newline-splitting grader.
         self.assertEqual(problem.blanks.first().answers.splitlines(), ['Paris', 'paris'])
+
+    def test_create_fill_blank_persists_per_blank_points(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'blank', 'name': 'Weighted blanks', 'description': 'Two blanks.',
+            'points': 10, 'partial': True, 'group_id': self.group.id,
+            'blanks': [
+                {'answers': 'Paris', 'points': 7},
+                {'answers': '1789', 'points': 3},
+            ],
+        }
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        self.assertTrue(problem.partial)
+        blanks = list(problem.blanks.order_by('order'))
+        self.assertEqual([b.points for b in blanks], [7, 3])
+        data = ProblemCreateV2View()._build_edit_data(problem)
+        self.assertEqual(data['blanks'][0]['points'], 7)
+        self.assertEqual(data['blanks'][1]['answers'], '1789')
 
     def test_create_fill_blank_ai_mode(self):
         # With ai=True the config records AI grading + rubric; grading itself falls back to exact
