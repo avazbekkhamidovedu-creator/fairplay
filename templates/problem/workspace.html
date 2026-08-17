@@ -452,6 +452,9 @@
                     {% endif %}
                   {% endif %}
                 </div>
+                {% if workspace_submission.released %}
+                  <div class="ws-released-tag"><i class="fa fa-check-circle"></i> {{ _('Released') }}</div>
+                {% endif %}
                 {% if workspace_submission.review_note_html %}
                   <div class="ws-review-note">
                     <div class="ws-review-note-label">{{ _('Teacher feedback') }}</div>

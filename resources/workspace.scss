@@ -795,6 +795,30 @@
   color: var(--oj-text, #222);
   word-break: break-word;
 }
+/* "Released" tag shown on the Result tab + submission rows once the manual grade is released. */
+.ws-released-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  margin-top: .5rem;
+  padding: .2rem .55rem;
+  border-radius: 3px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: .78rem;
+  font-weight: 700;
+}
+.ws-released-mini {
+  display: inline-block;
+  margin-left: .35rem;
+  padding: 0 .3rem;
+  border-radius: 3px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: .68rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
 #ws-subs-table .ws-result-code {
   font-weight: 700;
 }

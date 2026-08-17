@@ -571,6 +571,12 @@
       wrap.appendChild(score);
     }
     main.appendChild(wrap);
+    if (status.released) {
+      var tag = document.createElement('div');
+      tag.className = 'ws-released-tag';
+      tag.textContent = gettext('Released');
+      main.appendChild(tag);
+    }
     if (status.review_note_html) {
       var note = document.createElement('div');
       note.className = 'ws-review-note';

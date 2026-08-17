@@ -29,6 +29,9 @@
             <span title="{{ submission.long_status }}" class="status">{{ submission.short_status }}</span> |
         {%- endif -%}
         <span class="language">{{ submission.language.short_display_name }}</span>
+        {% if submission.display_released %}
+            <span class="ws-released-mini" title="{{ _('Teacher review released') }}">{{ _('released') }}</span>
+        {% endif %}
     </div>
 </div>
 
