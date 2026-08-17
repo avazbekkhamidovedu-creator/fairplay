@@ -13,9 +13,9 @@ from judge.models.problem import LanguageLimit, License, Problem, ProblemClarifi
 from judge.models.problem_data import CHECKERS, ProblemData, ProblemHarness, ProblemTestCase, problem_data_storage, \
     problem_directory_file
 from judge.models.profile import Class, ClassMaterial, Organization, OrganizationRequest, Profile, WebAuthnCredential
-from judge.models.question import ProblemBlank, ProblemFileConfig, ProblemFillBlankConfig, ProblemImportDraft, \
-    ProblemImportImage, ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, \
-    SubmissionFile
+from judge.models.question import ProblemBlank, ProblemCodeConfig, ProblemFileConfig, \
+    ProblemFillBlankConfig, ProblemImportDraft, ProblemImportImage, ProblemImportItem, \
+    ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, SubmissionFile
 from judge.models.runtime import Judge, Language, RuntimeVersion
 from judge.models.seb import SEBConfigPreset
 from judge.models.stored_file import StoredFileRecord

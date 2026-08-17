@@ -1,0 +1,1141 @@
+{% extends "base.html" %}
+
+{% block title %}{{ _('Grade') }} — {{ contest.name }}{% endblock %}
+{% block html_class %}workspace-page{% endblock %}
+{% block body_class %}workspace-page{% endblock %}
+{% block title_row %}{% endblock %}
+{% block title_ruler %}{% endblock %}
+
+{% block media %}
+    <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
+    <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
+    <style>
+        /* Grade workspace — same visual language as the problem workspace (workspace.scss).
+           Self-contained: reuses --oj-* tokens (with fallbacks) and ws-* class names so the
+           page matches the problem editor even if the compiled workspace css is absent. */
+        .workspace-page {
+            overflow: hidden;
+        }
+        .workspace-page #page-container { margin: 0; min-height: 0; }
+        .workspace-page #page-container > br, .workspace-page #content > hr, .workspace-page footer { display: none; }
+        .workspace-page #content { margin: 0; max-width: none; min-height: 0; width: 100%; }
+        .workspace-page #content-body { min-height: 0; }
+
+        .ws-app {
+            --ws-toolbar-height: 48px;
+            display: flex;
+            flex-direction: column;
+            height: calc(100dvh - var(--nav-height, 56px));
+            min-height: 36rem;
+            color: var(--oj-text, #222);
+            background: var(--oj-bg, #eef1f4);
+        }
+        .ws-app * { box-sizing: border-box; }
+        .ws-app button, .ws-app input, .ws-app select, .ws-app textarea { font: inherit; }
+        .ws-app button { cursor: pointer; }
+
+        /* ── Toolbar ─────────────────────────────────────────────────────── */
+        .ws-toolbar {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: .35rem .55rem;
+            min-height: var(--ws-toolbar-height);
+            padding: .35rem .9rem;
+            border-bottom: 1px solid var(--oj-border, #ccc);
+            background: var(--oj-surface, #fff);
+        }
+        .ws-app .ws-toolbar .tool-btn,
+        .ws-app .ws-toolbar .layout-toggle {
+            min-height: 34px;
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: 4px;
+            background: var(--oj-surface, #fff);
+            color: var(--oj-text, #222) !important;
+            padding: .35rem .7rem;
+        }
+        .ws-app .ws-toolbar .tool-btn:hover,
+        .ws-app .ws-toolbar .layout-toggle:hover {
+            border-color: var(--oj-accent, #1958c1);
+            color: var(--oj-accent, #1958c1) !important;
+        }
+        .ws-app .ws-toolbar .tool-btn i,
+        .ws-app .ws-toolbar .layout-toggle i { color: inherit !important; }
+        .ws-toolbar .icon-only { width: 34px; padding: 0; }
+        .ws-toolbar .ctx-label {
+            color: var(--oj-text, #222);
+            font-size: 1.05rem;
+            font-weight: 700;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-decoration: none;
+        }
+        .ws-toolbar .nav-arrows { display: inline-flex; gap: .25rem; }
+        .ws-layout-switch { margin-left: .15rem; }
+        .grade-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: .4rem;
+            margin-left: auto;
+            padding-left: .85rem;
+            border-left: 1px solid var(--oj-border, #ccc);
+        }
+        .ws-app .ws-toolbar .tool-btn.submit-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: .4rem;
+            border: 1px solid var(--oj-btn-border, #1958c1) !important;
+            border-radius: 4px;
+            background-color: var(--oj-btn-from, #2e6da4) !important;
+            background-image: linear-gradient(to bottom, var(--oj-btn-from, #2e6da4), var(--oj-btn-to, #1958c1)) !important;
+            color: #fff !important;
+            font-weight: 700;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, .16);
+        }
+        .ws-app .ws-toolbar .tool-btn.submit-btn i { color: #fff !important; }
+        .ws-app .ws-toolbar .tool-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+        /* ── Body / panes / splitters ────────────────────────────────────── */
+        .ws-body { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; }
+        .ws-pane { min-width: 0; min-height: 0; overflow: auto; background: var(--oj-surface, #fff); }
+        .ws-pane-left {
+            flex: 0 0 42%;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--oj-border, #ccc);
+        }
+        .ws-pane-right {
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            background: var(--oj-surface, #fff);
+        }
+        .ws-body.layout-tb { flex-direction: column; }
+        .ws-body.layout-tb .ws-pane-left {
+            flex-basis: 42%;
+            border-right: 0;
+            border-bottom: 1px solid var(--oj-border, #ccc);
+        }
+        .ws-splitter {
+            flex: 0 0 8px;
+            position: relative;
+            z-index: 4;
+            background: var(--oj-border, #ccc);
+            cursor: col-resize;
+        }
+        .ws-splitter:hover, .ws-splitter.is-dragging { background: var(--oj-accent, #1958c1); }
+        .layout-tb .ws-splitter { cursor: row-resize; }
+
+        /* ── Drawer ──────────────────────────────────────────────────────── */
+        .ws-drawer-backdrop { display: none; position: absolute; inset: 0; z-index: 9; background: transparent; }
+        .ws-drawer-backdrop.open { display: block; }
+        .ws-drawer {
+            position: absolute;
+            z-index: 10;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: min(26rem, 92vw);
+            display: flex;
+            flex-direction: column;
+            transform: translateX(-101%);
+            transition: transform .18s ease;
+            overflow: hidden;
+            border-right: 1px solid var(--oj-border, #ccc);
+            background: var(--oj-surface, #fff);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
+        }
+        .ws-drawer.open { transform: translateX(0); }
+        .ws-drawer-summary {
+            position: relative;
+            display: flex;
+            gap: .45rem;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            padding: .55rem 2.5rem .55rem .9rem;
+            border-bottom: 1px solid var(--oj-border, #ccc);
+            color: var(--oj-text-muted, #666);
+            font-size: 12px;
+        }
+        .ws-drawer .drawer-summary-close {
+            position: absolute;
+            top: .45rem;
+            right: .7rem;
+            width: 24px;
+            height: 24px;
+            border: 0;
+            border-radius: 4px;
+            background: transparent;
+            color: var(--oj-text-muted, #666);
+            font-size: 1.05rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .ws-drawer .drawer-summary-close:hover { background: var(--oj-bg, #eef1f4); color: var(--oj-text, #222); }
+        .ws-drawer-body { flex: 1; overflow: auto; }
+
+        /* ── Drawer filters ──────────────────────────────────────────────── */
+        .grade-filters {
+            padding: .7rem .85rem;
+            border-bottom: 1px solid var(--oj-border, #ccc);
+            background: var(--oj-bg, #eef1f4);
+            flex-shrink: 0;
+        }
+        .grade-filter-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: .5rem .55rem;
+        }
+        .grade-filter-grid .wide { grid-column: 1 / -1; }
+        .grade-filter-grid label {
+            display: block;
+            margin-bottom: .15rem;
+            font-size: 11px;
+            color: var(--oj-text-muted, #666);
+        }
+        .grade-filter-grid select,
+        .grade-filter-grid input {
+            width: 100%;
+            height: 30px;
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: 4px;
+            padding: 0 .4rem;
+            font-size: 12.5px;
+            box-sizing: border-box;
+            background: var(--oj-surface, #fff);
+            color: var(--oj-text, #222);
+        }
+        .grade-filter-summary {
+            margin-top: .45rem;
+            font-size: 11.5px;
+            color: var(--oj-text-muted, #666);
+        }
+        .grade-list-head {
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+            padding: .45rem .75rem;
+            background: var(--oj-heading, #222);
+            color: var(--oj-heading-text, #fff);
+            font-size: 13px;
+            font-weight: 600;
+            border-bottom: 1px solid var(--oj-border, #ccc);
+        }
+
+        /* ── Submission rows ─────────────────────────────────────────────── */
+        .submission-list { background: var(--oj-surface, #fff); }
+        .submission-row {
+            display: flex;
+            border-bottom: 1px solid var(--oj-border, #ccc);
+            cursor: pointer;
+            transition: background-color 0.12s linear;
+        }
+        .submission-row:hover { background: var(--oj-hover-overlay, #f7fafc); }
+        .submission-row.active { background: var(--oj-accent-soft, #eef6fb); }
+        .submission-row > div {
+            padding: 7px 5px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .sub-result {
+            min-width: 78px;
+            width: 78px;
+            text-align: center;
+            border-right: 1px solid var(--oj-border, #ccc);
+        }
+        .sub-result .score { font-size: 1.15em; color: var(--oj-text, #222); }
+        .sub-result .state { font-size: 0.7em; font-weight: 700; padding-top: 0.35em; color: var(--oj-text-muted, #666); }
+        .sub-main {
+            display: flex;
+            flex: 1;
+            flex-direction: row;
+            align-items: center;
+            justify-content: space-between;
+            padding-left: 12px !important;
+            gap: 0.45rem;
+            min-width: 0;
+        }
+        .sub-info { flex: 1; min-width: 0; word-break: break-word; }
+        .sub-info .name { font-weight: 700; font-size: 0.98em; color: var(--oj-text, #222); }
+        .sub-info .time { color: var(--oj-text-muted, #666); font-size: 11.5px; }
+        .sub-usage {
+            min-width: 64px;
+            width: 64px;
+            white-space: nowrap;
+            text-align: center;
+            border-left: 1px solid var(--oj-border, #ccc);
+            font-size: 11.5px;
+            color: var(--oj-text-muted, #666);
+        }
+        .sub-usage .time { font-weight: 700; }
+        .badge {
+            display: inline-block;
+            font-size: 10px;
+            padding: 0.05rem 0.3rem;
+            border-radius: 3px;
+            margin-left: 0.2rem;
+        }
+        .badge-review { background: #fff3e0; color: #e65100; }
+        .badge-done { background: #e8f5e9; color: #2e7d32; }
+        .badge-final { background: #e3f2fd; color: #1565c0; }
+        .badge-released { background: #ede7f6; color: #4527a0; }
+        .badge-hidden { background: #eee; color: #666; }
+
+        .grade-empty {
+            color: var(--oj-text-muted, #888);
+            padding: 2.5rem 1.25rem;
+            text-align: center;
+            font-size: 13.5px;
+        }
+
+        /* ── Left pane ───────────────────────────────────────────────────── */
+        .ide-head {
+            display: flex;
+            align-items: center;
+            gap: .55rem;
+            min-height: 3.1rem;
+            padding: 0 .8rem;
+            color: var(--oj-text, #222);
+            border-bottom: 1px solid var(--oj-border, #ccc);
+            background: var(--oj-bg, #eef1f4);
+            flex-shrink: 0;
+        }
+        .ide-head .ide-label { font-weight: 700; }
+        .ide-head .allowed-hint { margin-left: auto; font-size: 12px; color: var(--oj-text-muted, #666); }
+        .grade-left-scroll {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 1rem 1.15rem 1.5rem;
+        }
+        .grade-section { margin-bottom: 1.15rem; }
+        .grade-section:last-child { margin-bottom: 0; }
+        .grade-section h4 {
+            margin: 0 0 0.5rem;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: var(--oj-text-muted, #666);
+            font-weight: 700;
+        }
+        .grade-card {
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: 4px;
+            background: var(--oj-bg, #fcfcfc);
+            padding: 0.75rem 0.85rem;
+            color: var(--oj-text, #222);
+        }
+        .grade-meta-line {
+            font-size: 12.5px;
+            color: var(--oj-text, #555);
+            line-height: 1.65;
+            margin-top: 0.25rem;
+        }
+        .grade-meta-line .muted, .muted { color: var(--oj-text-muted, #666); font-size: 12px; }
+        .gd-top h3 { margin: 0; font-size: 1.05rem; color: var(--oj-text, #222); }
+        .version-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .version-row select {
+            height: 32px;
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: 4px;
+            padding: 0 0.45rem;
+            font-size: 13px;
+            min-width: 12rem;
+            background: var(--oj-surface, #fff);
+            color: var(--oj-text, #222);
+        }
+        .grade-stem {
+            line-height: 1.65;
+            font-size: 13.5px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .gd-source-card { padding: 0; overflow: hidden; background: #111827 !important; }
+        .gd-source-card .source-code {
+            margin: 0;
+            max-height: none;
+            padding: 0.8rem 0.9rem;
+            color: #e5e7eb;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            overflow: auto;
+        }
+        .gd-upload { padding: 0.6rem 0.8rem; }
+
+        /* ── Right pane: result (top) + grading (bottom) ─────────────────── */
+        .grade-right {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            height: 100%;
+        }
+        .grade-result-pane {
+            flex: 1 1 48%;
+            min-height: 140px;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .grade-result-body {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 1rem 1.15rem 1.25rem;
+        }
+        .gd-result-summary { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 13px; margin-bottom: 1rem; }
+        .gd-result-summary .rs-label {
+            color: var(--oj-text-muted, #666);
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+        .gd-result-summary .rs-value { font-weight: 700; color: var(--oj-text, #222); }
+        .gd-testcases { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .gd-testcases th, .gd-testcases td {
+            border-bottom: 1px solid var(--oj-border, #ccc);
+            padding: 0.3rem 0.45rem;
+            text-align: left;
+        }
+        .gd-testcases th { color: var(--oj-text-muted, #666); font-weight: 600; }
+        .gd-testcases tr:last-child td { border-bottom: none; }
+
+        .grade-v-splitter {
+            height: 5px;
+            flex-shrink: 0;
+            cursor: row-resize;
+            background: transparent;
+            position: relative;
+            border-top: 1px solid var(--oj-border, #ccc);
+            border-bottom: 1px solid var(--oj-border, #ccc);
+            z-index: 2;
+        }
+        .grade-v-splitter:hover,
+        .grade-v-splitter.is-dragging { background: var(--oj-accent-soft, #e8f0fb); }
+        .grade-v-splitter::after {
+            content: "";
+            position: absolute;
+            inset: -2px 0;
+        }
+        .grade-review-pane {
+            flex: 1 1 42%;
+            min-height: 180px;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            overflow: hidden;
+            background: var(--oj-surface, #fff);
+        }
+        .grade-review-body {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 0.85rem 1rem 1.1rem;
+        }
+        .score-row {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 0.75rem;
+        }
+        .score-row label { font-size: 13px; font-weight: 600; color: var(--oj-text, #222); }
+        .score-row input {
+            width: 5.5rem;
+            height: 32px;
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: 4px;
+            padding: 0 0.45rem;
+            font-size: 13px;
+            background: var(--oj-surface, #fff);
+            color: var(--oj-text, #222);
+        }
+        .score-row .muted { color: var(--oj-text-muted, #666); font-size: 12px; }
+        .rte-wrap {
+            border: 1px solid var(--oj-border, #ccc);
+            border-radius: 4px;
+            background: var(--oj-surface, #fff);
+        }
+        .rte-wrap textarea#g-note {
+            width: 100%;
+            min-height: 160px;
+            border: 0;
+            padding: 0.8rem;
+            box-sizing: border-box;
+            font: inherit;
+            resize: vertical;
+            background: var(--oj-surface, #fff);
+            color: var(--oj-text, #222);
+        }
+        .save-row { margin-top: 0.7rem; display: flex; justify-content: flex-end; }
+
+        @media (max-width: 900px) {
+            .ws-body.layout-lr { flex-direction: column; }
+            .ws-body.layout-lr .ws-pane-left {
+                width: 100% !important;
+                height: 42%;
+                border-right: none;
+                border-bottom: 1px solid var(--oj-border, #ccc);
+            }
+            .ws-body.layout-lr .ws-splitter {
+                width: auto;
+                height: 5px;
+                cursor: row-resize;
+            }
+            .ws-toolbar { padding-inline: .6rem; }
+            .ws-toolbar .ctx-label { max-width: 9rem; }
+        }
+    </style>
+{% endblock %}
+
+{% block js_media %}
+    <script type="text/javascript">
+        $(function () {
+            // ── Server-provided data ────────────────────────────────────────
+            // grade_submissions_json is serialized with |tojson (html-safe JSON:
+            // `<`, `>`, `&`, `'` become \u003c etc.), so student-controlled
+            // source can never break out of this <script> block (stored XSS).
+            var submissions = {{ grade_submissions_json|tojson }};
+            var problems = {{ grade_problems_json|tojson }};
+            var saveUrl = {{ url('contest_grade_save', contest.key)|tojson }};
+            var releaseUrl = {{ url('contest_grade_release', contest.key)|tojson }};
+            var rejudgeUrl = {{ url('submission_rejudge')|tojson }};
+            var statusUrl = {{ url('contest_grade_status', contest.key)|tojson }};
+            var released = {{ 'true' if grade_released else 'false' }};
+            // Rejudge additionally needs staff + the rejudge_submission perm
+            // (enforced server-side by the widget too); disable the button when absent.
+            var canRejudge = {{ 'true' if request.user.is_staff and request.user.has_perm('judge.rejudge_submission') else 'false' }};
+            var selectedId = null;
+            var filteredRows = [];
+
+            function esc(s) {
+                return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+                    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+                });
+            }
+
+            // problems is a list of dicts: {code, name, letter, description}.
+            function problemMeta(code) {
+                for (var i = 0; i < problems.length; i++) {
+                    if (problems[i].code === code) return problems[i];
+                }
+                return null;
+            }
+            function problemName(code) {
+                var p = problemMeta(code);
+                return p ? p.name : code;
+            }
+            function problemLabel(code) {
+                var p = problemMeta(code);
+                return p && p.letter ? p.letter + '. ' + p.name : problemName(code);
+            }
+            function getSubmission(id) {
+                for (var i = 0; i < submissions.length; i++) {
+                    if (submissions[i].id === id) return submissions[i];
+                }
+                return null;
+            }
+            function scoreText(s) {
+                return (s.points != null ? s.points : '—') + ' / ' + (s.total != null ? s.total : '—');
+            }
+
+            function refreshReleaseButton() {
+                $('#btn-release').html(
+                    '<i class="fa fa-flag-checkered"></i> ' + (released ? '{{ _('Unrelease') }}' : '{{ _('Release') }}')
+                );
+                $('#btn-release').attr('title', released
+                    ? '{{ _('Withdraw the released grades from students') }}'
+                    : '{{ _('Reveal final grades to students (results_finalized)') }}');
+            }
+
+            // ── Filtering (queue / participation / problem / user / attempts) ─
+            function filtered() {
+                var q = $('#f-queue').val();
+                var part = $('#f-part').val();
+                var problem = $('#f-problem').val();
+                var user = $('#f-user').val().trim().toLowerCase();
+                var attempts = $('#f-attempts').val();
+                var rows = submissions.filter(function (s) {
+                    if (problem && s.problem !== problem) return false;
+                    if (user && (s.user || '').toLowerCase().indexOf(user) < 0) return false;
+                    if (part === 'live' && s.virtual) return false;
+                    if (part === 'virtual' && !s.virtual) return false;
+                    if (q === 'final' && !s.is_latest) return false;
+                    if (q === 'ungraded' && s.points != null) return false;
+                    if (q === 'graded' && s.points == null) return false;
+                    return true;
+                });
+                // Attempts aggregation: collapse multiple submissions per (user, problem)
+                // to either the highest-scoring or the latest one. ``submissions`` is ordered
+                // newest-first, so the latest is the first row seen; for highest we scan ahead.
+                if (attempts === 'latest' || attempts === 'best') {
+                    var seen = {};
+                    var out = [];
+                    for (var i = 0; i < rows.length; i++) {
+                        var key = rows[i].user + '\u0000' + rows[i].problem;
+                        if (key in seen) continue;
+                        seen[key] = true;
+                        if (attempts === 'latest') {
+                            out.push(rows[i]);
+                        } else {
+                            // Highest score: scan ahead for the max-points row for this (user, problem).
+                            var best = rows[i];
+                            for (var j = i + 1; j < rows.length; j++) {
+                                var k2 = rows[j].user + '\u0000' + rows[j].problem;
+                                if (k2 !== key) continue;
+                                if ((rows[j].points || 0) > (best.points || 0)) best = rows[j];
+                            }
+                            out.push(best);
+                        }
+                    }
+                    rows = out;
+                }
+                return rows;
+            }
+
+            function submissionBadges(s) {
+                var bits = '';
+                if (s.points == null) bits += '<span class="badge badge-review">pending</span>';
+                else bits += '<span class="badge badge-done">graded</span>';
+                if (s.is_latest) bits += '<span class="badge badge-final">final</span>';
+                if (released) bits += '<span class="badge badge-released">released</span>';
+                if (s.virtual) bits += '<span class="badge badge-hidden">V</span>';
+                return bits;
+            }
+
+            // ── Submission list (drawer) ────────────────────────────────────
+            function renderList() {
+                filteredRows = filtered();
+                $('#drawer-progress').text(filteredRows.length + ' {{ _('submissions') }}');
+                $('#left-summary').text(filteredRows.length + ' rows' + (released ? ' · {{ _('released') }}' : ''));
+                if (!selectedId && filteredRows.length) selectedId = filteredRows[0].id;
+                /* Never keep a stale selected id that the current filters hide. */
+                if (selectedId && !getSubmission(selectedId)) {
+                    selectedId = filteredRows.length ? filteredRows[0].id : null;
+                }
+
+                $('#submission-list').html(filteredRows.map(function (s) {
+                    return '<div class="submission-row' + (s.id === selectedId ? ' active' : '') + '" data-id="' + s.id + '">' +
+                        '<div class="sub-result">' +
+                            '<div class="score">' + esc(scoreText(s)) + '</div>' +
+                            '<div class="state">' + esc(s.result || '—') + ' | ' + esc(s.lang || '—') + '</div>' +
+                        '</div>' +
+                        '<div class="sub-main">' +
+                            '<div class="sub-info">' +
+                                '<div class="name">' + esc(problemLabel(s.problem)) + '</div>' +
+                                '<div><span class="time">' + esc(s.user) + ' · ' + esc(s.date) + '</span> ' + submissionBadges(s) + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="sub-usage">' +
+                            '<div class="time">' + (s.time != null ? Number(s.time).toFixed(2) + 's' : '---') + '</div>' +
+                            '<div class="memory">' + esc(s.memory != null ? s.memory : '---') + '</div>' +
+                        '</div>' +
+                    '</div>';
+                }).join('') || '<div class="grade-empty">{{ _('No submissions match the current filters.') }}</div>');
+
+                $('#submission-list .submission-row[data-id]').off('click').on('click', function () {
+                    selectSubmission(parseInt($(this).attr('data-id'), 10));
+                });
+
+                var idx = filteredRows.findIndex(function (r) { return r.id === selectedId; });
+                $('#btn-prev').prop('disabled', idx <= 0);
+                $('#btn-next').prop('disabled', idx < 0 || idx >= filteredRows.length - 1);
+            }
+
+            function renderAnswerSource(s) {
+                if (s.upload && s.upload.download_url) {
+                    return '<div class="gd-upload"><a class="btn" href="' + esc(s.upload.download_url) + '" download>' +
+                        '<i class="fa fa-download"></i> ' + esc(s.upload.original_name || 'download') + '</a>' +
+                        (s.upload.size != null ? ' <span class="muted">' + (s.upload.size / 1024).toFixed(1) + ' KB</span>' : '') +
+                        '</div>';
+                }
+                return '<pre class="source-code">' + esc(s.source || '{{ _('No source.') }}') + '</pre>';
+            }
+
+            // ── Left pane: info · version · stem · source ───────────────────
+            function renderLeft() {
+                var box = document.getElementById('pane-left-body');
+                var hint = document.getElementById('left-hint');
+                var s = getSubmission(selectedId);
+                if (!s) {
+                    box.innerHTML = '<div class="grade-empty">{{ _('Select a submission on the left to start grading.') }}</div>';
+                    hint.textContent = '';
+                    return;
+                }
+                var desc = problemMeta(s.problem);
+                var siblings = submissions.filter(function (x) { return x.user === s.user && x.problem === s.problem; });
+                hint.textContent = '#' + s.id + ' · ' + s.user;
+
+                box.innerHTML =
+                    '<div class="grade-section">' +
+                        '<div class="gd-top"><h3>#' + s.id + ' · ' + esc(s.user) + '</h3></div>' +
+                        '<div class="grade-meta-line">' +
+                            esc(problemLabel(s.problem)) + ' · ' + esc(s.problem_type || '—') + ' · ' + esc(s.lang || '—') +
+                        '</div>' +
+                        '<div class="grade-meta-line muted">' +
+                            esc(s.date) + ' · ' +
+                            (s.reviewed_by
+                                ? ('{{ _('Last graded') }} ' + esc(s.reviewed_at || '') + ' by ' + esc(s.reviewed_by))
+                                : '{{ _('Not graded yet') }}') +
+                            (released
+                                ? (' · {{ _('student score') }} ' + scoreText(s) +
+                                  (s.is_latest ? '' : ' (#' + s.id + ')'))
+                                : ' · {{ _('student score not released') }}') +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="grade-section"><h4>{{ _('Version selection') }}</h4><div class="grade-card"><div class="version-row">' +
+                        '<select id="g-final">' +
+                        siblings.map(function (item) {
+                            return '<option value="' + item.id + '"' + (item.id === s.id ? ' selected' : '') + '>#' + item.id +
+                                ' · ' + esc(item.result || '?') + ' · ' + (item.points != null ? item.points : '—') + '/' + (item.total || '?') +
+                                (item.is_latest ? ' ★' : '') + '</option>';
+                        }).join('') +
+                        '</select>' +
+                    '</div></div></div>' +
+                    '<div class="grade-section"><h4>{{ _('Problem description') }}</h4>' +
+                        '<div class="grade-card grade-stem">' + esc(desc ? desc.description : '') + '</div></div>' +
+                    '<div class="grade-section grade-source-block"><h4>{{ _('Submitted source') }}</h4>' +
+                        '<div class="grade-card gd-source-card">' + renderAnswerSource(s) + '</div></div>';
+
+                $('#g-final').on('change', function () {
+                    selectSubmission(parseInt(this.value, 10));
+                });
+            }
+
+            // ── Right pane: result (top) + grading (bottom) ─────────────────
+            function renderRight() {
+                var resultBody = document.getElementById('result-body');
+                var reviewBody = document.getElementById('review-body');
+                var hint = document.getElementById('result-hint');
+                var s = getSubmission(selectedId);
+                if (!s) {
+                    resultBody.innerHTML = '<div class="grade-empty">{{ _('Select a submission to see its judging result.') }}</div>';
+                    reviewBody.innerHTML = '<div class="grade-empty">{{ _('Select a submission to grade it.') }}</div>';
+                    hint.textContent = '';
+                    $('#btn-submit-current').prop('disabled', true);
+                    $('#btn-rejudge').prop('disabled', true);
+                    return;
+                }
+                $('#btn-submit-current').prop('disabled', false);
+                $('#btn-rejudge').prop('disabled', !canRejudge);
+                hint.textContent = (s.result || '—') + ' · ' + (s.lang || '—');
+
+                var html = '<div class="gd-result-summary">' +
+                    '<div><div class="rs-label">{{ _('Result') }}</div><div class="rs-value">' + esc(s.result || '—') + '</div></div>' +
+                    '<div><div class="rs-label">{{ _('Points') }}</div><div class="rs-value">' + esc(scoreText(s)) + '</div></div>' +
+                    '<div><div class="rs-label">{{ _('Language') }}</div><div class="rs-value">' + esc(s.lang || '—') + '</div></div>' +
+                    '<div><div class="rs-label">{{ _('Time') }}</div><div class="rs-value">' + (s.time != null ? Number(s.time).toFixed(2) + 's' : '—') + '</div></div>' +
+                    '<div><div class="rs-label">{{ _('Memory') }}</div><div class="rs-value">' + esc(s.memory != null ? s.memory : '—') + '</div></div>' +
+                    '</div>';
+
+                if (s.test_cases && s.test_cases.length) {
+                    html += '<table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Time') }}</th><th>{{ _('Memory') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
+                        s.test_cases.map(function (tc) {
+                            // batch -1 marks supplementary AI rubric rows (teacher-only); show
+                            // their sub-question name instead of a bare case number.
+                            var label = (tc.batch === -1 && tc.feedback)
+                                ? '<span title="' + esc(tc.extended_feedback || '') + '">' + esc(tc.feedback) + '</span>'
+                                : tc.case;
+                            return '<tr><td>' + label + '</td><td>' + esc(tc.status) + '</td><td>' +
+                                (tc.time != null ? Number(tc.time).toFixed(2) + 's' : '—') + '</td><td>' +
+                                (tc.memory != null ? esc(tc.memory) : '—') + '</td><td>' +
+                                (tc.points != null ? tc.points : '—') + '</td></tr>';
+                        }).join('') +
+                        '</tbody></table>';
+                }
+                resultBody.innerHTML = html;
+
+                reviewBody.innerHTML =
+                    '<div class="score-row">' +
+                        '<label for="g-score">{{ _('Manual score') }}</label>' +
+                        '<input type="number" id="g-score" min="0" max="' + (s.total || 0) + '" step="0.01" value="' + (s.points != null ? s.points : 0) + '">' +
+                        '<span>/ ' + (s.total || 0) + '</span>' +
+                        '<span class="muted">{{ _('Manual grades are only pushed to students after Release.') }}</span>' +
+                    '</div>' +
+                    '<div class="rte-wrap" id="review-editor-mount"></div>' +
+                    '<div class="save-row"><button type="button" class="btn btn-primary" id="btn-save-score">' +
+                        '<i class="fa fa-check"></i> {{ _('Save grading') }}</button></div>';
+
+                mountReviewEditor(s);
+                $('#btn-save-score').on('click', saveCurrent);
+            }
+
+            function mountReviewEditor(s) {
+                var mount = document.getElementById('review-editor-mount');
+                if (!mount) return;
+                if (!window.RichEditor) {
+                    mount.innerHTML = '<textarea id="g-note" class="gd-note">' + esc(s.review_note || '') + '</textarea>';
+                    return;
+                }
+                mount.innerHTML = '<div data-rich-mount="grading-review" data-toolbar="full" data-placeholder="{{ _('Write review comment...') }}"></div>';
+                RichEditor.mount(mount);
+                RichEditor.init(mount);
+                try { RichEditor.setMarkdown('grading-review', s.review_note || ''); } catch (e) {}
+            }
+
+            function getReviewMarkdown() {
+                var fallback = document.getElementById('g-note');
+                if (fallback) return fallback.value || '';
+                if (!window.RichEditor) return '';
+                try { return RichEditor.getMarkdown('grading-review') || ''; } catch (e) { return ''; }
+            }
+
+            function saveCurrent() {
+                var s = getSubmission(selectedId);
+                if (!s) return;
+                var scoreEl = document.getElementById('g-score');
+                if (!scoreEl) return;
+                $.post(saveUrl, {
+                    submission: s.id,
+                    score: scoreEl.value,
+                    note: getReviewMarkdown()
+                }).done(function (res) {
+                    if (!res.ok) { alert(res.error || '{{ _('Failed to save') }}'); return; }
+                    for (var i = 0; i < submissions.length; i++) {
+                        if (submissions[i].id === res.submission) {
+                            submissions[i].points = res.score;
+                            submissions[i].total = res.total;
+                            submissions[i].review_note = res.note || '';
+                            submissions[i].reviewed_by = res.reviewed_by || null;
+                        }
+                    }
+                    renderList();
+                    renderLeft();
+                    renderRight();
+                }).fail(function () { alert('{{ _('Failed to save grading') }}'); });
+            }
+
+            function moveSelection(delta) {
+                if (!filteredRows.length) return;
+                var idx = filteredRows.findIndex(function (r) { return r.id === selectedId; });
+                if (idx < 0) idx = 0;
+                var next = Math.max(0, Math.min(filteredRows.length - 1, idx + delta));
+                selectSubmission(filteredRows[next].id);
+            }
+
+            function selectSubmission(id) {
+                selectedId = parseInt(id, 10);
+                renderList();
+                renderLeft();
+                renderRight();
+            }
+
+            // ── Drawer ───────────────────────────────────────────────────────
+            var drawer = document.getElementById('ws-drawer');
+            var backdrop = document.getElementById('drawer-backdrop');
+            var overviewBtn = document.getElementById('btn-overview');
+            function openDrawer() {
+                drawer.classList.add('open');
+                backdrop.classList.add('open');
+                overviewBtn.classList.add('is-active');
+            }
+            function closeDrawer() {
+                drawer.classList.remove('open');
+                backdrop.classList.remove('open');
+                overviewBtn.classList.remove('is-active');
+            }
+            $('#btn-overview').on('click', function () {
+                drawer.classList.contains('open') ? closeDrawer() : openDrawer();
+            });
+            $('#drawer-close').on('click', closeDrawer);
+            $('#drawer-backdrop').on('click', closeDrawer);
+
+            // ── Layout toggle ────────────────────────────────────────────────
+            $('#layout-toggle').on('click', function () {
+                var lr = $('#ws-body').hasClass('layout-lr');
+                $('#ws-body').toggleClass('layout-lr', !lr);
+                $('#ws-body').toggleClass('layout-tb', lr);
+                $('#layout-mode').text(lr ? '{{ _('Top-bottom') }}' : '{{ _('Left-right') }}');
+            });
+
+            // ── Horizontal splitter (left / right) ──────────────────────────
+            (function bindHSplitter() {
+                var splitter = document.getElementById('ws-splitter');
+                var left = document.getElementById('pane-left');
+                var body = document.getElementById('ws-body');
+                var dragging = false;
+                splitter.addEventListener('mousedown', function (e) {
+                    dragging = true;
+                    splitter.classList.add('is-dragging');
+                    e.preventDefault();
+                });
+                window.addEventListener('mousemove', function (e) {
+                    if (!dragging) return;
+                    var rect = body.getBoundingClientRect();
+                    if (body.classList.contains('layout-lr')) {
+                        var w = ((e.clientX - rect.left) / rect.width) * 100;
+                        w = Math.max(28, Math.min(72, w));
+                        left.style.width = w + '%';
+                        left.style.height = '';
+                    } else {
+                        var h = ((e.clientY - rect.top) / rect.height) * 100;
+                        h = Math.max(25, Math.min(75, h));
+                        left.style.height = h + '%';
+                        left.style.width = '100%';
+                    }
+                });
+                window.addEventListener('mouseup', function () {
+                    if (!dragging) return;
+                    dragging = false;
+                    splitter.classList.remove('is-dragging');
+                });
+            })();
+
+            // ── Vertical splitter (result / review) ──────────────────────────
+            (function bindVSplitter() {
+                var splitter = document.getElementById('grade-v-splitter');
+                var resultPane = document.getElementById('grade-result-pane');
+                var right = document.getElementById('grade-right');
+                var dragging = false;
+                splitter.addEventListener('mousedown', function (e) {
+                    dragging = true;
+                    splitter.classList.add('is-dragging');
+                    e.preventDefault();
+                });
+                window.addEventListener('mousemove', function (e) {
+                    if (!dragging) return;
+                    var rect = right.getBoundingClientRect();
+                    var h = ((e.clientY - rect.top) / rect.height) * 100;
+                    h = Math.max(22, Math.min(78, h));
+                    resultPane.style.flex = '0 0 ' + h + '%';
+                });
+                window.addEventListener('mouseup', function () {
+                    if (!dragging) return;
+                    dragging = false;
+                    splitter.classList.remove('is-dragging');
+                });
+            })();
+
+            // ── Filter events ────────────────────────────────────────────────
+            $('#f-queue, #f-part, #f-problem, #f-attempts').on('change', function () {
+                selectedId = null;
+                renderList();
+                renderLeft();
+                renderRight();
+            });
+            $('#f-user').on('input', function () {
+                selectedId = null;
+                renderList();
+                renderLeft();
+                renderRight();
+            });
+
+            // ── Toolbar: Submit grading / Release / Rejudge ──────────────────
+            $('#btn-submit-current').on('click', saveCurrent);
+
+            $('#btn-release').on('click', function () {
+                var $btn = $(this).prop('disabled', true);
+                $.post(releaseUrl).done(function (res) {
+                    if (!res.ok) { alert(res.error || '{{ _('Failed') }}'); return; }
+                    released = res.released;
+                    refreshReleaseButton();
+                    renderList();
+                    renderLeft();
+                    renderRight();
+                }).fail(function () { alert('{{ _('Failed to toggle release') }}'); })
+                  .always(function () { $btn.prop('disabled', false); });
+            });
+
+            // Queueing only schedules the judge — the verdict lands asynchronously.
+            // Poll the per-submission status endpoint until the judge finishes,
+            // then patch the in-memory row and re-render.
+            var rejudgePollTimer = null;
+
+            function applySubmissionUpdate(res) {
+                for (var i = 0; i < submissions.length; i++) {
+                    if (submissions[i].id === res.id) {
+                        submissions[i].status = res.status;
+                        submissions[i].result = res.result;
+                        submissions[i].points = res.points;
+                        submissions[i].total = res.total;
+                        submissions[i].time = res.time;
+                        submissions[i].memory = res.memory;
+                        submissions[i].test_cases = res.test_cases || [];
+                        submissions[i].review_note = res.review_note || '';
+                        submissions[i].reviewed_by = res.reviewed_by;
+                        break;
+                    }
+                }
+                renderList();
+                renderLeft();
+                renderRight();
+            }
+
+            function pollRejudgeResult(id) {
+                var tries = 0;
+                if (rejudgePollTimer) clearInterval(rejudgePollTimer);
+                rejudgePollTimer = setInterval(function () {
+                    tries++;
+                    $.get(statusUrl, {submission: id}).done(function (res) {
+                        if (!res.ok || res.id !== id) return;  // keep polling
+                        if (res.is_graded || tries >= 30) {     // ~60s cap
+                            clearInterval(rejudgePollTimer);
+                            rejudgePollTimer = null;
+                            $('#btn-rejudge').prop('disabled', !canRejudge);
+                            applySubmissionUpdate(res);
+                            if (res.is_graded) {
+                                $('#left-summary').append(' · <span class="badge badge-done">{{ _('Rejudge finished') }}: ' +
+                                    esc(res.result || '?') + ' · ' +
+                                    (res.points != null ? esc(res.points) + ' / ' + (res.total || '—') : '—') + '</span>');
+                            } else {
+                                alert('{{ _('Rejudge is taking unusually long — refresh the page to see the result.') }}');
+                            }
+                        }
+                    }).fail(function () {
+                        clearInterval(rejudgePollTimer);
+                        rejudgePollTimer = null;
+                        $('#btn-rejudge').prop('disabled', !canRejudge);
+                    });
+                }, 2000);
+            }
+
+            $('#btn-rejudge').on('click', function () {
+                if (!selectedId) return;
+                var $btn = $(this).prop('disabled', true);
+                $.post(rejudgeUrl, {id: selectedId}).done(function () {
+                    alert('{{ _('Rejudge queued') }}');
+                    pollRejudgeResult(selectedId);
+                }).fail(function (xhr) {
+                    alert('{{ _('Rejudge failed') }} (' + xhr.status + ')');
+                    $btn.prop('disabled', !canRejudge);
+                });
+            });
+
+            $('#btn-prev').on('click', function () { moveSelection(-1); });
+            $('#btn-next').on('click', function () { moveSelection(1); });
+
+            refreshReleaseButton();
+            renderList();
+            renderLeft();
+            renderRight();
+        });
+    </script>
+{% endblock %}
+
+{% block body %}
+    <div class="ws-app" id="grade-app">
+        <div class="ws-toolbar">
+            <button type="button" class="tool-btn icon-only" id="btn-overview" title="{{ _('Submission list') }}" aria-label="{{ _('Submission list') }}"><i class="fa fa-bars"></i></button>
+            <a class="ctx-label" id="ctx-home" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+            <span class="nav-arrows">
+                <button type="button" class="tool-btn icon-only" id="btn-prev" title="{{ _('Previous submission') }}" aria-label="{{ _('Previous submission') }}"><i class="fa fa-chevron-left"></i></button>
+                <button type="button" class="tool-btn icon-only" id="btn-next" title="{{ _('Next submission') }}" aria-label="{{ _('Next submission') }}"><i class="fa fa-chevron-right"></i></button>
+            </span>
+            <div class="ws-layout-switch">
+                <button type="button" class="layout-toggle" id="layout-toggle" title="{{ _('Toggle left/right vs top/bottom layout') }}"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button>
+            </div>
+            <div class="grade-actions">
+                <button type="button" class="tool-btn" id="btn-release"><i class="fa fa-flag-checkered"></i> {{ _('Release') }}</button>
+                <button type="button" class="tool-btn" id="btn-rejudge" disabled title="{{ _('Requires staff + rejudge permission') }}"><i class="fa fa-refresh"></i> {{ _('Rejudge') }}</button>
+                <button type="button" class="tool-btn submit-btn" id="btn-submit-current" disabled><i class="fa fa-check"></i> {{ _('Submit grading') }}</button>
+            </div>
+        </div>
+
+        <div class="ws-body layout-lr" id="ws-body">
+            <div class="ws-drawer-backdrop" id="drawer-backdrop"></div>
+            <aside class="ws-drawer grade-drawer" id="ws-drawer" aria-label="{{ _('Submission list') }}">
+                <div class="ws-drawer-summary">
+                    <button type="button" class="close-btn drawer-summary-close" id="drawer-close" title="{{ _('Close') }}" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button>
+                    <span id="drawer-progress">0 {{ _('submissions') }}</span>
+                </div>
+                <div class="grade-filters">
+                    <div class="grade-filter-grid">
+                        <div>
+                            <label for="f-queue">{{ _('Queue') }}</label>
+                            <select id="f-queue">
+                                <option value="all">{{ _('All submissions') }}</option>
+                                <option value="final">{{ _('Final versions') }}</option>
+                                <option value="ungraded">{{ _('Ungraded') }}</option>
+                                <option value="graded">{{ _('Graded') }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="f-part">{{ _('Participation') }}</label>
+                            <select id="f-part">
+                                <option value="all">{{ _('All') }}</option>
+                                <option value="live">{{ _('Live') }}</option>
+                                <option value="virtual">{{ _('Virtual') }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="f-problem">{{ _('Problem') }}</label>
+                            <select id="f-problem">
+                                <option value="">{{ _('All problems') }}</option>
+                                {% for p in grade_problems %}
+                                    <option value="{{ p.code }}">{% if p.letter %}{{ p.letter }}. {% endif %}{{ p.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="f-attempts">{{ _('Attempts') }}</label>
+                            <select id="f-attempts">
+                                <option value="all">{{ _('All attempts') }}</option>
+                                <option value="best">{{ _('Highest score') }}</option>
+                                <option value="latest">{{ _('Last submission') }}</option>
+                            </select>
+                        </div>
+                        <div class="wide">
+                            <label for="f-user">{{ _('User') }}</label>
+                            <input id="f-user" placeholder="{{ _('Search user') }}">
+                        </div>
+                    </div>
+                    <div class="grade-filter-summary" id="left-summary"></div>
+                </div>
+                <div class="ws-drawer-body">
+                    <div class="grade-list-head"><i class="fa fa-list"></i> {{ _('Submissions') }}</div>
+                    <div class="submission-list" id="submission-list"></div>
+                </div>
+            </aside>
+
+            <section class="ws-pane ws-pane-left" id="pane-left">
+                <div class="ide-head">
+                    <span class="ide-label"><i class="fa fa-file-text-o"></i> {{ _('Submission') }}</span>
+                    <span class="allowed-hint" id="left-hint"></span>
+                </div>
+                <div class="grade-left-scroll" id="pane-left-body">
+                    <div class="grade-empty">{{ _('Select a submission on the left to start grading.') }}</div>
+                </div>
+            </section>
+
+            <div class="ws-splitter" id="ws-splitter"></div>
+
+            <section class="ws-pane ws-pane-right" id="pane-right">
+                <div class="grade-right" id="grade-right">
+                    <div class="grade-result-pane" id="grade-result-pane">
+                        <div class="ide-head">
+                            <span class="ide-label"><i class="fa fa-check-square-o"></i> {{ _('Answer result') }}</span>
+                            <span class="allowed-hint" id="result-hint"></span>
+                        </div>
+                        <div class="grade-result-body" id="result-body">
+                            <div class="grade-empty">{{ _('Select a submission to see its judging result.') }}</div>
+                        </div>
+                    </div>
+                    <div class="grade-v-splitter" id="grade-v-splitter" title="{{ _('Drag to resize result / grading height') }}"></div>
+                    <div class="grade-review-pane" id="grade-review-pane">
+                        <div class="ide-head">
+                            <span class="ide-label"><i class="fa fa-pencil"></i> {{ _('Grading and review') }}</span>
+                            <span class="allowed-hint">{{ _('Manual grading') }}</span>
+                        </div>
+                        <div class="grade-review-body" id="review-body">
+                            <div class="grade-empty">{{ _('Select a submission to grade it.') }}</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+{% endblock %}
+
+{% block bodyend %}
+    <script src="{{ static('rich_editor.js') }}"></script>
+{% endblock %}

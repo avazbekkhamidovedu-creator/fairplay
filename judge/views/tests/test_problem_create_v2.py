@@ -3,10 +3,11 @@ import os
 import tempfile
 import zipfile
 from io import BytesIO
+from unittest import mock
 
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from reversion.models import Version
 
@@ -285,6 +286,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    @override_settings(LANGUAGES=[('en', 'English'), ('zh-hans', 'Chinese (Simplified)')])
     def test_create_mcq_persists_advanced_fields(self):
         from django.contrib.auth.models import Permission
         creator = self.users['creator']
@@ -345,6 +347,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(tr.name, '进阶题')
         self.assertEqual(tr.description, '中文描述')
 
+    @override_settings(LANGUAGES=[('en', 'English'), ('zh-hans', 'Chinese (Simplified)')])
     def test_edit_omitting_solution_and_translations_keeps_them(self):
         """Partial edit payloads must not wipe Advanced solution/translations."""
         self.client.force_login(self.users['creator'])
@@ -602,11 +605,15 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
 
     def test_ai_difficulty_endpoint(self):
         self.client.force_login(self.users['creator'])
-        response = self.client.post(
-            reverse('problem_create_v2_ai_difficulty'),
-            data=json.dumps({'description': 'short'}),
-            content_type='application/json',
-        )
+        # Mock the LLM as unconfigured so the endpoint deterministically uses its heuristic
+        # fallback instead of a real model call (which would hang/time out on a host that has a
+        # configured-but-unreachable LLM, e.g. the production container).
+        with mock.patch('judge.llm.is_configured', return_value=False):
+            response = self.client.post(
+                reverse('problem_create_v2_ai_difficulty'),
+                data=json.dumps({'description': 'short'}),
+                content_type='application/json',
+            )
         self.assertEqual(response.status_code, 200)
         self.assertIn(response.json()['level'], ('easy', 'medium', 'hard'))
 
@@ -792,11 +799,14 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
 
     def test_ai_problem_type_endpoint(self):
         self.client.force_login(self.users['creator'])
-        response = self.client.post(
-            reverse('problem_create_v2_ai_problem_type'),
-            data=json.dumps({'description': 'Find shortest path in a weighted graph using Dijkstra.'}),
-            content_type='application/json',
-        )
+        # Mock the LLM as unconfigured so the endpoint uses its deterministic substring fallback
+        # instead of a real model call (which hangs on a configured-but-unreachable LLM).
+        with mock.patch('judge.llm.is_configured', return_value=False):
+            response = self.client.post(
+                reverse('problem_create_v2_ai_problem_type'),
+                data=json.dumps({'description': 'Find shortest path in a weighted graph using Dijkstra.'}),
+                content_type='application/json',
+            )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['suggestions'])
 

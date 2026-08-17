@@ -1,0 +1,528 @@
+"""Variant / mutation tests for the contest grading workspace.
+
+Complements ``test_contest_grade.py`` (role matrix, validation, XSS). This file
+pins the *edge* and *interaction* behaviors that the role/validation suite does
+not touch, in a "variant" (hostile / extreme input) and "mutation" (grant /
+revoke / interaction) style:
+
+* **Rejudge endpoint** (``submission_rejudge``) as reached from the grade page:
+  id validation, the staff+permission+editor gate, method check, queue
+  dispatch, redirect passthrough. This is the endpoint behind the teacher's
+  "Rejudge" button — the button is disabled without staff + ``rejudge_submission``.
+* **Grade status endpoint** (``contest_grade_status``) the page polls after a
+  rejudge: authorization, input validation, and the returned status/points.
+* **canRejudge flag** on the grade page (button enablement per role).
+* **Save-endpoint variants**: infinity / huge exponents / NaN / booleans /
+  hex floats, fractional scores, whitespace ids, negative / zero / huge ids.
+* **Release variants**: double-toggle, per-contest isolation, score side effects.
+* **Payload variants**: newest-version marker, virtual badge, empty contest.
+* **Interactions**: a rejudge's machine scoring overwrites the manual grade;
+  and the propagation contract — a manual grade must reach the student's
+  *contest* score (``ContestSubmission.points`` + ``recompute_results``).
+
+Tests that assert a *desired* contract the current code does not yet meet are
+marked ``expectedFailure`` and cite the gap; the accompanying passing tests
+pin the current behavior so the diff is visible when the gap is fixed.
+"""
+
+import json
+import unittest
+from datetime import timedelta
+from unittest import mock
+
+from django.test import Client
+from django.urls import reverse
+from django.utils import timezone
+
+from judge.models import ContestParticipation, ContestProblem, ContestSubmission, Language, Submission
+from judge.models.tests.util import create_contest, create_user
+from judge.views.tests.test_contest_grade import GradeTestBase
+
+
+class ContestGradeRejudgeEndpointTestCase(GradeTestBase):
+    """The rejudge endpoint the grade page's Rejudge button posts to."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        # Staff with every permission needed to rejudge this problem's submissions.
+        cls.staff_editor = create_user(
+            username='grade_var_staff', is_staff=True,
+            user_permissions=('edit_all_contest', 'edit_own_problem', 'edit_all_problem',
+                              'rejudge_submission'),
+        )
+        # Problem author (is_editable_by True) but NOT staff → must be denied.
+        cls.problem_author = create_user(
+            username='grade_var_author',
+            user_permissions=('edit_own_problem', 'rejudge_submission'),
+        )
+        cls.problem.authors.add(cls.problem_author.profile)
+        # Staff but missing the rejudge_submission permission.
+        cls.staff_no_perm = create_user(
+            username='grade_var_staff_noperm', is_staff=True,
+            user_permissions=('edit_all_contest',),
+        )
+        cls.rejudge_url = reverse('submission_rejudge')
+
+    def _rejudge(self, user, data):
+        return self._client(user).post(self.rejudge_url, data)
+
+    def test_missing_id_is_400(self):
+        self.assertEqual(self._rejudge(self.superuser, {}).status_code, 400)
+
+    def test_non_digit_id_is_400(self):
+        for bad in ('abc', '-1', '1.5', '1e3', '0x10', ''):
+            with self.subTest(bad=bad):
+                self.assertEqual(self._rejudge(self.superuser, {'id': bad}).status_code, 400)
+
+    def test_unknown_submission_is_400(self):
+        self.assertEqual(self._rejudge(self.superuser, {'id': '99999999'}).status_code, 400)
+
+    def test_get_method_is_405(self):
+        self.assertEqual(self._client(self.superuser).get(self.rejudge_url).status_code, 405)
+
+    def test_anonymous_is_redirected_to_login(self):
+        response = Client().post(self.rejudge_url, {'id': str(self.submission.id)})
+        self.assertEqual(response.status_code, 302)
+
+    def test_curator_cannot_rejudge(self):
+        # is_subs_manageable_by requires is_staff — a course teacher (curator)
+        # never gets the Rejudge button enabled, and the endpoint refuses too.
+        self.assertEqual(
+            self._rejudge(self.curator, {'id': str(self.submission.id)}).status_code, 403)
+
+    def test_problem_author_without_staff_cannot_rejudge(self):
+        self.assertEqual(
+            self._rejudge(self.problem_author, {'id': str(self.submission.id)}).status_code, 403)
+
+    def test_staff_without_rejudge_perm_cannot_rejudge(self):
+        self.assertEqual(
+            self._rejudge(self.staff_no_perm, {'id': str(self.submission.id)}).status_code, 403)
+
+    def test_superuser_queues_rejudge(self):
+        with mock.patch.object(Submission, 'judge') as judge:
+            response = self._rejudge(self.superuser, {'id': str(self.submission.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'success')
+        judge.assert_called_once()
+        self.assertTrue(judge.call_args.kwargs['rejudge'])
+        self.assertEqual(judge.call_args.kwargs['rejudge_user'], self.superuser)
+
+    def test_staff_editor_queues_rejudge(self):
+        with mock.patch.object(Submission, 'judge') as judge:
+            response = self._rejudge(self.staff_editor, {'id': str(self.submission.id)})
+        self.assertEqual(response.status_code, 200)
+        judge.assert_called_once()
+
+    def test_path_param_redirects_after_queueing(self):
+        with mock.patch.object(Submission, 'judge'):
+            response = self._rejudge(
+                self.superuser, {'id': str(self.submission.id), 'path': '/problem/grade-perm-prob'})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], '/problem/grade-perm-prob')
+
+
+class ContestGradeCanRejudgeFlagTestCase(GradeTestBase):
+    """The grade page's Rejudge button is only enabled for staff + permission."""
+
+    def test_flag_true_for_superuser(self):
+        response = self._client(self.superuser).get(self.grade_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'var canRejudge = true')
+
+    def test_flag_false_for_curator(self):
+        # A course teacher can grade but never rejudge (needs staff) — the
+        # button stays disabled; this is why the teacher-side rejudge appears inert.
+        response = self._client(self.curator).get(self.grade_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'var canRejudge = false')
+        self.assertContains(response, 'id="btn-rejudge" disabled')
+
+    def test_flag_false_for_author(self):
+        response = self._client(self.author).get(self.grade_url)
+        self.assertContains(response, 'var canRejudge = false')
+
+
+class ContestGradeSaveVariantTestCase(GradeTestBase):
+    """Hostile / fractional / extreme score and id variants for the save endpoint.
+
+    Every test posts its own score and asserts on that result, so the tests stay
+    order-independent despite sharing the fixture submission.
+    """
+
+    def _save(self, data, user=None):
+        return self._client(user or self.curator).post(self.save_url, data)
+
+    def test_missing_score_treated_as_zero(self):
+        response = self._save({'submission': str(self.submission.id)})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 0.0)
+
+    def test_negative_zero_stays_zero(self):
+        response = self._save({'submission': str(self.submission.id), 'score': '-0'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 0.0)
+
+    def test_infinity_clamps_to_total(self):
+        response = self._save({'submission': str(self.submission.id), 'score': 'inf'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 100.0)
+
+    def test_negative_infinity_clamps_to_zero(self):
+        response = self._save({'submission': str(self.submission.id), 'score': '-inf'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 0.0)
+
+    def test_huge_exponent_clamps_to_total(self):
+        # float('1e309') overflows to inf without raising — must clamp, not 500.
+        response = self._save({'submission': str(self.submission.id), 'score': '1e309'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 100.0)
+
+    def test_fractional_score_persisted(self):
+        response = self._save({'submission': str(self.submission.id), 'score': '3.14159'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 3.14159)
+
+    def test_boolean_string_rejected(self):
+        self.assertEqual(
+            self._save({'submission': str(self.submission.id), 'score': 'True'}).status_code, 400)
+        self.assertEqual(
+            self._save({'submission': str(self.submission.id), 'score': 'False'}).status_code, 400)
+
+    def test_hex_float_string_rejected(self):
+        self.assertEqual(
+            self._save({'submission': str(self.submission.id), 'score': '0x10'}).status_code, 400)
+
+    def test_truncated_exponent_rejected(self):
+        self.assertEqual(
+            self._save({'submission': str(self.submission.id), 'score': '1e'}).status_code, 400)
+
+    def test_negative_submission_id_is_404(self):
+        self.assertEqual(self._save({'submission': '-5', 'score': '10'}).status_code, 404)
+
+    def test_zero_submission_id_is_404(self):
+        self.assertEqual(self._save({'submission': '0', 'score': '10'}).status_code, 404)
+
+    def test_huge_submission_id_is_404(self):
+        self.assertEqual(
+            self._save({'submission': '999999999999', 'score': '10'}).status_code, 404)
+
+    def test_submission_id_with_whitespace_parses(self):
+        response = self._save({'submission': ' %s ' % self.submission.id, 'score': '42'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 42.0)
+
+    @unittest.expectedFailure
+    def test_nan_score_does_not_crash(self):
+        # Desired contract: a hostile 'nan' payload is rejected or clamped to a
+        # real number, never a 500. Current gap: float('nan') passes the clamp
+        # (min/max both return nan), and writing NaN into a MySQL DOUBLE raises
+        # in strict mode → the view's save() is outside any try/except → 500.
+        response = self._save({'submission': str(self.submission.id), 'score': 'nan'})
+        self.assertEqual(response.status_code, 400)
+
+
+class ContestGradeScorePropagationTestCase(GradeTestBase):
+    """Manual grade vs the student's *contest* score (ContestSubmission).
+
+    The grade page reads ``Submission.points``, and the score students actually
+    see (ranking / per-problem cells / participation.score) is computed by the
+    contest format from ``ContestSubmission.points`` via
+    ``participation.recompute_results()``. Saving a manual grade must therefore
+    update both — this was a gap (only ``Submission.points`` was written) and
+    is the contract locked here.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.participation = ContestParticipation.objects.create(
+            contest=cls.contest, user=cls.student.profile,
+            real_start=timezone.now() - timedelta(hours=1),
+        )
+        cls.contest_submission = ContestSubmission.objects.create(
+            submission=cls.submission,
+            problem=ContestProblem.objects.get(contest=cls.contest),
+            participation=cls.participation, points=50.0,
+        )
+        cls.participation.recompute_results()
+
+    def test_manual_grade_updates_base_submission_points(self):
+        response = self._client(self.curator).post(
+            self.save_url, {'submission': str(self.submission.id), 'score': '90'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 90.0)
+
+    def test_manual_grade_updates_contest_submission_points(self):
+        # Regression: the teacher's override used to die on the base row only;
+        # the student-facing ContestSubmission.points stayed on the machine score.
+        response = self._client(self.curator).post(
+            self.save_url, {'submission': str(self.submission.id), 'score': '90'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest_submission.refresh_from_db()
+        self.assertEqual(self.contest_submission.points, 90.0)
+
+    def test_manual_grade_recomputes_participation_score(self):
+        # recompute_results() folds the manual grade into participation.score,
+        # which is what the scoreboard / ranking display.
+        response = self._client(self.curator).post(
+            self.save_url, {'submission': str(self.submission.id), 'score': '90'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 90.0)
+
+    def test_manual_grade_propagates_to_contest_score(self):
+        # End-to-end contract for "manual grade must be visible to students":
+        # the format's per-problem score for the student's live participation
+        # reflects the manual grade.
+        response = self._client(self.curator).post(
+            self.save_url, {'submission': str(self.submission.id), 'score': '90'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest_submission.refresh_from_db()
+        self.assertEqual(self.contest_submission.points, 90.0)
+
+
+class ContestGradeRejudgeInteractionTestCase(GradeTestBase):
+    """Manual grades are fragile: a rejudge's machine scoring recomputes the
+    base Submission.points from case data, wiping the teacher's override."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.participation = ContestParticipation.objects.create(
+            contest=cls.contest, user=cls.student.profile,
+            real_start=timezone.now() - timedelta(hours=1),
+        )
+        cls.contest_submission = ContestSubmission.objects.create(
+            submission=cls.submission,
+            problem=ContestProblem.objects.get(contest=cls.contest),
+            participation=cls.participation, points=50.0,
+        )
+
+    def test_rejudge_machine_score_overwrites_manual_grade(self):
+        # Teacher overrides the score to 90...
+        response = self._client(self.curator).post(
+            self.save_url, {'submission': str(self.submission.id), 'score': '90'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 90.0)
+        # ...then the judge finishes a rejudge: tasks/submission.py recomputes
+        # Submission.points from case_points/case_total (60/100 → 60) and
+        # Submission.update_contest() folds it into ContestSubmission.points.
+        self.submission.case_points = 60
+        self.submission.case_total = 100
+        self.submission.save(update_fields=['case_points', 'case_total'])
+        self.submission.points = round(60 / 100 * 100, 1)
+        self.submission.save(update_fields=['points'])
+        self.submission.update_contest()
+        self.submission.refresh_from_db()
+        self.contest_submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 60.0)  # manual 90 wiped
+        self.assertEqual(self.contest_submission.points, 60.0)
+
+
+class ContestGradeReleaseVariantTestCase(GradeTestBase):
+    """Release / unrelease edge cases and isolation."""
+
+    def setUp(self):
+        # Reset the shared flag so toggle tests are order-independent.
+        self.contest.results_finalized = False
+        self.contest.save(update_fields=['results_finalized'])
+
+    def test_double_toggle_returns_to_original(self):
+        client = self._client(self.curator)
+        first = client.post(self.release_url)
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(json.loads(first.content)['released'])
+        second = client.post(self.release_url)
+        self.assertFalse(json.loads(second.content)['released'])
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.results_finalized)
+
+    def test_release_does_not_touch_submission_points(self):
+        self._client(self.curator).post(self.release_url)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 50.0)
+
+    def test_release_is_isolated_between_contests(self):
+        other = create_contest(
+            key='gradevar_other', name='Other',
+            start_time=timezone.now() - timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=1),
+            authors=('grade_superuser',),
+        )
+        other_url = reverse('contest_grade_release', args=[other.key])
+        self._client(self.superuser).post(other_url)
+        other.refresh_from_db()
+        self.contest.refresh_from_db()
+        self.assertTrue(other.results_finalized)
+        self.assertFalse(self.contest.results_finalized)
+
+    def test_release_anonymous_is_401(self):
+        response = Client().post(self.release_url)
+        self.assertEqual(response.status_code, 401)
+
+    def test_release_get_does_not_unrelease(self):
+        # ContestMixin.dispatch turns the GET handler's Http404 into a generic
+        # page — the security property is that a GET can never flip the flag,
+        # even from the released state.
+        self.contest.results_finalized = True
+        self.contest.save(update_fields=['results_finalized'])
+        self._client(self.curator).get(self.release_url)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.results_finalized)
+
+
+class ContestGradePayloadVariantTestCase(GradeTestBase):
+    """Data-shape variants in the grade page's embedded submission payload."""
+
+    def _grade_payload(self, user=None):
+        response = self._client(user or self.superuser).get(self.grade_url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode('utf-8')
+        # |tojson output is single-line; the submissions array is the first
+        # `var submissions = ...;` statement in the inline script.
+        return json.loads(html.split('var submissions = ')[1].split(';\n')[0])
+
+    def test_payload_orders_newest_first_and_marks_latest(self):
+        now = timezone.now()
+        Submission.objects.filter(id=self.submission.id).update(date=now - timedelta(hours=1))
+        older = Submission.objects.create(
+            user=self.student.profile, problem=self.problem,
+            language=Language.objects.get(key='PY3'), result='WA', status='D',
+            contest_object=self.contest, points=20.0, case_total=100,
+        )
+        Submission.objects.filter(id=older.id).update(date=now - timedelta(hours=2))
+        payload = self._grade_payload()
+        by_id = {s['id']: s for s in payload}
+        self.assertTrue(by_id[self.submission.id]['is_latest'])
+        self.assertFalse(by_id[older.id]['is_latest'])
+        # Newest submission appears first in the list (queryset orders -date).
+        ids_in_order = [s['id'] for s in payload]
+        self.assertLess(ids_in_order.index(self.submission.id), ids_in_order.index(older.id))
+
+    def test_virtual_submission_is_flagged(self):
+        virtual_part = ContestParticipation.objects.create(
+            contest=self.contest, user=self.student.profile, virtual=1,
+            real_start=timezone.now(),
+        )
+        sub = Submission.objects.create(
+            user=self.student.profile, problem=self.problem,
+            language=Language.objects.get(key='PY3'), result='AC', status='D',
+            contest_object=self.contest, points=100.0, case_total=100,
+        )
+        ContestSubmission.objects.create(
+            submission=sub, problem=ContestProblem.objects.get(contest=self.contest),
+            participation=virtual_part, points=100.0,
+        )
+        payload = self._grade_payload()
+        by_id = {s['id']: s for s in payload}
+        self.assertTrue(by_id[sub.id]['virtual'])
+        self.assertFalse(by_id[self.submission.id]['virtual'])
+
+    def test_empty_contest_payload_is_empty_list(self):
+        empty = create_contest(
+            key='gradevar_empty', name='Empty',
+            start_time=timezone.now() - timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=1),
+            authors=('grade_superuser',),
+        )
+        response = self._client(self.superuser).get(reverse('contest_grade', args=[empty.key]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'var submissions = []')
+
+    def test_review_note_and_reviewer_in_payload(self):
+        self.submission.review_note = 'looks good'
+        self.submission.reviewed_by = self.curator.profile
+        self.submission.reviewed_at = timezone.now()
+        self.submission.save(update_fields=['review_note', 'reviewed_by', 'reviewed_at'])
+        payload = self._grade_payload()
+        by_id = {s['id']: s for s in payload}
+        self.assertEqual(by_id[self.submission.id]['review_note'], 'looks good')
+        self.assertEqual(by_id[self.submission.id]['reviewed_by'], 'grade_curator')
+
+
+class ContestGradeStatusTestCase(GradeTestBase):
+    """The status endpoint the grade page polls while a rejudge runs."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.status_url = reverse('contest_grade_status', args=[cls.contest.key])
+
+    def _status(self, user, query):
+        return self._client(user).get(self.status_url, query)
+
+    def test_anonymous_is_401(self):
+        self.assertEqual(Client().get(self.status_url, {'submission': str(self.submission.id)}).status_code, 401)
+
+    def test_non_editor_is_403(self):
+        self.assertEqual(
+            self._status(self.student, {'submission': str(self.submission.id)}).status_code, 403)
+        self.assertEqual(
+            self._status(self.tester, {'submission': str(self.submission.id)}).status_code, 403)
+
+    def test_editor_gets_status_json(self):
+        response = self._status(self.curator, {'submission': str(self.submission.id)})
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['id'], self.submission.id)
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['status'], 'D')
+        self.assertEqual(data['points'], 50.0)
+        self.assertEqual(data['total'], 100)
+        self.assertTrue(data['is_graded'])
+        self.assertIn('test_cases', data)
+
+    def test_missing_submission_param_is_400(self):
+        self.assertEqual(self._status(self.curator, {}).status_code, 400)
+
+    def test_non_integer_submission_param_is_400(self):
+        for bad in ('abc', '1.5', '1e3'):
+            with self.subTest(bad=bad):
+                self.assertEqual(self._status(self.curator, {'submission': bad}).status_code, 400)
+
+    def test_negative_submission_param_is_404(self):
+        # int('-1') parses; only the lookup fails → 404 (same as the save endpoint).
+        self.assertEqual(self._status(self.curator, {'submission': '-1'}).status_code, 404)
+
+    def test_unknown_submission_is_404(self):
+        self.assertEqual(self._status(self.curator, {'submission': '99999999'}).status_code, 404)
+
+    def test_cross_contest_submission_is_404(self):
+        other = create_contest(
+            key='gradevar_st_other', name='Other',
+            start_time=timezone.now() - timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=1),
+            authors=('grade_superuser',),
+        )
+        other_url = reverse('contest_grade_status', args=[other.key])
+        response = self._client(self.superuser).get(
+            other_url, {'submission': str(self.submission.id)})
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_is_405(self):
+        # http_method_names = ['get'] — polling must never mutate anything.
+        response = self._client(self.curator).post(
+            self.status_url, {'submission': str(self.submission.id)})
+        self.assertEqual(response.status_code, 405)
+
+    def test_status_reflects_rejudge_in_flight(self):
+        # A queued submission reports is_graded=False so the page keeps polling.
+        self.submission.status = 'QU'
+        self.submission.save(update_fields=['status'])
+        data = json.loads(self._status(self.curator, {'submission': str(self.submission.id)}).content)
+        self.assertEqual(data['status'], 'QU')
+        self.assertFalse(data['is_graded'])
+        # Restore for other tests in the class.
+        self.submission.status = 'D'
+        self.submission.save(update_fields=['status'])

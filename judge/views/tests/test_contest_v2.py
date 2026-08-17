@@ -1,12 +1,12 @@
 import json
 from datetime import timedelta
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestTag, Organization
-from judge.models.tests.util import CommonDataMixin, create_contest, create_user
+from judge.models import Contest, ContestTag, Organization, Submission
+from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
 
 
 class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
@@ -160,6 +160,17 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
                 ),
             ),
             'normal_user': create_user(username='normal_user'),
+            # Holds only create_private_contest (no edit_all_contest): the "Add
+            # assignment" entry must be granted by this permission alone.
+            'contest_creator': create_user(
+                username='contest_creator',
+                user_permissions=('create_private_contest',),
+            ),
+            # edit_own_contest but NOT create_private_contest: must NOT see the create entry.
+            'edit_own_only': create_user(
+                username='edit_own_only',
+                user_permissions=('edit_own_contest',),
+            ),
         })
 
         cls.organization = Organization.objects.create(name='Test Org', slug='test-org')
@@ -182,6 +193,31 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['normal_user'])
         response = self.client.get(reverse('contest_create'))
         self.assertEqual(response.status_code, 403)
+
+    def test_create_private_contest_grants_access(self):
+        """A user holding only ``create_private_contest`` (no ``edit_all_contest``)
+        may open the contest creator — the "Add assignment" entry follows this permission."""
+        self.client.force_login(self.users['contest_creator'])
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_edit_own_contest_without_create_is_denied(self):
+        """``edit_own_contest`` alone must NOT grant the creator entry."""
+        self.client.force_login(self.users['edit_own_only'])
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_assignment_tab_gated_on_create_private_contest(self):
+        """The 'Add Assignment' tab renders for create_private_contest holders and is absent
+        otherwise (list page uses contest-list-tabs.html)."""
+        self.client.force_login(self.users['contest_creator'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertIn('/contests/create/', html)
+        self.assertIn('Add Assignment', html)
+
+        self.client.force_login(self.users['edit_own_only'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertNotIn('/contests/create/', html)
 
     def test_post_success(self):
         self.client.force_login(self.users['staff_contest_edit_all'])
@@ -384,3 +420,144 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         contest = Contest.objects.get(key='authortest')
         self.assertEqual(contest.authors.first(), self.users['staff_contest_edit_all'].profile)
+
+
+class ContestDetailSolvedStatusTestCase(TestCase):
+    """Detail page: green checkmark for problems solved *within the contest*.
+
+    Also covers the exam-style gating (a hidden result must not leak through the
+    checkmark before ``results_finalized``) and the "No description." placeholder
+    for contests without a statement.
+
+    Rendered with social + comments disabled so the page only goes through the
+    Jinja2 engine — on Python 3.14 + Django 4.2 the Django-DTL error path crashes
+    the test client's template-context copy (pre-existing env issue), which would
+    mask the real assertion below.
+    """
+
+    fixtures = ['language_all.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='statcontest', name='Stats',
+            start_time=_now - timedelta(days=1), end_time=_now + timedelta(days=1),
+            is_visible=True, description='',
+        )
+        cls.solved_problem = create_problem('solved-problem')
+        cls.attempted_problem = create_problem('attempted-problem')
+        from judge.models import ContestProblem, Language
+        cls.cp_solved = ContestProblem.objects.create(
+            contest=cls.contest, problem=cls.solved_problem, points=100, order=1)
+        cls.cp_attempted = ContestProblem.objects.create(
+            contest=cls.contest, problem=cls.attempted_problem, points=100, order=2)
+        cls.user = create_user(username='status_user')
+        # AC (full points) → solved; WA → attempted only.
+        cls.ac = Submission.objects.create(
+            user=cls.user.profile, problem=cls.solved_problem,
+            language=Language.objects.get(key='PY3'),
+            result='AC', status='D', contest_object=cls.contest,
+            case_points=100, case_total=100,
+        )
+        cls.wa = Submission.objects.create(
+            user=cls.user.profile, problem=cls.attempted_problem,
+            language=Language.objects.get(key='PY3'),
+            result='WA', status='D', contest_object=cls.contest,
+            case_points=0, case_total=100,
+        )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _get_detail(self):
+        return self.client.get(reverse('contest_view', args=['statcontest']))
+
+    @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+    def test_solved_and_attempted_sets(self):
+        response = self._get_detail()
+        self.assertEqual(response.status_code, 200)
+        solved = response.context['contest_solved_problem_ids']
+        attempted = response.context['contest_attempted_problem_ids']
+        self.assertIn(self.solved_problem.id, solved)
+        self.assertNotIn(self.attempted_problem.id, solved)
+        self.assertIn(self.solved_problem.id, attempted)
+        self.assertIn(self.attempted_problem.id, attempted)
+
+    @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+    def test_solved_problem_renders_green_check(self):
+        response = self._get_detail()
+        html = response.content.decode()
+        # The AC problem's row carries a solved checkmark icon.
+        self.assertIn('solved-problem-color fa fa-check-circle', html)
+        # The WA-only problem must not render one.
+        check_rows = html.count('solved-problem-color fa fa-check-circle')
+        self.assertEqual(check_rows, 1)
+
+    @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+    def test_empty_description_renders_placeholder(self):
+        """A contest without a statement must show a placeholder, not an empty box."""
+        response = self._get_detail()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('No description.', response.content.decode())
+
+    @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+    def test_anonymous_gets_no_solved_state(self):
+        client = Client()
+        response = client.get(reverse('contest_view', args=['statcontest']))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['contest_solved_problem_ids'], set())
+        self.assertEqual(response.context['contest_attempted_problem_ids'], set())
+
+
+class ContestDetailExamHiddenResultsTestCase(TestCase):
+    """Exam-style contests must not leak verdicts through the checkmark before release."""
+
+    fixtures = ['language_all.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='examcontest', name='Exam',
+            start_time=_now - timedelta(days=1), end_time=_now + timedelta(days=1),
+            is_visible=True, format_name='exam',
+        )
+        cls.problem = create_problem('exam-problem')
+        from judge.models import ContestProblem, Language
+        cls.cp = ContestProblem.objects.create(
+            contest=cls.contest, problem=cls.problem, points=100, order=1,
+            hide_results=True,
+        )
+        cls.user = create_user(username='exam_user')
+        cls.sub = Submission.objects.create(
+            user=cls.user.profile, problem=cls.problem,
+            language=Language.objects.get(key='PY3'),
+            result='AC', status='D', contest_object=cls.contest,
+            case_points=100, case_total=100,
+        )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _get_detail(self):
+        return self.client.get(reverse('contest_view', args=['examcontest']))
+
+    @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+    def test_solved_hidden_before_finalize(self):
+        """Before release the checkmark must be withheld (exam integrity)."""
+        self.contest.refresh_from_db()
+        self.assertFalse(self.contest.results_finalized)
+        response = self._get_detail()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['contest_solved_problem_ids'], set())
+
+    @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+    def test_solved_revealed_after_finalize(self):
+        self.contest.results_finalized = True
+        self.contest.save(update_fields=['results_finalized'])
+        response = self._get_detail()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(self.problem.id, response.context['contest_solved_problem_ids'])

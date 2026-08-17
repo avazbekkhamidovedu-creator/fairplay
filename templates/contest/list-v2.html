@@ -432,6 +432,10 @@
                         {% endif %}
                     {% endif %}
                 {% endif %}
+                {% if contest.is_editable_by(request.user) %}
+                    <a class="button" href="{{ url('contest_grade', contest.key) }}">{{ _('Grade') }}</a>
+                    <a class="button" href="{{ url('contest_edit', contest.key) }}">{{ _('Edit') }}</a>
+                {% endif %}
             </div>
         </article>
     {% endmacro %}

@@ -158,6 +158,10 @@ def group_test_cases(cases):
     max_execution_time = 0.0
     last = None
     for case in cases:
+        # Supplementary AI rubric rows (batch=-1, see question_types.code.AI_GRADE_BATCH) are
+        # teacher-only feedback; exclude them from the student-facing status aggregation.
+        if case.batch == -1:
+            continue
         if case.time:
             max_execution_time = max(max_execution_time, case.time)
         if case.batch != last and buf:
@@ -321,7 +325,12 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
             log.success = False
             log.error_message = str(e)[:2000]
             log.save()
-            return JsonResponse({'error': f'AI hint unavailable: {e}'}, status=503)
+            # Never leak backend internals (exception types, endpoints) to the student — log the
+            # detail server-side and return a stable, friendly message instead.
+            import logging
+            logging.getLogger(__name__).warning('AI hint failed for submission %d: %s', submission.id, e)
+            return JsonResponse(
+                {'error': 'Could not reach the AI service. Please try again later.'}, status=503)
 
         log.save()
         return JsonResponse({'hint': result.hint_text, 'remaining': ai_hints.get_remaining(request.profile.id)})

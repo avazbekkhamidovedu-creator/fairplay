@@ -7478,3 +7478,23 @@ msgstr "按课程分组"
 msgid "Group assignments by status"
 msgstr "按状态分组"
 
+
+#: templates/contest/grade.html
+msgid "Manual grades are only pushed to students after Release."
+msgstr "手动评分需点击 Release 后才会推送给学生。"
+
+#: templates/contest/grade.html
+msgid "Rejudge finished"
+msgstr "重判完成"
+
+#: templates/contest/grade.html
+msgid "Rejudge queued"
+msgstr "重判已排队"
+
+#: templates/contest/grade.html
+msgid "Rejudge failed"
+msgstr "重判失败"
+
+#: templates/contest/grade.html
+msgid "Rejudge is taking unusually long — refresh the page to see the result."
+msgstr "重判耗时较长，请刷新页面查看结果。"

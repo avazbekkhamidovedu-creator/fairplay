@@ -1528,7 +1528,6 @@ class ProblemCodeCheckView(LoginRequiredMixin, View):
         if not (
             request.user.has_perm('judge.clone_problem')
             or request.user.is_superuser
-            or getattr(request.user.profile, 'is_instructor', False)
         ):
             return JsonResponse({'error': _('Forbidden')}, status=403)
 

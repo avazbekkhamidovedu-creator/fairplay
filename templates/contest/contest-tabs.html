@@ -6,6 +6,7 @@
         {{ make_tab('stats', 'fa-pie-chart', url('contest_stats', contest.key), _('Statistics')) }}
     {% endif %}
     {% if can_edit %}
+        {{ make_tab('grade', 'fa-check-square-o', url('contest_grade', contest.key), _('Grade')) }}
         {{ make_tab('analytics', 'fa-line-chart', url('contest_analytics', contest.key), _('Analytics')) }}
     {% endif %}
 
@@ -23,8 +24,6 @@
         {% if perms.judge.moss_contest and has_moss_api_key %}
             {{ make_tab('moss', 'fa-gavel', url('contest_moss', contest.key), _('MOSS')) }}
         {% endif %}
-        {# Frontend editor (ContestCreate) — discoverable entry point for
-           authors/curators; the Django admin stays one click away from there. #}
         {{ make_tab('edit', 'fa-edit', url('contest_edit', contest.key), _('Edit')) }}
     {% endif %}
     {% if perms.judge.clone_contest %}

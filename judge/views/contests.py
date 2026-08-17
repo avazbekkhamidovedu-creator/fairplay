@@ -43,7 +43,7 @@ from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
 from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestTag, \
-    Problem, Profile, SEBConfigPreset, Submission
+    Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission
 from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
@@ -63,6 +63,7 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
+           'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease',
            'ContestSEBConfig', 'SEBQuit', 'ContestTagCreateView', 'ContestSEBFileView',
            'ContestFinalizeView', 'ContestUnfinalizeView']
 
@@ -476,7 +477,8 @@ class ContestCreate(LoginRequiredMixin, View):
     def dispatch(self, request, *args, **kwargs):
         """Route to create or edit mode and enforce the matching permission.
 
-        - Create mode (no ``contest`` kwarg) requires ``judge.edit_all_contest``.
+        - Create mode (no ``contest`` kwarg) requires ``judge.create_private_contest``
+          (``edit_all_contest`` remains a superset for full editors).
         - Edit mode (``contest`` kwarg) requires ``is_editable_by``, which also
           admits ``edit_own_contest`` holders who are curators of the contest.
         """
@@ -490,7 +492,8 @@ class ContestCreate(LoginRequiredMixin, View):
         else:
             if not request.user.is_authenticated:
                 return redirect_to_login(request.get_full_path())
-            if not request.user.has_perm('judge.edit_all_contest'):
+            if not (request.user.has_perm('judge.create_private_contest')
+                    or request.user.has_perm('judge.edit_all_contest')):
                 raise PermissionDenied
         return super().dispatch(request, *args, **kwargs)
 
@@ -552,7 +555,10 @@ class ContestCreate(LoginRequiredMixin, View):
         try:
             hours = int(payload.get('duration_hours', 0) or 0)
             minutes = int(payload.get('duration_minutes', 0) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: json.loads('1e309') yields float('inf') — int(inf)
+            # overflows. A hostile body must 400 with a readable message,
+            # never 500 the worker.
             raise ValidationError(_('Invalid duration.'))
         if not (hours or minutes):
             return None
@@ -649,7 +655,8 @@ class ContestCreate(LoginRequiredMixin, View):
             value = payload.get(field)
             try:
                 parsed = int(value) if value not in (None, '') else None
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
+                # OverflowError guards float('inf') payloads (json.loads('1e309')).
                 parsed = None
             if parsed is None:
                 # Fall back to the model's default: points_precision is NOT NULL
@@ -713,6 +720,54 @@ class ContestCreate(LoginRequiredMixin, View):
         # Duration: the frontend edits hours+minutes, the model stores a timedelta.
         contest.time_limit = self._parse_duration(payload)
 
+        # ── Deadline follows a duration increase ────────────────────────────
+        # Editing an existing contest: when the per-student duration grows, the
+        # global deadline must grow by the SAME amount, measured from
+        # max(old deadline, now). Otherwise the increase is silently capped by
+        # the stale deadline and students see no extra time — "duration +1h"
+        # must actually give students +1h. Using ``now`` as the floor also
+        # covers a contest whose deadline already passed: the extension then
+        # starts from the present instead of from a past date.
+        existing = getattr(self, 'contest', None)
+        old_row = None
+        if existing is not None and existing.pk is not None:
+            # IMPORTANT: the old values must come from the DATABASE, not from
+            # ``contest`` — by this point ``_apply_payload`` has already written
+            # the new duration/end_time onto it, and ``self.contest`` IS that
+            # same object, so reading ``existing.time_limit`` would see the new.
+            old_row = type(existing).objects.filter(pk=existing.pk).values('time_limit', 'end_time').first()
+            if old_row:
+                old_limit, old_end = old_row['time_limit'], old_row['end_time']
+                new_limit = contest.time_limit
+                if old_limit is not None and new_limit is not None and new_limit > old_limit \
+                        and old_end is not None:
+                    increase = new_limit - old_limit
+                    contest.end_time = max(old_end, timezone.now()) + increase
+                    # Also extend the windows of students who have ALREADY
+                    # joined. Their deadline is `min(real_start + time_limit,
+                    # end_time)` anchored to the immutable `real_start`, so a
+                    # contest-level change alone is invisible to anyone whose
+                    # `real_start + new_limit` is already in the past (they
+                    # still see "Your time is up!"). Shift `real_start` later
+                    # so each student's new deadline is exactly
+                    # `max(old deadline, now) + increase` — active students
+                    # keep their start (their end just grows), finished
+                    # students restart their window from now. Spectators have
+                    # no personal window (their end is the contest's), so they
+                    # are left untouched.
+                    _now = timezone.now()
+                    shifted = []
+                    for participation in existing.users.exclude(
+                            virtual=ContestParticipation.SPECTATE).only('id', 'real_start', 'virtual', 'user_id'):
+                        if participation.real_start is None:
+                            continue
+                        old_deadline = min(participation.real_start + old_limit, old_end)
+                        participation.real_start = max(old_deadline, _now) - old_limit
+                        shifted.append(participation)
+                    if shifted:
+                        ContestParticipation.objects.bulk_update(shifted, ['real_start'])
+                        self._restore_missing_sessions(shifted)
+
         # ── "Only extend, never shorten" guard ──────────────────────────────
         # Once students have joined (a participation exists), shrinking the
         # duration or pulling the deadline earlier would retroactively end
@@ -725,16 +780,10 @@ class ContestCreate(LoginRequiredMixin, View):
         #   - end_time may only stay equal or move later.
         # This mirrors the frontend validation, but is authoritative — a
         # crafted JSON payload cannot bypass it.
-        # IMPORTANT: the old values must come from the DATABASE, not from
-        # ``contest`` — by this point ``_apply_payload`` has already written
-        # the new duration/end_time onto it, and ``self.contest`` IS that same
-        # object, so reading ``existing.time_limit`` would see the new value.
-        existing = getattr(self, 'contest', None)
-        if existing is not None and existing.pk is not None \
+        if existing is not None and existing.pk is not None and old_row is not None \
                 and existing.users.exists():
-            old_row = type(existing).objects.filter(pk=existing.pk).values('time_limit', 'end_time').first()
-            old_limit = old_row['time_limit'] if old_row else None
-            old_end = old_row['end_time'] if old_row else None
+            old_limit = old_row['time_limit']
+            old_end = old_row['end_time']
             new_limit = contest.time_limit
             if old_limit is None:
                 if new_limit is not None:
@@ -743,8 +792,12 @@ class ContestCreate(LoginRequiredMixin, View):
                           'increased — it cannot be changed from unlimited to a fixed time.'))
             elif new_limit is None:
                 # Removing a personal limit is always an extension (the window
-                # becomes "until the contest ends"), so it is allowed.
-                pass
+                # becomes "until the contest ends"), so it is allowed. It also
+                # extends every joined student's window — restore missing
+                # sessions the same way the duration-increase path does.
+                self._restore_missing_sessions(
+                    existing.users.exclude(virtual=ContestParticipation.SPECTATE)
+                    .only('id', 'virtual', 'user_id'))
             elif new_limit < old_limit:
                 raise ValidationError(
                     _('Students have already joined. The duration can only be '
@@ -754,6 +807,46 @@ class ContestCreate(LoginRequiredMixin, View):
                     _('Students have already joined. The end time can only be '
                       'extended, not brought earlier.'))
         return contest
+
+    @staticmethod
+    def _restore_missing_sessions(participations):
+        """Re-point each participation's owner at it when they have no session.
+
+        The middleware clears ``profile.current_contest`` as soon as a
+        student's window ends (or the contest becomes temporarily
+        inaccessible), and nothing ever sets it back — yet
+        ``Problem.is_accessible_by()`` only admits contest problems while
+        ``current_contest`` is set. So a teacher extending a contest's window
+        (duration increase or limit removal) must also restore the session:
+        otherwise the student can SEE the extended timer but gets
+        "No such problem" 404s when clicking into any problem.
+
+        Only profiles that are not currently inside ANY contest are touched
+        (``current_contest_id is None``) — a student who moved on to another
+        contest, or is currently spectating/re-joined elsewhere, is never
+        hijacked. When a profile has several matching participations (live +
+        virtual), the live (``virtual=0``) one wins. Restored sessions that
+        turn out ended are harmless: the middleware re-clears them on the
+        student's next request.
+        """
+        participations = list(participations)
+        if not participations:
+            return
+        profiles = {p.id: p for p in Profile.objects.filter(
+            id__in={p.user_id for p in participations})}
+        restored = []
+        seen = set()
+        for participation in sorted(
+                participations, key=lambda p: p.virtual != ContestParticipation.LIVE):
+            profile = profiles.get(participation.user_id)
+            if profile is None or profile.id in seen:
+                continue
+            seen.add(profile.id)
+            if profile.current_contest_id is None:
+                profile.current_contest = participation
+                restored.append(profile)
+        if restored:
+            Profile.objects.bulk_update(restored, ['current_contest'])
 
     def _save_m2m(self, contest, payload):
         """Fully replace each submitted many-to-many field with the given ids.
@@ -1568,6 +1661,24 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
                 problem_count=Count('id'),
             ),
         )
+        # Which problems the viewer has solved / attempted *within this contest*,
+        # driving the green checkmark (same visual language as the Problem list
+        # page). Results are withheld while an exam-style contest is still
+        # masking verdicts (has_hidden_results && not finalized), so the check
+        # cannot leak a hidden result before release.
+        solved = set()
+        attempted = set()
+        profile = getattr(self.request, 'profile', None)
+        if self.request.user.is_authenticated and profile is not None:
+            contest_subs = Submission.objects.filter(contest_object=self.object, user=profile)
+            attempted = set(contest_subs.values_list('problem_id', flat=True).distinct())
+            if not (self.object.format_class.has_hidden_results and not self.object.results_finalized):
+                solved = set(
+                    contest_subs.filter(result='AC', case_points__gte=F('case_total'))
+                    .values_list('problem_id', flat=True).distinct(),
+                )
+        context['contest_solved_problem_ids'] = solved
+        context['contest_attempted_problem_ids'] = attempted
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         context['enable_social'] = settings.DMOJ_ENABLE_SOCIAL
         return context
@@ -1983,6 +2094,276 @@ ContestRankingProfile = namedtuple(
 )
 
 BestSolutionData = namedtuple('BestSolutionData', 'code points time state is_pretested')
+
+
+class ContestGrade(TitleMixin, ContestMixin, DetailView):
+    """Teacher-side grading workspace for a contest — mirrors the grading.html reference."""
+    template_name = 'contest/grade.html'
+
+    def get_title(self):
+        return _('%s Grade') % self.object.name
+
+    def dispatch(self, request, *args, **kwargs):
+        # Grading is an *edit* action, not a view action, so we gate on
+        # `is_editable_by` and NOT on `ContestMixin.get_object()`'s
+        # `access_check`. Using `get_object()` here would (a) 404 a hidden
+        # contest for non-viewers *before* the edit check, and (b) raise an
+        # uncaught `PrivateContestError` (→500) for a private contest. Fetching
+        # the contest directly gives every authenticated non-editor a uniform,
+        # existence-hiding 404.
+        if not request.user.is_authenticated:
+            return redirect_to_login(self.request.get_full_path())
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
+        if not self.object.is_editable_by(request.user):
+            raise Http404()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        contest = self.object
+        submissions = (
+            Submission.objects.filter(contest_object=contest)
+            .select_related('user__user', 'problem', 'language',
+                            'reviewed_by__user', 'contest__participation')
+            .prefetch_related('test_cases')
+            .order_by('-date')
+        )
+        context['grade_submissions'] = submissions
+        # Problem library for the grade page: code → display name + statement,
+        # so the detail pane can render the problem description ("题面").
+        problems = list(contest.contest_problems.order_by('order').select_related('problem'))
+        context['grade_problems'] = [
+            {
+                'code': cp.problem.code,
+                'name': cp.problem.name,
+                'letter': chr(65 + idx) if len(problems) <= 26 else '',
+                'points': cp.points,
+                'description': cp.problem.description or '',
+            }
+            for idx, cp in enumerate(problems)
+        ]
+        # Whether grades are currently released to students (drives the
+        # Release / Unrelease toolbar button state).
+        context['grade_released'] = contest.results_finalized
+
+        payload = []
+        latest_seen = set()
+        for sub in submissions:
+            # "Latest version" marker: the first row seen per (user, problem)
+            # because the queryset is ordered newest-first.
+            user_problem = (sub.user_id, sub.problem_id)
+            is_latest = user_problem not in latest_seen
+            latest_seen.add(user_problem)
+            try:
+                source = sub.source.source
+            except Submission.source.RelatedObjectDoesNotExist:
+                source = ''
+            # File-upload submissions carry no source; expose the uploaded file
+            # (name/size/download URL) so the grade page can render a download link.
+            upload_info = None
+            if sub.problem.submission_type == ProblemSubmissionType.FILE:
+                try:
+                    upload = sub.upload
+                    upload_info = {
+                        'original_name': upload.original_name,
+                        'size': upload.size,
+                        'download_url': reverse('submission_file_download', args=(sub.id,)),
+                    }
+                except Exception:
+                    upload_info = None
+            # `sub.contest` is the per-participation ContestSubmission row; a
+            # None means this submission was not part of a live/virtual run.
+            contest_submission = sub.contest_or_none
+            payload.append({
+                'id': sub.id,
+                'user': sub.user.user.username,
+                'problem': sub.problem.code,
+                'problem_type': sub.problem.submission_type,
+                'lang': sub.language.short_name or sub.language.key,
+                'date': sub.date.strftime('%Y-%m-%d %H:%M'),
+                'result': sub.short_status,
+                'points': sub.points,
+                'total': sub.case_total or sub.problem.points,
+                'time': sub.time,
+                'memory': sub.memory,
+                'source': source,
+                'upload': upload_info,
+                'test_cases': [
+                    {
+                        'case': tc.case,
+                        'status': tc.status,
+                        'time': tc.time,
+                        'memory': tc.memory,
+                        'points': tc.points,
+                        # batch=-1 marks supplementary AI rubric rows (teacher-only feedback).
+                        'batch': tc.batch,
+                        'feedback': tc.feedback or '',
+                        'extended_feedback': tc.extended_feedback or '',
+                    } for tc in sub.test_cases.all()
+                ],
+                # Manual-grading metadata (评分与评语 state).
+                'review_note': sub.review_note or '',
+                'reviewed_by': sub.reviewed_by.user.username if sub.reviewed_by else None,
+                'reviewed_at': sub.reviewed_at.strftime('%Y-%m-%d %H:%M') if sub.reviewed_at else None,
+                # Participation kind: virtual runs are marked with a "V" badge.
+                'virtual': bool(contest_submission and contest_submission.participation_id
+                                and contest_submission.participation.virtual),
+                'is_latest': is_latest,
+            })
+        # Pass Python objects; the template serializes with |tojson (htmlsafe JSON,
+        # escapes `<`/`>`/`&`/`'`) so student-controlled source can never break out
+        # of the <script> block via `</script>`.
+        context['grade_submissions_json'] = payload
+        context['grade_problems_json'] = context['grade_problems']
+        return context
+
+
+class ContestGradeSave(ContestMixin, DetailView):
+    """Save a manual score for a submission (teacher-side)."""
+
+    def dispatch(self, request, *args, **kwargs):
+        # Same reasoning as `ContestGrade.dispatch`: grading is an edit action,
+        # so we check `is_editable_by` directly instead of `access_check` (which
+        # would give non-viewers a 404 HTML page rather than the 403 JSON the
+        # frontend expects, and 500 on private contests). Status contract for the
+        # JSON endpoint: 401 anonymous, 403 authenticated non-editor, 200 editor.
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
+        if not self.object.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        raise Http404()
+
+    def post(self, request, *args, **kwargs):
+        try:
+            submission_id = int(request.POST.get('submission'))
+            score = float(request.POST.get('score') or 0)
+        except (TypeError, ValueError):
+            return JsonResponse({'error': _('Invalid input.')}, status=400)
+        try:
+            submission = Submission.objects.get(
+                id=submission_id, contest_object=self.object,
+            )
+        except Submission.DoesNotExist:
+            return JsonResponse({'error': _('Submission not found.')}, status=404)
+
+        # Clamp the manual score to [0, max] so a typo (−50 or 10⁹) can never
+        # produce a nonsensical grade.
+        total = submission.case_total or submission.problem.points
+        score = min(max(score, 0), total)
+        submission.points = score
+        # Save the review note (评语) alongside the score. The note is only
+        # written by graders on this endpoint; it is not student-editable.
+        note = request.POST.get('note')
+        if note is not None:
+            submission.review_note = note
+        submission.reviewed_by = request.profile
+        submission.reviewed_at = timezone.now()
+        submission.save(update_fields=['points', 'review_note', 'reviewed_by', 'reviewed_at'])
+        # Propagate the manual grade into the student-visible contest score.
+        # The contest formats compute each problem's points from
+        # ContestSubmission.points (via participation.recompute_results), so
+        # writing only Submission.points would leave the student's
+        # scoreboard / ranking / per-problem display on the machine score —
+        # the teacher's override would be visible only on this page.
+        contest_submission = submission.contest_or_none
+        if contest_submission is not None:
+            contest_submission.points = score
+            contest_submission.save(update_fields=['points'])
+            contest_submission.participation.recompute_results()
+        return JsonResponse({
+            'ok': True,
+            'submission': submission_id,
+            'score': score,
+            'total': total,
+            'note': submission.review_note,
+        })
+
+
+class ContestGradeStatus(ContestMixin, DetailView):
+    """JSON status for one grade-page submission (teacher-side).
+
+    The grade page polls this endpoint after queueing a rejudge so the
+    teacher sees the fresh verdict / score without a manual page reload.
+    Read-only, same authorization contract as ``ContestGradeSave`` (401
+    anonymous, 403 authenticated non-editor, 404 unknown submission).
+    """
+
+    http_method_names = ['get']
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
+        if not self.object.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        try:
+            submission_id = int(request.GET.get('submission'))
+        except (TypeError, ValueError):
+            return JsonResponse({'error': _('Invalid input.')}, status=400)
+        try:
+            submission = Submission.objects.filter(contest_object=self.object, id=submission_id) \
+                .select_related('language', 'reviewed_by__user') \
+                .prefetch_related('test_cases').get()
+        except Submission.DoesNotExist:
+            return JsonResponse({'error': _('Submission not found.')}, status=404)
+        return JsonResponse({
+            'ok': True,
+            'id': submission.id,
+            'status': submission.status,
+            'result': submission.result,
+            'points': submission.points,
+            'total': submission.case_total or submission.problem.points,
+            'time': submission.time,
+            'memory': submission.memory,
+            'is_graded': submission.is_graded,
+            'review_note': submission.review_note or '',
+            'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
+            'test_cases': [
+                {
+                    'case': tc.case,
+                    'status': tc.status,
+                    'time': tc.time,
+                    'memory': tc.memory,
+                    'points': tc.points,
+                } for tc in submission.test_cases.all()
+            ],
+        })
+
+
+class ContestGradeRelease(ContestMixin, DetailView):
+    """Release / unrelease grades for a contest (teacher-side).
+
+    Mirrors the "Release" button of the grading.html reference: releasing sets
+    ``Contest.results_finalized``, which reveals hidden (exam-style) results to
+    students and folds them into the scoreboard; unreleasing hides them again.
+    The status contract matches ``ContestGradeSave``: 401 anonymous, 403
+    authenticated non-editor, 200 editor.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
+        if not self.object.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        raise Http404()
+
+    def post(self, request, *args, **kwargs):
+        # Toggle: a second release call unreleases (idempotent UI state lives
+        # in the button label, so the server only flips the boolean).
+        self.object.results_finalized = not self.object.results_finalized
+        self.object.save(update_fields=['results_finalized'])
+        return JsonResponse({'ok': True, 'released': self.object.results_finalized})
 
 
 def make_contest_ranking_profile(contest, participation, contest_problems):

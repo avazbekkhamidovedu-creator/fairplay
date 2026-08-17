@@ -9,8 +9,8 @@ from judge.storage import generate_submission_key, submission_storage
 
 __all__ = [
     'ProblemMCQOption', 'ProblemMCQConfig', 'ProblemBlank', 'ProblemFillBlankConfig',
-    'ProblemShortAnswerConfig', 'ProblemImportDraft', 'ProblemImportItem', 'ProblemImportImage',
-    'SubmissionFile', 'ProblemFileConfig',
+    'ProblemShortAnswerConfig', 'ProblemCodeConfig', 'ProblemImportDraft', 'ProblemImportItem',
+    'ProblemImportImage', 'SubmissionFile', 'ProblemFileConfig',
 ]
 
 
@@ -291,3 +291,37 @@ class ProblemShortAnswerConfig(models.Model):
     class Meta:
         verbose_name = _('short-answer configuration')
         verbose_name_plural = _('short-answer configurations')
+
+
+# --- Code (supplementary AI rubric) -----------------------------------------
+class ProblemCodeConfig(models.Model):
+    """Per-problem supplementary AI grading for code (programming) problems.
+
+    Test-case judging (the judge bridge) remains the source of truth for AC/WA; when
+    ``ai_enabled`` is set, the configured model *additionally* scores the submitted source against
+    the rubric / grading table after the judge finishes.  That rubric score is stored as extra
+    ``SubmissionTestCase`` rows (never shown to students, never changes the AC/WA verdict) so
+    teachers can review it on the grade page.
+    """
+    problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='code_config',
+                                   on_delete=CASCADE)
+    ai_enabled = models.BooleanField(
+        verbose_name=_('enable AI rubric scoring'), default=False,
+        help_text=_('After the judge grades the test cases, also ask the configured model to score '
+                    'the submitted code against the rubric below.'))
+    ai_rubric = models.TextField(
+        verbose_name=_('AI rubric'), blank=True,
+        help_text=_('Grading guidance sent to the model (never shown to students).'))
+    grading_table = models.JSONField(
+        verbose_name=_('grading table'), blank=True, null=True, default=None,
+        help_text=_('Sub-question breakdown: a list of {"name", "max_points", '
+                    '"strictness": "strict|normal|lenient"} objects. '
+                    'When set, the LLM grades each sub-question independently; '
+                    'otherwise the code is graded as a single whole.'))
+
+    def __str__(self):
+        return _('Code AI config for %s') % self.problem.code
+
+    class Meta:
+        verbose_name = _('code AI configuration')
+        verbose_name_plural = _('code AI configurations')

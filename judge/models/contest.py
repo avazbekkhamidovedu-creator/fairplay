@@ -555,6 +555,11 @@ class Contest(models.Model):
         # people who can already edit, so membership itself is sufficient.
         # (Sensitive fields inside the editor are still gated by their own
         # permissions via ContestCreate._restricted_fields.)
+        # NOTE (merge): origin/develop's relaxed semantics are kept on purpose
+        # — the Teachers group carries no `edit_own_contest`, so course
+        # workflow teachers rely on author/curator membership alone to edit
+        # assignments (see ContestTagCreateView._can_create). The grade page
+        # permission tests encode this exact contract.
         if user.is_authenticated and user.profile.id in self.editor_ids:
             return True
 
