@@ -180,6 +180,21 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertTrue(response.context['is_edit'])
         self.assertEqual(response.context['prefill']['name'], 'Editable')
         self.assertEqual(response.context['prefill']['description'], 'original description')
+        self.assertFalse(response.context['prefill']['allow_ai_hints'])
+
+    def test_post_roundtrips_allow_ai_hints(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(self._full_payload(allow_ai_hints=True)),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.allow_ai_hints)
+        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
+        self.assertTrue(response.context['prefill']['allow_ai_hints'])
+        self.assertContains(response, 'id="id_allow_ai_hints"')
 
     def test_get_tmp_timezone_overrides_echo(self):
         """?tz=... only changes how stored UTC is echoed back, not the saved profile tz."""
@@ -593,6 +608,46 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('from=assignment', html)
         self.assertIn('id="cp-create-new"', html)
         self.assertNotIn('/admin/judge/problem/add/', html)
+        self.assertRegex(html, r'<a class="btn-soft" id="cp-create-new"')
+        self.assertNotRegex(html, r'<a class="btn-soft alt" id="cp-create-new"')
+
+    def test_visibility_sits_above_course(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        vis = html.find('id="vis-seg"')
+        course = html.find('id="id_organizations"')
+        self.assertGreater(vis, 0)
+        self.assertGreater(course, vis)
+        self.assertEqual(html.count('id="vis-seg"'), 1)
+
+    def test_library_panel_matches_workspace_filters(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        _, library = html.split('id="problem-library"', 1)
+        self.assertIn('id="lib-filter-panel"', library)
+        self.assertIn('ws-filter-panel', library)
+        self.assertIn('id="lib-filter-format"', library)
+        self.assertIn('id="lib-filter-difficulty"', library)
+        self.assertIn('id="lib-filter-course"', library)
+        self.assertIn('id="lib-filter-status"', library)
+        self.assertIn('id="lib-filter-knowledge"', library)
+        self.assertIn('id="lib-search"', library)
+        self.assertNotIn('id="lib-knowledge-picker"', library)
+        self.assertNotIn('>ID</th>', library)
+        self.assertNotIn('data-sort="group"', library)
+        self.assertIn('id="cp-from-library"', html)
+        self.assertIn('id="id_allow_ai_hints"', html)
+
+    def test_validity_toggle_shares_label_row(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('validity-head', html)
+        head = html.split('validity-head', 1)[1].split('</div>', 1)[0]
+        self.assertIn('Validity', head)
+        self.assertIn('Range', head)
+        self.assertIn('Permanent', head)
+
+    def test_preview_omits_join_assignment(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertNotIn('Join assignment', html)
+        self.assertNotIn('pv-join', html)
 
     def _post(self, **overrides):
         now = timezone.now()
@@ -612,6 +667,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             name='Flags', key='flagtest',
             run_pretests_only=True, tester_see_submissions=True, tester_see_scoreboard=True,
             is_private=True, is_organization_private=True, limit_join_organizations=True,
+            allow_ai_hints=True,
         )
         self.assertEqual(response.status_code, 200)
         contest = Contest.objects.get(key='flagtest')
@@ -621,6 +677,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertTrue(contest.is_private)
         self.assertTrue(contest.is_organization_private)
         self.assertTrue(contest.limit_join_organizations)
+        self.assertTrue(contest.allow_ai_hints)
 
     def test_seb_fields_saved(self):
         # Keys must be valid 64-char hex hashes: model validation (full_clean)

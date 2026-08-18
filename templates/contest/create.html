@@ -148,6 +148,36 @@
         .v2-left .form-row.stacked .field select { max-width: 100%; }
         .v2-left .form-row.stacked .tz-selector { max-width: 520px; }
 
+        /* Validity: Range / Permanent sits on the same line as the label. */
+        .v2-left .form-row.validity-row > .validity-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.45rem;
+        }
+        .v2-left .form-row.validity-row > .validity-head > label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            width: auto;
+            margin: 0;
+            padding-top: 0;
+        }
+        .v2-left .form-row.validity-row .validity-head .seg { margin: 0; }
+
+        /* Create new is an <a>; keep its type/icon the same accent as From library. */
+        .pcv2 a.btn-soft,
+        .pcv2 a.btn-soft:link,
+        .pcv2 a.btn-soft:visited,
+        .pcv2 a.btn-soft:hover,
+        .pcv2 a.btn-soft:focus {
+            color: var(--oj-accent, #2980B9);
+            text-decoration: none;
+        }
+        .pcv2 a.btn-soft i { color: inherit; }
+
         /* Temporary timezone picker: lets a teacher view/enter Validity times
            in a different zone than their account default, without changing
            their profile. Only affects how this form echoes UTC back. */
@@ -350,8 +380,7 @@
             color: var(--muted);
         }
         /* Per-problem options (partial credit / pretest / results / out prefix):
-           a dashed-border settings strip, visually distinct from the solid
-           Pts / Max inputs in the row above. */
+           a light accent strip, distinct from the Pts / Max inputs above. */
         .cp-options {
             grid-column: 1 / -1;
             display: flex;
@@ -360,10 +389,10 @@
             align-items: center;
             margin-top: 0.15rem;
             padding: 0.4rem 0.55rem;
-            border: 1px dashed var(--oj-border);
+            border: 1px solid var(--oj-accent-soft, rgba(41, 128, 185, 0.12));
             border-radius: 4px;
-            background: var(--oj-surface-muted, #f4f4f4);
-            color: var(--muted);
+            background: var(--oj-accent-soft, rgba(41, 128, 185, 0.12));
+            color: var(--oj-text-secondary, #555);
             font-size: 12px;
         }
         .cp-options .cp-opt {
@@ -590,7 +619,7 @@
                  'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
                  'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
                  'show_short_display', 'is_private', 'is_organization_private',
-                 'limit_join_organizations', 'seb_required',
+                 'limit_join_organizations', 'seb_required', 'allow_ai_hints',
                  // Not a model field: the server resolves it to Contest.seb_preset
                  // (the site default) so the client never names a preset id.
                  'seb_use_default'].forEach(function(f) {
@@ -1247,8 +1276,8 @@
             var visToast = {
                 hidden: {{ _('Hidden mode is not listed — Course/Class scoping and Private users do not apply.')|htmltojs }},
                 public: {{ _('Public mode is visible to everyone — Course/Class scoping and Private users do not apply.')|htmltojs }},
-                org: {{ _("Course mode restricts visibility to the courses/classes above. The Advanced → Private users list is ignored.")|htmltojs }},
-                private: {{ _("Private mode ignores the Course/Class scoping above. Use Advanced → Private users to choose who can see this assignment.")|htmltojs }},
+                org: {{ _("Course mode restricts visibility to the courses/classes below. The Advanced → Private users list is ignored.")|htmltojs }},
+                private: {{ _("Private mode ignores the Course/Class scoping below. Use Advanced → Private users to choose who can see this assignment.")|htmltojs }},
             };
             document.querySelectorAll('#vis-seg input[type=radio]').forEach(function (radio) {
                 radio.addEventListener('change', function () {
@@ -1588,7 +1617,7 @@
             updateCheatFields();
 
             // --- From library button + enhanced bank (filters/sort/pagination) ---
-            var libBtn = document.querySelector('.btn-soft:not(.alt)');
+            var libBtn = document.getElementById('cp-from-library');
             var slideover = document.getElementById('problem-library');
             // Insert-at-position support: set to an index (or null for append)
             // by the drag-reorder rail / toolbar before opening the library.
@@ -1716,6 +1745,7 @@
                 libBtn.addEventListener('click', function () {
                     window.cpInsertAt = null;
                     slideover.classList.add('open');
+                    initLibSelects();
                     renderLib();
                 });
                 slideover.querySelector('.so-mask').addEventListener('click', function () {
@@ -1728,53 +1758,61 @@
                 // Library pagination state.
                 var libPage = 0, libPageSize = 10, libSortKey = null, libSortDesc = false;
 
-                function collectLibFilters() {
-                    return {
-                        q: (document.getElementById('lib-search').value || '').toLowerCase(),
-                        org: document.getElementById('lib-f-org').value,
-                        group: document.getElementById('lib-f-group').value,
-                        type: document.getElementById('lib-f-type').value,
-                        diff: document.getElementById('lib-f-diff').value,
-                        ac: document.getElementById('lib-f-ac').value,
-                    };
+                function selectedValues(id) {
+                    var el = document.getElementById(id);
+                    if (!el) return [];
+                    return Array.prototype.filter.call(el.options, function (opt) {
+                        return opt.selected && opt.value !== '';
+                    }).map(function (opt) { return String(opt.value); });
                 }
-                function buildFilterOptions() {
-                    var orgs = {}, groups = {}, types = {};
-                    document.querySelectorAll('#lib-results tr[data-pid]').forEach(function (row) {
-                        (row.dataset.org || '').split(';').forEach(function (o) { if (o) orgs[o] = 1; });
-                        if (row.dataset.group) groups[row.dataset.group] = 1;
-                        (row.dataset.types || '').split(';').forEach(function (t) { if (t) types[t] = 1; });
-                    });
-                    var orgSel = document.getElementById('lib-f-org');
-                    orgSel.innerHTML = '<option value="">' + {{ _('All courses')|htmltojs }} + '</option>' +
-                        Object.keys(orgs).sort().map(function (o) {
-                            return '<option value="' + o.replace(/"/g, '&quot;') + '">' + o + '</option>';
-                        }).join('');
-                    var groupSel = document.getElementById('lib-f-group');
-                    groupSel.innerHTML = '<option value="">' + {{ _('All groups')|htmltojs }} + '</option>' +
-                        Object.keys(groups).sort().map(function (g) {
-                            return '<option value="' + g.replace(/"/g, '&quot;') + '">' + g + '</option>';
-                        }).join('');
-                    var typeSel = document.getElementById('lib-f-type');
-                    typeSel.innerHTML = '<option value="">' + {{ _('All types')|htmltojs }} + '</option>' +
-                        Object.keys(types).sort().map(function (t) {
-                            return '<option value="' + t.replace(/"/g, '&quot;') + '">' + t + '</option>';
-                        }).join('');
+                function collectLibFilters() {
+                    var acMinRaw = (document.getElementById('lib-ac-min') || {}).value;
+                    var acMaxRaw = (document.getElementById('lib-ac-max') || {}).value;
+                    var acMin = acMinRaw === '' || acMinRaw == null ? null : parseFloat(acMinRaw);
+                    var acMax = acMaxRaw === '' || acMaxRaw == null ? null : parseFloat(acMaxRaw);
+                    if (acMin !== null && isNaN(acMin)) acMin = null;
+                    if (acMax !== null && isNaN(acMax)) acMax = null;
+                    var statusEl = document.getElementById('lib-filter-status');
+                    return {
+                        q: ((document.getElementById('lib-search') || {}).value || '').toLowerCase(),
+                        formats: selectedValues('lib-filter-format'),
+                        diffs: selectedValues('lib-filter-difficulty'),
+                        courses: selectedValues('lib-filter-course'),
+                        tags: selectedValues('lib-filter-knowledge'),
+                        status: statusEl ? (statusEl.value || '') : '',
+                        acMin: acMin,
+                        acMax: acMax,
+                    };
                 }
                 function libMatches(row, f) {
                     var name = (row.dataset.name || '').toLowerCase();
                     var code = (row.dataset.code || '').toLowerCase();
                     if (f.q && name.indexOf(f.q) === -1 && code.indexOf(f.q) === -1) return false;
-                    if (f.org && (';' + row.dataset.org).indexOf(';' + f.org) === -1) return false;
-                    if (f.group && row.dataset.group !== f.group) return false;
-                    if (f.type && (row.dataset.types || '').split(';').indexOf(f.type) === -1) return false;
-                    if (f.diff && (row.dataset.diff || 'none') !== f.diff) return false;
-                    if (f.ac) {
-                        var ac = parseFloat(row.dataset.ac || '0');
-                        var parts = f.ac.split('-');
-                        var lo = parseInt(parts[0], 10), hi = parseInt(parts[1], 10);
-                        if (ac < lo || ac >= hi) return false;
+                    if (f.formats.length) {
+                        var stype = row.dataset.stype || '';
+                        var fmt = row.dataset.format || '';
+                        var formatOk = f.formats.some(function (v) { return v === stype || v === fmt; });
+                        if (!formatOk) return false;
                     }
+                    if (f.diffs.length && f.diffs.indexOf(row.dataset.diff || 'none') === -1) return false;
+                    if (f.courses.length) {
+                        var orgIds = (row.dataset.orgIds || '').split(',').filter(Boolean);
+                        var courseOk = f.courses.some(function (v) {
+                            if (v === 'public') return row.dataset.public === '1';
+                            return orgIds.indexOf(v) !== -1;
+                        });
+                        if (!courseOk) return false;
+                    }
+                    if (f.tags.length) {
+                        var kids = (row.dataset.knowledge || '').split(/[;,]/).filter(Boolean);
+                        var tagOk = f.tags.some(function (id) { return kids.indexOf(id) !== -1; });
+                        if (!tagOk) return false;
+                    }
+                    if (f.status === 'solved' && row.dataset.status !== 'solved') return false;
+                    if (f.status === 'unsolved' && row.dataset.status === 'solved') return false;
+                    var ac = parseFloat(row.dataset.ac || '0');
+                    if (f.acMin !== null && ac < f.acMin) return false;
+                    if (f.acMax !== null && ac > f.acMax) return false;
                     return true;
                 }
                 function renderLib() {
@@ -1794,7 +1832,7 @@
                             if (libSortKey === 'name') { va = (a.dataset.name || ''); vb = (b.dataset.name || ''); }
                             else if (libSortKey === 'diff') { va = (a.dataset.diff || 'none'); vb = (b.dataset.diff || 'none'); }
                             else if (libSortKey === 'ac') { va = parseFloat(a.dataset.ac || '0'); vb = parseFloat(b.dataset.ac || '0'); }
-                            else if (libSortKey === 'group') { va = (a.dataset.group || ''); vb = (b.dataset.group || ''); }
+                            else if (libSortKey === 'type') { va = (a.dataset.stype || ''); vb = (b.dataset.stype || ''); }
                             else { va = parseInt(a.dataset.pid, 10); vb = parseInt(b.dataset.pid, 10); }
                             if (va < vb) return libSortDesc ? 1 : -1;
                             if (va > vb) return libSortDesc ? -1 : 1;
@@ -1846,11 +1884,36 @@
                     }
                 }
                 // Wire search + filters + sort headers.
-                ['lib-search', 'lib-f-org', 'lib-f-group', 'lib-f-type', 'lib-f-diff', 'lib-f-ac'].forEach(function (id) {
+                function initLibSelects() {
+                    if (slideover.dataset.select2Ready) return;
+                    slideover.dataset.select2Ready = '1';
+                    if (!(window.jQuery && jQuery.fn.select2)) return;
+                    var multiOpts = { theme: 'dmoj', multiple: true, width: '100%', closeOnSelect: false,
+                                      dropdownParent: jQuery('#problem-library .so-panel') };
+                    ['lib-filter-format', 'lib-filter-difficulty', 'lib-filter-course', 'lib-filter-knowledge'].forEach(function (id) {
+                        var el = document.getElementById(id);
+                        if (!el) return;
+                        jQuery(el).select2(jQuery.extend({}, multiOpts, {
+                            placeholder: el.getAttribute('data-placeholder') || '',
+                        })).on('change', function () { libPage = 0; renderLib(); });
+                    });
+                    var statusEl = document.getElementById('lib-filter-status');
+                    if (statusEl) {
+                        jQuery(statusEl).select2({
+                            theme: 'dmoj',
+                            minimumResultsForSearch: Infinity,
+                            width: '100%',
+                            dropdownParent: jQuery('#problem-library .so-panel'),
+                        }).on('change', function () { libPage = 0; renderLib(); });
+                    }
+                }
+                ['lib-search', 'lib-filter-format', 'lib-filter-difficulty', 'lib-filter-course',
+                 'lib-filter-knowledge', 'lib-filter-status', 'lib-ac-min', 'lib-ac-max'].forEach(function (id) {
                     var el = document.getElementById(id);
                     if (el) el.addEventListener('change', function () { libPage = 0; renderLib(); });
                 });
-                document.getElementById('lib-search').addEventListener('input', function () { libPage = 0; renderLib(); });
+                var libSearch = document.getElementById('lib-search');
+                if (libSearch) libSearch.addEventListener('input', function () { libPage = 0; renderLib(); });
                 slideover.querySelector('.so-table thead').addEventListener('click', function (e) {
                     var th = e.target.closest('th[data-sort]');
                     if (!th) return;
@@ -1918,7 +1981,6 @@
                     slideover.classList.remove('open');
                     showToast(newRows.length + {{ _(" problems added")|htmltojs }});
                 });
-                buildFilterOptions();
             }
 
             // --- Problem list bookkeeping (remove buttons, preview sync) ---
@@ -2319,13 +2381,15 @@
                                 <div class="dur-note" id="dur-end-warning" style="display:none;margin-top:0.4rem;"></div>
                             </div>
 
-                            <div class="form-row stacked">
-                                <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time. Once students have joined, the end time can only be extended, not brought earlier.', tz=user_timezone)) }}</label>
-                                <div class="field">
-                                    <div class="seg" style="margin-bottom:0.45rem;">
+                            <div class="form-row stacked validity-row">
+                                <div class="validity-head">
+                                    <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time. Once students have joined, the end time can only be extended, not brought earlier.', tz=user_timezone)) }}</label>
+                                    <div class="seg">
                                         <label><input type="radio" name="validity_type" value="range" hidden checked><span>{{ _('Range') }}</span></label>
                                         <label><input type="radio" name="validity_type" value="permanent" hidden><span>{{ _('Permanent') }}</span></label>
                                     </div>
+                                </div>
+                                <div class="field">
                                     <div class="validity-compact" id="validity-range">
                                         <div class="ac-inline">
                                             <input type="datetime-local" id="id_start_time" name="start_time" required
@@ -2354,6 +2418,45 @@
                                 <div class="field ac-inline">
                                     <input type="number" id="f-score" min="1" value="{{ prefill.target_score or 100 }}" style="width:80px;">
                                     <span class="unit">{{ _('pts') }}</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>{{ _('Visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes below; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side.')) }}</label>
+                                <div class="field">
+                                    {% if 'is_visible' in restricted_fields %}
+                                        {# Visibility is admin-managed for this user (no change_contest_visibility
+                                           permission): show the still-editable privacy flags directly instead of the
+                                           seg control, and keep a non-submitted hidden flag so the preview badge
+                                           still reflects the stored is_visible value. #}
+                                        <input type="hidden" id="id_is_visible" value="{% if prefill.is_visible %}true{% else %}false{% endif %}">
+                                        <div class="check-grid">
+                                            <label><input type="checkbox" id="id_is_private" name="is_private"{% if prefill.is_private %} checked{% endif %}> {{ _('Private to listed users') }}</label>
+                                            <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to courses / classes') }}</label>
+                                        </div>
+                                        <div class="ac-help">{{ _('Whether the assignment is listed is managed by administrators.') }}</div>
+                                    {% else %}
+                                        {% if contest and not can_edit_private and prefill.vis_mode in ('private', 'org') %}
+                                            {# The stored contest is private/org-scoped, but this user lacks
+                                               create_private_contest: show a read-only note instead of a seg
+                                               whose Private/Org options would silently not apply. #}
+                                            <input type="hidden" id="id_is_visible" value="true">
+                                            <input type="hidden" id="id_vis_mode_ro" value="{{ prefill.vis_mode }}">
+                                            <div class="ac-help">
+                                                {{ _('This assignment is restricted to a private audience (managed by administrators).') }}
+                                            </div>
+                                        {% else %}
+                                        <div class="seg" id="vis-seg">
+                                            <label><input type="radio" name="vis_mode" value="public"{% if prefill.vis_mode == 'public' %} checked{% endif %}><span>{{ _('Public') }}</span></label>
+                                            {% if can_edit_private %}
+                                            <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Course') }}</span></label>
+                                            <label><input type="radio" name="vis_mode" value="private"{% if prefill.vis_mode == 'private' %} checked{% endif %}><span>{{ _('Private') }}</span></label>
+                                            {% endif %}
+                                            <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
+                                        </div>
+                                        <div class="ac-help">{{ _('Course / Private restrict access; pick the courses/classes below, or users under Advanced → Private users.') }}</div>
+                                        {% endif %}
+                                    {% endif %}
                                 </div>
                             </div>
 
@@ -2413,45 +2516,6 @@
                                 </div>
                             </div>
 
-                            <div class="form-row">
-                                <label>{{ _('Visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes above; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side.')) }}</label>
-                                <div class="field">
-                                    {% if 'is_visible' in restricted_fields %}
-                                        {# Visibility is admin-managed for this user (no change_contest_visibility
-                                           permission): show the still-editable privacy flags directly instead of the
-                                           seg control, and keep a non-submitted hidden flag so the preview badge
-                                           still reflects the stored is_visible value. #}
-                                        <input type="hidden" id="id_is_visible" value="{% if prefill.is_visible %}true{% else %}false{% endif %}">
-                                        <div class="check-grid">
-                                            <label><input type="checkbox" id="id_is_private" name="is_private"{% if prefill.is_private %} checked{% endif %}> {{ _('Private to listed users') }}</label>
-                                            <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to courses / classes') }}</label>
-                                        </div>
-                                        <div class="ac-help">{{ _('Whether the assignment is listed is managed by administrators.') }}</div>
-                                    {% else %}
-                                        {% if contest and not can_edit_private and prefill.vis_mode in ('private', 'org') %}
-                                            {# The stored contest is private/org-scoped, but this user lacks
-                                               create_private_contest: show a read-only note instead of a seg
-                                               whose Private/Org options would silently not apply. #}
-                                            <input type="hidden" id="id_is_visible" value="true">
-                                            <input type="hidden" id="id_vis_mode_ro" value="{{ prefill.vis_mode }}">
-                                            <div class="ac-help">
-                                                {{ _('This assignment is restricted to a private audience (managed by administrators).') }}
-                                            </div>
-                                        {% else %}
-                                        <div class="seg" id="vis-seg">
-                                            <label><input type="radio" name="vis_mode" value="public"{% if prefill.vis_mode == 'public' %} checked{% endif %}><span>{{ _('Public') }}</span></label>
-                                            {% if can_edit_private %}
-                                            <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Course') }}</span></label>
-                                            <label><input type="radio" name="vis_mode" value="private"{% if prefill.vis_mode == 'private' %} checked{% endif %}><span>{{ _('Private') }}</span></label>
-                                            {% endif %}
-                                            <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
-                                        </div>
-                                        <div class="ac-help">{{ _('Course / Private restrict access; pick the courses/classes or users in the sections above / under Advanced → Private users.') }}</div>
-                                        {% endif %}
-                                    {% endif %}
-                                </div>
-                            </div>
-
                             <div class="form-row stacked">
                                 <label>{{ _('Description') }}</label>
                                 <div class="field">
@@ -2471,12 +2535,16 @@
                         <h2>{{ _('Problems') }}</h2>
                         <div class="form-content">
                             <div class="cp-toolbar">
-                                <button type="button" class="btn-soft"><i class="fa fa-search"></i> {{ _('From library') }}</button>
+                                <button type="button" class="btn-soft" id="cp-from-library"><i class="fa fa-search"></i> {{ _('From library') }}</button>
                                 {# Same audience as the problem-list "New problem" entry: the unified
                                    create_v2 page, not the classic Django admin add form. #}
                                 {% if perms.judge.create_private_problem or perms.judge.add_problem %}
-                                <a class="btn-soft alt" id="cp-create-new" href="{{ url('problem_create_v2') }}?from=assignment" target="_blank"><i class="fa fa-plus"></i> {{ _('Create new') }}</a>
+                                <a class="btn-soft" id="cp-create-new" href="{{ url('problem_create_v2') }}?from=assignment" target="_blank"><i class="fa fa-plus"></i> {{ _('Create new') }}</a>
                                 {% endif %}
+                                <label class="cp-ai-hint">
+                                    <input type="checkbox" id="id_allow_ai_hints" name="allow_ai_hints"{% if prefill.allow_ai_hints %} checked{% endif %}>
+                                    {{ _('Allow AI Hint') }}{{ tip(_('When this assignment is active, students can use AI Hint on every problem in it. Each problem\'s own AI Hint setting is unchanged outside this assignment.')) }}
+                                </label>
                                 <span class="spacer"></span>
                                 <span class="count" id="cp-count">{{ prefill.problems|length if prefill.problems else 0 }} {{ _('problems') }}</span>
                             </div>
@@ -3011,8 +3079,6 @@
                                     <tr><td colspan="3" style="text-align:center;color:var(--muted);">{{ _('No problems added yet.') }}</td></tr>
                                 </tbody>
                             </table>
-
-                            <a class="pv-join" href="#">{{ _('Join assignment') }}</a>
                         </div>
                     </div>
                 </aside>
@@ -3030,62 +3096,123 @@
                     <h2>{{ _('Add from library') }}</h2>
                     <button type="button" class="so-close">&times;</button>
                 </div>
-                <div class="so-toolbar">
-                    <div class="so-search">
-                        <i class="fa fa-search"></i>
-                        <input type="text" id="lib-search" placeholder="{{ _('Search problems...') }}">
+                <div class="lib-filters">
+                    <div class="ws-drawer-toolbar">
+                        <div class="ws-drawer-search">
+                            <i class="fa fa-search" aria-hidden="true"></i>
+                            <input id="lib-search" type="search" placeholder="{{ _('Search problems') }}" autocomplete="off">
+                        </div>
+                        <div class="ws-filter-panel open exposed" id="lib-filter-panel">
+                            <div class="filter-block">
+                                <label class="filter-label" for="lib-filter-format">{{ _('Problem type') }}</label>
+                                <select id="lib-filter-format" multiple data-placeholder="{{ _('All types') }}">
+                                    {% for f in lib_format_types %}
+                                        <option value="{{ f.code }}">{{ f.label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="filter-block">
+                                <label class="filter-label" for="lib-filter-difficulty">{{ _('Difficulty') }}</label>
+                                <select id="lib-filter-difficulty" multiple data-placeholder="{{ _('All difficulties') }}">
+                                    {% for value, label in lib_difficulty_options %}
+                                        <option value="{{ value }}">{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="filter-block">
+                                <label class="filter-label" for="lib-filter-course">{{ _('Course') }}</label>
+                                <select id="lib-filter-course" multiple data-placeholder="{{ _('All courses') }}">
+                                    <option value="public">{{ _('Public') }}</option>
+                                    {% for org in organizations %}
+                                        <option value="{{ org.id }}">{{ org.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="filter-block">
+                                <label class="filter-label" for="lib-filter-status">{{ _('Status') }}</label>
+                                <select id="lib-filter-status">
+                                    <option value="">{{ _('All') }}</option>
+                                    <option value="solved">{{ _('Solved') }}</option>
+                                    <option value="unsolved">{{ _('Unsolved') }}</option>
+                                </select>
+                            </div>
+                            <div class="filter-block">
+                                <label class="filter-label" for="lib-ac-min">{{ _('AC %%') }}</label>
+                                <div class="filter-inline">
+                                    <input id="lib-ac-min" type="number" min="0" max="100" step="0.1" placeholder="{{ _('Min') }}">
+                                    <span>~</span>
+                                    <input id="lib-ac-max" type="number" min="0" max="100" step="0.1" placeholder="{{ _('Max') }}">
+                                </div>
+                            </div>
+                            <div class="filter-block filter-block-tags">
+                                <label class="filter-label" for="lib-filter-knowledge">{{ _('Tags') }}</label>
+                                <select id="lib-filter-knowledge" multiple data-placeholder="{{ _('Click to choose tags (multiple)') }}">
+                                    {% for type in lib_knowledge_types %}
+                                        <option value="{{ type.id }}">{{ user_trans(type.full_name) }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="so-filters">
-                    <select id="lib-f-org"><option value="">{{ _('All courses') }}</option></select>
-                    <select id="lib-f-group"><option value="">{{ _('All groups') }}</option></select>
-                    <select id="lib-f-type"><option value="">{{ _('All types') }}</option></select>
-                    <select id="lib-f-diff"><option value="">{{ _('All difficulties') }}</option>
-                        <option value="easy">{{ _('Easy') }}</option>
-                        <option value="medium">{{ _('Medium') }}</option>
-                        <option value="hard">{{ _('Hard') }}</option>
-                        <option value="none">{{ _('None') }}</option>
-                    </select>
-                    <select id="lib-f-ac"><option value="">{{ _('Any AC rate') }}</option>
-                        <option value="0-20">0–20%</option>
-                        <option value="20-40">20–40%</option>
-                        <option value="40-60">40–60%</option>
-                        <option value="60-80">60–80%</option>
-                        <option value="80-100">80–100%</option>
-                    </select>
-                </div>
                 <div class="so-body">
-                    <table class="so-table">
+                    <table class="so-table problem-list-redesign oj-ui">
                         <thead>
                             <tr>
-                                <th data-sort="id">ID</th>
-                                <th data-sort="name">{{ _('Title') }}</th>
-                                <th>{{ _('Course') }}</th>
-                                <th data-sort="group">{{ _('Group') }}</th>
-                                <th>{{ _('Type') }}</th>
-                                <th data-sort="diff">{{ _('Diff') }}</th>
-                                <th data-sort="ac">{{ _('AC rate') }}</th>
+                                <th class="col-name" data-sort="name">{{ _('Title') }}</th>
+                                <th class="col-course">{{ _('Course') }}</th>
+                                <th class="col-type" data-sort="type">{{ _('Problem type') }}</th>
+                                <th class="col-tags">{{ _('Tags') }}</th>
+                                <th class="col-diff" data-sort="diff">{{ _('Difficulty') }}</th>
+                                <th class="col-ac" data-sort="ac">{{ _('AC rate') }}</th>
                             </tr>
                         </thead>
                         <tbody id="lib-results">
                             {% for problem in problems %}
                             <tr data-pid="{{ problem.id }}" data-code="{{ problem.code }}" data-name="{{ problem.name }}"
-                                data-org="{% for o in problem.organizations.all() %}{{ o.name }};{% endfor %}"
-                                data-group="{{ problem.group.name if problem.group else '' }}"
-                                data-types="{{ problem.types_list|join(';') }}"
+                                data-org-ids="{% for o in problem.organizations.all() %}{{ o.id }}{% if not loop.last %},{% endif %}{% endfor %}"
+                                data-format="{{ problem.format_filter_code }}"
+                                data-stype="{{ problem.submission_type }}"
+                                data-knowledge="{{ problem.knowledge_type_ids|join(';') }}"
                                 data-diff="{{ problem.difficulty or 'none' }}"
-                                data-ac="{{ problem.ac_rate|round(1) }}">
-                                <td>{{ problem.id }}</td>
-                                <td class="ptitle">{{ problem.name }}</td>
-                                <td class="num">{% for o in problem.organizations.all() %}{{ o.name }}{% if not loop.last %}, {% endif %}{% else %}<span class="num">{{ _('Public') }}</span>{% endfor %}</td>
-                                <td class="num">{{ problem.group.name if problem.group else '—' }}</td>
-                                <td class="num">{{ problem.types_list|join(', ') }}</td>
-                                <td class="num">{% if problem.difficulty %}{{ problem.difficulty_label }}{% else %}—{% endif %}</td>
-                                <td class="num">{{ '%.1f'|format(problem.ac_rate) }}%</td>
+                                data-ac="{{ problem.ac_rate|round(1) }}"
+                                data-public="{{ '1' if problem.is_public and not problem.is_organization_private else '0' }}"
+                                data-status="{% if problem.id in lib_completed_ids %}solved{% else %}unsolved{% endif %}">
+                                <td class="ptitle col-name">{{ problem.name }}</td>
+                                <td class="col-course">{% for o in problem.organizations.all() %}{{ o.name }}{% if not loop.last %}, {% endif %}{% else %}<span class="num">{{ _('Public') }}</span>{% endfor %}</td>
+                                <td class="col-type">
+                                    {% for type in problem.format_types_list %}
+                                        <span class="type-tag">{{ type }}</span>
+                                    {% else %}
+                                        <span class="tag-placeholder">&mdash;</span>
+                                    {% endfor %}
+                                </td>
+                                <td class="col-tags">
+                                    {% for type in problem.knowledge_types_list %}
+                                        <span class="tag-badge">{{ type }}</span>
+                                    {% else %}
+                                        <span class="tag-placeholder">&mdash;</span>
+                                    {% endfor %}
+                                </td>
+                                <td class="col-diff">
+                                    {% if problem.difficulty %}
+                                        <span class="difficulty-badge diff-{{ problem.difficulty }}">{{ problem.difficulty_label }}</span>
+                                    {% else %}
+                                        <span class="diff-placeholder">&mdash;</span>
+                                    {% endif %}
+                                </td>
+                                <td class="col-ac">
+                                    <div class="ac-cell">
+                                        <div class="ac-bar">
+                                            <div class="ac-bar-fill" style="width: {{ '%.1f'|format(problem.ac_rate) }}%"></div>
+                                        </div>
+                                        <span class="ac-text">{{ '%.1f'|format(problem.ac_rate) }}%</span>
+                                    </div>
+                                </td>
                             </tr>
                             {% endfor %}
                             {% if not problems %}
-                            <tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
+                            <tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
                             {% endif %}
                         </tbody>
                     </table>

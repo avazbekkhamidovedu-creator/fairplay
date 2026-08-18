@@ -49,7 +49,7 @@ from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
-from judge.utils.problems import _get_result_data
+from judge.utils.problems import _get_result_data, user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.seb import request_matches_seb, seb_launch_context
 from judge.utils.stats import get_bar_chart, get_pie_chart
@@ -406,7 +406,7 @@ class ContestCreate(LoginRequiredMixin, View):
         'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
         'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
         'show_short_display', 'is_private', 'is_organization_private',
-        'limit_join_organizations', 'seb_required',
+        'limit_join_organizations', 'seb_required', 'allow_ai_hints',
     )
     _text_fields = (
         'name', 'description', 'access_code', 'problem_label_script',
@@ -1100,6 +1100,39 @@ class ContestCreate(LoginRequiredMixin, View):
             dt = timezone.make_aware(dt, timezone.utc)
         return dt.astimezone(tz).strftime('%Y-%m-%dT%H:%M')
 
+    def _library_filter_context(self):
+        """Filter metadata for the From-library panel (same controls as the workspace drawer)."""
+        from judge.models import ProblemType
+        from judge.question_types import all_types
+
+        format_types = []
+        seen_codes = set()
+        for question_type in all_types():
+            if question_type.submission_type == ProblemSubmissionType.MCQ:
+                code, label = ProblemSubmissionType.MCQ, str(_('Choice question'))
+            else:
+                code, label = question_type.submission_type, str(question_type.label)
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            format_types.append({'code': code, 'label': label})
+        reserved_labels = Problem.reserved_auto_type_labels()
+        knowledge_types = [
+            problem_type for problem_type in ProblemType.objects.order_by('full_name')
+            if Problem.is_knowledge_problem_type(problem_type, reserved_labels=reserved_labels)
+        ]
+        profile = getattr(self.request, 'profile', None)
+        return {
+            'lib_format_types': format_types,
+            'lib_knowledge_types': knowledge_types,
+            'lib_difficulty_options': [
+                ('easy', str(_('Easy'))),
+                ('medium', str(_('Medium'))),
+                ('hard', str(_('Hard'))),
+            ],
+            'lib_completed_ids': user_completed_ids(profile) if profile is not None else set(),
+        }
+
     def get_context_data(self):
         """Build the template context, pre-filling every field in edit mode.
 
@@ -1142,6 +1175,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': False,
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
+            'allow_ai_hints': False,
             'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
             'cheat_level': 'medium', 'problems': [],
             'target_score': 100,
@@ -1254,7 +1288,7 @@ class ContestCreate(LoginRequiredMixin, View):
             else:
                 prefill['vis_mode'] = 'hidden'
 
-        return {
+        ctx = {
             'title': _('Edit Contest') if contest else _('Add Contest'),
             'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
             'now': timezone.now(),
@@ -1263,10 +1297,10 @@ class ContestCreate(LoginRequiredMixin, View):
             'tags': ContestTag.objects.all(),
             'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
             # Only problems this editor may attach — see _visible_problems_for.
-            # select_related/prefetch_related feed the library columns (group,
-            # types / difficulty, orgs) without N+1 queries on a large bank.
+            # select_related/prefetch_related feed the library columns (types /
+            # difficulty / orgs / MCQ format) without N+1 queries on a large bank.
             'problems': (self._visible_problems_for(self.request.user)
-                         .select_related('group').prefetch_related('types', 'organizations')
+                         .select_related('mcq_config').prefetch_related('types', 'organizations')
                          .order_by('-date')),
             'contest': contest,
             'user_timezone': user_tz_name,
@@ -1292,6 +1326,8 @@ class ContestCreate(LoginRequiredMixin, View):
             'seb_linked_preset': linked_preset,
             'prefill': prefill,
         }
+        ctx.update(self._library_filter_context())
+        return ctx
 
     @staticmethod
     def _tz_options(current):

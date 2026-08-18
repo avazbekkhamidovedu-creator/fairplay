@@ -472,6 +472,25 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'non-AC formal')
         self.assertNotContains(response, 'complexity budget')
 
+    def test_ai_hints_possible_when_assignment_allows(self):
+        problem = create_problem(code='ws-ai-asg', is_public=True, ai_hints_enabled=False)
+        contest = create_contest(
+            key='wsaiasg', name='AI Assignment',
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(days=1),
+            allow_ai_hints=True,
+            is_visible=True,
+        )
+        create_contest_problem(contest=contest, problem=problem, points=100, order=1)
+        participation = create_contest_participation(contest=contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        with mock.patch('judge.ai_hints.is_configured', return_value=True):
+            response = self.client.get(reverse('problem_detail', args=[problem.code]))
+        self.assertTrue(response.context['ai_hints_possible'])
+        problem.refresh_from_db()
+        self.assertFalse(problem.ai_hints_enabled)
+
     def test_mcq_result_shows_verdict_and_score_over_max(self):
         self.mcq.points = 10
         self.mcq.save(update_fields=['points'])

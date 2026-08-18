@@ -656,8 +656,13 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         else:
             context['workspace_submissions'] = []
         from judge import ai_hints as ai_hints_mod
+        hint_contest = (
+            current_participation.contest
+            if contest_problem is not None and current_participation is not None
+            else None
+        )
         context['ai_hints_possible'] = bool(
-            self.object.ai_hints_enabled and ai_hints_mod.is_configured(),
+            ai_hints_mod.hints_enabled_for(self.object, hint_contest) and ai_hints_mod.is_configured(),
         )
         context['ai_hints_remaining'] = (
             ai_hints_mod.get_remaining(self.request.profile.id)

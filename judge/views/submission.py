@@ -207,9 +207,9 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
         if first_failed:
             context['first_failed_case_id'] = first_failed.case
 
-        # AI hints context
+        # AI hints context: problem flag OR the assignment this submission belongs to.
         context['ai_hints_possible'] = (
-            submission.problem.ai_hints_enabled
+            ai_hints.hints_enabled_for(submission.problem, submission.contest_object)
             and ai_hints.is_configured()
         )
         context['ai_hints_enabled'] = (
@@ -286,8 +286,9 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
     def post(self, request, *args, **kwargs):
         submission = self.get_object()
 
-        # Gate 1: feature enabled on this problem
-        if not submission.problem.ai_hints_enabled:
+        # Gate 1: feature enabled on this problem, or on the assignment this
+        # submission was made in (does not mutate Problem.ai_hints_enabled).
+        if not ai_hints.hints_enabled_for(submission.problem, submission.contest_object):
             return JsonResponse({'error': 'AI hints are not enabled for this problem.'}, status=403)
 
         # Gate 2: backend configured

@@ -7578,3 +7578,35 @@ msgstr "测验"
 #: templates/contest/create.html
 msgid "Exam"
 msgstr "考试"
+
+#: templates/contest/create.html
+msgid "Course / Private restrict access; pick the courses/classes below, or users under Advanced → Private users."
+msgstr "Course / Private 会限制访问；请在下方选择课程／班级，或在高级 → 私人用户中选择用户。"
+
+#: templates/contest/create.html
+msgid "Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes below; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side."
+msgstr "作业是否出现在学生可见列表中。Hidden = 不列出；Public = 对所有人列出；Course = 列出，但限于下方课程／班级；Private = 列出，但限于高级 → 私人用户中的用户。此分段控件是唯一真相来源 — 底层标志由服务端据此推导。"
+
+#: templates/contest/create.html
+msgid "Course mode restricts visibility to the courses/classes below. The Advanced → Private users list is ignored."
+msgstr "Course 模式将可见范围限定为下方课程／班级。高级 → 私人用户列表会被忽略。"
+
+#: templates/contest/create.html
+msgid "Private mode ignores the Course/Class scoping below. Use Advanced → Private users to choose who can see this assignment."
+msgstr "Private 模式会忽略下方的课程／班级范围。请在高级 → 私人用户中选择谁可以看到此作业。"
+
+#: templates/contest/create.html
+msgid "Allow AI Hint"
+msgstr "允许 AI 提示"
+
+#: judge/models/contest.py
+msgid "allow AI hints"
+msgstr "允许 AI 提示"
+
+#: judge/models/contest.py
+msgid "When this assignment is active, students can use AI Hint on every attached problem. Each problem's own AI Hint setting is unchanged outside this assignment."
+msgstr "此作业进行中时，学生可对本作业内每道题使用 AI 提示。作业外仍以各题自身的 AI 提示设置为准。"
+
+#: templates/contest/create.html
+msgid "When this assignment is active, students can use AI Hint on every problem in it. Each problem's own AI Hint setting is unchanged outside this assignment."
+msgstr "此作业进行中时，学生可对本作业内每道题使用 AI 提示。作业外仍以各题自身的 AI 提示设置为准。"
