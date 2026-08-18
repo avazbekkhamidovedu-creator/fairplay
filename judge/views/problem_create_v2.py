@@ -133,6 +133,11 @@ def _can_create_any(user):
     return user.has_perm('judge.create_private_problem') or (user.is_staff and user.has_perm('judge.add_problem'))
 
 
+def _can_create_code(user):
+    """Programming problems: course instructors (create_private_problem) or site add_problem."""
+    return _can_create_any(user)
+
+
 @method_decorator(ensure_csrf_cookie, name='dispatch')
 class ProblemCreateV2View(LoginRequiredMixin, View):
     template_name = 'problem/create_v2.html'
@@ -184,7 +189,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 {'name': t['name'], 'full': t['full_name'] or t['name']}
                 for t in ProblemType.objects.order_by('full_name', 'name').values('name', 'full_name')
             ]),
-            'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
+            'can_create_code': _can_create_code(user),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
             'can_create_file': user.has_perm('judge.create_private_problem'),
             'can_import_excel_problems': user.has_perm('judge.create_private_problem'),
@@ -1040,7 +1045,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
     def _create_code(self, request, payload, name, problem=None, zip_upload=None):
         user = request.user
-        if not (user.is_staff and user.has_perm('judge.add_problem')):
+        if not _can_create_code(user):
             raise PermissionError(_('You do not have permission to create code problems.'))
 
         # Inline test cases: sync only when the client sends ``testcases`` (or a ZIP upload).

@@ -276,7 +276,7 @@
             <label>{{ _('Type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="type-pills" id="type-pills">
-                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create programming problems') }}" style="opacity:0.45;"{% endif %}>
+                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires permission to create problems') }}" style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="programming" onchange="selectType('programming')" {% if not can_create_code %}disabled{% endif %}><span>{{ _('Programming') }}</span></label>
                 <label class="type-pill" data-save="mcq">
                   <input type="radio" name="qtype" value="single" {% if can_create_mcq %}checked{% endif %} onchange="selectType('single')"><span>{{ _('Single choice') }}</span></label>
