@@ -324,7 +324,7 @@
           <div class="form-row">
             <label>{{ _('Public visible') }}</label>
             <div class="field">
-              <input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}>
+              <input type="checkbox" id="f-public" {% if can_change_public %}checked{% else %}disabled{% endif %}>
             </div>
           </div>
           <div class="form-row">
@@ -952,6 +952,7 @@
     const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
     const IMPORT_EDITOR_MODE = {{ 'true' if import_editor_mode else 'false' }};
+    const FROM_ASSIGNMENT = new URLSearchParams(window.location.search).get('from') === 'assignment';
     const IMPORT_ITEM_ID = '{{ import_item_id }}';
     const IMPORT_FORMAT_URL = '{{ import_format_url }}';
     const IMPORT_CREATE_URL = '{{ import_create_url }}';
@@ -2661,8 +2662,25 @@
           return;
         }
         showToast('{{ _("Saved") }} ' + res.body.code, true);
-        if (res.body.redirect) setTimeout(function() { location.href = res.body.redirect; }, 600);
-        else resetForm();
+        if (FROM_ASSIGNMENT && window.opener && !window.opener.closed && res.body.id) {
+          try {
+            window.opener.postMessage({
+              kind: 'assignment-problem-created',
+              problem: { id: res.body.id, code: res.body.code, name: res.body.name || '' }
+            }, window.location.origin);
+          } catch (e) { /* opener gone */ }
+          if (action !== 'another' && action !== 'continue') {
+            setTimeout(function() { window.close(); }, 400);
+            return;
+          }
+        }
+        if (res.body.redirect) {
+          var next = res.body.redirect;
+          if (FROM_ASSIGNMENT && action === 'another') {
+            next += (next.indexOf('?') === -1 ? '?' : '&') + 'from=assignment';
+          }
+          setTimeout(function() { location.href = next; }, 600);
+        } else resetForm();
       }).catch(function(err) {
         console.error('[add-problem] network/fetch error:', err);
         var networkMessage = '{{ _("Network error — please check your connection and try again.") }}';

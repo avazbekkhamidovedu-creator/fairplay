@@ -1000,6 +1000,23 @@
         font-size: 11px;
         color: var(--oj-text-muted);
     }
+
+    .cp-ai-hint {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin-left: 0.25rem;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--oj-text);
+        cursor: pointer;
+        user-select: none;
+
+        input {
+            margin: 0;
+            accent-color: var(--oj-accent);
+        }
+    }
 }
 
 .cp-empty {
@@ -1378,18 +1395,6 @@
     }
 }
 
-.pv-join {
-    display: inline-block;
-    margin-top: 0.75rem;
-    padding: 0.5rem 1.25rem;
-    background: var(--oj-accent);
-    color: var(--oj-btn-text);
-    border-radius: var(--oj-radius);
-    text-decoration: none;
-    font-weight: 600;
-    font-size: 13px;
-}
-
 /* ── Problem bank slideover ────────────────────────────────────────────────── */
 
 .slideover {
@@ -1414,7 +1419,7 @@
     top: 0;
     right: 0;
     height: 100%;
-    width: 860px;
+    width: 1040px;
     max-width: 96vw;
     background: var(--oj-surface);
     box-shadow: -8px 0 30px rgba(0, 0, 0, 0.2);
@@ -1536,6 +1541,37 @@
     }
 }
 
+#problem-library {
+    .lib-filters {
+        flex-shrink: 0;
+        padding: 0.55rem 0.75rem;
+        border-bottom: 1px solid var(--oj-border);
+        background: var(--oj-bg);
+    }
+
+    .ws-drawer-toolbar {
+        padding: 0;
+        border-bottom: none;
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .ws-filter-panel .select2-container {
+        min-width: 0;
+        max-width: none;
+    }
+
+    .so-table {
+        .col-name {
+            min-width: 140px;
+        }
+
+        .col-course {
+            max-width: 140px;
+        }
+    }
+}
+
 /* ── Score / points helpers ────────────────────────────────────────────────── */
 
 .diff-label {
@@ -1627,6 +1663,10 @@
             margin: 0;
             accent-color: var(--oj-accent);
         }
+
+        .oj-tip {
+            flex-shrink: 0;
+        }
     }
 }
 
@@ -1672,9 +1712,11 @@
     cursor: pointer;
     font-size: 12px;
     font-weight: 600;
+    text-decoration: none;
 
     &:hover {
         background: var(--oj-btn-hover);
+        text-decoration: none;
     }
 
     &.alt {

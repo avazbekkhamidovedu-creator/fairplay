@@ -271,6 +271,10 @@
         color: var(--oj-text-muted);
     }
 
+    .empty .oj-btn-primary {
+        margin-top: 0.75rem;
+    }
+
     .course-form-wrap {
         max-width: 920px;
         margin: 0 auto;
@@ -913,6 +917,13 @@
     .action-panel button.action-link.danger { color: var(--oj-danger) !important; }
     .action-panel .action-link:hover { text-decoration: underline; }
     .action-panel .action-body form { margin: 0; }
+
+    /* Match the Add Assignment tab-cta / primary button chrome. */
+    .action-panel .manage-links .oj-btn-primary {
+        width: 100%;
+        justify-content: center;
+        box-sizing: border-box;
+    }
 
     .class-section {
         background: transparent;

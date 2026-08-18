@@ -157,9 +157,6 @@ def workspace_manual_released(submission):
     return manual_grade is not None and manual_grade.released
 
 
-PUBLIC_COURSE_FILTER = 'public'
-
-
 def course_filter_organizations(user):
     """Courses shown in course filters: the user's memberships (and orgs they admin).
 
@@ -544,7 +541,6 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             for name in Problem.DIFFICULTY_TYPE_NAMES
         ]
         context['workspace_organizations'] = course_filter_organizations(user)
-        context['workspace_public_course_value'] = PUBLIC_COURSE_FILTER
         reserved_kp = Problem.reserved_auto_type_labels()
         context['workspace_knowledge_types'] = [
             t for t in ProblemType.objects.order_by('full_name')
@@ -693,8 +689,13 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         else:
             context['workspace_submissions'] = []
         from judge import ai_hints as ai_hints_mod
+        hint_contest = (
+            current_participation.contest
+            if contest_problem is not None and current_participation is not None
+            else None
+        )
         context['ai_hints_possible'] = bool(
-            self.object.ai_hints_enabled and ai_hints_mod.is_configured(),
+            ai_hints_mod.hints_enabled_for(self.object, hint_contest) and ai_hints_mod.is_configured(),
         )
         context['ai_hints_remaining'] = (
             ai_hints_mod.get_remaining(self.request.profile.id)
@@ -936,7 +937,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
     all_sorts = sql_sort | manual_sort
     default_desc = frozenset(('points', 'ac_rate', 'user_count', 'date'))
     default_sort = 'code'
-    PUBLIC_COURSE_FILTER = 'public'
 
     def get_paginator(self, queryset, per_page, orphans=0, allow_empty_first_page=True, **kwargs):
         paginator = DiggPaginator(
@@ -1194,14 +1194,10 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             queryset = queryset.filter(has_public_editorial=True)
         if self.category is not None:
             queryset = queryset.filter(group__id=self.category)
-        if self.selected_organizations or self.filter_public_course:
-            # Multi-select within Course is OR: chosen courses and/or fully public problems.
-            org_q = Q()
-            if self.selected_organizations:
-                org_q |= Q(organizations__in=self.selected_organizations)
-            if self.filter_public_course:
-                org_q |= Q(is_public=True, is_organization_private=False)
-            queryset = queryset.filter(org_q)
+        if self.selected_organizations:
+            # Multi-select within Course is OR. No course selected keeps the
+            # visible set unchanged (public problems included).
+            queryset = queryset.filter(organizations__in=self.selected_organizations)
         if self.selected_types:
             # Within a filter dimension multi-select is OR; dimensions combine with AND.
             # Difficulty and tags/knowledge points both use OR within their selected ids.
@@ -1266,7 +1262,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         context['categories'] = ProblemGroup.objects.all()
         context['organizations'] = self.get_course_filter_organizations()
         context['selected_organizations'] = self.selected_organizations
-        context['filter_public_course'] = self.filter_public_course
         if self.show_types:
             # Tags (knowledge points) come from the ProblemType taxonomy.
             all_problem_types = list(ProblemType.objects.all())
@@ -1439,7 +1434,6 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         self.selected_types = []
         self.selected_formats = []
         self.selected_organizations = []
-        self.filter_public_course = False
 
         # This actually copies into the instance dictionary...
         self.all_sorts = set(self.all_sorts)
@@ -1456,13 +1450,11 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             valid_formats = {code for code, label, q in self.get_format_options()}
             self.selected_formats = [c for c in request.GET.getlist('format') if c in valid_formats]
         # UI label is "Course"; accept both `course` and legacy `organization`.
-        # `public` is a sentinel for fully public problems (not private to any course).
+        # Non-integer values (the old `public` sentinel) are ignored so an
+        # unselected course still includes public problems.
         if 'course' in request.GET or 'organization' in request.GET:
             raw_courses = request.GET.getlist('course') or request.GET.getlist('organization')
             for raw in raw_courses:
-                if str(raw).lower() == self.PUBLIC_COURSE_FILTER:
-                    self.filter_public_course = True
-                    continue
                 try:
                     self.selected_organizations.append(int(raw))
                 except (TypeError, ValueError):
@@ -1623,7 +1615,8 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
     @cached_property
     def remaining_submission_count(self):
         max_subs = self.contest_problem and self.contest_problem.max_submissions
-        if max_subs is None:
+        # None or 0 → unlimited (0 is rejected by the model validator; treat as unset).
+        if not max_subs:
             return None
         # When an IE submission is rejudged into a non-IE status, it will count towards the
         # submission limit. We max with 0 to ensure that `remaining_submission_count` returns

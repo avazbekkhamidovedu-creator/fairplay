@@ -14,14 +14,21 @@ from judge.utils.simple_xlsx import build_xlsx_workbook
 from judge.views.problem_import import (
     _auto_fill_blank_config, _draft_image_url, _extract_labeled_multiple_choice_options, _fill_blanks_from_signs,
     _format_with_llm, _header_name,
-    _import_problem_name, _import_question_type, _multiple_choice_answer_indices, _normalise_type, _parse_fill_blanks,
-    _parse_text_test_data,
+    _import_problem_name, _import_question_type, _matching_import_languages, _multiple_choice_answer_indices,
+    _normalise_type, _parse_fill_blanks, _parse_text_test_data,
     _parse_zip_test_data, _promote_draft_images, _read_test_data_zip, _remove_multiple_choice_option_block,
     _serialize_fill_blanks, _validate_problem_import_item,
 )
 
 
 class ProblemImportTestDataParsingTestCase(SimpleTestCase):
+    def test_language_matching_only_ignores_capitalization(self):
+        java8 = SimpleNamespace(key='JAVA8', name='Java 8', common_name='Java')
+
+        self.assertEqual(_matching_import_languages([java8], 'java8'), [java8])
+        self.assertEqual(_matching_import_languages([java8], 'java 8'), [java8])
+        self.assertEqual(_matching_import_languages([java8], 'java'), [])
+
     def test_docx_images_remain_in_memory_until_a_draft_is_created(self):
         document = io.BytesIO()
         with zipfile.ZipFile(document, 'w') as archive:

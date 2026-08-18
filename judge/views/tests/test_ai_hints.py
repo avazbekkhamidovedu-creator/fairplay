@@ -1,14 +1,16 @@
 """Tests for the AI-hint endpoint (judge.views.submission.SubmissionAIHint)."""
+from datetime import timedelta
 from unittest import mock
 
 from django.core.cache import cache
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from judge import ai_hints, llm
 from judge.models import Language, Problem, Submission, SubmissionSource
 from judge.models.ai_hints import AIHintLog
-from judge.models.tests.util import create_problem, create_user
+from judge.models.tests.util import create_contest, create_contest_problem, create_problem, create_user
 
 AZURE_SETTINGS = {
     'LLM_PROVIDER': 'azure',
@@ -102,3 +104,64 @@ class AIHintViewTestCase(TestCase):
         self.assertNotIn('APITimeoutError', body)
         self.assertNotIn('10.0.0.1', body)
         self.assertIn('Could not reach the AI service', body)
+
+
+class AssignmentAIHintOverrideTestCase(TestCase):
+    """Assignment-level Allow AI Hint ORs with the problem flag; it does not mutate it."""
+
+    fixtures = ['language_all.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_user(username='asghintowner')
+        cls.problem = create_problem(code='asghintprob', ai_hints_enabled=False)
+        cls.contest = create_contest(
+            key='asghinthw', name='Hint Homework',
+            start_time=timezone.now() - timedelta(hours=1),
+            end_time=timezone.now() + timedelta(days=1),
+            allow_ai_hints=True,
+            is_visible=True,
+        )
+        create_contest_problem(contest=cls.contest, problem=cls.problem)
+        cls.submission = Submission.objects.create(
+            user=cls.user.profile, problem=cls.problem,
+            language=Language.objects.get(key='PY3'), result='WA', status='D',
+            contest_object=cls.contest,
+        )
+        SubmissionSource.objects.create(submission=cls.submission, source='print(1)')
+        cls.outside = Submission.objects.create(
+            user=cls.user.profile, problem=cls.problem,
+            language=Language.objects.get(key='PY3'), result='WA', status='D',
+        )
+        SubmissionSource.objects.create(submission=cls.outside, source='print(2)')
+
+    def setUp(self):
+        llm._backend = None
+        self.addCleanup(setattr, llm, '_backend', None)
+        cache.clear()
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def test_hints_enabled_for_or_logic(self):
+        problem = create_problem(code='hintlogic', ai_hints_enabled=False)
+        contest = create_contest(key='hintlogicc', allow_ai_hints=True)
+        self.assertFalse(ai_hints.hints_enabled_for(problem, None))
+        self.assertTrue(ai_hints.hints_enabled_for(problem, contest))
+        contest.allow_ai_hints = False
+        self.assertFalse(ai_hints.hints_enabled_for(problem, contest))
+        problem.ai_hints_enabled = True
+        self.assertTrue(ai_hints.hints_enabled_for(problem, contest))
+
+    @override_settings(**AZURE_SETTINGS)
+    def test_assignment_override_allows_hint_when_problem_disabled(self):
+        result = ai_hints.HintResult(hint_text='Check your loop bounds.')
+        with mock.patch.object(ai_hints, 'get_hint', return_value=result):
+            response = self.client.post(reverse('submission_ai_hint', args=[self.submission.id]))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.problem.refresh_from_db()
+        self.assertFalse(self.problem.ai_hints_enabled)
+
+    @override_settings(**AZURE_SETTINGS)
+    def test_assignment_override_does_not_apply_outside_assignment(self):
+        response = self.client.post(reverse('submission_ai_hint', args=[self.outside.id]))
+        self.assertEqual(response.status_code, 403)

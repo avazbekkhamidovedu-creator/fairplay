@@ -121,7 +121,6 @@
             <div class="filter-block">
               <label class="filter-label" for="fp-course">{{ _('Course') }}</label>
               <select id="fp-course" multiple data-placeholder="{{ _('All courses') }}">
-                <option value="{{ workspace_public_course_value }}">{{ _('Public') }}</option>
                 {% for org in workspace_organizations %}<option value="{{ org.id }}">{{ org.name }}</option>{% endfor %}
               </select>
             </div>

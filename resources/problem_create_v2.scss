@@ -856,10 +856,18 @@ fieldset.module .form-content { padding: 1rem; }
   padding: 0.45rem 0.9rem; border: 1px solid var(--oj-accent, #2980B9);
   border-radius: var(--pcv2-radius); background: var(--pcv2-accent-soft); color: var(--oj-accent, #2980B9);
   cursor: pointer; font-size: var(--oj-font-size, 14px); font-weight: 600;
+  text-decoration: none;
 }
-.btn-soft:hover { background: rgba(41, 128, 185, 0.2); }
-.btn-soft.alt { border-color: var(--oj-accent, #2980B9); background: var(--pcv2-accent-soft); color: var(--oj-accent, #2980B9); }
-.btn-soft.alt:hover { background: rgba(41, 128, 185, 0.2); }
+.btn-soft i { color: inherit; }
+.btn-soft:hover { background: rgba(41, 128, 185, 0.2); color: var(--oj-accent, #2980B9); text-decoration: none; }
+a.btn-soft,
+a.btn-soft:link,
+a.btn-soft:visited,
+a.btn-soft:hover,
+a.btn-soft:focus {
+  color: var(--oj-accent, #2980B9);
+  text-decoration: none;
+}
 
 .cp-empty {
   text-align: center; padding: 2.5rem 1rem; color: var(--muted);

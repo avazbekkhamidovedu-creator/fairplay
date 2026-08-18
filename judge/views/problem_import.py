@@ -31,7 +31,6 @@ from judge.models import Language, Organization, Problem, ProblemBlank, ProblemD
     ProblemSubmissionType, ProblemTestCase, ProblemType, Solution, problem_data_storage
 from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
     store_docx_image
-from judge.utils.language_matching import matching_languages
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type
 from judge.utils.problem_data import ProblemDataCompiler
 from judge.utils.simple_xlsx import validate_xlsx_upload
@@ -279,7 +278,7 @@ def _editor_data_for_item(item):
         'name': item.name,
         'description': item.description,
         'points': 10,
-        'is_public': False,
+        'is_public': True,
         'partial': False,
         'organizations': [],
         'group_id': '',
@@ -1200,7 +1199,7 @@ def _preview_type_presentation(item):
 
 
 def _preview_options(item):
-    options = _split_lines(item.options)
+    options = _split_choice_lines(item.options)
     try:
         correct = set(_multiple_choice_answer_indices(item.answer, options)) if options else set()
     except ValueError:
@@ -1233,8 +1232,13 @@ def _split_lines(value):
     return [part.strip() for part in re.split(r'[\n,;|]+', value or '') if part.strip()]
 
 
+def _split_choice_lines(value):
+    """Treat each non-empty line as one multiple-choice option."""
+    return [line.strip() for line in str(value or '').splitlines() if line.strip()]
+
+
 def _resolve_import_organizations(request, raw_value):
-    """Resolve one Excel organization to the organization selector's visible ID."""
+    """Resolve one Excel organization using the unified editor's assignment scope."""
     tokens = _split_lines(raw_value)
     if not tokens:
         return [], []
@@ -1245,8 +1249,13 @@ def _resolve_import_organizations(request, raw_value):
             'reason': _('The preview editor currently supports one organization per problem.'),
         }]
 
-    profile = getattr(request, 'profile', None)
-    queryset = profile.organizations.all() if profile is not None else Organization.objects.none()
+    # Match the unified problem editor: creators may assign any organization,
+    # including a course that does not yet have any classes or members.
+    queryset = (
+        Organization.objects.all()
+        if request.user.has_perm('judge.create_private_problem')
+        else Organization.objects.none()
+    )
     token = tokens[0]
     matches = list(queryset.filter(slug__iexact=token))
     matches.extend(queryset.filter(short_name__iexact=token))
@@ -1279,7 +1288,7 @@ def _resolve_allowed_languages(raw_value):
     resolved = []
     seen = set()
     for token in requested:
-        matches = matching_languages(queryset, token)
+        matches = _matching_import_languages(queryset, token)
         if not matches:
             raise ValueError('Language "{}" was not found.'.format(token))
         if len(matches) > 1:
@@ -1289,6 +1298,15 @@ def _resolve_allowed_languages(raw_value):
             resolved.append(match)
             seen.add(match.pk)
     return resolved
+
+
+def _matching_import_languages(languages, token):
+    """Match spreadsheet languages by full name or key, ignoring only case."""
+    normalized_token = str(token).casefold()
+    return [
+        language for language in languages
+        if language.key.casefold() == normalized_token or language.name.casefold() == normalized_token
+    ]
 
 
 def _normalise_import_tags(raw_value):
@@ -1392,7 +1410,7 @@ def _configuration_review_items(item):
         except ValueError as error:
             add(_('Allowed languages'), item.allowed_languages, error)
     elif item.submission_type == ProblemSubmissionType.MCQ:
-        options = _split_lines(item.options)
+        options = _split_choice_lines(item.options)
         if len(options) < 2:
             add(_('Choices'), item.options, _('At least two choices are required.'))
         else:
@@ -1544,7 +1562,7 @@ def _validate_problem_import_item(item):
         elif item.test_data.strip():
             _parse_text_test_data(item.test_data)
     elif item.submission_type == ProblemSubmissionType.MCQ:
-        options = _split_lines(item.options)
+        options = _split_choice_lines(item.options)
         correct = set(_multiple_choice_answer_indices(item.answer, options))
         if len(options) < 2:
             raise ValueError('Multiple-choice questions need at least two options.')
@@ -1663,7 +1681,7 @@ def _create_problem_records(request, item, description, created_data_directories
         problem.allowed_languages.set(languages)
         _add_test_cases(problem, item, created_data_directories)
     elif item.submission_type == ProblemSubmissionType.MCQ:
-        options = _split_lines(item.options)
+        options = _split_choice_lines(item.options)
         correct = set(_multiple_choice_answer_indices(item.answer, options))
         if len(options) < 2:
             raise ValueError('Multiple-choice questions need at least two options.')

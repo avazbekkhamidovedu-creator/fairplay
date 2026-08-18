@@ -339,13 +339,19 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         action = payload.get('action') or 'save'
         if action == 'another':
             # Land on a fresh add-problem page.
-            return JsonResponse({'ok': True, 'code': problem.code, 'redirect': reverse('problem_create_v2')})
-        if action == 'continue':
+            redirect = reverse('problem_create_v2')
+        elif action == 'continue':
             # Reopen this problem on the add page for further edits.
             redirect = reverse('problem_edit_v2', args=[problem.code])
         else:
             redirect = reverse('problem_detail', args=[problem.code])
-        return JsonResponse({'ok': True, 'code': problem.code, 'redirect': redirect})
+        return JsonResponse({
+            'ok': True,
+            'id': problem.id,
+            'code': problem.code,
+            'name': problem.name,
+            'redirect': redirect,
+        })
 
     # ------------------------------------------------------------------ edit support
     def _get_editable_problem(self, request, code):
