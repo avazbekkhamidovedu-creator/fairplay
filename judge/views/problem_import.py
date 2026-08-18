@@ -31,7 +31,6 @@ from judge.models import Language, Organization, Problem, ProblemBlank, ProblemD
     ProblemSubmissionType, ProblemTestCase, ProblemType, Solution, problem_data_storage
 from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
     store_docx_image
-from judge.utils.language_matching import matching_languages
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type
 from judge.utils.problem_data import ProblemDataCompiler
 from judge.utils.simple_xlsx import validate_xlsx_upload
@@ -1279,7 +1278,7 @@ def _resolve_allowed_languages(raw_value):
     resolved = []
     seen = set()
     for token in requested:
-        matches = matching_languages(queryset, token)
+        matches = _matching_import_languages(queryset, token)
         if not matches:
             raise ValueError('Language "{}" was not found.'.format(token))
         if len(matches) > 1:
@@ -1289,6 +1288,15 @@ def _resolve_allowed_languages(raw_value):
             resolved.append(match)
             seen.add(match.pk)
     return resolved
+
+
+def _matching_import_languages(languages, token):
+    """Match spreadsheet languages by full name or key, ignoring only case."""
+    normalized_token = str(token).casefold()
+    return [
+        language for language in languages
+        if language.key.casefold() == normalized_token or language.name.casefold() == normalized_token
+    ]
 
 
 def _normalise_import_tags(raw_value):
