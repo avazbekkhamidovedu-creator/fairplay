@@ -4,8 +4,6 @@ from django.utils.translation import gettext_lazy as _
 
 from judge.models.profile import Profile
 
-# Auth group that receives instructor-verification applications.
-SITE_ADMINISTRATORS_GROUP = 'Site Administrators'
 # Site-wide Teacher group: create courses / private problems / classes /
 # assignments (after admin approval).
 INSTRUCTORS_GROUP = 'Instructors'

@@ -26,7 +26,7 @@ from judge.forms import ClassAssignmentsForm, ClassSiteForm, EditOrganizationFor
 from judge.models import AdminNotification, Class, ClassMaterial, Contest, InstructorVerificationRequest, \
     Organization, OrganizationRequest, Profile
 from judge.models.notification import (
-    INSTRUCTORS_GROUP, SITE_ADMINISTRATORS_GROUP, ensure_instructors_group,
+    INSTRUCTORS_GROUP, ensure_instructors_group,
 )
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, notify_instructor_verification,
@@ -271,12 +271,10 @@ def users_for_template(users, order):
 
 
 def user_can_review_site_teacher_verifications(user):
-    """Site-wide teacher applications: Site Administrators / edit_all / superuser."""
+    """Site-wide teacher applications: Django superusers."""
     if not user or not user.is_authenticated:
         return False
-    if user.is_superuser or user.has_perm('judge.edit_all_organization'):
-        return True
-    return user.groups.filter(name=SITE_ADMINISTRATORS_GROUP).exists()
+    return user.is_superuser
 
 
 def instructor_verifications_for_reviewer(profile, user=None):

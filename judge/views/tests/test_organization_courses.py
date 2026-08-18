@@ -616,7 +616,22 @@ class ClassSiteFormTests(CommonDataMixin, TestCase):
             'is_active': 'on',
         }, organization=org)
         self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['name'], '2026-2027 Spring - Session 1 Alice Smith')
         self.assertEqual(
-            form.cleaned_data['name'],
-            suggested_class_name(org, '2026-2027', 'Spring - Session 1'),
+            suggested_class_name('2027-2028', 'Fall Session', 'Prof. Huang'),
+            '2027-2028 Fall Session Prof. Huang',
         )
+
+        # JS-filled legacy names (course + year + session) are rewritten to include the instructor.
+        legacy_name = ' '.join(
+            part for part in [(org.short_name or org.name), '2026-2027', 'Spring - Session 1'] if part
+        )
+        form = ClassSiteForm(data={
+            'name': legacy_name,
+            'academic_year': '2026-2027',
+            'term_session': 'Spring - Session 1',
+            'instructor_names': 'Prof. Huang',
+            'is_active': 'on',
+        }, organization=org)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['name'], '2026-2027 Spring - Session 1 Prof. Huang')

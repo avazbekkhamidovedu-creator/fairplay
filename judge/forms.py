@@ -324,7 +324,7 @@ class OrganizationSiteForm(ModelForm):
         }
         widgets = {
             'about': forms.Textarea(attrs={
-                'rows': 12,
+                'rows': 4,
                 'class': 'rich-editor-source',
                 'data-rich-editor': 'course-about',
             }),
@@ -367,8 +367,23 @@ class EditOrganizationForm(OrganizationSiteForm):
     pass
 
 
-def suggested_class_name(organization, academic_year='', term_session=''):
-    """Build a class name from course code + offering fields."""
+def suggested_class_name(academic_year='', term_session='', instructor_names=''):
+    """Build a class name from year, session, and instructor (e.g. 2027-2028 Fall Session Prof. Huang)."""
+    parts = []
+    year = (academic_year or '').strip()
+    term = (term_session or '').strip()
+    instructors = (instructor_names or '').strip()
+    if year:
+        parts.append(year)
+    if term:
+        parts.append(term)
+    if instructors:
+        parts.append(instructors)
+    return ' '.join(parts)
+
+
+def suggested_class_name_legacy(organization, academic_year='', term_session=''):
+    """Previous auto name: course code + year + session (no instructor)."""
     parts = []
     if organization is not None:
         code = (getattr(organization, 'short_name', None) or getattr(organization, 'name', '') or '').strip()
@@ -438,7 +453,7 @@ class ClassSiteForm(ModelForm):
             'is_active': _('Class is active'),
         }
         help_texts = {
-            'name': _('Filled in from the course code, academic year, and session. You can still edit it.'),
+            'name': _('Filled in from the academic year, session, and instructor. You can still edit it.'),
             'instructor_names': _('Required. Comma-separated names shown on the class page and course class cards.'),
             'ta_names': _('Comma-separated TA names shown on the class page.'),
             'admins': _('Optional. The creator is always added as a class administrator.'),
@@ -448,7 +463,7 @@ class ClassSiteForm(ModelForm):
         }
         widgets = {
             'description': forms.Textarea(attrs={
-                'rows': 10,
+                'rows': 4,
                 'class': 'rich-editor-source',
                 'data-rich-editor': 'class-description',
             }),
@@ -469,7 +484,7 @@ class ClassSiteForm(ModelForm):
             'access_code': forms.TextInput(attrs={'class': 'oj-input', 'maxlength': '7'}),
             'name': forms.TextInput(attrs={
                 'class': 'oj-input',
-                'placeholder': _('Generated from year and session'),
+                'placeholder': _('Generated from year, session, and instructor'),
                 'autocomplete': 'off',
             }),
             'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
@@ -515,15 +530,22 @@ class ClassSiteForm(ModelForm):
             self.add_error('end_date', _('The end date must be after the start date.'))
 
         name = (cleaned.get('name') or '').strip()
-        generated = not name
+        year = cleaned.get('academic_year')
+        term = cleaned.get('term_session')
+        instructors = cleaned.get('instructor_names')
+        suggested = suggested_class_name(year, term, instructors)
+        legacy = suggested_class_name_legacy(self.organization, year, term)
+        generated = not name or name in {
+            suggested,
+            suggested_class_name(year, term, ''),
+            legacy,
+        }
         if generated:
-            name = suggested_class_name(
-                self.organization, cleaned.get('academic_year'), cleaned.get('term_session'),
-            )
+            name = suggested
         if not name:
             self.add_error(
                 'name',
-                _('Select an academic year and session, or enter a class name.'),
+                _('Select an academic year, session, and instructor, or enter a class name.'),
             )
             return cleaned
         if generated:

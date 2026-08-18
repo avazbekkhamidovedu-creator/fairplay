@@ -1,23 +1,12 @@
-from django.contrib.auth.models import Group
 from django.urls import reverse
 from django.utils.translation import gettext as _
 
 from judge.models import AdminNotification, Profile
-from judge.models.notification import SITE_ADMINISTRATORS_GROUP
 
 
 def site_administrator_profiles():
-    """Profiles in the Site Administrators group; fallback to staff/superusers."""
-    group = Group.objects.filter(name=SITE_ADMINISTRATORS_GROUP).first()
-    if group is not None:
-        qs = Profile.objects.filter(user__groups=group, user__is_active=True).distinct()
-        if qs.exists():
-            return qs
-    return Profile.objects.filter(
-        user__is_active=True,
-    ).filter(
-        user__is_superuser=True,
-    ).distinct()
+    """Active Django superusers (the original site-admin flag, not a custom group)."""
+    return Profile.objects.filter(user__is_active=True, user__is_superuser=True).distinct()
 
 
 def notify_profiles(recipients, *, kind, title, body='', actor=None, link='',
