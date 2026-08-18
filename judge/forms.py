@@ -312,7 +312,8 @@ class OrganizationSiteForm(ModelForm):
         }
         help_texts = {
             'is_open': _('If checked, students can join without approval. Cannot combine with class required.'),
-            'class_required': _('If checked, students must select a class when requesting membership.'),
+            'class_required': _('If checked, students must select a class when requesting membership. '
+                                'Site teachers can request the course without picking a class.'),
             'slots': _('Optional. Maximum members for private courses.'),
             'admins': _('People who can edit this course and review join requests. '
                         'The creator is included by default and can add co-administrators.'),
@@ -366,6 +367,36 @@ class EditOrganizationForm(OrganizationSiteForm):
     pass
 
 
+def suggested_class_name(organization, academic_year='', term_session=''):
+    """Build a class name from course code + offering fields."""
+    parts = []
+    if organization is not None:
+        code = (getattr(organization, 'short_name', None) or getattr(organization, 'name', '') or '').strip()
+        if code:
+            parts.append(code)
+    year = (academic_year or '').strip()
+    term = (term_session or '').strip()
+    if year:
+        parts.append(year)
+    if term:
+        parts.append(term)
+    return ' '.join(parts)
+
+
+def uniquify_class_name(name, instance=None):
+    """Append 2, 3, … when *name* is already taken."""
+    candidate = name
+    suffix = 2
+    while True:
+        qs = Class.objects.filter(name=candidate)
+        if instance is not None and instance.pk:
+            qs = qs.exclude(pk=instance.pk)
+        if not qs.exists():
+            return candidate
+        candidate = '%s %d' % (name, suffix)
+        suffix += 1
+
+
 class ClassSiteForm(ModelForm):
     """Front-end create/edit class form aligned with the class-form demo modules."""
 
@@ -407,7 +438,8 @@ class ClassSiteForm(ModelForm):
             'is_active': _('Class is active'),
         }
         help_texts = {
-            'instructor_names': _('Comma-separated names shown on the class page and course class cards.'),
+            'name': _('Filled in from the course code, academic year, and session. You can still edit it.'),
+            'instructor_names': _('Required. Comma-separated names shown on the class page and course class cards.'),
             'ta_names': _('Comma-separated TA names shown on the class page.'),
             'admins': _('Optional. The creator is always added as a class administrator.'),
             'members': _('Search course members or users. Use Import CSV to bulk-add usernames.'),
@@ -435,12 +467,17 @@ class ClassSiteForm(ModelForm):
                 'placeholder': _('e.g. Carol Chen, Dan Wu'),
             }),
             'access_code': forms.TextInput(attrs={'class': 'oj-input', 'maxlength': '7'}),
-            'name': forms.TextInput(attrs={'class': 'oj-input', 'placeholder': _('CS201 2026 Spring Session 1')}),
+            'name': forms.TextInput(attrs={
+                'class': 'oj-input',
+                'placeholder': _('Generated from year and session'),
+                'autocomplete': 'off',
+            }),
             'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
             'members': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, organization=None, **kwargs):
+        self.organization = organization
         super().__init__(*args, **kwargs)
         year = timezone.now().year
         year_choices = [('', _('Select…'))]
@@ -449,29 +486,26 @@ class ClassSiteForm(ModelForm):
             year_choices.append((label, label))
         self.fields['academic_year'].widget.choices = year_choices
         self.fields['term_session'].widget.choices = list(self.TERM_SESSION_CHOICES)
+        self.fields['name'].required = False
+        self.fields['instructor_names'].required = True
         for name in (
             'admins', 'members', 'access_code', 'description', 'academic_year', 'term_session',
-            'credits', 'location', 'start_date', 'end_date', 'instructor_names', 'ta_names',
+            'credits', 'location', 'start_date', 'end_date', 'ta_names',
         ):
             if name in self.fields:
                 self.fields[name].required = False
 
     def clean_instructor_names(self):
-        return (self.cleaned_data.get('instructor_names') or '').strip()
+        value = (self.cleaned_data.get('instructor_names') or '').strip()
+        if not value:
+            raise ValidationError(_('This field is required.'))
+        return value
 
     def clean_ta_names(self):
         return (self.cleaned_data.get('ta_names') or '').strip()
 
     def clean_name(self):
-        name = self.cleaned_data['name']
-        qs = Class.objects.filter(name=name)
-        if self.instance and self.instance.pk:
-            qs = qs.exclude(pk=self.instance.pk)
-        if qs.exists():
-            raise ValidationError(_(
-                'A class with this name already exists. Class names must be unique across the site.',
-            ))
-        return name
+        return (self.cleaned_data.get('name') or '').strip()
 
     def clean(self):
         cleaned = super().clean()
@@ -479,6 +513,31 @@ class ClassSiteForm(ModelForm):
         end = cleaned.get('end_date')
         if start and end and end < start:
             self.add_error('end_date', _('The end date must be after the start date.'))
+
+        name = (cleaned.get('name') or '').strip()
+        generated = not name
+        if generated:
+            name = suggested_class_name(
+                self.organization, cleaned.get('academic_year'), cleaned.get('term_session'),
+            )
+        if not name:
+            self.add_error(
+                'name',
+                _('Select an academic year and session, or enter a class name.'),
+            )
+            return cleaned
+        if generated:
+            name = uniquify_class_name(name, self.instance)
+        else:
+            qs = Class.objects.filter(name=name)
+            if self.instance and self.instance.pk:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                self.add_error('name', _(
+                    'A class with this name already exists. Class names must be unique across the site.',
+                ))
+                return cleaned
+        cleaned['name'] = name
         return cleaned
 
 

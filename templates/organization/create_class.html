@@ -53,6 +53,34 @@
                 var name = (this.files && this.files[0] && this.files[0].name) || '';
                 $('#csv-filename').text(name ? name : {{ _('No file chosen')|htmltojs }});
             });
+
+            {% if form_mode != 'edit' %}
+            var $name = $('#id_name');
+            var $year = $('#id_academic_year');
+            var $term = $('#id_term_session');
+            var courseCode = {{ (organization.short_name or organization.name)|htmltojs }};
+            var autoName = !$name.val();
+            var lastAuto = $name.val() || '';
+            function suggestedClassName() {
+                var parts = [courseCode];
+                var year = ($year.val() || '').trim();
+                var term = ($term.val() || '').trim();
+                if (year) parts.push(year);
+                if (term) parts.push(term);
+                return parts.join(' ');
+            }
+            function syncClassName() {
+                if (!autoName && $name.val() !== lastAuto) return;
+                lastAuto = suggestedClassName();
+                autoName = true;
+                $name.val(lastAuto);
+            }
+            $name.on('input', function () {
+                autoName = ($name.val() === lastAuto) || !$name.val();
+            });
+            $year.add($term).on('change', syncClassName);
+            if (autoName) syncClassName();
+            {% endif %}
         });
     </script>
 {% endblock %}
@@ -92,8 +120,9 @@
                 <h2>{{ _('Class identity') }}</h2>
                 <div class="class-form-grid">
                     <div class="class-form-field full">
-                        <label for="{{ form.name.id_for_label }}">{{ form.name.label }} <span aria-hidden="true">*</span></label>
+                        <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
                         {{ form.name }}
+                        {% if form.name.help_text %}<div class="helptext">{{ form.name.help_text }}</div>{% endif %}
                         {{ form.name.errors }}
                     </div>
                     <div class="class-form-field full">
@@ -145,7 +174,7 @@
                 <h2>{{ _('People') }}</h2>
                 <div class="class-form-grid">
                     <div class="class-form-field">
-                        <label for="{{ form.instructor_names.id_for_label }}">{{ form.instructor_names.label }}</label>
+                        <label for="{{ form.instructor_names.id_for_label }}">{{ form.instructor_names.label }} <span aria-hidden="true">*</span></label>
                         {{ form.instructor_names }}
                         {% if form.instructor_names.help_text %}<div class="helptext">{{ form.instructor_names.help_text }}</div>{% endif %}
                         {{ form.instructor_names.errors }}
