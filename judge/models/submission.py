@@ -16,8 +16,7 @@ from judge.models.profile import Profile
 from judge.models.runtime import Language
 from judge.utils.unicode import utf8bytes
 
-__all__ = ['SUBMISSION_RESULT', 'Submission', 'SubmissionSource', 'SubmissionTestCase',
-           'SubmissionManualGrade']
+__all__ = ['SUBMISSION_RESULT', 'Submission', 'SubmissionSource', 'SubmissionTestCase']
 
 SUBMISSION_RESULT = (
     ('AC', _('Accepted')),
@@ -109,20 +108,6 @@ class Submission(models.Model):
         verbose_name=_('reviewed at'), null=True, blank=True,
         help_text=_('When the manual grade was last saved.'),
     )
-
-    @cached_property
-    def manual_grade_override(self):
-        """The teacher's manual grade record for this submission, or None.
-
-        OneToOne reverse accessor (``self.manual_grade``) raises
-        ``ObjectDoesNotExist`` when no manual grade exists, or returns None when
-        ``prefetch_related('manual_grade')`` was used. Both collapse to None here
-        so callers can branch on ``is None`` uniformly.
-        """
-        try:
-            return self.manual_grade
-        except ObjectDoesNotExist:
-            return None
 
     @classmethod
     def result_class_from_code(cls, result, case_points, case_total):
@@ -225,12 +210,6 @@ class Submission(models.Model):
                                if self.case_total > 0 else 0, 3)
         if not contest_problem.partial and contest.points != contest_problem.points:
             contest.points = 0
-        # A teacher's manual override always wins over the machine score, so a
-        # rejudge (which recomputes machine points) must not wipe it: the actual
-        # contest score stays on the manual grade regardless of release state.
-        manual_grade = self.manual_grade_override
-        if manual_grade is not None and manual_grade.points is not None:
-            contest.points = manual_grade.points
         contest.save()
         contest.participation.recompute_results()
 
@@ -397,36 +376,3 @@ class SubmissionTestCase(models.Model):
         unique_together = ('submission', 'case')
         verbose_name = _('submission test case')
         verbose_name_plural = _('submission test cases')
-
-
-class SubmissionManualGrade(models.Model):
-    """A teacher's manual score override for a single submission.
-
-    This is the authoritative record written by the grade page's "Save grading"
-    action. It is deliberately kept OUT of ``Submission.points`` /
-    ``ContestSubmission.points`` (the machine/judge scores) so that:
-
-    * the machine score survives untouched for display until the teacher
-      "releases" this override (``released``), and
-    * every consumer that needs the *actual* score (grade page, ranking,
-      standings, exports) can prefer the manual score unconditionally.
-
-    ``machine_points`` snapshots the machine score in the same scale the grade
-    page displays (assignment-specified points for contest submissions, the
-    problem's own scale otherwise) at the moment of first grading, so the
-    student-facing workspace can keep showing the machine score while the
-    override is unreleased.
-    """
-    submission = models.OneToOneField(Submission, verbose_name=_('submission'),
-                                      related_name='manual_grade', on_delete=models.CASCADE)
-    points = models.FloatField(verbose_name=_('manual score'), null=True, blank=True)
-    machine_points = models.FloatField(verbose_name=_('machine score at grading time'), null=True, blank=True)
-    released = models.BooleanField(verbose_name=_('released to students'), default=False)
-    updated_at = models.DateTimeField(verbose_name=_('last updated'), auto_now=True)
-
-    def __str__(self):
-        return _('Manual grade for submission %(id)d') % {'id': self.submission_id}
-
-    class Meta:
-        verbose_name = _('submission manual grade')
-        verbose_name_plural = _('submission manual grades')

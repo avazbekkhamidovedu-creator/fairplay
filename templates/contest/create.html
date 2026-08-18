@@ -2415,20 +2415,15 @@
                             {% if can_edit_access_code %}
                             <div class="form-row" id="cheat-accesscode-row">
                                 <label>{{ _('Access code') }}</label>
-                                <div class="field">
-                                    <div class="ac-inline">
-                                        {# Backfill the stored code: without this, reopening an existing contest
-                                           shows an empty field and saving would wipe the access code. #}
-                                        <input type="text" id="id_access_code" name="access_code"
-                                               placeholder="{{ _('Optional') }}" value="{{ prefill.access_code or '' }}">
-                                        <button type="button" id="gen-access-code" class="btn-soft">{{ _('Generate') }}</button>
-                                    </div>
-                                    {# This help text lives INSIDE #cheat-accesscode-row so the
-                                       cheat-level toggle (updateCheatFields) hides it together
-                                       with the input — it must only appear at Medium/Custom. #}
-                                    <div class="ac-help">{{ _('Students must enter a code before joining.') }}</div>
+                                <div class="field ac-inline">
+                                    {# Backfill the stored code: without this, reopening an existing contest
+                                       shows an empty field and saving would wipe the access code. #}
+                                    <input type="text" id="id_access_code" name="access_code"
+                                           placeholder="{{ _('Optional') }}" value="{{ prefill.access_code or '' }}">
+                                    <button type="button" id="gen-access-code" class="btn-soft">{{ _('Generate') }}</button>
                                 </div>
                             </div>
+                            <div class="ac-help">{{ _('Students must enter a code before joining.') }}</div>
                             {% endif %}
 
                             {% if can_edit_seb %}

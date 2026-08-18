@@ -73,13 +73,6 @@
         }
         .ws-toolbar .nav-arrows { display: inline-flex; gap: .25rem; }
         .ws-layout-switch { margin-left: .15rem; }
-        .ws-toolbar-left {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: .35rem .55rem;
-            min-width: 0;
-        }
         .grade-actions {
             display: inline-flex;
             align-items: center;
@@ -88,33 +81,6 @@
             padding-left: .85rem;
             border-left: 1px solid var(--oj-border, #ccc);
         }
-        /* Centered "Release All" button (green — releasing is a positive action). */
-        .ws-toolbar.has-leave {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-            align-items: center;
-        }
-        .ws-toolbar-center { justify-self: center; }
-        .ws-toolbar.has-leave .grade-actions { justify-self: end; margin-left: 0; }
-        .ws-app .ws-toolbar button.release-btn.tool-btn {
-            border-color: var(--oj-success, #2e7d32);
-            background: var(--oj-surface, #fff);
-            color: var(--oj-success, #2e7d32) !important;
-            font-weight: 700;
-        }
-        .ws-app .ws-toolbar button.release-btn.tool-btn:hover {
-            background: var(--oj-success, #2e7d32);
-            color: #fff !important;
-            border-color: var(--oj-success, #2e7d32);
-        }
-        .ws-app .ws-toolbar button.release-btn.tool-btn i { color: inherit !important; }
-        /* Collapsible sections (e.g. Problem description — collapsed by default). */
-        .gd-collapse-toggle {
-            cursor: pointer;
-            user-select: none;
-        }
-        .gd-collapse-toggle .chev { display: inline-block; transition: transform .12s ease; }
-        .gd-collapse-toggle.open .chev { transform: rotate(90deg); }
         .ws-app .ws-toolbar .tool-btn.submit-btn {
             display: inline-flex;
             align-items: center;
@@ -317,8 +283,7 @@
         .badge-review { background: #fff3e0; color: #e65100; }
         .badge-done { background: #e8f5e9; color: #2e7d32; }
         .badge-final { background: #e3f2fd; color: #1565c0; }
-        .badge-released { background: #e8f5e9; color: #2e7d32; }
-        .badge-manual { background: #eee; color: #666; }
+        .badge-released { background: #ede7f6; color: #4527a0; }
         .badge-hidden { background: #eee; color: #666; }
 
         .grade-empty {
@@ -392,6 +357,7 @@
         .grade-stem {
             line-height: 1.65;
             font-size: 13.5px;
+            white-space: pre-wrap;
             word-break: break-word;
         }
         .gd-source-card { padding: 0; overflow: hidden; background: #111827 !important; }
@@ -406,26 +372,6 @@
             overflow: auto;
         }
         .gd-upload { padding: 0.6rem 0.8rem; }
-        /* Readable answer rows for MCQ / fill-blank / short-answer submissions
-           (rendered instead of the raw JSON payload). */
-        .gd-answer { padding: 0.7rem 0.9rem; background: #111827; }
-        .gd-answer-row {
-            display: flex;
-            gap: 0.5rem;
-            padding: 0.3rem 0;
-            color: #e5e7eb;
-            font-size: 13px;
-            line-height: 1.5;
-            border-bottom: 1px solid #1f2937;
-        }
-        .gd-answer-row:last-child { border-bottom: none; }
-        .gd-answer-label {
-            flex-shrink: 0;
-            color: #9ca3af;
-            font-weight: 600;
-            min-width: 3.5rem;
-        }
-        .gd-answer-value { word-break: break-word; white-space: pre-wrap; }
 
         /* ── Right pane: result (top) + grading (bottom) ─────────────────── */
         .grade-right {
@@ -548,11 +494,6 @@
             }
             .ws-toolbar { padding-inline: .6rem; }
             .ws-toolbar .ctx-label { max-width: 9rem; }
-            /* On narrow screens drop the 3-column grid so the Release All button
-               wraps naturally next to the other toolbar actions. */
-            .ws-toolbar.has-leave { display: flex; }
-            .ws-toolbar.has-leave .grade-actions { margin-left: auto; }
-            .ws-toolbar-center { margin: 0 auto; }
         }
     </style>
 {% endblock %}
@@ -570,26 +511,12 @@
             var releaseUrl = {{ url('contest_grade_release', contest.key)|tojson }};
             var rejudgeUrl = {{ url('submission_rejudge')|tojson }};
             var statusUrl = {{ url('contest_grade_status', contest.key)|tojson }};
-            // Release is now per-submission (manual grade override). These counts
-            // drive the "Release All" button hint only.
-            var unreleasedCount = {{ grade_unreleased_count|tojson }};
-            var releasedCount = {{ grade_released_count|tojson }};
+            var released = {{ 'true' if grade_released else 'false' }};
             // Rejudge additionally needs staff + the rejudge_submission perm
             // (enforced server-side by the widget too); disable the button when absent.
             var canRejudge = {{ 'true' if request.user.is_staff and request.user.has_perm('judge.rejudge_submission') else 'false' }};
             var selectedId = null;
             var filteredRows = [];
-            // Deep-link: ?submission=<id> (from the submission list's "grade" link)
-            // pre-selects that submission; renderList() falls back to the first
-            // row if the id is absent or filtered out. Show all submissions so
-            // a deep-linked non-final attempt is still visible.
-            try {
-                var urlSub = new URLSearchParams(window.location.search).get('submission');
-                if (urlSub) {
-                    selectedId = parseInt(urlSub, 10);
-                    $('#f-queue').val('all');
-                }
-            } catch (e) { /* ignore — deep-link is best-effort */ }
 
             function esc(s) {
                 return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -624,33 +551,28 @@
 
             function refreshReleaseButton() {
                 $('#btn-release').html(
-                    '<i class="fa fa-flag-checkered"></i> {{ _('Release All') }}' +
-                    (unreleasedCount > 0 ? ' (' + unreleasedCount + ')' : '')
+                    '<i class="fa fa-flag-checkered"></i> ' + (released ? '{{ _('Unrelease') }}' : '{{ _('Release') }}')
                 );
-                $('#btn-release').attr('title', {{ _('Reveal every saved manual grade to students')|tojson }});
-                $('#btn-release').prop('disabled', unreleasedCount === 0 && releasedCount === 0);
+                $('#btn-release').attr('title', released
+                    ? '{{ _('Withdraw the released grades from students') }}'
+                    : '{{ _('Reveal final grades to students (results_finalized)') }}');
             }
 
-            // ── Filtering (queue / participation / problem / type / user / attempts) ─
+            // ── Filtering (queue / participation / problem / user / attempts) ─
             function filtered() {
                 var q = $('#f-queue').val();
                 var part = $('#f-part').val();
                 var problem = $('#f-problem').val();
-                var type = $('#f-type').val();
                 var user = $('#f-user').val().trim().toLowerCase();
                 var attempts = $('#f-attempts').val();
                 var rows = submissions.filter(function (s) {
                     if (problem && s.problem !== problem) return false;
-                    if (type && s.problem_type !== type) return false;
                     if (user && (s.user || '').toLowerCase().indexOf(user) < 0) return false;
                     if (part === 'live' && s.virtual) return false;
                     if (part === 'virtual' && !s.virtual) return false;
                     if (q === 'final' && !s.is_latest) return false;
-                    // "Ungraded" = awaiting teacher review (pending), not merely
-                    // missing a score: a code submission still in the judge queue
-                    // will resolve itself and is not part of the grading worklist.
-                    if (q === 'ungraded' && !s.is_pending) return false;
-                    if (q === 'graded' && (s.points == null || s.is_pending)) return false;
+                    if (q === 'ungraded' && s.points != null) return false;
+                    if (q === 'graded' && s.points == null) return false;
                     return true;
                 });
                 // Attempts aggregation: collapse multiple submissions per (user, problem)
@@ -683,24 +605,10 @@
 
             function submissionBadges(s) {
                 var bits = '';
-                // "Pending" means awaiting teacher review (see the payload's
-                // is_pending): file uploads with no score, or AI-graded
-                // fill-blank/short-answer problems flagged "require teacher
-                // review after AI scoring". A code submission still in the
-                // judge queue is NOT pending — it resolves automatically.
-                if (s.is_pending) bits += '<span class="badge badge-review">pending</span>';
-                else if (s.points == null) bits += '<span class="badge badge-review">awaiting judge</span>';
+                if (s.points == null) bits += '<span class="badge badge-review">pending</span>';
                 else bits += '<span class="badge badge-done">graded</span>';
                 if (s.is_latest) bits += '<span class="badge badge-final">final</span>';
-                // "manual" tag: the teacher changed the score (manual != machine).
-                if (s.manual_points != null && s.manual_points !== s.machine_points) {
-                    bits += '<span class="badge badge-manual" title="{{ _('Manual grade differs from the machine score') }}">manual</span>';
-                }
-                // "release" tag: the score is visible to the student — either no
-                // manual override (machine score always shown) or a released one.
-                if (s.manual_points == null || s.released) {
-                    bits += '<span class="badge badge-released" title="{{ _('Released to student') }}">release</span>';
-                }
+                if (released) bits += '<span class="badge badge-released">released</span>';
                 if (s.virtual) bits += '<span class="badge badge-hidden">V</span>';
                 return bits;
             }
@@ -709,8 +617,7 @@
             function renderList() {
                 filteredRows = filtered();
                 $('#drawer-progress').text(filteredRows.length + ' {{ _('submissions') }}');
-                $('#left-summary').text(filteredRows.length + ' rows' +
-                    (releasedCount > 0 ? ' · ' + releasedCount + ' {{ _('released') }}' : ''));
+                $('#left-summary').text(filteredRows.length + ' rows' + (released ? ' · {{ _('released') }}' : ''));
                 if (!selectedId && filteredRows.length) selectedId = filteredRows[0].id;
                 /* Never keep a stale selected id that the current filters hide. */
                 if (selectedId && !getSubmission(selectedId)) {
@@ -752,16 +659,6 @@
                         (s.upload.size != null ? ' <span class="muted">' + (s.upload.size / 1024).toFixed(1) + ' KB</span>' : '') +
                         '</div>';
                 }
-                // MCQ / fill-blank / short-answer: show the human-readable answer
-                // rows (same rendering as the student workspace), not the raw JSON
-                // payload stored in SubmissionSource.
-                if (s.answer_display && s.answer_display.length) {
-                    return '<div class="gd-answer">' + s.answer_display.map(function (item) {
-                        return '<div class="gd-answer-row">' +
-                            (item.label ? '<span class="gd-answer-label">' + esc(item.label) + '</span>' : '') +
-                            '<span class="gd-answer-value">' + esc(item.value) + '</span></div>';
-                    }).join('') + '</div>';
-                }
                 return '<pre class="source-code">' + esc(s.source || '{{ _('No source.') }}') + '</pre>';
             }
 
@@ -779,18 +676,6 @@
                 var siblings = submissions.filter(function (x) { return x.user === s.user && x.problem === s.problem; });
                 hint.textContent = '#' + s.id + ' · ' + s.user;
 
-                // Student-visible score hint: the student still sees their machine
-                // score until this submission's manual grade is released.
-                var studentScoreText;
-                if (s.manual_points != null) {
-                    var visible = s.released ? s.points : (s.machine_points != null ? s.machine_points : s.points);
-                    studentScoreText = ' · {{ _('student score') }} ' + (visible != null ? visible : '—') + '/' +
-                        (s.total != null ? s.total : '—') +
-                        (s.released ? ' {{ _('(released)') }}' : ' {{ _('(manual unreleased)') }}');
-                } else {
-                    studentScoreText = '';
-                }
-
                 box.innerHTML =
                     '<div class="grade-section">' +
                         '<div class="gd-top"><h3>#' + s.id + ' · ' + esc(s.user) + '</h3></div>' +
@@ -802,7 +687,10 @@
                             (s.reviewed_by
                                 ? ('{{ _('Last graded') }} ' + esc(s.reviewed_at || '') + ' by ' + esc(s.reviewed_by))
                                 : '{{ _('Not graded yet') }}') +
-                            studentScoreText +
+                            (released
+                                ? (' · {{ _('student score') }} ' + scoreText(s) +
+                                  (s.is_latest ? '' : ' (#' + s.id + ')'))
+                                : ' · {{ _('student score not released') }}') +
                         '</div>' +
                     '</div>' +
                     '<div class="grade-section"><h4>{{ _('Version selection') }}</h4><div class="grade-card"><div class="version-row">' +
@@ -814,24 +702,13 @@
                         }).join('') +
                         '</select>' +
                     '</div></div></div>' +
-                    '<div class="grade-section">' +
-                        '<h4 class="gd-collapse-toggle" id="gd-desc-toggle"><span class="chev"><i class="fa fa-chevron-right"></i></span> {{ _('Problem description') }}</h4>' +
-                        '<div class="grade-card grade-stem gd-collapse-body" id="gd-desc-body" style="display:none">' +
-                            (desc && desc.description_html ? desc.description_html : esc(desc ? desc.description : '')) +
-                        '</div>' +
-                    '</div>' +
+                    '<div class="grade-section"><h4>{{ _('Problem description') }}</h4>' +
+                        '<div class="grade-card grade-stem">' + esc(desc ? desc.description : '') + '</div></div>' +
                     '<div class="grade-section grade-source-block"><h4>{{ _('Submitted source') }}</h4>' +
                         '<div class="grade-card gd-source-card">' + renderAnswerSource(s) + '</div></div>';
 
                 $('#g-final').on('change', function () {
                     selectSubmission(parseInt(this.value, 10));
-                });
-                // Problem description is collapsed by default; click the header to expand.
-                $('#gd-desc-toggle').on('click', function () {
-                    var body = document.getElementById('gd-desc-body');
-                    var open = $(this).hasClass('open');
-                    $(this).toggleClass('open', !open);
-                    body.style.display = open ? 'none' : 'block';
                 });
             }
 
@@ -845,11 +722,11 @@
                     resultBody.innerHTML = '<div class="grade-empty">{{ _('Select a submission to see its judging result.') }}</div>';
                     reviewBody.innerHTML = '<div class="grade-empty">{{ _('Select a submission to grade it.') }}</div>';
                     hint.textContent = '';
-                    $('#btn-save-current').prop('disabled', true);
+                    $('#btn-submit-current').prop('disabled', true);
                     $('#btn-rejudge').prop('disabled', true);
                     return;
                 }
-                $('#btn-save-current').prop('disabled', false);
+                $('#btn-submit-current').prop('disabled', false);
                 $('#btn-rejudge').prop('disabled', !canRejudge);
                 hint.textContent = (s.result || '—') + ' · ' + (s.lang || '—');
 
@@ -883,11 +760,14 @@
                         '<label for="g-score">{{ _('Manual score') }}</label>' +
                         '<input type="number" id="g-score" min="0" max="' + (s.total || 0) + '" step="0.01" value="' + (s.points != null ? s.points : 0) + '">' +
                         '<span>/ ' + (s.total || 0) + '</span>' +
-                        '<span class="muted">{{ _('Students see this only after Release All.') }}</span>' +
+                        '<span class="muted">{{ _('Manual grades are only pushed to students after Release.') }}</span>' +
                     '</div>' +
-                    '<div class="rte-wrap" id="review-editor-mount"></div>';
+                    '<div class="rte-wrap" id="review-editor-mount"></div>' +
+                    '<div class="save-row"><button type="button" class="btn btn-primary" id="btn-save-score">' +
+                        '<i class="fa fa-check"></i> {{ _('Save grading') }}</button></div>';
 
                 mountReviewEditor(s);
+                $('#btn-save-score').on('click', saveCurrent);
             }
 
             function mountReviewEditor(s) {
@@ -898,16 +778,9 @@
                     return;
                 }
                 mount.innerHTML = '<div data-rich-mount="grading-review" data-toolbar="full" data-placeholder="{{ _('Write review comment...') }}"></div>';
-                // The rich editor is best-effort: if its mount/init throws (e.g. it
-                // was already initialized or failed to load), fall back to a plain
-                // textarea so the grade save flow never depends on it.
-                try {
-                    RichEditor.mount(mount);
-                    RichEditor.init(mount);
-                    RichEditor.setMarkdown('grading-review', s.review_note || '');
-                } catch (e) {
-                    mount.innerHTML = '<textarea id="g-note" class="gd-note">' + esc(s.review_note || '') + '</textarea>';
-                }
+                RichEditor.mount(mount);
+                RichEditor.init(mount);
+                try { RichEditor.setMarkdown('grading-review', s.review_note || ''); } catch (e) {}
             }
 
             function getReviewMarkdown() {
@@ -922,45 +795,24 @@
                 if (!s) return;
                 var scoreEl = document.getElementById('g-score');
                 if (!scoreEl) return;
-                var entered = parseFloat(scoreEl.value);
                 $.post(saveUrl, {
                     submission: s.id,
                     score: scoreEl.value,
                     note: getReviewMarkdown()
                 }).done(function (res) {
-                    if (!res.ok) { window.showToast(res.error || '{{ _('Failed to save') }}', 'error'); return; }
+                    if (!res.ok) { alert(res.error || '{{ _('Failed to save') }}'); return; }
                     for (var i = 0; i < submissions.length; i++) {
                         if (submissions[i].id === res.submission) {
                             submissions[i].points = res.score;
                             submissions[i].total = res.total;
-                            submissions[i].manual_points = res.score;
-                            // machine_points already reflects the machine score from
-                            // the server payload; keep it so the "student sees
-                            // machine until release" hint stays correct.
-                            submissions[i].released = !!res.released;
                             submissions[i].review_note = res.note || '';
                             submissions[i].reviewed_by = res.reviewed_by || null;
-                            submissions[i].reviewed_at = res.reviewed_at || null;
-                            submissions[i].is_pending = false;
                         }
                     }
-                    unreleasedCount = submissions.filter(function (x) {
-                        return x.manual_points != null && !x.released;
-                    }).length;
-                    releasedCount = submissions.filter(function (x) {
-                        return x.manual_points != null && x.released;
-                    }).length;
-                    refreshReleaseButton();
                     renderList();
                     renderLeft();
                     renderRight();
-                    // Feedback only after the server confirms the DB write.
-                    if (!isNaN(entered) && entered !== res.score) {
-                        window.showToast('{{ _('Score adjusted to') }} ' + res.score + ' / ' + res.total, 'error');
-                    } else {
-                        window.showToast('{{ _('Grade saved') }}', 'success');
-                    }
-                }).fail(function () { window.showToast('{{ _('Failed to save grading') }}', 'error'); });
+                }).fail(function () { alert('{{ _('Failed to save grading') }}'); });
             }
 
             function moveSelection(delta) {
@@ -1065,7 +917,7 @@
             })();
 
             // ── Filter events ────────────────────────────────────────────────
-            $('#f-queue, #f-part, #f-problem, #f-type, #f-attempts').on('change', function () {
+            $('#f-queue, #f-part, #f-problem, #f-attempts').on('change', function () {
                 selectedId = null;
                 renderList();
                 renderLeft();
@@ -1078,30 +930,19 @@
                 renderRight();
             });
 
-            // ── Toolbar: Save grading / Release All / Rejudge ────────────────
-            $('#btn-save-current').on('click', saveCurrent);
+            // ── Toolbar: Submit grading / Release / Rejudge ──────────────────
+            $('#btn-submit-current').on('click', saveCurrent);
 
             $('#btn-release').on('click', function () {
-                if (!confirm({{ _('Release all manual grades to students? Students will then see the adjusted scores and teacher feedback.')|htmltojs }})) {
-                    return;
-                }
                 var $btn = $(this).prop('disabled', true);
                 $.post(releaseUrl).done(function (res) {
-                    if (!res.ok) { window.showToast(res.error || '{{ _('Failed') }}', 'error'); return; }
-                    // Mark every in-memory manual grade as released.
-                    for (var i = 0; i < submissions.length; i++) {
-                        if (submissions[i].manual_points != null) submissions[i].released = true;
-                    }
-                    unreleasedCount = 0;
-                    releasedCount = submissions.filter(function (x) {
-                        return x.manual_points != null;
-                    }).length;
+                    if (!res.ok) { alert(res.error || '{{ _('Failed') }}'); return; }
+                    released = res.released;
                     refreshReleaseButton();
                     renderList();
                     renderLeft();
                     renderRight();
-                    window.showToast('{{ _('Grades released') }}', 'success');
-                }).fail(function () { window.showToast('{{ _('Failed to release grades') }}', 'error'); })
+                }).fail(function () { alert('{{ _('Failed to toggle release') }}'); })
                   .always(function () { $btn.prop('disabled', false); });
             });
 
@@ -1183,24 +1024,20 @@
 
 {% block body %}
     <div class="ws-app" id="grade-app">
-        <div class="ws-toolbar has-leave">
-            <div class="ws-toolbar-left">
-                <button type="button" class="tool-btn icon-only" id="btn-overview" title="{{ _('Submission list') }}" aria-label="{{ _('Submission list') }}"><i class="fa fa-bars"></i></button>
-                <a class="ctx-label" id="ctx-home" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
-                <span class="nav-arrows">
-                    <button type="button" class="tool-btn icon-only" id="btn-prev" title="{{ _('Previous submission') }}" aria-label="{{ _('Previous submission') }}"><i class="fa fa-chevron-left"></i></button>
-                    <button type="button" class="tool-btn icon-only" id="btn-next" title="{{ _('Next submission') }}" aria-label="{{ _('Next submission') }}"><i class="fa fa-chevron-right"></i></button>
-                </span>
-                <div class="ws-layout-switch">
-                    <button type="button" class="layout-toggle" id="layout-toggle" title="{{ _('Toggle left/right vs top/bottom layout') }}"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button>
-                </div>
-            </div>
-            <div class="ws-toolbar-center">
-                <button type="button" class="tool-btn release-btn" id="btn-release" title="{{ _('Reveal every saved manual grade to students') }}"><i class="fa fa-flag-checkered"></i> {{ _('Release All') }}</button>
+        <div class="ws-toolbar">
+            <button type="button" class="tool-btn icon-only" id="btn-overview" title="{{ _('Submission list') }}" aria-label="{{ _('Submission list') }}"><i class="fa fa-bars"></i></button>
+            <a class="ctx-label" id="ctx-home" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+            <span class="nav-arrows">
+                <button type="button" class="tool-btn icon-only" id="btn-prev" title="{{ _('Previous submission') }}" aria-label="{{ _('Previous submission') }}"><i class="fa fa-chevron-left"></i></button>
+                <button type="button" class="tool-btn icon-only" id="btn-next" title="{{ _('Next submission') }}" aria-label="{{ _('Next submission') }}"><i class="fa fa-chevron-right"></i></button>
+            </span>
+            <div class="ws-layout-switch">
+                <button type="button" class="layout-toggle" id="layout-toggle" title="{{ _('Toggle left/right vs top/bottom layout') }}"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button>
             </div>
             <div class="grade-actions">
+                <button type="button" class="tool-btn" id="btn-release"><i class="fa fa-flag-checkered"></i> {{ _('Release') }}</button>
                 <button type="button" class="tool-btn" id="btn-rejudge" disabled title="{{ _('Requires staff + rejudge permission') }}"><i class="fa fa-refresh"></i> {{ _('Rejudge') }}</button>
-                <button type="button" class="tool-btn submit-btn" id="btn-save-current" disabled><i class="fa fa-check"></i> {{ _('Save grading') }}</button>
+                <button type="button" class="tool-btn submit-btn" id="btn-submit-current" disabled><i class="fa fa-check"></i> {{ _('Submit grading') }}</button>
             </div>
         </div>
 
@@ -1217,7 +1054,7 @@
                             <label for="f-queue">{{ _('Queue') }}</label>
                             <select id="f-queue">
                                 <option value="all">{{ _('All submissions') }}</option>
-                                <option value="final" selected>{{ _('Final versions') }}</option>
+                                <option value="final">{{ _('Final versions') }}</option>
                                 <option value="ungraded">{{ _('Ungraded') }}</option>
                                 <option value="graded">{{ _('Graded') }}</option>
                             </select>
@@ -1226,7 +1063,7 @@
                             <label for="f-part">{{ _('Participation') }}</label>
                             <select id="f-part">
                                 <option value="all">{{ _('All') }}</option>
-                                <option value="live" selected>{{ _('Live') }}</option>
+                                <option value="live">{{ _('Live') }}</option>
                                 <option value="virtual">{{ _('Virtual') }}</option>
                             </select>
                         </div>
@@ -1237,17 +1074,6 @@
                                 {% for p in grade_problems %}
                                     <option value="{{ p.code }}">{% if p.letter %}{{ p.letter }}. {% endif %}{{ p.name }}</option>
                                 {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label for="f-type">{{ _('Type') }}</label>
-                            <select id="f-type">
-                                <option value="">{{ _('All types') }}</option>
-                                <option value="C">{{ _('Programming') }}</option>
-                                <option value="M">{{ _('Multiple choice') }}</option>
-                                <option value="B">{{ _('Fill in the blank') }}</option>
-                                <option value="S">{{ _('Short answer') }}</option>
-                                <option value="F">{{ _('File upload') }}</option>
                             </select>
                         </div>
                         <div>

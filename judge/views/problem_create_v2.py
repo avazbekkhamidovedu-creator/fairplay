@@ -393,7 +393,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'partial': problem.partial,
             'description': problem.description or '',
             'ai': False,
-            'aiReview': False,
             'rubric': '',
         }
 
@@ -460,7 +459,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['caseSensitive'] = bool(config and config.case_sensitive)
             data['trimWhitespace'] = bool(config.trim_whitespace) if config else True
             data['ai'] = bool(config and config.grading_mode == GRADE_AI)
-            data['aiReview'] = bool(config and config.requires_manual_review)
             data['rubric'] = (config.ai_rubric if config else '') or ''
             data['gradingTable'] = config.grading_table if config else None
             # ProblemBlank stores accepted answers one-per-line and the create page now edits them
@@ -475,7 +473,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['shortAnswer'] = (config.reference_answer if config else '') or ''
             data['rubric'] = (config.ai_rubric if config else '') or ''
             data['ai'] = True  # short answer always uses AI grading
-            data['aiReview'] = bool(config and config.requires_manual_review)
             data['gradingTable'] = config.grading_table if config else None
         elif st == ProblemSubmissionType.FILE:
             data['type'] = 'file'
@@ -1478,7 +1475,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 case_sensitive=bool(payload.get('caseSensitive')),
                 trim_whitespace=bool(payload.get('trimWhitespace', True)),
                 grading_mode=GRADE_AI if bool(payload.get('ai')) else GRADE_EXACT,
-                requires_manual_review=bool(payload.get('aiReview')),
                 ai_rubric=(payload.get('rubric') or '').strip(),
                 grading_table=payload.get('gradingTable') or None,
             )
@@ -1523,7 +1519,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ProblemShortAnswerConfig.objects.create(
                 problem=problem,
                 reference_answer=(payload.get('shortAnswer') or '').strip(),
-                requires_manual_review=bool(payload.get('aiReview')),
                 ai_rubric=(payload.get('rubric') or '').strip(),
                 grading_table=payload.get('gradingTable') or None,
             )
