@@ -6,13 +6,15 @@ from judge.models.profile import Profile
 
 # Auth group that receives instructor-verification applications.
 SITE_ADMINISTRATORS_GROUP = 'Site Administrators'
-# Site-wide Teacher group: create courses / private problems / classes (after admin approval).
+# Site-wide Teacher group: create courses / private problems / classes /
+# assignments (after admin approval).
 INSTRUCTORS_GROUP = 'Instructors'
 # Backward-compatible alias (historical migrations / older code).
 TEACHERS_GROUP = INSTRUCTORS_GROUP
 
-# Django permissions attached to Instructors (course/class management + private problems).
-# Intentionally excludes edit_all_organization / delete_organization (site-admin scope).
+# Django permissions attached to Instructors (course/class management + private
+# problems + private assignments). Intentionally excludes edit_all_organization
+# / delete_organization / edit_all_contest (site-admin scope).
 INSTRUCTOR_PERMISSION_CODENAMES = (
     'add_organization',
     'change_organization',
@@ -22,6 +24,9 @@ INSTRUCTOR_PERMISSION_CODENAMES = (
     'delete_class',
     'create_private_problem',
     'edit_own_problem',
+    # Opens /contests/create/ and the "Add Assignment" tab. Authors can later
+    # edit via curator membership without edit_own_contest.
+    'create_private_contest',
     # Lets instructors arm Safe Exam Browser on their own assignments. Without
     # it the entire SEB card is hidden from them (ContestCreate._restricted_fields),
     # so they could not even opt into the site default configuration.

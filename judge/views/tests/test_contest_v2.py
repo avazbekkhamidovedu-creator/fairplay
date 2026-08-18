@@ -219,6 +219,20 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_list')).content.decode()
         self.assertNotIn('/contests/create/', html)
 
+    def test_instructors_group_can_create_assignment(self):
+        """Verified teachers (Instructors group) get Add Assignment."""
+        from django.contrib.auth.models import Group
+        from judge.models.notification import INSTRUCTORS_GROUP, ensure_instructors_group
+
+        ensure_instructors_group()
+        teacher = create_user(username='site_teacher_assignment')
+        Group.objects.get(name=INSTRUCTORS_GROUP).user_set.add(teacher)
+        self.client.force_login(teacher)
+        self.assertEqual(self.client.get(reverse('contest_create')).status_code, 200)
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertIn('/contests/create/', html)
+        self.assertIn('Add Assignment', html)
+
     def test_post_success(self):
         self.client.force_login(self.users['staff_contest_edit_all'])
         now = timezone.now()
