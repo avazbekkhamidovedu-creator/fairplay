@@ -67,9 +67,9 @@
             <a href="{{ url('submission_status', submission.id) }}">
                 <i class="fa fa-eye fa-fw"></i><span class="label">{{ _('view') }}</span>
             </a>
-            {% if submission.contest_object_id and submission.contest_object.is_editable_by(request.user) %} ·
-                <a href="{{ url('contest_grade', submission.contest_object.key) }}?submission={{ submission.id }}"
-                   class="sub-grade-link" title="{{ _('Grade this submission in the grading desk') }}">
+            {% if perms.judge.rejudge_submission %} ·
+                <a href="#" class="sub-grade-link" onclick="return false;" aria-disabled="true"
+                   title="{{ _('Grading desk is not available yet.') }}">
                     <i class="fa fa-check-square-o fa-fw"></i><span class="label">{{ _('grade') }}</span>
                 </a>
             {% endif %}
