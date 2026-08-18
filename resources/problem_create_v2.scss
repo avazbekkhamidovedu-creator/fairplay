@@ -796,6 +796,22 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-stem h3 { font-size: 1rem; margin: 0.4rem 0; }
 .pv-stem code { background: var(--admin-bg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
 .pv-stem pre { background: var(--oj-bg); padding: 0.5rem; border-radius: 4px; overflow: auto; font-size: 12px; }
+.pv-stem .code-block {
+  margin: 0.6em 0;
+  border: 1px solid var(--oj-border);
+  background: var(--oj-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pv-stem .code-block-lang {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--oj-text-muted);
+  padding: 0.3em 0.7em;
+  border-bottom: 1px solid var(--oj-border);
+}
+.pv-stem .code-block pre { margin: 0; border: 0; border-radius: 0; }
 .pv-stem u { text-decoration: none; border-bottom: 1.5px solid var(--oj-accent); padding: 0 1.2em; }
 .pv-options { display: flex; flex-direction: column; gap: 0.55rem; }
 .pv-option { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 14px; }
@@ -811,6 +827,21 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-option-body pre {
   background: var(--oj-bg); padding: 0.45rem 0.65rem; border-radius: 4px; overflow: auto; font-size: 12px; margin: 0.35em 0;
 }
+.pv-option-body .code-block {
+  margin: 0.35em 0;
+  border: 1px solid var(--oj-border);
+  background: var(--oj-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pv-option-body .code-block-lang {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--oj-text-muted);
+  padding: 0.25em 0.65em;
+  border-bottom: 1px solid var(--oj-border);
+}
+.pv-option-body .code-block pre { margin: 0; border: 0; border-radius: 0; }
 .pv-option-body code { background: var(--oj-bg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
 .pv-option-body pre code { background: transparent; padding: 0; }
 .pv-option-body ul, .pv-option-body ol { margin: 0.3em 0; padding-left: 1.4em; }

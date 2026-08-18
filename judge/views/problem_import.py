@@ -709,6 +709,7 @@ class ProblemImportPreviewView(LoginRequiredMixin, View):
             'type_choices': ProblemImportItem.TYPE_CHOICES,
             'languages': languages,
             'image_upload_url': reverse('martor_image_uploader'),
+            'file_upload_url': reverse('editor_file_uploader'),
             'title': _('Excel import preview'),
             'content_title': _('Excel import preview'),
             'feedback': request.GET.get('feedback', ''),

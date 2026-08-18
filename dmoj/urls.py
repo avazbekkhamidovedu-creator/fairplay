@@ -17,6 +17,7 @@ from judge.views import (
     license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission,
     register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
+from judge.views.editor_attachment import editor_file_download, editor_file_uploader
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
     ProblemCreateV2AIProblemTypeView, ProblemCreateV2OrganizationView,
@@ -437,6 +438,8 @@ urlpatterns = [
             path('upload-image', martor_image_uploader, name='martor_image_uploader'),
             path('search-user', markdown_search_user, name='martor_search_user'),
         ])),
+        path('upload-file', editor_file_uploader, name='editor_file_uploader'),
+        path('files/<uuid:file_uuid>/', editor_file_download, name='editor_file_download'),
     ])),
 
     path('feed/', include([

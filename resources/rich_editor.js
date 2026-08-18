@@ -12,11 +12,11 @@
  * Node (tests): module.exports = RichEditor
  *
  * API:
- *   RichEditor.configure({ imageUploadUrl, csrfToken, onChange, messages })
+ *   RichEditor.configure({ imageUploadUrl, fileUploadUrl, csrfToken, onChange, messages })
  *   RichEditor.html(name, opts) / mount(root) / init(root)
  *   RichEditor.getMarkdown(name) / getHtml(name) / setMarkdown(name, md)
  *   RichEditor.htmlToMd(html) / mdToHtml(md)   // projection only
- *   RichEditor.onImagePicked(event)
+ *   RichEditor.onImagePicked(event) / onFilePicked(event)
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -29,14 +29,18 @@
 
   const config = {
     imageUploadUrl: '',
+    fileUploadUrl: '',
     searchUsersUrl: '',
     csrfToken: '',
     onChange: null,
     messages: {
       uploadFailed: 'Image upload failed.',
       uploadFailedAuth: 'Image upload failed. Make sure you are signed in with upload permission.',
+      fileUploadFailed: 'File upload failed.',
+      fileUploadFailedAuth: 'File upload failed. Make sure you are signed in with upload permission.',
     },
     imageInputId: 'img-file',
+    fileInputId: 'rte-file',
   };
 
   function notifyChange() {
@@ -56,14 +60,18 @@
       bold: '<button type="button" data-cmd="bold" title="' + t('Bold (Ctrl+B)') + '"><i class="fa fa-bold"></i></button>',
       italic: '<button type="button" data-cmd="italic" title="' + t('Italic (Ctrl+I)') + '"><i class="fa fa-italic"></i></button>',
       highlight: '<button type="button" data-cmd="highlight" class="hl-btn" title="' + t('Highlight') + '"><i class="fa fa-paint-brush"></i></button>',
-      code: '<button type="button" data-cmd="code" title="' + t('Code') + '"><i class="fa fa-code"></i></button>',
+      code: '<button type="button" data-cmd="code" title="' + t('Inline code') + '"><i class="fa fa-code"></i></button>',
+      codeblock: '<button type="button" data-cmd="codeblock" title="' + t('Code block (Ctrl+Enter to leave)') + '"><i class="fa fa-file-code-o"></i></button>',
       math: '<button type="button" data-cmd="math" title="' + t('Math (Ctrl+Alt+D)') + '"><i class="fa fa-superscript"></i></button>',
       quote: '<button type="button" data-cmd="quote" title="' + t('Quote (Ctrl+Q)') + '"><i class="fa fa-quote-left"></i></button>',
       ul: '<button type="button" data-cmd="ul" title="' + t('Unordered list (Ctrl+U)') + '"><i class="fa fa-list-ul"></i></button>',
       ol: '<button type="button" data-cmd="ol" title="' + t('Ordered list (Ctrl+Shift+O)') + '"><i class="fa fa-list-ol"></i></button>',
       table: '<button type="button" data-cmd="table" title="' + t('Table') + '"><i class="fa fa-table"></i></button>',
       link: '<button type="button" data-cmd="link" title="' + t('Link (Ctrl+L)') + '"><i class="fa fa-link"></i></button>',
-      image: '<button type="button" data-cmd="image" title="' + t('Image') + '"><i class="fa fa-image"></i></button>',
+      image: '<button type="button" data-cmd="image" title="' + t('Image') + '"' +
+        (config.fileUploadUrl ? ' style="display:none;"' : '') + '><i class="fa fa-image"></i></button>',
+      file: '<button type="button" data-cmd="file" title="' + t('Attach file') + '"' +
+        (config.fileUploadUrl ? '' : ' style="display:none;"') + '><i class="fa fa-paperclip"></i></button>',
       mention: '<button type="button" data-cmd="mention" title="' + t('Mention user (Ctrl+M)') + '"><i class="fa fa-at"></i></button>',
       help: '<button type="button" data-cmd="help" title="' + t('Markdown help') + '"><i class="fa fa-question-circle"></i></button>',
       alignLeft: '<button type="button" data-cmd="alignLeft" title="' + t('Align left') + '"><i class="fa fa-align-left"></i></button>',
@@ -76,10 +84,10 @@
   const RTE_TOOLBAR = [
     'heading', 'sep',
     'bold', 'highlight', 'italic', 'sep',
-    'code', 'math', 'quote', 'sep',
+    'code', 'codeblock', 'math', 'quote', 'sep',
     'ul', 'ol', 'table', 'sep',
     'alignLeft', 'alignCenter', 'alignRight', 'sep',
-    'link', 'image', 'mention', 'help', 'blank',
+    'link', 'image', 'file', 'mention', 'help', 'blank',
   ];
   const TABLE_PICKER_MAX = 10;
 
@@ -163,6 +171,7 @@
     if (!parts.rich || !parts.ta) return;
     parts.ta.value = normalizePipeTables(parts.ta.value);
     parts.rich.innerHTML = mdToHtml(parts.ta.value);
+    ensureEditableAfterBlocks(parts.rich);
   }
 
   function getMd(name) {
@@ -253,7 +262,10 @@
         });
       });
       if (rich) {
-        rich.addEventListener('input', () => {
+        rich.addEventListener('input', (e) => {
+          if (e.target && e.target.classList && e.target.classList.contains('code-block-lang-input')) {
+            syncCodeBlockLangFromInput(e.target);
+          }
           syncMarkdownFromRich(editor);
           syncPaneHeight(editor);
           notifyChange();
@@ -269,7 +281,10 @@
           updateTableChrome(editor);
         });
         rich.addEventListener('click', () => updateTableChrome(editor));
-        rich.addEventListener('keydown', (e) => handleEditorShortcut(editor, e));
+        rich.addEventListener('keydown', (e) => {
+          if (handleCodeBlockKey(editor, e)) return;
+          handleEditorShortcut(editor, e);
+        });
       }
       if (ta) {
         ta.addEventListener('input', () => {
@@ -300,7 +315,8 @@
         // Preserve caret before toolbar steals focus (link / mention / align / image / table).
         btn.addEventListener('mousedown', (e) => {
           const cmd = btn.dataset.cmd;
-          if (cmd === 'link' || cmd === 'mention' || cmd === 'image' || cmd === 'table' ||
+          if (cmd === 'link' || cmd === 'mention' || cmd === 'image' || cmd === 'file' ||
+              cmd === 'codeblock' || cmd === 'table' ||
               cmd === 'alignLeft' || cmd === 'alignCenter' || cmd === 'alignRight') {
             e.preventDefault();
             saveSelection(editor);
@@ -311,6 +327,10 @@
       const headSel = editor.querySelector('.rte-heading');
       if (headSel) headSel.addEventListener('change', () => applyFormat(editor, headSel.value));
       // Initial projection from whatever is already in the textarea (usually empty).
+      const fileBtn = editor.querySelector('[data-cmd="file"]');
+      if (fileBtn) fileBtn.style.display = config.fileUploadUrl ? '' : 'none';
+      const imgBtn = editor.querySelector('[data-cmd="image"]');
+      if (imgBtn) imgBtn.style.display = config.fileUploadUrl ? 'none' : '';
       if (!editor.classList.contains('mode-markdown')) projectRichFromMarkdown(editor);
       syncPaneHeight(editor);
       updateTableChrome(editor);
@@ -324,6 +344,17 @@
     if (!n) return null;
     if (n.nodeType === 3) n = n.parentElement;
     return area.contains(n) ? n : null;
+  }
+
+  function isEditorAttachmentUrl(href) {
+    return /\/widgets\/files\/[0-9a-f-]+\/?/i.test(String(href || ''));
+  }
+
+  function selectionAttachmentLink(area) {
+    const n = selectionNode(area);
+    const a = n && n.closest && n.closest('a');
+    if (!a || !area.contains(a)) return null;
+    return isEditorAttachmentUrl(a.getAttribute('href')) ? a : null;
   }
 
   function selectionInTag(area, tag) {
@@ -354,8 +385,19 @@
         case 'ul': active = document.queryCommandState('insertUnorderedList'); break;
         case 'ol': active = document.queryCommandState('insertOrderedList'); break;
         case 'quote': active = selectionInTag(area, 'blockquote'); break;
-        case 'code': active = selectionInTag(area, 'code') || selectionInTag(area, 'pre'); break;
-        case 'link': active = selectionInTag(area, 'a'); break;
+        case 'code':
+          active = selectionInTag(area, 'code') && !selectionInTag(area, 'pre') &&
+            !(selectionNode(area) && selectionNode(area).closest('.code-block'));
+          break;
+        case 'codeblock':
+          active = !!(selectionNode(area) && selectionNode(area).closest('.code-block, pre'));
+          break;
+        case 'file':
+          active = !!selectionAttachmentLink(area);
+          break;
+        case 'link':
+          active = selectionInTag(area, 'a') && !selectionAttachmentLink(area);
+          break;
       }
       btn.classList.toggle('active', !!active);
     });
@@ -420,10 +462,12 @@
 
   function applyFormat(editor, cmd, btn) {
     if (cmd === 'image') { pickImage(editor); return; }
+    if (cmd === 'file') { pickFile(editor); return; }
     if (cmd === 'help') { openHelpModal(); return; }
     if (cmd === 'link') { openLinkPopover(editor); return; }
     if (cmd === 'mention') { openMentionPopover(editor); return; }
     if (cmd === 'table') { openTablePicker(editor, btn); return; }
+    if (cmd === 'codeblock') { applyCodeBlock(editor); return; }
 
     const isMd = editor.classList.contains('mode-markdown');
     if (isMd) {
@@ -435,7 +479,6 @@
     }
     const area = editor.querySelector('.rich-editor-body');
     area.focus();
-    let isBlockCode = false;
     switch (cmd) {
       case 'bold': document.execCommand('bold'); break;
       case 'italic': document.execCommand('italic'); break;
@@ -454,21 +497,11 @@
         else document.execCommand('formatBlock', false, 'blockquote');
         break;
       case 'code':
-        if (selectionInTag(area, 'pre')) {
-          unwrapTagFromSelection(area, 'pre');
-          isBlockCode = true;
-        } else if (selectionInTag(area, 'code') && !selectionInTag(area, 'pre')) {
+        if (selectionNode(area) && selectionNode(area).closest('.code-block')) break;
+        if (selectionInTag(area, 'code') && !selectionInTag(area, 'pre')) {
           unwrapTagFromSelection(area, 'code');
         } else {
-          const sel = window.getSelection();
-          const text = (sel && sel.rangeCount) ? sel.toString() : '';
-          if (!text || text.indexOf('\n') !== -1) {
-            const body = (text || 'code').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            document.execCommand('insertHTML', false, '<pre><code>' + body + '</code></pre><p><br></p>');
-            isBlockCode = true;
-          } else {
-            wrapInline('code');
-          }
+          wrapInline('code');
         }
         break;
       case 'alignLeft': applyTextAlign(area, 'left'); break;
@@ -482,13 +515,193 @@
     // Always flush into Markdown source; reproject block cmds so rich view matches MD.
     // Align skips reproject: wrapping/rebuilding can drop resized img width/height.
     syncMarkdownFromRich(editor);
-    if (BLOCK_CMDS[cmd] || isBlockCode) {
+    if (BLOCK_CMDS[cmd]) {
       projectRichFromMarkdown(editor);
     }
     syncPaneHeight(editor);
     notifyChange();
     updateToolbarState(editor);
     updateTableChrome(editor);
+  }
+
+  function ensureEditableAfterBlocks(area) {
+    if (!area) return;
+    const last = area.lastElementChild;
+    if (!last) return;
+    if (last.classList.contains('code-block') || last.tagName === 'PRE') {
+      const p = document.createElement('p');
+      p.innerHTML = '<br>';
+      area.appendChild(p);
+    }
+  }
+
+  function textAfterCaret(el) {
+    const sel = window.getSelection();
+    if (!sel.rangeCount || !el) return '';
+    const range = sel.getRangeAt(0);
+    try {
+      const after = document.createRange();
+      after.selectNodeContents(el);
+      after.setStart(range.endContainer, range.endOffset);
+      return after.toString();
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function lastLineEmpty(el) {
+    const text = el.textContent || '';
+    if (/\n[ \t]*$/.test(text) && text.indexOf('\n') !== -1) return true;
+    const html = el.innerHTML || '';
+    return /<br\s*\/?>\s*$/i.test(html) && (text.trim() !== '' || (el.querySelectorAll('br').length >= 2));
+  }
+
+  function exitCodeBlockAfter(block, area) {
+    let next = block.nextElementSibling;
+    if (!next || (next.classList && next.classList.contains('code-block'))) {
+      const p = document.createElement('p');
+      p.innerHTML = '<br>';
+      block.parentNode.insertBefore(p, block.nextSibling);
+      next = p;
+    }
+    const range = document.createRange();
+    range.setStart(next, 0);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    if (area) area.focus();
+  }
+
+  function handleCodeBlockKey(editor, e) {
+    const area = editor.querySelector('.rich-editor-body');
+    if (!area) return false;
+    if (e.target && e.target.classList && e.target.classList.contains('code-block-lang-input')) {
+      if (e.key === 'Enter' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const block = e.target.closest('.code-block');
+        const codeEl = block && block.querySelector('code');
+        if (codeEl) {
+          const range = document.createRange();
+          range.selectNodeContents(codeEl);
+          range.collapse(true);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+        return true;
+      }
+      return false;
+    }
+    const node = selectionNode(area);
+    const block = node && node.closest && node.closest('.code-block');
+    if (!block || !area.contains(block)) return false;
+    const codeEl = block.querySelector('code') || block.querySelector('pre');
+    if (!codeEl) return false;
+    const after = textAfterCaret(codeEl);
+    const atEnd = after === '';
+    const onLastLine = after.indexOf('\n') === -1;
+    const leave = () => {
+      e.preventDefault();
+      exitCodeBlockAfter(block, area);
+      syncMarkdownFromRich(editor);
+      notifyChange();
+      updateToolbarState(editor);
+    };
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      leave();
+      return true;
+    }
+    if (e.key === 'ArrowDown' && !e.shiftKey && onLastLine) {
+      leave();
+      return true;
+    }
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      if (!e.shiftKey && atEnd && lastLineEmpty(codeEl)) {
+        leave();
+        return true;
+      }
+      e.preventDefault();
+      document.execCommand('insertText', false, '\n');
+      syncMarkdownFromRich(editor);
+      notifyChange();
+      return true;
+    }
+    return false;
+  }
+
+  function syncCodeBlockLangFromInput(input) {
+    const block = input.closest('.code-block');
+    if (!block) return;
+    const lang = sanitizeCodeLang(input.value);
+    if (lang) block.setAttribute('data-lang', lang);
+    else block.removeAttribute('data-lang');
+    const codeEl = block.querySelector('code');
+    if (!codeEl) return;
+    if (lang) {
+      codeEl.setAttribute('data-lang', lang);
+      codeEl.className = 'language-' + lang;
+    } else {
+      codeEl.removeAttribute('data-lang');
+      codeEl.removeAttribute('class');
+    }
+  }
+
+  function unwrapCodeBlock(block) {
+    const codeEl = block.querySelector('code');
+    const raw = (codeEl ? codeEl.textContent : '') || '';
+    const p = document.createElement('p');
+    p.innerHTML = escapeHtmlText(raw).replace(/\n/g, '<br>') || '<br>';
+    block.parentNode.insertBefore(p, block);
+    block.parentNode.removeChild(block);
+  }
+
+  function applyCodeBlock(editor) {
+    if (editor.classList.contains('mode-markdown')) {
+      const ta = editor.querySelector('.rich-editor-markdown textarea');
+      applyMarkdown(ta, 'codeblock');
+      ta.focus();
+      ta.dispatchEvent(new Event('input'));
+      return;
+    }
+    const area = editor.querySelector('.rich-editor-body');
+    if (!area) return;
+    area.focus();
+    restoreSavedSelection(area);
+    const node = selectionNode(area);
+    const existing = node && node.closest && node.closest('.code-block');
+    if (existing && area.contains(existing)) {
+      unwrapCodeBlock(existing);
+      syncMarkdownFromRich(editor);
+      ensureEditableAfterBlocks(area);
+      syncPaneHeight(editor);
+      notifyChange();
+      updateToolbarState(editor);
+      return;
+    }
+    const sel = window.getSelection();
+    const text = (sel && sel.rangeCount) ? sel.toString() : '';
+    document.execCommand('insertHTML', false, renderFencedCodeHtml('', text) + '<p><br></p>');
+    syncMarkdownFromRich(editor);
+    ensureEditableAfterBlocks(area);
+    let el = area.lastElementChild;
+    if (el && el.tagName === 'P' && !(el.textContent || '').trim()) el = el.previousElementSibling;
+    const langInput = el && el.querySelector && el.querySelector('.code-block-lang-input');
+    const codeEl = el && el.querySelector && el.querySelector('code');
+    if (langInput) {
+      langInput.focus();
+      langInput.select();
+    } else if (codeEl) {
+      const range = document.createRange();
+      range.selectNodeContents(codeEl);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    syncPaneHeight(editor);
+    notifyChange();
+    updateToolbarState(editor);
   }
 
   /** Align current block or selected image; keeps heading tags (unlike bare justify*). */
@@ -589,9 +802,38 @@
   }
 
   let pendingImgEditor = null;
+  let pendingFileEditor = null;
+
+  function ensureHiddenFileInput(id, accept, onChange) {
+    if (typeof document === 'undefined') return null;
+    let input = document.getElementById(id);
+    if (input) return input;
+    input = document.createElement('input');
+    input.type = 'file';
+    input.id = id;
+    if (accept) input.accept = accept;
+    input.style.display = 'none';
+    input.addEventListener('change', onChange);
+    document.body.appendChild(input);
+    return input;
+  }
+
   function pickImage(editor) {
     pendingImgEditor = editor;
-    const input = document.getElementById(config.imageInputId);
+    const input = ensureHiddenFileInput(config.imageInputId, 'image/*', onImagePicked);
+    if (!input) return;
+    input.value = '';
+    input.click();
+  }
+
+  function pickFile(editor) {
+    if (!config.fileUploadUrl) {
+      alert(config.messages.fileUploadFailed);
+      return;
+    }
+    pendingFileEditor = editor;
+    saveSelection(editor);
+    const input = ensureHiddenFileInput(config.fileInputId, '', onFilePicked);
     if (!input) return;
     input.value = '';
     input.click();
@@ -622,6 +864,45 @@
         insertImageUrl(ed, body.link);
       })
       .catch(() => alert(config.messages.uploadFailed));
+  }
+
+  function onFilePicked(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !pendingFileEditor) return;
+    const ed = pendingFileEditor;
+    pendingFileEditor = null;
+    if (!config.fileUploadUrl) {
+      alert(config.messages.fileUploadFailed);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('markdown-file-upload', file);
+    fetch(config.fileUploadUrl, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': config.csrfToken },
+      body: fd,
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })).catch(() => ({ ok: false, body: null })))
+      .then(({ ok, body }) => {
+        if (!ok || !body || body.status !== 200 || !body.link) {
+          alert((body && body.error) || config.messages.fileUploadFailedAuth);
+          return;
+        }
+        insertUploadedFile(ed, body.link, body.name || file.name || 'file', !!body.is_image);
+      })
+      .catch(() => alert(config.messages.fileUploadFailed));
+  }
+
+  function safeMdLabel(name) {
+    return String(name || 'file').replace(/[\r\n\[\]]/g, ' ').trim() || 'file';
+  }
+
+  function insertUploadedFile(ed, url, name, isImage) {
+    if (isImage) {
+      insertImageUrl(ed, url);
+      return;
+    }
+    insertLink(ed, safeMdLabel(name), url);
   }
 
   function insertImageUrl(ed, url) {
@@ -679,10 +960,13 @@
       case 'bold': wrap('**', '**', t('Bold')); break;
       case 'italic': wrap('*', '*', t('Italic')); break;
       case 'highlight': wrap('<mark>', '</mark>', t('Highlight')); break;
-      case 'code':
-        if (sel && sel.indexOf('\n') !== -1) wrap('```\n', '\n```', 'code');
-        else wrap('`', '`', 'code');
+      case 'code': wrap('`', '`', 'code'); break;
+      case 'codeblock': {
+        const lang = '';
+        const txt = sel || '';
+        wrap('```' + lang + '\n', '\n```', txt);
         break;
+      }
       case 'quote': linePrefix('> '); break;
       // Match site renderer: # → h3, ## → h4, ### → h5
       case 'heading': case 'h3': linePrefix('# '); break;
@@ -1139,7 +1423,8 @@
                 <tr><td><code>&gt; ${t('quote')}</code></td><td>Ctrl+Q</td><td>${t('Block quote')}</td></tr>
                 <tr><td><code>- ${t('list')}</code> / <code>1. ${t('list')}</code></td><td>Ctrl+U / Ctrl+Shift+O</td><td>${t('List')}</td></tr>
                 <tr><td><code>| A | B |</code><br><code>| --- | --- |</code><br><code>| 1 | 2 |</code></td><td>—</td><td>${t('Table')}</td></tr>
-                <tr><td><code>\`code\`</code> / ${t('fenced code block')}</td><td>—</td><td>${t('Code')}</td></tr>
+                <tr><td><code>\`code\`</code></td><td>—</td><td>${t('Inline code')}</td></tr>
+                <tr><td><code>\`\`\`c++</code></td><td>—</td><td>${t('Code block')}</td></tr>
                 <tr><td><code>$$ a^2+b^2 $$</code></td><td>Ctrl+Alt+D</td><td>${t('Math')}</td></tr>
                 <tr><td><code>[user:${t('username')}]</code></td><td>Ctrl+M</td><td>${t('Mention user')}</td></tr>
                 <tr><td><code>&lt;mark&gt;${t('highlight')}&lt;/mark&gt;</code></td><td>—</td><td>${t('Highlight')}</td></tr>
@@ -1288,7 +1573,9 @@
       document.execCommand('createLink', false, href);
     } else {
       document.execCommand('insertHTML', false,
-        '<a href="' + escapeAttr(href) + '">' + escapeHtmlText(text) + '</a>');
+        '<a href="' + escapeAttr(href) + '"' +
+        (isEditorAttachmentUrl(href) ? ' class="rte-attachment"' : '') +
+        '>' + escapeHtmlText(text) + '</a>');
     }
     syncMarkdownFromRich(ed);
     notifyChange();
@@ -1444,6 +1731,8 @@
     if (n.nodeType !== 1) return '';
     const tag = n.tagName.toLowerCase();
     if (tag === 'br') return '\n';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return '';
+    if (n.classList && n.classList.contains('code-block-lang')) return '';
     if (tag === 'img') return imgToMarkup(n);
     if (tag === 'a') return '[' + serializeInline(n) + '](' + (n.getAttribute('href') || '') + ')';
     if (tag === 'code') return '`' + serializeInline(n) + '`';
@@ -1504,6 +1793,44 @@
     return inner;
   }
 
+  function sanitizeCodeLang(lang) {
+    lang = String(lang || '').replace(/\r/g, '').trim();
+    return /^[\w+#.-]{1,40}$/.test(lang) ? lang : '';
+  }
+
+  function fenceToMd(el) {
+    if (!el) return '```\n```';
+    const codeEl = el.querySelector ? el.querySelector('code') : null;
+    const langInput = el.querySelector ? el.querySelector('.code-block-lang-input') : null;
+    let lang = '';
+    if (langInput) lang = langInput.value || '';
+    if (!lang && el.getAttribute) lang = el.getAttribute('data-lang') || '';
+    if (!lang && codeEl && codeEl.getAttribute) {
+      lang = codeEl.getAttribute('data-lang') || '';
+      if (!lang) {
+        const m = String(codeEl.getAttribute('class') || '').match(/language-([\w+#.-]+)/);
+        if (m) lang = m[1];
+      }
+    }
+    lang = sanitizeCodeLang(lang);
+    const raw = ((codeEl ? codeEl.textContent : el.textContent) || '')
+      .replace(/^\n+/, '').replace(/\n+$/, '');
+    return '```' + lang + '\n' + raw + '\n```';
+  }
+
+  function renderFencedCodeHtml(lang, body) {
+    lang = sanitizeCodeLang(lang);
+    const code = escapeHtmlText(String(body || '').replace(/^\n/, '').replace(/\n$/, ''));
+    const langAttr = lang ? ' class="language-' + escapeAttr(lang) + '" data-lang="' + escapeAttr(lang) + '"' : '';
+    const label =
+      '<div class="code-block-lang" contenteditable="false">' +
+        '<input type="text" class="code-block-lang-input" value="' + escapeAttr(lang) +
+          '" placeholder="c++, python…" maxlength="40" spellcheck="false" autocomplete="off">' +
+      '</div>';
+    return '<div class="code-block"' + (lang ? ' data-lang="' + escapeAttr(lang) + '"' : '') + '>' +
+      label + '<pre><code' + langAttr + '>' + code + '</code></pre></div>';
+  }
+
   function serializeBlocks(nodes) {
     let out = '';
     let inlineBuf = '';
@@ -1558,6 +1885,10 @@
         if (md) out += md + '\n\n';
         return;
       }
+      if (tag === 'div' && n.classList && n.classList.contains('code-block')) {
+        out += fenceToMd(n) + '\n\n';
+        return;
+      }
       if (tag === 'table') {
         const md = tableToMd(n);
         if (md) out += md + '\n\n';
@@ -1581,13 +1912,9 @@
         case 'blockquote':
           out += '> ' + serializeInline(n).trim().replace(/\n/g, '\n> ') + '\n\n';
           break;
-        case 'pre': {
-          const codeEl = n.querySelector && n.querySelector('code');
-          const raw = ((codeEl ? codeEl.textContent : n.textContent) || '')
-            .replace(/^\n+/, '').replace(/\n+$/, '');
-          out += '```\n' + raw + '\n```\n\n';
+        case 'pre':
+          out += fenceToMd(n) + '\n\n';
           break;
-        }
         case 'hr': out += '---\n\n'; break;
         case 'div': case 'p': {
           const inner = serializeInline(n).trim();
@@ -1810,10 +2137,9 @@
       });
     s = protectMath(s, math);
 
-    // Fenced code before escaping.
-    s = s.replace(/```([\s\S]*?)```/g, (m, c) => {
-      const body = escapeHtmlText(String(c).replace(/^\n/, '').replace(/\n$/, ''));
-      blocks.push('<pre><code>' + body + '</code></pre>');
+    // Fenced code before escaping. Keep the info string (```python) as a language label.
+    s = s.replace(/```([^\n]*)\n([\s\S]*?)```/g, (m, lang, body) => {
+      blocks.push(renderFencedCodeHtml(lang, body));
       return '\u0000B' + (blocks.length - 1) + '\u0000';
     });
 
@@ -1846,7 +2172,8 @@
     s = formatInlineMarkdown(s);
     s = s.replace(/\u0000L(\d+)\u0000/g, (m, i) => {
       const L = links[+i];
-      return '<a href="' + escapeAttr(L.url) + '">' +
+      const cls = isEditorAttachmentUrl(L.url) ? ' class="rte-attachment"' : '';
+      return '<a href="' + escapeAttr(L.url) + '"' + cls + '>' +
         formatInlineMarkdown(escapeHtmlText(L.text)) + '</a>';
     });
     s = s.replace(/(?:^|\n)((?:\d+\.[ \t].*(?:\n|$))+)/g, (m) =>
@@ -1871,7 +2198,7 @@
     // Park block-level HTML (and existing placeholders) so we can paragraphize the rest.
     // Park block constructs + block raw (K). Leave inline math/mark (R/M) inside <p>.
     let t = String(s || '').replace(
-      /<div\b[^>]*class="[^"]*\bh-scrollable-table\b[^"]*"[^>]*>[\s\S]*?<\/div>|<table\b[\s\S]*?<\/table>|<(h[1-6]|ul|ol|pre|blockquote)\b[\s\S]*?<\/\1>|<hr\b[^>]*>|\u0000[BIHK]\d*\u0000/gi,
+      /<div\b[^>]*class="[^"]*\bh-scrollable-table\b[^"]*"[^>]*>[\s\S]*?<\/div>|<div\b[^>]*class="[^"]*\bcode-block\b[^"]*"[^>]*>[\s\S]*?<\/div>|<table\b[\s\S]*?<\/table>|<(h[1-6]|ul|ol|pre|blockquote)\b[\s\S]*?<\/\1>|<hr\b[^>]*>|\u0000[BIHK]\d*\u0000/gi,
       (m) => {
         held.push(m);
         return '\u0000X' + (held.length - 1) + '\u0000';
@@ -1909,10 +2236,12 @@
     configure(opts) {
       if (!opts) return;
       if (opts.imageUploadUrl != null) config.imageUploadUrl = opts.imageUploadUrl;
+      if (opts.fileUploadUrl != null) config.fileUploadUrl = opts.fileUploadUrl;
       if (opts.searchUsersUrl != null) config.searchUsersUrl = opts.searchUsersUrl;
       if (opts.csrfToken != null) config.csrfToken = opts.csrfToken;
       if (opts.onChange != null) config.onChange = opts.onChange;
       if (opts.imageInputId != null) config.imageInputId = opts.imageInputId;
+      if (opts.fileInputId != null) config.fileInputId = opts.fileInputId;
       if (opts.messages) Object.assign(config.messages, opts.messages);
       ensureSelectionListener();
     },
@@ -1934,6 +2263,7 @@
     htmlToMd: htmlToMd,
     mdToHtml: mdToHtml,
     onImagePicked: onImagePicked,
+    onFilePicked: onFilePicked,
   };
 
   return RichEditor;

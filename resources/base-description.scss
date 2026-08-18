@@ -118,6 +118,33 @@
         border-radius: $widget_border_radius;
     }
 
+    .code-block {
+        margin: 1.5em 0;
+        border: 1px solid $color_primary25;
+        background-color: $color_primary5;
+        border-radius: $widget_border_radius;
+        overflow: hidden;
+
+        .code-block-lang {
+            font-family: $monospace-fonts;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: $color_primary50;
+            padding: 0.4em 0.85em;
+            border-bottom: 1px solid $color_primary25;
+            background-color: $color_primary10;
+            user-select: none;
+        }
+
+        pre {
+            margin: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+        }
+    }
+
     b, strong {
         font-weight: bold;
     }

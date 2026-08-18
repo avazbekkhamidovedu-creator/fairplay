@@ -933,6 +933,7 @@
     const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
     const PROBLEM_PREVIEW_BATCH_URL = '{{ problem_preview_batch_url }}';
     const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
+    const FILE_UPLOAD_URL = '{{ file_upload_url }}';
     const SEARCH_USERS_URL = '{{ search_users_url }}';
     const PROFILE_SELECT2_URL = '{{ profile_select2_url }}';
     const CLASS_SELECT2_URL = '{{ class_select2_url }}';
@@ -2833,12 +2834,15 @@
 
     RichEditor.configure({
       imageUploadUrl: IMAGE_UPLOAD_URL,
+      fileUploadUrl: FILE_UPLOAD_URL,
       searchUsersUrl: SEARCH_USERS_URL,
       csrfToken: CSRF_TOKEN,
       onChange: renderPreview,
       messages: {
         uploadFailed: '{{ _("Image upload failed.") }}',
         uploadFailedAuth: '{{ _("Image upload failed. Make sure you are signed in with upload permission.") }}',
+        fileUploadFailed: '{{ _("File upload failed.") }}',
+        fileUploadFailedAuth: '{{ _("File upload failed. Make sure you are signed in with upload permission.") }}',
       },
     });
     RichEditor.mount();
