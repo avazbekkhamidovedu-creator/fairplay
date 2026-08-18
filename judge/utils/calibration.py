@@ -4,14 +4,30 @@ The spline reshapes the model's raw score distribution to match human score
 distributions (trained on 3,470 Mohler + jorGPT pairs).  Three strictness
 presets control how much extra lift is added on top of the spline.
 
-Anchor points embedded here come from the Qwen3.6-27B-AWQ-INT4 training run
-(see DKUOJ_JUDGE_PRODUCTION.md §2).
+Anchor points are grouped per model.  The default set comes from the
+Gemma-4-31B-AWQ-8bit training run (current production model); the
+Qwen3.6-27B-AWQ-INT4 anchors are retained as historical reference and can be
+selected via the ``model`` argument (see DKUOJ_JUDGE_PRODUCTION.md §2).
 """
 import math
 
 # --- trained anchor points (model_percentile, human_percentile) ---
 # Each set has 9 anchors at percentiles [0, 5, 15, 30, 50, 70, 85, 95, 100].
-_ANCHORS = {
+
+# Gemma-4-31B-AWQ-8bit — current production model.
+_ANCHORS_GEMMA4 = {
+    5: [
+        (0.0, 0.0), (2.30, 2.0), (3.07, 3.0), (3.58, 3.5), (4.60, 4.5),
+        (4.86, 5.0), (4.86, 5.0), (4.86, 5.0), (5.0, 5.0),
+    ],
+    10: [
+        (0.0, 0.0), (0.71, 0.0), (2.33, 2.0), (3.14, 3.0), (3.95, 5.0),
+        (5.57, 6.0), (6.78, 7.0), (7.59, 9.0), (10.0, 10.0),
+    ],
+}
+
+# Qwen3.6-27B-AWQ-INT4 — historical, kept for reference / rollback.
+_ANCHORS_QWEN = {
     5: [
         (0.0, 0.0), (2.83, 2.0), (3.23, 3.0), (4.02, 4.0), (4.82, 4.63),
         (4.82, 5.0), (4.82, 5.0), (4.82, 5.0), (5.0, 5.0),
@@ -22,17 +38,26 @@ _ANCHORS = {
     ],
 }
 
-# Fit anchors without duplicate x-values (keep first occurrence).
-_FIT_ANCHORS: dict[int, tuple] = {}
-for _ms, _pairs in _ANCHORS.items():
-    _xs, _ys = [], []
-    _seen = set()
-    for _x, _y in _pairs:
-        if _x not in _seen:
-            _xs.append(_x)
-            _ys.append(_y)
-            _seen.add(_x)
-    _FIT_ANCHORS[_ms] = (_xs, _ys)
+DEFAULT_MODEL = 'gemma4'
+_ANCHOR_SETS = {
+    'gemma4': _ANCHORS_GEMMA4,
+    'qwen': _ANCHORS_QWEN,
+}
+
+# Fit anchors without duplicate x-values (keep first occurrence), per model.
+_FIT_ANCHORS: dict[str, dict[int, tuple]] = {}
+for _model, _set in _ANCHOR_SETS.items():
+    _fit = {}
+    for _ms, _pairs in _set.items():
+        _xs, _ys = [], []
+        _seen = set()
+        for _x, _y in _pairs:
+            if _x not in _seen:
+                _xs.append(_x)
+                _ys.append(_y)
+                _seen.add(_x)
+        _fit[_ms] = (_xs, _ys)
+    _FIT_ANCHORS[_model] = _fit
 
 
 def _fritsch_carlson(x_anchors, y_anchors, x_eval):
@@ -102,17 +127,23 @@ def _fritsch_carlson(x_anchors, y_anchors, x_eval):
     return h00 * y0 + h10 * h * d0 + h01 * y1 + h11 * h * d1
 
 
-def apply_spline(raw_score: float, max_score: float) -> float:
+def apply_spline(raw_score: float, max_score: float,
+                 model: str = DEFAULT_MODEL) -> float:
     """Map *raw_score* through the trained spline for *max_score*.
 
+    *model* selects the anchor set ('gemma4' default, 'qwen' historical).
     If no anchors exist for *max_score* the raw score is returned unchanged.
     """
-    anchors = _FIT_ANCHORS.get(int(max_score))
+    anchors = _FIT_ANCHORS.get(model, {}).get(int(max_score))
     if anchors is None:
         return raw_score
 
     x_anchors, y_anchors = anchors
-    return _fritsch_carlson(x_anchors, y_anchors, raw_score)
+    value = _fritsch_carlson(x_anchors, y_anchors, raw_score)
+    # Fritsch-Carlson can overshoot by a few hundredths on flat tail segments
+    # (e.g. raw 4.86→5.0 on max_score=5); clip to keep the public invariant
+    # 0 ≤ spline ≤ max_score.
+    return max(0.0, min(float(max_score), value))
 
 
 def apply_preset(spline_score: float, max_score: float, strictness: str) -> float:
@@ -144,7 +175,7 @@ def round_half(value: float) -> float:
 
 
 def calibrate(raw_score: float, max_score: float,
-              strictness: str = 'normal') -> float:
+              strictness: str = 'normal', model: str = DEFAULT_MODEL) -> float:
     """Full calibration pipeline: spline → preset → round.
 
     Returns the calibrated score on the original *max_score* scale,
@@ -154,7 +185,7 @@ def calibrate(raw_score: float, max_score: float,
     if max_score <= 0:
         return 0.0
 
-    spline = apply_spline(raw_score, max_score)
+    spline = apply_spline(raw_score, max_score, model)
     corrected = apply_preset(spline, max_score, strictness)
     rounded = round_half(corrected)
     return max(0.0, min(float(max_score), rounded))
