@@ -18,7 +18,10 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestParticipation, ContestTag, Organization, SEBConfigPreset, StoredFileRecord
+from judge.models import (
+    Class, Contest, ContestParticipation, ContestTag, Organization,
+    SEBConfigPreset, StoredFileRecord,
+)
 from judge.models.seb import DEFAULT_PRESET_CACHE_KEY
 from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
 from judge.views.contests import ContestCreate
@@ -598,6 +601,138 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertNotIn('id="id_key"', before)
         self.assertIn('id="id_key"', after)
 
+    def test_format_and_virtual_live_in_basic(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        before, after = html.split('class="advanced-hidden"', 1)
+        self.assertIn('id="id_format_name"', before)
+        self.assertIn('id="id_allow_virtual_participation"', before)
+        self.assertNotIn('id="id_format_config"', before)
+        self.assertNotIn('id="id_format_name"', after)
+        self.assertNotIn('id="id_allow_virtual_participation"', after)
+        self.assertIn('id="id_format_config"', after)
+        self.assertEqual(html.count('id="id_format_name"'), 1)
+        self.assertEqual(html.count('id="id_format_config"'), 1)
+        self.assertEqual(html.count('id="id_allow_virtual_participation"'), 1)
+        # Basic: after Target score, before Visibility; virtual follows format name.
+        basic = before[before.find('Basic information'):]
+        self.assertLess(basic.find('id="f-score"'), basic.find('id="id_format_name"'))
+        self.assertLess(basic.find('id="id_format_name"'), basic.find('id="id_allow_virtual_participation"'))
+        self.assertLess(basic.find('id="id_allow_virtual_participation"'), basic.find('name="vis_mode"'))
+        # Advanced Format: config sits with the existing label script.
+        self.assertLess(after.find('id="id_format_config"'), after.find('id="id_problem_label_script"'))
+
+    def test_anti_cheat_has_no_level_presets(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        ac = html[html.find('Anti-cheating'):html.find('id="advanced-btn"')]
+        self.assertNotIn('name="cheat_level"', html)
+        self.assertNotIn('High ≈ SEB exam', html)
+        self.assertNotIn('value="high"', ac)
+        self.assertNotIn('value="medium"', ac)
+        self.assertNotIn('value="low"', ac)
+        self.assertNotIn('value="custom"', ac)
+        self.assertNotIn('>High<', ac)
+        self.assertNotIn('>Medium<', ac)
+        self.assertNotIn('>Low<', ac)
+        self.assertNotIn('>Custom<', ac)
+        self.assertIn('id="id_access_code"', ac)
+        self.assertIn('id="id_seb_required"', ac)
+
+    def test_advanced_help_tooltips_present(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        before, advanced = html.split('class="advanced-hidden"', 1)
+        self.assertIn('class="oj-tip"', advanced)
+        self.assertIn('oj-tip-pop', advanced)
+        self.assertIn('These users will be able to edit the contest.', advanced)
+        self.assertGreater(advanced.count('class="oj-tip"'), 10)
+        basic = before[before.find('Basic information'):]
+        self.assertIn('The contest format module to use.', basic)
+        self.assertIn('Allow users to participate virtually after the contest ends.', basic)
+        self.assertIn('A JSON object to serve as the configuration for the chosen contest format module.', advanced)
+
+    def test_advanced_fields_round_trip(self):
+        response = self._post(
+            name='Adv RT', key='advrt',
+            format_name='icpc',
+            format_config='{"penalty": 20}',
+            allow_virtual_participation=False,
+            use_clarifications=False,
+            hide_problem_tags=True,
+            show_short_display=True,
+            summary='hello summary',
+            og_image='https://example.com/og.png',
+            logo_override_image='https://example.com/logo.png',
+            points_precision=2,
+            scoreboard_visibility='C',
+            access_code='secret42',
+            seb_required=False,
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='advrt')
+        self.assertEqual(contest.format_name, 'icpc')
+        self.assertEqual(contest.format_config, {'penalty': 20})
+        self.assertFalse(contest.allow_virtual_participation)
+        self.assertFalse(contest.use_clarifications)
+        self.assertTrue(contest.hide_problem_tags)
+        self.assertTrue(contest.show_short_display)
+        self.assertEqual(contest.summary, 'hello summary')
+        self.assertEqual(contest.og_image, 'https://example.com/og.png')
+        self.assertEqual(contest.logo_override_image, 'https://example.com/logo.png')
+        self.assertEqual(contest.points_precision, 2)
+        self.assertEqual(contest.scoreboard_visibility, 'C')
+        self.assertEqual(contest.access_code, 'secret42')
+        self.assertFalse(contest.seb_required)
+
+        edit = self.client.get(reverse('contest_edit', args=['advrt']))
+        self.assertEqual(edit.status_code, 200)
+        prefill = edit.context['prefill']
+        self.assertEqual(prefill['format_name'], 'icpc')
+        self.assertFalse(prefill['allow_virtual_participation'])
+        self.assertFalse(prefill['use_clarifications'])
+        self.assertTrue(prefill['hide_problem_tags'])
+        self.assertTrue(prefill['show_short_display'])
+        self.assertEqual(prefill['summary'], 'hello summary')
+        self.assertEqual(prefill['og_image'], 'https://example.com/og.png')
+        self.assertEqual(prefill['access_code'], 'secret42')
+        self.assertEqual(prefill['points_precision'], 2)
+        self.assertEqual(prefill['scoreboard_visibility'], 'C')
+        html = edit.content.decode()
+        before, advanced = html.split('class="advanced-hidden"', 1)
+        self.assertIn('id="id_format_name"', before)
+        self.assertIn('id="id_allow_virtual_participation"', before)
+        self.assertNotIn('id="id_format_config"', before)
+        self.assertNotIn('id="id_format_name"', advanced)
+        self.assertNotIn('id="id_allow_virtual_participation"', advanced)
+        self.assertIn('id="id_format_config"', advanced)
+        self.assertNotIn('name="cheat_level"', html)
+
+    def test_join_organizations_multi_select_round_trip(self):
+        org_a = Organization.objects.create(name='Join Org A', slug='join-org-a', is_open=True)
+        org_b = Organization.objects.create(name='Join Org B', slug='join-org-b', is_open=True)
+        response = self._post(
+            name='Join M2M', key='joinm2m',
+            limit_join_organizations=True,
+            join_organizations=[org_a.id, org_b.id],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='joinm2m')
+        self.assertTrue(contest.limit_join_organizations)
+        self.assertCountEqual(
+            list(contest.join_organizations.values_list('id', flat=True)),
+            [org_a.id, org_b.id],
+        )
+        edit = self.client.get(reverse('contest_edit', args=['joinm2m']))
+        self.assertEqual(edit.status_code, 200)
+        html = edit.content.decode()
+        self.assertIn('id="id_join_organizations"', html)
+        self.assertRegex(html, r'id="id_join_organizations"[^>]*multiple')
+        prefill = edit.context['prefill']
+        self.assertCountEqual([o[0] for o in prefill['join_organizations']], [org_a.id, org_b.id])
+
+    def test_invalid_scoreboard_visibility_returns_400(self):
+        response = self._post(name='SB Bad', key='sbbad', scoreboard_visibility='X')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('scoreboard', json.loads(response.content)['error'].lower())
+
     def test_create_new_problem_links_to_v2(self):
         adder = create_user(username='fields_problem_adder', user_permissions=(
             'create_private_contest', 'create_private_problem',
@@ -635,6 +770,107 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertNotIn('data-sort="group"', library)
         self.assertIn('id="cp-from-library"', html)
         self.assertIn('id="id_allow_ai_hints"', html)
+
+    def test_course_selects_omit_public_sentinel(self):
+        public_problem = create_problem(
+            'libpubshown', name='Library Public Shown', is_public=True,
+        )
+        html = self.client.get(reverse('contest_create')).content.decode()
+        _, library = html.split('id="problem-library"', 1)
+        lib_course = library.split('id="lib-filter-course"', 1)[1].split('</select>', 1)[0]
+        self.assertNotIn('value="public"', lib_course)
+        self.assertNotRegex(lib_course, r'>\s*Public\s*<')
+        # Unselected course still lists public problems in the library.
+        self.assertIn(public_problem.code, library)
+        self.assertIn(public_problem.name, library)
+
+        org_select = html.split('id="id_organizations"', 1)[1].split('</select>', 1)[0]
+        self.assertNotIn('value="public"', org_select)
+        self.assertNotIn('— Public —', org_select)
+        self.assertNotRegex(org_select, r'>\s*Public\s*<')
+        self.assertNotRegex(org_select, r'<option[^>]*value=""')
+        self.assertRegex(html, r'id="id_organizations"[^>]*multiple')
+        self.assertIn('data-placeholder', org_select)
+
+        class_select = html.split('id="id_classes"', 1)[1].split('</select>', 1)[0]
+        self.assertNotRegex(class_select, r'<option[^>]*value=""')
+        self.assertNotRegex(class_select, r'<option[^>]*>\s*Select course first')
+        self.assertRegex(html, r'id="id_classes"[^>]*multiple')
+        self.assertIn('data-placeholder', class_select)
+
+    def test_classes_multi_select_round_trip(self):
+        org_a = Organization.objects.create(name='Class Org A', slug='class-org-a', is_open=True)
+        org_b = Organization.objects.create(name='Class Org B', slug='class-org-b', is_open=True)
+        class_a = Class.objects.create(organization=org_a, name='Class A1', slug='class-a1')
+        class_b = Class.objects.create(organization=org_b, name='Class B1', slug='class-b1')
+        response = self._post(
+            name='Class M2M', key='classm2m',
+            vis_mode='org',
+            organizations=[org_a.id, org_b.id],
+            classes=[class_a.id, class_b.id],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='classm2m')
+        self.assertTrue(contest.is_organization_private)
+        self.assertCountEqual(
+            list(contest.organizations.values_list('id', flat=True)),
+            [org_a.id, org_b.id],
+        )
+        self.assertCountEqual(
+            list(contest.classes.values_list('id', flat=True)),
+            [class_a.id, class_b.id],
+        )
+        edit = self.client.get(reverse('contest_edit', args=['classm2m']))
+        self.assertEqual(edit.status_code, 200)
+        prefill = edit.context['prefill']
+        self.assertEqual(prefill['vis_mode'], 'org')
+        self.assertCountEqual([o[0] for o in prefill['organizations']], [org_a.id, org_b.id])
+        self.assertCountEqual([c[0] for c in prefill['classes']], [class_a.id, class_b.id])
+        html = edit.content.decode()
+        class_html = html.split('id="id_classes"', 1)[1].split('</select>', 1)[0]
+        self.assertIn('selected', class_html)
+        self.assertIn(str(class_a.id), class_html)
+        self.assertIn(str(class_b.id), class_html)
+
+    def test_classes_require_organizations(self):
+        org = Organization.objects.create(name='Orphan Class Org', slug='orphan-class-org', is_open=True)
+        cls = Class.objects.create(organization=org, name='Orphan Class', slug='orphan-class')
+        response = self._post(
+            name='Class No Org', key='classnoorg',
+            vis_mode='org',
+            classes=[cls.id],
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('organizations', json.loads(response.content)['error'].lower())
+
+    def test_classes_must_belong_to_selected_organizations(self):
+        org_a = Organization.objects.create(name='Match Org A', slug='match-org-a', is_open=True)
+        org_b = Organization.objects.create(name='Match Org B', slug='match-org-b', is_open=True)
+        class_b = Class.objects.create(organization=org_b, name='Match Class B', slug='match-class-b')
+        response = self._post(
+            name='Class Mismatch', key='classmismatch',
+            vis_mode='org',
+            organizations=[org_a.id],
+            classes=[class_b.id],
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('classes', json.loads(response.content)['error'].lower())
+
+    def test_public_vis_mode_stores_but_does_not_apply_course_scope(self):
+        org = Organization.objects.create(name='Public Scope Org', slug='public-scope-org', is_open=True)
+        cls = Class.objects.create(organization=org, name='Public Scope Class', slug='public-scope-class')
+        response = self._post(
+            name='Public Scoped', key='pubscoped',
+            vis_mode='public',
+            organizations=[org.id],
+            classes=[cls.id],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='pubscoped')
+        self.assertTrue(contest.is_visible)
+        self.assertFalse(contest.is_organization_private)
+        self.assertCountEqual(list(contest.organizations.values_list('id', flat=True)), [org.id])
+        self.assertCountEqual(list(contest.classes.values_list('id', flat=True)), [cls.id])
 
     def test_validity_toggle_shares_label_row(self):
         html = self.client.get(reverse('contest_create')).content.decode()
@@ -1370,6 +1606,88 @@ class ContestEditorProblemOptionsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(len(problems), 1)
         self.assertEqual(problems[0]['output_prefix'], 7)
         self.assertEqual(problems[0]['hide_results'], False)
+
+    def test_results_markup_is_exam_only(self):
+        """Results lives in ``.cp-results`` (exam-only). Default format pages
+        ship the control in markup/JS but do not mark ``.cp-list`` as exam, so
+        CSS keeps it hidden. ``syncExamResultsVisibility`` toggles ``is-exam``
+        when ``#id_format_name`` changes to exam."""
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('class="cp-opt cp-results"', html)
+        self.assertIn('data-exam-only="hide_results"', html)
+        self.assertIn('select class="cp-results"', html)
+        self.assertIn('.cp-list.is-exam .cp-options .cp-opt.cp-results', html)
+        self.assertIn("fmt.value === 'exam'", html)
+        self.assertIn('syncExamResultsVisibility', html)
+        # Create defaults to Default format — list is not exam-active.
+        self.assertIn('id="cp-list"', html)
+        self.assertNotIn('class="cp-list is-exam"', html)
+
+    def test_exam_edit_marks_cp_list_is_exam(self):
+        from judge.models import ContestProblem
+        exam = create_contest(
+            key='examopts', name='Exam Opts',
+            start_time=timezone.now() + timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=2),
+            authors=('superuser',),
+            format_name='exam',
+            problems=(),
+        )
+        ContestProblem.objects.create(
+            contest=exam, problem=self.problem, points=100, order=1,
+            hide_results=True,
+        )
+        response = self.client.get(reverse('contest_edit', args=['examopts']))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn('class="cp-list is-exam"', html)
+        self.assertIn('data-exam-only="hide_results"', html)
+        self.assertIn('class="cp-opt cp-results"', html)
+
+    def test_hide_results_round_trip_on_exam_format(self):
+        """Exam format still persists hide_results (the UI only *shows* Results then)."""
+        response = self.client.post(
+            reverse('contest_edit', args=['proboptscontest']),
+            data=json.dumps(self._payload(
+                format_name='exam',
+                problems=[{'id': self.problem.id, 'points': 100, 'hide_results': 'hide'}],
+            )), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.format_name, 'exam')
+        self.assertTrue(self.contest.contest_problems.get().hide_results)
+        self.assertTrue(self.contest.format_class.has_hidden_results)
+
+    def test_non_exam_save_keeps_hide_results(self):
+        """Non-exam UI hides Results but still submits the stored three-state
+        so switching back to exam does not lose Hide/Show. Runtime masking is a
+        no-op here (``has_hidden_results`` is False); see
+        ``judge.models.tests.test_exam_contest``."""
+        response = self.client.post(
+            reverse('contest_edit', args=['proboptscontest']),
+            data=json.dumps(self._payload(
+                format_name='default',
+                problems=[{'id': self.problem.id, 'points': 100, 'hide_results': 'hide'}],
+            )), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.format_name, 'default')
+        self.assertTrue(self.contest.contest_problems.get().hide_results)
+        self.assertFalse(self.contest.format_class.has_hidden_results)
+
+    def test_max_submissions_zero_means_unlimited(self):
+        """Blank and 0 both mean unlimited (model min is 1 or None)."""
+        for raw in (0, '0', '', None):
+            response = self.client.post(
+                reverse('contest_edit', args=['proboptscontest']),
+                data=json.dumps(self._payload(problems=[
+                    {'id': self.problem.id, 'points': 100, 'max_submissions': raw},
+                ])), content_type='application/json',
+            )
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertIsNone(self.contest.contest_problems.get().max_submissions, raw)
 
 
 class ContestDurationGuardTestCase(CommonDataMixin, TestCase):

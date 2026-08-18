@@ -704,6 +704,12 @@ class ContestCreate(LoginRequiredMixin, View):
         elif format_config is not None:
             contest.format_config = None
 
+        scoreboard = payload.get('scoreboard_visibility', Contest.SCOREBOARD_VISIBLE)
+        valid_scoreboards = {choice[0] for choice in Contest.SCOREBOARD_VISIBILITY}
+        if scoreboard not in valid_scoreboards:
+            raise ValidationError(_('Invalid scoreboard visibility.'))
+        contest.scoreboard_visibility = scoreboard
+
         # ── Schedule: start/end are required and must be ordered; lock is optional ──
         start_time = self._parse_datetime(payload, 'start_time')
         end_time = self._parse_datetime(payload, 'end_time')
@@ -872,6 +878,22 @@ class ContestCreate(LoginRequiredMixin, View):
                 raise ValidationError(_('Invalid value for "%(field)s".') % {'field': field})
             getattr(contest, field).set(ids)
 
+        # Same org→class rule as ContestForm.clean: classes are a subset of
+        # the selected organizations, and cannot be set without an organization.
+        if 'classes' in payload or 'organizations' in payload:
+            self._validate_contest_classes(contest)
+
+    @staticmethod
+    def _validate_contest_classes(contest):
+        """Reject class ids that do not belong to the contest's organizations."""
+        if not contest.classes.exists():
+            return
+        org_ids = set(contest.organizations.values_list('id', flat=True))
+        if not org_ids:
+            raise ValidationError(_('You must select organizations before selecting classes.'))
+        if contest.classes.exclude(organization_id__in=org_ids).exists():
+            raise ValidationError(_('Selected classes must belong to selected organizations.'))
+
     def _sync_problems(self, contest, payload):
         """Replace the contest's problem list with the submitted selection.
 
@@ -943,7 +965,10 @@ class ContestCreate(LoginRequiredMixin, View):
             partial = bool(raw_partial) if raw_partial is not None else True
             is_pretested = bool(raw_pretested) if raw_pretested is not None else False
             try:
+                # Blank / 0 → unlimited (model validator rejects 0: min 1 or None).
                 max_submissions = int(raw_max_subs) if raw_max_subs not in (None, '') else None
+                if max_submissions is not None and max_submissions < 1:
+                    max_submissions = None
             except (TypeError, ValueError):
                 max_submissions = None
             # output_prefix_override: nullable int (blank → model default 0).
@@ -1177,7 +1202,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
             'allow_ai_hints': False,
             'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
-            'cheat_level': 'medium', 'problems': [],
+            'problems': [],
             'target_score': 100,
         }
         for field in self._m2m_fields:
@@ -1264,16 +1289,6 @@ class ContestCreate(LoginRequiredMixin, View):
             # of problem points so the editor's target input matches reality.
             prefill['target_score'] = sum(cp.points for cp in contest.contest_problems.all()) or 100
 
-            # Reconstruct UI-only controls from the stored flags.
-            # Anti-cheat level: SEB + access code → custom; SEB → high; code → medium.
-            if contest.seb_required and contest.access_code:
-                prefill['cheat_level'] = 'custom'
-            elif contest.seb_required:
-                prefill['cheat_level'] = 'high'
-            elif contest.access_code:
-                prefill['cheat_level'] = 'medium'
-            else:
-                prefill['cheat_level'] = 'low'
             # List visibility seg control: user-private > org-private > public > hidden.
             # Derived from the STORED FLAGS only — list contents (private_contestants /
             # organizations / classes) are scoping data, not mode selectors. Checking the

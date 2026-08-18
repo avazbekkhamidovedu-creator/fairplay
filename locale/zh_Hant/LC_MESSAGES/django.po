@@ -6511,3 +6511,119 @@ msgstr "此作業進行中時，學生可對本作業內每道題使用 AI 提�
 msgid "When this assignment is active, students can use AI Hint on every problem in it. Each problem's own AI Hint setting is unchanged outside this assignment."
 msgstr "此作業進行中時，學生可對本作業內每道題使用 AI 提示。作業外仍以各題自身的 AI 提示設定為準。"
 
+#: templates/contest/create.html
+msgid "Identity"
+msgstr "身分"
+
+#: templates/contest/create.html
+msgid "Identity, settings, rating, access…"
+msgstr "身分、設定、積分、存取權…"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Join organizations"
+msgstr "加入組織"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Private contestants"
+msgstr "私有參賽者"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Rating floor"
+msgstr "評分下限"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Rating ceiling"
+msgstr "評分上限"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Performance ceiling override"
+msgstr "表現上限覆寫"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Contest format"
+msgstr "競賽格式"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Contest format configuration"
+msgstr "競賽格式設定"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Allow virtual participation"
+msgstr "允許虛擬參賽"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Contest problem label script"
+msgstr "競賽題目標籤腳本"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Scoreboard visibility"
+msgstr "記分板可見性"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Precision points"
+msgstr "分數精度"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Contest lock"
+msgstr "競賽鎖定"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Rate all"
+msgstr "全部評分"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Allow users to participate virtually after the contest ends."
+msgstr "允許使用者在競賽結束後以虛擬方式參賽。"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Rate users even if they make no submissions."
+msgstr "即使沒有提交，也為使用者評分。"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Overrides the performance_ceiling parameter used in computing ratings. Do not modify unless you know what you're doing!"
+msgstr "覆寫計算積分時使用的 performance_ceiling 參數。除非你清楚自己在做什麼，否則不要修改！"
+
+#: templates/contest/create.html
+msgid "URL of the OpenGraph image used in social media previews."
+msgstr "用於社群媒體預覽的 OpenGraph 圖片 URL。"
+
+#: templates/contest/create.html
+msgid "These users will not receive a rating from this contest."
+msgstr "這些使用者不會從這場競賽獲得積分。"
+
+#: templates/contest/create.html
+msgid "If enabled, only the join organizations listed here may join the contest."
+msgstr "若啟用，僅此處列出的加入組織可以加入競賽。"
+
+#: judge/views/contests.py
+msgid "Invalid scoreboard visibility."
+msgstr "無效的記分板可見性。"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "If enabled, non-staff participants can only access this contest from inside Safe Exam Browser."
+msgstr "若啟用，非教職員參與者只能在 Safe Exam Browser 內存取此競賽。"
+
+#: templates/contest/create.html
+msgid "Partial credit"
+msgstr "部分分"
+
+#: templates/contest/create.html
+msgid "Pretest only"
+msgstr "僅測 Pretest"
+
+#: templates/contest/create.html
+msgid "Results"
+msgstr "成績"
+
+#: templates/contest/create.html
+msgid "What results students can see after judging."
+msgstr "評測後學生能看到哪些結果。"
+
+#: templates/contest/create.html
+msgid "Out prefix"
+msgstr "輸出前綴"
+
+#: templates/contest/create.html
+msgid "Number of output characters shown to students after judging — 0 means none, so only the verdict is visible."
+msgstr "評測後向學生展示的輸出字元數。0 表示不展示輸出，僅可見判定結果。"
+

@@ -154,10 +154,7 @@
   }
   function matchesCourse(item, courses) {
     if (!courses.length) return true;
-    var wantPublic = courses.indexOf('public') !== -1;
-    var orgIds = courses.filter(function (code) { return code !== 'public'; });
-    if (wantPublic && item.dataset.public === '1') return true;
-    return orgIds.length ? tokenHit(item.dataset.orgs, orgIds) : false;
+    return tokenHit(item.dataset.orgs, courses);
   }
   function matchesFormat(item, formats) {
     if (!formats.length) return true;

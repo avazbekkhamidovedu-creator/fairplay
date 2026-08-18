@@ -305,7 +305,7 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'id="fp-group"', html=False)
         self.assertIn('workspace_organizations', response.context)
 
-    def test_practice_course_filter_lists_membership_and_public(self):
+    def test_practice_course_filter_lists_membership_without_public_sentinel(self):
         mine = create_organization(name='WsMine')
         other = create_organization(name='WsOther')
         self.user.profile.organizations.add(mine)
@@ -313,9 +313,12 @@ class ProblemWorkspaceTestCase(TestCase):
         names = {org.name for org in response.context['workspace_organizations']}
         self.assertIn(mine.name, names)
         self.assertNotIn(other.name, names)
-        self.assertContains(response, 'value="%s"' % response.context['workspace_public_course_value'], html=False)
-        self.assertContains(response, mine.name)
-        self.assertNotContains(response, other.name)
+        course = response.content.decode().split('id="fp-course"', 1)[1].split('</select>', 1)[0]
+        self.assertNotIn('value="public"', course)
+        self.assertNotRegex(course, r'>\s*Public\s*<')
+        self.assertIn(mine.name, course)
+        self.assertNotIn(other.name, course)
+        # Public problems stay in the drawer; filtering is "all courses" when none are selected.
         self.assertContains(response, 'data-public="1"', html=False)
 
     def test_anonymous_problem_detail_stays_in_practice(self):

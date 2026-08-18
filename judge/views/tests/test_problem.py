@@ -268,7 +268,7 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         ))
         self.assertEqual(codes, {'filter-easy', 'filter-hard', 'filter-alpha'})
 
-    def test_course_filter_lists_membership_and_public(self):
+    def test_course_filter_lists_membership_without_public_sentinel(self):
         mine = create_organization(name='My Filter Course')
         other = create_organization(name='Other Filter Course')
         self.users['normal'].profile.organizations.add(mine)
@@ -276,27 +276,35 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         names = {org.name for org in context['organizations']}
         self.assertIn(mine.name, names)
         self.assertNotIn(other.name, names)
-        self.assertFalse(context['filter_public_course'])
 
         self.client.force_login(self.users['normal'])
         response = self.client.get(reverse('problem_list'))
-        self.assertContains(response, 'value="public"', html=False)
-        self.assertContains(response, mine.name)
-        self.assertNotContains(response, other.name)
+        course = response.content.decode().split('id="filter-course"', 1)[1].split('</select>', 1)[0]
+        self.assertNotIn('value="public"', course)
+        self.assertNotRegex(course, r'>\s*Public\s*<')
+        self.assertIn(mine.name, course)
+        self.assertNotIn(other.name, course)
 
-    def test_public_course_filter_excludes_org_private(self):
+    def test_unselected_course_includes_public_problems(self):
         org = create_organization(name='PrivCourse')
         self.users['normal'].profile.organizations.add(org)
         self.problem_easy.is_organization_private = True
         self.problem_easy.save()
         self.problem_easy.organizations.add(org)
 
-        public_codes = self._filter_group_codes(self._filtered_codes(
+        unselected = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'filtered': '1'},
+        ))
+        self.assertIn('filter-easy', unselected)
+        self.assertIn('filter-hard', unselected)
+
+        # The retired `public` sentinel is ignored (same as leaving course empty).
+        stale = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
             {'course': ['public'], 'filtered': '1'},
         ))
-        self.assertNotIn('filter-easy', public_codes)
-        self.assertIn('filter-hard', public_codes)
+        self.assertEqual(stale, unselected)
 
         course_codes = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
