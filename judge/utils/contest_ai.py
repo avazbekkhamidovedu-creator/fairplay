@@ -178,6 +178,12 @@ def run_ai_for_submission(submission, *, batch_pass=False):
 
     st = submission.problem.submission_type
     if st == ProblemSubmissionType.CODE:
+        # Only grade rubric rows once the judge has finished (status D ⇒ test
+        # cases are written). Grading a queued/running submission computes the
+        # case offset before the real rows exist, colliding with them later on
+        # SubmissionTestCase's unique (submission, case) constraint.
+        if submission.status != 'D':
+            return 'skipped-not-graded'
         rows = supplementary_ai_grade(submission)
         if not rows:
             return 'no-rows'
@@ -285,16 +291,20 @@ def schedule_batch_ai_grade(contest_id):
     if contest.ai_grading_mode != Contest.AI_GRADING_BATCH or delay <= 0:
         contest.save(update_fields=['ai_grading_scheduled_task_id'])
         return
+    if contest.end_time is None:
+        # No deadline to anchor the auto-run to; the teacher can still use the button.
+        contest.save(update_fields=['ai_grading_scheduled_task_id'])
+        return
 
-    eta = contest.end_time + timedelta(minutes=delay)
-    if eta <= timezone.now():
-        contest.save(update_fields=['ai_grading_scheduled_task_id'])
-        return
-    if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
-        # Tests / eager workers would fire immediately; teacher still has the button.
-        contest.save(update_fields=['ai_grading_scheduled_task_id'])
-        return
     try:
+        eta = contest.end_time + timedelta(minutes=delay)
+        if eta <= timezone.now():
+            contest.save(update_fields=['ai_grading_scheduled_task_id'])
+            return
+        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            # Tests / eager workers would fire immediately; teacher still has the button.
+            contest.save(update_fields=['ai_grading_scheduled_task_id'])
+            return
         from judge.tasks.contest import batch_ai_grade
         result = batch_ai_grade.apply_async(args=[contest.key], kwargs={'auto': True}, eta=eta)
         contest.ai_grading_scheduled_task_id = result.id or ''

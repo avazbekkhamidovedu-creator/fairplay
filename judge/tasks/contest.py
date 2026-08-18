@@ -1,8 +1,12 @@
+from datetime import timedelta
+
 from celery import shared_task
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext as _
+from moss import MOSS
 
 from judge.models import Contest, ContestMoss, ContestParticipation, ContestSubmission, Submission
 from judge.utils.celery import Progress
@@ -145,15 +149,23 @@ def batch_ai_grade(self, contest_key, auto=False):
         latest_submissions_for_contest, problem_has_ai_grading, run_ai_for_submission,
     )
 
-    contest = Contest.objects.get(key=contest_key)
-    if contest.ai_grading_mode != Contest.AI_GRADING_BATCH:
-        return 0
-    if auto and contest.ai_grading_batch_finished_at is not None:
-        return 0
-
-    contest.ai_grading_batch_started_at = timezone.now()
-    contest.ai_grading_batch_finished_at = None
-    contest.save(update_fields=['ai_grading_batch_started_at', 'ai_grading_batch_finished_at'])
+    with transaction.atomic():
+        contest = Contest.objects.select_for_update().get(key=contest_key)
+        if contest.ai_grading_mode != Contest.AI_GRADING_BATCH:
+            return 0
+        if auto and contest.ai_grading_batch_finished_at is not None:
+            return 0
+        # Serialize concurrent runs (double-clicked button, or auto vs manual):
+        # skip when a run already started and has not finished within the last
+        # 2h. A crashed worker leaves ``started_at`` set; the 2h window lets a
+        # later run retake the lock.
+        started = contest.ai_grading_batch_started_at
+        if started is not None and contest.ai_grading_batch_finished_at is None \
+                and timezone.now() - started < timedelta(hours=2):
+            return 0
+        contest.ai_grading_batch_started_at = timezone.now()
+        contest.ai_grading_batch_finished_at = None
+        contest.save(update_fields=['ai_grading_batch_started_at', 'ai_grading_batch_finished_at'])
 
     latest = latest_submissions_for_contest(contest)
     targets = [sub for sub in latest.values() if problem_has_ai_grading(sub.problem)]
