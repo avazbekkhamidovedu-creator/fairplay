@@ -34,8 +34,9 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import ContestParticipation, ContestProblem, ContestSubmission, Language, Submission
-from judge.models.tests.util import create_contest, create_user
+from judge.models import ContestParticipation, ContestProblem, ContestSubmission, Language, Submission, \
+    SubmissionManualGrade
+from judge.models.tests.util import create_contest, create_problem, create_user
 from judge.views.tests.test_contest_grade import GradeTestBase
 
 
@@ -156,39 +157,39 @@ class ContestGradeSaveVariantTestCase(GradeTestBase):
     def test_missing_score_treated_as_zero(self):
         response = self._save({'submission': str(self.submission.id)})
         self.assertEqual(response.status_code, 200, response.content)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 0.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 0.0)
 
     def test_negative_zero_stays_zero(self):
         response = self._save({'submission': str(self.submission.id), 'score': '-0'})
         self.assertEqual(response.status_code, 200, response.content)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 0.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 0.0)
 
     def test_infinity_clamps_to_total(self):
         response = self._save({'submission': str(self.submission.id), 'score': 'inf'})
         self.assertEqual(response.status_code, 200, response.content)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 100.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 100.0)
 
     def test_negative_infinity_clamps_to_zero(self):
         response = self._save({'submission': str(self.submission.id), 'score': '-inf'})
         self.assertEqual(response.status_code, 200, response.content)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 0.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 0.0)
 
     def test_huge_exponent_clamps_to_total(self):
         # float('1e309') overflows to inf without raising — must clamp, not 500.
         response = self._save({'submission': str(self.submission.id), 'score': '1e309'})
         self.assertEqual(response.status_code, 200, response.content)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 100.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 100.0)
 
     def test_fractional_score_persisted(self):
         response = self._save({'submission': str(self.submission.id), 'score': '3.14159'})
         self.assertEqual(response.status_code, 200, response.content)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 3.14159)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 3.14159)
 
     def test_boolean_string_rejected(self):
         self.assertEqual(
@@ -217,8 +218,8 @@ class ContestGradeSaveVariantTestCase(GradeTestBase):
     def test_submission_id_with_whitespace_parses(self):
         response = self._save({'submission': ' %s ' % self.submission.id, 'score': '42'})
         self.assertEqual(response.status_code, 200, response.content)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 42.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 42.0)
 
     @unittest.expectedFailure
     def test_nan_score_does_not_crash(self):
@@ -255,12 +256,17 @@ class ContestGradeScorePropagationTestCase(GradeTestBase):
         )
         cls.participation.recompute_results()
 
-    def test_manual_grade_updates_base_submission_points(self):
+    def test_manual_grade_preserves_base_submission_points(self):
+        # The machine score must NOT be overwritten by the teacher's override:
+        # the override lives in SubmissionManualGrade and is folded into the
+        # contest pipeline, while Submission.points keeps the judge's machine score.
         response = self._client(self.curator).post(
             self.save_url, {'submission': str(self.submission.id), 'score': '90'})
         self.assertEqual(response.status_code, 200, response.content)
         self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 90.0)
+        self.assertEqual(self.submission.points, 50.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 90.0)
 
     def test_manual_grade_updates_contest_submission_points(self):
         # Regression: the teacher's override used to die on the base row only;
@@ -308,16 +314,12 @@ class ContestGradeRejudgeInteractionTestCase(GradeTestBase):
             participation=cls.participation, points=50.0,
         )
 
-    def test_rejudge_machine_score_overwrites_manual_grade(self):
+    def test_rejudge_machine_score_does_not_wipe_manual_grade(self):
         # Teacher overrides the score to 90...
         response = self._client(self.curator).post(
             self.save_url, {'submission': str(self.submission.id), 'score': '90'})
         self.assertEqual(response.status_code, 200, response.content)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 90.0)
-        # ...then the judge finishes a rejudge: tasks/submission.py recomputes
-        # Submission.points from case_points/case_total (60/100 → 60) and
-        # Submission.update_contest() folds it into ContestSubmission.points.
+        # ...then the judge finishes a rejudge: machine points recompute to 60.
         self.submission.case_points = 60
         self.submission.case_total = 100
         self.submission.save(update_fields=['case_points', 'case_total'])
@@ -326,29 +328,34 @@ class ContestGradeRejudgeInteractionTestCase(GradeTestBase):
         self.submission.update_contest()
         self.submission.refresh_from_db()
         self.contest_submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 60.0)  # manual 90 wiped
-        self.assertEqual(self.contest_submission.points, 60.0)
+        # The base machine score is recomputed to 60, but the manual override
+        # (90) still wins for the actual contest score — a rejudge must not
+        # wipe the teacher's grade.
+        self.assertEqual(self.submission.points, 60.0)
+        self.assertEqual(self.contest_submission.points, 90.0)
 
 
 class ContestGradeReleaseVariantTestCase(GradeTestBase):
-    """Release / unrelease edge cases and isolation."""
+    """Release All edge cases: idempotency, isolation, and side effects."""
 
-    def setUp(self):
-        # Reset the shared flag so toggle tests are order-independent.
-        self.contest.results_finalized = False
-        self.contest.save(update_fields=['results_finalized'])
+    def _save_grade(self, score='77'):
+        self._client(self.curator).post(
+            self.save_url, {'submission': str(self.submission.id), 'score': score})
+        return SubmissionManualGrade.objects.get(submission=self.submission)
 
-    def test_double_toggle_returns_to_original(self):
+    def test_release_all_is_idempotent(self):
+        self._save_grade()
         client = self._client(self.curator)
         first = client.post(self.release_url)
         self.assertEqual(first.status_code, 200)
         self.assertTrue(json.loads(first.content)['released'])
         second = client.post(self.release_url)
-        self.assertFalse(json.loads(second.content)['released'])
-        self.contest.refresh_from_db()
-        self.assertFalse(self.contest.results_finalized)
+        self.assertTrue(json.loads(second.content)['released'])
+        grade = SubmissionManualGrade.objects.get(submission=self.submission)
+        self.assertTrue(grade.released)
 
     def test_release_does_not_touch_submission_points(self):
+        self._save_grade('77')
         self._client(self.curator).post(self.release_url)
         self.submission.refresh_from_db()
         self.assertEqual(self.submission.points, 50.0)
@@ -360,26 +367,36 @@ class ContestGradeReleaseVariantTestCase(GradeTestBase):
             end_time=timezone.now() + timedelta(days=1),
             authors=('grade_superuser',),
         )
+        other_problem = create_problem('gradevar_other_prob')
+        ContestProblem.objects.create(contest=other, problem=other_problem, points=100, order=1)
+        other_sub = Submission.objects.create(
+            user=self.student.profile, problem=other_problem,
+            language=Language.objects.get(key='PY3'), result='WA', status='D',
+            contest_object=other, points=50.0, case_total=100,
+        )
+        other_grade = SubmissionManualGrade.objects.create(
+            submission=other_sub, points=70.0, machine_points=50.0)
+        my_grade = self._save_grade()
+
         other_url = reverse('contest_grade_release', args=[other.key])
         self._client(self.superuser).post(other_url)
-        other.refresh_from_db()
-        self.contest.refresh_from_db()
-        self.assertTrue(other.results_finalized)
-        self.assertFalse(self.contest.results_finalized)
+        other_grade.refresh_from_db()
+        my_grade.refresh_from_db()
+        self.assertTrue(other_grade.released)
+        self.assertFalse(my_grade.released)
 
     def test_release_anonymous_is_401(self):
         response = Client().post(self.release_url)
         self.assertEqual(response.status_code, 401)
 
-    def test_release_get_does_not_unrelease(self):
+    def test_release_get_does_not_release(self):
         # ContestMixin.dispatch turns the GET handler's Http404 into a generic
-        # page — the security property is that a GET can never flip the flag,
-        # even from the released state.
-        self.contest.results_finalized = True
-        self.contest.save(update_fields=['results_finalized'])
+        # page — the security property is that a GET can never release grades.
+        grade = self._save_grade()
+        self.assertFalse(grade.released)
         self._client(self.curator).get(self.release_url)
-        self.contest.refresh_from_db()
-        self.assertTrue(self.contest.results_finalized)
+        grade.refresh_from_db()
+        self.assertFalse(grade.released)
 
 
 class ContestGradePayloadVariantTestCase(GradeTestBase):

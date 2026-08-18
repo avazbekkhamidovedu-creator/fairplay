@@ -772,6 +772,53 @@
   font-weight: 700;
   letter-spacing: .02em;
 }
+/* Teacher feedback (评语) shown on the Result tab once the manual grade is released. */
+.ws-review-note {
+  margin-top: .65rem;
+  padding: .6rem .75rem;
+  border: 1px solid var(--oj-border);
+  border-left: 3px solid var(--oj-success, #2e7d32);
+  border-radius: 4px;
+  background: var(--oj-bg, #fcfcfc);
+}
+.ws-review-note-label {
+  font-size: .75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--oj-text-muted, #666);
+  margin-bottom: .3rem;
+}
+.ws-review-note-body {
+  font-size: .88rem;
+  line-height: 1.55;
+  color: var(--oj-text, #222);
+  word-break: break-word;
+}
+/* "Released" tag shown on the Result tab + submission rows once the manual grade is released. */
+.ws-released-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  margin-top: .5rem;
+  padding: .2rem .55rem;
+  border-radius: 3px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: .78rem;
+  font-weight: 700;
+}
+.ws-released-mini {
+  display: inline-block;
+  margin-left: .35rem;
+  padding: 0 .3rem;
+  border-radius: 3px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: .68rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
 #ws-subs-table .ws-result-code {
   font-weight: 700;
 }

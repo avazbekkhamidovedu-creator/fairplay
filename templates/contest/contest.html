@@ -533,9 +533,6 @@
             <table>
                 <thead>
                 <tr>
-                    {% if request.user.is_authenticated %}
-                        <th class="col-status">{{ _('Status') }}</th>
-                    {% endif %}
                     <th>{{ _('Problem') }}</th>
                     <th>{{ _('Points') }}</th>
                     <th>{{ _('AC Rate') }}</th>
@@ -548,15 +545,6 @@
                 <tbody>
                 {% for problem in contest_problems %}
                     <tr>
-                        {% if request.user.is_authenticated %}
-                            <td class="col-status" solved="{% if problem.id in contest_solved_problem_ids %}1{% else %}0{% endif %}">
-                                {% if problem.id in contest_solved_problem_ids %}
-                                    <i class="solved-problem-color fa fa-check-circle" title="{{ _('Solved') }}"></i>
-                                {% elif problem.id in contest_attempted_problem_ids %}
-                                    <i class="attempted-problem-color fa fa-minus-circle" title="{{ _('Attempted') }}"></i>
-                                {% endif %}
-                            </td>
-                        {% endif %}
                         <td>
                             {% if problem.is_public or request.user.is_superuser or is_editor or (has_joined and not contest.ended) %}
                                 <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>

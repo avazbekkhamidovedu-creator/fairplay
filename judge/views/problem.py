@@ -104,10 +104,22 @@ def get_contest_submission_count(problem, profile, virtual):
 
 
 def workspace_display_points(submission, request):
-    """Score shown in Workspace: assignment uses ContestSubmission.points, else problem scale."""
+    """Score shown in Workspace: assignment uses ContestSubmission.points, else problem scale.
+
+    A teacher's manual override (SubmissionManualGrade) only takes over the
+    student-visible score once it is ``released``; until then the student keeps
+    seeing the machine score (the ``machine_points`` snapshot captured at
+    grading time).
+    """
     if getattr(request, 'in_contest', False):
         contest_sub = submission.contest_or_none
         if contest_sub is not None:
+            manual_grade = submission.manual_grade_override
+            if manual_grade is not None:
+                if manual_grade.points is not None and manual_grade.released:
+                    return manual_grade.points
+                if manual_grade.machine_points is not None:
+                    return manual_grade.machine_points
             return contest_sub.points
     return submission.points
 
@@ -122,6 +134,27 @@ def workspace_display_points_total(submission, request):
         if contest_problem is not None:
             return contest_problem.points
     return submission.problem.points
+
+
+def workspace_review_note_html(submission):
+    """Sanitized teacher-feedback (评语) HTML, or '' when not shown.
+
+    The note is only revealed to the student once the teacher's manual override
+    has been released; it is rendered through the site markdown pipeline (bleach
+    sanitized) so it can be injected safely from either the server-rendered
+    template or the workspace's JSON status endpoint.
+    """
+    manual_grade = submission.manual_grade_override
+    if manual_grade is None or not manual_grade.released or not submission.review_note:
+        return ''
+    from judge.jinja2.markdown import markdown as render_markdown
+    return str(render_markdown(submission.review_note, 'default'))
+
+
+def workspace_manual_released(submission):
+    """Whether this submission's manual override has been released to the student."""
+    manual_grade = submission.manual_grade_override
+    return manual_grade is not None and manual_grade.released
 
 
 PUBLIC_COURSE_FILTER = 'public'
@@ -614,6 +647,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                     'file_upload': get_workspace_file_upload(selected_submission),
                     'results_hidden': results_hidden,
                     'is_graded': selected_submission.is_graded,
+                    'released': workspace_manual_released(selected_submission),
+                    'review_note_html': workspace_review_note_html(selected_submission),
                     'id_secret': selected_submission.id_secret,
                     'status_url': reverse(
                         'problem_workspace_submission_status',
@@ -648,10 +683,12 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             workspace_subs = list(
                 workspace_subs_qs
                 .select_related('language', 'contest_object', 'contest__problem')
+                .prefetch_related('manual_grade')
                 .order_by('-date')[:20],
             )
             for submission in workspace_subs:
                 submission.display_points = workspace_display_points(submission, self.request)
+                submission.display_points_total = workspace_display_points_total(submission, self.request)
             context['workspace_submissions'] = workspace_subs
         else:
             context['workspace_submissions'] = []
@@ -2426,6 +2463,8 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
             'answer_display': answer_display,
             'file_upload': get_workspace_file_upload(submission),
             'comments_html': comments_html,
+            'released': workspace_manual_released(submission),
+            'review_note_html': workspace_review_note_html(submission),
             'id_secret': submission.id_secret,
             'status_url': reverse(
                 'problem_workspace_submission_status',
@@ -2472,6 +2511,7 @@ class ProblemWorkspaceSubmissionsList(LoginRequiredMixin, ProblemMixin, SingleOb
             submissions = (
                 my_qs
                 .select_related('language', 'contest_object', 'contest__problem')
+                .prefetch_related('manual_grade')
                 .order_by('-date')[:50]
             )
         elif scope == 'all':
@@ -2479,12 +2519,14 @@ class ProblemWorkspaceSubmissionsList(LoginRequiredMixin, ProblemMixin, SingleOb
             checker.selected_statuses = set()
             submissions = checker.get_queryset().select_related(
                 'language', 'contest_object', 'contest__problem',
-            ).order_by('-id')[:50]
+            ).prefetch_related('manual_grade').order_by('-id')[:50]
         else:
             checker.selected_languages = set()
             checker.selected_statuses = set()
             submissions = self._best_submissions(
-                checker.get_queryset().select_related('language', 'contest_object', 'contest__problem'),
+                checker.get_queryset().select_related(
+                    'language', 'contest_object', 'contest__problem',
+                ).prefetch_related('manual_grade'),
             )
 
         profile = request.profile
@@ -2495,6 +2537,12 @@ class ProblemWorkspaceSubmissionsList(LoginRequiredMixin, ProblemMixin, SingleOb
         for submission in submissions:
             if not submission.can_see_detail(request.user):
                 continue
+            # The row template renders the gated score (machine until the manual
+            # override is released), so attach the same display points the initial
+            # page load computes for its workspace submissions.
+            submission.display_points = workspace_display_points(submission, request)
+            submission.display_points_total = workspace_display_points_total(submission, request)
+            submission.display_released = workspace_manual_released(submission)
             html = render_to_string(
                 'problem/workspace-submission-row.html',
                 {

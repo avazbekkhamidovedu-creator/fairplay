@@ -571,6 +571,25 @@
       wrap.appendChild(score);
     }
     main.appendChild(wrap);
+    if (status.released) {
+      var tag = document.createElement('div');
+      tag.className = 'ws-released-tag';
+      tag.textContent = gettext('Released');
+      main.appendChild(tag);
+    }
+    if (status.review_note_html) {
+      var note = document.createElement('div');
+      note.className = 'ws-review-note';
+      var noteLabel = document.createElement('div');
+      noteLabel.className = 'ws-review-note-label';
+      noteLabel.textContent = gettext('Teacher feedback');
+      var noteBody = document.createElement('div');
+      noteBody.className = 'ws-review-note-body';
+      noteBody.innerHTML = status.review_note_html; // bleach-sanitized server-side
+      note.appendChild(noteLabel);
+      note.appendChild(noteBody);
+      main.appendChild(note);
+    }
     updateSubmittedSource(status.source, status.answer_display);
     updateFileUploadResult(status.file_upload);
   }
