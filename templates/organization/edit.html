@@ -4,6 +4,12 @@
     {{ form.media.css }}
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
     <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
+    <style>
+        .course-redesign .course-form .rich-editor {
+            height: 360px;
+            max-height: 360px;
+        }
+    </style>
 {% endblock %}
 
 {% block js_media %}
@@ -33,6 +39,7 @@
                 var name = ta.getAttribute('data-rich-editor');
                 var mount = document.createElement('div');
                 mount.setAttribute('data-rich-mount', name);
+                mount.setAttribute('data-compact', '');
                 ta.parentNode.insertBefore(mount, ta);
                 RichEditor.mount(ta.parentNode);
                 ta.setAttribute('aria-hidden', 'true');

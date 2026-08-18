@@ -1593,6 +1593,12 @@
     min-height: 34px;
 }
 
+.course-redesign .class-form-field .rich-editor,
+.course-redesign .course-form .rich-editor {
+    height: 360px;
+    max-height: 360px;
+}
+
 .course-redesign .class-form-field input[readonly] {
     background: var(--oj-surface-soft);
     color: var(--oj-text-muted);

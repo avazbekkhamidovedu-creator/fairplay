@@ -565,10 +565,19 @@ class OrganizationRequest(models.Model):
     )
 
     def clean(self):
-        if self.organization.class_required and self.request_class is None:
-            raise ValidationError('Organization requires a class to be specified')
         if self.request_class and self.organization_id != self.request_class.organization_id:
             raise ValidationError('Class must be part of the organization')
+        if not (self.organization.class_required and self.request_class is None):
+            return
+        # Site teachers may request a course without picking a class.
+        from judge.models.notification import INSTRUCTORS_GROUP
+        user = getattr(self.user, 'user', None)
+        if user is not None and (
+            user.has_perm('judge.add_organization') or
+            user.groups.filter(name=INSTRUCTORS_GROUP).exists()
+        ):
+            return
+        raise ValidationError('Organization requires a class to be specified')
 
     class Meta:
         verbose_name = _('organization join request')

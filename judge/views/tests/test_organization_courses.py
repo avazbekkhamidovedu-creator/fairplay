@@ -1,7 +1,7 @@
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
-from judge.models import Class, ClassMaterial, InstructorVerificationRequest, OrganizationRequest
+from judge.models import Class, ClassMaterial, InstructorVerificationRequest, Organization, OrganizationRequest
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.views.organization import safe_redirect_url
 
@@ -471,3 +471,167 @@ class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
         url = reverse('organization_create_class', args=[self.org.id, self.org.slug])
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+
+class CourseJoinRequestRoleTest(CommonDataMixin, TestCase):
+    """Students pick a class; teachers may leave class empty or choose one to co-teach."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.org = Organization.objects.create(
+            name='Private Course', slug='priv-course', short_name='PRIV',
+            about='closed', is_open=False, class_required=True,
+        )
+        cls.org.admins.add(cls.users['staff_organization_admin'].profile)
+        cls.klass = Class.objects.create(
+            organization=cls.org, name='PRIV Spring', slug='priv-spring', is_active=True,
+        )
+        cls.student = create_user(username='joinrole_student')
+        cls.teacher = create_user(username='joinrole_teacher')
+
+    def test_student_must_select_class(self):
+        self.client.force_login(self.student)
+        url = reverse('request_organization', args=[self.org.id, self.org.slug])
+        response = self.client.post(url, {
+            'reason': 'please',
+            'next': reverse('organization_list'),
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(OrganizationRequest.objects.filter(user=self.student.profile).exists())
+
+    def test_teacher_can_request_without_class(self):
+        from judge.models.notification import ensure_instructors_group
+        from judge.views.organization import grant_site_teacher_role
+
+        ensure_instructors_group()
+        grant_site_teacher_role(self.teacher.profile)
+        self.client.force_login(self.teacher)
+        url = reverse('request_organization', args=[self.org.id, self.org.slug])
+        response = self.client.post(url, {
+            'next': reverse('organization_list'),
+        })
+        self.assertEqual(response.status_code, 302)
+        req = OrganizationRequest.objects.get(user=self.teacher.profile, organization=self.org)
+        self.assertIsNone(req.request_class_id)
+        self.assertEqual(req.state, 'P')
+        self.assertTrue(req.grants_organization)
+
+    def test_teacher_can_request_a_class_to_co_teach(self):
+        from judge.models.notification import ensure_instructors_group
+        from judge.views.organization import grant_site_teacher_role
+
+        ensure_instructors_group()
+        grant_site_teacher_role(self.teacher.profile)
+        self.client.force_login(self.teacher)
+        url = reverse('request_organization', args=[self.org.id, self.org.slug])
+        response = self.client.post(url, {
+            'class_': str(self.klass.id),
+            'next': reverse('organization_list'),
+        })
+        self.assertEqual(response.status_code, 302)
+        req = OrganizationRequest.objects.get(user=self.teacher.profile, organization=self.org)
+        self.assertEqual(req.request_class_id, self.klass.id)
+
+    def test_approving_teacher_course_request_adds_instructor(self):
+        from judge.models.notification import ensure_instructors_group
+        from judge.views.organization import grant_site_teacher_role
+
+        ensure_instructors_group()
+        grant_site_teacher_role(self.teacher.profile)
+        req = OrganizationRequest.objects.create(
+            user=self.teacher.profile,
+            organization=self.org,
+            request_class=None,
+            state='P',
+            reason='instructor',
+            grants_organization=True,
+        )
+        self.client.force_login(self.users['staff_organization_admin'])
+        response = self.client.post(
+            reverse('organization_join_requests'),
+            {'action': 'approve', 'request_ids': [str(req.id)]},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(self.org.members.filter(id=self.teacher.profile.id).exists())
+        self.assertTrue(self.org.instructors.filter(id=self.teacher.profile.id).exists())
+        self.assertFalse(self.klass.admins.filter(id=self.teacher.profile.id).exists())
+
+    def test_approving_teacher_class_request_grants_class_instructor(self):
+        from judge.models.notification import ensure_instructors_group
+        from judge.views.organization import grant_site_teacher_role
+
+        ensure_instructors_group()
+        grant_site_teacher_role(self.teacher.profile)
+        req = OrganizationRequest.objects.create(
+            user=self.teacher.profile,
+            organization=self.org,
+            request_class=self.klass,
+            state='P',
+            reason='co-teach',
+            grants_organization=True,
+        )
+        self.client.force_login(self.users['staff_organization_admin'])
+        response = self.client.post(
+            reverse('organization_join_requests'),
+            {'action': 'approve', 'request_ids': [str(req.id)]},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(self.org.instructors.filter(id=self.teacher.profile.id).exists())
+        self.assertTrue(self.klass.admins.filter(id=self.teacher.profile.id).exists())
+
+    def test_list_shows_join_modal_trigger(self):
+        self.client.force_login(self.student)
+        html = self.client.get(reverse('organization_list')).content.decode()
+        self.assertIn('js-open-join-modal', html)
+        self.assertIn('join-request-modal', html)
+        self.assertIn('join-classes-json', html)
+
+    def test_course_home_does_not_offer_a_second_request(self):
+        self.client.force_login(self.student)
+        html = self.client.get(self.org.get_absolute_url()).content.decode()
+        self.assertNotIn('js-open-join-modal', html)
+        self.assertNotIn('join-request-modal', html)
+        self.assertIn('Request from course list', html)
+        self.assertIn('join=%s' % self.org.id, html)
+
+
+class ClassSiteFormTests(CommonDataMixin, TestCase):
+    def test_instructor_required_and_name_autogenerated(self):
+        from judge.forms import ClassSiteForm, suggested_class_name
+
+        org = self.organizations['open']
+        form = ClassSiteForm(data={
+            'academic_year': '2026-2027',
+            'term_session': 'Spring - Session 1',
+            'is_active': 'on',
+        }, organization=org)
+        self.assertFalse(form.is_valid())
+        self.assertIn('instructor_names', form.errors)
+
+        form = ClassSiteForm(data={
+            'academic_year': '2026-2027',
+            'term_session': 'Spring - Session 1',
+            'instructor_names': 'Alice Smith',
+            'is_active': 'on',
+        }, organization=org)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['name'], '2026-2027 Spring - Session 1 Alice Smith')
+        self.assertEqual(
+            suggested_class_name('2027-2028', 'Fall Session', 'Prof. Huang'),
+            '2027-2028 Fall Session Prof. Huang',
+        )
+
+        # JS-filled legacy names (course + year + session) are rewritten to include the instructor.
+        legacy_name = ' '.join(
+            part for part in [(org.short_name or org.name), '2026-2027', 'Spring - Session 1'] if part
+        )
+        form = ClassSiteForm(data={
+            'name': legacy_name,
+            'academic_year': '2026-2027',
+            'term_session': 'Spring - Session 1',
+            'instructor_names': 'Prof. Huang',
+            'is_active': 'on',
+        }, organization=org)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['name'], '2026-2027 Spring - Session 1 Prof. Huang')

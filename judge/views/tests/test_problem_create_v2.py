@@ -45,6 +45,28 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['creator'])
         self.assertEqual(self.client.get(reverse('problem_create_v2')).status_code, 200)
 
+    def test_create_private_problem_can_choose_programming(self):
+        """Instructors have create_private_problem, not add_problem; programming must still be offered."""
+        self.client.force_login(self.users['creator'])
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertTrue(response.context['can_create_code'])
+        html = response.content.decode()
+        self.assertNotRegex(html, r'name="qtype" value="programming"[^>]*disabled')
+        payload = {
+            'type': 'programming',
+            'name': 'Instructor code',
+            'description': 'print hello',
+            'points': 10,
+            'group_id': self.group.id,
+        }
+        posted = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(posted.status_code, 200, posted.content)
+        self.assertEqual(Problem.objects.get(code=posted.json()['code']).submission_type, 'C')
+
     def test_create_page_uses_public_visible_label(self):
         self.client.force_login(self.users['creator'])
         response = self.client.get(reverse('problem_create_v2'))
