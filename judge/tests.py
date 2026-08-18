@@ -17,7 +17,7 @@ from judge.models.tests.util import CommonDataMixin, create_problem_group, creat
 from judge.question_types.fill_blank import FillBlankQuestionType
 from judge.question_types.short_answer import ShortAnswerQuestionType
 from judge.utils import simple_xlsx
-from judge.utils.calibration import apply_preset, apply_spline, calibrate, round_half
+from judge.utils.calibration import apply_preset, apply_spline, calibrate, redistribute_half_points, round_half
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 
 
@@ -741,6 +741,27 @@ class RoundHalfTests(StdlibTestCase):
     def test_negative(self):
         self.assertEqual(round_half(-0.3), -0.5)
         self.assertEqual(round_half(-1.2), -1.0)
+
+
+class RedistributeHalfPointsTests(StdlibTestCase):
+    def test_sums_to_total_on_half_grid(self):
+        out = redistribute_half_points([0.3, 0.7], 1.0)
+        self.assertEqual(out, [0.5, 0.5])
+        self.assertEqual(sum(out), 1.0)
+
+    def test_awkward_ai_split_normalized(self):
+        out = redistribute_half_points([3.3, 3.3, 3.4], 10.0)
+        self.assertEqual(sum(out), 10.0)
+        self.assertEqual(sorted(out), [3.0, 3.5, 3.5])
+        for pts in out:
+            self.assertEqual(pts * 2, round(pts * 2))
+
+    def test_equal_weights(self):
+        out = redistribute_half_points([1, 1, 1, 1], 10.0)
+        self.assertEqual(out, [2.5, 2.5, 2.5, 2.5])
+
+    def test_empty(self):
+        self.assertEqual(redistribute_half_points([], 5), [])
 
 
 class ApplySplineTests(StdlibTestCase):

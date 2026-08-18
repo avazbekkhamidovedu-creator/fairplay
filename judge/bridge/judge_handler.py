@@ -444,6 +444,9 @@ class JudgeHandler(ZlibPacketHandler):
 
         if submission.problem.submission_type != ProblemSubmissionType.CODE:
             return
+        from judge.utils.contest_ai import is_latest_submission, persist_code_ai_rows, should_run_ai_now
+        if not should_run_ai_now(submission):
+            return
         # Cheap pre-check inside the worker too; this just avoids spawning threads needlessly.
         try:
             if not submission.problem.code_config.ai_enabled:
@@ -453,18 +456,11 @@ class JudgeHandler(ZlibPacketHandler):
 
         def _run():
             try:
+                if not is_latest_submission(submission):
+                    return
                 rows = supplementary_ai_grade(submission)
                 if rows:
-                    from judge.models import SubmissionTestCase
-                    SubmissionTestCase.objects.bulk_create([
-                        SubmissionTestCase(
-                            submission=submission, case=r['case'], status=r['status'],
-                            time=0, memory=0, points=r['points'], total=r['total'],
-                            batch=r.get('batch'), feedback=r['feedback'],
-                            extended_feedback=r['extended_feedback'],
-                        )
-                        for r in rows
-                    ])
+                    persist_code_ai_rows(submission, rows)
             except Exception:
                 logger.exception('Code AI rubric scoring failed for submission %d', submission.id)
 

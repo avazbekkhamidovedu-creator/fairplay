@@ -246,6 +246,10 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
             'classes': ('embedded-advanced-fields',),
             'fields': ('format_name', 'format_config', 'problem_label_script'),
         }),
+        (_('Advanced AI grading'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('ai_grading_mode', 'ai_grading_auto_delay_minutes'),
+        }),
         (_('Advanced Rating'), {
             'classes': ('embedded-advanced-fields',),
             'fields': (
@@ -274,6 +278,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         (_('Scheduling'), {'fields': ('start_time', 'end_time', 'time_limit')}),
         (_('Details'), {'fields': ('description', 'og_image', 'logo_override_image', 'tags', 'summary')}),
         (_('Format'), {'fields': ('format_name', 'format_config', 'problem_label_script')}),
+        (_('AI grading'), {'fields': ('ai_grading_mode', 'ai_grading_auto_delay_minutes')}),
         (_('Rating'), {'fields': ('is_rated', 'rate_all', 'rating_floor', 'rating_ceiling',
                                   'performance_ceiling_override', 'rate_exclude')}),
         (_('Access'), {'fields': ('access_code', 'private_contestants', 'organizations', 'classes',

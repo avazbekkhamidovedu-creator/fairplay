@@ -203,7 +203,14 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
 
         # Get the first failed test case ID for download button
         context['first_failed_case_id'] = None
-        first_failed = submission.test_cases.exclude(status='AC').exclude(status='SC').order_by('case').first()
+        first_failed = (
+            submission.test_cases
+            .exclude(batch=-1)
+            .exclude(status='AC')
+            .exclude(status='SC')
+            .order_by('case')
+            .first()
+        )
         if first_failed:
             context['first_failed_case_id'] = first_failed.case
 
@@ -221,6 +228,18 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
             context['ai_hints_remaining'] = ai_hints.get_remaining(self.request.profile.id)
         else:
             context['ai_hints_remaining'] = 0
+
+        from judge.question_types.code import AI_GRADE_BATCH
+        from judge.utils.contest_ai import (
+            AI_BATCH_PENDING, student_can_see_code_ai, student_can_trigger_ai,
+        )
+        context['ai_batch_pending'] = (submission.error or '') == AI_BATCH_PENDING
+        show_code_ai = student_can_see_code_ai(self.request.user, submission)
+        context['ai_rubric_cases'] = list(
+            submission.test_cases.filter(batch=AI_GRADE_BATCH).order_by('case'),
+        ) if show_code_ai else []
+        context['can_trigger_ai_grade'] = student_can_trigger_ai(self.request.user, submission)
+
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         if settings.DMOJ_ENABLE_COMMENTS:
             context.update(self.get_comment_context())
@@ -334,6 +353,35 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
 
         log.save()
         return JsonResponse({'hint': result.hint_text, 'remaining': ai_hints.get_remaining(request.profile.id)})
+
+
+class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
+    """POST /submission/<id>/ai-grade — student/teacher trigger, latest submit only."""
+
+    def post(self, request, *args, **kwargs):
+        from judge import llm
+        from judge.utils.contest_ai import run_ai_for_submission, student_can_trigger_ai
+
+        submission = self.get_object()
+        if not student_can_trigger_ai(request.user, submission):
+            return JsonResponse(
+                {'error': _('You can only request AI grading on your latest submission.')},
+                status=403,
+            )
+        if not llm.is_configured():
+            return JsonResponse({'error': _('AI grading is not configured on this server.')}, status=503)
+        try:
+            status = run_ai_for_submission(submission, batch_pass=False)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                'Manual AI grade failed for submission %d', submission.id,
+            )
+            return JsonResponse(
+                {'error': _('Could not reach the AI service. Please try again later.')},
+                status=503,
+            )
+        return JsonResponse({'ok': True, 'status': status})
 
 
 class SubmissionSourceRaw(SubmissionSource):

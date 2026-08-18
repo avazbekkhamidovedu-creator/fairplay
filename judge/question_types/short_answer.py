@@ -71,6 +71,16 @@ class ShortAnswerQuestionType(QuestionType):
 
         case_total = self._case_total(problem, config)
 
+        from judge.utils.contest_ai import contest_defers_ai, should_run_ai_now
+        if not should_run_ai_now(submission):
+            if contest_defers_ai(submission):
+                cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
+                          'feedback': _('Awaiting batch AI grading.')}]
+                return GradingResult(case_points=0, case_total=case_total, result='IE', cases=cases)
+            cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
+                      'feedback': _('AI grading is off for this assignment.')}]
+            return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
+
         scored = self._grade_ai(problem, config, answer)
         if scored is None:
             # AI unavailable/failed is an infrastructure issue, not a wrong student answer (WA).

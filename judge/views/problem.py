@@ -1868,6 +1868,8 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
         # Save a query.
         self.new_submission.source = source
+        from judge.utils.contest_ai import supersede_older_in_flight
+        supersede_older_in_flight(self.new_submission)
         self.new_submission.judge(force_judge=True, judge_id=form.cleaned_data['judge'])
 
         return self._workspace_success_response(form)
@@ -1881,17 +1883,25 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             self._attach_contest(self.new_submission)
             self.grader.store_answer(self.new_submission, form.cleaned_data)
 
+        from judge.utils.contest_ai import (
+            contest_defers_ai, mark_awaiting_batch_ai, supersede_older_in_flight,
+        )
+        supersede_older_in_flight(self.new_submission)
+
         # Defer AI grading to a background thread so the submission page
         # loads immediately with a spinner; the websocket event fires when
         # grading completes and the page updates in-place.
         if self._needs_ai_grading():
-            self.new_submission.status = 'QU'
-            self.new_submission.save(update_fields=['status'])
-            threading.Thread(
-                target=self._grade_in_background,
-                args=(self.new_submission,),
-                daemon=True,
-            ).start()
+            if contest_defers_ai(self.new_submission):
+                mark_awaiting_batch_ai(self.new_submission)
+            else:
+                self.new_submission.status = 'QU'
+                self.new_submission.save(update_fields=['status'])
+                threading.Thread(
+                    target=self._grade_in_background,
+                    args=(self.new_submission,),
+                    daemon=True,
+                ).start()
         else:
             self.new_submission.judge(force_judge=True)
 
@@ -1918,6 +1928,12 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
         """Called from a daemon thread to grade the submission and fire the
         websocket event so the status page updates."""
         try:
+            from judge.utils.contest_ai import is_latest_submission
+            if not is_latest_submission(submission):
+                return
+            submission.refresh_from_db()
+            if submission.status == 'AB':
+                return
             submission.judge(force_judge=True)
         except Exception:
             logger = logging.getLogger(__name__)

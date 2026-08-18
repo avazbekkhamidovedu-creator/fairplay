@@ -154,6 +154,38 @@ class Contest(models.Model):
                                                         'and folds them into the scoreboard. Leave unset while the '
                                                         'contest is running.'),
                                             default=False)
+    AI_GRADING_OFF = 'off'
+    AI_GRADING_REALTIME = 'realtime'
+    AI_GRADING_BATCH = 'batch'
+    AI_GRADING_MODE_CHOICES = (
+        (AI_GRADING_OFF, _('Off')),
+        (AI_GRADING_REALTIME, _('Realtime (grade each submit)')),
+        (AI_GRADING_BATCH, _('Batch (latest submits after the contest)')),
+    )
+    ai_grading_mode = models.CharField(
+        verbose_name=_('AI grading'), max_length=16,
+        choices=AI_GRADING_MODE_CHOICES, default=AI_GRADING_OFF,
+        help_text=_('When AI-enabled problems in this assignment/exam are graded. '
+                    'Always uses each student’s latest submission per problem. '
+                    'Realtime grades a submit as it arrives (a newer submit cancels '
+                    'one still queued). Batch waits for the Grade-page button, or '
+                    'for the delay after the contest ends.'),
+    )
+    ai_grading_auto_delay_minutes = models.PositiveIntegerField(
+        verbose_name=_('batch AI delay after end (minutes)'),
+        default=30,
+        help_text=_('For batch mode: automatically grade latest submissions this many '
+                    'minutes after the contest ends. 0 disables auto-run (manual button only).'),
+    )
+    ai_grading_scheduled_task_id = models.CharField(
+        verbose_name=_('scheduled batch AI task id'), max_length=255, blank=True, default='',
+    )
+    ai_grading_batch_started_at = models.DateTimeField(
+        verbose_name=_('batch AI started'), null=True, blank=True,
+    )
+    ai_grading_batch_finished_at = models.DateTimeField(
+        verbose_name=_('batch AI finished'), null=True, blank=True,
+    )
     show_short_display = models.BooleanField(verbose_name=_('show short form settings display'),
                                              help_text=_('Whether to show a section containing contest settings '
                                                          'on the contest page or not.'),

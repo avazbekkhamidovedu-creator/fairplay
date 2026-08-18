@@ -400,7 +400,7 @@
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
                 <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
               </label>
-              <div class="help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. Requires LITELLM_API_BASE to be set.') }}</div>
+              <div class="help" id="ai-help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. In an assignment/exam, the teacher chooses realtime (each submit) or batch (latest submit after the contest). Always uses the latest submission. Requires LITELLM_API_BASE.') }}</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
                 <!-- Grading Table (shown when AI grading is on) -->
                 <div id="grading-table-panel" style="margin-bottom:0.75rem;">
@@ -1848,6 +1848,28 @@
     }
 
     /* ---------- Partial-score / AI-judging configuration ---------- */
+    function roundHalf(v) {
+      return Math.round(Number(v) * 2) / 2;
+    }
+    function isHalfIncrement(v) {
+      const n = Number(v);
+      if (!isFinite(n)) return false;
+      return Math.abs(n * 2 - Math.round(n * 2)) < 1e-9;
+    }
+    /** Split *total* into *n* 0.5-grid values that sum exactly to total. */
+    function splitPointsHalf(total, n) {
+      if (n <= 0) return [];
+      const targetHalves = Math.round(roundHalf(total) * 2);
+      if (targetHalves <= 0) return Array(n).fill(0);
+      const base = Math.floor(targetHalves / n);
+      let rem = targetHalves - base * n;
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        out.push((base + (rem > 0 ? 1 : 0)) / 2);
+        if (rem > 0) rem--;
+      }
+      return out;
+    }
     function renderScoreConf() {
       const partialRow = document.getElementById('partial-row');
       const partialOn = document.getElementById('f-partial').checked;
@@ -1856,21 +1878,34 @@
       // The grading table lives inside ai-conf now (above the rubric), so it
       // follows the same checkbox without extra per-element bookkeeping.
       document.getElementById('ai-conf').style.display = aiOn ? 'block' : 'none';
+      const aiHelp = document.getElementById('ai-help');
+      if (aiHelp) {
+        if (currentType === 'programming') {
+          aiHelp.textContent = gettext('Test cases still decide AC/WA and the student score. AI additionally scores the code against your rubric; students see those subtasks in realtime assignments, or after batch grading in exams. Only the latest submission is graded. Requires LITELLM_API_BASE.');
+        } else if (currentType === 'blank') {
+          aiHelp.textContent = gettext('When enabled, blanks are scored by the LLM against the grading table instead of exact match (falls back to exact match if the model is unavailable). Requires LITELLM_API_BASE.');
+        } else {
+          aiHelp.textContent = gettext('Sends the rubric and student answer to the configured LLM for automated scoring. Requires LITELLM_API_BASE to be set.');
+        }
+      }
       if (aiOn) {
         updateGradingTableState();
-        // Auto-populate grading table from blanks for fill-blank type
+        // Auto-populate grading table from blanks for fill-blank type (0.5 increments).
         if (currentType === 'blank' && (document.getElementById('grading-tbody').querySelectorAll('tr:not(#grading-empty)').length === 0)) {
           const blanks = document.querySelectorAll('#blank-answers .blank-answer');
           if (blanks.length > 0) {
             const totalPts = parseFloat(document.getElementById('f-points').value) || 1;
-            const perBlank = Math.round(totalPts / blanks.length * 10) / 10;
-            document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
-            gtableSeq = 0;
-            blanks.forEach((b, i) => addSubQuestion({
-              name: 'Blank ' + (i + 1),
-              max_points: perBlank,
-              strictness: 'normal'
-            }));
+            // Need at least 0.5 per blank on the grid; otherwise leave empty for manual edit.
+            if (blanks.length * 0.5 <= totalPts + 1e-9) {
+              const parts = splitPointsHalf(totalPts, blanks.length);
+              document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
+              gtableSeq = 0;
+              blanks.forEach((b, i) => addSubQuestion({
+                name: 'Blank ' + (i + 1),
+                max_points: parts[i],
+                strictness: 'normal'
+              }));
+            }
           }
         }
       }
@@ -2470,8 +2505,8 @@
       if (d.ai && d.gradingTable && d.gradingTable.length) {
         for (var i = 0; i < d.gradingTable.length; i++) {
           var pts = Number(d.gradingTable[i].max_points) || 0;
-          if (pts <= 0) return 'Each sub-question must have at least 0.5 points. (Row ' + (i + 1) + ' has ' + pts + ')';
-          if (pts % 0.5 !== 0) return 'Sub-question points must be in 0.5 increments. (Row ' + (i + 1) + ' has ' + pts + ')';
+          if (pts < 0.5) return 'Each sub-question must have at least 0.5 points. (Row ' + (i + 1) + ' has ' + pts + ')';
+          if (!isHalfIncrement(pts)) return 'Sub-question points must be in 0.5 increments. (Row ' + (i + 1) + ' has ' + pts + ')';
         }
         const total = Number(d.points);
         const sum = d.gradingTable.reduce((s, q) => s + (Number(q.max_points) || 0), 0);
@@ -2914,10 +2949,11 @@
         `<button type="button" class="gt-pill ${l === strictness ? 'active' : ''}"
                  data-level="${l}" onclick="setStrictness(this,'${l}')">${labels[l]}</button>`
       ).join('');
+      const pts = Math.max(0.5, roundHalf(item.max_points || 1));
       tr.innerHTML =
         `<td><input class="gt-name" value="${escHtml(item.name)}" placeholder="e.g. Analyse time complexity" style="width:100%;"></td>
-         <td><input class="gt-points" type="number" step="0.5" min="0.5" value="${item.max_points || 1}"
-                    style="width:70px;"></td>
+         <td><input class="gt-points" type="number" step="0.5" min="0.5" value="${pts}"
+                    style="width:70px;" onchange="this.value=Math.max(0.5, roundHalf(this.value))"></td>
          <td class="gt-strictness">${pills}</td>
          <td><button type="button" class="btn-del-row" onclick="removeSubQuestion(this)">×</button></td>`;
       document.getElementById('grading-tbody').appendChild(tr);

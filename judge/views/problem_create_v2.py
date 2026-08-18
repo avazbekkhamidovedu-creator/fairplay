@@ -1885,14 +1885,16 @@ class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
                     '{"sub_questions": ['
                     '  {"name": "short label (≤30 chars)", "max_points": float}, ...]}\n'
                     '- Use Chinese or English matching the problem language.\n'
-                    '- Each max_points should be a positive number.\n'
+                    '- Each max_points must be a positive multiple of 0.5.\n'
+                    '- The max_points values MUST sum exactly to the total points.\n'
                     '- When there are no clear sub-questions, return exactly one item '
                     '  with max_points equal to the total points.'
                 )},
                 {'role': 'user', 'content': (
                     f'Problem description:\n{description[:2000]}\n\n'
                     f'Total points: {total_points}\n\n'
-                    f'Break this problem into 1-5 independent sub-questions.'
+                    f'Break this problem into 1-5 independent sub-questions. '
+                    f'Use 0.5-point increments only.'
                 )},
             ]
             text = llm.chat(messages, profile='decompose', max_tokens=1024).text.strip()
@@ -1908,9 +1910,22 @@ class ProblemCreateV2AIDecomposeView(LoginRequiredMixin, View):
             items = parsed.get('sub_questions', [])
             if not isinstance(items, list) or not items:
                 return []
-            return [{'name': str(item.get('name', ''))[:30],
-                     'max_points': float(item.get('max_points', 0))}
-                    for i, item in enumerate(items) if item.get('name')]
+            named = [
+                {'name': str(item.get('name', ''))[:30],
+                 'max_points': float(item.get('max_points', 0))}
+                for item in items if item.get('name')
+            ]
+            if not named:
+                return []
+            from judge.utils.calibration import redistribute_half_points
+            snapped = redistribute_half_points(
+                [row['max_points'] for row in named], total_points,
+            )
+            return [
+                {'name': row['name'], 'max_points': pts}
+                for row, pts in zip(named, snapped)
+                if pts > 0
+            ]
         except Exception as e:
             _log.exception('Decomposition failed')
             raise RuntimeError('Decomposition failed') from e

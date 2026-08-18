@@ -1491,6 +1491,18 @@
             cheatRadios.forEach(function(r) { r.addEventListener('change', updateCheatFields); });
             updateCheatFields();
 
+            function syncAiBatchDelayRow() {
+                var modeEl = document.getElementById('id_ai_grading_mode');
+                var row = document.getElementById('ai-batch-delay-row');
+                if (!modeEl || !row) return;
+                row.style.display = modeEl.value === 'batch' ? '' : 'none';
+            }
+            var aiModeEl = document.getElementById('id_ai_grading_mode');
+            if (aiModeEl) {
+                aiModeEl.addEventListener('change', syncAiBatchDelayRow);
+                syncAiBatchDelayRow();
+            }
+
             // --- From library button + enhanced bank (filters/sort/pagination) ---
             var libBtn = document.querySelector('.btn-soft:not(.alt)');
             var slideover = document.getElementById('problem-library');
@@ -2529,7 +2541,34 @@
                     </fieldset>
                     {% endif %}
 
-                    <!-- ④ Advanced (collapsed by default; same toggle pattern as the problem editor) -->
+                    <!-- ④ AI grading -->
+                    <fieldset class="module">
+                        <h2>{{ _('AI grading') }}</h2>
+                        <div class="form-content">
+                            <div class="form-row">
+                                <label>{{ _('When to grade') }}</label>
+                                <div class="field">
+                                    <select id="id_ai_grading_mode" name="ai_grading_mode">
+                                        <option value="off"{% if prefill.ai_grading_mode == 'off' or not prefill.ai_grading_mode %} selected{% endif %}>{{ _('Off') }}</option>
+                                        <option value="realtime"{% if prefill.ai_grading_mode == 'realtime' %} selected{% endif %}>{{ _('Realtime — grade each submit (homework)') }}</option>
+                                        <option value="batch"{% if prefill.ai_grading_mode == 'batch' %} selected{% endif %}>{{ _('Batch — latest submits after the contest (exam)') }}</option>
+                                    </select>
+                                    <div class="help">{{ _('AI grading always uses each student’s latest submission per problem. Realtime grades a submit as it arrives; a newer submit cancels one still queued. Batch waits for the button on the Grade page, or for the delay after the contest ends. Students then see scores and subtask results on the existing submission page — no extra screen.') }}</div>
+                                </div>
+                            </div>
+                            <div class="form-row" id="ai-batch-delay-row">
+                                <label>{{ _('Auto-run after end') }}</label>
+                                <div class="field ac-inline">
+                                    <input type="number" id="id_ai_grading_auto_delay_minutes" name="ai_grading_auto_delay_minutes"
+                                           value="{{ prefill.ai_grading_auto_delay_minutes if prefill.ai_grading_auto_delay_minutes is not none else 30 }}" min="0" max="1440">
+                                    <span class="unit">{{ _('minutes (0 = manual only)') }}</span>
+                                    <div class="help">{{ _('Batch mode only. Default 30 minutes after the contest ends. Teachers can still press “Run AI grading” on the Grade page at any time.') }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- ⑤ Advanced (collapsed by default; same toggle pattern as the problem editor) -->
                     <p style="margin:1rem 0;">
                         <button type="button" class="btn" id="advanced-btn" onclick="toggleAdvanced()">{{ _('Advanced') }}</button>
                         <span style="font-size:12px;color:var(--muted);margin-left:0.5rem;">{{ _('Advanced settings (format, visibility, roles…)') }}</span>
