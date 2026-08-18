@@ -305,6 +305,24 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'id="fp-group"', html=False)
         self.assertIn('workspace_organizations', response.context)
 
+    def test_workspace_toolbar_has_progress_not_in_drawer(self):
+        practice = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(practice, 'ws-toolbar-progress')
+        self.assertContains(practice, 'id="toolbar-progress-bar"', html=False)
+        self.assertNotContains(practice, 'id="drawer-bar"', html=False)
+        self.assertNotContains(practice, 'id="drawer-solved-frac"', html=False)
+
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        assignment = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(assignment.context['workspace_mode'], 'assignment')
+        self.assertContains(assignment, 'ws-toolbar-progress')
+        self.assertContains(assignment, 'id="toolbar-progress-bar"', html=False)
+        self.assertNotContains(assignment, 'id="drawer-progress"', html=False)
+        self.assertNotContains(practice, 'id="drawer-close"', html=False)
+        self.assertNotContains(assignment, 'id="drawer-close"', html=False)
+
     def test_practice_course_filter_lists_membership_without_public_sentinel(self):
         mine = create_organization(name='WsMine')
         other = create_organization(name='WsOther')

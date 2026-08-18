@@ -5,6 +5,30 @@
 {% block title_row %}{% endblock %}
 {% block title_ruler %}{% endblock %}
 {% block media %}
+  <style>
+    .ws-toolbar-progress {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: .55rem;
+      flex: 0 0 auto;
+    }
+    .ws-toolbar-progress .solved-frac {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .ws-toolbar-progress progress {
+      display: block;
+      width: 160px;
+      height: 10px;
+      accent-color: var(--oj-accent, #2980B9);
+    }
+    .ws-app .ws-toolbar .nav-arrows .tool-btn:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+    }
+  </style>
   {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
     <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
@@ -72,6 +96,10 @@
         <button class="tool-btn icon-only" id="btn-next" type="button" title="{{ _('Next problem') }}"><i class="fa fa-chevron-right"></i></button>
       </span>
       <div class="ws-layout-switch"><button class="layout-toggle" type="button" id="layout-toggle"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button></div>
+      <div class="ws-toolbar-progress" title="{% if workspace_mode == 'practice' %}{{ _('solved (current filter)') }}{% else %}{{ _('answered') }}{% endif %}">
+        <span class="solved-frac" id="toolbar-progress-label">0/0</span>
+        <progress id="toolbar-progress-bar" max="1" value="0" aria-hidden="true"></progress>
+      </div>
     </div>
     {% if workspace_in_contest %}
       <div class="ws-toolbar-center">
@@ -92,14 +120,6 @@
     <div class="ws-drawer-backdrop" id="drawer-backdrop"></div>
     <aside class="ws-drawer" id="ws-drawer" aria-label="{{ _('Problem set') }}">
       {% if workspace_mode == 'practice' %}
-        <div class="ws-drawer-progress">
-          <button class="close-btn drawer-progress-close" id="drawer-close" type="button" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button>
-          <div class="ws-drawer-solved-line">
-            <span class="solved-frac" id="drawer-solved-frac">0/0</span>
-            {{ _('solved (current filter)') }}
-          </div>
-          <div class="bar" aria-hidden="true"><span id="drawer-bar" style="width:0%"></span></div>
-        </div>
         <div class="ws-drawer-toolbar">
           <div class="ws-drawer-search">
             <i class="fa fa-search" aria-hidden="true"></i>
@@ -150,8 +170,6 @@
         </div>
       {% else %}
         <div class="ws-drawer-summary">
-          <button class="close-btn drawer-summary-close" id="drawer-close" type="button" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button>
-          <span id="drawer-progress"></span>
           <select id="drawer-filter-status">
             <option value="">{{ _('All') }}</option>
             <option value="answered">{{ _('Answered') }}</option>
@@ -624,5 +642,5 @@
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
-  <script src="{{ static('workspace.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+  <script src="{{ static('workspace.js') }}?v=ws-nav-progress-3{% if DMOJ_STATIC_VERSION %}&amp;rel={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}
