@@ -398,7 +398,7 @@
             <label>{{ _('AI Grading') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
-                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
+                <input type="checkbox" id="f-ai" checked onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
               </label>
               <div class="help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. Requires LITELLM_API_BASE to be set.') }}</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
@@ -725,7 +725,7 @@
             <div class="form-row"><label>{{ _('Is full markup') }}</label><div class="field"><input type="checkbox" id="f-full-markup" {% if not can_full_markup %}disabled{% endif %}><div class="help">{% if can_full_markup %}{{ _('Allow full HTML markup in the statement') }}{% else %}{{ _('You do not have permission to change this flag') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('View test cases') }}</label><div class="field"><input type="checkbox" id="f-view-cases"><div class="help">{{ _('Allow contestants to download failed test samples') }}</div></div></div>
             <div class="form-row"><label>{{ _('View tester') }}</label><div class="field"><input type="checkbox" id="f-view-tester"><div class="help">{{ _('Allow downloading the tester file') }}</div></div></div>
-            <div class="form-row"><label>{{ _('AI hints enabled') }}</label><div class="field"><input type="checkbox" id="f-ai-hints"><div class="help">{{ _('Allow AI hints') }}</div></div></div>
+            <div class="form-row"><label>{{ _('AI hints enabled') }}</label><div class="field"><input type="checkbox" id="f-ai-hints" checked><div class="help">{{ _('Allow AI hints') }}</div></div></div>
             <div class="form-row"><label>{{ _('License') }}</label><div class="field"><select id="f-license">
               <option value="">{{ _('— None —') }}</option>
               {% for lic in licenses %}<option value="{{ lic.id }}">{{ lic.display or lic.name }}</option>{% endfor %}
