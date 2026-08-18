@@ -13,9 +13,9 @@ from django.views.generic import RedirectView
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
 from judge.views import (
-    TitledTemplateView, api, blog, comment, contest_analytics, contests, fill_blank, ide, language, license,
-    mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission, register,
-    stats, status, submission, tasks, ticket, two_factor, user, widgets,
+    TitledTemplateView, api, blog, comment, contest_analytics, contests, file_upload, fill_blank, ide, language,
+    license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission,
+    register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
@@ -26,9 +26,9 @@ from judge.views.problem_create_v2 import (
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView
-from judge.views.select2 import AssigneeSelect2View, ClassSelect2View, CommentSelect2View, ContestSelect2View, \
-    ContestUserSearchSelect2View, OrganizationSelect2View, ProblemSelect2View, TicketUserSelect2View, \
-    UserSearchSelect2View, UserSelect2View
+from judge.views.select2 import AssigneeSelect2View, ClassSelect2View, CommentSelect2View, ContestFilterSelect2View, \
+    ContestSelect2View, ContestUserSearchSelect2View, OrganizationSelect2View, ProblemFilterSelect2View, \
+    ProblemSelect2View, TicketUserSelect2View, UserSearchSelect2View, UserSelect2View
 from judge.views.widgets import martor_image_uploader
 from martor.views import markdown_search_user
 
@@ -135,6 +135,8 @@ urlpatterns = [
          name='problem_import_preview'),
     path('problems/import-excel/<int:draft>/create-all/', problem_import.ProblemImportCreateAllView.as_view(),
          name='problem_import_create_all'),
+    path('problems/import-excel/<int:draft>/<int:item>/editor/', problem_import.ProblemImportItemEditorView.as_view(),
+         name='problem_import_item_editor'),
     path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
          problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 
@@ -145,6 +147,17 @@ urlpatterns = [
         path('/pdf/<slug:language>', problem.ProblemPdfView.as_view(), name='problem_pdf'),
         path('/clone', problem.ProblemClone.as_view(), name='problem_clone'),
         path('/submit', problem.ProblemSubmit.as_view(), name='problem_submit'),
+        path('/workspace/run', problem.ProblemWorkspaceRun.as_view(), name='problem_workspace_run'),
+        path(
+            '/workspace/submissions/',
+            problem.ProblemWorkspaceSubmissionsList.as_view(),
+            name='problem_workspace_submissions',
+        ),
+        path(
+            '/workspace/submission/<int:submission>',
+            problem.ProblemWorkspaceSubmissionStatus.as_view(),
+            name='problem_workspace_submission_status',
+        ),
         path('/resubmit/<int:submission>', problem.ProblemSubmit.as_view(), name='problem_submit'),
         path('/mcq', mcq.ProblemMCQEditView.as_view(), name='problem_mcq_edit'),
         path('/fill-blank', fill_blank.ProblemFillBlankEditView.as_view(), name='problem_fillblank_edit'),
@@ -194,6 +207,8 @@ urlpatterns = [
         path('/abort', submission.abort_submission, name='submission_abort'),
         path('/test_case/<int:case>/<str:type>', download_test_case, name='submission_test_case_download'),
         path('/ai-hint', submission.SubmissionAIHint.as_view(), name='submission_ai_hint'),
+        path('/file', file_upload.submission_file_download, name='submission_file_download'),
+        path('/grade-file', file_upload.submission_file_grade, name='submission_file_grade'),
     ])),
 
     path('users/', include([
@@ -232,8 +247,17 @@ urlpatterns = [
     ])),
 
     path('seb/quit/', contests.SEBQuit.as_view(), name='seb_quit'),
+    path('seb/presets/<int:pk>/config/', contests.SEBPresetConfig.as_view(), name='seb_preset_config'),
 
-    path('contests/', paged_list_view(contests.ContestList, 'contest_list')),
+    path('contests/', paged_list_view(contests.ContestListV2, 'contest_list')),
+    path('contests/legacy/', paged_list_view(contests.ContestList, 'contest_list_legacy')),
+    path('contests/create/', contests.ContestCreate.as_view(), name='contest_create'),
+    path('contests/<str:contest>/edit/', contests.ContestCreate.as_view(), name='contest_edit'),
+    path('contest-tz/', contests.ContestTZPreference.as_view(), name='contest_tz_preference'),
+    path('contest-tags/create/', contests.ContestTagCreateView.as_view(), name='contest_tag_create'),
+    path('contests/<str:contest>/seb/', contests.ContestSEBFileView.as_view(), name='contest_seb_upload'),
+    path('contests/<str:contest>/finalize/', contests.ContestFinalizeView.as_view(), name='contest_finalize'),
+    path('contests/<str:contest>/unfinalize/', contests.ContestUnfinalizeView.as_view(), name='contest_unfinalize'),
     path('contests.ics', contests.ContestICal.as_view(), name='contest_ical'),
     path('contests/<int:year>/<int:month>/', contests.ContestCalendar.as_view(), name='contest_calendar'),
     re_path(r'^contests/tag/(?P<name>[a-z-]+)', include([
@@ -253,6 +277,10 @@ urlpatterns = [
         path('/seb-config', contests.ContestSEBConfig.as_view(), name='contest_seb_config'),
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
         path('/analytics', contest_analytics.ContestAnalytics.as_view(), name='contest_analytics'),
+        path('/grade', contests.ContestGrade.as_view(), name='contest_grade'),
+        path('/grade/save', contests.ContestGradeSave.as_view(), name='contest_grade_save'),
+        path('/grade/status', contests.ContestGradeStatus.as_view(), name='contest_grade_status'),
+        path('/grade/release', contests.ContestGradeRelease.as_view(), name='contest_grade_release'),
 
         path('/rank/<str:problem>/',
              paged_list_view(ranked_submission.ContestRankedSubmission, 'contest_ranked_submissions')),
@@ -278,12 +306,29 @@ urlpatterns = [
     ])),
 
     path('organizations/', organization.OrganizationList.as_view(), name='organization_list'),
+    path('organizations/new/', organization.CreateOrganization.as_view(), name='organization_create'),
+    path('organizations/requests/', organization.InstructorJoinRequestsView.as_view(),
+         name='organization_join_requests'),
+    path('organizations/notifications/',
+         RedirectView.as_view(pattern_name='organization_join_requests', permanent=False),
+         name='organization_notifications'),
+    path('organizations/instructor-requests/',
+         RedirectView.as_view(pattern_name='organization_join_requests', permanent=False),
+         name='organization_instructor_requests'),
+    path('organizations/instructor-verification/', organization.InstructorVerificationSubmitView.as_view(),
+         name='organization_instructor_verification'),
+    # Legacy teacher-* URLs redirect to instructor-*.
+    path('organizations/teacher-requests/',
+         RedirectView.as_view(pattern_name='organization_join_requests', permanent=False)),
+    path('organizations/teacher-verification/',
+         RedirectView.as_view(pattern_name='organization_instructor_verification', permanent=False)),
     path('organization/<int:pk>-<slug:slug>', include([
         path('', organization.OrganizationHome.as_view(), name='organization_home'),
         path('/users', organization.OrganizationUsers.as_view(), name='organization_users'),
         path('/join', organization.JoinOrganization.as_view(), name='join_organization'),
         path('/leave', organization.LeaveOrganization.as_view(), name='leave_organization'),
         path('/edit', organization.EditOrganization.as_view(), name='edit_organization'),
+        path('/delete', organization.DeleteOrganization.as_view(), name='organization_delete'),
         path('/kick', organization.KickUserWidgetView.as_view(), name='organization_user_kick'),
         path('/import/users', organization.OrganizationImportUsers.as_view(), name='organization_import_users'),
         path('/class/create', organization.CreateClass.as_view(), name='organization_create_class'),
@@ -303,6 +348,14 @@ urlpatterns = [
         path('/class/<int:cpk>-<slug:cslug>', include([
             path('', organization.ClassHome.as_view(), name='class_home'),
             path('/join', organization.RequestJoinClass.as_view(), name='class_join'),
+            path('/edit', organization.EditClass.as_view(), name='class_edit'),
+            path('/assignments', organization.ClassLinkAssignmentsView.as_view(),
+                 name='class_link_assignments'),
+            path('/materials', organization.ClassMaterialActionView.as_view(),
+                 name='class_material_action'),
+            path('/materials/<int:mid>/download', organization.ClassMaterialDownloadView.as_view(),
+                 name='class_material_download'),
+            path('/delete', organization.DeleteClass.as_view(), name='class_delete'),
         ])),
 
         path('/', lambda _, pk, slug: HttpResponsePermanentRedirect(reverse('organization_home', args=[pk, slug]))),
@@ -344,6 +397,8 @@ urlpatterns = [
 
     path('widgets/', include([
         path('rejudge', widgets.rejudge_submission, name='submission_rejudge'),
+        path('rejudge/bulk', widgets.bulk_rejudge_submissions, name='submission_bulk_rejudge'),
+        path('rescore/bulk', widgets.bulk_rescore_submissions, name='submission_bulk_rescore'),
         path('single_submission', submission.single_submission, name='submission_single_query'),
         path('submission_testcases', submission.SubmissionTestCaseQuery.as_view(), name='submission_testcases_query'),
         path('status-table', status.status_table, name='status_table'),
@@ -356,6 +411,10 @@ urlpatterns = [
                  name='contest_user_search_select2_ajax'),
             path('ticket_user', TicketUserSelect2View.as_view(), name='ticket_user_select2_ajax'),
             path('ticket_assignee', AssigneeSelect2View.as_view(), name='ticket_assignee_select2_ajax'),
+            path('submission_problem', ProblemFilterSelect2View.as_view(),
+                 name='submission_problem_filter_select2'),
+            path('submission_contest', ContestFilterSelect2View.as_view(),
+                 name='submission_contest_filter_select2'),
         ])),
 
         path('preview/', include([
@@ -452,12 +511,16 @@ handler404 = 'judge.views.error.error404'
 handler403 = 'judge.views.error.error403'
 handler500 = 'judge.views.error.error500'
 
-# Production deployments should serve MEDIA_URL directly through Nginx. This
-# fallback makes uploaded Markdown and DOCX figures visible in local DEBUG runs.
-if settings.DEBUG:
-    urlpatterns += static_files(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-
 if 'newsletter' in settings.INSTALLED_APPS:
     urlpatterns.append(path('newsletter/', include('newsletter.urls')))
 if 'impersonate' in settings.INSTALLED_APPS:
     urlpatterns.append(path('impersonate/', include('impersonate.urls')))
+
+# Production deployments should serve MEDIA_URL directly through Nginx. This
+# fallback makes uploaded Markdown and DOCX figures visible in local DEBUG runs.
+# It must stay last: static_files() compiles to ^<prefix>(?P<path>.*)$, so a
+# root-ish MEDIA_URL ('/' or unset) degenerates into a catch-all that swallows
+# every route declared after it. Only honor real sub-path prefixes.
+_media_url = getattr(settings, 'MEDIA_URL', '')
+if settings.DEBUG and _media_url.strip('/'):
+    urlpatterns += static_files(_media_url, document_root=settings.MEDIA_ROOT)

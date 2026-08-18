@@ -164,12 +164,19 @@ form.contest-join-pseudotab {
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
 
-    input {
+    input, button {
         display: inline;
         border: none;
         padding: 0;
         background: none;
+        font: inherit;
         font-weight: 600;
+        color: inherit;
+        cursor: pointer;
+
+        .fa {
+            padding-right: 0.3em;
+        }
     }
 }
 
@@ -223,7 +230,7 @@ form.contest-join-pseudotab {
 
     /* Make problem table headers green on hover */
     th a:hover {
-        color: #0F0;
+        color: var(--oj-accepted);
     }
 
     .rank {
@@ -244,26 +251,26 @@ form.contest-join-pseudotab {
     }
 
     .partial-score, .partial-score a {
-        color: green;
+        color: var(--oj-accepted);
     }
 
     .failed-score, .failed-score a {
         font-weight: bold;
-        color: red;
+        color: var(--oj-rejected);
     }
 
     .pretest-full-score, .pretest-full-score a {
         font-weight: bold;
-        color: #2980b9;
+        color: var(--oj-accent);
     }
 
     .pretest-partial-score, .pretest-partial-score a {
-        color: #2980b9;
+        color: var(--oj-accent);
     }
 
     .pretest-failed-score, .pretest-failed-score a {
         font-weight: bold;
-        color: red;
+        color: var(--oj-rejected);
     }
 
     .user-points, .user-points a {

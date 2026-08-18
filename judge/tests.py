@@ -5,6 +5,7 @@ from unittest import TestCase as StdlibTestCase
 from unittest import mock
 from xml.etree import ElementTree as ET
 
+from django.conf import settings
 from django.contrib import admin
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
@@ -320,7 +321,11 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
 
             namespace = {'x': simple_xlsx.MAIN_NS}
             workbook_xml = ET.fromstring(workbook.read('xl/workbook.xml'))
+            workbook_text = workbook.read('xl/workbook.xml').decode('utf-8')
             relationships = ET.fromstring(workbook.read('xl/_rels/workbook.xml.rels'))
+            self.assertNotIn('ns1:Ignorable', workbook_text)
+            self.assertIn('xmlns:mc=', workbook_text)
+            self.assertIn('xmlns:x15=', workbook_text)
             instruction_sheet = next(
                 sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
                 if sheet.attrib['name'] in ('Instructions', 'Reference')
@@ -337,14 +342,68 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
             max_columns = max(len(row) for row in reference_rows)
             self.assertEqual(
                 reference_sheet.find('x:dimension', namespace).attrib['ref'],
-                'A1:{}{}'.format(simple_xlsx._excel_column_name(max_columns), len(reference_rows)),
+                'A1:{}{}'.format(simple_xlsx._excel_column_name(max_columns - 1), len(reference_rows)),
             )
             expected_header_cells = {
                 '{}3'.format(simple_xlsx._excel_column_name(column_index))
-                for column_index, value in enumerate(reference_rows[2], start=1)
+                for column_index, value in enumerate(reference_rows[2])
                 if value not in (None, '')
             }
             self.assertTrue(expected_header_cells.issubset(references))
+
+            problems_sheet = next(
+                sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
+                if sheet.attrib['name'] == 'Problems'
+            )
+            example_sheet = next(
+                sheet for sheet in workbook_xml.findall('x:sheets/x:sheet', namespace)
+                if sheet.attrib['name'] == 'Example Problems'
+            )
+            problems_relationship_id = problems_sheet.attrib['{%s}id' % simple_xlsx.REL_NS]
+            problems_target = next(
+                relationship.attrib['Target'] for relationship in relationships
+                if relationship.attrib['Id'] == problems_relationship_id
+            )
+            problems_path = (
+                problems_target.lstrip('/') if problems_target.startswith('/') else 'xl/{}'.format(problems_target)
+            )
+            problems_xml = ET.fromstring(workbook.read(problems_path))
+            self.assertIsNotNone(problems_xml.find('x:cols', namespace))
+            self.assertIsNotNone(problems_xml.find('x:sheetViews', namespace))
+            self.assertIsNone(problems_xml.find('x:sheetProtection', namespace))
+            self.assertIsNone(problems_xml.find('x:oleObjects', namespace))
+            type_validation = next(
+                validation for validation in problems_xml.findall('x:dataValidations/x:dataValidation', namespace)
+                if validation.attrib.get('sqref') == 'B2:B{}'.format(settings.PROBLEM_EXCEL_TEMPLATE_MAX_ROW)
+            )
+            self.assertEqual(
+                type_validation.find('x:formula1', namespace).text,
+                '"code,multiple_choice,fill_blank,true_false,short_answer"',
+            )
+            example_relationship_id = example_sheet.attrib['{%s}id' % simple_xlsx.REL_NS]
+            example_target = next(
+                relationship.attrib['Target'] for relationship in relationships
+                if relationship.attrib['Id'] == example_relationship_id
+            )
+            example_path = (
+                example_target.lstrip('/') if example_target.startswith('/') else 'xl/{}'.format(example_target)
+            )
+            example_xml = ET.fromstring(workbook.read(example_path))
+            self.assertIsNotNone(example_xml.find('x:sheetProtection', namespace))
+            self.assertIsNotNone(example_xml.find('x:oleObjects', namespace))
+            app_properties = ET.fromstring(workbook.read('docProps/app.xml'))
+            app_namespace = {
+                'a': 'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties',
+                'vt': 'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes',
+            }
+            self.assertEqual(
+                app_properties.find('a:HeadingPairs/vt:vector/vt:variant/vt:i4', app_namespace).text,
+                '3',
+            )
+            self.assertEqual(
+                [title.text for title in app_properties.findall('a:TitlesOfParts/vt:vector/vt:lpstr', app_namespace)],
+                ['Instructions', 'Problems', 'Example Problems'],
+            )
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(
@@ -883,7 +942,7 @@ class IndexMatchingTests(StdlibTestCase):
             {'name': 'Part 2: Explain', 'max_points': 2.0, 'strictness': 'lenient'},
         ]
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_index_match_uses_correct_max_points(self, mock_llm, mock_call):
         """Even if LLM rephrases names, index matching picks correct max_points."""
@@ -922,7 +981,7 @@ class IndexMatchingTests(StdlibTestCase):
         # Names preserved from LLM output (for feedback display)
         self.assertEqual(calibrated[0]['name'], 'Part 1: Solving the equation')
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_extra_sub_scores_get_default_max(self, mock_llm, mock_call):
         """If LLM returns more items than sub_questions, extras get max_pts=1.0."""
@@ -970,7 +1029,7 @@ class ShortAnswerGradingIntegrationTests(TestCase):
     def setUp(self):
         self.grader = ShortAnswerQuestionType()
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_no_llm_configured_returns_none(self, mock_llm, _mock_call):
         mock_llm.is_configured.return_value = False
@@ -978,7 +1037,7 @@ class ShortAnswerGradingIntegrationTests(TestCase):
         result = self.grader._grade_ai(problem, None, 'anything')
         self.assertIsNone(result)
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_llm_returns_invalid_json_returns_none(self, mock_llm, mock_call):
         mock_llm.is_configured.return_value = True
@@ -998,7 +1057,7 @@ class ShortAnswerGradingIntegrationTests(TestCase):
                 result = self.grader._grade_ai(problem, config, 'test')
         self.assertIsNone(result)
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_empty_sub_scores_returns_none(self, mock_llm, mock_call):
         mock_llm.is_configured.return_value = True
@@ -1018,7 +1077,7 @@ class ShortAnswerGradingIntegrationTests(TestCase):
                 result = self.grader._grade_ai(problem, config, 'test')
         self.assertIsNone(result)
 
-    @mock.patch('judge.question_types.short_answer.ShortAnswerQuestionType._call_llm')
+    @mock.patch('judge.question_types.short_answer.call_llm')
     @mock.patch('judge.llm')
     def test_full_scoring_with_calibration(self, mock_llm, mock_call):
         """Verify that a simple one-sub-question answer passes through calibration."""
@@ -1062,7 +1121,7 @@ class FillBlankGradingIntegrationTests(TestCase):
     def setUp(self):
         self.grader = FillBlankQuestionType()
 
-    @mock.patch('judge.question_types.fill_blank.FillBlankQuestionType._call_llm')
+    @mock.patch('judge.question_types.fill_blank.call_llm')
     @mock.patch('judge.llm')
     def test_index_matching_picks_correct_max_points(self, mock_llm, mock_call):
         mock_llm.is_configured.return_value = True
@@ -1100,7 +1159,7 @@ class FillBlankGradingIntegrationTests(TestCase):
         self.assertEqual(result.cases[0]['total'], 1.0)
         self.assertEqual(result.cases[1]['total'], 1.0)
 
-    @mock.patch('judge.question_types.fill_blank.FillBlankQuestionType._call_llm')
+    @mock.patch('judge.question_types.fill_blank.call_llm')
     @mock.patch('judge.llm')
     def test_grading_table_mismatch_logs_warning(self, mock_llm, mock_call):
         """When grading_table length ≠ blanks length, should auto-generate + warn."""
@@ -1139,7 +1198,7 @@ class FillBlankGradingIntegrationTests(TestCase):
         self.assertTrue(any('grading_table has 1 entries' in msg for msg in log_cm.output),
                         f'Expected warning about grading_table mismatch, got: {log_cm.output}')
 
-    @mock.patch('judge.question_types.fill_blank.FillBlankQuestionType._call_llm')
+    @mock.patch('judge.question_types.fill_blank.call_llm')
     @mock.patch('judge.llm')
     def test_no_blanks_returns_none(self, mock_llm, _mock_call):
         mock_llm.is_configured.return_value = True
@@ -1149,7 +1208,7 @@ class FillBlankGradingIntegrationTests(TestCase):
         result = self.grader._grade_ai(problem, config, [], [])
         self.assertIsNone(result)
 
-    @mock.patch('judge.question_types.fill_blank.FillBlankQuestionType._call_llm')
+    @mock.patch('judge.question_types.fill_blank.call_llm')
     @mock.patch('judge.llm')
     def test_llm_call_failure_returns_none(self, mock_llm, mock_call):
         mock_llm.is_configured.return_value = True

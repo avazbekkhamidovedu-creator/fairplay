@@ -7,6 +7,7 @@ from django.utils.translation import gettext, gettext_lazy as _
 from reversion.admin import VersionAdmin
 
 from judge.models import Organization
+from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget
 
 
@@ -18,10 +19,15 @@ class ClassForm(ModelForm):
 
 
 class ClassAdmin(VersionAdmin):
-    fields = ('name', 'slug', 'organization', 'is_active', 'access_code', 'admins', 'description', 'members')
+    fields = ('name', 'slug', 'organization', 'is_active', 'access_code',
+              'instructor_names', 'ta_names', 'admins', 'description', 'members')
     list_display = ('name', 'organization', 'is_active')
     prepopulated_fields = {'slug': ('name',)}
     form = ClassForm
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        sync_class_members_to_organization(form.instance)
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
@@ -69,8 +75,8 @@ class OrganizationForm(ModelForm):
 
 class OrganizationAdmin(VersionAdmin):
     readonly_fields = ('creation_date',)
-    fields = ('name', 'slug', 'short_name', 'is_open', 'class_required', 'about', 'logo_override_image', 'slots',
-              'creation_date', 'admins')
+    fields = ('name', 'slug', 'short_name', 'is_open', 'class_required', 'about', 'instructor_names',
+              'logo_override_image', 'slots', 'creation_date', 'admins')
     list_display = ('name', 'short_name', 'is_open', 'slots', 'show_public')
     prepopulated_fields = {'slug': ('name',)}
     actions_on_top = True

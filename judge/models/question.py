@@ -5,10 +5,12 @@ from django.db.models import CASCADE
 from django.utils.translation import gettext_lazy as _
 
 from judge.models.problem import Problem
+from judge.storage import generate_submission_key, submission_storage
 
 __all__ = [
     'ProblemMCQOption', 'ProblemMCQConfig', 'ProblemBlank', 'ProblemFillBlankConfig',
-    'ProblemShortAnswerConfig', 'ProblemImportDraft', 'ProblemImportItem', 'ProblemImportImage',
+    'ProblemShortAnswerConfig', 'ProblemCodeConfig', 'ProblemImportDraft', 'ProblemImportItem',
+    'ProblemImportImage', 'SubmissionFile', 'ProblemFileConfig',
 ]
 
 
@@ -27,9 +29,10 @@ class ProblemImportDraft(models.Model):
 class ProblemImportItem(models.Model):
     """One editable row in an Excel import preview."""
     TYPE_CHOICES = (
-        ('C', _('Code')),
+        ('C', _('Programming')),
         ('M', _('Multiple choice')),
         ('B', _('Fill in the blank')),
+        ('S', _('Short answer')),
     )
 
     draft = models.ForeignKey(ProblemImportDraft, related_name='items', on_delete=CASCADE)
@@ -48,6 +51,16 @@ class ProblemImportItem(models.Model):
     options = models.TextField(blank=True)
     correct_options = models.TextField(blank=True)
     blanks = models.TextField(blank=True)
+    rubric = models.TextField(blank=True)
+    grading_table = models.TextField(blank=True)
+    is_true_false = models.BooleanField(default=False)
+    # Preserve the complete unified-editor payload while the import is still a draft.
+    editor_data = models.JSONField(default=dict, blank=True)
+    data_needs_review = models.BooleanField(default=False)
+    data_load_error = models.TextField(blank=True)
+    config_needs_review = models.BooleanField(default=False)
+    unrecognized_configurations = models.JSONField(default=list, blank=True)
+    config_review_signature = models.CharField(max_length=64, blank=True)
     formatting_error = models.TextField(blank=True)
     type_needs_review = models.BooleanField(default=False)
     name_needs_review = models.BooleanField(default=False)
@@ -94,6 +107,13 @@ class ProblemMCQOption(models.Model):
 
 class ProblemMCQConfig(models.Model):
     """Per-problem multiple-choice settings."""
+    SCORE_PROPORTIONAL = 'proportional'
+    SCORE_UNDERSELECT = 'underselect'
+    SCORE_MODE_CHOICES = (
+        (SCORE_PROPORTIONAL, _('Proportional credit')),
+        (SCORE_UNDERSELECT, _('Under-select credit')),
+    )
+
     problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='mcq_config', on_delete=CASCADE)
     multiple_select = models.BooleanField(
         verbose_name=_('allow multiple answers'), default=False,
@@ -104,6 +124,14 @@ class ProblemMCQConfig(models.Model):
     shuffle_options = models.BooleanField(
         verbose_name=_('shuffle options per student'), default=False,
         help_text=_('Present choices in a different, stable order for each student to deter copying.'))
+    scoring_mode = models.CharField(
+        verbose_name=_('scoring method'), max_length=16, choices=SCORE_MODE_CHOICES,
+        default=SCORE_PROPORTIONAL,
+        help_text=_('How a multiple-select question awards partial credit. Ignored for single-answer questions.'))
+    underselect_points = models.FloatField(
+        verbose_name=_('points per correct choice'), null=True, blank=True, default=None,
+        help_text=_('In under-select mode, points awarded for each correctly selected option. '
+                    'Leave empty to split the question points evenly among correct options.'))
 
     def __str__(self):
         return _('MCQ config for %s') % self.problem.code
@@ -134,6 +162,9 @@ class ProblemBlank(models.Model):
     answers = models.TextField(
         verbose_name=_('accepted answers'),
         help_text=_('One accepted answer per line; any of them counts as correct.'))
+    points = models.FloatField(
+        verbose_name=_('points'), default=1,
+        help_text=_('Points awarded when this blank is correct. Used when the problem allows partial credit.'))
     label = models.CharField(
         verbose_name=_('label'), max_length=100, blank=True,
         help_text=_('Optional label shown next to the input; defaults to "Blank N".'))
@@ -181,6 +212,61 @@ class ProblemFillBlankConfig(models.Model):
         verbose_name_plural = _('fill-in-the-blank configurations')
 
 
+def submission_file_path(instance, filename):
+    """upload_to callback: the storage key is generated from the submission id, never the raw
+    filename (the original name is kept on the model). ``submission_id`` is set before save."""
+    return generate_submission_key(instance.submission_id, filename)
+
+
+class SubmissionFile(models.Model):
+    """The binary a student uploaded as their answer for a file-upload submission.
+
+    One file per submission to start; the file itself lives in ``submission_storage`` (S3 primary
+    + async Box mirror), never on the judge filesystem. ``original_name`` is what the student is
+    offered on download; ``file.name`` is the generated storage key.
+    """
+    submission = models.OneToOneField('Submission', verbose_name=_('submission'), related_name='upload',
+                                      on_delete=CASCADE)
+    file = models.FileField(verbose_name=_('uploaded file'), storage=submission_storage,
+                            upload_to=submission_file_path, max_length=255)
+    original_name = models.CharField(verbose_name=_('original filename'), max_length=255)
+    size = models.PositiveBigIntegerField(verbose_name=_('file size'), default=0)
+    uploaded_on = models.DateTimeField(verbose_name=_('uploaded on'), auto_now_add=True)
+
+    def __str__(self):
+        return _('Upload for submission %d') % self.submission_id
+
+    class Meta:
+        verbose_name = _('submission file')
+        verbose_name_plural = _('submission files')
+
+
+class ProblemFileConfig(models.Model):
+    """Per-problem file-upload settings (accepted extensions / size cap / instructions)."""
+    problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='file_config',
+                                   on_delete=CASCADE)
+    allowed_extensions = models.CharField(
+        verbose_name=_('allowed file extensions'), max_length=255, blank=True,
+        help_text=_('Comma-separated extensions without dots, e.g. "pdf,zip,docx". '
+                    'Leave blank to allow any extension.'))
+    max_file_size = models.PositiveBigIntegerField(
+        verbose_name=_('maximum file size (bytes)'), default=20 * 1024 * 1024,
+        help_text=_('Reject uploads larger than this many bytes.'))
+    instructions = models.TextField(
+        verbose_name=_('submission instructions'), blank=True,
+        help_text=_('Optional guidance shown to students on the submit page.'))
+
+    def allowed_extension_list(self):
+        return [e.strip().lower().lstrip('.') for e in self.allowed_extensions.split(',') if e.strip()]
+
+    def __str__(self):
+        return _('File-upload config for %s') % self.problem.code
+
+    class Meta:
+        verbose_name = _('file-upload configuration')
+        verbose_name_plural = _('file-upload configurations')
+
+
 # --- Short answer -----------------------------------------------------------
 class ProblemShortAnswerConfig(models.Model):
     """Per-problem short-answer settings. Graded by the LLM against a reference answer + rubric."""
@@ -205,3 +291,37 @@ class ProblemShortAnswerConfig(models.Model):
     class Meta:
         verbose_name = _('short-answer configuration')
         verbose_name_plural = _('short-answer configurations')
+
+
+# --- Code (supplementary AI rubric) -----------------------------------------
+class ProblemCodeConfig(models.Model):
+    """Per-problem supplementary AI grading for code (programming) problems.
+
+    Test-case judging (the judge bridge) remains the source of truth for AC/WA; when
+    ``ai_enabled`` is set, the configured model *additionally* scores the submitted source against
+    the rubric / grading table after the judge finishes.  That rubric score is stored as extra
+    ``SubmissionTestCase`` rows (never shown to students, never changes the AC/WA verdict) so
+    teachers can review it on the grade page.
+    """
+    problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='code_config',
+                                   on_delete=CASCADE)
+    ai_enabled = models.BooleanField(
+        verbose_name=_('enable AI rubric scoring'), default=False,
+        help_text=_('After the judge grades the test cases, also ask the configured model to score '
+                    'the submitted code against the rubric below.'))
+    ai_rubric = models.TextField(
+        verbose_name=_('AI rubric'), blank=True,
+        help_text=_('Grading guidance sent to the model (never shown to students).'))
+    grading_table = models.JSONField(
+        verbose_name=_('grading table'), blank=True, null=True, default=None,
+        help_text=_('Sub-question breakdown: a list of {"name", "max_points", '
+                    '"strictness": "strict|normal|lenient"} objects. '
+                    'When set, the LLM grades each sub-question independently; '
+                    'otherwise the code is graded as a single whole.'))
+
+    def __str__(self):
+        return _('Code AI config for %s') % self.problem.code
+
+    class Meta:
+        verbose_name = _('code AI configuration')
+        verbose_name_plural = _('code AI configurations')

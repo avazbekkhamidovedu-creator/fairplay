@@ -3,9 +3,7 @@
 
 /* Problem create/edit v2 — bridged onto site --oj-* design tokens (classic OJ). */
 :root {
-  /* Legacy names kept so existing rules keep working; values follow OJ tokens. */
-  --dmoj-green: var(--oj-btn-from, #337ab7);
-  --dmoj-green-dark: var(--oj-btn-hover, #265a88);
+  /* Scoped design tokens — map to site --oj-* for colour, pin admin chrome locally. */
   --admin-bg: var(--oj-bg, #f8f8f8);
   /* Pin section chrome to classic admin grey — same in light/dark (do NOT use --oj-heading). */
   --admin-header: #3b3b3b;
@@ -95,18 +93,18 @@
 .pcv2 .admin-sidebar h2 { font-size: 1.1rem; margin: 0; }
 
 .note {
-  background: var(--oj-surface)de7;
-  border: 1px solid var(--oj-surface)59d;
+  background: var(--oj-warning-soft);
+  border: 1px solid var(--oj-warning-border);
   border-radius: 4px;
   padding: 0.75rem 1rem;
   margin: 1rem 0;
   font-size: 13px;
 }
-.note strong { color: #f57f17; }
+.note strong { color: var(--oj-warning); }
 
 .flow-box {
   background: var(--oj-info-soft);
-  border: 1px solid #90caf9;
+  border: 1px solid var(--oj-info);
   border-radius: 4px;
   padding: 1rem;
   margin: 1rem 0;
@@ -161,31 +159,31 @@
   border: 1px solid var(--admin-border);
   border-radius: var(--pcv2-radius);
   background: var(--card-bg);
-  color: var(--text) !important;
+  color: var(--text);
   cursor: pointer;
   font-size: var(--oj-font-size, 14px);
   font-weight: 400;
   line-height: 1.4;
-  text-decoration: none !important;
+  text-decoration: none;
 }
 .btn:hover { background: var(--admin-bg); text-decoration: none; }
 .btn-primary, .btn.default {
   background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%);
   border-color: var(--oj-btn-border, #245580);
-  color: var(--oj-surface) !important;
+  color: var(--oj-surface);
 }
 .btn-primary:hover, .btn.default:hover {
   background: var(--oj-btn-hover, #265a88);
-  color: var(--oj-surface) !important;
+  color: var(--oj-surface);
 }
 .btn-secondary {
   background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%);
   border-color: var(--oj-btn-border, #245580);
-  color: var(--oj-surface) !important;
+  color: var(--oj-surface);
 }
 .btn-secondary:hover { background: var(--oj-btn-hover, #265a88); }
-.btn-cancel { color: var(--danger) !important; border-color: #e0b4b1; background: var(--card-bg); }
-.btn-cancel:hover { background: #fdecea; }
+.btn-cancel { color: var(--danger); border-color: #e0b4b1; background: var(--card-bg); }
+.btn-cancel:hover { background: var(--oj-danger-soft); }
 
 /* Forms */
 fieldset.module {
@@ -242,6 +240,7 @@ fieldset.module .form-content { padding: 1rem; }
 .v2-left .form-row .field input[type="number"],
 .v2-left .form-row .field select,
 .v2-left .form-row .field textarea,
+.v2-left .form-row .field .rich-editor,
 .v2-left .stem-block .rich-editor,
 .v2-left .options-list { max-width: none; width: 100%; }
 .form-row textarea { min-height: 120px; font-family: monospace; }
@@ -374,7 +373,7 @@ fieldset.module .form-content { padding: 1rem; }
   border-radius: 6px;
   padding: 1.25rem;
 }
-.nav-card h3 { margin: 0 0 0.5rem; color: var(--dmoj-green); }
+.nav-card h3 { margin: 0 0 0.5rem; color: var(--oj-accent); }
 .nav-card ul { margin: 0.5rem 0 0; padding-left: 1.2rem; font-size: 13px; }
 .nav-card li { margin: 0.3rem 0; }
 
@@ -386,13 +385,13 @@ fieldset.module .form-content { padding: 1rem; }
   background: var(--oj-surface-soft);
 }
 .tag.route { background: var(--oj-info-soft); color: var(--oj-link); }
-.tag.admin { background: var(--oj-surface)3e0; color: #e65100; }
+.tag.admin { background: var(--oj-tag-admin-bg); color: var(--oj-tag-admin-text); }
 
 .mock-label {
   position: fixed;
   top: 56px;
   right: 12px;
-  background: #ff5722;
+  background: var(--oj-warning);
   color: var(--oj-surface);
   font-size: 11px;
   padding: 0.25rem 0.6rem;
@@ -412,7 +411,7 @@ fieldset.module .form-content { padding: 1rem; }
   margin-bottom: 1.25rem;
   font-size: var(--oj-font-size, 14px);
 }
-.design-banner strong { color: var(--dmoj-green-dark); }
+.design-banner strong { color: var(--oj-accent-hover); }
 
 .form-section {
   background: var(--card-bg);
@@ -505,7 +504,7 @@ fieldset.module .form-content { padding: 1rem; }
   text-overflow: ellipsis;
 }
 .segment-group input:checked + span {
-  background: var(--dmoj-green);
+  background: var(--oj-accent);
   color: var(--oj-surface);
   font-weight: 600;
 }
@@ -584,7 +583,7 @@ fieldset.module .form-content { padding: 1rem; }
   justify-content: center;
   padding-top: 0.5rem;
   font-weight: 700;
-  color: var(--dmoj-green-dark);
+  color: var(--oj-accent-hover);
   font-size: 13px;
 }
 .option-row .option-marker input { margin: 0; }
@@ -601,7 +600,7 @@ fieldset.module .form-content { padding: 1rem; }
   line-height: 1;
   color: var(--oj-text-secondary);
 }
-.btn-icon:hover { background: #fee; border-color: #e57373; color: var(--danger); }
+.btn-icon:hover { background: var(--oj-danger-soft); border-color: var(--oj-danger); color: var(--danger); }
 .btn-add-option {
   display: inline-flex;
   align-items: center;
@@ -654,8 +653,8 @@ fieldset.module .form-content { padding: 1rem; }
 }
 
 .blank-hints {
-  background: var(--oj-surface)8e1;
-  border: 1px solid #ffe082;
+  background: var(--oj-warning-soft);
+  border: 1px solid var(--oj-warning-border);
   border-radius: 4px;
   padding: 0.65rem 0.85rem;
   font-size: 12px;
@@ -671,7 +670,7 @@ fieldset.module .form-content { padding: 1rem; }
   font-weight: 600;
   font-size: 12px;
   min-width: 48px;
-  color: var(--dmoj-green-dark);
+  color: var(--oj-accent-hover);
 }
 .blank-answer-row input { flex: 1; }
 
@@ -699,7 +698,7 @@ fieldset.module .form-content { padding: 1rem; }
   font-weight: 600;
 }
 .tag-type.programming { background: var(--oj-info-soft); color: var(--oj-link); }
-.tag-type.regular { background: #f3e5f5; color: #7b1fa2; }
+.tag-type.regular { background: var(--oj-tag-regular-bg); color: var(--oj-tag-regular-text); }
 
 /* Problem-type picker modal */
 .req { color: var(--danger); margin-left: 2px; }
@@ -764,7 +763,7 @@ fieldset.module .form-content { padding: 1rem; }
   border-radius: var(--pcv2-radius); padding: 0 0.75rem; font-size: var(--oj-font-size-sm, 12px);
   cursor: pointer; line-height: 1;
 }
-.inline-add-btn:hover { background: var(--dmoj-green); color: var(--oj-surface); }
+.inline-add-btn:hover { background: var(--oj-accent); color: var(--oj-surface); }
 .inline-add-box { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.45rem; }
 .inline-add-box input { flex: 1 1 auto; min-width: 0; }
 .btn-mini {
@@ -797,17 +796,17 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-stem h3 { font-size: 1rem; margin: 0.4rem 0; }
 .pv-stem code { background: var(--admin-bg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
 .pv-stem pre { background: var(--oj-bg); padding: 0.5rem; border-radius: 4px; overflow: auto; font-size: 12px; }
-.pv-stem u { text-decoration: none; border-bottom: 1.5px solid var(--dmoj-green); padding: 0 1.2em; }
+.pv-stem u { text-decoration: none; border-bottom: 1.5px solid var(--oj-accent); padding: 0 1.2em; }
 .pv-options { display: flex; flex-direction: column; gap: 0.55rem; }
 .pv-option { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 14px; }
 .pv-option .mk { width: 14px; height: 14px; border: 1.5px solid var(--oj-control-border); border-radius: 50%; flex-shrink: 0; margin-top: 0.2rem; }
 .pv-option .mk.sq { border-radius: 3px; }
-.pv-option .mk.on { border-color: var(--dmoj-green); background: var(--dmoj-green); }
+.pv-option .mk.on { border-color: var(--oj-accent); background: var(--oj-accent); }
 .pv-option-body { flex: 1; min-width: 0; line-height: 1.6; }
 .pv-option-body > :first-child { margin-top: 0; }
 .pv-option-body > :last-child { margin-bottom: 0; }
 .pv-option-body blockquote {
-  margin: 0.35em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--dmoj-green); color: var(--oj-text-secondary); background: var(--oj-success-soft);
+  margin: 0.35em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--oj-accent); color: var(--oj-text-secondary); background: var(--oj-success-soft);
 }
 .pv-option-body pre {
   background: var(--oj-bg); padding: 0.45rem 0.65rem; border-radius: 4px; overflow: auto; font-size: 12px; margin: 0.35em 0;
@@ -820,25 +819,25 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-blankinput { width: 100%; padding: 0.45rem 0.6rem; border: 1px solid var(--oj-border); border-radius: 4px; margin-bottom: 0.6rem; font-size: 13px; }
 .pv-blankinput.pv-blank-inline {
   display: inline-block; width: 90px; margin: 0 4px 0 4px; padding: 2px 6px;
-  border: none; border-bottom: 1.5px solid var(--dmoj-green); border-radius: 0;
+  border: none; border-bottom: 1.5px solid var(--oj-accent); border-radius: 0;
   background: var(--oj-success-soft); text-align: center; vertical-align: baseline;
 }
-.pv-blankinput.pv-blank-inline::placeholder { color: var(--dmoj-green); font-weight: 600; }
+.pv-blankinput.pv-blank-inline::placeholder { color: var(--oj-accent); font-weight: 600; }
 
 /* Difficulty (reference layout) */
 .difficulty-bar { display: flex; gap: 0.35rem; }
 .difficulty-bar .seg {
   width: 32px; height: 8px; border-radius: 4px; background: var(--oj-surface-muted); cursor: pointer; transition: background 0.12s;
 }
-.difficulty-bar .seg.on { background: var(--dmoj-green); }
-.difficulty-bar .seg:hover { background: var(--dmoj-green-dark); }
+.difficulty-bar .seg.on { background: var(--oj-accent); }
+.difficulty-bar .seg:hover { background: var(--oj-accent-hover); }
 
 /* Per-option Markdown toggle (matches reference mockup) */
 .opt-md-toggle {
   font-size: 10px; font-weight: 700; cursor: pointer; border-radius: 4px;
   padding: 0.15rem 0.4rem; border: 1px solid var(--admin-border); color: var(--muted); background: var(--oj-bg);
 }
-.opt-md-toggle.on { background: var(--dmoj-green); color: var(--oj-surface); border-color: var(--dmoj-green); }
+.opt-md-toggle.on { background: var(--oj-accent); color: var(--oj-surface); border-color: var(--oj-accent); }
 .option-row .option-input {
   width: 100%; border: 1px solid var(--oj-control-border); border-radius: 4px; padding: 0.4rem 0.55rem; font-size: 13px;
 }
@@ -882,7 +881,7 @@ fieldset.module .form-content { padding: 1rem; }
 .cp-table .label-letter {
   display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 24px; border-radius: 50%;
-  background: var(--dmoj-green); color: var(--oj-surface); font-weight: 700; font-size: 12px;
+  background: var(--oj-accent); color: var(--oj-surface); font-weight: 700; font-size: 12px;
 }
 .cp-table .pcode { font-family: ui-monospace, Menlo, monospace; color: var(--muted); font-size: 12px; }
 .cp-table .pname { font-weight: 600; color: var(--text); }
@@ -896,7 +895,7 @@ fieldset.module .form-content { padding: 1rem; }
 .diff-mini i { width: 14px; height: 6px; border-radius: 3px; background: var(--oj-surface-muted); display: inline-block; }
 .diff-mini.easy i:nth-child(-n+2),
 .diff-mini.medium i:nth-child(-n+4),
-.diff-mini.hard i:nth-child(-n+6) { background: var(--dmoj-green); }
+.diff-mini.hard i:nth-child(-n+6) { background: var(--oj-accent); }
 
 /* Side panel: pick from problem bank */
 .slideover { position: fixed; inset: 0; z-index: 250; display: none; }
@@ -924,7 +923,7 @@ fieldset.module .form-content { padding: 1rem; }
   border: none; background: none; padding: 0.6rem 1rem; font-size: 13px;
   color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
 }
-.so-tabs button.active { color: var(--dmoj-green); font-weight: 600; border-bottom-color: var(--dmoj-green); }
+.so-tabs button.active { color: var(--oj-accent); font-weight: 600; border-bottom-color: var(--oj-accent); }
 
 .so-filters {
   display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
@@ -952,20 +951,20 @@ fieldset.module .form-content { padding: 1rem; }
 .so-table .num { color: var(--muted); font-size: 12px; }
 .so-table .ptitle { font-weight: 400; color: var(--text); }
 .so-table .rate { color: var(--muted); font-size: 12px; }
-.so-table .added-flag { font-size: 11px; color: var(--dmoj-green); }
+.so-table .added-flag { font-size: 11px; color: var(--oj-accent); }
 
 .so-foot {
   display: flex; align-items: center; gap: 1rem;
   padding: 0.85rem 1.25rem; border-top: 1px solid var(--admin-border); background: var(--card-bg);
 }
 .so-foot .sel-count { font-size: 13px; color: var(--text); }
-.so-foot .sel-count b { color: var(--dmoj-green-dark); }
+.so-foot .sel-count b { color: var(--oj-accent-hover); }
 .so-foot .so-pager { display: flex; align-items: center; gap: 0.25rem; margin-left: auto; }
 .so-foot .so-pager button {
   min-width: 28px; height: 28px; border: 1px solid var(--admin-border);
   background: var(--card-bg); border-radius: 4px; cursor: pointer; font-size: 12px; color: var(--text);
 }
-.so-foot .so-pager button.active { background: var(--dmoj-green); color: var(--oj-surface); border-color: var(--dmoj-green); }
+.so-foot .so-pager button.active { background: var(--oj-accent); color: var(--oj-surface); border-color: var(--oj-accent); }
 .so-foot .so-pager button:disabled { opacity: 0.4; cursor: default; }
 
 /* Preview pane: match content-description / rich projection (# → h3) */
@@ -1000,7 +999,7 @@ fieldset.module .form-content { padding: 1rem; }
 }
 .pv-stem blockquote {
   margin: 0.4em 0; padding: 0.2em 0.8em;
-  border-left: 3px solid var(--dmoj-green); color: var(--oj-text-secondary); background: var(--pcv2-accent-soft);
+  border-left: 3px solid var(--oj-accent); color: var(--oj-text-secondary); background: var(--pcv2-accent-soft);
 }
 
 @media (max-width: 600px) {
@@ -1010,60 +1009,60 @@ fieldset.module .form-content { padding: 1rem; }
 
 /* ==========================================================================
    Compatibility after embedding into base.html
-   Site widgets.scss sets `.button, button { color: white !important }`, which
-   washes out toolbar / save / cancel labels on this page. Re-assert text colour
-   per control with higher specificity. Dark theme overrides live in the
-   prefers-color-scheme block at the bottom (aligned with redesign MR31).
+   Site widgets.scss `.button, button` no longer uses !important, so scoped
+   class selectors naturally outrank the type selector.  We still keep the
+   gradient on `.btn-primary` / `.btn-secondary` to restore the OJ button look
+   that widgets.scss provides for generic `button`.
    ========================================================================== */
 .pcv2 .editor-mode-tabs button,
 .pcv2 .editor-mode-tabs button.mode-btn {
-  color: var(--oj-text-secondary) !important;
-  background: transparent !important;
+  color: var(--oj-text-secondary);
+  background: transparent;
 }
 .pcv2 .editor-mode-tabs button.active,
 .pcv2 .editor-mode-tabs button.mode-btn.active {
-  color: var(--oj-text) !important;
-  background: var(--oj-surface) !important;
+  color: var(--oj-text);
+  background: var(--oj-surface);
 }
 .pcv2 .rich-toolbar button,
 .pcv2 .rich-toolbar button i,
 .pcv2 .rich-toolbar button .fa {
-  color: var(--oj-text-secondary) !important;
+  color: var(--oj-text-secondary);
 }
 .pcv2 .rich-toolbar button:hover,
 .pcv2 .rich-toolbar button:hover i,
 .pcv2 .rich-toolbar button:hover .fa {
-  color: var(--oj-text) !important;
+  color: var(--oj-text);
 }
 .pcv2 .rich-toolbar button.active,
 .pcv2 .rich-toolbar button.active i,
 .pcv2 .rich-toolbar button.active .fa {
-  color: var(--oj-surface) !important;
+  color: var(--oj-surface);
 }
 .pcv2 .rich-toolbar .rte-heading {
-  color: var(--oj-text-secondary) !important;
-  background: var(--oj-surface) !important;
+  color: var(--oj-text-secondary);
+  background: var(--oj-surface);
 }
-.pcv2 .btn { color: var(--text) !important; }
+.pcv2 .btn { color: var(--text); }
 .pcv2 .btn-primary,
 .pcv2 .btn.default,
 .pcv2 .btn-secondary {
-  background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%) !important;
-  border-color: var(--oj-btn-border, #245580) !important;
-  color: var(--oj-surface) !important;
+  background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%);
+  border-color: var(--oj-btn-border, #245580);
+  color: var(--oj-surface);
 }
 .pcv2 .btn-primary:hover,
 .pcv2 .btn.default:hover,
-.pcv2 .btn-secondary:hover { background: var(--oj-btn-hover, #265a88) !important; }
-.pcv2 .btn-cancel { color: var(--danger) !important; }
-.pcv2 .btn-icon { color: var(--oj-text-secondary) !important; }
-.pcv2 .btn-icon:hover { color: var(--danger) !important; }
-.pcv2 .btn-add-option { color: var(--dmoj-green-dark) !important; }
-.pcv2 .inline-add-btn { color: var(--dmoj-green-dark) !important; }
-.pcv2 .inline-add-btn:hover { color: var(--oj-surface) !important; background: var(--dmoj-green) !important; }
-.pcv2 .btn-mini { color: var(--text) !important; }
-.pcv2 .btn-mini:hover { color: var(--text) !important; }
-.pcv2 .btn-mini-primary { color: var(--oj-surface) !important; }
+.pcv2 .btn-secondary:hover { background: var(--oj-btn-hover, #265a88); }
+.pcv2 .btn-cancel { color: var(--danger); }
+.pcv2 .btn-icon { color: var(--oj-text-secondary); }
+.pcv2 .btn-icon:hover { color: var(--danger); }
+.pcv2 .btn-add-option { color: var(--oj-accent-hover); }
+.pcv2 .inline-add-btn { color: var(--oj-accent-hover); }
+.pcv2 .inline-add-btn:hover { color: var(--oj-surface); background: var(--oj-accent); }
+.pcv2 .btn-mini { color: var(--text); }
+.pcv2 .btn-mini:hover { color: var(--text); }
+.pcv2 .btn-mini-primary { color: var(--oj-surface); }
 
 /* --- Grading Table --- */
 .grading-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -1072,31 +1071,42 @@ fieldset.module .form-content { padding: 1rem; }
 .grading-table td { padding: 4px 6px; vertical-align: middle; }
 .grading-table input { font-size: 12px; padding: 3px 6px; border: 1px solid var(--oj-border);
   border-radius: 3px; font-family: inherit; }
-.grading-table input:focus { border-color: var(--dmoj-green); outline: none; }
+.grading-table input:focus { border-color: var(--oj-accent); outline: none; }
 
 /* strictness pills */
 .gt-pill { display: inline-block; padding: 2px 8px; margin: 0 2px; border: 1px solid var(--oj-border);
-  border-radius: var(--pcv2-radius); background: var(--admin-bg); color: var(--oj-text-secondary) !important; cursor: pointer;
+  border-radius: var(--pcv2-radius); background: var(--admin-bg); color: var(--oj-text-secondary); cursor: pointer;
   font-size: 11px; transition: all 0.15s; }
-.gt-pill.active { background: var(--dmoj-green); color: var(--oj-surface) !important; border-color: var(--dmoj-green); }
-.gt-pill:hover:not(.active) { border-color: var(--dmoj-green); color: var(--dmoj-green-dark) !important; }
+.gt-pill.active { background: var(--oj-accent); color: var(--oj-surface); border-color: var(--oj-accent); }
+.gt-pill:hover:not(.active) { border-color: var(--oj-accent); color: var(--oj-accent-hover); }
 
 .btn-del-row { padding: 2px 7px; border: 1px solid var(--oj-danger); border-radius: 3px;
-  background: none; color: var(--oj-danger) !important; cursor: pointer; font-size: 13px; line-height: 1; }
-.btn-del-row:hover { background: var(--oj-danger); color: var(--oj-surface) !important; }
+  background: none; color: var(--oj-danger); cursor: pointer; font-size: 13px; line-height: 1; }
+.btn-del-row:hover { background: var(--oj-danger); color: var(--oj-surface); }
 
 .btn-add-row { padding: 3px 10px; border: 1px dashed var(--oj-control-border); border-radius: 4px;
-  background: none; cursor: pointer; color: var(--oj-text-muted) !important; font-family: inherit; }
-.btn-add-row:hover { border-color: var(--dmoj-green); color: var(--dmoj-green-dark) !important; }
+  background: none; cursor: pointer; color: var(--oj-text-muted); font-family: inherit; }
+.btn-add-row:hover { border-color: var(--oj-accent); color: var(--oj-accent-hover); }
 
 /* AI decompose spinner */
 #decompose-status { animation: pulse 1s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 #btn-ai-decompose:disabled { opacity: 0.45; cursor: not-allowed; }
-.pcv2 .btn-mini-primary:hover { color: var(--oj-surface) !important; background: var(--dmoj-green-dark) !important; }
-.pcv2 .tc-file-btn { color: var(--oj-link) !important; background: var(--oj-info-soft) !important; }
-.pcv2 .tc-file-btn:hover { color: var(--oj-link) !important; background: var(--oj-info-soft) !important; }
-.pcv2 .tc-file-btn.manual { color: var(--oj-text) !important; }
+.pcv2 .btn-mini-primary:hover { color: var(--oj-surface); background: var(--oj-accent-hover); }
+.pcv2 .tc-file-btn { color: var(--oj-link); background: var(--oj-info-soft); }
+.pcv2 .tc-file-btn:hover { color: var(--oj-link); background: var(--oj-info-soft); }
+.pcv2 .tc-file-btn.manual { color: var(--oj-text); }
+.pcv2 .tc-file-select { width: 100%; min-width: 8rem; }
+.pcv2 .tc-harness { margin-top: 1rem; border-top: 1px solid var(--admin-border); padding-top: 0.75rem; }
+.pcv2 .tc-harness summary { cursor: pointer; font-weight: 600; }
+.pcv2 .harness-monaco {
+  width: 100%;
+  height: 280px;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--pcv2-radius);
+  overflow: hidden;
+}
+.pcv2 .tc-admin-link { margin: 0 0 0.75rem; }
 
 /* Custom file picker — avoids browser-native locale file-button chrome */
 .pcv2 .file-pick {
@@ -1115,53 +1125,30 @@ fieldset.module .form-content { padding: 1rem; }
   color: var(--muted);
 }
 
-/* ── OJ token alignment overrides (win over older green soft tints) ── */
+/* ── OJ token alignment overrides ── */
 .pcv2 .sq-pill.on {
-  border-color: var(--oj-accent, #2980B9) !important;
-  background: var(--pcv2-accent-soft) !important;
-  color: var(--oj-accent, #2980B9) !important;
+  border-color: var(--oj-accent, #2980B9);
+  background: var(--pcv2-accent-soft);
+  color: var(--oj-accent, #2980B9);
 }
 .pcv2 .draft-banner {
-  background: var(--pcv2-accent-soft) !important;
-  border-color: var(--admin-border) !important;
-}
-.pcv2 .v2-right .pv-head,
-.pcv2 .content-preview .pv-head {
-  background: var(--admin-header) !important;
-  color: var(--admin-header-text) !important;
-  border-bottom-color: var(--admin-header-border) !important;
-  font-size: 1.1em !important;
-  font-weight: 600 !important;
-  text-transform: none !important;
-  letter-spacing: normal !important;
-}
-.pcv2 .tc-table th {
-  background: var(--admin-header) !important;
-  color: var(--admin-header-text) !important;
-}
-.pcv2 .btn-mini-primary {
-  background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%) !important;
-  border-color: var(--oj-btn-border, #245580) !important;
-  color: var(--oj-surface) !important;
-}
-.pcv2 .btn-mini-primary:hover {
-  background: var(--oj-btn-hover, #265a88) !important;
+  background: var(--pcv2-accent-soft);
+  border-color: var(--admin-border);
 }
 
 /* --- dark theme overrides ---
    Classic OJ loads resources/dark/*.css (vars-dark) via media query in base.html.
-   create_v2 now does the same for problem_create_v2.css / rich_editor.css.
-   Keep this block as a safety net when only the light sheet is present: remap
-   page tokens, but keep --admin-header on classic #3b3b3b so module / inline-group
-   / Preview headers stay one chrome (the old #0f0f0f header made panels look split).
+   The dark-compiled CSS already provides correct --oj-* token values for dark mode,
+   so this block is a safety net when only the light sheet is present. Remap page
+   tokens to match dark --oj-* values; keep --admin-header on classic #3b3b3b.
 */
 @media (prefers-color-scheme: dark) {
   .pcv2 {
-    --admin-bg: var(--oj-bg, #111);
-    --card-bg: var(--oj-surface-soft, #181818);
-    --text: var(--oj-text, #eee);
-    --muted: var(--oj-text-secondary, #aaa);
-    --admin-border: var(--oj-border, #3b3b3b);
+    --admin-bg: var(--oj-bg);
+    --card-bg: var(--oj-surface-soft);
+    --text: var(--oj-text);
+    --muted: var(--oj-text-secondary);
+    --admin-border: var(--oj-border);
     --admin-header: #3b3b3b;
     --admin-header-text: #fff;
     --admin-header-border: #808080;
@@ -1198,60 +1185,58 @@ fieldset.module .form-content { padding: 1rem; }
   .pcv2 .form-row > label { background: none; color: var(--muted); }
 
   .pcv2 .btn,
-  .pcv2 .btn-mini { background: #555; color: #e0e0e0 !important; border-color: #666; }
+  .pcv2 .btn-mini { background: var(--oj-surface-muted); color: var(--oj-text) !important; border-color: var(--oj-border); }
   .pcv2 .btn:hover,
-  .pcv2 .btn-mini:hover { background: #6a6a6a; color: #fff !important; }
-  .pcv2 .btn-danger { color: #fff !important; background: #c0392b; border-color: #c0392b; }
-  .pcv2 .btn-danger:hover { background: #e74c3c; border-color: #e74c3c; }
+  .pcv2 .btn-mini:hover { background: var(--oj-surface-soft); color: var(--oj-text) !important; }
   .pcv2 .btn-mini-primary,
   .pcv2 .btn-primary,
   .pcv2 .btn-info {
-    background: var(--oj-btn-from, var(--dmoj-green)) !important;
-    color: #fff !important;
-    border-color: var(--oj-btn-border, var(--dmoj-green)) !important;
+    background: linear-gradient(to bottom, var(--oj-btn-from) 0, var(--oj-btn-to) 100%) !important;
+    color: var(--oj-btn-text) !important;
+    border-color: var(--oj-btn-border) !important;
   }
   .pcv2 .btn-mini-primary:hover,
   .pcv2 .btn-primary:hover,
   .pcv2 .btn-info:hover {
-    background: var(--oj-btn-hover, var(--dmoj-green-dark)) !important;
-    border-color: var(--oj-btn-hover, var(--dmoj-green-dark)) !important;
+    background: var(--oj-btn-hover) !important;
+    border-color: var(--oj-btn-hover) !important;
   }
-  .pcv2 .btn-add-option { background: none; color: #bbb !important; border: 1px dashed #666; }
-  .pcv2 .btn-add-option:hover { border-color: var(--dmoj-green); color: var(--dmoj-green-dark) !important; }
-  .pcv2 .btn-cancel { color: #FF3030 !important; }
+  .pcv2 .btn-add-option { background: none; color: var(--oj-text-muted) !important; border: 1px dashed var(--oj-border); }
+  .pcv2 .btn-add-option:hover { border-color: var(--oj-accent); color: var(--oj-accent-hover) !important; }
+  .pcv2 .btn-cancel { color: var(--oj-danger) !important; }
 
   .pcv2 input[type="text"],
   .pcv2 input[type="number"],
   .pcv2 input[type="url"],
   .pcv2 input[type="search"],
   .pcv2 textarea,
-  .pcv2 select { background: #3b3b3b; color: #eee; border-color: #555; }
+  .pcv2 select { background: var(--oj-surface-muted); color: var(--oj-text); border-color: var(--oj-border); }
   .pcv2 input:focus,
   .pcv2 textarea:focus,
-  .pcv2 select:focus { border-color: var(--dmoj-green); }
+  .pcv2 select:focus { border-color: var(--oj-accent); }
   .pcv2 .help,
   .pcv2 label { color: var(--muted); }
 
   .pcv2 .rte-toolbar { background: var(--admin-bg); border-color: var(--admin-border); }
   .pcv2 .rte-toolbar button { color: var(--muted) !important; }
-  .pcv2 .rte-toolbar button:hover { color: #eee !important; background: #3b3b3b; }
-  .pcv2 .rte-toolbar .rte-heading { background: #3b3b3b; color: #ccc; border-color: #555; }
+  .pcv2 .rte-toolbar button:hover { color: var(--text) !important; background: var(--oj-surface-muted); }
+  .pcv2 .rte-toolbar .rte-heading { background: var(--oj-surface-muted); color: var(--oj-text-secondary); border-color: var(--oj-border); }
 
   .pcv2 .ptype-tag,
   .pcv2 .diff-tag,
-  .pcv2 .tag-type { background: #3b3b3b; color: var(--muted); }
+  .pcv2 .tag-type { background: var(--oj-surface-muted); color: var(--muted); }
   .pcv2 .ptype-tag:hover,
-  .pcv2 .ptype-tag.active { color: #fff; }
-  .pcv2 .ptype-ai { background: #3b3b3b; border-color: var(--dmoj-green); color: var(--dmoj-green-dark); }
-  .pcv2 .ptype-ai:hover { background: var(--dmoj-green); color: #fff; }
+  .pcv2 .ptype-tag.active { color: var(--oj-text); }
+  .pcv2 .ptype-ai { background: var(--oj-surface-muted); border-color: var(--oj-accent); color: var(--oj-accent-hover); }
+  .pcv2 .ptype-ai:hover { background: var(--oj-accent); color: var(--oj-btn-text); }
 
   .grading-table th { color: var(--muted); border-color: var(--admin-border); }
-  .grading-table td { border-color: #222; }
-  .grading-table input { background: #3b3b3b; color: #eee; border-color: #555; }
-  .gt-pill { background: #3b3b3b !important; color: var(--muted) !important; border-color: #555; }
-  .gt-pill.active { background: var(--dmoj-green) !important; color: #fff !important; }
-  .btn-del-row { color: #ff6b7a !important; border-color: #ff6b7a; }
-  .btn-del-row:hover { background: #ff6b7a; color: #fff !important; }
+  .grading-table td { border-color: var(--oj-surface-soft); }
+  .grading-table input { background: var(--oj-surface-muted); color: var(--oj-text); border-color: var(--oj-border); }
+  .gt-pill { background: var(--oj-surface-muted) !important; color: var(--muted) !important; border-color: var(--oj-border); }
+  .gt-pill.active { background: var(--oj-accent) !important; color: var(--oj-btn-text) !important; }
+  .btn-del-row { color: var(--oj-danger) !important; border-color: var(--oj-danger); }
+  .btn-del-row:hover { background: var(--oj-danger); color: var(--oj-btn-text) !important; }
 
   .pcv2 .tc-table th,
   .pcv2 .inline-table th,
@@ -1260,43 +1245,44 @@ fieldset.module .form-content { padding: 1rem; }
     color: var(--admin-header-text) !important;
     border-color: var(--admin-border);
   }
-  .pcv2 .data-table tr:hover { background: #111; }
+  .pcv2 .data-table tr:hover { background: var(--oj-surface-soft); }
   .pcv2 .sub-q-head { background: var(--admin-bg); border-color: var(--admin-border); }
 
   .pcv2 .blank-answers .blank-row { border-color: var(--admin-border); background: var(--card-bg); }
-  .pcv2 .tf-choices label { background: #3b3b3b; border-color: #555; color: #eee; }
+  .pcv2 .tf-choices label { background: var(--oj-surface-muted); border-color: var(--oj-border); color: var(--text); }
   .pcv2 .blank-hints,
   .pcv2 #empty-src-tip { color: var(--muted); }
   .pcv2 .martor-preview { background: var(--card-bg); color: var(--text); }
   .pcv2 .qtype-card { background: var(--card-bg); border-color: var(--admin-border); }
-  .pcv2 .qtype-card:hover { border-color: var(--dmoj-green); }
+  .pcv2 .qtype-card:hover { border-color: var(--oj-accent); }
 
-  .pcv2 .editor-mode-tabs { background: #2a2a2a; }
+  .pcv2 .editor-mode-tabs { background: var(--oj-surface-soft); }
   .pcv2 .editor-mode-tabs button,
   .pcv2 .editor-mode-tabs button.mode-btn { color: var(--muted) !important; background: transparent !important; }
   .pcv2 .editor-mode-tabs button.active,
   .pcv2 .editor-mode-tabs button.mode-btn.active {
-    background: #1a1a1a !important;
+    background: var(--card-bg) !important;
     color: var(--text) !important;
   }
   .pcv2 .rich-editor-markdown textarea { background: var(--card-bg) !important; color: var(--text) !important; }
+  .pcv2 .harness-monaco { border-color: var(--admin-border); }
 }
 
-/* Keep accent soft-tints aligned; section headers use --admin-header above. */
+/* Keep accent soft-tints aligned for both themes. */
 .pcv2 .sq-pill.on {
-  border-color: var(--oj-accent, #2980B9) !important;
-  background: var(--pcv2-accent-soft) !important;
-  color: var(--oj-accent, #2980B9) !important;
+  border-color: var(--oj-accent, #2980B9);
+  background: var(--pcv2-accent-soft);
+  color: var(--oj-accent, #2980B9);
 }
 .pcv2 .draft-banner {
-  background: var(--pcv2-accent-soft) !important;
-  border-color: var(--admin-border) !important;
+  background: var(--pcv2-accent-soft);
+  border-color: var(--admin-border);
 }
 .pcv2 .btn-mini-primary {
-  background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%) !important;
-  border-color: var(--oj-btn-border, #245580) !important;
-  color: #fff !important;
+  background: linear-gradient(to bottom, var(--oj-btn-from, #337ab7) 0, var(--oj-btn-to, #265a88) 100%);
+  border-color: var(--oj-btn-border, #245580);
+  color: var(--oj-btn-text);
 }
 .pcv2 .btn-mini-primary:hover {
-  background: var(--oj-btn-hover, #265a88) !important;
+  background: var(--oj-btn-hover, #265a88);
 }

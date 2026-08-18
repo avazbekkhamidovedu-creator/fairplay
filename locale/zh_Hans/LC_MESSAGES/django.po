@@ -982,6 +982,48 @@ msgstr "时间限制"
 msgid "publicly visible"
 msgstr "公开"
 
+msgid "Public visible"
+msgstr "公开"
+
+msgid "After you save this programming problem, a link to the original test-data editor will appear here."
+msgstr "保存编程题后，这里会出现指向原测试数据编辑页的链接。"
+
+msgid "Opens the original test-data page (generator, batches, harness, and zip file matching)."
+msgstr "打开原测试数据页（生成器、测试组、Harness，以及 zip 文件匹配）。"
+
+msgid "Upload a zip to list its files, then pick input and output for each case. Case weights are relative."
+msgstr "上传 zip 后会列出其中的文件，再为每组测试点选择输入和输出。分值为相对权重。"
+
+msgid "Publish the editorial"
+msgstr "公开题解"
+
+msgid "Students can read it after this time, once it is public. Hidden during assignments/contests."
+msgstr "公开后且到达该时间，学生才可阅读。作业/竞赛进行中不会显示。"
+
+msgid "Enter the editorial…"
+msgstr "请输入题解…"
+
+msgid "Shown on the student problem page as the Editorial tab."
+msgstr "显示在学生做题页的「题解」标签中。"
+
+msgid "Loaded %s files. Pick input and output for each case."
+msgstr "已载入 %s 个文件。请为每组测试点选择输入和输出。"
+
+msgid "The zip has no files to match."
+msgstr "该 zip 中没有可匹配的文件。"
+
+msgid "Harness"
+msgstr "Harness"
+
+msgid "Skip pre-compilation"
+msgstr "跳过预编译"
+
+msgid "Run student main"
+msgstr "运行学生 main"
+
+msgid "Harness Code"
+msgstr "Harness 代码"
+
 #: judge/models/contest.py:94
 msgid "Should be set even for organization-private contests, where it determines whether the contest is visible to members of the specified organizations."
 msgstr "组织内竞赛也需公开，否则责组织成员无法查看本竞赛。"
@@ -4522,6 +4564,50 @@ msgstr "或者，下列类可能访问此竞赛："
 msgid "Organization"
 msgstr "组织"
 
+#: templates/problem/list.html
+msgid "Course"
+msgstr "课程"
+
+#: templates/problem/list.html
+msgid "All courses"
+msgstr "全部课程"
+
+#: templates/problem/list.html templates/problem/workspace.html
+msgid "Public"
+msgstr "公共"
+
+#: templates/problem/create_v2.html
+msgid "Courses"
+msgstr "课程"
+
+#: templates/problem/create_v2.html
+msgid "Create course"
+msgstr "创建课程"
+
+#: templates/problem/create_v2.html
+msgid "Course name"
+msgstr "课程名称"
+
+#: templates/problem/create_v2.html
+msgid "Course created"
+msgstr "课程已创建"
+
+#: templates/problem/create_v2.html
+msgid "Failed to create course"
+msgstr "创建课程失败"
+
+#: templates/problem/create_v2.html
+msgid "Please enter a course name."
+msgstr "请输入课程名称。"
+
+#: templates/problem/create_v2.html
+msgid "Select courses…"
+msgstr "选择课程…"
+
+#: templates/problem/create_v2.html
+msgid "Only classes belonging to the selected courses are listed"
+msgstr "仅列出所选课程下的班级"
+
 #: templates/contest/ranking-table.html:27
 #, python-brace-format
 msgid "Started on {time}"
@@ -5114,6 +5200,10 @@ msgid "All types"
 msgstr "全部题型"
 
 #: templates/problem/list.html
+msgid "All tags"
+msgstr "全部标签"
+
+#: templates/problem/list.html
 msgid "Difficulty"
 msgstr "难度"
 
@@ -5156,6 +5246,14 @@ msgstr "选择"
 #: templates/problem/list.html
 msgid "Search..."
 msgstr "搜索…"
+
+#: templates/problem/list.html
+msgid "Show more"
+msgstr "展开"
+
+#: templates/problem/list.html
+msgid "Show less"
+msgstr "收起"
 
 #: templates/problem/list.html
 msgid "No knowledge points yet."
@@ -5789,38 +5887,99 @@ msgstr "评分时裁判服务端发生了内部错误。"
 msgid "Error information"
 msgstr "错误信息"
 
-#: templates/submission/list.html:35 templates/submission/status.html:81
+#: templates/submission/list.html templates/submission/status.html:81
 msgid "Are you sure you want to rejudge?"
 msgstr "您确定要重新评测吗？"
 
-#: templates/submission/list.html:75
+#: templates/submission/list.html
+msgid "No submissions selected."
+msgstr "未选择提交。"
+
+#: templates/submission/list.html
+msgid "Done."
+msgstr "完成。"
+
+#: templates/submission/list.html
+msgid "Request failed."
+msgstr "请求失败。"
+
+#: templates/submission/list.html
+msgid "Are you sure you want to rejudge the selected submissions?"
+msgstr "确定要对选中的提交重新评测吗？"
+
+#: templates/submission/list.html
+msgid "Are you sure you want to rescore the selected submissions?"
+msgstr "确定要对选中的提交重新计分吗？"
+
+#: templates/submission/list.html
 msgid "Filter by status..."
 msgstr "按状态过滤…"
 
-#: templates/submission/list.html:82
+#: templates/submission/list.html
 msgid "Filter by language..."
 msgstr "按语言筛选…"
 
-#: templates/submission/list.html:306
-msgid "Filter submissions"
-msgstr "提交筛选"
+#: templates/submission/list.html
+msgid "problem / code"
+msgstr "题目 / 题号"
 
-#: templates/submission/list.html:342
+#: templates/submission/list.html
+msgid "contest key"
+msgstr "竞赛 key"
+
+#: templates/submission/list.html
+msgid "Practice only (no contest)"
+msgstr "仅练习（无竞赛）"
+
+#: templates/submission/list.html
+#, python-format
+msgid "Showing submissions in contest: %(contest)s"
+msgstr "当前范围：竞赛 %(contest)s"
+
+#: templates/submission/list.html
+msgid "Select all on this page"
+msgstr "全选当前页"
+
+#: templates/submission/list.html
+msgid "Rejudge selected"
+msgstr "Rejudge 选中"
+
+#: templates/submission/list.html
+msgid "Rescore selected"
+msgstr "Rescore 选中"
+
+#: templates/submission/list.html
+msgid "Practice Grade"
+msgstr "Practice Grade"
+
+#: templates/submission/list.html templates/submission/row.html
+msgid "Grading desk is not available yet."
+msgstr "阅卷台尚未开放。"
+
+#: templates/submission/list.html
 msgid "Total:"
 msgstr "总计："
 
-#: templates/submission/list.html:352
+#: templates/submission/list.html
 msgid "You were disconnected. Refresh to show latest updates."
 msgstr "您处于离线状态。刷新以显示最近的更新。"
 
-#: templates/submission/row.html:44
+#: templates/submission/row.html
+msgid "Select submission"
+msgstr "选择该提交"
+
+#: templates/submission/row.html
 #, python-format
 msgid "Case #%(case)s"
 msgstr "测试数据 #%(case)s"
 
-#: templates/submission/row.html:54
+#: templates/submission/row.html
 msgid "view"
 msgstr "查看"
+
+#: templates/submission/row.html
+msgid "grade"
+msgstr "grade"
 
 #: templates/submission/row.html:59
 msgid "rejudge"
@@ -6412,12 +6571,8 @@ msgid "AI difficulty failed"
 msgstr "AI 难度判定失败"
 
 #: problem create_v2 / rich_editor i18n
-msgid "AI judge"
-msgstr "AI 判断"
-
-#: problem create_v2 / rich_editor i18n
-msgid "AI judged:"
-msgstr "AI 判定："
+msgid "AI suggest:"
+msgstr "AI 推荐："
 
 #: problem create_v2 / rich_editor i18n
 msgid "AI recommends type tags from the statement"
@@ -6660,6 +6815,10 @@ msgid "Leave blank for a public problem (requires permission); selecting an orga
 msgstr "留空则为公开题（需相应权限）；选择组织后为该组织私有"
 
 #: problem create_v2 / rich_editor i18n
+msgid "Choice question"
+msgstr "选择题"
+
+#: problem create_v2 / rich_editor i18n
 msgid "Multiple choice"
 msgstr "多选题"
 
@@ -6718,6 +6877,38 @@ msgstr "页面错误："
 #: problem create_v2 / rich_editor i18n
 msgid "Partial scoring"
 msgstr "部分分"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Scoring method"
+msgstr "计分方式"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Under-select credit:"
+msgstr "少选给分："
+
+#: problem create_v2 / rich_editor i18n
+msgid "Proportional credit:"
+msgstr "比例计分："
+
+#: problem create_v2 / rich_editor i18n
+msgid "each correct choice earns"
+msgstr "每对一项得"
+
+#: problem create_v2 / rich_editor i18n
+msgid "points; a wrong choice scores 0"
+msgstr "分；错选不得分"
+
+#: problem create_v2 / rich_editor i18n
+msgid "score = full points × (correct − wrong) / number of correct options, minimum 0"
+msgstr "得分 = 满分 × (对 − 错) / 正确选项数，最低为 0"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Leave per-choice points empty to split the question evenly among correct options."
+msgstr "每项分留空则按满分均分到各正确选项。"
+
+#: problem create_v2 / rich_editor i18n
+msgid "Each blank is scored separately; set points next to each blank under Answers."
+msgstr "每个空单独计分；在上方答案处为每个空设定分数。"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Plain-text summary for meta description"
@@ -6812,8 +7003,8 @@ msgid "Select problem type"
 msgstr "选择题目类型"
 
 #: problem create_v2 / rich_editor i18n
-msgid "Setting difficulty writes a problem_type tag automatically; choosing \"AI judge\" immediately calls AI to classify Easy / Medium / Hard from the statement"
-msgstr "设置难度后自动写入 problem_type 标签；选「AI 判断」将立即调用 AI 依据题面判定 Easy / Medium / Hard"
+msgid "Setting difficulty writes a problem_type tag automatically; choosing \"AI suggest\" immediately calls AI to classify Easy / Medium / Hard from the statement"
+msgstr "设置难度后自动写入 problem_type 标签；选「AI 推荐」将立即调用 AI 依据题面判定 Easy / Medium / Hard"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Short answer"
@@ -6868,8 +7059,8 @@ msgid "True/False"
 msgstr "判断题"
 
 #: problem create_v2 / rich_editor i18n
-msgid "Type and difficulty tags are written automatically; you can add more category tags. Click \"🤖 AI\" to recommend from the statement"
-msgstr "题型与难度标签自动写入，可继续添加其它分类标签；点「🤖 AI」按题面自动推荐"
+msgid "Type and difficulty tags are written automatically; you can add more category tags. Click \"AI suggest\" to recommend from the statement"
+msgstr "题型与难度标签自动写入，可继续添加其它分类标签；点「AI 推荐」按题面自动推荐"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Unique problem code, generated by the backend"
@@ -7211,3 +7402,99 @@ msgstr "译文描述"
 msgid "+ Add another Translation"
 msgstr "+ 添加翻译"
 
+#: templates/problem/workspace.html
+msgid "Submitted source"
+msgstr "提交内容"
+
+#: templates/problem/workspace.html
+msgid "Load into editor"
+msgstr "加载到编辑器"
+
+#: judge/views/problem.py
+msgid "(option no longer available)"
+msgstr "（选项已失效）"
+
+#: judge/views/problem.py
+msgid "(no option selected)"
+msgstr "（未选择选项）"
+
+#: judge/views/problem.py
+msgid "Source code cannot be empty."
+msgstr "源代码不能为空。"
+
+#: judge/views/problem.py
+msgid "Answer cannot be empty."
+msgstr "答案不能为空。"
+
+#: templates/comments/list.html
+msgid "Write a comment; $$math$$ supported…"
+msgstr "撰写评论；支持 $$math$$…"
+
+#: templates/contest/list-v2.html
+msgid "Group by"
+msgstr "分组方式"
+
+#: templates/contest/list-v2.html
+msgid "By course"
+msgstr "按课程"
+
+#: templates/contest/list-v2.html
+msgid "By status"
+msgstr "按状态"
+
+#: templates/contest/list-v2.html
+msgid "General course"
+msgstr "公共课程"
+
+#: templates/contest/list-v2.html
+msgid "assignments"
+msgstr "作业"
+
+#: templates/contest/list-v2.html
+msgid "There are no assignments."
+msgstr "暂无作业。"
+
+#: templates/contest/list-v2.html
+msgid "Active"
+msgstr "我进行中"
+
+#: templates/contest/list-v2.html
+msgid "Ongoing"
+msgstr "进行中"
+
+#: templates/contest/list-v2.html
+msgid "Upcoming"
+msgstr "即将开始"
+
+#: templates/contest/list-v2.html
+msgid "Past"
+msgstr "已结束"
+
+#: templates/contest/list-v2.html
+msgid "Group assignments by course"
+msgstr "按课程分组"
+
+#: templates/contest/list-v2.html
+msgid "Group assignments by status"
+msgstr "按状态分组"
+
+
+#: templates/contest/grade.html
+msgid "Manual grades are only pushed to students after Release."
+msgstr "手动评分需点击 Release 后才会推送给学生。"
+
+#: templates/contest/grade.html
+msgid "Rejudge finished"
+msgstr "重判完成"
+
+#: templates/contest/grade.html
+msgid "Rejudge queued"
+msgstr "重判已排队"
+
+#: templates/contest/grade.html
+msgid "Rejudge failed"
+msgstr "重判失败"
+
+#: templates/contest/grade.html
+msgid "Rejudge is taking unusually long — refresh the page to see the result."
+msgstr "重判耗时较长，请刷新页面查看结果。"

@@ -41,9 +41,10 @@ from django.views.generic import View
 from reversion import revisions
 
 from judge.models import (Class, Language, LanguageLimit, License, Organization, Problem, ProblemBlank,
-                          ProblemClarification, ProblemFillBlankConfig, ProblemGroup, ProblemMCQConfig,
-                          ProblemMCQOption, ProblemShortAnswerConfig, ProblemSubmissionType, ProblemTemplate,
-                          ProblemTranslation, ProblemType, Profile, Solution, SubmissionSourceAccess)
+                          ProblemClarification, ProblemCodeConfig, ProblemFileConfig, ProblemFillBlankConfig,
+                          ProblemGroup, ProblemHarness, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig,
+                          ProblemSubmissionType, ProblemTemplate, ProblemTranslation, ProblemType, Profile,
+                          Solution, SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
@@ -51,10 +52,80 @@ from judge.utils.problem_create import apply_simple_problem_defaults, default_pr
 # Types the redesigned page offers but the backend cannot grade/store yet.
 NOT_IMPLEMENTED_TYPES = {'compound', 'other'}
 
+# Difficulty ProblemType.full_name defaults when attaching the standard easy/medium/hard row.
+_DIFFICULTY_FULL_NAMES = {
+    'easy': 'Easy',
+    'medium': 'Medium',
+    'hard': 'Hard',
+}
+
+# Controlled vocabulary of algorithm / solution tags the AI tag suggester may propose.
+# The AI must pick ONLY from these (plus existing knowledge tags in the DB); it may not invent
+# new labels or echo answer-format / difficulty chips.  Kept deliberately short and conventional
+# so the tag space stays uniform across problems instead of drifting with each model response.
+_KNOWLEDGE_TAG_VOCABULARY = (
+    'dp', 'dfs', 'bfs', 'greedy', 'math', 'graph', 'tree', 'string', 'sorting', 'binary search',
+    'two pointers', 'hash map', 'stack', 'queue', 'heap', 'recursion', 'backtracking',
+    'divide and conquer', 'dynamic programming', 'number theory', 'combinatorics', 'geometry',
+    'polynomial', 'linear algebra', 'probability', 'simulation', 'prefix sum', 'bit manipulation',
+    'shortest path', 'minimum spanning tree', 'topological sort', 'union find', 'segment tree',
+    'sliding window', 'linked list', 'array', 'matrix', 'binary tree', 'search', 'intervals',
+)
+
 
 def _problem_type_code(text):
     code = re.sub(r'[^\w\-]+', '-', (text or '').strip().lower())[:20].strip('-')
     return code or 'type'
+
+
+def _reserved_auto_labels():
+    """Format/difficulty auto-chip labels that must not be stored as knowledge tags."""
+    return Problem.reserved_auto_type_labels()
+
+
+def _knowledge_type_labels():
+    """Display labels of existing knowledge ProblemTypes (format/difficulty chips excluded).
+
+    This is the authoritative candidate set for AI tag suggestions: answer-format rows
+    (``programming``, ``fill_in_blank``, ``short-answer``, difficulty levels, translated chip
+    labels) are filtered out so the model can never return a question-type tag.
+    """
+    reserved = _reserved_auto_labels()
+    labels = []
+    for t in ProblemType.objects.order_by('full_name', 'name').values('name', 'full_name'):
+        ptype = ProblemType(name=t['name'], full_name=t['full_name'])
+        if Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+            labels.append(t['full_name'] or t['name'])
+    return labels
+
+
+def _tag_suggestion_candidates():
+    """Merge DB knowledge tags with the controlled vocabulary (deduped, ordered)."""
+    existing = _knowledge_type_labels()
+    seen = set()
+    out = []
+    for label in list(existing) + list(_KNOWLEDGE_TAG_VOCABULARY):
+        key = (label or '').casefold()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(label)
+    return out
+
+
+def _normalize_tag_label(label):
+    """Return the canonical display form of a suggested tag, or None if not acceptable.
+
+    Rejects answer-format / difficulty chips (``fill_in_blank``, ``Programming``, ``Easy`` …),
+    arbitrary new labels outside the vocabulary, and anything longer than 40 chars — the model
+    may only choose from the curated candidate set, keeping the tag space uniform.
+    """
+    text = (label or '').strip().strip('.').strip()
+    if not text or len(text) > 100:
+        return None
+    for candidate in _tag_suggestion_candidates():
+        if text.casefold() == candidate.casefold():
+            return candidate
+    return None
 
 
 def _can_create_any(user):
@@ -85,13 +156,20 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             context['edit_data_json'] = json.dumps(self._build_edit_data(problem))
             context['test_data_url'] = reverse('problem_data', args=[problem.code])
             context['edit_detail_url'] = reverse('problem_detail', args=[problem.code])
+            if (
+                request.user.has_perm('judge.clone_problem')
+                or problem.is_viewable_by_org_admin(request.user)
+            ):
+                context['can_clone_problem'] = True
+                context['clone_url'] = reverse('problem_clone', args=[problem.code])
         return render(request, self.template_name, context)
 
     def get_context(self, request):
         user = request.user
         profile = request.profile
-        # Organizations the teacher may scope the problem to (their own memberships).
-        orgs = list(profile.organizations.values('id', 'name')) if profile else []
+        # Match original admin organization_select2 on main: any course is selectable.
+        orgs = list(Organization.objects.order_by('name').values('id', 'name'))
+        can_edit_organizations = user.has_perm('judge.create_private_problem')
         return {
             'title': _('Add problem'),
             'organizations': orgs,
@@ -108,8 +186,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ]),
             'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
+            'can_create_file': user.has_perm('judge.create_private_problem'),
             'can_import_excel_problems': user.has_perm('judge.create_private_problem'),
-            'can_change_public': user.has_perm('judge.change_public_visibility'),
+            # Match ProblemAdmin.get_readonly_fields on main: is_public is editable with
+            # create_private_problem or change_public_visibility; save still requires an
+            # organization unless the user has change_public_visibility.
+            'can_change_public': (
+                can_edit_organizations or user.has_perm('judge.change_public_visibility')
+            ),
             'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
             'can_full_markup': user.has_perm('judge.problem_full_markup'),
             'default_group_id': default_problem_group().id,
@@ -118,7 +202,18 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'create_problem_type_url': reverse('problem_create_v2_problem_type'),
             'create_problem_group_url': reverse('problem_create_v2_problem_group'),
             'create_organization_url': reverse('problem_create_v2_organization'),
-            'can_create_organization': user.has_perm('judge.create_private_problem'),
+            'can_create_organization': can_edit_organizations,
+            'harness_languages_json': (
+                json.dumps([
+                    {'id': lang.id, 'key': lang.key, 'name': lang.name, 'ace': lang.ace}
+                    for lang in Language.objects.filter(
+                        common_name__in=['Java', 'Python'],
+                    ).order_by('common_name', 'key')
+                ])
+                .replace('<', '\\u003c')
+                .replace('>', '\\u003e')
+                .replace('&', '\\u0026')
+            ),
             'ai_problem_type_url': reverse('problem_create_v2_ai_problem_type'),
             'ai_decompose_url': reverse('problem_create_v2_ai_decompose'),
             'problem_list_url': reverse('problem_list'),
@@ -144,6 +239,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'edit_data_json': 'null',
             'test_data_url': '',
             'edit_detail_url': '',
+            'can_clone_problem': False,
+            'clone_url': '',
+            'import_format_url': '',
+            'import_create_url': '',
+            'import_data_needs_review': False,
+            'import_data_load_error': '',
+            'import_config_needs_review': False,
+            'import_unrecognized_configurations': [],
             'checkers': [{'value': value, 'label': str(label)} for value, label in CHECKERS],
             'checkers_json': json.dumps([
                 {'value': value, 'label': str(label)} for value, label in CHECKERS
@@ -214,6 +317,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     problem = self._create_fill_blank(request, payload, name, problem=existing)
                 elif qtype == 'short':
                     problem = self._create_short_answer(request, payload, name, problem=existing)
+                elif qtype == 'file':
+                    problem = self._create_file_upload(request, payload, name, problem=existing)
                 else:
                     return JsonResponse({'error': _('Unknown question type.')}, status=400)
                 revisions.set_user(request.user)
@@ -266,8 +371,15 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ProblemBlank.objects.filter(problem=problem).delete()
         ProblemFillBlankConfig.objects.filter(problem=problem).delete()
         ProblemShortAnswerConfig.objects.filter(problem=problem).delete()
+        ProblemCodeConfig.objects.filter(problem=problem).delete()
+        # Only the per-problem upload settings go; SubmissionFile rows are student data and are
+        # deliberately left alone.
+        ProblemFileConfig.objects.filter(problem=problem).delete()
         if clear_cases:
             problem.cases.all().delete()
+        # Called after submission_type is updated; drop harness when leaving programming.
+        if problem.submission_type != ProblemSubmissionType.CODE:
+            ProblemHarness.objects.filter(problem=problem).delete()
 
     def _build_edit_data(self, problem):
         """Serialize an existing problem into the shape the add-page JS expects (see collectData)."""
@@ -284,16 +396,21 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'rubric': '',
         }
 
-        diff_labels = {'Easy': 'easy', 'Medium': 'medium', 'Hard': 'hard'}
-        type_tags, difficulty = [], ''
-        for full in problem.types.values_list('full_name', 'name'):
-            label = full[0] or full[1]
-            if label in diff_labels:
-                difficulty = diff_labels[label]
-            else:
-                type_tags.append(label)
+        # Knowledge chips only — difficulty / format / auto type labels are rebuilt by the UI.
+        reserved = _reserved_auto_labels()
+        type_tags = []
+        seen_labels = set()
+        for ptype in problem.types.all():
+            if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                continue
+            label = ptype.full_name or ptype.name
+            key = (label or '').casefold()
+            if not key or key in seen_labels:
+                continue
+            seen_labels.add(key)
+            type_tags.append(label)
         data['problemTypes'] = type_tags
-        data['difficulty'] = difficulty or 'medium'
+        data['difficulty'] = problem.difficulty or 'medium'
 
         if st == ProblemSubmissionType.CODE:
             data['type'] = 'programming'
@@ -301,10 +418,27 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['memory_limit'] = round((problem.memory_limit or 0) / 1024, 2)  # KB -> MB
             data['languages'] = list(problem.allowed_languages.values_list('key', flat=True))
             data['testcases'] = self._read_testcases(problem)
+            code_config = getattr(problem, 'code_config', None)
+            data['ai'] = bool(code_config and code_config.ai_enabled)
+            data['rubric'] = (code_config.ai_rubric if code_config else '') or ''
+            data['gradingTable'] = code_config.grading_table if code_config else None
             try:
                 data['checker'] = problem.data_files.checker or ''
+                data['zip_files'] = self._zip_member_names(problem.data_files.zipfile)
             except Exception:
                 data['checker'] = ''
+                data['zip_files'] = []
+            harness = ProblemHarness.objects.filter(problem=problem).select_related('language').first()
+            if harness is not None:
+                data['harness'] = {
+                    'language_id': harness.language_id,
+                    'language': harness.language.key,
+                    'harness_code': harness.harness_code or '',
+                    'skip_precompile': harness.skip_precompile,
+                    'run_student_main': harness.run_student_main,
+                }
+            else:
+                data['harness'] = None
         elif st == ProblemSubmissionType.MCQ:
             config = getattr(problem, 'mcq_config', None)
             options = list(problem.mcq_options.order_by('order').values('text', 'is_correct'))
@@ -316,6 +450,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 data['type'] = 'multiple' if (config and config.multiple_select) else 'single'
                 data['multiple'] = bool(config and config.multiple_select)
                 data['options'] = [{'text': o['text'], 'correct': o['is_correct']} for o in options]
+                if config and config.multiple_select:
+                    data['mcqScoring'] = config.scoring_mode or ProblemMCQConfig.SCORE_PROPORTIONAL
+                    data['mcqUnderselectPoints'] = config.underselect_points
         elif st == ProblemSubmissionType.FILL_BLANK:
             data['type'] = 'blank'
             config = getattr(problem, 'fill_blank_config', None)
@@ -326,7 +463,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['gradingTable'] = config.grading_table if config else None
             # ProblemBlank stores accepted answers one-per-line and the create page now edits them
             # the same way (one accepted answer per line in a textarea), so pass them through as-is.
-            data['blanks'] = list(problem.blanks.order_by('order').values_list('answers', flat=True))
+            data['blanks'] = [
+                {'answers': blank.answers, 'points': blank.points}
+                for blank in problem.blanks.order_by('order')
+            ]
         elif st == ProblemSubmissionType.SHORT_ANSWER:
             data['type'] = 'short'
             config = getattr(problem, 'short_answer_config', None)
@@ -334,6 +474,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             data['rubric'] = (config.ai_rubric if config else '') or ''
             data['ai'] = True  # short answer always uses AI grading
             data['gradingTable'] = config.grading_table if config else None
+        elif st == ProblemSubmissionType.FILE:
+            data['type'] = 'file'
+            config = getattr(problem, 'file_config', None)
+            data['fileExtensions'] = (config.allowed_extensions if config else '') or ''
+            # The model stores bytes; the page edits MB. Keep 3 decimals so a sub-MB limit set via
+            # the API survives an edit round-trip instead of rounding down to zero.
+            data['fileMaxSizeMb'] = round((config.max_file_size or 0) / (1024 * 1024), 3) if config else 20
+            data['fileInstructions'] = (config.instructions if config else '') or ''
         else:
             data['type'] = 'single'
 
@@ -471,6 +619,34 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         except (TypeError, ValueError):
             return default
 
+    def _positive_or_none(self, value):
+        """Parse a score input; empty / missing / non-positive means “use the even split”."""
+        if value is None or value == '':
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    def _iter_blank_payload(self, payload):
+        """Yield ``(answers_text, points)`` from create-v2 ``blanks`` (strings or objects)."""
+        for item in payload.get('blanks') or []:
+            if isinstance(item, dict):
+                answers = item.get('answers') or item.get('text') or ''
+                points = self._num(item.get('points'), 1)
+            else:
+                answers = item
+                points = 1
+            if isinstance(answers, (list, tuple)):
+                answers = '\n'.join(str(part) for part in answers if part is not None and str(part).strip())
+            elif not isinstance(answers, str):
+                answers = str(answers) if answers is not None else ''
+            answers = answers.strip()
+            if not answers:
+                continue
+            yield answers, points if points > 0 else 1
+
     def _resolve_group(self, payload):
         gid = payload.get('group_id')
         if gid:
@@ -519,21 +695,75 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return ProblemType.objects.create(name=code, full_name=label[:100])
 
     def _attach_types(self, problem, payload):
-        labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+        """Persist knowledge tags + standard difficulty; drop auto type/difficulty chips.
+
+        Distinguishes omitted vs explicit ``problemTypes`` so partial/legacy
+        payloads that only send ``difficulty`` do not wipe knowledge tags:
+
+        - key missing → keep existing knowledge types; only update difficulty
+        - key present (including ``[]``) → replace knowledge types from payload
+        - ``difficulty`` omitted/invalid → keep any existing easy/medium/hard row
+        """
+        reserved = _reserved_auto_labels()
         resolved = []
         seen = set()
-        for label in labels:
-            ptype = self._resolve_problem_type(label)
-            if ptype is None or ptype.pk in seen:
-                continue
-            seen.add(ptype.pk)
-            resolved.append(ptype)
+
+        if 'problemTypes' in payload:
+            labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
+            for label in labels:
+                text = str(label).strip()
+                if text.casefold() in reserved:
+                    continue
+                ptype = self._resolve_problem_type(text)
+                if ptype is None or ptype.pk in seen:
+                    continue
+                if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                    continue
+                seen.add(ptype.pk)
+                resolved.append(ptype)
+        else:
+            for ptype in problem.types.all():
+                if ptype.pk in seen:
+                    continue
+                if not Problem.is_knowledge_problem_type(ptype, reserved_labels=reserved):
+                    continue
+                seen.add(ptype.pk)
+                resolved.append(ptype)
+
+        diff_name = Problem.canonical_difficulty_name(payload.get('difficulty'))
+        if diff_name in Problem.DIFFICULTY_TYPE_NAMES:
+            diff_type = ProblemType.objects.filter(name__iexact=diff_name).first()
+            if diff_type is None:
+                diff_type = ProblemType.objects.filter(
+                    full_name__iexact=_DIFFICULTY_FULL_NAMES[diff_name],
+                ).first()
+            if diff_type is None:
+                diff_type, _created = ProblemType.objects.get_or_create(
+                    name=diff_name,
+                    defaults={'full_name': _DIFFICULTY_FULL_NAMES[diff_name]},
+                )
+            if diff_type.pk not in seen:
+                resolved.append(diff_type)
+                seen.add(diff_type.pk)
+        else:
+            # Older clients omit difficulty — keep any existing easy/medium/hard row.
+            existing_diff = next(
+                (ptype for ptype in problem.types.all() if Problem.is_difficulty_problem_type(ptype)),
+                None,
+            )
+            if existing_diff is not None and existing_diff.pk not in seen:
+                resolved.append(existing_diff)
+
         if resolved:
             problem.types.set(resolved)
         elif not problem.types.exists():
             problem.types.add(default_problem_type())
 
-    def _attach_orgs(self, problem, payload):
+    def _attach_orgs(self, problem, payload, user):
+        # Match ProblemAdmin.get_readonly_fields: organizations is read-only without
+        # create_private_problem. Users who can edit the field may assign any course.
+        if not user.has_perm('judge.create_private_problem'):
+            return
         ids = payload.get('organizations') or []
         problem.organizations.set(Organization.objects.filter(pk__in=ids))
 
@@ -634,7 +864,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if is_create or 'banned_users' in payload:
             problem.banned_users.set(Profile.objects.filter(pk__in=self._profile_ids(payload.get('banned_users'))))
 
-        if is_create or 'classes' in payload:
+        if user.has_perm('judge.create_private_problem') and (is_create or 'classes' in payload):
             org_ids = list(problem.organizations.values_list('id', flat=True))
             class_ids = self._profile_ids(payload.get('classes'))  # reuse int parser
             class_qs = Class.get_visible_classes(request.user).filter(pk__in=class_ids)
@@ -794,86 +1024,19 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         return path.rsplit('/', 1)[-1] if path else ''
 
     @staticmethod
-    def _zip_dirname(path):
-        path = (path or '').replace('\\', '/')
-        if '/' not in path:
-            return ''
-        return path.rsplit('/', 1)[0]
-
-    @staticmethod
-    def _zip_natural_key(name):
-        return re.sub(r'(\d+)', lambda m: m.group(1).zfill(10), (name or '').lower())
-
-    @classmethod
-    def _pair_zip_entries(cls, paths):
-        """Pair zip member paths into input/output cases (same rules as create_v2.js)."""
-        usable = []
-        for path in paths:
-            if not path or path.endswith('/'):
-                continue
-            base = cls._zip_basename(path)
-            if base.startswith('.') or '__MACOSX' in path.replace('\\', '/'):
-                continue
-            usable.append(path.replace('\\', '/'))
-
-        by_dir = {}
-        for path in usable:
-            by_dir.setdefault(cls._zip_dirname(path), []).append(path)
-
-        pairs = []
-        used = set()
-
-        for directory in sorted(by_dir):
-            files = by_dir[directory]
-            lower_map = {cls._zip_basename(p).lower(): p for p in files}
-            for in_path in files:
-                if in_path in used:
-                    continue
-                base = cls._zip_basename(in_path)
-                lower = base.lower()
-                out_base = None
-                m = re.match(r'^(.+)\.in\.txt$', lower)
-                if m:
-                    stem = m.group(1)
-                    for candidate in (stem + '.out.txt', stem + '.ans.txt'):
-                        if candidate in lower_map and lower_map[candidate] not in used:
-                            out_base = candidate
-                            break
-                else:
-                    m = re.match(r'^(.+)\.in$', lower)
-                    if m:
-                        stem = m.group(1)
-                        for candidate in (stem + '.out', stem + '.ans', stem + '.out.txt', stem + '.ans.txt'):
-                            if candidate in lower_map and lower_map[candidate] not in used:
-                                out_base = candidate
-                                break
-                    else:
-                        m = re.match(r'^input(\d+)\.txt$', lower)
-                        if m:
-                            for candidate in ('output' + m.group(1) + '.txt', 'output' + m.group(1) + '.out'):
-                                if candidate in lower_map and lower_map[candidate] not in used:
-                                    out_base = candidate
-                                    break
-                        else:
-                            m = re.match(r'^in(\d+)\.txt$', lower)
-                            if m:
-                                for candidate in ('out' + m.group(1) + '.txt', 'ans' + m.group(1) + '.txt'):
-                                    if candidate in lower_map and lower_map[candidate] not in used:
-                                        out_base = candidate
-                                        break
-                if not out_base:
-                    continue
-                out_path = lower_map[out_base]
-                used.add(in_path)
-                used.add(out_path)
-                pairs.append({
-                    'input': in_path,
-                    'output': out_path,
-                    'sort_key': cls._zip_natural_key(directory + '/' + base),
-                })
-
-        pairs.sort(key=lambda item: item['sort_key'])
-        return pairs
+    def _zip_member_names(zipfile_field):
+        """Non-directory members of an uploaded ProblemData zip, as classic valid_files."""
+        if not zipfile_field:
+            return []
+        try:
+            with ZipFile(zipfile_field.path, 'r') as zf:
+                return [
+                    name.replace('\\', '/')
+                    for name in zf.namelist()
+                    if name and not name.endswith('/')
+                ]
+        except (BadZipfile, OSError, ValueError):
+            return []
 
     def _create_code(self, request, payload, name, problem=None, zip_upload=None):
         user = request.user
@@ -912,10 +1075,13 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
             self._attach_types(problem, payload)
             self._attach_languages(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
+
+            # Supplementary AI rubric scoring config (test-case judging is unchanged).
+            self._save_code_config(problem, payload)
 
             checker = payload.get('checker') or ''
             if zip_upload is not None:
@@ -924,9 +1090,37 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     meta_cases=cleaned_cases if cleaned_cases is not None else [],
                     checker=checker,
                 )
+            elif sync_cases and payload.get('zip_mode'):
+                self._save_testcase_matches(problem, cleaned_cases or [], checker=checker)
             elif sync_cases and (cleaned_cases or payload.get('edit_code')):
                 self._save_testcases(problem, cleaned_cases or [], checker=checker)
+            if 'harness' in payload:
+                self._save_harness(problem, payload)
         return problem
+
+    def _save_code_config(self, problem, payload):
+        """Persist the supplementary AI rubric config for a code problem.
+
+        The AI score is informational (stored as extra test-case rows); it never changes the
+        judge's AC/WA verdict, so an absent or disabled config is a no-op.
+        """
+        ai_enabled = bool(payload.get('ai'))
+        rubric = (payload.get('rubric') or '').strip()
+        grading_table = payload.get('gradingTable') or None
+
+        config = getattr(problem, 'code_config', None)
+        if not ai_enabled and config is None:
+            return
+        if config is None:
+            ProblemCodeConfig.objects.create(
+                problem=problem, ai_enabled=True,
+                ai_rubric=rubric, grading_table=grading_table,
+            )
+        else:
+            config.ai_enabled = ai_enabled
+            config.ai_rubric = rubric
+            config.grading_table = grading_table
+            config.save(update_fields=['ai_enabled', 'ai_rubric', 'grading_table'])
 
     def _attach_languages(self, problem, payload):
         # No selection (or an all-invalid selection) means "all languages allowed" so the problem
@@ -969,12 +1163,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         data.checker = checker_value
 
     def _save_testcases_from_zip(self, problem, uploaded_zip, meta_cases=None, checker=''):
-        """Persist cases from an uploaded archive the same way classic test_data stores zipfile.
+        """Store the archive as classic test_data does; cases reference zip members the user picked.
 
-        ``meta_cases`` supplies points/pretest (and optional preferred names) by index; file bytes
-        always come from the zip so large packages never need to ride in the JSON body.
+        The zip is not re-paired by filename conventions. ``meta_cases`` supplies
+        ``input_file`` / ``output_file`` / points / pretest for each Normal case.
         """
-        from judge.models import ProblemData, ProblemTestCase
+        from judge.models import ProblemData
         from judge.utils.problem_data import ProblemDataCompiler
 
         if not uploaded_zip:
@@ -983,10 +1177,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         if not zip_name.lower().endswith('.zip'):
             raise ValueError(_("Zip files must end in '.zip'"))
 
-        # Pair before mutating storage so a bad archive fails without clearing existing data.
         try:
             with ZipFile(uploaded_zip, 'r') as zf:
-                pairs = self._pair_zip_entries(zf.namelist())
+                namelist = [name.replace('\\', '/') for name in zf.namelist() if name and not name.endswith('/')]
         except BadZipfile:
             raise
         except Exception:
@@ -995,35 +1188,89 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             if hasattr(uploaded_zip, 'seek'):
                 uploaded_zip.seek(0)
 
-        if not pairs:
-            raise ValueError(_('No paired test files found in the zip '
-                               '(supported: N.in/N.out, N.in.txt/N.out.txt, inputN.txt/outputN.txt).'))
-
+        valid = set(namelist)
         meta_cases = meta_cases or []
+        self._write_zip_matched_cases(problem, meta_cases, valid)
         self._clear_problem_data_files(problem)
-        problem.cases.filter(type='C').delete()
-
-        valid_files = []
-        for order, pair in enumerate(pairs, start=1):
-            meta = meta_cases[order - 1] if order - 1 < len(meta_cases) else {}
-            in_name = pair['input']
-            out_name = pair['output']
-            valid_files += [in_name, out_name]
-            ProblemTestCase.objects.create(
-                dataset=problem, order=order, type='C',
-                input_file=in_name, output_file=out_name,
-                points=int(self._num(meta.get('points'), 0)),
-                is_pretest=bool(meta.get('pretest')),
-                checker=(meta.get('checker') or '')[:10],
-            )
 
         data, _created = ProblemData.objects.get_or_create(problem=problem)
         self._apply_checker(data, checker)
-        # Same FileField path as classic ProblemDataForm zip upload.
         data.zipfile.save(zip_name, uploaded_zip, save=False)
         data.save()
         problem.__dict__.pop('data_files', None)
-        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
+        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), namelist)
+
+    def _save_testcase_matches(self, problem, testcases, checker=''):
+        """Keep the existing zip and update which members each case uses (classic test_data)."""
+        from judge.models import ProblemData
+        from judge.utils.problem_data import ProblemDataCompiler
+
+        try:
+            data = problem.data_files
+        except ProblemData.DoesNotExist:
+            data = None
+        if data is None or not data.zipfile:
+            raise ValueError(_('Upload a zip of test files before matching input and output.'))
+
+        namelist = self._zip_member_names(data.zipfile)
+        self._write_zip_matched_cases(problem, testcases, set(namelist))
+        self._apply_checker(data, checker)
+        data.save()
+        problem.__dict__.pop('data_files', None)
+        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), namelist)
+
+    def _write_zip_matched_cases(self, problem, testcases, valid_names):
+        from judge.models import ProblemTestCase
+
+        prepared = []
+        for tc in testcases or []:
+            in_name = (tc.get('input_file') or '').replace('\\', '/').strip()
+            out_name = (tc.get('output_file') or '').replace('\\', '/').strip()
+            if in_name and in_name not in valid_names:
+                raise ValueError(_('Input file "%s" is not in the zip.') % in_name)
+            if out_name and out_name not in valid_names:
+                raise ValueError(_('Output file "%s" is not in the zip.') % out_name)
+            prepared.append((in_name, out_name, tc))
+
+        problem.cases.filter(type='C').delete()
+        for order, (in_name, out_name, tc) in enumerate(prepared, start=1):
+            ProblemTestCase.objects.create(
+                dataset=problem, order=order, type='C',
+                input_file=in_name, output_file=out_name,
+                points=int(self._num(tc.get('points'), 0)),
+                is_pretest=bool(tc.get('pretest')),
+                checker=(tc.get('checker') or '')[:10],
+            )
+
+    def _save_harness(self, problem, payload):
+        """Persist at most one harness, matching classic test_data formset max_num=1."""
+        harness = payload.get('harness')
+        ProblemHarness.objects.filter(problem=problem).delete()
+        if not harness or harness.get('delete'):
+            return
+        code = (harness.get('harness_code') or '').strip()
+        if not code:
+            return
+        lang = None
+        language_id = harness.get('language_id')
+        language_key = (harness.get('language') or '').strip()
+        qs = Language.objects.filter(common_name__in=['Java', 'Python'])
+        if language_id not in (None, ''):
+            try:
+                lang = qs.filter(pk=int(language_id)).first()
+            except (TypeError, ValueError):
+                lang = None
+        if lang is None and language_key:
+            lang = qs.filter(key=language_key).first()
+        if lang is None:
+            raise ValueError(_('Please select a harness language.'))
+        ProblemHarness.objects.create(
+            problem=problem,
+            language=lang,
+            harness_code=code,
+            skip_precompile=bool(harness.get('skip_precompile')),
+            run_student_main=bool(harness.get('run_student_main')),
+        )
 
     def _save_testcases(self, problem, testcases, checker=''):
         """Persist inline cases as loose files + a data.zip so the classic test_data page stays in sync.
@@ -1124,20 +1371,30 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.name = name
             problem.description = payload.get('description') or ''
             problem.points = self._num(payload.get('points'), 1)
-            problem.partial = bool(payload.get('partial')) if multiple else False
+            problem.partial = True if multiple else False
             problem.group = self._resolve_group(payload)
             apply_simple_problem_defaults(problem)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
 
+            scoring_mode = ProblemMCQConfig.SCORE_PROPORTIONAL
+            underselect_points = None
+            if multiple:
+                raw_mode = payload.get('mcqScoring') or scoring_mode
+                if raw_mode in (ProblemMCQConfig.SCORE_PROPORTIONAL, ProblemMCQConfig.SCORE_UNDERSELECT):
+                    scoring_mode = raw_mode
+                underselect_points = self._positive_or_none(payload.get('mcqUnderselectPoints'))
+                if scoring_mode != ProblemMCQConfig.SCORE_UNDERSELECT:
+                    underselect_points = None
             ProblemMCQConfig.objects.create(
-                problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')))
+                problem=problem, multiple_select=multiple, shuffle_options=bool(payload.get('shuffle')),
+                scoring_mode=scoring_mode, underselect_points=underselect_points)
             for index, option in enumerate(options):
                 ProblemMCQOption.objects.create(
                     problem=problem, order=index,
@@ -1171,7 +1428,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1187,7 +1444,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         user = request.user
         if not user.has_perm('judge.create_private_problem'):
             raise PermissionError(_('You do not have permission to create this problem type.'))
-        blanks = [b for b in (payload.get('blanks') or []) if (b or '').strip()]
+        blanks = list(self._iter_blank_payload(payload))
         if not blanks:
             raise ValueError(_('Please provide at least one blank answer.'))
 
@@ -1208,7 +1465,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1222,10 +1479,12 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 grading_table=payload.get('gradingTable') or None,
             )
             # The create page enters accepted answers one-per-line per blank; ProblemBlank stores
-            # them the same way (the grader splits on newlines).
-            for index, answers in enumerate(blanks):
+            # them the same way (the grader splits on newlines). Per-blank points apply when
+            # problem.partial is on.
+            for index, (answers, points) in enumerate(blanks):
                 normalized = '\n'.join(line.strip() for line in answers.splitlines() if line.strip())
-                ProblemBlank.objects.create(problem=problem, order=index, answers=normalized)
+                ProblemBlank.objects.create(
+                    problem=problem, order=index, answers=normalized, points=points)
         return problem
 
     # ------------------------------------------------------------------ short answer
@@ -1252,7 +1511,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.save()
 
             self._attach_types(problem, payload)
-            self._attach_orgs(problem, payload)
+            self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
             self._apply_advanced(problem, payload, request, is_create=is_create)
@@ -1262,6 +1521,64 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 reference_answer=(payload.get('shortAnswer') or '').strip(),
                 ai_rubric=(payload.get('rubric') or '').strip(),
                 grading_table=payload.get('gradingTable') or None,
+            )
+        return problem
+
+    @staticmethod
+    def _normalise_extensions(raw):
+        """``".PDF, .zip"`` -> ``"pdf,zip"``.
+
+        ``ProblemFileConfig.allowed_extension_list`` expects lowercase, dot-less entries, so store
+        them that way rather than round-tripping whatever the author typed.
+        """
+        seen, out = set(), []
+        for part in (raw or '').split(','):
+            ext = part.strip().lstrip('.').lower()
+            if ext and ext not in seen:
+                seen.add(ext)
+                out.append(ext)
+        return ','.join(out)
+
+    def _create_file_upload(self, request, payload, name, problem=None):
+        user = request.user
+        if not user.has_perm('judge.create_private_problem'):
+            raise PermissionError(_('You do not have permission to create this problem type.'))
+
+        # The page edits whole MB; the model stores bytes. Guard on the byte count so a fractional
+        # value cannot truncate to 0 — ProblemFileConfig treats 0 as "no limit".
+        max_file_size = int(self._num(payload.get('fileMaxSizeMb'), 20) * 1024 * 1024)
+        if max_file_size <= 0:
+            raise ValueError(_('Maximum file size must be greater than zero.'))
+
+        with transaction.atomic():
+            is_create = problem is None
+            if is_create:
+                problem = Problem(submission_type=ProblemSubmissionType.FILE)
+            else:
+                problem.submission_type = ProblemSubmissionType.FILE
+                self._clear_type_children(problem)
+            problem.name = name
+            problem.description = payload.get('description') or ''
+            problem.points = self._num(payload.get('points'), 1)
+            # A teacher grades these by hand and may award anything in [0, points], so partial
+            # credit must be on for the awarded score to reach Profile.points and the standings.
+            problem.partial = True
+            problem.group = self._resolve_group(payload)
+            apply_simple_problem_defaults(problem)
+            problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
+            problem.save()
+
+            self._attach_types(problem, payload)
+            self._attach_orgs(problem, payload, user)
+            problem.is_organization_private = problem.organizations.exists()
+            problem.save(update_fields=['is_organization_private'])
+            self._apply_advanced(problem, payload, request, is_create=is_create)
+
+            ProblemFileConfig.objects.create(
+                problem=problem,
+                allowed_extensions=self._normalise_extensions(payload.get('fileExtensions')),
+                max_file_size=max_file_size,
+                instructions=(payload.get('fileInstructions') or '').strip(),
             )
         return problem
 
@@ -1282,28 +1599,34 @@ class ProblemCreateV2AIDifficultyView(LoginRequiredMixin, View):
         if not description:
             return JsonResponse({'error': _('Please enter problem content first.')}, status=400)
 
-        level = self._classify(description)
+        try:
+            level = self._classify(description)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('AI difficulty classification failed')
+            return JsonResponse({'error': _('Could not reach the AI service. '
+                                            'Please check your connection and try again.')}, status=503)
         return JsonResponse({'level': level, 'label': {'easy': 'Easy', 'medium': 'Medium', 'hard': 'Hard'}[level]})
 
     def _classify(self, description):
         from judge import llm
 
+        # Only call the LLM when it is configured; a configured-but-unreachable model is an error
+        # (surfaced to the user as 503) rather than a silent fallback that pretends the AI worked.
         if llm.is_configured():
-            try:
-                messages = [
-                    {'role': 'system', 'content': (
-                        'You classify educational/problem difficulty. Reply with exactly one word: '
-                        'easy, medium, or hard. No other text.'
-                    )},
-                    {'role': 'user', 'content': description[:4000]},
-                ]
-                text = llm.chat(messages, max_tokens=16).text.strip().lower()
-                for level in ('easy', 'medium', 'hard'):
-                    if level in text:
-                        return level
-            except Exception:
-                pass
+            messages = [
+                {'role': 'system', 'content': (
+                    'You classify educational/problem difficulty. Reply with exactly one word: '
+                    'easy, medium, or hard. No other text.'
+                )},
+                {'role': 'user', 'content': description[:4000]},
+            ]
+            text = llm.chat(messages, max_tokens=16).text.strip().lower()
+            for level in ('easy', 'medium', 'hard'):
+                if level in text:
+                    return level
 
+        # Heuristic fallback (no LLM configured, or the model returned no usable label).
         compact = description.replace(' ', '')
         if len(compact) < 80:
             return 'easy'
@@ -1431,58 +1754,81 @@ class ProblemCreateV2AIProblemTypeView(LoginRequiredMixin, View):
         if not description:
             return JsonResponse({'error': _('Please enter problem content first.')}, status=400)
 
-        suggestions = self._suggest(description)
+        try:
+            suggestions = self._suggest(description)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('AI tag suggestion failed')
+            return JsonResponse({'error': _('Could not reach the AI service. '
+                                            'Please check your connection and try again.')}, status=503)
         return JsonResponse({'suggestions': suggestions})
 
     def _suggest(self, description):
         from judge import llm
 
-        existing = list(ProblemType.objects.order_by('full_name', 'name').values('name', 'full_name'))
-        labels = [t['full_name'] or t['name'] for t in existing]
+        # Candidate set = existing knowledge tags + the controlled algorithm vocabulary.
+        # Answer-format / difficulty chips (fill_in_blank, Programming, Easy, …) are excluded
+        # here AND re-filtered after parsing, so a format tag can never be suggested.
+        candidates = _tag_suggestion_candidates()
 
+        # Only call the LLM when configured; a configured-but-unreachable model raises (surfaced
+        # as 503) instead of silently falling back and pretending the AI produced the tags.
         if llm.is_configured():
-            try:
-                messages = [
-                    {'role': 'system', 'content': (
-                        'You classify competitive-programming / educational problems. '
-                        'Reply with 1-3 short category labels from this list when possible, '
-                        'comma-separated. If none fit, suggest one new short label (≤20 chars). '
-                        'Existing labels: ' + ', '.join(labels[:80])
-                    )},
-                    {'role': 'user', 'content': description[:4000]},
-                ]
-                text = llm.chat(messages, max_tokens=64).text.strip()
-                picked = []
-                for part in text.replace('\n', ',').split(','):
-                    label = part.strip().strip('.')
-                    if not label:
-                        continue
-                    match = next((t for t in existing if label.lower() in (t['full_name'] or '').lower()
-                                  or label.lower() in t['name'].lower()), None)
-                    if match:
-                        picked.append({'name': match['name'], 'full': match['full_name'] or match['name'],
-                                       'existing': True})
-                    elif len(label) <= 100:
-                        code = label[:20].replace(' ', '-').lower()
-                        picked.append({'name': code, 'full': label, 'existing': False})
-                    if len(picked) >= 3:
-                        break
-                if picked:
-                    return picked
-            except Exception:
-                pass
+            messages = [
+                {'role': 'system', 'content': (
+                    'You classify competitive-programming / educational problems by the '
+                    'algorithm or solution technique they exercise (e.g. dynamic programming, '
+                    'depth-first search, polynomial math).\n'
+                    'Rules:\n'
+                    '- Reply with 1-3 labels, comma-separated, chosen ONLY from the provided '
+                    'candidate list.\n'
+                    '- NEVER invent labels that are not in the candidate list.\n'
+                    '- NEVER use question-format tags (programming, fill-in-the-blank, '
+                    'multiple-choice, short answer, true/false) or difficulty tags '
+                    '(easy, medium, hard) or anything unrelated to the solution method.\n'
+                    '- If nothing fits well, reply with a single most-relevant candidate '
+                    'instead of inventing new ones.\n'
+                    'Candidate labels: ' + ', '.join(candidates)
+                )},
+                {'role': 'user', 'content': description[:4000]},
+            ]
+            text = llm.chat(messages, max_tokens=64).text.strip()
+            picked = []
+            seen = set()
+            for part in text.replace('\n', ',').split(','):
+                label = _normalize_tag_label(part)
+                if label is None:
+                    continue
+                key = label.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Prefer the DB knowledge tag row when the label already exists; otherwise
+                # the frontend creates the ProblemType row from the vocabulary label on save.
+                existing = next((t for t in _knowledge_type_labels()
+                                 if t.casefold() == label.casefold()), None)
+                picked.append({
+                    'name': _problem_type_code(existing or label),
+                    'full': existing or label,
+                    'existing': existing is not None,
+                })
+                if len(picked) >= 3:
+                    break
+            if picked:
+                return picked
 
+        # No LLM configured (or the model returned no usable label): fall back to substring
+        # matching against knowledge tags only.
         compact = description.lower()
         picked = []
-        for t in existing:
-            for token in (t['full_name'] or '', t['name']):
-                if token and token.lower() in compact:
-                    picked.append({'name': t['name'], 'full': t['full_name'] or t['name'], 'existing': True})
-                    break
+        for label in _knowledge_type_labels():
+            if label.lower() in compact:
+                picked.append({'name': _problem_type_code(label), 'full': label, 'existing': True})
             if len(picked) >= 3:
                 break
         if picked:
             return picked
+        # Last resort: a generic tag is preferable to inventing a question-type tag.
         return [{'name': 'general', 'full': 'General', 'existing': False}]
 
 

@@ -31,4 +31,8 @@ exclude =
     ./dmoj/local_settings.py,
     # is actually a fragment to be included by settings.py
     ./.ci.settings.py,
-    ./judge/management/commands/migrate_organizations.py
+    ./judge/management/commands/migrate_organizations.py,
+    # local virtualenv (CI never has one, so this only affects local runs)
+    .venv,
+    # local gitlab-ci-local build artifacts
+    .gitlab-ci-local,

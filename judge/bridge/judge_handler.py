@@ -387,7 +387,9 @@ class JudgeHandler(ZlibPacketHandler):
         status_codes = ['SC', 'AC', 'WA', 'MLE', 'TLE', 'IR', 'RTE', 'OLE']
         batches = {}  # batch number: (points, total)
 
-        for case in SubmissionTestCase.objects.filter(submission=submission):
+        # Supplementary AI rubric rows carry batch=-1 (see code.AI_GRADE_BATCH); they are
+        # teacher-only feedback and must never contribute to the aggregate score/verdict.
+        for case in SubmissionTestCase.objects.filter(submission=submission).exclude(batch=-1):
             time += case.time
             if not case.batch:
                 points += case.points
@@ -427,6 +429,46 @@ class JudgeHandler(ZlibPacketHandler):
         ))
 
         self._post_update_submission(submission.id, 'grading-end', done=True)
+
+        # Supplementary AI rubric scoring (optional): when the problem has an enabled code AI
+        # config, score the source against the rubric in a daemon thread after the judge verdict
+        # is final.  The rubric rows are appended as extra test cases and never change the verdict.
+        self._maybe_run_code_ai_grade(submission)
+
+    @staticmethod
+    def _maybe_run_code_ai_grade(submission):
+        from threading import Thread
+
+        from judge.models import ProblemSubmissionType
+        from judge.question_types.code import supplementary_ai_grade
+
+        if submission.problem.submission_type != ProblemSubmissionType.CODE:
+            return
+        # Cheap pre-check inside the worker too; this just avoids spawning threads needlessly.
+        try:
+            if not submission.problem.code_config.ai_enabled:
+                return
+        except Exception:
+            return
+
+        def _run():
+            try:
+                rows = supplementary_ai_grade(submission)
+                if rows:
+                    from judge.models import SubmissionTestCase
+                    SubmissionTestCase.objects.bulk_create([
+                        SubmissionTestCase(
+                            submission=submission, case=r['case'], status=r['status'],
+                            time=0, memory=0, points=r['points'], total=r['total'],
+                            batch=r.get('batch'), feedback=r['feedback'],
+                            extended_feedback=r['extended_feedback'],
+                        )
+                        for r in rows
+                    ])
+            except Exception:
+                logger.exception('Code AI rubric scoring failed for submission %d', submission.id)
+
+        Thread(target=_run, daemon=True).start()
 
     def on_compile_error(self, packet):
         logger.info('%s: Submission failed to compile: %s', self.name, packet['submission-id'])

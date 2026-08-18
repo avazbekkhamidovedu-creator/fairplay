@@ -5,14 +5,29 @@ from urllib.parse import urljoin
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
+from django.core.cache import cache
 from django.core.files.storage import default_storage
+from django.db.models import Q
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, HttpResponseNotFound, \
-    HttpResponseRedirect
+    HttpResponseRedirect, JsonResponse
+from django.utils.translation import gettext as _, ngettext
 from django.views.decorators.http import require_POST
 
-from judge.models import Submission
+from judge.models import ContestParticipation, Profile, Submission
 
-__all__ = ['rejudge_submission']
+__all__ = ['rejudge_submission', 'bulk_rejudge_submissions', 'bulk_rescore_submissions']
+
+
+def _parse_submission_ids(request):
+    raw_ids = request.POST.getlist('ids')
+    if len(raw_ids) == 1 and ',' in raw_ids[0]:
+        raw_ids = [part.strip() for part in raw_ids[0].split(',') if part.strip()]
+    ids = []
+    for value in raw_ids:
+        if not str(value).isdigit():
+            return None
+        ids.append(int(value))
+    return ids
 
 
 @login_required
@@ -34,6 +49,118 @@ def rejudge_submission(request):
     redirect = request.POST.get('path', None)
 
     return HttpResponseRedirect(redirect) if redirect else HttpResponse('success', content_type='text/plain')
+
+
+@login_required
+@require_POST
+def bulk_rejudge_submissions(request):
+    """Bulk rejudge selected submissions (mirrors Admin SubmissionAdmin.judge)."""
+    if not request.user.has_perm('judge.rejudge_submission') or not request.user.has_perm('judge.edit_own_problem'):
+        return JsonResponse({
+            'ok': False,
+            'processed': 0,
+            'message': _('You do not have the permission to rejudge submissions.'),
+        }, status=403)
+
+    ids = _parse_submission_ids(request)
+    if not ids:
+        return JsonResponse({
+            'ok': False,
+            'processed': 0,
+            'message': _('No submissions selected.'),
+        }, status=400)
+
+    queryset = Submission.objects.filter(id__in=ids).order_by('id')
+    if not request.user.has_perm('judge.rejudge_submission_lot') and \
+            queryset.count() > settings.DMOJ_SUBMISSIONS_REJUDGE_LIMIT:
+        return JsonResponse({
+            'ok': False,
+            'processed': 0,
+            'message': _('You do not have the permission to rejudge THAT many submissions.'),
+        }, status=403)
+
+    if not request.user.has_perm('judge.edit_all_problem'):
+        profile_id = request.profile.id
+        queryset = queryset.filter(
+            Q(problem__authors__id=profile_id) | Q(problem__curators__id=profile_id),
+        ).distinct()
+
+    judged = len(queryset)
+    for submission in queryset:
+        submission.judge(rejudge=True, batch_rejudge=True, rejudge_user=request.user)
+
+    message = ngettext(
+        '%d submission was successfully scheduled for rejudging.',
+        '%d submissions were successfully scheduled for rejudging.',
+        judged,
+    ) % judged
+    return JsonResponse({'ok': True, 'processed': judged, 'message': message})
+
+
+@login_required
+@require_POST
+def bulk_rescore_submissions(request):
+    """Bulk rescore selected submissions (mirrors Admin recalculate_score)."""
+    if not request.user.has_perm('judge.rejudge_submission'):
+        return JsonResponse({
+            'ok': False,
+            'processed': 0,
+            'message': _('You do not have the permission to rejudge submissions.'),
+        }, status=403)
+
+    ids = _parse_submission_ids(request)
+    if not ids:
+        return JsonResponse({
+            'ok': False,
+            'processed': 0,
+            'message': _('No submissions selected.'),
+        }, status=400)
+
+    # Match SubmissionAdmin.get_queryset: limited staff may only touch
+    # submissions for problems they author or curate (recalculate_score itself
+    # only checks rejudge_submission; admin changelist queryset is already scoped).
+    queryset = Submission.objects.filter(id__in=ids)
+    if not request.user.has_perm('judge.edit_all_problem'):
+        profile_id = request.profile.id
+        queryset = queryset.filter(
+            Q(problem__authors__id=profile_id) | Q(problem__curators__id=profile_id),
+        ).distinct()
+
+    if not request.user.has_perm('judge.rejudge_submission_lot') and \
+            queryset.count() > settings.DMOJ_SUBMISSIONS_REJUDGE_LIMIT:
+        return JsonResponse({
+            'ok': False,
+            'processed': 0,
+            'message': _('You do not have the permission to rejudge THAT many submissions.'),
+        }, status=403)
+
+    submissions = list(queryset.defer(None).select_related(None).select_related('problem')
+                       .only('points', 'case_points', 'case_total', 'problem__partial', 'problem__points'))
+    for submission in submissions:
+        submission.points = round(submission.case_points / submission.case_total * submission.problem.points
+                                  if submission.case_total else 0, 1)
+        if not submission.problem.partial and submission.points < submission.problem.points:
+            submission.points = 0
+        submission.save()
+        submission.update_contest()
+
+    user_ids = queryset.values_list('user_id', flat=True).distinct()
+    for profile in Profile.objects.filter(id__in=user_ids):
+        profile.calculate_points()
+        cache.delete('user_complete:%d' % profile.id)
+        cache.delete('user_attempted:%d' % profile.id)
+
+    participation_ids = queryset.values_list('contest__participation_id', flat=True)
+    for participation in ContestParticipation.objects.filter(id__in=participation_ids).prefetch_related('contest'):
+        participation.recompute_results()
+
+    processed = len(submissions)
+    message = ngettext(
+        '%d submission was successfully rescored.',
+        '%d submissions were successfully rescored.',
+        processed,
+    ) % processed
+    return JsonResponse({'ok': True, 'processed': processed, 'message': message})
 
 
 def django_uploader(image):

@@ -201,7 +201,7 @@ class FillBlankSubmitViewTestCase(CommonDataMixin, TestCase):
 
     def test_submit_correct_grades_internally(self):
         self.client.force_login(self.users['normal'])
-        response = self._post(blank_0='  paris ', blank_1='1789')
+        response = self._post(fb_0='  paris ', fb_1='1789')
         self.assertEqual(response.status_code, 302)
 
         sub = Submission.objects.get(problem=self.problem, user=self.users['normal'].profile)
@@ -213,7 +213,7 @@ class FillBlankSubmitViewTestCase(CommonDataMixin, TestCase):
 
     def test_submit_partial_wrong(self):
         self.client.force_login(self.users['normal'])
-        self._post(blank_0='Paris', blank_1='nope')
+        self._post(fb_0='Paris', fb_1='nope')
         sub = Submission.objects.get(problem=self.problem, user=self.users['normal'].profile)
         self.assertEqual(sub.result, 'WA')
         self.assertEqual(sub.points, 5)
@@ -230,12 +230,26 @@ class FillBlankSubmitViewTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('problem_detail', args=['fbsub']))
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(b'id_source', response.content)
-        self.assertIn(b'name="blank_0"', response.content)
-        self.assertIn(b'name="blank_1"', response.content)
+        self.assertIn(b'name="fb_0"', response.content)
+        self.assertIn(b'name="fb_1"', response.content)
+
+    def test_fill_blank_inputs_disable_browser_autocomplete(self):
+        from judge.forms import FillBlankSubmitForm
+
+        form = FillBlankSubmitForm(problem=self.problem)
+        for name in form.fields:
+            html = str(form[name])
+            self.assertIn('autocomplete="new-password"', html, msg='%s missing autocomplete=new-password' % name)
+            self.assertIn('readonly', html, msg='%s missing readonly autofill guard' % name)
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_detail', args=['fbsub']))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'autocomplete="new-password"', response.content)
+        self.assertIn(b'name="fb_0"', response.content)
 
     def test_resubmit_prefills_previous_answers(self):
         self.client.force_login(self.users['normal'])
-        self._post(blank_0='Paris', blank_1='nope')
+        self._post(fb_0='Paris', fb_1='nope')
         sub = Submission.objects.get(problem=self.problem, user=self.users['normal'].profile)
         # Use the dedicated resubmit route so old_submission is populated and prefills the form.
         response = self.client.get(reverse('problem_submit', args=['fbsub', sub.id]))

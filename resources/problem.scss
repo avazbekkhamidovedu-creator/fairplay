@@ -59,18 +59,18 @@ span.type-tag {
     line-height: 1.4;
 
     &.diff-easy {
-        background: #dcfce7;
-        color: #15803d;
+        background: var(--oj-diff-easy-bg);
+        color: var(--oj-diff-easy-text);
     }
 
     &.diff-medium {
-        background: #ffedd5;
-        color: #c2410c;
+        background: var(--oj-diff-medium-bg);
+        color: var(--oj-diff-medium-text);
     }
 
     &.diff-hard {
-        background: #f3e8ff;
-        color: #7e22ce;
+        background: var(--oj-diff-hard-bg);
+        color: var(--oj-diff-hard-text);
     }
 }
 
@@ -105,23 +105,23 @@ ul.problem-list {
 }
 
 .solved-problem-color {
-    color: #44AD41;
+    color: var(--oj-accepted);
 }
 
 .unsolved-problem-color {
-    color: #DE2121;
+    color: var(--oj-rejected);
 }
 
 .attempted-problem-color {
-    color: orange;
+    color: var(--oj-warning);
 }
 
 .has-editorial-color {
-    color: #44AD41;
+    color: var(--oj-accepted);
 }
 
 .no-editorial-color {
-    color: #DE2121;
+    color: var(--oj-rejected);
 }
 
 .submissions-left {
@@ -163,13 +163,13 @@ ul.problem-list {
     font-weight: 600;
     margin-right: 0.45em;
     position: relative;
-    background-color: #00ccff;
+    background-color: var(--oj-info);
     transform: translateY(+35%);
     display: inline-block;
 }
 
 .class-tag a {
-    color: #000000;
+    color: var(--oj-text);
 }
 
 .pdf-icon {
@@ -178,7 +178,7 @@ ul.problem-list {
     font-size: 1.5em;
 
     .pdf-icon-logo {
-        color: #d40e13;
+        color: var(--oj-rejected);
     }
 
     .pdf-icon-bar {
@@ -186,7 +186,7 @@ ul.problem-list {
         display: block;
         position: absolute;
         top: 0.3em;
-        background: #d40e13;
+        background: var(--oj-rejected);
         width: 0.6em;
         margin-left: -0.15em;
     }
@@ -458,31 +458,66 @@ ul.problem-list {
         align-items: flex-start;
     }
 
+    .filter-row-conditions {
+        flex-wrap: nowrap;
+        align-items: center;
+
+        > .filter-label {
+            padding-top: 0;
+        }
+    }
+
     .filter-controls {
         display: flex;
-        flex-wrap: wrap;
-        gap: 16px 24px;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 8px 12px;
         flex: 1;
         min-width: 0;
     }
 
     .filter-group {
-        display: flex;
+        display: inline-flex;
         align-items: center;
         gap: 8px;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        flex: 0 0 auto;
     }
 
     .filter-group-label {
-        font-size: var(--oj-font-size-sm);
+        font-size: var(--oj-font-size);
         color: var(--text-muted);
         white-space: nowrap;
+        flex-shrink: 0;
     }
+
+    /* Native <select> placeholder before Select2 init (see list.html inline CSS). */
+    #filter-format,
+    #filter-difficulty,
+    #filter-course,
+    #filter-knowledge,
+    #status-filter {
+        visibility: hidden;
+        height: var(--oj-control-height);
+        max-height: var(--oj-control-height);
+        overflow: hidden;
+        box-sizing: border-box;
+    }
+
+    #filter-format { width: 140px; }
+    #filter-difficulty { width: 120px; }
+    #filter-course { width: 150px; }
+    #filter-knowledge { width: clamp(280px, 48%, 560px); max-width: 100%; }
+    #status-filter { width: 100px; }
 
     .ac-range {
         display: flex;
         align-items: center;
         gap: 6px;
+
+        .input-num {
+            width: 56px;
+        }
     }
 
     .ac-range-sep,
@@ -658,31 +693,68 @@ ul.problem-list {
     }
 }
 
-/* ── Knowledge filter (placeholder) ── */
+/* ── Knowledge filter: always-visible hot tags ── */
 .problem-list-redesign {
     .knowledge-filter {
         display: flex;
-        align-items: flex-start;
-        gap: 10px;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
         flex: 1;
-        flex-wrap: wrap;
+        min-width: 0;
+
+        > .select2-container {
+            width: clamp(280px, 48%, 560px);
+            max-width: 100%;
+            align-self: flex-start;
+        }
+
+        .select2-container .select2-selection--multiple {
+            min-height: var(--oj-control-height);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+        }
     }
 
-    .knowledge-selected {
+    .knowledge-picker {
         display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        flex: 1;
-        min-height: 32px;
-        padding: 4px 8px;
-        border: 1px dashed var(--border);
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+
+    /* Select2 local multi-selects: compact fixed width so Filters stay one row. */
+    .filter-controls .select2-container {
+        flex: 0 0 auto;
+    }
+
+    .filter-controls .select2-container .select2-selection--multiple {
+        min-height: var(--oj-control-height);
+        border: 1px solid var(--border);
         border-radius: var(--radius-sm);
+    }
+
+    .filter-controls .select,
+    .filter-controls .select2-container--dmoj .select2-selection--single {
+        min-width: 100px;
+        height: var(--oj-control-height);
+        box-sizing: border-box;
+    }
+
+    .filter-controls .select2-container--dmoj .select2-selection--single {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        display: flex;
         align-items: center;
     }
 
-    .knowledge-placeholder {
-        color: var(--text-muted);
-        font-size: var(--oj-font-size);
+    .filter-controls .select2-container--dmoj .select2-selection--single .select2-selection__rendered {
+        padding-left: 10px;
+        line-height: calc(var(--oj-control-height) - 2px);
+    }
+
+    .filter-controls .select2-container--dmoj .select2-selection--single .select2-selection__arrow {
+        height: 100%;
     }
 }
 
@@ -805,6 +877,31 @@ ul.problem-list {
                 text-decoration: none;
             }
         }
+
+        /* Buttons (e.g. the contest list sort menu) share the link row style. */
+        li button {
+            display: block;
+            width: 100%;
+            padding: 8px 14px;
+            border: none;
+            border-radius: 0;
+            background: transparent;
+            font-size: var(--oj-font-size);
+            text-align: left;
+            color: var(--text);
+            box-shadow: none;
+            cursor: pointer;
+
+            &:hover {
+                background: var(--bg);
+                color: var(--text);
+            }
+
+            &.active {
+                color: var(--oj-accent);
+                font-weight: 600;
+            }
+        }
     }
 }
 
@@ -893,7 +990,7 @@ ul.problem-list {
             .sort-link,
             .btn-text,
             button {
-                color: var(--oj-heading-text) !important;
+                color: var(--oj-heading-text);
                 font-size: inherit;
                 font-weight: inherit;
                 line-height: inherit;
@@ -903,16 +1000,16 @@ ul.problem-list {
             .sort-link:hover,
             .btn-text:hover,
             button:hover {
-                color: var(--oj-heading-text) !important;
+                color: var(--oj-heading-text);
                 text-decoration: underline;
             }
 
             /* Keep header controls flat on the dark bar */
             .btn-text,
             button.btn-text {
-                background: none !important;
-                border: none !important;
-                box-shadow: none !important;
+                background: none;
+                border: none;
+                box-shadow: none;
                 padding: 0;
                 min-height: 0;
                 display: inline;
@@ -1154,7 +1251,7 @@ ul.problem-list {
         li.active-page span {
             background: var(--oj-accent);
             border-color: var(--oj-accent);
-            color: #fff;
+            color: var(--oj-btn-text);
         }
 
         li.disabled-page span {
@@ -1166,23 +1263,20 @@ ul.problem-list {
 
 /* ── Fixes & additions (rev 2) ── */
 .problem-list-redesign {
-    /* The global `.button, button, input[type=submit]` rule forces white text with
-       !important, which makes our light-background buttons invisible. Re-assert the
-       intended colours with matching specificity + !important. */
-    /* Global `button` rule forces white text; re-assert variants here. */
-    .group-tab { color: var(--text) !important; }
-    .group-tab:hover { color: var(--oj-accent) !important; }
-    .group-tab.active { color: var(--oj-btn-text) !important; }
+    /* widgets.scss no longer forces white on all buttons, so class selectors
+       here naturally outrank the `button` type selector. */
+    .group-tab { color: var(--text); }
+    .group-tab:hover { color: var(--oj-accent); }
+    .group-tab.active { color: var(--oj-btn-text); }
     .group-tab .count { color: inherit; }
 
-    .multi-select-trigger { color: var(--text) !important; }
-    .icon-btn { color: var(--text-muted) !important; }
-    .icon-btn:hover { color: var(--oj-accent) !important; }
-    .sort-btn { color: var(--text) !important; }
-    .sort-link { color: inherit !important; }
+    .multi-select-trigger { color: var(--text); }
+    .icon-btn { color: var(--text-muted); }
+    .icon-btn:hover { color: var(--oj-accent); }
+    .sort-btn { color: var(--text); }
+    .sort-link { color: inherit; }
 
-    /* Align the row label with the first line of its controls. */
-    .filter-row-conditions > .filter-label,
+    /* Align the Tags row label with the first line of chips. */
     .knowledge-row > .filter-label {
         padding-top: 8px;
     }
@@ -1218,6 +1312,41 @@ ul.problem-list {
         .sort-btn-dir {
             color: var(--text-muted);
             font-size: var(--oj-font-size-sm);
+        }
+    }
+
+    /* Segmented group switch (By course / By status) in the toolbar. */
+    .group-switch {
+        display: inline-flex;
+        align-items: stretch;
+        height: var(--oj-control-height);
+        padding: 2px;
+        gap: 2px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+
+        .group-switch-btn {
+            height: 100%;
+            padding: 0 12px;
+            border: none;
+            border-radius: calc(var(--radius-sm) - 2px);
+            background: transparent;
+            font-size: var(--oj-font-size);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+
+            &:hover {
+                background: var(--bg);
+                color: var(--oj-accent);
+            }
+
+            &.active {
+                background: var(--oj-accent);
+                color: var(--oj-btn-text);
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            }
         }
     }
 
@@ -1275,35 +1404,18 @@ ul.problem-list {
     }
 }
 
-/* ── Knowledge-point picker (ported from reference) ── */
+/* ── Knowledge tags (always-visible local multi-select chips) ── */
 .problem-list-redesign {
-    .knowledge-picker {
-        margin: -4px 0 12px 68px;
-        padding: 0;
-        overflow: hidden;
-    }
-
-    .knowledge-picker-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--border);
-
-        .input {
-            flex: 1;
-            max-width: 220px;
-        }
-    }
-
     .knowledge-picker-body {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        padding: 14px;
         max-height: 220px;
         overflow-y: auto;
+    }
+
+    .knowledge-picker:not(.is-expanded) .knowledge-tag:not(.is-hot):not(.active) {
+        display: none;
     }
 
     .knowledge-tag {
@@ -1313,20 +1425,21 @@ ul.problem-list {
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         background: var(--bg);
+        font: inherit;
         font-size: var(--oj-font-size-sm);
-        color: var(--text) !important;
+        color: var(--text);
         cursor: pointer;
         user-select: none;
 
         &:hover {
             border-color: var(--oj-accent);
-            color: var(--oj-accent) !important;
+            color: var(--oj-accent);
         }
 
         &.active {
             background: linear-gradient(to bottom, var(--oj-btn-from) 0, var(--oj-btn-to) 100%);
             border-color: var(--oj-btn-border);
-            color: var(--oj-btn-text) !important;
+            color: var(--oj-btn-text);
         }
 
         .badge {
@@ -1342,35 +1455,32 @@ ul.problem-list {
         margin: 0;
     }
 
-    .knowledge-picker-footer {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 10px;
-        padding: 10px 14px;
-        border-top: 1px solid var(--border);
-
-        span:first-child {
-            margin-right: auto;
-            font-size: var(--oj-font-size-sm);
-            color: var(--text-muted);
-        }
+    .knowledge-show-more {
+        padding: 0;
+        min-height: 0;
     }
 }
 
 @media (max-width: 768px) {
     .problem-list-redesign {
-        .knowledge-picker {
-            margin-left: 0;
-        }
-
         .filter-row {
             flex-direction: column;
             align-items: stretch;
         }
 
+        .filter-row-conditions,
+        .filter-controls {
+            flex-wrap: wrap;
+        }
+
         .filter-label {
             min-width: auto;
+        }
+
+        #filter-knowledge,
+        .knowledge-filter > .select2-container {
+            width: 100%;
+            max-width: 100%;
         }
 
         .toolbar {

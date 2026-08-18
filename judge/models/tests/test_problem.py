@@ -1,11 +1,14 @@
+from unittest import mock
+
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
-from judge.models import Language, LanguageLimit, Problem, Submission
+from judge.models import Language, LanguageLimit, Problem, ProblemData, ProblemType, Submission
 from judge.models.problem import VotePermission, disallowed_characters_validator
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_organization, create_problem, create_problem_type, create_solution, create_user
+from judge.utils.problem_create import apply_simple_problem_defaults
 
 
 class ProblemTestCase(CommonDataMixin, TestCase):
@@ -87,6 +90,17 @@ class ProblemTestCase(CommonDataMixin, TestCase):
         self.assertEqual(self.basic_problem.translated_name('ABCDEFGHIJK'), self.basic_problem.name)
 
         self.assertFalse(self.basic_problem.clarifications.exists())
+
+    def test_new_problem_does_not_rename_data_root_on_later_save(self):
+        problem = Problem(name='New code problem', description='Statement', points=1)
+        apply_simple_problem_defaults(problem)
+
+        with mock.patch.object(ProblemData, '_update_code') as update_code:
+            problem.save()
+            ProblemData.objects.create(problem=problem)
+            problem.save()
+
+        update_code.assert_not_called()
 
     def test_basic_problem_language_limits(self):
         for common_name, memory_limit in self.basic_problem.language_memory_limit:
@@ -443,11 +457,19 @@ class ProblemDifficultyPropertiesTestCase(CommonDataMixin, TestCase):
         create_problem_type(name='fill_in_blank', full_name='Fill in Blank')
         create_problem_type(name='dp', full_name='Dynamic Programming')
         create_problem_type(name='greedy', full_name='Greedy')
+        # Legacy auto chips persisted with non-canonical names (still must not show in Tags).
+        create_problem_type(name='programming', full_name='Programming')
+        create_problem_type(name='fill-in-blank', full_name='Fill-in-blank')
 
         cls.easy_problem = create_problem(
             code='diff-easy',
             is_public=True,
             types=('easy', 'code', 'dp'),
+        )
+        cls.polluted_tags = create_problem(
+            code='diff-polluted',
+            is_public=True,
+            types=('easy', 'programming', 'fill-in-blank', 'dp', 'greedy'),
         )
         cls.hard_problem = create_problem(
             code='diff-hard',
@@ -480,11 +502,61 @@ class ProblemDifficultyPropertiesTestCase(CommonDataMixin, TestCase):
         self.assertIsNone(Problem.difficulty_display(None))
 
     def test_format_types_list_excludes_difficulty_and_knowledge(self):
-        self.assertEqual(self.easy_problem.format_types_list, ['Code'])
+        self.assertEqual(self.easy_problem.format_types_list, ['Programming'])
 
     def test_knowledge_types_list_excludes_format_and_difficulty(self):
         self.assertEqual(self.easy_problem.knowledge_types_list, ['Dynamic Programming'])
         self.assertEqual(self.untagged_difficulty.knowledge_types_list, ['Greedy'])
+
+    def test_knowledge_types_list_excludes_auto_chips_and_dedupes(self):
+        self.assertEqual(
+            self.polluted_tags.knowledge_types_list,
+            ['Dynamic Programming', 'Greedy'],
+        )
+
+    def test_is_knowledge_type_name_excludes_format_aliases(self):
+        self.assertTrue(Problem.is_knowledge_type_name('dp'))
+        self.assertFalse(Problem.is_knowledge_type_name('code'))
+        self.assertFalse(Problem.is_knowledge_type_name('programming'))
+        self.assertFalse(Problem.is_knowledge_type_name('编程题'))
+        self.assertFalse(Problem.is_knowledge_type_name('single-choice'))
+        self.assertFalse(Problem.is_knowledge_type_name('easy'))
+        self.assertFalse(Problem.is_knowledge_type_name('hard'))
+
+
+class CapitalizedDifficultyTypeTestCase(CommonDataMixin, TestCase):
+    """MySQL treats Easy and easy as the same unique name; this suite only seeds capitalized IDs."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        create_problem_type(name='Easy', full_name='Easy')
+        create_problem_type(name='Medium', full_name='Medium')
+        create_problem_type(name='Hard', full_name='Hard')
+        create_problem_type(name='dp', full_name='Dynamic Programming')
+        cls.easy_problem = create_problem(
+            code='diff-caps-easy',
+            is_public=True,
+            types=('Easy', 'dp'),
+        )
+        cls.hard_problem = create_problem(
+            code='diff-caps-hard',
+            is_public=True,
+            types=('Hard', 'dp'),
+        )
+
+    def test_difficulty_recognizes_capitalized_category_ids(self):
+        self.assertEqual(self.easy_problem.difficulty, 'easy')
+        self.assertEqual(self.easy_problem.difficulty_label, 'Easy')
+        self.assertEqual(self.hard_problem.difficulty, 'hard')
+        self.assertEqual(self.hard_problem.difficulty_label, 'Hard')
+        self.assertEqual(self.easy_problem.knowledge_types_list, ['Dynamic Programming'])
+        self.assertTrue(Problem.is_difficulty_problem_type(ProblemType.objects.get(name='Easy')))
+        self.assertTrue(Problem.is_difficulty_problem_type(ProblemType.objects.get(name='Hard')))
+        self.assertEqual(Problem.canonical_difficulty_name('Easy'), 'easy')
+        self.assertEqual(Problem.canonical_difficulty_name('Hard'), 'hard')
+        self.assertEqual(Problem.canonical_difficulty_name('difficult'), 'hard')
+        self.assertEqual(Problem.canonical_difficulty_name('困难'), 'hard')
 
 
 class DisallowedCharactersValidatorTestCase(SimpleTestCase):

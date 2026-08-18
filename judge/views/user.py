@@ -274,21 +274,29 @@ class UserAboutPage(UserPage):
             'height': '%.3fem' % rating_progress(rating.rating),
         } for rating in ratings]))
 
+        # Aggregate in SQL. Use TruncDate(..., tzinfo=UTC) so MySQL does not call
+        # CONVERT_TZ into the active user timezone (missing tz tables → NULL → crash).
+        # Skip any residual null buckets defensively.
         submissions = (
             self.object.submission_set
-            .annotate(date_only=TruncDate('date'))
-            .values('date_only').annotate(cnt=Count('id'))
+            .filter(date__isnull=False)
+            .annotate(date_only=TruncDate('date', tzinfo=datetime.timezone.utc))
+            .values('date_only')
+            .annotate(cnt=Count('id'))
         )
-
         context['submission_data'] = mark_safe(json.dumps({
-            date_counts['date_only'].isoformat(): date_counts['cnt'] for date_counts in submissions
+            row['date_only'].isoformat(): row['cnt']
+            for row in submissions
+            if row['date_only'] is not None
         }))
+        min_year = (
+            self.object.submission_set
+            .filter(date__isnull=False)
+            .annotate(year_only=ExtractYear('date', tzinfo=datetime.timezone.utc))
+            .aggregate(min_year=Min('year_only'))['min_year']
+        )
         context['submission_metadata'] = mark_safe(json.dumps({
-            'min_year': (
-                self.object.submission_set
-                .annotate(year_only=ExtractYear('date'))
-                .aggregate(min_year=Min('year_only'))['min_year']
-            ),
+            'min_year': min_year,
         }))
         return context
 

@@ -8,16 +8,15 @@ manual-review flag so grading never blocks.
 """
 import json
 import logging
-import time as _time
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
 from judge.models import ProblemSubmissionType
+from judge.question_types.ai_grading import call_llm, parse_calibrated_scores, sub_score_cases
 from judge.question_types.base import GradingResult, QuestionType
 from judge.question_types.registry import register
-from judge.utils.calibration import calibrate
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,7 @@ class ShortAnswerQuestionType(QuestionType):
         return reverse('admin:judge_problem_change', args=(problem.id,))
 
     # --- student submission -------------------------------------------------
-    def build_form(self, problem, profile, data=None, initial=None):
+    def build_form(self, problem, profile, data=None, files=None, initial=None):
         from judge.forms import ShortAnswerSubmitForm
         return ShortAnswerSubmitForm(data, problem=problem, initial=initial)
 
@@ -90,16 +89,7 @@ class ShortAnswerQuestionType(QuestionType):
 
         # Build one SubmissionTestCase per sub-question so the status page
         # renders a grading table with per-item feedback.
-        cases = []
-        for i, sq in enumerate(sub_scores):
-            cases.append({
-                'case': i + 1,
-                'status': 'AC' if sq['score'] >= sq['max_points'] else 'WA',
-                'points': sq['score'],
-                'total': sq['max_points'],
-                'feedback': sq['name'],
-                'extended_feedback': sq.get('feedback', ''),
-            })
+        cases = sub_score_cases(sub_scores)
 
         return GradingResult(case_points=total, case_total=case_total,
                              result=result, cases=cases)
@@ -141,50 +131,17 @@ class ShortAnswerQuestionType(QuestionType):
         messages = self._build_messages(problem, reference, rubric, answer, sub_questions)
 
         try:
-            raw = self._call_llm(llm, messages)
+            raw = call_llm(llm, messages)
             logger.info('Short-answer raw LLM response (submission): %s', raw)
-            parsed = json.loads(raw)
+            if raw is None:
+                return None
+            calibrated = parse_calibrated_scores(raw, sub_questions, log_prefix='Short-answer: ')
         except Exception:
             logger.exception('Short-answer AI grading failed for submission')
             return None
 
-        sub_scores = parsed.get('sub_scores', [])
-        if not isinstance(sub_scores, list) or not sub_scores:
+        if not calibrated:
             return None
-
-        # Calibrate per sub-question — match by INDEX, not by name.
-        # The prompt lists sub-questions in order; the LLM returns sub_scores
-        # in the same order.  Index matching avoids fragile exact-name
-        # comparison when the LLM slightly rephrases a label.
-        calibrated = []
-        for i, sq in enumerate(sub_scores):
-            try:
-                raw_score = float(sq.get('score', 0))
-            except (ValueError, TypeError):
-                logger.warning('Short-answer: non-numeric score from LLM: %r', sq.get('score'))
-                raw_score = 0.0
-            name = str(sq.get('name', ''))[:30]
-            if i < len(sub_questions):
-                max_pts = sub_questions[i]['max_points']
-                strictness = sub_questions[i]['strictness']
-            else:
-                logger.warning(
-                    'Short-answer: LLM returned more sub_scores (%d) than sub_questions (%d); '
-                    'extra item "%s" defaulting max_pts=1.0.',
-                    len(sub_scores), len(sub_questions), name)
-                max_pts = 1.0
-                strictness = 'normal'
-
-            cal_score = calibrate(raw_score, max_pts, strictness)
-            logger.info(
-                'Short-answer calibration: sub="%s" raw=%.2f max=%.2f strict=%s → calibrated=%.2f',
-                name, raw_score, max_pts, strictness, cal_score)
-            calibrated.append({
-                'name': name,
-                'max_points': max_pts,
-                'score': cal_score,
-                'feedback': str(sq.get('feedback', ''))[:2000],
-            })
 
         total = sum(item['score'] for item in calibrated)
         # Apply 0.5 rounding to the total as a final safety net.
@@ -277,31 +234,3 @@ class ShortAnswerQuestionType(QuestionType):
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': user},
         ]
-
-    @staticmethod
-    def _call_llm(llm, messages):
-        """Send the prompt with retry on transient errors (429/5xx), exponential
-        back-off 1s → 5s → 25s, max 3 retries.  Returns the stripped text."""
-        delays = [1, 5, 25]
-        for attempt in range(len(delays) + 1):
-            try:
-                result = llm.chat(messages, profile='grading',
-                                  max_tokens=2048, temperature=0,
-                                  response_format={'type': 'json_object'})
-                text = result.text.strip()
-                # Strip markdown code fences if present
-                if text.startswith('```'):
-                    lines = text.split('\n')
-                    text = '\n'.join(lines[1:]) if len(lines) > 1 else text
-                    if text.endswith('```'):
-                        text = text.rsplit('```', 1)[0]
-                return text.strip()
-            except Exception as exc:
-                logger.warning('LLM attempt %d failed', attempt + 1, exc_info=True)
-                if attempt < len(delays):
-                    msg = str(exc).lower()
-                    if any(str(code) in msg for code in (429, 500, 502, 503, 504)):
-                        _time.sleep(delays[attempt])
-                        continue
-                return None
-        return None

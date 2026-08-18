@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import re
 from urllib.parse import urlparse, urlunparse
 
 from django.urls import reverse
@@ -9,6 +10,30 @@ BEK_HEADER = 'HTTP_X_SAFEEXAMBROWSER_REQUESTHASH'
 CFG_HEADER = 'HTTP_X_SAFEEXAMBROWSER_CONFIGKEYHASH'
 
 SEB_INSTALL_URL = 'https://safeexambrowser.org/download_en.html'
+
+# Both Browser Exam Keys and Config Keys are SHA-256 hashes in lowercase hex.
+SEB_KEY_RE = re.compile('[0-9a-f]{64}')
+
+
+def parse_seb_keys(text):
+    """Split a key textarea into hashes: one per line, trailing comments dropped."""
+    out = []
+    for raw in (text or '').splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        token = line.split()[0].lower()
+        if token:
+            out.append(token)
+    return out
+
+
+def first_invalid_seb_key(text):
+    """Return the first parsed key that is not a 64-char hex hash, else ``None``."""
+    for key in parse_seb_keys(text):
+        if not SEB_KEY_RE.fullmatch(key):
+            return key
+    return None
 
 
 def _sha256_hex(absolute_url, key):
@@ -35,7 +60,7 @@ def request_matches_seb(request, allowed_bek, allowed_cfg):
 def seb_launch_context(request, contest):
     download_url = None
     sebs_url = None
-    if contest.seb_config_file:
+    if contest.seb_effective_config_file:
         download_url = request.build_absolute_uri(reverse('contest_seb_config', args=(contest.key,)))
         parsed = urlparse(download_url)
         sebs_scheme = 'sebs' if parsed.scheme == 'https' else 'seb'
@@ -44,6 +69,6 @@ def seb_launch_context(request, contest):
     return {
         'download_url': download_url,
         'sebs_url': sebs_url,
-        'quit_url': contest.seb_quit_url or '',
+        'quit_url': contest.seb_effective_quit_url,
         'install_url': SEB_INSTALL_URL,
     }

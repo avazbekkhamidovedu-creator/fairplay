@@ -9,6 +9,8 @@ from django.utils import timezone
 from judge.models import Language, Problem, ProblemGroup, ProblemSubmissionType, ProblemType, Submission
 from judge.models.tests.util import (
     CommonDataMixin,
+    create_contest,
+    create_organization,
     create_problem,
     create_problem_group,
     create_problem_type,
@@ -196,17 +198,19 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         ))
         self.assertEqual(codes, {'filter-easy', 'filter-hard', 'filter-alpha', 'filter-beta'})
 
-    def test_knowledge_and_format_filters_use_and_semantics(self):
+    def test_knowledge_filters_use_or_semantics(self):
+        # Multi-select within tags is OR: problems matching any selected tag are kept.
         codes = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
             {
-                'type': [self.type_ids['dp'], self.type_ids['code']],
+                'type': [self.type_ids['dp'], self.type_ids['greedy']],
                 'filtered': '1',
             },
         ))
-        self.assertEqual(codes, {'filter-easy', 'filter-hard'})
+        self.assertEqual(codes, {'filter-easy', 'filter-hard', 'filter-greedy', 'filter-alpha', 'filter-beta'})
 
     def test_combined_difficulty_and_knowledge_filters(self):
+        # Different dimensions still AND: difficulty ∩ tags.
         codes = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
             {
@@ -247,6 +251,58 @@ class ProblemListFilterTestCase(ProblemListTestBase):
             },
         ))
         self.assertEqual(codes, {'filter-other'})
+
+    def test_organization_filter_uses_or_semantics(self):
+        org_a = create_organization(name='Filter Org A')
+        org_b = create_organization(name='Filter Org B')
+        self.problem_easy.organizations.add(org_a)
+        self.problem_hard.organizations.add(org_b)
+        self.problem_alpha.organizations.add(org_a, org_b)
+
+        codes = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {
+                'organization': [org_a.id, org_b.id],
+                'filtered': '1',
+            },
+        ))
+        self.assertEqual(codes, {'filter-easy', 'filter-hard', 'filter-alpha'})
+
+    def test_course_filter_lists_membership_and_public(self):
+        mine = create_organization(name='My Filter Course')
+        other = create_organization(name='Other Filter Course')
+        self.users['normal'].profile.organizations.add(mine)
+        context = self._context(self.users['normal'], {})
+        names = {org.name for org in context['organizations']}
+        self.assertIn(mine.name, names)
+        self.assertNotIn(other.name, names)
+        self.assertFalse(context['filter_public_course'])
+
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_list'))
+        self.assertContains(response, 'value="public"', html=False)
+        self.assertContains(response, mine.name)
+        self.assertNotContains(response, other.name)
+
+    def test_public_course_filter_excludes_org_private(self):
+        org = create_organization(name='PrivCourse')
+        self.users['normal'].profile.organizations.add(org)
+        self.problem_easy.is_organization_private = True
+        self.problem_easy.save()
+        self.problem_easy.organizations.add(org)
+
+        public_codes = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'course': ['public'], 'filtered': '1'},
+        ))
+        self.assertNotIn('filter-easy', public_codes)
+        self.assertIn('filter-hard', public_codes)
+
+        course_codes = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'course': [str(org.id)], 'filtered': '1'},
+        ))
+        self.assertEqual(course_codes, {'filter-easy'})
 
     def test_ac_rate_range_filter(self):
         codes = self._filter_group_codes(self._filtered_codes(
@@ -376,25 +432,44 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         response = self.client.get(reverse('problem_list'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="filter-form"', html=False)
-        self.assertContains(response, 'id="difficulty-multi-select"', html=False)
+        # Select2-backed local multi-selects + tags chip picker.
+        self.assertContains(response, 'id="filter-difficulty"', html=False)
+        self.assertContains(response, 'id="filter-course"', html=False)
         self.assertContains(response, 'id="status-filter"', html=False)
+        self.assertContains(response, 'id="filter-knowledge"', html=False)
+        self.assertContains(response, 'id="knowledge-picker"', html=False)
+        self.assertContains(response, 'id="knowledge-picker-body"', html=False)
+        self.assertNotContains(response, 'id="knowledge-search"', html=False)
+        self.assertNotContains(response, 'id="knowledge-selected"', html=False)
+        self.assertNotContains(response, 'id="toggle-knowledge-picker"', html=False)
+        self.assertNotContains(response, 'id="close-knowledge"', html=False)
+        self.assertNotContains(response, 'id="clear-knowledge"', html=False)
+        self.assertNotContains(response, 'knowledge-picker-footer', html=False)
+        self.assertNotContains(response, 'Click to choose tags (multiple)', html=False)
         self.assertContains(response, 'class="difficulty-badge', html=False)
+        self.assertContains(response, 'Programming', html=False)
+        self.assertNotContains(response, 'group-tabs', html=False)
+        self.assertNotContains(response, 'col-group', html=False)
+        self.assertContains(response, '>Tags<', html=False)
+        self.assertNotContains(response, 'id="difficulty-multi-select"', html=False)
+        self.assertNotContains(response, 'id="org-multi-select"', html=False)
 
     def test_problem_list_context_splits_type_groups(self):
         context = self._context(self.users['normal'], {})
 
         difficulty_names = {t.name for t in context['difficulty_types']}
         knowledge_names = {t.name for t in context['knowledge_types']}
-        # Format options come from the registered question types (submission_type), exposed as
-        # {'code', 'label'} dicts, not from the ProblemType taxonomy. MCQ is additionally broken
-        # down into single / multiple / true-false pseudo-codes on top of the whole-MCQ option.
+        # Format options come from the registered question types (submission_type).
+        # MCQ is one option ("Choice question") covering single / multiple / true-false.
         format_codes = {f['code'] for f in context['format_types']}
+        format_labels = {f['label'] for f in context['format_types']}
 
         self.assertEqual(difficulty_names, {'easy', 'medium', 'hard'})
-        self.assertEqual(
-            format_codes,
-            {t.submission_type for t in all_types()} | {'single', 'multiple', 'truefalse'},
-        )
+        self.assertEqual(format_codes, {t.submission_type for t in all_types()})
+        self.assertIn('Choice question', format_labels)
+        self.assertNotIn('Multiple choice', format_labels)
+        self.assertNotIn('Single choice', format_labels)
+        self.assertNotIn('True/False', format_labels)
         self.assertIn('dp', knowledge_names)
         self.assertIn('greedy', knowledge_names)
         # Format- and difficulty-named ProblemTypes are not surfaced as knowledge points.
@@ -416,11 +491,63 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         # ...and the active format selection comes from the dedicated ?format param.
         self.assertEqual(context['selected_formats'], [ProblemSubmissionType.MCQ])
 
-    def test_problem_list_context_exposes_group_and_type_counts(self):
+    def test_problem_list_context_exposes_type_counts(self):
         context = self._context(self.users['normal'], {})
-        self.assertGreaterEqual(context['group_counts'].get(self.group_id, 0), 6)
+        self.assertIn('organizations', context)
         self.assertGreaterEqual(context['type_counts'].get(self.type_ids['dp'], 0), 3)
-        self.assertGreaterEqual(context['total_problem_count'], 7)
+        self.assertNotIn('total_problem_count', context)
+
+    def test_knowledge_types_ordered_by_problem_count(self):
+        context = self._context(self.users['normal'], {})
+        counts = [context['type_counts'].get(t.id, 0) for t in context['knowledge_types']]
+        self.assertEqual(counts, sorted(counts, reverse=True))
+        names = [t.name for t in context['knowledge_types']]
+        self.assertLess(names.index('dp'), names.index('greedy'))
+        self.assertEqual(context['knowledge_hot_count'], ProblemList.KNOWLEDGE_PICKER_HOT_COUNT)
+
+    def test_knowledge_picker_collapses_low_frequency_tags(self):
+        hot = ProblemList.KNOWLEDGE_PICKER_HOT_COUNT
+        for i in range(hot + 3):
+            create_problem_type(name='extra-tag-%02d' % i, full_name='Extra Tag %02d' % i)
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_list'))
+        self.assertContains(response, 'id="knowledge-show-more"', html=False)
+        self.assertContains(response, 'is-hot', html=False)
+
+    def test_m2m_filters_do_not_duplicate_rows(self):
+        """M2M course/tag JOINs can multiply rows; list/count must stay distinct."""
+        org_a = create_organization(name='Distinct Org A')
+        org_b = create_organization(name='Distinct Org B')
+        # One problem matching both selected orgs and both selected knowledge tags.
+        self.problem_easy.organizations.add(org_a, org_b)
+        self.problem_easy.types.add(
+            ProblemType.objects.get(id=self.type_ids['dp']),
+            ProblemType.objects.get(id=self.type_ids['greedy']),
+        )
+
+        qs = self._view(self.users['normal'], {
+            'organization': [org_a.id, org_b.id],
+            'type': [self.type_ids['dp'], self.type_ids['greedy']],
+            'filtered': '1',
+        }).get_normal_queryset()
+        codes = list(qs.values_list('code', flat=True))
+        easy_hits = [c for c in codes if c == 'filter-easy']
+        self.assertEqual(len(easy_hits), 1, 'expected a single list row for filter-easy, got %r' % (codes,))
+        self.assertEqual(qs.filter(code='filter-easy').count(), 1)
+
+        # Pagination / progress count uses the same distinct queryset.
+        view = self._view(self.users['normal'], {
+            'organization': [org_a.id, org_b.id],
+            'type': [self.type_ids['dp'], self.type_ids['greedy']],
+            'filtered': '1',
+        })
+        queryset = view.get_normal_queryset()
+        paginator = view.get_paginator(queryset, view.paginate_by)
+        self.assertEqual(paginator.count, queryset.count())
+        self.assertEqual(
+            sum(1 for p in paginator.object_list if p.code == 'filter-easy'),
+            1,
+        )
 
     def test_problem_list_context_exposes_progress_counts(self):
         self._mark_solved(self.problem_easy)
@@ -537,11 +664,6 @@ class ProblemListSortTestCase(ProblemListTestBase):
         self.assertEqual(asc_names, sorted(asc_names))
         self.assertEqual(desc_names, sorted(desc_names, reverse=True))
 
-    def test_sort_by_group(self):
-        codes = self._sorted_codes(self.users['normal'], {'order': 'group'})
-        group_names = [Problem.objects.get(code=code).group.name for code in codes]
-        self.assertEqual(group_names, sorted(group_names))
-
     def test_sort_by_type(self):
         asc = self._sorted_codes(
             self.users['normal'],
@@ -610,7 +732,12 @@ class ProblemDetailDifficultyTestCase(CommonDataMixin, TestCase):
     def test_problem_detail_shows_difficulty_badge(self):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'class="difficulty-badge diff-easy"', html=False)
+        # Workspace header uses ws-badge; classic problem.html uses bare difficulty-badge.
+        self.assertTrue(
+            'ws-badge difficulty-badge diff-easy' in response.content.decode()
+            or 'class="difficulty-badge diff-easy"' in response.content.decode(),
+            'expected difficulty badge for the open problem',
+        )
         self.assertContains(response, 'Easy', html=False)
 
     def test_problem_detail_hides_difficulty_when_unset(self):
@@ -621,7 +748,9 @@ class ProblemDetailDifficultyTestCase(CommonDataMixin, TestCase):
         )
         response = self.client.get(reverse('problem_detail', args=[problem.code]))
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, 'class="difficulty-badge', html=False)
+        # Drawer rows may still show badges for other problems; only the open problem
+        # header uses the ws-badge difficulty chip.
+        self.assertNotContains(response, 'ws-badge difficulty-badge', html=False)
 
 
 class ProblemBulkDeleteRedirectTestCase(CommonDataMixin, TestCase):
@@ -655,3 +784,56 @@ class ProblemBulkDeleteRedirectTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, '/problems/?category=1')
         self.assertFalse(Problem.objects.filter(code='bulk-del-keep').exists())
+
+
+class ProblemSubmitGuardTestCase(CommonDataMixin, TestCase):
+    """A non-public problem attached to an assignment is only reachable after
+    joining (OJ contest-problem access). Editors may still test-submit outside
+    a live window."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.student = create_user(username='guard_student')
+        cls.editor = create_user(username='guard_editor', user_permissions=('edit_own_problem',))
+        cls.problem = create_problem(code='guardprob', authors=('guard_editor',), allowed_languages=('PY3',))
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='guardcontest', name='Guard Contest',
+            start_time=_now - timedelta(days=1), end_time=_now + timedelta(days=1),
+            is_visible=True, authors=('superuser',),
+        )
+        from judge.models import ContestProblem, Judge
+        ContestProblem.objects.create(contest=cls.contest, problem=cls.problem, points=100, order=1)
+        cls.lang = Language.objects.get(key='PY3')
+        judge = Judge.objects.create(name='guardjudge', auth_key='guardkey', online=True)
+        judge.problems.add(cls.problem)
+        judge.runtimes.add(cls.lang)
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_student_blocked_from_regular_submit(self):
+        self.client.force_login(self.student)
+        detail = self.client.get(reverse('problem_detail', args=['guardprob']))
+        self.assertEqual(detail.status_code, 404)
+        response = self.client.post(
+            reverse('problem_submit', args=['guardprob']),
+            {'language': self.lang.id, 'source': 'print(1)'},
+        )
+        self.assertIn(response.status_code, (403, 404))
+        self.assertFalse(Submission.objects.filter(user=self.student.profile).exists())
+
+    def test_editor_not_blocked_from_regular_submit(self):
+        # Maintainers (authors/editors) may still test-submit from the problem
+        # page outside a contest — the guard must not overblock them.
+        from unittest import mock
+
+        with mock.patch('judge.models.submission.judge_submission'):
+            self.client.force_login(self.editor)
+            response = self.client.post(
+                reverse('problem_submit', args=['guardprob']),
+                {'language': self.lang.id, 'source': 'print(1)'},
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Submission.objects.filter(user=self.editor.profile).exists())

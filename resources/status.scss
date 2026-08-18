@@ -1,44 +1,44 @@
 .AB {
-    background-color: #CCC;
-    color: black;
+    background-color: var(--oj-judge-pending);
+    color: var(--oj-text);
 }
 
 .AC {
-    background-color: #53f23f;
-    color: green;
+    background-color: var(--oj-judge-pass);
+    color: var(--oj-accepted);
 }
 
 ._AC {
-    background-color: #DFFF00;
-    color: green;
+    background-color: var(--oj-judge-sc);
+    color: var(--oj-accepted);
 }
 
 .WA {
-    background-color: #CCC;
-    color: #ef1b53;
+    background-color: var(--oj-judge-pending);
+    color: var(--oj-judge-fail);
 }
 
 .TLE, .MLE {
-    background-color: #CCC;
-    color: black;
+    background-color: var(--oj-judge-pending);
+    color: var(--oj-text);
 }
 
 .OLE, .IR, .RTE, .OTH {
-    background-color: #FAB623;
-    color: black;
+    background-color: var(--oj-judge-judging);
+    color: var(--oj-text);
 }
 
 .CE {
-    background-color: #CCC;
-    color: black;
+    background-color: var(--oj-judge-pending);
+    color: var(--oj-text);
 }
 
 .IE {
-    background-color: red;
-    color: black;
+    background-color: var(--oj-rejected);
+    color: var(--oj-text);
 }
 
 .QU, .G {
-    background: white;
-    color: black;
+    background: var(--oj-surface);
+    color: var(--oj-text);
 }

@@ -1,24 +1,26 @@
 {% extends "base.html" %}
 
-{% block title %}{% if edit_code %}{{ _('Edit problem') }} &mdash; {{ edit_name or edit_code }}{% else %}{{ _('Add problem') }}{% endif %}{% endblock %}
+{% block title %}{% if import_editor_mode %}{{ _('Excel import preview') }}{% elif edit_code %}{{ _('Edit problem') }} &mdash; {{ edit_name or edit_code }}{% else %}{{ _('Add problem') }}{% endif %}{% endblock %}
 
-{# 与题库列表一致：顶部显示 List / Admin / Add 选项卡（Add 高亮），内容在下方 #}
+{# Match the problem list: show List / Admin / Add tabs at the top, with Add highlighted. #}
 {% block title_row %}
+  {% if not import_editor_mode %}
   {% set tab = 'add' %}
   {% include "problem/problem-list-tabs.html" %}
+  {% endif %}
 {% endblock %}
 {% block title_ruler %}{% endblock %}
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
-  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}">
+  <link rel="stylesheet" href="{{ static('rich_editor.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
+  <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
   {# Same pattern as base.html DARK_STYLE_CSS: rebuild page styles with vars-dark. #}
   <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
-  <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}" media="(prefers-color-scheme: dark)">
   {% include "problem/add-problem-menu-assets.html" %}
 
-  <!-- 数学公式：块级 $$...$$ / \[...\]；行内 \(...\)（旧 ~...~ 仍兼容） -->
+  <!-- Math formulas: block $$...$$ / \[...\]; inline \(...\) (legacy ~...~ remains supported). -->
   <script>
     window.MathJax = {
       tex: {
@@ -37,7 +39,7 @@
 
   <!-- Page-local layout tweaks; colours come from --oj-* / problem_create_v2.css -->
   <style>
-    /* 融入站点框架（继承 base.html）：不再锁 100vh，随页面滚动 */
+    /* Integrate with the base.html layout: do not lock height to 100vh; scroll with the page. */
     .v2-main { display: block; }
     .v2-top { padding: 0.55rem 1.5rem 0.75rem; border-bottom: 1px solid var(--admin-border); background: var(--admin-bg,#f8f8f8); flex-shrink: 0; }
     .v2-top .breadcrumb { margin: 0; }
@@ -52,12 +54,12 @@
     #opt-hint,
     #tc-testdata-hint { display: none !important; }
 
-    /* 需求6：题面标签与预览标题同高，保证左右齐平 */
+    /* Keep the statement label level with the preview heading. */
     .stem-block > .block-label,
     .content-preview .pv-head { height: 20px; line-height: 20px; margin-bottom: 0.6rem !important; }
     .stem-block > .block-label { display: block; font-weight: 600; font-size: var(--oj-font-size, 14px); }
 
-    /* 需求8：内联测试用例 */
+    /* Inline test cases. */
     .tc-table { width: 100%; border-collapse: collapse; font-size: var(--oj-font-size-sm, 12px); }
     .tc-table th, .tc-table td { border: 1px solid var(--admin-border, #ddd); padding: 0.35rem 0.4rem; text-align: left; vertical-align: top; }
     .tc-table th { background: var(--admin-header, #3b3b3b); color: #fff; font-weight: 600; }
@@ -105,8 +107,19 @@
     .tc-collapse-summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; color: var(--muted); transition: transform 0.15s; }
     .tc-collapse[open] .tc-collapse-summary::before { transform: rotate(90deg); }
     .tc-body-wrap { border-top: 1px solid var(--admin-border); padding: 0.75rem 0.85rem 0.9rem; }
+    .editorial-collapse { margin: 0; }
+    .editorial-collapse > summary {
+      background: var(--admin-header); color: var(--admin-header-text); margin: 0; padding: 0.55rem 1rem;
+      font-size: 1.1em; font-weight: 600; cursor: pointer; list-style: none; user-select: none;
+      border-bottom: 1px solid var(--admin-header-border);
+      border-radius: var(--oj-radius-md, 6px) var(--oj-radius-md, 6px) 0 0;
+    }
+    .editorial-collapse > summary::-webkit-details-marker { display: none; }
+    .editorial-collapse > summary::before { content: '▸'; display: inline-block; margin-right: 0.5rem; transition: transform 0.15s; }
+    .editorial-collapse[open] > summary::before { transform: rotate(90deg); }
+    .editorial-collapse:not([open]) > summary { border-bottom: none; border-radius: var(--oj-radius-md, 6px); }
 
-    /* ZIP 用例预览：更窄；同时展示该用例的 in + out */
+    /* ZIP case preview: compact and shows both input and output. */
     .tc-drawer-mask {
       display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.28); z-index: 1200;
     }
@@ -147,7 +160,7 @@
     .draft-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: #f39c12; flex-shrink: 0; }
     .draft-banner.saved .dot { background: var(--dmoj-green); }
 
-    /* 需求4：复合题子题目 */
+    /* Composite-problem subquestions. */
     .sub-q { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); margin-bottom: 0.75rem; overflow: hidden; background: #fff; }
     .sub-q-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.65rem; background: #f5f5f5; border-bottom: 1px solid var(--admin-border); }
     .sub-q-head .sq-idx { font-weight: 700; color: var(--oj-accent, #2980B9); }
@@ -160,26 +173,20 @@
     .sub-q-body { padding: 0.75rem; }
     .sub-q.collapsed .sub-q-body { display: none; }
 
-    /* 需求7：部分分 / AI 判题 配置 */
+    /* Partial-score and AI-judging configuration. */
     .score-conf { margin-top: 0.5rem; padding: 0.6rem 0.75rem; background: var(--admin-bg, #fafafa); border: 1px dashed var(--admin-border); border-radius: 5px; }
-    .profile-select2 + .select2-container { max-width: 500px; width: 100% !important; }
+    .profile-select2 + .select2-container,
+    .org-select2 + .select2-container { max-width: 500px; width: 100% !important; }
     .unsaved-note { font-size: 12px; color: var(--muted); padding: 0.35rem 1rem 0.6rem; }
     .radio-list label { display: block; font-weight: normal; width: auto; padding: 0.2rem 0; }
     .inline-num input { width: 70px; }
 
-    /* 需求5：解析折叠 */
-    .explain-collapse > summary { list-style: none; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--muted); padding: 0.2rem 0; display: flex; align-items: center; gap: 0.4rem; }
-    .explain-collapse > summary::-webkit-details-marker { display: none; }
-    .explain-collapse .chev { transition: transform 0.15s; }
-    .explain-collapse[open] .chev { transform: rotate(90deg); }
-    .explain-collapse .ec-body { margin-top: 0.6rem; }
-
-    /* 预览里公式/子题 */
+    /* Formulas and subquestions in the preview. */
     .pv-sub { border-top: 1px dashed #e0e0e0; margin-top: 1rem; padding-top: 0.8rem; }
     .pv-sub .pv-sub-t { font-weight: 600; margin-bottom: 0.35rem; }
     .pv-badge { display: inline-block; font-size: 11px; background: #f3e5f5; color: #7b1fa2; border-radius: 4px; padding: 0.05rem 0.4rem; font-weight: 600; }
 
-    /* 左右分栏：左侧随页面滚动，右侧预览做成与左侧一致的卡片并 sticky 跟随视口 */
+    /* Two columns: the form scrolls with the page and the preview is a matching sticky card. */
     .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
     .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
     .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
@@ -197,32 +204,79 @@
       .pv-panel { max-height: none; }
     }
 
-    /* 难度 AI 判断 */
+    /* AI difficulty assessment. */
     #diff-ai-box { margin-top: 0.5rem; }
     .diff-ai-result { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 12px; background: #ede7f6; color: #5e35b1; border: 1px solid #d1c4e9; border-radius: 14px; padding: 0.15rem 0.6rem; margin-left: 0.5rem; }
+
+    /* AI Grading: stack the label above the field. The section holds a grading table
+       plus a rubric and a checkbox, which reads better full-width than beside a 160px label. */
+    #ai-row { flex-direction: column; align-items: stretch; }
+    #ai-row > label { width: auto; padding-top: 0; margin-bottom: 0.35rem; }
+    #ai-row > .field { width: 100%; }
+    {% if import_editor_mode %}
+    #navigation,
+    #page-container > br,
+    #page-container > footer,
+    #content > h2,
+    #content > hr { display: none; }
+    #page-container,
+    #content,
+    #content-body { margin: 0; max-width: none; padding: 0; width: auto; }
+    .v2-top { display: none; }
+    .v2-right { display: none; }
+    .v2-split { display: block; }
+    .v2-left { padding: 0.75rem; }
+    .import-review-notice { margin: 0.75rem; }
+    .import-review-notice .form-row:last-child { margin-bottom: 0; }
+    {% endif %}
   </style>
 {% endblock %}
 
 {% block body %}
   <div class="pcv2">
   <main class="v2-main" id="content-main">
+    {% if import_editor_mode and (import_type_needs_review or import_name_needs_review or import_data_needs_review or import_config_needs_review) %}
+    <fieldset class="module import-review-notice">
+      <h2>{{ _('Review required') }}</h2>
+      <div class="form-content">
+        {% if import_name_needs_review %}
+        <div class="form-row"><div class="field"><ul class="errorlist"><li>{{ _('Replace the generated missing-name placeholder before saving.') }}</li></ul></div></div>
+        {% endif %}
+        {% if import_type_needs_review %}
+        <div class="form-row"><div class="field"><label><input id="import-confirm-type" type="checkbox" onchange="if (this.checked) submitForm('save')"> {{ _('Confirm the selected question type') }}</label></div></div>
+        {% endif %}
+        {% if import_data_needs_review %}
+        <div class="form-row"><div class="field"><ul class="errorlist"><li>{{ _('Test data could not be loaded:') }} {{ import_data_load_error }}</li></ul><label><input id="import-confirm-data" type="checkbox" onchange="if (this.checked) submitForm('save')"> {{ _('Confirm and create this problem without the unreadable test data') }}</label></div></div>
+        {% endif %}
+        {% if import_config_needs_review %}
+        <div class="form-row"><div class="field"><ul class="errorlist"><li>{{ _('Review the imported configuration values below, then revise the corresponding fields where needed.') }}</li></ul>
+          <ul>{% for config in import_unrecognized_configurations %}<li><strong>{{ config.column }}</strong>: {{ config.value }}{% if config.reason %} - {{ config.reason }}{% endif %}</li>{% endfor %}</ul>
+          <label><input id="import-confirm-config" type="checkbox" onchange="if (this.checked) submitForm('save')"> {{ _('I have reviewed these values and updated the corresponding configuration where needed') }}</label>
+        </div></div>
+        {% endif %}
+      </div>
+    </fieldset>
+    {% endif %}
     <div class="v2-top">
       <span class="v2-type-hint">{{ _('Current type:') }} <span class="tag-type regular" id="type-badge">{{ _('Single choice') }}</span></span>
       {% if edit_code %}&mdash; <a href="{{ edit_detail_url }}">{{ edit_name or edit_code }}</a>{% endif %}
+      {% if can_clone_problem and clone_url %}
+        &mdash; <a href="{{ clone_url }}"><i class="fa fa-copy"></i> {{ _('Clone') }}</a>
+      {% endif %}
     </div>
 
     <div class="v2-split">
     <form id="add-problem-form" class="v2-left" novalidate>
-      <!-- ① 基本信息 -->
+      <!-- Basic information -->
       <fieldset class="module">
         <h2>{{ _('Basic information') }}</h2>
         <div class="form-content">
-          <!-- 需求4：去掉“题目大类”，直接选题型 -->
+          <!-- Select the question type directly instead of a broad category. -->
           <div class="form-row">
             <label>{{ _('Type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="type-pills" id="type-pills">
-                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create code problems') }}" style="opacity:0.45;"{% endif %}>
+                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create programming problems') }}" style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="programming" onchange="selectType('programming')" {% if not can_create_code %}disabled{% endif %}><span>{{ _('Programming') }}</span></label>
                 <label class="type-pill" data-save="mcq">
                   <input type="radio" name="qtype" value="single" {% if can_create_mcq %}checked{% endif %} onchange="selectType('single')"><span>{{ _('Single choice') }}</span></label>
@@ -234,6 +288,8 @@
                   <input type="radio" name="qtype" value="truefalse" onchange="selectType('truefalse')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('True/False') }}</span></label>
                 <label class="type-pill" data-save="short" {% if not can_create_mcq %}style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="short" onchange="selectType('short')" {% if not can_create_mcq %}disabled{% endif %}><span>{{ _('Short answer') }}</span></label>
+                <label class="type-pill" data-save="file" {% if not can_create_file %}style="opacity:0.45;"{% endif %}>
+                  <input type="radio" name="qtype" value="file" onchange="selectType('file')" {% if not can_create_file %}disabled{% endif %}><span>{{ _('File upload') }}</span></label>
                 <label class="type-pill" data-save="none" style="opacity:0.55;">
                   <input type="radio" name="qtype" value="compound" onchange="selectType('compound')"><span>{{ _('Composite') }}</span></label>
                 <label class="type-pill" data-save="none" style="opacity:0.55;">
@@ -246,41 +302,29 @@
             <div class="field"><input type="text" id="f-name" placeholder="{{ _('Problem name') }}" oninput="renderPreview()"></div>
           </div>
           <div class="form-row">
-            <label>{{ _('Organizations') }}</label>
+            <label>{{ _('Courses') }}</label>
             <div class="field">
               <div class="select-with-add">
-                <select id="f-org">
-                  <option value="">— {{ _('None') }} —</option>
+                <select multiple id="f-org" class="org-select2" style="width:100%;max-width:500px;"{% if not can_create_organization %} disabled{% endif %}>
                   {% for o in organizations %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
                 </select>
                 {% if can_create_organization %}
-                <button type="button" class="inline-add-btn" title="{{ _('Create organization') }}" aria-label="{{ _('Create organization') }}" onclick="toggleInlineAdd('org')">+</button>
+                <button type="button" class="inline-add-btn" title="{{ _('Create course') }}" aria-label="{{ _('Create course') }}" onclick="toggleInlineAdd('org')">+</button>
                 {% endif %}
               </div>
               {% if can_create_organization %}
               <div class="inline-add-box" id="org-add-box" style="display:none;">
-                <input type="text" id="org-add-name" placeholder="{{ _('Organization name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createOrg();}">
+                <input type="text" id="org-add-name" placeholder="{{ _('Course name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createOrg();}">
                 <button type="button" class="btn-mini btn-mini-primary" onclick="createOrg()">{{ _('Create') }}</button>
                 <button type="button" class="btn-mini" onclick="toggleInlineAdd('org')">{{ _('Cancel') }}</button>
               </div>
               {% endif %}
-              <div class="help">{{ _('Leave blank for a public problem (requires permission); selecting an organization makes it private to that organization') }}</div>
             </div>
           </div>
           <div class="form-row">
-            <label>{{ _('Problem group') }} <span class="req">*</span></label>
+            <label>{{ _('Public visible') }}</label>
             <div class="field">
-              <div class="select-with-add">
-                <select id="f-group">
-                  {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
-                </select>
-                <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" aria-label="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+</button>
-              </div>
-              <div class="inline-add-box" id="group-add-box" style="display:none;">
-                <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
-                <button type="button" class="btn-mini btn-mini-primary" onclick="createGroup()">{{ _('Create') }}</button>
-                <button type="button" class="btn-mini" onclick="toggleInlineAdd('group')">{{ _('Cancel') }}</button>
-              </div>
+              <input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}>
             </div>
           </div>
           <div class="form-row">
@@ -309,26 +353,48 @@
             </div>
           </div>
 
-          <!-- 分值 -->
+          <!-- Points -->
           <div class="form-row">
             <label>{{ _('Points') }} <span class="req">*</span></label>
             <div class="field"><input type="number" id="f-points" value="1" min="0" step="0.5" style="max-width:120px;"></div>
           </div>
 
-          <!-- 需求7：部分分（仅 多选/填空） -->
-          <div class="form-row type-panel" data-for="multiple,blank" id="partial-row" style="display:none;">
+          <!-- Fill-blank: optional per-blank points. -->
+          <div class="form-row type-panel" data-for="blank" id="partial-row" style="display:none;">
             <label>{{ _('Partial scoring') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
                 <input type="checkbox" id="f-partial" onchange="syncPartialFromMain(); renderScoreConf()"> {{ _('Allow partial scoring') }}
               </label>
-              <div class="help" id="partial-sub"></div>
+              <div class="help" id="partial-sub">{{ _('Each blank is scored separately; set points next to each blank under Answers.') }}</div>
               <div id="partial-conf" class="score-conf" style="display:none;"></div>
             </div>
           </div>
 
-          <!-- AI Grading (short-answer / fill-blank only) -->
-          <div class="form-row type-panel" data-for="short,blank" id="ai-row" style="display:none;">
+          <!-- Multiple choice: two partial-credit rules (no extra checkbox). -->
+          <div class="form-row type-panel" data-for="multiple" id="mcq-scoring-row" style="display:none;">
+            <label>{{ _('Scoring method') }}</label>
+            <div class="field">
+              <div class="radio-list" id="mcq-scoring-list">
+                <label>
+                  <input type="radio" name="mcq-scoring" value="underselect">
+                  {{ _('Under-select credit:') }}
+                  {{ _('each correct choice earns') }}
+                  <span class="inline-num"><input type="number" id="f-mcq-underselect-points" min="0" step="0.5" placeholder="" onfocus="document.querySelector('input[name=mcq-scoring][value=underselect]').checked = true;"></span>
+                  {{ _('points; a wrong choice scores 0') }}
+                </label>
+                <label>
+                  <input type="radio" name="mcq-scoring" value="proportional" checked>
+                  {{ _('Proportional credit:') }}
+                  {{ _('score = full points × (correct − wrong) / number of correct options, minimum 0') }}
+                </label>
+              </div>
+              <div class="help">{{ _('Leave per-choice points empty to split the question evenly among correct options.') }}</div>
+            </div>
+          </div>
+
+          <!-- AI Grading (short-answer / fill-blank / programming) -->
+          <div class="form-row type-panel" data-for="short,blank,programming" id="ai-row" style="display:none;">
             <label>{{ _('AI Grading') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
@@ -336,6 +402,30 @@
               </label>
               <div class="help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. Requires LITELLM_API_BASE to be set.') }}</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
+                <!-- Grading Table (shown when AI grading is on) -->
+                <div id="grading-table-panel" style="margin-bottom:0.75rem;">
+                  <label style="display:block;font-weight:600;font-size:12px;margin-bottom:0.35rem;">{{ _('Grading Table') }}</label>
+                  <div class="grading-table-section">
+                    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
+                      <button type="button" class="btn-mini btn-mini-primary" id="btn-ai-decompose"
+                              onclick="runAIDecompose()">{{ _('Auto-generate') }}</button>
+                      <span id="decompose-status" style="font-size:11px;color:var(--muted);display:none;"></span>
+                    </div>
+                    <table class="grading-table" id="grading-table">
+                      <thead>
+                        <tr><th>{{ _('Sub-question') }}</th><th>{{ _('Points') }}</th><th>{{ _('Strictness') }}</th><th></th></tr>
+                      </thead>
+                      <tbody id="grading-tbody">
+                        <tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">
+                          {{ _('Click Auto-generate to let the AI analyse the problem and suggest sub-questions, or add rows manually below.') }}
+                        </td></tr>
+                      </tbody>
+                    </table>
+                    <div style="margin-top:0.35rem;display:flex;gap:0.4rem;">
+                      <button type="button" class="btn-mini" onclick="addSubQuestion()">+ {{ _('Add sub-question') }}</button>
+                    </div>
+                  </div>
+                </div>
                 <div style="font-weight:600;font-size:12px;margin-bottom:0.35rem;">{{ _('Rubric (sent to the model; never shown to students)') }}</div>
                 <textarea id="f-rubric" rows="3" placeholder="{{ _('e.g. Correctly identifying the time complexity gives 60%%, proving stability gives 40%%...') }}" style="width:100%;font-family:inherit;"></textarea>
                 <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.4rem;white-space:nowrap;">
@@ -347,49 +437,24 @@
         </div>
       </fieldset>
 
-      <!-- ② 题面（预览已移至右栏） -->
+      <!-- Statement (preview is in the right column). -->
       <fieldset class="module">
         <h2>{{ _('Statement') }}</h2>
         <div class="form-content">
-              <!-- 题干 / 主题干 -->
+              <!-- Prompt / main statement -->
               <div class="stem-block">
                 <label class="block-label" id="stem-label">{{ _('Description') }} <span class="req">*</span></label>
                 <div data-rich-mount="stem" data-toolbar="full" data-placeholder="{{ _('Enter the problem statement; ~x^2~ or $$x^2$$ math supported…') }}"></div>
               </div>
 
-              <!-- Grading Table (short-answer / fill-blank, shown when AI grading is on) -->
-              <div class="type-panel" data-for="short,blank" id="grading-table-panel" style="display:none;">
-                <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _('Grading Table') }}</label>
-                <div class="grading-table-section">
-                  <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
-                    <button type="button" class="btn-mini btn-mini-primary" id="btn-ai-decompose"
-                            onclick="runAIDecompose()">{{ _('Auto-generate') }}</button>
-                    <span id="decompose-status" style="font-size:11px;color:var(--muted);display:none;"></span>
-                  </div>
-                  <table class="grading-table" id="grading-table">
-                    <thead>
-                      <tr><th>{{ _('Sub-question') }}</th><th>{{ _('Points') }}</th><th>{{ _('Strictness') }}</th><th></th></tr>
-                    </thead>
-                    <tbody id="grading-tbody">
-                      <tr id="grading-empty" style="display:none"><td colspan="4" style="font-size:11px;color:var(--muted);padding:8px 6px;">
-                        {{ _('Click Auto-generate to let the AI analyse the problem and suggest sub-questions, or add rows manually below.') }}
-                      </td></tr>
-                    </tbody>
-                  </table>
-                  <div style="margin-top:0.35rem;display:flex;gap:0.4rem;">
-                    <button type="button" class="btn-mini" onclick="addSubQuestion()">+ {{ _('Add sub-question') }}</button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 单选 / 多选 -->
+              <!-- Single-choice / multiple-choice -->
               <div class="type-panel" data-for="single,multiple">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Options") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);" id="opt-hint">{{ _("(select the correct answer)") }}</span></label>
                 <div class="options-list" id="options"></div>
                 <button type="button" class="btn-add-option" onclick="addOption()">+ {{ _("Add option") }}</button>
               </div>
 
-              <!-- 判断题 -->
+              <!-- True/false -->
               <div class="type-panel" data-for="truefalse" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _('Answer') }} <span class="req">*</span></label>
                 <div class="tf-choices">
@@ -398,13 +463,36 @@
                 </div>
               </div>
 
-              <!-- 简答题 -->
+              <!-- Short answer -->
               <div class="type-panel" data-for="short" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Reference answer") }} <span class="req">*</span></label>
                 <div data-rich-mount="short" data-toolbar="mini" data-placeholder="{{ _('Enter the reference answer…') }}"></div>
               </div>
 
-              <!-- 填空题 -->
+              <!-- File upload -->
+              <div class="type-panel" data-for="file" style="display:none;">
+                <div class="form-row">
+                  <label for="f-file-ext">{{ _("Allowed extensions") }}</label>
+                  <div class="field">
+                    <input type="text" id="f-file-ext" placeholder="pdf, zip" oninput="renderPreview()">
+                    <div class="help">{{ _("Comma-separated. Leave blank to allow any file type.") }}</div>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label for="f-file-size">{{ _("Maximum file size (MB)") }} <span class="req">*</span></label>
+                  <div class="field"><input type="number" id="f-file-size" min="1" step="1" value="20"></div>
+                </div>
+                <div class="form-row">
+                  <label for="f-file-instructions">{{ _("Submission instructions") }}</label>
+                  <div class="field">
+                    <textarea id="f-file-instructions" rows="3" oninput="renderPreview()"></textarea>
+                    <div class="help">{{ _("Optional. Shown to students above the upload box.") }}</div>
+                  </div>
+                </div>
+                <div class="blank-hints">{{ _("File-upload problems are graded manually by a teacher after submission.") }}</div>
+              </div>
+
+              <!-- Fill in the blank -->
               <div class="type-panel" data-for="blank" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Answers") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">{{ _("Each blank may have multiple acceptable answers; one per line") }}</span></label>
                 <div class="blank-answers" id="blank-answers"></div>
@@ -419,45 +507,78 @@
                 </div>
               </div>
 
-              <!-- 编程题：题面提示 -->
+              <!-- Code problem: statement guidance -->
               <div class="type-panel" data-for="programming" style="display:none;">
                 <div class="blank-hints">
                   {{ _('For programming problems: set time/memory limits and allowed languages under Advanced; enter test cases directly in the section below.') }}
                 </div>
               </div>
 
-              <!-- 复合题：子题目（需求4） -->
+              <!-- Composite problem: subquestions -->
               <div class="type-panel" data-for="compound" style="display:none;">
                 <label style="display:block;font-weight:600;font-size:13px;margin-bottom:0.4rem;">{{ _("Sub-questions") }} <span class="req">*</span> <span style="font-weight:normal;color:var(--muted);">{{ _("Each sub-question can use a different type and its own points") }}</span></label>
                 <div id="sub-list"></div>
                 <button type="button" class="btn-add-option" onclick="addSub('single')">+ {{ _("Add sub-question") }}</button>
               </div>
 
-              <!-- 其他题型 -->
+              <!-- Other question types -->
               <div class="type-panel" data-for="other" style="display:none;">
                 <div class="blank-hints">{{ _('Other type only records the statement and notes for offline/manual grading; it is not auto-judged.') }}</div>
-              </div>
-
-              <!-- Editorial shortcut → Advanced Solution.content -->
-              <div class="type-panel" data-for="single,multiple,truefalse,short,blank,programming">
-                <details class="explain-collapse">
-                  <summary><span class="chev">▸</span> {{ _("Explanation") }} <span style="font-weight:normal;color:var(--muted);">{{ _("(optional; saved as Solution editorial)") }}</span></summary>
-                  <div class="ec-body">
-                    <div data-rich-mount="explain" data-toolbar="mini" data-placeholder="{{ _('Enter the editorial / explanation…') }}"></div>
-                    <p class="unsaved-note">{{ _('Synced with Advanced → Solution content on save.') }}</p>
-                  </div>
-                </details>
               </div>
         </div>
       </fieldset>
 
-      <!-- ③ 编程题：测试用例（内联录入 / ZIP，不再嵌入旧页） -->
+      <!-- Same Solution model as classic admin; label matches the student Editorial tab. -->
+      <fieldset class="module type-panel" data-for="single,multiple,truefalse,short,blank,programming,file">
+        <details class="editorial-collapse" id="editorial-collapse">
+        <summary>{{ _('Editorial') }}</summary>
+        <div class="form-content">
+          <div class="form-row">
+            <label>{{ _('Is public') }}</label>
+            <div class="field">
+              <input type="checkbox" id="f-sol-public">
+              <div class="help">{{ _('Publish the editorial') }}</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>{{ _('Publish on') }}</label>
+            <div class="field">
+              <input type="text" id="f-sol-publish" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM">
+              <div class="help">{{ _('Students can read it after this time, once it is public. Hidden during assignments/contests.') }}</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>{{ _('Authors') }}</label>
+            <div class="field">
+              <select multiple id="f-sol-authors" class="profile-select2" style="width:100%;max-width:500px;"></select>
+            </div>
+          </div>
+          <div class="form-row" style="align-items:flex-start;">
+            <label>{{ _('Content') }}</label>
+            <div class="field">
+              <div data-rich-mount="editorial" data-toolbar="mini" data-placeholder="{{ _('Enter the editorial…') }}"></div>
+              <div class="help">{{ _('Shown on the student problem page as the Editorial tab.') }}</div>
+            </div>
+          </div>
+        </div>
+        </details>
+      </fieldset>
+
+      <!-- Code problem test cases: zip members + file matching, same model as classic test_data. -->
       <fieldset class="module type-panel" data-for="programming" style="display:none;">
         <h2>{{ _("Test cases") }}</h2>
         <div class="form-content">
           <details class="tc-collapse" id="tc-collapse" open>
             <summary class="tc-collapse-summary">{{ _("Test data settings (click to collapse)") }}</summary>
             <div class="tc-body-wrap">
+              {% if test_data_url %}
+                <p class="help tc-admin-link">
+                  <a href="{{ test_data_url }}" target="_blank" rel="noopener">{{ _('Edit test data') }}</a>
+                  — {{ _('Opens the original test-data page (generator, batches, harness, and zip file matching).') }}
+                </p>
+              {% else %}
+                <p class="help tc-admin-link">{{ _('After you save this programming problem, a link to the original test-data editor will appear here.') }}</p>
+              {% endif %}
               <div class="tc-toolbar">
                 <button type="button" class="btn" onclick="addTestCase()">+ {{ _("Add case") }}</button>
                 <label class="btn" style="cursor:pointer;margin:0;">
@@ -479,7 +600,7 @@
                 </label>
                 <span id="tc-zip-status" style="color:var(--muted);"></span>
               </div>
-              <p class="help" style="margin:0.4rem 0 0.6rem;">{{ _('Case weights are relative. With Partial on, score scales by passed/total weights; with Partial off, only full AC earns problem Points.') }}</p>
+              <p class="help" style="margin:0.4rem 0 0.6rem;">{{ _('Upload a zip to list its files, then pick input and output for each case. Case weights are relative.') }}</p>
               <div style="overflow-x:auto;">
                 <table class="tc-table" id="tc-table">
                   <thead>
@@ -495,12 +616,44 @@
                   <tbody id="tc-body"></tbody>
                 </table>
               </div>
+              <details class="tc-harness" id="tc-harness"{% if not test_data_url %} open{% endif %}>
+                <summary>{{ _('Harness') }}</summary>
+                <p class="help">{{ _("Hidden test code that wraps student submissions. Students can download this via 'Download Tester'. Only one harness per problem is supported.") }}</p>
+                <div class="form-row">
+                  <label>{{ _('Language') }}</label>
+                  <div class="field">
+                    <select id="f-harness-lang"></select>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label></label>
+                  <div class="field">
+                    <label><input type="checkbox" id="f-harness-skip"> {{ _('Skip pre-compilation') }}</label>
+                    <div class="help">{{ _('Enable if student code references classes/functions only defined in the harness (e.g., hidden APIs).') }}</div>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label></label>
+                  <div class="field">
+                    <label><input type="checkbox" id="f-harness-main"> {{ _('Run student main') }}</label>
+                    <div class="help">{{ _('If enabled, student code is the entry point; harness provides hidden APIs.') }}</div>
+                  </div>
+                </div>
+                <div class="form-row" style="align-items:flex-start;">
+                  <label>{{ _('Harness Code') }}</label>
+                  <div class="field">
+                    <div id="f-harness-monaco" class="harness-monaco"></div>
+                    <textarea id="f-harness-code" rows="10" hidden spellcheck="false" placeholder="{{ _('Hidden test code compiled/run with the student submission.') }}"></textarea>
+                    <div class="help">{{ _('Hidden test code compiled/run with the student submission.') }}</div>
+                  </div>
+                </div>
+              </details>
             </div>
           </details>
         </div>
       </fieldset>
 
-      <!-- 测试用例文件内容抽屉：同时展示该用例 in + out -->
+      <!-- Test-case file drawer: shows both input and output for the case. -->
       <div class="tc-drawer-mask" id="tc-drawer-mask" onclick="closeTcDrawer()"></div>
       <aside class="tc-drawer" id="tc-drawer" aria-hidden="true">
         <div class="tc-drawer-head">
@@ -523,7 +676,7 @@
         </div>
       </aside>
 
-      <!-- ④ 编程题：Creation preset 已移入 Advanced -->
+      <!-- Code-problem creation presets are in Advanced. -->
       <p style="margin:1rem 0;">
         <button type="button" class="btn" id="advanced-btn" onclick="toggleAdvanced()">{{ _('Advanced') }}</button>
         <span style="font-size:12px;color:var(--muted);margin-left:0.5rem;">{{ _('Advanced settings (fields shown by problem type)') }}</span>
@@ -533,8 +686,23 @@
           <h2>{{ _('Advanced') }}</h2>
           <div class="form-content">
             <div class="form-row type-panel" data-for="programming"><label>{{ _('Creation preset') }}</label><div class="field"><select id="preset" style="max-width:200px;"><option selected>{{ _('Default') }}</option><option>{{ _('Custom') }}</option></select><div class="help">{{ _('Becomes Custom after you change advanced fields') }}</div></div></div>
+            <div class="form-row">
+              <label>{{ _('Problem group') }}</label>
+              <div class="field">
+                <div class="select-with-add">
+                  <select id="f-group">
+                    {% for g in groups %}<option value="{{ g.id }}"{% if g.id == default_group_id %} selected{% endif %}>{{ g.full_name or g.name }}</option>{% endfor %}
+                  </select>
+                  <button type="button" class="inline-add-btn" title="{{ _('Create problem group') }}" aria-label="{{ _('Create problem group') }}" onclick="toggleInlineAdd('group')">+</button>
+                </div>
+                <div class="inline-add-box" id="group-add-box" style="display:none;">
+                  <input type="text" id="group-add-name" placeholder="{{ _('Group name') }}" onkeydown="if(event.key==='Enter'){event.preventDefault();createGroup();}">
+                  <button type="button" class="btn-mini btn-mini-primary" onclick="createGroup()">{{ _('Create') }}</button>
+                  <button type="button" class="btn-mini" onclick="toggleInlineAdd('group')">{{ _('Cancel') }}</button>
+                </div>
+              </div>
+            </div>
             <div class="form-row"><label>{{ _('Problem code') }}</label><div class="field"><input type="text" id="f-code" value="" placeholder="{{ _('Auto-generated as p000000 on save') }}" readonly><div class="help">{{ _('Unique problem code, generated by the backend') }}</div></div></div>
-            <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}><div class="help">{% if can_change_public %}{{ _('Visible to everyone when no organization is selected') }}{% else %}{{ _('You cannot make problems public without organization scope') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('Is manually managed') }}</label><div class="field"><input type="checkbox" id="f-manual" {% if not can_change_manually_managed %}disabled{% endif %}><div class="help">{% if can_change_manually_managed %}{{ _('When checked, the test_data page cannot be used') }}{% else %}{{ _('You do not have permission to change this flag') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('Date') }}</label><div class="field"><input type="text" id="f-date" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"><div class="help">{{ _('Problem publish/release time') }}</div></div></div>
             <div class="form-row"><label>{{ _('Authors') }}</label><div class="field">
@@ -585,8 +753,8 @@
           <h2>{{ _('Classes') }}</h2>
           <div class="form-content">
             <div class="form-row"><label>{{ _('Classes') }}</label><div class="field">
-              <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"></select>
-              <div class="help">{{ _('Only classes belonging to the selected organization are listed') }}</div>
+              <select multiple id="f-classes" class="class-select2" style="width:100%;max-width:500px;"{% if not can_create_organization %} disabled{% endif %}></select>
+              <div class="help">{{ _('Only classes belonging to the selected courses are listed') }}</div>
             </div></div>
           </div>
         </fieldset>
@@ -675,18 +843,6 @@
         </div>
 
         <div class="inline-group">
-          <h2>{{ _('Solution') }}</h2>
-          <div class="form-content" style="padding:0.75rem 1rem;">
-            <div class="form-row"><label>{{ _('Is public') }}</label><div class="field"><input type="checkbox" id="f-sol-public"><div class="help">{{ _('Publish the solution') }}</div></div></div>
-            <div class="form-row"><label>{{ _('Publish on') }}</label><div class="field"><input type="text" id="f-sol-publish" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"></div></div>
-            <div class="form-row"><label>{{ _('Authors') }}</label><div class="field">
-              <select multiple id="f-sol-authors" class="profile-select2" style="width:100%;max-width:500px;"></select>
-            </div></div>
-            <div class="form-row"><label>{{ _('Content') }}</label><div class="field"><textarea id="f-sol-content" rows="4" placeholder="{{ _('Solution / editorial body (also editable via Explanation above)') }}" style="width:100%;"></textarea></div></div>
-          </div>
-        </div>
-
-        <div class="inline-group">
           <h2>{{ _('Translations') }}</h2>
           <table class="inline-table">
             <thead><tr><th>{{ _('Language') }}</th><th>{{ _('Name') }}</th><th>{{ _('Description') }}</th><th>{{ _('Delete') }}</th></tr></thead>
@@ -704,11 +860,19 @@
       </div>
 
       <div id="bottombar">
+        {% if import_editor_mode %}
+        <button type="button" class="btn btn-primary" onclick="submitForm('save')">{{ _('Save draft') }}</button>
+        <button type="button" class="btn" onclick="submitForm('format')">{{ _('LLM format question') }}</button>
+        <button type="button" class="btn" onclick="submitForm('create')">{{ _('Create problem') }}</button>
+        <span style="flex:1;"></span>
+        <span id="import-save-status" class="unsaved-note"></span>
+        {% else %}
         <button type="button" class="btn btn-primary" onclick="submitForm('save')">{{ _('Save') }}</button>
         <button type="button" class="btn" onclick="submitForm('continue')">{{ _('Save and continue editing') }}</button>
         <button type="button" class="btn" onclick="submitForm('another')">{{ _('Save and add another') }}</button>
         <span style="flex:1;"></span>
         <button type="button" class="btn btn-cancel" onclick="cancelEdit()">{{ _('Cancel') }}</button>
+        {% endif %}
       </div>
 
     </form>
@@ -725,7 +889,7 @@
     <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="RichEditor.onImagePicked(event)">
   </main>
 
-  <!-- problem_type 选择 / 新建弹窗（沿用 add.html） -->
+  <!-- Problem-type selection / creation dialog (reused from add.html). -->
   <div class="qtype-modal hidden" id="ptype-modal">
     <div class="qtype-box" style="width:480px;">
       <div class="qtype-head">
@@ -780,9 +944,17 @@
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const CAN_CREATE_CODE = {{ 'true' if can_create_code else 'false' }};
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
+    const CAN_CREATE_FILE = {{ 'true' if can_create_file else 'false' }};
     const EDIT_CODE = '{{ edit_code }}';
+    const TEST_DATA_URL = '{{ test_data_url }}';
+    const HARNESS_LANGUAGES = {{ harness_languages_json|default('[]')|safe }};
+    const MONACO_VS_URL = '{{ static("libs/monaco/vs") }}';
     const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
+    const IMPORT_EDITOR_MODE = {{ 'true' if import_editor_mode else 'false' }};
+    const IMPORT_ITEM_ID = '{{ import_item_id }}';
+    const IMPORT_FORMAT_URL = '{{ import_format_url }}';
+    const IMPORT_CREATE_URL = '{{ import_create_url }}';
     const SERVER_PROBLEM_TYPES = {{ problem_types_json|safe }};
 
     const TYPE_META = {
@@ -792,6 +964,7 @@
       blank:       { title: '{{ _("Fill-in-blank") }}', badge: 'regular', tag: '{{ _("Fill-in-blank") }}' },
       truefalse:   { title: '{{ _("True/False") }}', badge: 'regular', tag: '{{ _("True/False") }}' },
       short:       { title: '{{ _("Short answer") }}', badge: 'regular', tag: '{{ _("Short answer") }}' },
+      file:        { title: '{{ _("File upload") }}', badge: 'regular', tag: '{{ _("File upload") }}' },
       compound:    { title: '{{ _("Composite") }}', badge: 'regular', tag: '{{ _("Composite") }}' },
       other:       { title: '{{ _("Other") }}', badge: 'regular', tag: '{{ _("Other") }}' },
     };
@@ -803,7 +976,7 @@
     /* Canonical English tags stored on problem_type; UI pills use gettext separately. */
     const DIFF_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
-    /* 取消：编辑模式=放弃本次修改并回到该题详情；新建模式=放弃这道新题。均不删除任何题目。 */
+    /* Cancel: discard changes in edit mode or the new problem in create mode; never delete a problem. */
     function cancelEdit() {
       if (EDIT_CODE) {
         if (!confirm('{{ _("Discard your changes? Your edits will not be saved, but the problem itself is kept.") }}')) return;
@@ -826,7 +999,7 @@
       if (radio) radio.checked = true;
       setDifficultyTag(DIFF_LABEL[level]);
     }
-    // 调用后端 AI 判定难度（judge/llm；未配置时后端回退启发式）
+    // Call the backend AI difficulty assessor; it falls back to heuristics when not configured.
     function runAIDifficulty() {
       const res = document.getElementById('diff-ai-result');
       const box = document.getElementById('diff-ai-box');
@@ -871,7 +1044,7 @@
         .finally(() => { if (btn) btn.disabled = false; });
     }
 
-    /* ---------- problem_type 选择（来自数据库） ---------- */
+    /* ---------- Problem-type selection (from the database) ---------- */
     function allTypes() { return SERVER_PROBLEM_TYPES.slice(); }
     function pushServerType(entry) {
       if (!SERVER_PROBLEM_TYPES.some(t => t.name === entry.name)) SERVER_PROBLEM_TYPES.push(entry);
@@ -950,7 +1123,7 @@
         showToast('{{ _("Problem type created") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
-    /* ---------- organization / problem_group 行内新建 ---------- */
+    /* ---------- Inline organization / problem-group creation ---------- */
     function toggleInlineAdd(kind) {
       const box = document.getElementById(kind + '-add-box');
       if (!box) return;
@@ -979,19 +1152,21 @@
     function createOrg() {
       const inp = document.getElementById('org-add-name');
       const name = inp.value.trim();
-      if (!name) { showToast('{{ _("Please enter an organization name.") }}', false); return; }
+      if (!name) { showToast('{{ _("Please enter a course name.") }}', false); return; }
       fetch(CREATE_ORGANIZATION_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
         body: JSON.stringify({ name }),
       }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
-        if (!ok) { showToast(body.error || '{{ _("Failed to create organization") }}', false); return; }
+        if (!ok) { showToast(body.error || '{{ _("Failed to create course") }}', false); return; }
         const sel = document.getElementById('f-org');
-        const opt = document.createElement('option');
-        opt.value = body.organization.id; opt.textContent = body.organization.name;
-        sel.appendChild(opt); sel.value = body.organization.id;
+        ensureOption(sel, body.organization.id, body.organization.name, true);
+        if (window.jQuery && jQuery(sel).data('select2')) {
+          const vals = (jQuery(sel).val() || []).concat([String(body.organization.id)]);
+          jQuery(sel).val([...new Set(vals)]).trigger('change');
+        }
         toggleInlineAdd('org');
-        showToast('{{ _("Organization created") }}', true);
+        showToast('{{ _("Course created") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
     function runAIProblemType(fillInput) {
@@ -1033,7 +1208,7 @@
         showToast('{{ _("AI suggestions applied — confirm selection") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
-    /* 需求：AI 入口放在加号旁边，直接按题面推荐并写入标签（无需打开弹窗） */
+    /* Put the AI entry beside the plus button to recommend and add tags without a dialog. */
     function runAIProblemTypeInline() {
       const description = RichEditor.getMarkdown('stem');
       if (!description.trim()) { showToast('{{ _("Please enter problem content first.") }}', false); return; }
@@ -1102,7 +1277,7 @@
         : gettext('Advanced');
     }
 
-    /* ---------- 题型切换（需求4：直接选题型，无大类） ---------- */
+    /* ---------- Question-type switching: select the type directly, without broad categories. ---------- */
     function selectType(type) {
       currentType = type;
       const meta = TYPE_META[type];
@@ -1129,6 +1304,7 @@
       if (type === 'programming' && document.getElementById('tc-body') && !document.getElementById('tc-body').children.length) {
         /* keep empty until user adds / imports; do not auto-seed */
       }
+      if (type === 'programming') layoutHarnessMonaco();
 
       renderScoreConf();
       renderPreview();
@@ -1136,7 +1312,7 @@
 
     /* RichEditor / MarkdownPreview loaded from static JS; see resources/rich_editor.js */
 
-    /* ---------- 选项（富文本 / Markdown） ---------- */
+    /* ---------- Options (rich text / Markdown) ---------- */
     function optionEditorTpl(name) {
       return RichEditor.html(name, { compact: true, placeholder: gettext('Enter option text ($$math$$ supported)') });
     }
@@ -1177,7 +1353,7 @@
       document.querySelectorAll('#options .option-marker input').forEach(i => { i.type = isMulti ? 'checkbox' : 'radio'; i.name = 'correct'; });
     }
 
-    /* ---------- 填空 ---------- */
+    /* ---------- Fill in the blank ---------- */
     function addBlank() {
       const n = ++blankSeq;
       const row = document.createElement('div');
@@ -1190,16 +1366,86 @@
       renderScoreConf(); renderPreview();
     }
 
-    /* ---------- 测试用例（内联录入 + ZIP 文件名模式）---------- */
-    // Soft warning only: save uploads the archive as a file (same path as classic test_data).
-    const TC_ZIP_WARN_TOTAL = 8 * 1024 * 1024;
-    let tcDrawerTarget = null; // { tr }
-    let pendingZipFile = null; // original File from <input>, reused on save when unchanged
+    /* ---------- Test cases (classic zip unpack + file matching) ---------- */
+    let pendingZipFile = null; // original File from <input>, reused on save
+    let zipFiles = []; // zip namelist shown in input/output selects
+    let tcDrawerTarget = null;
 
     function renumberTestCases() {
       const rows = document.querySelectorAll('#tc-body tr');
       rows.forEach((tr, i) => { tr.children[0].textContent = String(i + 1); });
       tcSeq = rows.length;
+    }
+
+    function usableZipPaths(paths) {
+      return (paths || []).filter(p => {
+        if (!p || String(p).endsWith('/')) return false;
+        const base = basename(p);
+        if (base.startsWith('.') || String(p).includes('__MACOSX')) return false;
+        return true;
+      }).sort((a, b) => {
+        const ka = naturalKey(a), kb = naturalKey(b);
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+    }
+
+    function fileSelectHtml(kind, selected) {
+      const opts = ['<option value=""></option>'].concat(zipFiles.map(p => (
+        `<option value="${escapeAttr(p)}"${p === selected ? ' selected' : ''}>${escapeHtml(p)}</option>`
+      )));
+      return `<select class="tc-file-select" data-kind="${kind}">${opts.join('')}</select>`;
+    }
+
+    function matchingOutName(inName) {
+      if (!inName) return '';
+      const guess = inName.replace(/in(?!.*?in)/, 'out');
+      if (zipFiles.indexOf(guess) >= 0) return guess;
+      const alt = inName.replace(/in(?!.*?in)/, 'ans');
+      if (zipFiles.indexOf(alt) >= 0) return alt;
+      return '';
+    }
+
+    function bindFileSelects(tr) {
+      const inSel = tr.querySelector('.tc-file-select[data-kind="input"]');
+      const outSel = tr.querySelector('.tc-file-select[data-kind="output"]');
+      if (!inSel || !outSel) return;
+      inSel.addEventListener('change', () => {
+        if (!outSel.value) {
+          const guess = matchingOutName(inSel.value);
+          if (guess) outSel.value = guess;
+        }
+      });
+    }
+
+    function fillSelect(sel, selected) {
+      const val = selected != null ? selected : sel.value;
+      sel.innerHTML = '<option value=""></option>' + zipFiles.map(p =>
+        `<option value="${escapeAttr(p)}">${escapeHtml(p)}</option>`).join('');
+      sel.value = zipFiles.indexOf(val) >= 0 ? val : '';
+    }
+
+    function applyZipFilesToRows() {
+      document.querySelectorAll('#tc-body tr').forEach(tr => {
+        let inSel = tr.querySelector('.tc-file-select[data-kind="input"]');
+        let outSel = tr.querySelector('.tc-file-select[data-kind="output"]');
+        if (!inSel) {
+          const inBtn = tr.querySelector('.tc-file-btn[data-kind="input"]');
+          const outBtn = tr.querySelector('.tc-file-btn[data-kind="output"]');
+          const inF = tr.querySelector('.tc-fname[data-kind="input"]');
+          const outF = tr.querySelector('.tc-fname[data-kind="output"]');
+          const inName = (inBtn && inBtn.dataset.file) || (inF && inF.value) || '';
+          const outName = (outBtn && outBtn.dataset.file) || (outF && outF.value) || '';
+          tr.dataset.mode = 'zip';
+          const inCell = tr.querySelector('.tc-in');
+          const outCell = tr.querySelector('.tc-out');
+          if (inCell) inCell.innerHTML = fileSelectHtml('input', inName);
+          if (outCell) outCell.innerHTML = fileSelectHtml('output', outName);
+          bindFileSelects(tr);
+        } else {
+          fillSelect(inSel);
+          fillSelect(outSel);
+        }
+      });
     }
 
     function fileCellHtml(kind, fileName, isZip) {
@@ -1220,44 +1466,36 @@
     function addTestCase(opts) {
       const points = (opts && opts.points != null) ? opts.points : 10;
       const pretest = !!(opts && opts.pretest);
-      const fromZip = !!(opts && (opts.input_file || opts.output_file || opts.fromZip));
       const inName = (opts && opts.input_file) || '';
       const outName = (opts && opts.output_file) || '';
+      const useZip = zipFiles.length > 0 || !!(opts && (opts.fromZip || inName || outName) && !opts.input && !opts.output);
       const tr = document.createElement('tr');
-      tr.dataset.mode = fromZip ? 'zip' : 'manual';
-      tr.innerHTML = `
+      tr.dataset.mode = useZip ? 'zip' : 'manual';
+      if (useZip) {
+        tr.innerHTML = `
         <td></td>
-        <td class="tc-in">${fromZip
-          ? fileCellHtml('input', inName, true)
-          : `<textarea class="tc-content" data-kind="input" placeholder="stdin"></textarea>
-             <input type="hidden" class="tc-fname" data-kind="input" value="">`}
-        </td>
-        <td class="tc-out">${fromZip
-          ? fileCellHtml('output', outName, true)
-          : `<textarea class="tc-content" data-kind="output" placeholder="expected"></textarea>
-             <input type="hidden" class="tc-fname" data-kind="output" value="">`}
-        </td>
+        <td class="tc-in">${fileSelectHtml('input', inName)}</td>
+        <td class="tc-out">${fileSelectHtml('output', outName)}</td>
         <td><input type="number" class="tc-points" value="${points}" min="0"></td>
         <td style="text-align:center;"><input type="checkbox" class="tc-pretest" title="${gettext('Mark as sample/pretest')}"${pretest ? ' checked' : ''}></td>
         <td><button type="button" class="btn-icon" onclick="removeTestCaseRow(this)">×</button></td>`;
-      document.getElementById('tc-body').appendChild(tr);
-      if (opts) {
+        bindFileSelects(tr);
+      } else {
+        tr.innerHTML = `
+        <td></td>
+        <td class="tc-in"><textarea class="tc-content" data-kind="input" placeholder="stdin"></textarea>
+             <input type="hidden" class="tc-fname" data-kind="input" value="${escapeAttr(inName)}"></td>
+        <td class="tc-out"><textarea class="tc-content" data-kind="output" placeholder="expected"></textarea>
+             <input type="hidden" class="tc-fname" data-kind="output" value="${escapeAttr(outName)}"></td>
+        <td><input type="number" class="tc-points" value="${points}" min="0"></td>
+        <td style="text-align:center;"><input type="checkbox" class="tc-pretest" title="${gettext('Mark as sample/pretest')}"${pretest ? ' checked' : ''}></td>
+        <td><button type="button" class="btn-icon" onclick="removeTestCaseRow(this)">×</button></td>`;
         const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
         const outTa = tr.querySelector('textarea.tc-content[data-kind="output"]');
-        if (inTa && opts.input != null) inTa.value = opts.input;
-        if (outTa && opts.output != null) outTa.value = opts.output;
-        if (!fromZip) {
-          const inF = tr.querySelector('.tc-fname[data-kind="input"]');
-          const outF = tr.querySelector('.tc-fname[data-kind="output"]');
-          if (inF && opts.input_file) inF.value = opts.input_file;
-          if (outF && opts.output_file) outF.value = opts.output_file;
-        }
+        if (inTa && opts && opts.input != null) inTa.value = opts.input;
+        if (outTa && opts && opts.output != null) outTa.value = opts.output;
       }
-      if (fromZip) {
-        tr.querySelectorAll('.tc-file-btn').forEach(btn => {
-          btn.addEventListener('click', () => openTcDrawer(tr));
-        });
-      }
+      document.getElementById('tc-body').appendChild(tr);
       renumberTestCases();
       return tr;
     }
@@ -1309,12 +1547,13 @@
     }
 
     function syncPendingZipState() {
-      const hasZipRow = [...document.querySelectorAll('#tc-body tr')].some(tr => tr.dataset.mode === 'zip');
-      if (!hasZipRow) pendingZipFile = null;
+      // Zip membership is independent of case rows, matching classic test_data.
     }
 
     function collectTestCases() {
       return [...document.querySelectorAll('#tc-body tr')].map(tr => {
+        const inSel = tr.querySelector('.tc-file-select[data-kind="input"]');
+        const outSel = tr.querySelector('.tc-file-select[data-kind="output"]');
         const inTa = tr.querySelector('textarea.tc-content[data-kind="input"]');
         const outTa = tr.querySelector('textarea.tc-content[data-kind="output"]');
         const inBtn = tr.querySelector('.tc-file-btn[data-kind="input"]');
@@ -1324,8 +1563,8 @@
         return {
           input: inTa ? inTa.value : '',
           output: outTa ? outTa.value : '',
-          input_file: (inBtn && inBtn.dataset.file) || (inF && inF.value) || '',
-          output_file: (outBtn && outBtn.dataset.file) || (outF && outF.value) || '',
+          input_file: (inSel && inSel.value) || (inBtn && inBtn.dataset.file) || (inF && inF.value) || '',
+          output_file: (outSel && outSel.value) || (outBtn && outBtn.dataset.file) || (outF && outF.value) || '',
           points: Number((tr.querySelector('.tc-points') || {}).value || 0),
           pretest: !!(tr.querySelector('.tc-pretest') || {}).checked,
           fromZip: tr.dataset.mode === 'zip',
@@ -1386,61 +1625,6 @@
       return i >= 0 ? path.slice(0, i) : '';
     }
 
-    /** Pair zip entries into {input, output, sortKey} using common OJ naming. */
-    function pairZipEntries(paths) {
-      const usable = paths.filter(p => {
-        if (!p || p.endsWith('/')) return false;
-        const base = basename(p);
-        if (base.startsWith('.') || p.includes('__MACOSX')) return false;
-        return true;
-      });
-      const byDir = {};
-      usable.forEach(p => {
-        const d = dirname(p);
-        (byDir[d] || (byDir[d] = [])).push(p);
-      });
-
-      const pairs = [];
-      const used = new Set();
-
-      function tryMatch(dir, files) {
-        const lowerMap = {};
-        files.forEach(p => { lowerMap[basename(p).toLowerCase()] = p; });
-
-        files.forEach(inPath => {
-          if (used.has(inPath)) return;
-          const base = basename(inPath);
-          const lower = base.toLowerCase();
-          let outBase = null;
-          let m;
-
-          if ((m = lower.match(/^(.+)\.in\.txt$/))) {
-            const stem = m[1];
-            outBase = [stem + '.out.txt', stem + '.ans.txt'].find(c => lowerMap[c] && !used.has(lowerMap[c]));
-          } else if ((m = lower.match(/^(.+)\.in$/))) {
-            const stem = m[1];
-            outBase = [stem + '.out', stem + '.ans', stem + '.out.txt', stem + '.ans.txt']
-              .find(c => lowerMap[c] && !used.has(lowerMap[c]));
-          } else if ((m = lower.match(/^input(\d+)\.txt$/))) {
-            outBase = ['output' + m[1] + '.txt', 'output' + m[1] + '.out']
-              .find(c => lowerMap[c] && !used.has(lowerMap[c]));
-          } else if ((m = lower.match(/^in(\d+)\.txt$/))) {
-            outBase = ['out' + m[1] + '.txt', 'ans' + m[1] + '.txt']
-              .find(c => lowerMap[c] && !used.has(lowerMap[c]));
-          }
-          if (!outBase) return;
-          const outPath = lowerMap[outBase];
-          used.add(inPath);
-          used.add(outPath);
-          pairs.push({ input: inPath, output: outPath, sortKey: naturalKey(dir + '/' + base) });
-        });
-      }
-
-      Object.keys(byDir).sort().forEach(d => tryMatch(d, byDir[d]));
-      pairs.sort((a, b) => a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0);
-      return pairs;
-    }
-
     async function importZipFile(file) {
       if (!file) return;
       if (typeof JSZip === 'undefined') {
@@ -1451,56 +1635,20 @@
         setZipStatus(gettext('Please choose a .zip file.'), true);
         return;
       }
-      const body = document.getElementById('tc-body');
-      const hasRows = body && body.children.length > 0;
-      if (hasRows && !confirm(gettext('Importing a zip will replace the current test cases. Continue?'))) {
-        document.getElementById('tc-zip-input').value = '';
-        return;
-      }
 
-      setZipStatus(interpolate(gettext('Parsing %s …'), [file.name]));
+      setZipStatus(interpolate(gettext('Reading %s …'), [file.name]));
       try {
         const zip = await JSZip.loadAsync(file);
-        const paths = Object.keys(zip.files);
-        const pairs = pairZipEntries(paths);
-        if (!pairs.length) {
-          setZipStatus(gettext('No pairable test files found (supports N.in/N.out, N.in.txt/N.out.txt, inputN.txt/outputN.txt).'), true);
+        const paths = usableZipPaths(Object.keys(zip.files));
+        if (!paths.length) {
+          setZipStatus(gettext('The zip has no files to match.'), true);
           return;
         }
-
-        let total = 0;
-        const cases = [];
-        for (const pair of pairs) {
-          const inEntry = zip.files[pair.input];
-          const outEntry = zip.files[pair.output];
-          if (inEntry.dir || outEntry.dir) continue;
-          const input = await inEntry.async('string');
-          const output = await outEntry.async('string');
-          total += input.length + output.length;
-          cases.push({
-            input, output,
-            // Keep zip-relative paths so save/re-upload matches classic valid_files / namelist.
-            input_file: pair.input.replace(/\\/g, '/'),
-            output_file: pair.output.replace(/\\/g, '/'),
-            fromZip: true,
-            points: 1,
-            pretest: false,
-          });
-        }
-        if (!cases.length) {
-          setZipStatus(gettext('No readable text test cases in the zip.'), true);
-          return;
-        }
-
-        body.innerHTML = '';
-        tcSeq = 0;
         pendingZipFile = file;
-        cases.forEach(tc => addTestCase(tc));
-        let msg = interpolate(gettext('Imported %s pairs (saved as a ZIP file upload, same limits as legacy test_data).'), [cases.length]);
-        if (total > TC_ZIP_WARN_TOTAL) {
-          msg += ' ' + gettext('Preview content is large; the browser may be slow, but save still uploads the ZIP file.');
-        }
-        setZipStatus(msg);
+        zipFiles = paths;
+        applyZipFilesToRows();
+        if (!document.querySelector('#tc-body tr')) addTestCase({ fromZip: true });
+        setZipStatus(interpolate(gettext('Loaded %s files. Pick input and output for each case.'), [paths.length]));
       } catch (err) {
         console.error('[tc-zip]', err);
         pendingZipFile = null;
@@ -1515,7 +1663,130 @@
       if (input) input.addEventListener('change', () => importZipFile(input.files && input.files[0]));
     })();
 
-    /* ---------- 复合子题目（需求4）---------- */
+    function fillHarnessLanguages() {
+      const sel = document.getElementById('f-harness-lang');
+      if (!sel) return;
+      sel.innerHTML = '<option value=""></option>' + (HARNESS_LANGUAGES || []).map(lang =>
+        `<option value="${escapeAttr(String(lang.id))}" data-key="${escapeAttr(lang.key)}" data-ace="${escapeAttr(lang.ace || '')}">${escapeHtml(lang.name)}</option>`
+      ).join('');
+    }
+    const ACE_TO_MONACO = {
+      c_cpp: 'cpp', cpp: 'cpp', c: 'c', csharp: 'csharp', golang: 'go', go: 'go',
+      java: 'java', javascript: 'javascript', python: 'python', rust: 'rust',
+      ruby: 'ruby', php: 'php', kotlin: 'kotlin', swift: 'swift', typescript: 'typescript',
+    };
+    let harnessEditor = null;
+    function harnessMonacoLang() {
+      const sel = document.getElementById('f-harness-lang');
+      const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+      const ace = (opt && opt.dataset.ace) || '';
+      if (ACE_TO_MONACO[ace]) return ACE_TO_MONACO[ace];
+      if (ace) return ace;
+      const name = ((opt && opt.textContent) || '').toLowerCase();
+      if (name.indexOf('python') >= 0) return 'python';
+      if (name.indexOf('java') >= 0 && name.indexOf('script') < 0) return 'java';
+      return 'java';
+    }
+    function harnessCodeValue() {
+      if (harnessEditor) return harnessEditor.getValue();
+      const ta = document.getElementById('f-harness-code');
+      return ta ? ta.value : '';
+    }
+    function setHarnessCode(value) {
+      const ta = document.getElementById('f-harness-code');
+      if (ta) ta.value = value || '';
+      if (harnessEditor) harnessEditor.setValue(value || '');
+    }
+    function syncHarnessMonacoLanguage() {
+      if (!harnessEditor || !window.monaco) return;
+      window.monaco.editor.setModelLanguage(harnessEditor.getModel(), harnessMonacoLang());
+    }
+    function layoutHarnessMonaco() {
+      if (harnessEditor && harnessEditor.layout) {
+        requestAnimationFrame(() => harnessEditor.layout());
+      }
+    }
+    function initHarnessMonaco() {
+      const mount = document.getElementById('f-harness-monaco');
+      const ta = document.getElementById('f-harness-code');
+      if (!mount || !ta || !MONACO_VS_URL) return;
+      const langSel = document.getElementById('f-harness-lang');
+      if (langSel) langSel.addEventListener('change', syncHarnessMonacoLanguage);
+      const box = document.getElementById('tc-harness');
+      if (box) box.addEventListener('toggle', () => { if (box.open) layoutHarnessMonaco(); });
+      const loader = document.createElement('script');
+      loader.src = MONACO_VS_URL.replace(/\/?$/, '/') + 'loader.js';
+      loader.onload = function () {
+        if (!window.require) return;
+        window.require.config({ paths: { vs: MONACO_VS_URL } });
+        window.require(['vs/editor/editor.main'], function () {
+          const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+          harnessEditor = window.monaco.editor.create(mount, {
+            value: ta.value,
+            language: harnessMonacoLang(),
+            theme: darkQuery.matches ? 'vs-dark' : 'vs',
+            automaticLayout: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            fontSize: 13,
+            wordWrap: 'on',
+          });
+          harnessEditor.onDidChangeModelContent(function () {
+            ta.value = harnessEditor.getValue();
+          });
+          if (darkQuery.addEventListener) {
+            darkQuery.addEventListener('change', () => {
+              window.monaco.editor.setTheme(darkQuery.matches ? 'vs-dark' : 'vs');
+            });
+          }
+          layoutHarnessMonaco();
+        });
+      };
+      loader.onerror = function () { mount.hidden = true; ta.hidden = false; };
+      document.head.appendChild(loader);
+    }
+    function collectHarness() {
+      const code = harnessCodeValue();
+      const lang = document.getElementById('f-harness-lang');
+      return {
+        language_id: lang ? lang.value : '',
+        language: lang && lang.selectedOptions[0] ? (lang.selectedOptions[0].dataset.key || '') : '',
+        harness_code: code,
+        skip_precompile: !!(document.getElementById('f-harness-skip') || {}).checked,
+        run_student_main: !!(document.getElementById('f-harness-main') || {}).checked,
+        delete: !code.trim(),
+      };
+    }
+    function fillHarness(h) {
+      fillHarnessLanguages();
+      const lang = document.getElementById('f-harness-lang');
+      const skip = document.getElementById('f-harness-skip');
+      const main = document.getElementById('f-harness-main');
+      const box = document.getElementById('tc-harness');
+      if (!h) {
+        if (lang) lang.value = '';
+        setHarnessCode('');
+        if (skip) skip.checked = false;
+        if (main) main.checked = false;
+        syncHarnessMonacoLanguage();
+        return;
+      }
+      if (lang) {
+        if (h.language_id) lang.value = String(h.language_id);
+        else if (h.language) {
+          const opt = [...lang.options].find(o => o.dataset.key === h.language);
+          if (opt) lang.value = opt.value;
+        }
+      }
+      setHarnessCode(h.harness_code || '');
+      syncHarnessMonacoLanguage();
+      if (skip) skip.checked = !!h.skip_precompile;
+      if (main) main.checked = !!h.run_student_main;
+      if (box && (h.harness_code || h.language_id)) box.open = true;
+      layoutHarnessMonaco();
+    }
+
+    /* ---------- Composite subquestions ---------- */
     function addSub(type) {
       const id = ++subSeq;
       const wrap = document.createElement('div');
@@ -1576,18 +1847,15 @@
       renderPreview();
     }
 
-    /* ---------- 需求7：部分分 / AI 判题配置 ---------- */
+    /* ---------- Partial-score / AI-judging configuration ---------- */
     function renderScoreConf() {
       const partialRow = document.getElementById('partial-row');
       const partialOn = document.getElementById('f-partial').checked;
       const partialConf = document.getElementById('partial-conf');
       const aiOn = document.getElementById('f-ai').checked;
+      // The grading table lives inside ai-conf now (above the rubric), so it
+      // follows the same checkbox without extra per-element bookkeeping.
       document.getElementById('ai-conf').style.display = aiOn ? 'block' : 'none';
-      const gradingPanel = document.getElementById('grading-table-panel');
-      if (gradingPanel) {
-        const isGradingType = currentType === 'short' || currentType === 'blank';
-        gradingPanel.style.display = (aiOn && isGradingType) ? '' : 'none';
-      }
       if (aiOn) {
         updateGradingTableState();
         // Auto-populate grading table from blanks for fill-blank type
@@ -1608,33 +1876,40 @@
       }
 
       const subEl = document.getElementById('partial-sub');
-      if (currentType === 'programming') subEl.textContent = gettext('Partial score uses relative case weights (passed / total); weights need not equal problem Points');
-      else if (currentType === 'multiple') subEl.textContent = gettext('Partial credit for under-selection; wrong selections follow the rule below');
-      else if (currentType === 'short') subEl.textContent = gettext('AI / keyword scoring awards a score between 0 and full points');
-      else if (currentType === 'blank') subEl.textContent = gettext('Each blank is scored separately; points for each correct blank');
+      if (subEl) {
+        if (currentType === 'programming') subEl.textContent = gettext('Partial score uses relative case weights (passed / total); weights need not equal problem Points');
+        else if (currentType === 'short') subEl.textContent = gettext('AI / keyword scoring awards a score between 0 and full points');
+        else if (currentType === 'blank') subEl.textContent = gettext('Each blank is scored separately; set points next to each blank under Answers.');
+      }
 
-      partialConf.style.display = partialOn ? 'block' : 'none';
-      if (partialOn) {
-        if (currentType === 'multiple') {
-          partialConf.innerHTML = `<div class="radio-list">
-            <label><input type="radio" name="pmode" checked> ${gettext('Under-select credit:')} ${gettext('each correct choice earns')} <span class="inline-num"><input type="number" value="0.5" step="0.5"></span> ${gettext('points; any wrong choice scores 0')}</label>
-            <label><input type="radio" name="pmode"> ${gettext('Proportional credit: score = full points × (correct − wrong) / number of correct options, minimum 0')}</label>
-          </div>`;
-        } else if (currentType === 'blank') {
+      if (currentType === 'blank') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Per-blank points are enabled; set points for each blank under Answers above.')}</div>`;
           document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'inline-flex');
-        } else if (currentType === 'short') {
+        } else {
+          document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'none');
+        }
+      } else if (currentType === 'short') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Short-answer partial scoring depends on <b>AI grading</b> or keyword matching (configure tiers in the AI grading Rubric below).')}</div>`;
-        } else if (currentType === 'programming') {
+        }
+      } else if (currentType === 'programming') {
+        partialConf.style.display = partialOn ? 'block' : 'none';
+        if (partialOn) {
           partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Programming partial score uses relative case weights (passed / total). Set Weight per case below; they need not sum to problem Points. Batch subtasks supported.')}</div>`;
         }
-      } else if (currentType === 'blank') {
+      } else if (partialConf) {
+        partialConf.style.display = 'none';
+      }
+      if (currentType !== 'blank') {
         document.querySelectorAll('#blank-answers .blank-pts').forEach(e => e.style.display = 'none');
       }
       renderPreview();
     }
 
-    /* ---------- 预览（全部走服务端 markdown 管线） ---------- */
+    /* ---------- Preview (all content goes through the server-side Markdown pipeline) ---------- */
     const PREVIEW_DEBOUNCE_MS = 350;
     let _previewTimer = null;
     let _previewToken = 0;
@@ -1686,6 +1961,17 @@
           <div class="pv-option"><span class="mk ${val === 'false' ? 'on' : ''}"></span>${gettext('False')}</div></div>`;
       } else if (currentType === 'short') {
         html += `<div class="pv-answerbox"></div><div class="pv-answerlabel">${gettext('Answer:')}</div>`;
+      } else if (currentType === 'file') {
+        const inst = (document.getElementById('f-file-instructions').value || '').trim();
+        if (inst) html += `<div class="pv-answerlabel">${escapeHtml(inst)}</div>`;
+        html += `<div class="pv-answerbox"></div>`;
+        const ext = (document.getElementById('f-file-ext').value || '').trim();
+        const mb = document.getElementById('f-file-size').value;
+        const bits = [];
+        if (ext) bits.push(interpolate(gettext('Allowed types: %s'), [ext]));
+        if (Number(mb) > 0) bits.push(interpolate(gettext('Max size: %s MB'), [mb]));
+        html += `<div class="pv-answerlabel">${gettext('Students upload a file here.')}` +
+                `${bits.length ? ' ' + escapeHtml(bits.join(' · ')) : ''}</div>`;
       } else if (currentType === 'blank') {
         if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="${gettext('Enter answer')}" disabled>`;
         const ans = [...document.querySelectorAll('#blank-answers .blank-answer')]
@@ -1835,21 +2121,44 @@
         ensureOption(document.getElementById('f-authors'), CURRENT_PROFILE.id, CURRENT_PROFILE.username, true);
       }
     }
+    function bindEditorialCollapse() {
+      const box = document.getElementById('editorial-collapse');
+      if (!box) return;
+      box.addEventListener('toggle', () => {
+        if (!box.open || !window.jQuery) return;
+        const sel = document.getElementById('f-sol-authors');
+        if (sel) jQuery(sel).trigger('change.select2');
+      });
+    }
+    function initOrgPicker() {
+      const sel = document.getElementById('f-org');
+      if (!sel || !window.jQuery || !jQuery.fn.select2) return;
+      const $el = jQuery(sel);
+      if ($el.data('select2')) return;
+      $el.select2({
+        theme: SELECT2_THEME,
+        width: '100%',
+        placeholder: gettext('Select courses…'),
+        allowClear: true,
+      });
+    }
     function initClassPicker() {
       const sel = document.getElementById('f-classes');
       const org = document.getElementById('f-org');
       initSelect2Multi(sel, CLASS_SELECT2_URL, () => {
-        const v = (org && org.value) || '';
-        return v ? { organizations: v } : { organizations: '' };
+        const ids = selectedIds(org);
+        return { organizations: ids.length ? ids.join(',') : '' };
       });
       if (org) {
-        org.addEventListener('change', () => {
+        const onOrgChange = () => {
           if (window.jQuery && jQuery(sel).data('select2')) {
             jQuery(sel).val(null).trigger('change');
           } else if (sel) {
             sel.textContent = '';
           }
-        });
+        };
+        if (window.jQuery) jQuery(org).on('change', onOrgChange);
+        else org.addEventListener('change', onOrgChange);
       }
     }
     function translationLangSelectHtml() {
@@ -2011,18 +2320,13 @@
         short_circuit: !!(document.getElementById('f-short-circuit') || {}).checked,
         edit_reason: ((document.getElementById('f-edit-reason') || {}).value || '').trim(),
         clarifications: collectClarifications(),
-        solution: (function () {
-          const ta = ((document.getElementById('f-sol-content') || {}).value || '').trim();
-          const explain = (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown)
-            ? (RichEditor.getMarkdown('explain') || '').trim() : '';
-          return {
-            is_public: !!(document.getElementById('f-sol-public') || {}).checked,
-            publish_on: (document.getElementById('f-sol-publish') || {}).value || '',
-            authors: selectedIds(document.getElementById('f-sol-authors')),
-            // Explanation editor is a shortcut into Solution.content.
-            content: ta || explain,
-          };
-        })(),
+        solution: {
+          is_public: !!(document.getElementById('f-sol-public') || {}).checked,
+          publish_on: (document.getElementById('f-sol-publish') || {}).value || '',
+          authors: selectedIds(document.getElementById('f-sol-authors')),
+          content: (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown)
+            ? (RichEditor.getMarkdown('editorial') || '').trim() : '',
+        },
         translations: collectTranslations(),
       };
     }
@@ -2050,10 +2354,9 @@
       if (d.solution) {
         setChk('f-sol-public', d.solution.is_public);
         setVal('f-sol-publish', d.solution.publish_on || '');
-        setVal('f-sol-content', d.solution.content || '');
         (d.solution.authors || []).forEach(u => ensureOption(document.getElementById('f-sol-authors'), u.id, u.username, true));
-        if (d.solution.content && typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
-          try { RichEditor.setMarkdown('explain', d.solution.content); } catch (e) { /* mount may lag */ }
+        if (typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
+          try { RichEditor.setMarkdown('editorial', d.solution.content || ''); } catch (e) { /* mount may lag */ }
         }
       }
       if (d.translations && d.translations.length) {
@@ -2068,35 +2371,52 @@
       (d.clarifications || []).forEach(row => addClarificationRow(row));
     }
 
-    /* ---------- 收集 / 校验 / 保存 ---------- */
+    /* ---------- Collect / validate / save ---------- */
     function collectData() {
       const data = {
         action: 'save',
         type: currentType, typeLabel: TYPE_META[currentType].title,
         name: document.getElementById('f-name').value.trim(),
-        organizations: (() => { const v = document.getElementById('f-org').value; return v ? [parseInt(v, 10)] : []; })(),
+        organizations: selectedIds(document.getElementById('f-org')),
         group_id: document.getElementById('f-group').value,
         points: document.getElementById('f-points').value,
         is_public: document.getElementById('f-public').checked,
-        partial: !!(document.getElementById('f-partial') && document.getElementById('f-partial').checked)
+        partial: currentType === 'multiple'
+          || !!(document.getElementById('f-partial') && document.getElementById('f-partial').checked)
           || !!(document.getElementById('f-partial-code') && document.getElementById('f-partial-code').checked),
         ai: document.getElementById('f-ai').checked,
         rubric: (document.getElementById('f-rubric') || {}).value || '',
         gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
-        problemTypes: [...document.querySelectorAll('#f-types .ptype-tag')].map(t => t.childNodes[0].textContent.trim()),
+        // Manual tags only; type/difficulty badges are visual helpers, not stored tags.
+        problemTypes: currentManualTags(),
         description: RichEditor.getMarkdown('stem'),
         ...collectAdvanced(),
       };
       if (currentType === 'single' || currentType === 'multiple') {
         data.multiple = currentType === 'multiple';
         data.options = [...document.querySelectorAll('#options .option-row')].map(op => ({ text: getOptionText(op).trim(), correct: op.querySelector('.option-marker input').checked }));
+        if (currentType === 'multiple') {
+          data.mcqScoring = (document.querySelector('input[name="mcq-scoring"]:checked') || {}).value || 'proportional';
+          const under = document.getElementById('f-mcq-underselect-points');
+          const raw = under ? String(under.value || '').trim() : '';
+          data.mcqUnderselectPoints = raw === '' ? null : Number(raw);
+        }
       } else if (currentType === 'truefalse') {
         data.tfAnswer = document.querySelector('input[name="tf"]:checked').value;
       } else if (currentType === 'short') {
         data.shortAnswer = RichEditor.getMarkdown('short');
+      } else if (currentType === 'file') {
+        data.fileExtensions = document.getElementById('f-file-ext').value.trim();
+        data.fileMaxSizeMb = document.getElementById('f-file-size').value;
+        data.fileInstructions = document.getElementById('f-file-instructions').value;
       } else if (currentType === 'blank') {
-        data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer')].map(t => t.value.trim());
+        data.blanks = [...document.querySelectorAll('#blank-answers .blank-answer-row')].map(row => {
+          const answers = ((row.querySelector('.blank-answer') || {}).value || '').trim();
+          const ptsEl = row.querySelector('.blank-pts input');
+          const raw = ptsEl ? String(ptsEl.value || '').trim() : '';
+          return { answers: answers, points: raw === '' ? 1 : Number(raw) };
+        }).filter(b => b.answers);
         data.trimWhitespace = (document.getElementById('f-blank-trim') || {}).checked !== false;
         data.caseSensitive = !!(document.getElementById('f-blank-case') || {}).checked;
       } else if (currentType === 'compound') {
@@ -2107,6 +2427,8 @@
         data.languages = [...document.querySelectorAll('#f-langs .lang-cb:checked')].map(c => c.value);
         data.checker = (document.getElementById('tc-checker') || {}).value || '';
         data.testcases = collectTestCases();
+        data.zip_mode = zipFiles.length > 0;
+        data.harness = collectHarness();
         data.language_limits = collectLangLimits();
         data.templates = collectTemplates();
       }
@@ -2122,7 +2444,9 @@
       if (['single', 'multiple', 'truefalse', 'blank', 'short'].includes(d.type) && !CAN_CREATE_MCQ) {
         return '{{ _("You do not have permission to create this problem type.") }}';
       }
-      if (!d.group_id) return 'Please select a problem group.';
+      if (d.type === 'file' && !CAN_CREATE_FILE) {
+        return '{{ _("You do not have permission to create this problem type.") }}';
+      }
       if (!d.points || Number(d.points) < 0) return 'Please enter a valid point value.';
       if (d.type !== 'compound' && d.type !== 'other' && !d.description) return 'Please enter a problem description.';
       if (d.type === 'single' || d.type === 'multiple') {
@@ -2133,7 +2457,14 @@
         if (d.type === 'single' && correct > 1) return 'Single-choice questions may only have one correct answer.';
       }
       if (d.type === 'short' && !d.shortAnswer) return 'Please provide a reference answer.';
-      if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(b => b))) return 'Please provide at least one fill-in-the-blank answer.';
+      if (d.type === 'blank' && (!d.blanks.length || !d.blanks.some(function (b) {
+        if (!b) return false;
+        if (typeof b === 'string') return !!b.trim();
+        var answers = b.answers;
+        if (Array.isArray(answers)) return answers.some(function (x) { return String(x || '').trim(); });
+        return !!(answers && String(answers).trim());
+      }))) return 'Please provide at least one fill-in-the-blank answer.';
+      if (d.type === 'file' && !(Number(d.fileMaxSizeMb) > 0)) return 'Please enter a maximum file size greater than zero.';
       if (d.type === 'compound' && (!d.subs || !d.subs.length)) return 'Please add at least one sub-problem.';
       // AI grading requires a grading table
       if (d.ai && d.gradingTable && d.gradingTable.length) {
@@ -2146,6 +2477,22 @@
         const sum = d.gradingTable.reduce((s, q) => s + (Number(q.max_points) || 0), 0);
         if (Math.abs(sum - total) > 0.01)
           return 'Grading Table points sum (' + sum.toFixed(1) + ') must equal Total Points (' + total + ')';
+      }
+      return null;
+    }
+    function validateForImportFormatting(d) {
+      if (!d.name) return '{{ _("Please enter a problem name.") }}';
+      if (UNSUPPORTED_TYPES.includes(d.type)) {
+        return '{{ _("This question type is under development and cannot be formatted yet.") }}';
+      }
+      if (d.type === 'programming' && !CAN_CREATE_CODE) {
+        return '{{ _("You do not have permission to create programming problems.") }}';
+      }
+      if (['single', 'multiple', 'truefalse', 'blank', 'short'].includes(d.type) && !CAN_CREATE_MCQ) {
+        return '{{ _("You do not have permission to create this problem type.") }}';
+      }
+      if (d.type !== 'compound' && d.type !== 'other' && !d.description) {
+        return '{{ _("Please enter a problem description.") }}';
       }
       return null;
     }
@@ -2164,6 +2511,8 @@
         const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
       { const tb = document.getElementById('tc-body'); if (tb) tb.innerHTML = ''; }
       pendingZipFile = null;
+      zipFiles = [];
+      fillHarness(null);
       document.getElementById('sub-list').innerHTML = '';
       document.getElementById('grading-tbody').innerHTML = _gradingEmptyHTML();
       optionSeq = blankSeq = tcSeq = subSeq = 0; draftSaved = false;
@@ -2171,50 +2520,65 @@
     }
     async function prepareSaveRequest(data) {
       const cases = data.testcases || [];
-      const rows = [...document.querySelectorAll('#tc-body tr')];
-      const needsZipUpload = data.type === 'programming' && cases.length > 0 &&
-        (pendingZipFile || rows.some(tr => tr.dataset.mode === 'zip'));
-      if (!needsZipUpload) {
-        return {
-          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
-          body: JSON.stringify(data),
-        };
+      const zipMode = !!data.zip_mode;
+      if (data.type === 'programming' && pendingZipFile) {
+        data.testcases = cases.map(tc => ({
+          input_file: tc.input_file || '',
+          output_file: tc.output_file || '',
+          points: tc.points,
+          pretest: tc.pretest,
+        }));
+        const fd = new FormData();
+        fd.append('payload', JSON.stringify(data));
+        fd.append('testcase_zip', pendingZipFile, pendingZipFile.name || 'data.zip');
+        return { headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd };
       }
-      const dirty = rows.some(tr => tr.querySelector('.tc-file-btn.dirty'));
-      const hasManual = rows.some(tr => tr.dataset.mode === 'manual');
-      let zipBlob;
-      let zipName = 'data.zip';
-      if (pendingZipFile && !dirty && !hasManual) {
-        zipBlob = pendingZipFile;
-        zipName = pendingZipFile.name || zipName;
-      } else {
-        zipBlob = await buildTestcaseZipBlob(cases);
+      if (zipMode && data.testcases) {
+        data.testcases = cases.map(tc => ({
+          input_file: tc.input_file || '',
+          output_file: tc.output_file || '',
+          points: tc.points,
+          pretest: tc.pretest,
+        }));
       }
-      // Metadata only in JSON — file bytes travel as multipart (classic test_data limits).
-      data.testcases = cases.map(tc => ({
-        input_file: tc.input_file || '',
-        output_file: tc.output_file || '',
-        points: tc.points,
-        pretest: tc.pretest,
-      }));
-      const fd = new FormData();
-      fd.append('payload', JSON.stringify(data));
-      fd.append('testcase_zip', zipBlob, zipName);
-      return { headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd };
+      return {
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify(data),
+      };
     }
 
     function submitForm(action) {
       console.log('[save] submitForm called, action=' + action);
+      function reportImportSaveError(message) {
+        if (IMPORT_EDITOR_MODE) {
+          window.parent.postMessage({kind: 'problem-import-save-error', message: message}, window.location.origin);
+        }
+      }
       var data;
+      var confirmedImportReview = false;
       try {
         data = collectData();
         data.action = action;
+        if (IMPORT_EDITOR_MODE) {
+          const confirmType = document.getElementById('import-confirm-type');
+          const confirmData = document.getElementById('import-confirm-data');
+          const confirmConfig = document.getElementById('import-confirm-config');
+          data.confirm_question_type = confirmType && confirmType.checked ? '1' : '';
+          data.confirm_data_load = confirmData && confirmData.checked ? '1' : '';
+          data.confirm_unrecognized_configurations = confirmConfig && confirmConfig.checked ? '1' : '';
+          confirmedImportReview = !!(
+            data.confirm_question_type || data.confirm_data_load || data.confirm_unrecognized_configurations
+          );
+        }
         if (EDIT_CODE) data.edit_code = EDIT_CODE;
-        var err = validate(data);
-        if (err) { console.log('[save] validation error:', err); showToast(err, false); return; }
+        var err = IMPORT_EDITOR_MODE && (action === 'save' || action === 'format')
+          ? validateForImportFormatting(data)
+          : validate(data);
+        if (err) { console.log('[save] validation error:', err); showToast(err, false); reportImportSaveError(err); return; }
       } catch (ex) {
         console.error('[add-problem] collectData/validate failed:', ex);
-        showToast('{{ _("Page error:") }} ' + ((ex && ex.message) || ex), false);
+        var message = '{{ _("Page error:") }} ' + ((ex && ex.message) || ex);
+        showToast(message, false); reportImportSaveError(message);
         return;
       }
       console.log('[save] validation passed, sending... type=' + data.type + ' ai=' + data.ai + ' gradingTable=' + (data.gradingTable ? data.gradingTable.length + ' rows' : 'null'));
@@ -2231,21 +2595,89 @@
         console.log('[save] server response:', { ok: res.ok, status: res.status, hasBody: !!res.body, hasRedirect: res.body && !!res.body.redirect, error: res.body && res.body.error });
         if (!res.body) {
           console.error('[add-problem] non-JSON response', res.status, res.txt);
-          showToast('{{ _("Save failed (server returned") }} ' + res.status + ')', false);
+          var responseMessage = '{{ _("Save failed (server returned") }} ' + res.status + ')';
+          showToast(responseMessage, false); reportImportSaveError(responseMessage);
           return;
         }
-        if (!res.ok) { showToast(res.body.error || '{{ _("Save failed") }}', false); return; }
+        if (!res.ok) {
+          var errorMessage = res.body.error || res.body.message || '{{ _("Save failed") }}';
+          showToast(errorMessage, false); reportImportSaveError(errorMessage); return;
+        }
+        if (IMPORT_EDITOR_MODE) {
+          if (action === 'save') {
+            const status = document.getElementById('import-save-status');
+            if (status) status.textContent = '{{ _("Draft saved.") }}';
+            showToast('{{ _("Draft saved.") }}', true);
+            window.parent.postMessage({kind: 'problem-import-saved', item: res.body.item}, window.location.origin);
+            if (confirmedImportReview) {
+              const reviewStillNeeded = res.body.item && (
+                res.body.item.name_needs_review || res.body.item.type_needs_review ||
+                res.body.item.data_needs_review || res.body.item.config_needs_review
+              );
+              if (reviewStillNeeded) {
+                if (status) status.textContent = '{{ _("Review is still required before this confirmation can pass.") }}';
+                showToast('{{ _("Fix the listed configuration issues, then confirm again.") }}', false);
+              } else {
+                if (status) status.textContent = '{{ _("Confirmation recorded.") }}';
+                showToast('{{ _("Confirmation recorded.") }}', true);
+              }
+            }
+            return;
+          }
+          const actionUrl = action === 'format' ? IMPORT_FORMAT_URL : IMPORT_CREATE_URL;
+          const pendingMessage = action === 'format'
+            ? '{{ _("Formatting question with LLM…") }}'
+            : '{{ _("Creating problem…") }}';
+          const status = document.getElementById('import-save-status');
+          if (status) status.textContent = pendingMessage;
+          showToast(pendingMessage, true);
+          fetch(actionUrl, {
+            method: 'POST',
+            headers: {'X-CSRFToken': CSRF_TOKEN, 'X-Requested-With': 'XMLHttpRequest'},
+          }).then(function(actionResponse) {
+            return actionResponse.json().then(function(actionBody) {
+              return {ok: actionResponse.ok, body: actionBody};
+            });
+          }).then(function(actionResult) {
+            if (!actionResult.ok || !actionResult.body.ok) {
+              showToast(actionResult.body.message || '{{ _("Request failed") }}', false);
+              return;
+            }
+            if (actionResult.body.item) {
+              window.parent.postMessage({kind: 'problem-import-saved', item: actionResult.body.item}, window.location.origin);
+            }
+            if (action === 'format') {
+              showToast('{{ _("Question formatted. Review the updated configuration.") }}', true);
+              window.location.reload();
+            } else {
+              const parentUrl = new URL(window.parent.location.href);
+              parentUrl.searchParams.set('item', IMPORT_ITEM_ID);
+              window.parent.location.href = parentUrl.toString();
+            }
+          }).catch(function() {
+            showToast('{{ _("Request failed") }}', false);
+          });
+          return;
+        }
         showToast('{{ _("Saved") }} ' + res.body.code, true);
         if (res.body.redirect) setTimeout(function() { location.href = res.body.redirect; }, 600);
         else resetForm();
       }).catch(function(err) {
         console.error('[add-problem] network/fetch error:', err);
-        showToast('{{ _("Network error — please check your connection and try again.") }}', false);
+        var networkMessage = '{{ _("Network error — please check your connection and try again.") }}';
+        showToast(networkMessage, false); reportImportSaveError(networkMessage);
       });
     }
     /* Buttons use onclick directly — no form submit listener needed. */
+    if (IMPORT_EDITOR_MODE) {
+      window.addEventListener('message', function(event) {
+        if (event.origin === window.location.origin && event.data && event.data.kind === 'problem-import-save') {
+          submitForm('save');
+        }
+      });
+    }
 
-    /* ── 富文本图片拖拽缩放（沿用 add.html） ── */
+    /* ── Rich-text image drag resizing (reused from add.html). ── */
     (function initImageResize() {
       const handle = document.createElement('div'); handle.className = 'img-resize-handle'; document.body.appendChild(handle);
       let selImg = null, resizing = false, startX = 0, startW = 0, ratio = 1;
@@ -2259,7 +2691,7 @@
       window.addEventListener('scroll', positionHandle, true); window.addEventListener('resize', positionHandle);
     })();
 
-    /* ---------- 编辑已有题目：把后端数据回填到表单 ---------- */
+    /* ---------- Editing an existing problem: populate the form from backend data. ---------- */
     function loadEditData(d) {
       const radio = document.querySelector(`input[name="qtype"][value="${d.type}"]`);
       if (radio) radio.checked = true;
@@ -2267,7 +2699,13 @@
 
       document.getElementById('f-name').value = d.name || '';
       if (d.organizations && d.organizations.length) {
-        const org = document.getElementById('f-org'); if (org) org.value = String(d.organizations[0]);
+        const org = document.getElementById('f-org');
+        if (org) {
+          d.organizations.forEach(id => ensureOption(org, id, null, true));
+          if (window.jQuery && jQuery(org).data('select2')) {
+            jQuery(org).val(d.organizations.map(String)).trigger('change');
+          }
+        }
       }
       if (d.group_id) { const g = document.getElementById('f-group'); if (g) g.value = String(d.group_id); }
       const pts = document.getElementById('f-points'); if (pts && d.points != null) pts.value = d.points;
@@ -2284,7 +2722,13 @@
         const dr = document.querySelector(`input[name="difficulty"][value="${d.difficulty}"]`);
         if (dr) { dr.checked = true; setDifficulty(d.difficulty); }
       }
+      // Knowledge only; type/difficulty auto chips were already inserted by selectType/setDifficulty.
+      const autoLabels = new Set([
+        ...Object.values(TYPE_META).map(m => m.tag),
+        ...Object.values(DIFF_LABEL),
+      ]);
       (d.problemTypes || []).forEach(full => {
+        if (!full || autoLabels.has(full)) return;
         const box = document.getElementById('f-types');
         const el = document.createElement('span');
         el.className = 'ptype-tag';
@@ -2300,6 +2744,13 @@
           rows[rows.length - 1].querySelector('.option-marker input').checked = !!o.correct;
         });
         refreshOptionMarkers();
+        if (d.type === 'multiple') {
+          const mode = d.mcqScoring || 'proportional';
+          const radio = document.querySelector(`input[name="mcq-scoring"][value="${mode}"]`);
+          if (radio) radio.checked = true;
+          const under = document.getElementById('f-mcq-underselect-points');
+          if (under) under.value = (d.mcqUnderselectPoints != null && d.mcqUnderselectPoints !== '') ? d.mcqUnderselectPoints : '';
+        }
       } else if (d.type === 'truefalse') {
         const tf = document.querySelector(`input[name="tf"][value="${d.tfAnswer || 'true'}"]`);
         if (tf) tf.checked = true;
@@ -2307,14 +2758,24 @@
         const list = document.getElementById('blank-answers'); list.innerHTML = ''; blankSeq = 0;
         (d.blanks || []).forEach(ans => {
           addBlank();
-          const areas = list.querySelectorAll('.blank-answer');
-          areas[areas.length - 1].value = ans || '';
+          const rows = list.querySelectorAll('.blank-answer-row');
+          const row = rows[rows.length - 1];
+          const text = (ans && typeof ans === 'object') ? (ans.answers || '') : (ans || '');
+          const pts = (ans && typeof ans === 'object') ? ans.points : null;
+          row.querySelector('.blank-answer').value = text;
+          const ptsInput = row.querySelector('.blank-pts input');
+          if (ptsInput && pts != null && pts !== '') ptsInput.value = pts;
         });
         if (!(d.blanks || []).length) addBlank();
         const trimCb = document.getElementById('f-blank-trim'); if (trimCb) trimCb.checked = d.trimWhitespace !== false;
         const caseCb = document.getElementById('f-blank-case'); if (caseCb) caseCb.checked = !!d.caseSensitive;
       } else if (d.type === 'short') {
         RichEditor.setMarkdown('short', d.shortAnswer || '');
+      } else if (d.type === 'file') {
+        const ext = document.getElementById('f-file-ext'); if (ext) ext.value = d.fileExtensions || '';
+        const size = document.getElementById('f-file-size');
+        if (size && d.fileMaxSizeMb != null) size.value = d.fileMaxSizeMb;
+        const inst = document.getElementById('f-file-instructions'); if (inst) inst.value = d.fileInstructions || '';
       } else if (d.type === 'programming') {
         const tl = document.getElementById('f-time'); if (tl && d.time_limit != null) tl.value = d.time_limit;
         const ml = document.getElementById('f-mem'); if (ml && d.memory_limit != null) ml.value = d.memory_limit;
@@ -2324,23 +2785,28 @@
         });
         const chk = document.getElementById('tc-checker');
         if (chk) chk.value = d.checker || '';
+        zipFiles = usableZipPaths(d.zip_files || []);
+        pendingZipFile = null;
+        if (zipFiles.length) {
+          setZipStatus(interpolate(gettext('Loaded %s files. Pick input and output for each case.'), [zipFiles.length]));
+        }
         const tb = document.getElementById('tc-body');
         if (tb) {
           tb.innerHTML = '';
           tcSeq = 0;
           (d.testcases || []).forEach(tc => {
-            const hasNames = !!(tc.input_file || tc.output_file);
             addTestCase({
-              input: tc.input || '',
-              output: tc.output || '',
+              input: zipFiles.length ? '' : (tc.input || ''),
+              output: zipFiles.length ? '' : (tc.output || ''),
               input_file: tc.input_file || '',
               output_file: tc.output_file || '',
               points: tc.points != null ? tc.points : 0,
               pretest: !!tc.pretest,
-              fromZip: hasNames,
+              fromZip: zipFiles.length > 0,
             });
           });
         }
+        fillHarness(d.harness);
       }
       hydrateAdvanced(d);
       renderScoreConf();
@@ -2359,8 +2825,12 @@
     });
     RichEditor.mount();
     setDifficulty(currentDifficulty);
+    initOrgPicker();
     initProfilePickers();
     initClassPicker();
+    fillHarnessLanguages();
+    initHarnessMonaco();
+    bindEditorialCollapse();
 
     (function bindAdvancedFilePick() {
       const input = document.getElementById('f-md-upload');

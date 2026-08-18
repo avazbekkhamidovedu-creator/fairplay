@@ -8,16 +8,15 @@ render a grading table.
 """
 import json
 import logging
-import time as _time
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
 from judge.models import ProblemSubmissionType
+from judge.question_types.ai_grading import call_llm, parse_calibrated_scores
 from judge.question_types.base import GradingResult, QuestionType
 from judge.question_types.registry import register
-from judge.utils.calibration import calibrate
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +47,20 @@ def _accepted_set(blank, config):
     return result
 
 
+def _blank_weights(blanks):
+    """Positive point weights per blank; fall back to 1 each if none are set."""
+    weights = []
+    for blank in blanks:
+        try:
+            pts = float(blank.points)
+        except (TypeError, ValueError, AttributeError):
+            pts = 1.0
+        weights.append(pts if pts > 0 else 1.0)
+    if blanks and not any(weights):
+        return [1.0] * len(blanks)
+    return weights
+
+
 @register
 class FillBlankQuestionType(QuestionType):
     submission_type = ProblemSubmissionType.FILL_BLANK
@@ -71,7 +84,7 @@ class FillBlankQuestionType(QuestionType):
         return reverse('problem_edit_v2', args=(problem.code,))
 
     # --- student submission -------------------------------------------------
-    def build_form(self, problem, profile, data=None, initial=None):
+    def build_form(self, problem, profile, data=None, files=None, initial=None):
         from judge.forms import FillBlankSubmitForm
         return FillBlankSubmitForm(data, problem=problem, initial=initial)
 
@@ -104,16 +117,18 @@ class FillBlankQuestionType(QuestionType):
 
     def _grade_exact(self, config, blanks, answers):
         cases = []
+        weights = _blank_weights(blanks)
         case_points = 0
         for index, blank in enumerate(blanks):
             given = answers[index] if index < len(answers) else ''
             correct = _normalize(given, config) in _accepted_set(blank, config)
-            if correct:
-                case_points += 1
+            weight = weights[index]
+            earned = weight if correct else 0
+            case_points += earned
             cases.append({'case': index + 1, 'status': 'AC' if correct else 'WA',
-                          'points': 1 if correct else 0, 'total': 1})
+                          'points': earned, 'total': weight})
 
-        case_total = len(blanks)
+        case_total = sum(weights)
         # Always emit granular per-blank points; the all-or-nothing gating is applied downstream
         # by problem.partial (finalize_submission) and contest_problem.partial (update_contest),
         # exactly like code and MCQ problems.
@@ -142,60 +157,27 @@ class FillBlankQuestionType(QuestionType):
                     'auto-generating sub-questions from problem.points instead. '
                     'grading_table=%s, problem.points=%s',
                     len(grading_table), len(blanks), grading_table, problem.points)
-            pts_per_blank = float(problem.points) / len(blanks) if problem.points else 1.0
+            weights = _blank_weights(blanks)
             sub_questions = [
                 {'name': blank.label or f'Blank {i + 1}',
-                 'max_points': pts_per_blank,
+                 'max_points': weights[i],
                  'strictness': 'normal'}
                 for i, blank in enumerate(blanks)
             ]
 
         messages = self._build_ai_messages(problem, config, blanks, answers, sub_questions)
         try:
-            raw = self._call_llm(llm, messages)
+            raw = call_llm(llm, messages)
             logger.info('Fill-blank raw LLM response (submission): %s', raw)
-            parsed = json.loads(raw)
+            if raw is None:
+                return None
+            calibrated = parse_calibrated_scores(raw, sub_questions, log_prefix='Fill-blank: ')
         except Exception:
             logger.exception('Fill-blank AI grading failed for submission')
             return None
 
-        sub_scores = parsed.get('sub_scores', [])
-        if not isinstance(sub_scores, list) or not sub_scores:
+        if not calibrated:
             return None
-
-        # Calibrate each sub-question — match by INDEX, not by name.
-        # The prompt lists sub-questions in order; the LLM returns sub_scores
-        # in the same order.  Index matching avoids fragile exact-name
-        # comparison when the LLM slightly rephrases a label.
-        calibrated = []
-        for i, sq in enumerate(sub_scores):
-            try:
-                raw_score = float(sq.get('score', 0))
-            except (ValueError, TypeError):
-                logger.warning('Fill-blank: non-numeric score from LLM: %r', sq.get('score'))
-                raw_score = 0.0
-            name = str(sq.get('name', ''))[:30]
-            if i < len(sub_questions):
-                max_pts = sub_questions[i]['max_points']
-                strictness = sub_questions[i]['strictness']
-            else:
-                logger.warning(
-                    'Fill-blank: LLM returned more sub_scores (%d) than sub_questions (%d); '
-                    'extra item "%s" defaulting max_pts=1.0.',
-                    len(sub_scores), len(sub_questions), name)
-                max_pts = 1.0
-                strictness = 'normal'
-
-            cal_score = calibrate(raw_score, max_pts, strictness)
-            logger.info(
-                'Fill-blank calibration: sub="%s" raw=%.2f max=%.2f strict=%s → calibrated=%.2f',
-                name, raw_score, max_pts, strictness, cal_score)
-            calibrated.append({
-                'name': name,
-                'max_points': max_pts,
-                'score': cal_score,
-                'feedback': str(sq.get('feedback', ''))[:2000],
-            })
 
         case_points = sum(item['score'] for item in calibrated)
         case_total = sum(item['max_points'] for item in calibrated)
@@ -276,29 +258,3 @@ class FillBlankQuestionType(QuestionType):
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': user},
         ]
-
-    @staticmethod
-    def _call_llm(llm, messages):
-        """Send the prompt with retry on transient errors (429/5xx)."""
-        delays = [1, 5, 25]
-        for attempt in range(len(delays) + 1):
-            try:
-                result = llm.chat(messages, profile='grading',
-                                  max_tokens=2048, temperature=0,
-                                  response_format={'type': 'json_object'})
-                text = result.text.strip()
-                if text.startswith('```'):
-                    lines = text.split('\n')
-                    text = '\n'.join(lines[1:]) if len(lines) > 1 else text
-                    if text.endswith('```'):
-                        text = text.rsplit('```', 1)[0]
-                return text.strip()
-            except Exception as exc:
-                logger.warning('LLM attempt %d failed', attempt + 1, exc_info=True)
-                if attempt < len(delays):
-                    msg = str(exc).lower()
-                    if any(str(code) in msg for code in (429, 500, 502, 503, 504)):
-                        _time.sleep(delays[attempt])
-                        continue
-                return None
-        return None

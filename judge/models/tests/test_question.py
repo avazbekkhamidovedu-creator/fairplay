@@ -1,4 +1,5 @@
 import json
+from unittest import mock
 
 from django.test import TestCase
 
@@ -60,9 +61,14 @@ class MCQGradingTestCase(CommonDataMixin, TestCase):
     def setUpTestData(self):
         super().setUpTestData()
 
-    def _make_mcq(self, code, options, multiple=False, shuffle=False, partial=False, points=10):
+    def _make_mcq(self, code, options, multiple=False, shuffle=False, partial=False, points=10,
+                  scoring_mode=None, underselect_points=None):
         problem = create_problem(code=code, submission_type='M', points=points, partial=partial, is_public=True)
-        ProblemMCQConfig.objects.create(problem=problem, multiple_select=multiple, shuffle_options=shuffle)
+        config_kwargs = {'problem': problem, 'multiple_select': multiple, 'shuffle_options': shuffle}
+        if scoring_mode:
+            config_kwargs['scoring_mode'] = scoring_mode
+            config_kwargs['underselect_points'] = underselect_points
+        ProblemMCQConfig.objects.create(**config_kwargs)
         created = []
         for i, (text, correct) in enumerate(options):
             created.append(ProblemMCQOption.objects.create(problem=problem, order=i, text=text, is_correct=correct))
@@ -121,14 +127,47 @@ class MCQGradingTestCase(CommonDataMixin, TestCase):
         sub = self._submit(problem, [opts[0].id, opts[2].id])
         self.assertEqual(sub.points, 0)
 
+    def test_underselect_even_split_no_wrong(self):
+        problem, opts = self._make_mcq(
+            'mcqunder', [('a', True), ('b', True), ('c', False)], multiple=True, partial=True,
+            scoring_mode='underselect')
+        sub = self._submit(problem, [opts[0].id])
+        self.assertEqual(sub.result, 'WA')
+        self.assertEqual(sub.points, 5)
+
+    def test_underselect_wrong_choice_scores_zero(self):
+        problem, opts = self._make_mcq(
+            'mcqunder0', [('a', True), ('b', True), ('c', False)], multiple=True, partial=True,
+            scoring_mode='underselect')
+        sub = self._submit(problem, [opts[0].id, opts[2].id])
+        self.assertEqual(sub.result, 'WA')
+        self.assertEqual(sub.points, 0)
+
+    def test_underselect_custom_points_per_choice(self):
+        problem, opts = self._make_mcq(
+            'mcqunder2', [('a', True), ('b', True), ('c', False)], multiple=True, partial=True,
+            scoring_mode='underselect', underselect_points=2)
+        sub = self._submit(problem, [opts[0].id])
+        self.assertEqual(sub.points, 2)
+
+    def test_underselect_full_set_still_full_marks(self):
+        problem, opts = self._make_mcq(
+            'mcqunderac', [('a', True), ('b', True), ('c', False)], multiple=True, partial=True,
+            scoring_mode='underselect', underselect_points=2)
+        sub = self._submit(problem, [opts[0].id, opts[1].id])
+        self.assertEqual(sub.result, 'AC')
+        self.assertEqual(sub.points, 10)
+
 
 class FillBlankGradingTestCase(CommonDataMixin, TestCase):
-    def _make_fb(self, code, blanks, case_sensitive=False, trim_whitespace=True, partial=False, points=10):
+    def _make_fb(self, code, blanks, case_sensitive=False, trim_whitespace=True, partial=False, points=10,
+                 blank_points=None):
         problem = create_problem(code=code, submission_type='B', points=points, partial=partial, is_public=True)
         ProblemFillBlankConfig.objects.create(
             problem=problem, case_sensitive=case_sensitive, trim_whitespace=trim_whitespace)
         for i, answers in enumerate(blanks):
-            ProblemBlank.objects.create(problem=problem, order=i, answers=answers)
+            pts = blank_points[i] if blank_points else 1
+            ProblemBlank.objects.create(problem=problem, order=i, answers=answers, points=pts)
         return problem
 
     def _submit(self, problem, answers):
@@ -161,6 +200,13 @@ class FillBlankGradingTestCase(CommonDataMixin, TestCase):
         sub = self._submit(problem, ['Paris', 'nope'])
         self.assertEqual(sub.result, 'WA')
         self.assertEqual(sub.points, 0)
+
+    def test_unequal_blank_points(self):
+        problem = self._make_fb(
+            'fbweights', ['Paris', '1789'], partial=True, blank_points=[7, 3])
+        sub = self._submit(problem, ['Paris', 'nope'])
+        self.assertEqual(sub.result, 'WA')
+        self.assertEqual(sub.points, 7)
 
     def test_empty_answer_is_wrong(self):
         problem = self._make_fb('fbempty', ['Paris'])
@@ -208,7 +254,10 @@ class ShortAnswerGradingTestCase(CommonDataMixin, TestCase):
             language=Language.get_answer_language(),
         )
         SubmissionSource.objects.create(submission=sub, source=json.dumps({'text': 'SYN SYN-ACK ACK'}))
-        grade_internally(sub)
+        # Deterministically force the "AI unavailable" path: a configured-but-unreachable LLM
+        # (e.g. in the production container) would otherwise trigger a real model call.
+        with mock.patch('judge.llm.is_configured', return_value=False):
+            grade_internally(sub)
         sub.refresh_from_db()
         self.assertEqual(sub.result, 'IR')
         self.assertEqual(sub.points, 0)
@@ -321,7 +370,8 @@ class GraderRegistryTestCase(TestCase):
             self.assertFalse(grader.is_manual)
 
     def test_unregistered_type_raises(self):
-        # File upload is exposed in the admin choices but has no grader yet; it must fail clearly
-        # rather than with a bare KeyError.
-        with self.assertRaises(NotImplementedError):
-            get_grader('F')
+        # A submission_type with no registered grader must fail clearly rather than with a bare
+        # KeyError. ('Z' is not a defined type; C/M/B/S/F are all registered.)
+        for submission_type in ('Z',):
+            with self.assertRaises(NotImplementedError):
+                get_grader(submission_type)

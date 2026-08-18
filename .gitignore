@@ -1,6 +1,7 @@
 .gitlab-ci-local
 .opencode
 .omo
+.playwright-mcp
 .tmp
 .idea
 .vscode
@@ -33,4 +34,17 @@ node_modules
 .venv
 .test_static
 test_logs/
+test-reports/
+p000000/
+static/jsi18n/
 dmoj/test_settings.py
+# Local STATIC_ROOT (dmoj/local_settings.py) used by compilejsi18n for tests.
+static_test_root/
+.local-backups/
+
+# Runtime uploads (MEDIA_ROOT) — never commit.
+media/
+# Local fallback for submission_storage when DMOJ_S3_ENDPOINT_URL is empty
+# (dev/CI); tests that write uploads land real files here.
+submission_files/
+submission_files_backup/

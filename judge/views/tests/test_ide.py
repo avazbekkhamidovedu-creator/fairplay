@@ -30,9 +30,17 @@ class IDEViewTestCase(TestCase):
         data.update(overrides)
         return self.client.post(reverse('ide_submit'), data)
 
+    def test_page_uses_local_monaco(self):
+        response = self.client.get(reverse('ide'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="code-editor"')
+        self.assertContains(response, 'libs/monaco/vs')
+        self.assertNotContains(response, 'cdn.jsdelivr.net')
+
     def test_requires_login(self):
-        response = Client().post(reverse('ide_submit'), {})
-        self.assertEqual(response.status_code, 302)
+        anon = Client()
+        self.assertEqual(anon.get(reverse('ide')).status_code, 302)
+        self.assertEqual(anon.post(reverse('ide_submit'), {}).status_code, 302)
 
     def test_rate_limit(self):
         cache.set(f'ide_run:{self.user.profile.id}', 5, 60)

@@ -1,14 +1,92 @@
 {% extends "base.html" %}
 
 {% block js_media %}
-    <script src="{{ static('libs/tablesorter.js') }}" type="text/javascript"></script>
     <script type="text/javascript">
         $(function () {
-            $("#organization-table").tablesorter();
-
             $("#instructor-verification-btn").on("click", function () {
-                alert("Please send an email to {{ admin_email }} to verify your instructor identity. Approved users will gain access to course management, grading, and assignment creation tools.");
+                $("#instructor-verification-modal").prop("hidden", false);
             });
+            $("#instructor-verification-modal .js-close-modal").on("click", function () {
+                $("#instructor-verification-modal").prop("hidden", true);
+            });
+            $(".js-delete-course").on("click", function (e) {
+                if (!confirm({{ _('Delete this course? This cannot be undone.')|htmltojs }})) {
+                    e.preventDefault();
+                }
+            });
+
+            var $grid = $('#course-grid');
+            var $empty = $('#course-empty');
+            var $cards = $grid.find('.course-card');
+
+            function applyFilters() {
+                var q = ($('#f-q').val() || '').trim().toLowerCase();
+                var joined = $('#f-joined').val() || '';
+                var mode = $('#f-mode').val() || '';
+                var sort = $('#f-sort').val() || 'short_name';
+
+                var items = $cards.get().map(function (el) {
+                    return {
+                        el: el,
+                        code: (el.getAttribute('data-code') || '').toLowerCase(),
+                        name: (el.getAttribute('data-name') || '').toLowerCase(),
+                        joined: el.getAttribute('data-joined') === '1',
+                        pending: el.getAttribute('data-pending') === '1',
+                        open: el.getAttribute('data-open') === '1',
+                        manage: el.getAttribute('data-manage') === '1',
+                        classes: parseInt(el.getAttribute('data-classes') || '0', 10),
+                        instructors: parseInt(el.getAttribute('data-instructors') || '0', 10)
+                    };
+                });
+
+                items.forEach(function (it) {
+                    var show = true;
+                    if (q && it.code.indexOf(q) < 0 && it.name.indexOf(q) < 0) show = false;
+                    if (joined === 'joined' && !it.joined) show = false;
+                    if (joined === 'pending' && !(it.pending && !it.joined)) show = false;
+                    if (joined === 'open' && !(it.open && !it.joined && !it.pending && !it.manage)) show = false;
+                    if (mode === 'open' && !it.open) show = false;
+                    if (mode === 'required' && it.open) show = false;
+                    it.show = show;
+                });
+
+                items.sort(function (a, b) {
+                    if (sort === 'name') return a.name.localeCompare(b.name);
+                    if (sort === 'classes') return b.classes - a.classes || a.code.localeCompare(b.code);
+                    if (sort === 'instructors') return b.instructors - a.instructors || a.code.localeCompare(b.code);
+                    return a.code.localeCompare(b.code) || a.name.localeCompare(b.name);
+                });
+
+                $grid.empty();
+                var visible = items.filter(function (it) { return it.show; });
+                visible.forEach(function (it) {
+                    $grid.append(it.el);
+                    $(it.el).show();
+                });
+                $empty.prop('hidden', !!visible.length);
+                $grid.prop('hidden', !visible.length);
+
+                try {
+                    var params = new URLSearchParams();
+                    if (q) params.set('q', $('#f-q').val().trim());
+                    if (joined) params.set('joined', joined);
+                    if (mode) params.set('join_mode', mode);
+                    if (sort && sort !== 'short_name') params.set('sort', sort);
+                    var qs = params.toString();
+                    var next = window.location.pathname + (qs ? ('?' + qs) : '');
+                    if (next !== window.location.pathname + window.location.search) {
+                        window.history.replaceState(null, '', next);
+                    }
+                } catch (e) {}
+            }
+
+            $('#f-q').on('input', applyFilters);
+            $('#f-joined, #f-mode, #f-sort').on('change', applyFilters);
+            $('#course-list-filters').on('submit', function (e) {
+                e.preventDefault();
+                applyFilters();
+            });
+            applyFilters();
         });
     </script>
 {% endblock %}
@@ -16,48 +94,110 @@
 {% block title_ruler %}{% endblock %}
 
 {% block title_row %}
-    {% set tab = 'organizations' %}
-    {% include "user/user-list-tabs.html" %}
+    {% set tab = 'course' %}
+    {% set title = _('Course') %}
+    {% include "organization/course-tabs.html" %}
 {% endblock %}
 
 {% block body %}
 {% if request.user.is_authenticated %}
+<div class="course-redesign oj-ui">
+    <form id="course-list-filters" class="filters" method="get" action="" role="search">
+        <div>
+            <label for="f-q">{{ _('Course code / course name') }}</label>
+            <input id="f-q" type="text" name="q" value="{{ filter_q }}"
+                   placeholder="{{ _('e.g. course code or course name') }}"
+                   autocomplete="off">
+        </div>
+        <div>
+            <label for="f-joined">{{ _('Join status') }}</label>
+            <select id="f-joined" name="joined" class="oj-select">
+                <option value="" {% if not filter_joined %}selected{% endif %}>{{ _('All') }}</option>
+                <option value="joined" {% if filter_joined == 'joined' %}selected{% endif %}>{{ _('Joined') }}</option>
+                <option value="open" {% if filter_joined == 'open' %}selected{% endif %}>{{ _('Can join') }}</option>
+                <option value="pending" {% if filter_joined == 'pending' %}selected{% endif %}>{{ _('Pending') }}</option>
+            </select>
+        </div>
+        <div>
+            <label for="f-mode">{{ _('Join mode') }}</label>
+            <select id="f-mode" name="join_mode" class="oj-select">
+                <option value="" {% if not filter_join_mode %}selected{% endif %}>{{ _('All') }}</option>
+                <option value="required" {% if filter_join_mode == 'required' %}selected{% endif %}>{{ _('Approval required') }}</option>
+                <option value="open" {% if filter_join_mode == 'open' %}selected{% endif %}>{{ _('Open join') }}</option>
+            </select>
+        </div>
+        <div>
+            <label for="f-sort">{{ _('Sort by') }}</label>
+            <select id="f-sort" name="sort" class="oj-select">
+                <option value="short_name" {% if filter_sort == 'short_name' %}selected{% endif %}>{{ _('Course code') }}</option>
+                <option value="name" {% if filter_sort == 'name' %}selected{% endif %}>{{ _('Course name') }}</option>
+                <option value="classes" {% if filter_sort == 'classes' %}selected{% endif %}>{{ _('Class count') }}</option>
+                <option value="instructors" {% if filter_sort == 'instructors' %}selected{% endif %}>{{ _('Instructor count') }}</option>
+            </select>
+        </div>
+    </form>
 
-    <div style="display:flex; gap:10px; align-items:center; margin-bottom:15px;">
-        {% if request.user.is_superuser or request.user.has_perm('judge.add_organization') %}
-            <a href="/admin/judge/organization/add/"
-            class="button"
-            style="display:inline-block; width:auto; padding:6px 12px; line-height:1.2;">
-                Create Course
-            </a>
-        {% endif %}
+    {% include "messages.html" %}
 
-        <button id="instructor-verification-btn"
-                type="button"
-                class="button"
-                style="display:inline-block; width:auto; padding:6px 12px; line-height:1.2;">
-            Instructor Verification
-        </button>
-    </div>
-
-    <table id="organization-table" class="table striped">
-        <thead>
-        <tr>
-            <th style="width:85%">{{ _('Name') }}</th>
-            <th>{{ _('Members') }}</th>
-        </tr>
-        </thead>
-        <tbody>
-        {% for org in organizations %}
-            <tr>
-                <td><a href="{{ org.get_absolute_url() }}">{{ org.name }}</a></td>
-                <td><a href="{{ org.get_users_url() }}">{{ org.member_count }}</a></td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-
+    {% if organizations %}
+        <div id="course-grid" class="course-grid">
+            {% for org in organizations %}
+                <div class="course-card"
+                     data-code="{{ org.short_name }}"
+                     data-name="{{ org.name }}"
+                     data-joined="{% if org.user_joined %}1{% else %}0{% endif %}"
+                     data-pending="{% if org.user_pending %}1{% else %}0{% endif %}"
+                     data-open="{% if org.is_open %}1{% else %}0{% endif %}"
+                     data-manage="{% if org.can_manage %}1{% else %}0{% endif %}"
+                     data-classes="{{ org.class_count }}"
+                     data-instructors="{{ org.instructor_count }}">
+                    {% if org.review_pending_count %}
+                        <a class="course-pending" href="{{ url('organization_join_requests') }}?status=P&course={{ org.id }}"
+                           title="{{ _('Pending join requests') }}">{{ org.review_pending_count }}</a>
+                    {% endif %}
+                    <div class="course-tint">
+                        <div class="course-code">{{ org.short_name }}</div>
+                        <div class="course-title">
+                            <a href="{{ org.get_absolute_url() }}">{{ org.name }}</a>
+                        </div>
+                        <div class="course-meta">
+                            <div class="line"><i class="fa fa-sitemap"></i>
+                                <span>
+                                    {% if org.class_count == 1 %}{{ _('1 class') }}
+                                    {% else %}{{ _('%(count)d classes', count=org.class_count) }}{% endif %}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="course-foot">
+                        <div class="status">
+                            {% if org.user_joined %}{{ _('Already in course') }}
+                            {% elif org.user_pending %}{{ _('Waiting for membership approval') }}
+                            {% elif org.is_open %}{{ _('Open course join') }}
+                            {% else %}{{ _('Course membership required') }}
+                            {% endif %}
+                        </div>
+                        <div class="actions">
+                            <a class="oj-btn oj-btn-primary" href="{{ org.get_absolute_url() }}">
+                                {% if org.can_manage or org.user_joined %}{{ _('Open course') }}
+                                {% elif org.user_pending %}{{ _('Pending membership') }}
+                                {% elif org.is_open %}{{ _('Join course') }}
+                                {% else %}{{ _('Request membership') }}
+                                {% endif %}
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+        <div id="course-empty" class="empty" hidden>{{ _('No courses match your filters.') }}</div>
+    {% else %}
+        <div class="empty">{{ _('No courses match your filters.') }}</div>
+    {% endif %}
+</div>
 {% else %}
-    <div>Please Login</div>
+    <div>{{ _('Please log in to view courses.') }}</div>
 {% endif %}
+
+{% include "organization/instructor-verification-modal.html" %}
 {% endblock %}

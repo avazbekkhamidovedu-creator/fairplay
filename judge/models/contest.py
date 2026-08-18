@@ -1,5 +1,3 @@
-import re
-
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
@@ -18,6 +16,8 @@ from judge.models.problem import Problem
 from judge.models.profile import Class, Organization, Profile
 from judge.models.submission import Submission
 from judge.ratings import rate_contest
+from judge.storage import generate_seb_config_key, submission_storage
+from judge.utils.seb import first_invalid_seb_key, parse_seb_keys
 
 __all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating']
 
@@ -25,6 +25,12 @@ __all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'C
 class MinValueOrNoneValidator(MinValueValidator):
     def compare(self, a, b):
         return a is not None and b is not None and super().compare(a, b)
+
+
+def seb_contest_config_upload_to(instance, filename):
+    """upload_to: opaque OSS key. Uploads only happen in edit mode, so the
+    contest already has a pk to shard by."""
+    return generate_seb_config_key('contest-%s' % (instance.pk or 0), filename)
 
 
 class ContestTag(models.Model):
@@ -217,7 +223,9 @@ class Contest(models.Model):
     )
     seb_config_file = models.FileField(
         verbose_name=_('SEB config file (.seb)'),
-        upload_to='seb_configs/',
+        storage=submission_storage,
+        upload_to=seb_contest_config_upload_to,
+        max_length=255,
         blank=True,
         null=True,
         help_text=_('The .seb file students download or launch via sebs:// to enter this exam.'),
@@ -228,6 +236,16 @@ class Contest(models.Model):
         default='',
         help_text=_('Must match the Quit URL set inside the .seb file. Shown to students after final '
                     'submission so SEB auto-closes. Leave blank to disable.'),
+    )
+    seb_preset = models.ForeignKey(
+        'judge.SEBConfigPreset',
+        verbose_name=_('SEB config preset'),
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='contests',
+        help_text=_('Inherit the .seb file, key hashes and quit URL from a staff-published configuration. '
+                    'Anything filled in above overrides the preset for this contest.'),
     )
 
     @cached_property
@@ -266,18 +284,22 @@ class Contest(models.Model):
 
         if self.seb_required:
             seb_errors = {}
-            if not self._parse_seb_keys(self.seb_browser_exam_keys):
+            # Validated against the EFFECTIVE keys: a contest that inherits a
+            # preset needs nothing of its own, which is what lets an instructor
+            # arm SEB in a single save instead of uploading a .seb by hand.
+            if not self.seb_allowed_bek():
                 seb_errors['seb_browser_exam_keys'] = _(
                     'At least one Browser Exam Key hash is required when Safe Exam Browser is enabled.')
-            if not self._parse_seb_keys(self.seb_config_keys):
+            if not self.seb_allowed_config_keys():
                 seb_errors['seb_config_keys'] = _(
                     'At least one Config Key hash is required when Safe Exam Browser is enabled '
                     '(the macOS SEB build only sends the Config Key).')
+            # Only this contest's own fields are hex-checked; the preset
+            # validates its own keys when staff save it.
             for field in ('seb_browser_exam_keys', 'seb_config_keys'):
-                for key in self._parse_seb_keys(getattr(self, field)):
-                    if not re.fullmatch('[0-9a-f]{64}', key):
-                        seb_errors[field] = _('"%s" is not a 64-character hex hash.') % key
-                        break
+                invalid = first_invalid_seb_key(getattr(self, field))
+                if invalid is not None:
+                    seb_errors[field] = _('"%s" is not a 64-character hex hash.') % invalid
             if seb_errors:
                 raise ValidationError(seb_errors)
 
@@ -528,8 +550,17 @@ class Contest(models.Model):
         if user.has_perm('judge.edit_all_contest'):
             return True
 
-        # If the user is a contest organizer or curator
-        if user.has_perm('judge.edit_own_contest') and user.profile.id in self.editor_ids:
+        # If the user is a contest organizer or curator. Being listed as an
+        # author/curator IS the grant: the curator list is only editable by
+        # people who can already edit, so membership itself is sufficient.
+        # (Sensitive fields inside the editor are still gated by their own
+        # permissions via ContestCreate._restricted_fields.)
+        # NOTE (merge): origin/develop's relaxed semantics are kept on purpose
+        # — the Teachers group carries no `edit_own_contest`, so course
+        # workflow teachers rely on author/curator membership alone to edit
+        # assignments (see ContestTagCreateView._can_create). The grade page
+        # permission tests encode this exact contract.
+        if user.is_authenticated and user.profile.id in self.editor_ids:
             return True
 
         return False
@@ -542,23 +573,30 @@ class Contest(models.Model):
             return False
         return self.organizations.filter(admins=user.profile).exists()
 
-    @staticmethod
-    def _parse_seb_keys(text):
-        out = []
-        for raw in text.splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            token = line.split()[0].lower()
-            if token:
-                out.append(token)
-        return out
+    _parse_seb_keys = staticmethod(parse_seb_keys)
 
+    # Every SEB accessor below resolves this contest's own value first and falls
+    # back to the linked preset, so a contest can inherit a staff-published
+    # configuration wholesale yet still override any single part of it.
     def seb_allowed_bek(self):
-        return self._parse_seb_keys(self.seb_browser_exam_keys)
+        return self._parse_seb_keys(self.seb_browser_exam_keys) or \
+            (self.seb_preset.allowed_bek() if self.seb_preset_id else [])
 
     def seb_allowed_config_keys(self):
-        return self._parse_seb_keys(self.seb_config_keys)
+        return self._parse_seb_keys(self.seb_config_keys) or \
+            (self.seb_preset.allowed_config_keys() if self.seb_preset_id else [])
+
+    @property
+    def seb_effective_config_file(self):
+        if self.seb_config_file:
+            return self.seb_config_file
+        return self.seb_preset.config_file if self.seb_preset_id else None
+
+    @property
+    def seb_effective_quit_url(self):
+        if self.seb_quit_url:
+            return self.seb_quit_url
+        return self.seb_preset.quit_url if self.seb_preset_id else ''
 
     def user_bypasses_seb(self, user):
         if not user.is_authenticated:
