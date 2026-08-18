@@ -49,7 +49,7 @@ from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
-from judge.utils.problems import _get_result_data
+from judge.utils.problems import _get_result_data, user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.seb import request_matches_seb, seb_launch_context
 from judge.utils.stats import get_bar_chart, get_pie_chart
@@ -406,7 +406,7 @@ class ContestCreate(LoginRequiredMixin, View):
         'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
         'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
         'show_short_display', 'is_private', 'is_organization_private',
-        'limit_join_organizations', 'seb_required',
+        'limit_join_organizations', 'seb_required', 'allow_ai_hints',
     )
     _text_fields = (
         'name', 'description', 'access_code', 'problem_label_script',
@@ -704,6 +704,12 @@ class ContestCreate(LoginRequiredMixin, View):
         elif format_config is not None:
             contest.format_config = None
 
+        scoreboard = payload.get('scoreboard_visibility', Contest.SCOREBOARD_VISIBLE)
+        valid_scoreboards = {choice[0] for choice in Contest.SCOREBOARD_VISIBILITY}
+        if scoreboard not in valid_scoreboards:
+            raise ValidationError(_('Invalid scoreboard visibility.'))
+        contest.scoreboard_visibility = scoreboard
+
         # ── Schedule: start/end are required and must be ordered; lock is optional ──
         start_time = self._parse_datetime(payload, 'start_time')
         end_time = self._parse_datetime(payload, 'end_time')
@@ -872,6 +878,22 @@ class ContestCreate(LoginRequiredMixin, View):
                 raise ValidationError(_('Invalid value for "%(field)s".') % {'field': field})
             getattr(contest, field).set(ids)
 
+        # Same org→class rule as ContestForm.clean: classes are a subset of
+        # the selected organizations, and cannot be set without an organization.
+        if 'classes' in payload or 'organizations' in payload:
+            self._validate_contest_classes(contest)
+
+    @staticmethod
+    def _validate_contest_classes(contest):
+        """Reject class ids that do not belong to the contest's organizations."""
+        if not contest.classes.exists():
+            return
+        org_ids = set(contest.organizations.values_list('id', flat=True))
+        if not org_ids:
+            raise ValidationError(_('You must select organizations before selecting classes.'))
+        if contest.classes.exclude(organization_id__in=org_ids).exists():
+            raise ValidationError(_('Selected classes must belong to selected organizations.'))
+
     def _sync_problems(self, contest, payload):
         """Replace the contest's problem list with the submitted selection.
 
@@ -943,7 +965,10 @@ class ContestCreate(LoginRequiredMixin, View):
             partial = bool(raw_partial) if raw_partial is not None else True
             is_pretested = bool(raw_pretested) if raw_pretested is not None else False
             try:
+                # Blank / 0 → unlimited (model validator rejects 0: min 1 or None).
                 max_submissions = int(raw_max_subs) if raw_max_subs not in (None, '') else None
+                if max_submissions is not None and max_submissions < 1:
+                    max_submissions = None
             except (TypeError, ValueError):
                 max_submissions = None
             # output_prefix_override: nullable int (blank → model default 0).
@@ -1100,11 +1125,44 @@ class ContestCreate(LoginRequiredMixin, View):
             dt = timezone.make_aware(dt, timezone.utc)
         return dt.astimezone(tz).strftime('%Y-%m-%dT%H:%M')
 
+    def _library_filter_context(self):
+        """Filter metadata for the From-library panel (same controls as the workspace drawer)."""
+        from judge.models import ProblemType
+        from judge.question_types import all_types
+
+        format_types = []
+        seen_codes = set()
+        for question_type in all_types():
+            if question_type.submission_type == ProblemSubmissionType.MCQ:
+                code, label = ProblemSubmissionType.MCQ, str(_('Choice question'))
+            else:
+                code, label = question_type.submission_type, str(question_type.label)
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            format_types.append({'code': code, 'label': label})
+        reserved_labels = Problem.reserved_auto_type_labels()
+        knowledge_types = [
+            problem_type for problem_type in ProblemType.objects.order_by('full_name')
+            if Problem.is_knowledge_problem_type(problem_type, reserved_labels=reserved_labels)
+        ]
+        profile = getattr(self.request, 'profile', None)
+        return {
+            'lib_format_types': format_types,
+            'lib_knowledge_types': knowledge_types,
+            'lib_difficulty_options': [
+                ('easy', str(_('Easy'))),
+                ('medium', str(_('Medium'))),
+                ('hard', str(_('Hard'))),
+            ],
+            'lib_completed_ids': user_completed_ids(profile) if profile is not None else set(),
+        }
+
     def get_context_data(self):
         """Build the template context, pre-filling every field in edit mode.
 
         Add mode ships sensible defaults (e.g. virtual participation on,
-        ``vis_mode`` = hidden); edit mode overwrites them from the stored row.
+        ``vis_mode`` = org / Course); edit mode overwrites them from the stored row.
         """
         contest = self.contest
         # Temporary timezone for this editor, remembered per-browser-session so
@@ -1142,7 +1200,9 @@ class ContestCreate(LoginRequiredMixin, View):
             'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': False,
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
-            'vis_mode': 'hidden', 'cheat_level': 'medium', 'problems': [],
+            'allow_ai_hints': False,
+            'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
+            'problems': [],
             'target_score': 100,
         }
         for field in self._m2m_fields:
@@ -1229,16 +1289,6 @@ class ContestCreate(LoginRequiredMixin, View):
             # of problem points so the editor's target input matches reality.
             prefill['target_score'] = sum(cp.points for cp in contest.contest_problems.all()) or 100
 
-            # Reconstruct UI-only controls from the stored flags.
-            # Anti-cheat level: SEB + access code → custom; SEB → high; code → medium.
-            if contest.seb_required and contest.access_code:
-                prefill['cheat_level'] = 'custom'
-            elif contest.seb_required:
-                prefill['cheat_level'] = 'high'
-            elif contest.access_code:
-                prefill['cheat_level'] = 'medium'
-            else:
-                prefill['cheat_level'] = 'low'
             # List visibility seg control: user-private > org-private > public > hidden.
             # Derived from the STORED FLAGS only — list contents (private_contestants /
             # organizations / classes) are scoping data, not mode selectors. Checking the
@@ -1253,7 +1303,7 @@ class ContestCreate(LoginRequiredMixin, View):
             else:
                 prefill['vis_mode'] = 'hidden'
 
-        return {
+        ctx = {
             'title': _('Edit Contest') if contest else _('Add Contest'),
             'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
             'now': timezone.now(),
@@ -1262,10 +1312,10 @@ class ContestCreate(LoginRequiredMixin, View):
             'tags': ContestTag.objects.all(),
             'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
             # Only problems this editor may attach — see _visible_problems_for.
-            # select_related/prefetch_related feed the library columns (group,
-            # types / difficulty, orgs) without N+1 queries on a large bank.
+            # select_related/prefetch_related feed the library columns (types /
+            # difficulty / orgs / MCQ format) without N+1 queries on a large bank.
             'problems': (self._visible_problems_for(self.request.user)
-                         .select_related('group').prefetch_related('types', 'organizations')
+                         .select_related('mcq_config').prefetch_related('types', 'organizations')
                          .order_by('-date')),
             'contest': contest,
             'user_timezone': user_tz_name,
@@ -1291,6 +1341,8 @@ class ContestCreate(LoginRequiredMixin, View):
             'seb_linked_preset': linked_preset,
             'prefill': prefill,
         }
+        ctx.update(self._library_filter_context())
+        return ctx
 
     @staticmethod
     def _tz_options(current):
@@ -1344,6 +1396,8 @@ class ContestTagCreateView(LoginRequiredMixin, View):
     only lets teachers pick existing tags. This endpoint lets them type a new
     tag name, persist it (with an auto-assigned colour), and immediately select
     it — mirroring ``ProblemCreateV2ProblemTypeView`` for problem types.
+    Duplicate names return the existing row (get-or-create) so preset pills
+    stay instant even when homework/quiz/exam already exist.
     """
 
     # Rotating palette so consecutive tags get distinct colours automatically.
@@ -1357,7 +1411,9 @@ class ContestTagCreateView(LoginRequiredMixin, View):
         # permission — see Contest.is_editable_by).
         if not user.is_authenticated:
             return False
-        if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.edit_own_contest'):
+        if (user.has_perm('judge.edit_all_contest')
+                or user.has_perm('judge.edit_own_contest')
+                or user.has_perm('judge.create_private_contest')):
             return True
         from judge.models import Contest as ContestModel
         return (ContestModel.authors.through.objects.filter(profile=user.profile).exists()
@@ -1378,12 +1434,9 @@ class ContestTagCreateView(LoginRequiredMixin, View):
             return JsonResponse({'error': _('Lowercase letters and hyphens only.')}, status=400)
         if len(name) > 20:
             return JsonResponse({'error': _('Tag name must be at most 20 characters.')}, status=400)
-        if ContestTag.objects.filter(name=name).exists():
-            return JsonResponse({'error': _('This tag already exists.')}, status=400)
-
-        tag = ContestTag.objects.create(
+        tag, _created = ContestTag.objects.get_or_create(
             name=name,
-            color=self._PALETTE[ContestTag.objects.count() % len(self._PALETTE)],
+            defaults={'color': self._PALETTE[ContestTag.objects.count() % len(self._PALETTE)]},
         )
         return JsonResponse({'ok': True, 'tag': {'id': tag.id, 'name': tag.name, 'color': tag.color}})
 

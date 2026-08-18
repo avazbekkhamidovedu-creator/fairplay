@@ -202,6 +202,12 @@ class Contest(models.Model):
         default=True,
         help_text=_('Allow users to participate virtually after the contest ends.'),
     )
+    allow_ai_hints = models.BooleanField(
+        verbose_name=_('allow AI hints'),
+        default=False,
+        help_text=_('When this assignment is active, students can use AI Hint on every attached '
+                    "problem. Each problem's own AI Hint setting is unchanged outside this assignment."),
+    )
     seb_required = models.BooleanField(
         verbose_name=_('require Safe Exam Browser'),
         default=False,

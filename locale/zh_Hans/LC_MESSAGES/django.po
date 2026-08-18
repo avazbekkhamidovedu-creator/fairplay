@@ -7498,3 +7498,231 @@ msgstr "重判失败"
 #: templates/contest/grade.html
 msgid "Rejudge is taking unusually long — refresh the page to see the result."
 msgstr "重判耗时较长，请刷新页面查看结果。"
+
+#: templates/contest/create.html
+msgid "Course scoping is managed by administrators."
+msgstr "课程范围由管理员管理。"
+
+#: templates/contest/create.html
+msgid "Options depend on the selected course."
+msgstr "选项取决于所选课程。"
+
+#: templates/contest/create.html
+msgid "Select course first"
+msgstr "请先选择课程"
+
+#: templates/contest/create.html
+msgid "Visibility"
+msgstr "可见性"
+
+#: templates/contest/create.html
+msgid "Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes above; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side."
+msgstr "作业是否出现在学生可见列表中。Hidden = 不列出；Public = 对所有人列出；Course = 列出，但仅限上方课程/班级；Private = 列出，但仅限高级 → 私人用户中的用户。此分段控件是唯一来源，底层标志由服务器据此推导。"
+
+#: templates/contest/create.html
+msgid "Private to courses / classes"
+msgstr "仅对课程／班级可见"
+
+#: templates/contest/create.html
+msgid "Course / Private restrict access; pick the courses/classes or users in the sections above / under Advanced → Private users."
+msgstr "Course／Private 会限制访问；请在上方区块或高级 → 私人用户中选择课程／班级或用户。"
+
+#: templates/contest/create.html
+msgid "choose 'Course' to scope to courses/classes."
+msgstr "请选择「Course」以限定课程／班级。"
+
+#: templates/contest/create.html
+msgid "Hidden mode is not listed — Course/Class scoping and Private users do not apply."
+msgstr "Hidden 模式不会列出 — 课程／班级范围与私人用户不适用。"
+
+#: templates/contest/create.html
+msgid "Public mode is visible to everyone — Course/Class scoping and Private users do not apply."
+msgstr "Public 模式对所有人可见 — 课程／班级范围与私人用户不适用。"
+
+#: templates/contest/create.html
+msgid "Course mode restricts visibility to the courses/classes above. The Advanced → Private users list is ignored."
+msgstr "Course 模式将可见范围限定为上方课程／班级。高级 → 私人用户列表会被忽略。"
+
+#: templates/contest/create.html
+msgid "Private mode ignores the Course/Class scoping above. Use Advanced → Private users to choose who can see this assignment."
+msgstr "Private 模式会忽略上方的课程／班级范围。请在高级 → 私人用户中选择谁可以看到此作业。"
+
+#: templates/contest/create.html
+msgid "Join courses"
+msgstr "加入课程"
+
+#: templates/contest/create.html
+msgid "Limit who may join (join courses)"
+msgstr "限制可加入者（加入课程）"
+
+#: templates/contest/create.html
+msgid "Join restriction enabled — pick the courses allowed to join."
+msgstr "已启用加入限制 — 请选择允许加入的课程。"
+
+#: templates/contest/create.html
+msgid "Join restriction disabled — the Join courses selection is ignored."
+msgstr "已关闭加入限制 — 「加入课程」的选择会被忽略。"
+
+#: templates/contest/create.html
+msgid "Click a preset or + to add tags. Use + to pick existing tags or create a new one."
+msgstr "点击预设项或 + 以加入标签。使用 + 可挑选已有标签或创建新标签。"
+
+#: templates/contest/create.html
+msgid "Homework"
+msgstr "作业"
+
+#: templates/contest/create.html
+msgid "Quiz"
+msgstr "测验"
+
+#: templates/contest/create.html
+msgid "Exam"
+msgstr "考试"
+
+#: templates/contest/create.html
+msgid "Course / Private restrict access; pick the courses/classes below, or users under Advanced → Private users."
+msgstr "Course / Private 会限制访问；请在下方选择课程／班级，或在高级 → 私人用户中选择用户。"
+
+#: templates/contest/create.html
+msgid "Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes below; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side."
+msgstr "作业是否出现在学生可见列表中。Hidden = 不列出；Public = 对所有人列出；Course = 列出，但限于下方课程／班级；Private = 列出，但限于高级 → 私人用户中的用户。此分段控件是唯一真相来源 — 底层标志由服务端据此推导。"
+
+#: templates/contest/create.html
+msgid "Course mode restricts visibility to the courses/classes below. The Advanced → Private users list is ignored."
+msgstr "Course 模式将可见范围限定为下方课程／班级。高级 → 私人用户列表会被忽略。"
+
+#: templates/contest/create.html
+msgid "Private mode ignores the Course/Class scoping below. Use Advanced → Private users to choose who can see this assignment."
+msgstr "Private 模式会忽略下方的课程／班级范围。请在高级 → 私人用户中选择谁可以看到此作业。"
+
+#: templates/contest/create.html
+msgid "Allow AI Hint"
+msgstr "允许 AI 提示"
+
+#: judge/models/contest.py
+msgid "allow AI hints"
+msgstr "允许 AI 提示"
+
+#: judge/models/contest.py
+msgid "When this assignment is active, students can use AI Hint on every attached problem. Each problem's own AI Hint setting is unchanged outside this assignment."
+msgstr "此作业进行中时，学生可对本作业内每道题使用 AI 提示。作业外仍以各题自身的 AI 提示设置为准。"
+
+#: templates/contest/create.html
+msgid "When this assignment is active, students can use AI Hint on every problem in it. Each problem's own AI Hint setting is unchanged outside this assignment."
+msgstr "此作业进行中时，学生可对本作业内每道题使用 AI 提示。作业外仍以各题自身的 AI 提示设置为准。"
+
+#: templates/contest/create.html
+msgid "Identity"
+msgstr "身份"
+
+#: templates/contest/create.html
+msgid "Identity, settings, rating, access…"
+msgstr "身份、设置、评分、访问权限…"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Join organizations"
+msgstr "加入组织"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Private contestants"
+msgstr "私有参赛者"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Rating floor"
+msgstr "评分下限"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Rating ceiling"
+msgstr "评分上限"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Performance ceiling override"
+msgstr "表现上限覆盖"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Contest format"
+msgstr "竞赛格式"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Contest format configuration"
+msgstr "竞赛格式配置"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Allow virtual participation"
+msgstr "允许虚拟参赛"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Contest problem label script"
+msgstr "竞赛题目标签脚本"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Scoreboard visibility"
+msgstr "记分板可见性"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Precision points"
+msgstr "分数精度"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Contest lock"
+msgstr "竞赛锁定"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Rate all"
+msgstr "全部评分"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Allow users to participate virtually after the contest ends."
+msgstr "允许用户在竞赛结束后以虚拟方式参赛。"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Rate users even if they make no submissions."
+msgstr "即使没有提交，也为用户评分。"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "Overrides the performance_ceiling parameter used in computing ratings. Do not modify unless you know what you're doing!"
+msgstr "覆盖计算评分时使用的 performance_ceiling 参数。除非你清楚自己在做什么，否则不要修改！"
+
+#: templates/contest/create.html
+msgid "URL of the OpenGraph image used in social media previews."
+msgstr "用于社交媒体预览的 OpenGraph 图片 URL。"
+
+#: templates/contest/create.html
+msgid "These users will not receive a rating from this contest."
+msgstr "这些用户不会从这场竞赛获得评分。"
+
+#: templates/contest/create.html
+msgid "If enabled, only the join organizations listed here may join the contest."
+msgstr "若启用，仅此处列出的加入组织可以加入竞赛。"
+
+#: judge/views/contests.py
+msgid "Invalid scoreboard visibility."
+msgstr "无效的记分板可见性。"
+
+#: judge/models/contest.py templates/contest/create.html
+msgid "If enabled, non-staff participants can only access this contest from inside Safe Exam Browser."
+msgstr "若启用，非教职人员参与者只能在 Safe Exam Browser 内访问此竞赛。"
+
+#: templates/contest/create.html
+msgid "Partial credit"
+msgstr "部分分"
+
+#: templates/contest/create.html
+msgid "Pretest only"
+msgstr "仅测 Pretest"
+
+#: templates/contest/create.html
+msgid "Results"
+msgstr "成绩"
+
+#: templates/contest/create.html
+msgid "What results students can see after judging."
+msgstr "评测后学生能看到哪些结果。"
+
+#: templates/contest/create.html
+msgid "Out prefix"
+msgstr "输出前缀"
+
+#: templates/contest/create.html
+msgid "Number of output characters shown to students after judging — 0 means none, so only the verdict is visible."
+msgstr "评测后向学生展示的输出字符数。0 表示不展示输出，仅可见判定结果。"

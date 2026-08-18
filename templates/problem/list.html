@@ -531,7 +531,6 @@
             <input type="hidden" name="filtered" value="1">
             {% set difficulty_labels = {'easy': _('Easy'), 'medium': _('Medium'), 'hard': _('Hard')} %}
             {% set knowledge_hot_count = knowledge_hot_count|default(12) %}
-            {% set filter_public_course = filter_public_course|default(false) %}
 
             <section class="card filter-card">
                 <div class="filter-row filter-row-conditions">
@@ -560,7 +559,6 @@
                         <div class="filter-group">
                             <span class="filter-group-label">{{ _('Course') }}</span>
                             <select id="filter-course" name="course" multiple>
-                                <option value="public" {% if filter_public_course %}selected{% endif %}>{{ _('Public') }}</option>
                                 {% for org in organizations %}
                                     <option value="{{ org.id }}" {% if org.id in selected_organizations %}selected{% endif %}>{{ org.name }}</option>
                                 {% endfor %}
@@ -642,16 +640,13 @@
                 <div class="filter-row selected-row">
                     <span class="filter-label">{{ _('Selected') }}</span>
                     <div class="chip-list" id="active-chips">
-                        {% set has_chip = selected_types or selected_formats or selected_organizations or filter_public_course or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text %}
+                        {% set has_chip = selected_types or selected_formats or selected_organizations or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text %}
                         {% for f in format_types %}{% if f.code in selected_formats %}
                             <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
                         {% for type in difficulty_types %}{% if type.id in selected_difficulty_types %}
                             <span class="chip">{{ difficulty_labels.get(type.name|lower, type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
-                        {% if filter_public_course %}
-                            <span class="chip">{{ _('Public') }}<button type="button" data-field="course" data-value="public" aria-label="{{ _('Remove') }}">&times;</button></span>
-                        {% endif %}
                         {% for org in organizations %}{% if org.id in selected_organizations %}
                             <span class="chip">{{ org.name }}<button type="button" data-field="course" data-value="{{ org.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}

@@ -96,6 +96,18 @@ def is_configured() -> bool:
     return llm.is_configured()
 
 
+def hints_enabled_for(problem, contest=None) -> bool:
+    """Whether AI Hint is available for this problem in the given contest context.
+
+    The problem's own ``ai_hints_enabled`` is never mutated. Callers must only
+    pass ``contest`` when the student is actually working that problem inside
+    that assignment (active participation / contest submission).
+    """
+    if getattr(problem, 'ai_hints_enabled', False):
+        return True
+    return bool(contest is not None and getattr(contest, 'allow_ai_hints', False))
+
+
 def build_user_message(submission) -> str:
     """Assemble the user message from submission data."""
     problem = submission.problem
