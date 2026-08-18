@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('judge', '0201_merge_organization_instructors_problemcodeconfig'),
+        ('judge', '0201_merge_organization_instructors_and_problemcodeconfig'),
     ]
 
     operations = [
