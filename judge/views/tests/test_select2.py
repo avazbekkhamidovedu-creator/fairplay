@@ -121,4 +121,3 @@ class UserSelect2NameSearchTest(CommonDataMixin, TestCase):
         """Teacher form pickers keep the original profile_select2 scope."""
         rows = self._results('profile_select2', 'Hidden')
         self.assertTrue(any(row['id'] == self.unlisted.profile.id for row in rows))
-

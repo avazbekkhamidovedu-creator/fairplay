@@ -1,4 +1,3 @@
-from django.contrib.auth.models import User
 from django.test import TestCase
 
 from judge.models.tests.util import create_user

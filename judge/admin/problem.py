@@ -26,8 +26,8 @@ from judge.models import Class, Language, LanguageLimit, Organization, Problem, 
 from judge.utils import simple_xlsx
 from judge.utils.language_matching import matching_languages
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
-from judge.utils.views import NoBatchDeleteMixin
 from judge.utils.user_search import apply_profile_choice_labels, profile_choice_label
+from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, AdminSelect2MultipleWidget, \
     AdminSelect2Widget, CheckboxSelectMultipleWithSelectAll
 

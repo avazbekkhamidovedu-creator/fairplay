@@ -7,7 +7,6 @@ from django.http import HttpResponse
 from django.utils.translation import gettext_lazy as _
 
 from judge.utils.user_search import auth_user_search_q, format_user_label, profile_person_name
-
 from .utils import LazyEncoder
 
 
