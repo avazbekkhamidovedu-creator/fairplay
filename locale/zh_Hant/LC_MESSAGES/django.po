@@ -5092,6 +5092,11 @@ msgstr "篩選"
 msgid "Public"
 msgstr "公共"
 
+#: templates/problem/list.html templates/organization/course-tabs.html
+#: templates/contest/create.html
+msgid "Course"
+msgstr "課程"
+
 #: templates/problem/list.html
 msgid "All courses"
 msgstr "全部課程"
@@ -6393,4 +6398,84 @@ msgstr "管理使用者檔案"
 #: templates/widgets/select_all.html:8
 msgid "Check all"
 msgstr "全選"
+
+#: templates/contest/create.html
+msgid "Course scoping is managed by administrators."
+msgstr "課程範圍由管理員管理。"
+
+#: templates/contest/create.html
+msgid "Options depend on the selected course."
+msgstr "選項取決於所選課程。"
+
+#: templates/contest/create.html
+msgid "Select course first"
+msgstr "請先選擇課程"
+
+#: templates/contest/create.html
+msgid "Visibility"
+msgstr "可見性"
+
+#: templates/contest/create.html
+msgid "Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes above; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side."
+msgstr "作業是否出現在學生可見清單中。Hidden = 不列出；Public = 對所有人列出；Course = 列出，但僅限上方課程/班級；Private = 列出，但僅限進階 → 私人使用者中的使用者。此分段控制是唯一來源，底層旗標由伺服器依此推導。"
+
+#: templates/contest/create.html
+msgid "Private to courses / classes"
+msgstr "僅對課程／班級可見"
+
+#: templates/contest/create.html
+msgid "Course / Private restrict access; pick the courses/classes or users in the sections above / under Advanced → Private users."
+msgstr "Course／Private 會限制存取；請在上方區塊或進階 → 私人使用者中選擇課程／班級或使用者。"
+
+#: templates/contest/create.html
+msgid "choose 'Course' to scope to courses/classes."
+msgstr "請選擇「Course」以限定課程／班級。"
+
+#: templates/contest/create.html
+msgid "Hidden mode is not listed — Course/Class scoping and Private users do not apply."
+msgstr "Hidden 模式不會列出 — 課程／班級範圍與私人使用者不適用。"
+
+#: templates/contest/create.html
+msgid "Public mode is visible to everyone — Course/Class scoping and Private users do not apply."
+msgstr "Public 模式對所有人可見 — 課程／班級範圍與私人使用者不適用。"
+
+#: templates/contest/create.html
+msgid "Course mode restricts visibility to the courses/classes above. The Advanced → Private users list is ignored."
+msgstr "Course 模式將可見範圍限定為上方課程／班級。進階 → 私人使用者清單會被忽略。"
+
+#: templates/contest/create.html
+msgid "Private mode ignores the Course/Class scoping above. Use Advanced → Private users to choose who can see this assignment."
+msgstr "Private 模式會忽略上方的課程／班級範圍。請在進階 → 私人使用者中選擇誰可以看到此作業。"
+
+#: templates/contest/create.html
+msgid "Join courses"
+msgstr "加入課程"
+
+#: templates/contest/create.html
+msgid "Limit who may join (join courses)"
+msgstr "限制可加入者（加入課程）"
+
+#: templates/contest/create.html
+msgid "Join restriction enabled — pick the courses allowed to join."
+msgstr "已啟用加入限制 — 請選擇允許加入的課程。"
+
+#: templates/contest/create.html
+msgid "Join restriction disabled — the Join courses selection is ignored."
+msgstr "已關閉加入限制 — 「加入課程」的選擇會被忽略。"
+
+#: templates/contest/create.html
+msgid "Click a preset or + to add tags. Use + to pick existing tags or create a new one."
+msgstr "點選預設項或 + 以加入標籤。使用 + 可挑選既有標籤或建立新標籤。"
+
+#: templates/contest/create.html
+msgid "Homework"
+msgstr "作業"
+
+#: templates/contest/create.html
+msgid "Quiz"
+msgstr "測驗"
+
+#: templates/contest/create.html
+msgid "Exam"
+msgstr "考試"
 

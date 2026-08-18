@@ -1104,7 +1104,7 @@ class ContestCreate(LoginRequiredMixin, View):
         """Build the template context, pre-filling every field in edit mode.
 
         Add mode ships sensible defaults (e.g. virtual participation on,
-        ``vis_mode`` = hidden); edit mode overwrites them from the stored row.
+        ``vis_mode`` = org / Course); edit mode overwrites them from the stored row.
         """
         contest = self.contest
         # Temporary timezone for this editor, remembered per-browser-session so
@@ -1142,7 +1142,8 @@ class ContestCreate(LoginRequiredMixin, View):
             'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': False,
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
-            'vis_mode': 'hidden', 'cheat_level': 'medium', 'problems': [],
+            'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
+            'cheat_level': 'medium', 'problems': [],
             'target_score': 100,
         }
         for field in self._m2m_fields:
@@ -1344,6 +1345,8 @@ class ContestTagCreateView(LoginRequiredMixin, View):
     only lets teachers pick existing tags. This endpoint lets them type a new
     tag name, persist it (with an auto-assigned colour), and immediately select
     it — mirroring ``ProblemCreateV2ProblemTypeView`` for problem types.
+    Duplicate names return the existing row (get-or-create) so preset pills
+    stay instant even when homework/quiz/exam already exist.
     """
 
     # Rotating palette so consecutive tags get distinct colours automatically.
@@ -1357,7 +1360,9 @@ class ContestTagCreateView(LoginRequiredMixin, View):
         # permission — see Contest.is_editable_by).
         if not user.is_authenticated:
             return False
-        if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.edit_own_contest'):
+        if (user.has_perm('judge.edit_all_contest')
+                or user.has_perm('judge.edit_own_contest')
+                or user.has_perm('judge.create_private_contest')):
             return True
         from judge.models import Contest as ContestModel
         return (ContestModel.authors.through.objects.filter(profile=user.profile).exists()
@@ -1378,12 +1383,9 @@ class ContestTagCreateView(LoginRequiredMixin, View):
             return JsonResponse({'error': _('Lowercase letters and hyphens only.')}, status=400)
         if len(name) > 20:
             return JsonResponse({'error': _('Tag name must be at most 20 characters.')}, status=400)
-        if ContestTag.objects.filter(name=name).exists():
-            return JsonResponse({'error': _('This tag already exists.')}, status=400)
-
-        tag = ContestTag.objects.create(
+        tag, _created = ContestTag.objects.get_or_create(
             name=name,
-            color=self._PALETTE[ContestTag.objects.count() % len(self._PALETTE)],
+            defaults={'color': self._PALETTE[ContestTag.objects.count() % len(self._PALETTE)]},
         )
         return JsonResponse({'ok': True, 'tag': {'id': tag.id, 'name': tag.name, 'color': tag.color}})
 

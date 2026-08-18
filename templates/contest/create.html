@@ -295,10 +295,27 @@
             color: var(--muted);
         }
 
-        /* Tag pills sit in a ptype-tags row with a "+" modal opener, exactly
-           like the problem editor's type picker. */
-        .v2-left .ptype-tags#tag-pills { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
-        .v2-left .ptype-tags#tag-pills .ptype-add {
+        /* Tags: preset pills (Homework / Quiz / Exam) + custom pills + "+",
+           matching the problem editor's difficulty / type-picker row. */
+        #tag-row {
+            display: inline-flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.45rem;
+            max-width: 100%;
+        }
+        #tag-presets {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }
+        #tag-presets .type-pill span {
+            display: inline-block;
+            white-space: nowrap;
+            padding: 0.35rem 0.7rem;
+        }
+        .v2-left .ptype-tags#tag-pills { display: inline-flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+        #tag-add-btn {
             flex: 0 0 auto;
             width: var(--oj-control-height, 34px);
             height: var(--oj-control-height, 34px);
@@ -864,7 +881,7 @@
                     var labels = {
                         hidden: {{ _('Hidden')|htmltojs }},
                         public: {{ _('Public')|htmltojs }},
-                        org: {{ _('Org')|htmltojs }},
+                        org: {{ _('Course')|htmltojs }},
                         private: {{ _('Private')|htmltojs }},
                     };
                     visEl.textContent = labels[mode] || {{ _('Hidden')|htmltojs }};
@@ -941,7 +958,12 @@
             }
 
             form.addEventListener('input', function (e) { syncPreview(); syncScoreSummary(); });
-            form.addEventListener('change', function (e) { syncPreview(); syncScoreSummary(); syncPreviewProblems(); });
+            form.addEventListener('change', function (e) {
+                // Tag pills don't affect the preview; skip the markdown render
+                // so checking Homework/Quiz/Exam stays instant.
+                if (e.target && e.target.closest && e.target.closest('#tag-row')) return;
+                syncPreview(); syncScoreSummary(); syncPreviewProblems();
+            });
             // RichEditor changes do not bubble as form events; hook its onChange.
             if (typeof RichEditor !== 'undefined' && RichEditor.configure) {
                 RichEditor.configure({ onChange: function () { syncPreview(); } });
@@ -1121,11 +1143,18 @@
                         if (isNone) {
                             durH.value = '';
                             durM.value = '';
+                        } else if (savedDurH || savedDurM) {
+                            // Restore the previously saved duration. Keep a
+                            // literal 0 (e.g. 2h 0min) instead of collapsing
+                            // it to blank — blank + unchecked is "unset".
+                            durH.value = savedDurH;
+                            durM.value = savedDurM;
                         } else {
-                            // Restore the previously saved duration, or a clean
-                            // 0h 0min if the contest never had one.
-                            durH.value = savedDurH || '';
-                            durM.value = savedDurM || '';
+                            // New assignment, or a contest that never had a
+                            // personal window: leave the inputs empty so
+                            // No limit is not implied by a checked box.
+                            durH.value = '';
+                            durM.value = '';
                         }
                     }
                     durNone.addEventListener('change', function () {
@@ -1199,7 +1228,7 @@
                 var labels = {
                     hidden: {{ _('Hidden')|htmltojs }},
                     public: {{ _('Public')|htmltojs }},
-                    org: {{ _('Org')|htmltojs }},
+                    org: {{ _('Course')|htmltojs }},
                     private: {{ _('Private')|htmltojs }},
                 };
                 var modeLabel = labels[mode] || mode;
@@ -1211,15 +1240,15 @@
                         note.style.display = active ? 'none' : '';
                     }
                 }
-                applyMute(orgMuteRow, orgMuteNote, orgActive, {{ _("choose 'Org' to scope to organizations/classes.")|htmltojs }});
-                applyMute(classMuteRow, classMuteNote, orgActive, {{ _("choose 'Org' to scope to organizations/classes.")|htmltojs }});
+                applyMute(orgMuteRow, orgMuteNote, orgActive, {{ _("choose 'Course' to scope to courses/classes.")|htmltojs }});
+                applyMute(classMuteRow, classMuteNote, orgActive, {{ _("choose 'Course' to scope to courses/classes.")|htmltojs }});
                 applyMute(privMuteRow, privMuteNote, privActive, {{ _("choose 'Private' to restrict to specific users.")|htmltojs }});
             }
             var visToast = {
-                hidden: {{ _('Hidden mode is not listed — Organization/Class scoping and Private users do not apply.')|htmltojs }},
-                public: {{ _('Public mode is visible to everyone — Organization/Class scoping and Private users do not apply.')|htmltojs }},
-                org: {{ _("Org mode restricts visibility to the organizations/classes above. The Advanced → Private users list is ignored.")|htmltojs }},
-                private: {{ _("Private mode ignores the Organization/Class scoping above. Use Advanced → Private users to choose who can see this assignment.")|htmltojs }},
+                hidden: {{ _('Hidden mode is not listed — Course/Class scoping and Private users do not apply.')|htmltojs }},
+                public: {{ _('Public mode is visible to everyone — Course/Class scoping and Private users do not apply.')|htmltojs }},
+                org: {{ _("Course mode restricts visibility to the courses/classes above. The Advanced → Private users list is ignored.")|htmltojs }},
+                private: {{ _("Private mode ignores the Course/Class scoping above. Use Advanced → Private users to choose who can see this assignment.")|htmltojs }},
             };
             document.querySelectorAll('#vis-seg input[type=radio]').forEach(function (radio) {
                 radio.addEventListener('change', function () {
@@ -1252,8 +1281,8 @@
                 joinLimitCb.addEventListener('change', function () {
                     syncJoinMuting();
                     showToast(joinLimitCb.checked
-                        ? {{ _('Join restriction enabled — pick the organizations allowed to join.')|htmltojs }}
-                        : {{ _('Join restriction disabled — the Join orgs selection is ignored.')|htmltojs }});
+                        ? {{ _('Join restriction enabled — pick the courses allowed to join.')|htmltojs }}
+                        : {{ _('Join restriction disabled — the Join courses selection is ignored.')|htmltojs }});
                 });
                 syncJoinMuting();
             }
@@ -1285,19 +1314,49 @@
                 });
             }
 
-            // --- Tag picker: pills + "+" opens a modal (mirrors the problem
-            //     editor's problem-type picker) ---
+            // --- Tag picker: preset pills (Homework / Quiz / Exam) + custom
+            //     pills + "+" modal, matching the problem editor's difficulty
+            //     options + add-button row. ---
             var tagSelect = document.getElementById('id_tags');
             var tagPills = document.getElementById('tag-pills');
+            var PRESET_TAG_NAMES = ['homework', 'quiz', 'exam'];
+            var presetBusy = {};
             // All known tags: seeded from the server + any created this session.
             var knownTags = [];
-            Array.prototype.forEach.call(tagSelect.querySelectorAll('option'), function (opt) {
-                knownTags.push({ id: opt.value, name: opt.textContent });
-            });
+            if (tagSelect) {
+                Array.prototype.forEach.call(tagSelect.querySelectorAll('option'), function (opt) {
+                    knownTags.push({ id: opt.value, name: opt.textContent });
+                });
+            }
+            function findTagByName(name) {
+                var needle = (name || '').toLowerCase();
+                for (var i = 0; i < knownTags.length; i++) {
+                    if ((knownTags[i].name || '').toLowerCase() === needle) return knownTags[i];
+                }
+                return null;
+            }
+            function isPresetName(name) {
+                return PRESET_TAG_NAMES.indexOf(name) !== -1;
+            }
+            function syncPresetChecks() {
+                PRESET_TAG_NAMES.forEach(function (name) {
+                    var input = document.querySelector('#tag-presets input[data-tag-name="' + name + '"]');
+                    if (!input || !tagSelect) return;
+                    var t = findTagByName(name);
+                    var selected = false;
+                    if (t) {
+                        var opt = tagSelect.querySelector('option[value="' + t.id + '"]');
+                        selected = !!(opt && opt.selected);
+                    }
+                    input.checked = selected;
+                });
+            }
             function syncTagPills() {
                 if (!tagPills || !tagSelect) return;
-                tagPills.innerHTML = '';
+                syncPresetChecks();
+                tagPills.textContent = '';
                 Array.from(tagSelect.selectedOptions).forEach(function (opt) {
+                    if (isPresetName(opt.text)) return;
                     var pill = document.createElement('span');
                     pill.className = 'ptype-tag tag-pill';
                     pill.textContent = opt.text;
@@ -1313,19 +1372,67 @@
                     pill.appendChild(x);
                     tagPills.appendChild(pill);
                 });
-                // The "+" add button sits at the end of the pill row, like the
-                // problem editor's ptype-add.
-                var addBtn = document.createElement('button');
-                addBtn.type = 'button';
-                addBtn.className = 'inline-add-btn ptype-add';
-                addBtn.title = {{ _('Select from existing tags / create new')|tojson }};
-                addBtn.textContent = '+';
-                addBtn.addEventListener('click', openTagModal);
-                tagPills.appendChild(addBtn);
             }
-            function selectTagById(id) {
+            function selectTagById(id, selected) {
                 var opt = tagSelect.querySelector('option[value="' + id + '"]');
-                if (opt) { opt.selected = true; syncTagPills(); }
+                if (opt) {
+                    opt.selected = selected !== false;
+                    syncTagPills();
+                }
+            }
+            function rememberTag(tag) {
+                var id = String(tag.id);
+                if (!findTagByName(tag.name) && !knownTags.some(function (t) { return t.id === id; })) {
+                    knownTags.push({ id: id, name: tag.name });
+                }
+                if (tagSelect && !tagSelect.querySelector('option[value="' + id + '"]')) {
+                    var opt = document.createElement('option');
+                    opt.value = id;
+                    opt.textContent = tag.name;
+                    tagSelect.appendChild(opt);
+                }
+                return id;
+            }
+            function createTagByName(name) {
+                return fetch({{ url('contest_tag_create')|tojson }}, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('input[name="csrfmiddlewaretoken"]').value || ''
+                    },
+                    body: JSON.stringify({ name: name })
+                })
+                .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+                .then(function (res) {
+                    if (res.data.ok && res.data.tag) {
+                        rememberTag(res.data.tag);
+                        return res.data.tag;
+                    }
+                    showToast(res.data.error || {{ _('Failed to create tag.')|htmltojs }}, true);
+                    return null;
+                })
+                .catch(function () {
+                    showToast({{ _('Failed to create tag.')|htmltojs }}, true);
+                    return null;
+                });
+            }
+            function applyPresetTag(name, selected) {
+                // Local toggle first (same feel as problem difficulty radios).
+                // Only hit the network when the tag is not in the hidden <select>.
+                var existing = findTagByName(name);
+                if (existing) {
+                    selectTagById(String(existing.id), selected);
+                    return;
+                }
+                if (!selected) return;
+                if (presetBusy[name]) return;
+                presetBusy[name] = true;
+                createTagByName(name).then(function (tag) {
+                    presetBusy[name] = false;
+                    var input = document.querySelector('#tag-presets input[data-tag-name="' + name + '"]');
+                    if (tag && input && input.checked) selectTagById(String(tag.id), true);
+                    else syncPresetChecks();
+                });
             }
             // ── Tag modal (same chrome as the problem-type modal) ─────────────
             function openTagModal() {
@@ -1382,35 +1489,13 @@
             function createNewTag() {
                 var raw = document.getElementById('nt-tag').value.trim();
                 if (!raw) { showToast({{ _('Please enter a tag name.')|htmltojs }}, true); return; }
-                fetch({{ url('contest_tag_create')|tojson }}, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': document.querySelector('input[name="csrfmiddlewaretoken"]').value || ''
-                    },
-                    body: JSON.stringify({ name: raw })
-                })
-                .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
-                .then(function (res) {
-                    if (res.data.ok && res.data.tag) {
-                        var t = res.data.tag;
-                        knownTags.push({ id: String(t.id), name: t.name });
-                        var opt = document.createElement('option');
-                        opt.value = t.id;
-                        opt.textContent = t.name;
-                        opt.selected = true;
-                        tagSelect.appendChild(opt);
-                        syncTagPills();
-                        syncTagModalOptions();
-                        document.getElementById('nt-tag').value = '';
-                        toggleNewTagForm(false);
-                        showToast({{ _('Tag created.')|htmltojs }});
-                    } else {
-                        showToast(res.data.error || {{ _('Failed to create tag.')|htmltojs }}, true);
-                    }
-                })
-                .catch(function () {
-                    showToast({{ _('Failed to create tag.')|htmltojs }}, true);
+                createTagByName(raw).then(function (tag) {
+                    if (!tag) return;
+                    selectTagById(String(tag.id), true);
+                    syncTagModalOptions();
+                    document.getElementById('nt-tag').value = '';
+                    toggleNewTagForm(false);
+                    showToast({{ _('Tag created.')|htmltojs }});
                 });
             }
             function applyTagSelection() {
@@ -1441,7 +1526,18 @@
                     if (e.target === tagModal) closeTagModal();
                 });
             }
-            tagSelect.addEventListener('change', syncTagPills);
+            if (tagSelect) {
+                tagSelect.addEventListener('change', syncTagPills);
+            }
+            var tagAddBtn = document.getElementById('tag-add-btn');
+            if (tagAddBtn) tagAddBtn.addEventListener('click', openTagModal);
+            Array.prototype.forEach.call(
+                document.querySelectorAll('#tag-presets input[data-tag-name]'),
+                function (input) {
+                    input.addEventListener('change', function () {
+                        applyPresetTag(input.getAttribute('data-tag-name'), input.checked);
+                    });
+                });
             syncTagPills();
 
             // --- Anti-cheat seg control: toggle fields by level ---
@@ -1497,12 +1593,19 @@
             // Insert-at-position support: set to an index (or null for append)
             // by the drag-reorder rail / toolbar before opening the library.
             window.cpInsertAt = null;
+            function escapeHtml(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;');
+            }
             function libRowHtml(row, letter) {
                 var code = row.dataset.code || '';
-                var solveUrl = code ? '/problem/' + code : '#';
+                var solveUrl = code ? '/problem/' + encodeURIComponent(code) : '#';
                 return '<span class="cp-drag" title="' + {{ _('Drag to reorder')|htmltojs }} + '">⠿</span>' +
                     '<span class="label-letter">' + letter + '</span>' +
-                    '<span class="pname">' + (row.dataset.name || 'Problem ' + row.dataset.pid) + '</span>' +
+                    '<span class="pname">' + escapeHtml(row.dataset.name || 'Problem ' + row.dataset.pid) + '</span>' +
                     '<span><input type="number" class="cp-points" value="100" style="width:48px"></span>' +
                     '<span><input type="number" class="cp-max-subs" min="1" placeholder="∞" title="' + {{ _('Maximum number of submissions allowed for this problem — blank means unlimited.')|htmltojs }} + '" style="width:60px"></span>' +
                     '<span class="cp-actions">' +
@@ -1518,6 +1621,33 @@
                     '<label class="cp-opt" title="' + {{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.')|htmltojs }} + '">' + {{ _('Out prefix')|htmltojs }} + ' <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px"></label>' +
                     '</div>' +
                     '<div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>';
+            }
+            function addCpRowFromMeta(meta) {
+                var pid = String((meta && (meta.id || meta.pid)) || '');
+                if (!pid) return false;
+                var hiddenIds = document.getElementById('problem-ids');
+                var cpList = document.querySelector('.cp-list');
+                var cpEmpty = document.querySelector('.cp-empty');
+                if (!hiddenIds || !cpList) return false;
+                var existingIds = (hiddenIds.value || '').split(',').filter(Boolean);
+                if (existingIds.indexOf(pid) !== -1) return false;
+                existingIds.push(pid);
+                hiddenIds.value = existingIds.join(',');
+                cpList.style.display = '';
+                if (cpEmpty) cpEmpty.style.display = 'none';
+                var fake = document.createElement('div');
+                fake.dataset.pid = pid;
+                fake.dataset.code = meta.code || '';
+                fake.dataset.name = meta.name || ('Problem ' + pid);
+                var r = document.createElement('div');
+                r.className = 'cp-row';
+                r.dataset.pid = pid;
+                r.dataset.code = meta.code || '';
+                r.setAttribute('draggable', 'true');
+                r.innerHTML = libRowHtml(fake, '?');
+                cpList.appendChild(r);
+                if (typeof window.updateProblemIds === 'function') window.updateProblemIds();
+                return true;
             }
             // Re-render a `.cp-row`'s letter after reorder (drag/drop, insert).
             function renumberCpRows() {
@@ -1616,7 +1746,7 @@
                         (row.dataset.types || '').split(';').forEach(function (t) { if (t) types[t] = 1; });
                     });
                     var orgSel = document.getElementById('lib-f-org');
-                    orgSel.innerHTML = '<option value="">' + {{ _('All orgs')|htmltojs }} + '</option>' +
+                    orgSel.innerHTML = '<option value="">' + {{ _('All courses')|htmltojs }} + '</option>' +
                         Object.keys(orgs).sort().map(function (o) {
                             return '<option value="' + o.replace(/"/g, '&quot;') + '">' + o + '</option>';
                         }).join('');
@@ -1812,6 +1942,22 @@
                 syncScoreSummary();
             };
 
+            var createNewBtn = document.getElementById('cp-create-new');
+            if (createNewBtn) {
+                createNewBtn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    // Named window keeps window.opener so the add-problem page
+                    // can postMessage the new problem back into this form.
+                    window.open(createNewBtn.href, 'assignment-create-problem');
+                });
+            }
+            window.addEventListener('message', function (e) {
+                if (e.origin !== window.location.origin) return;
+                if (!e.data || e.data.kind !== 'assignment-problem-created') return;
+                var added = addCpRowFromMeta(e.data.problem || {});
+                if (added) showToast({{ _('Problem added to this assignment.')|htmltojs }});
+            });
+
             // --- Drag & drop reorder (4c) ---
             // HTML5 dnd on the row list: on drop, splice the DOM order and
             // re-render letters so the submitted order follows the DOM.
@@ -1878,14 +2024,6 @@
                     dragPid = null;
                     renumberCpRows();
                     updateProblemIds();
-                });
-            }
-
-            // --- Create new problem button ---
-            var newBtn = document.querySelector('.btn-soft.alt');
-            if (newBtn) {
-                newBtn.addEventListener('click', function () {
-                    window.open('{{ url("admin:judge_problem_add") }}', '_blank');
                 });
             }
 
@@ -2165,26 +2303,16 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Auto-generated from the name — edit it only if you need a specific ID.')) }}</label>
-                                <div class="field">
-                                    <input type="text" id="id_key" name="key" required
-                                           placeholder="{{ _('Auto-generated from name') }}"
-                                           pattern="[a-z0-9]+" maxlength="20"
-                                           value="{{ prefill.key or '' }}">
-                                </div>
-                            </div>
-
-                            <div class="form-row">
                                 <label>{{ _('Duration') }}{{ tip(_('Each participant gets this much time from the moment they start. The assignment closes at the end time below — if the deadline arrives first, the timer stops even with time left. Validity and duration are independent. Once students have joined, the duration can only be increased — shortening it would end their windows mid-run and is blocked.')) }}</label>
                                 <div class="field ac-inline">
                                     <input type="number" id="id_duration_hours" name="duration_hours"
-                                           min="0" max="1000" value="{{ prefill.duration_hours if contest else 0 }}">
+                                           min="0" max="1000" value="{% if contest and (prefill.duration_hours or prefill.duration_minutes) %}{{ prefill.duration_hours }}{% endif %}">
                                     <span class="unit">{{ _('h') }}</span>
                                     <input type="number" id="id_duration_minutes" name="duration_minutes"
-                                           min="0" max="59" value="{{ prefill.duration_minutes if contest else 0 }}">
+                                           min="0" max="59" value="{% if contest and (prefill.duration_hours or prefill.duration_minutes) %}{{ prefill.duration_minutes }}{% endif %}">
                                     <span class="unit">{{ _('min') }}</span>
                                     <label style="display:inline-flex;align-items:center;gap:0.3rem;font-weight:normal;margin-left:0.5rem;">
-                                        <input type="checkbox" id="id_duration_none"{% if not contest or not prefill.duration_hours and not prefill.duration_minutes %} checked{% endif %}>
+                                        <input type="checkbox" id="id_duration_none"{% if contest and not prefill.duration_hours and not prefill.duration_minutes %} checked{% endif %}>
                                         {{ _('No limit') }}
                                     </label>
                                 </div>
@@ -2230,12 +2358,12 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Organization') }}</label>
+                                <label>{{ _('Course') }}</label>
                                 <div class="field">
                                     {# Scoping a contest to an organization needs create_private_contest; without
                                        it the select is hidden (server also skips the field on save). #}
                                     {% if 'organizations' in restricted_fields %}
-                                        <div class="ac-help">{{ _('Organization scoping is managed by administrators.') }}</div>
+                                        <div class="ac-help">{{ _('Course scoping is managed by administrators.') }}</div>
                                     {% else %}
                                         <select id="id_organizations" name="organizations" data-oj-select>
                                             <option value="">{{ _('— Public —') }}</option>
@@ -2250,10 +2378,10 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Class') }}{{ tip(_('Options depend on the selected organization.')) }}</label>
+                                <label>{{ _('Class') }}{{ tip(_('Options depend on the selected course.')) }}</label>
                                 <div class="field">
                                     <select id="id_classes" name="classes" data-oj-select>
-                                        <option value="">{{ _('Select organization first') }}</option>
+                                        <option value="">{{ _('Select course first') }}</option>
                                         {% set prefill_class_ids = (prefill.classes or []) | map(attribute=0) | list %}
                                         {% for cls in classes %}
                                             {# data-org drives the client-side org→class cascade (see JS above). #}
@@ -2265,9 +2393,17 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Tags') }}{{ tip(_('Click + to pick existing tags or create a new one on the fly.')) }}</label>
+                                <label>{{ _('Tags') }}{{ tip(_('Click a preset or + to add tags. Use + to pick existing tags or create a new one.')) }}</label>
                                 <div class="field">
-                                    <div class="ptype-tags" id="tag-pills"></div>
+                                    <div class="diff-row" id="tag-row">
+                                        <div class="type-pills" id="tag-presets">
+                                            <label class="type-pill"><input type="checkbox" data-tag-name="homework"><span>{{ _('Homework') }}</span></label>
+                                            <label class="type-pill"><input type="checkbox" data-tag-name="quiz"><span>{{ _('Quiz') }}</span></label>
+                                            <label class="type-pill"><input type="checkbox" data-tag-name="exam"><span>{{ _('Exam') }}</span></label>
+                                        </div>
+                                        <div class="ptype-tags" id="tag-pills"></div>
+                                        <button type="button" class="inline-add-btn ptype-add" id="tag-add-btn" title="{{ _('Select from existing tags / create new') }}">+</button>
+                                    </div>
                                     <select id="id_tags" name="tags" multiple hidden>
                                         {% set prefill_tag_ids = (prefill.tags or []) | map(attribute=0) | list %}
                                         {% for tag in tags %}
@@ -2278,7 +2414,7 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('List visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Org = listed, restricted to the organizations/classes above; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side.')) }}</label>
+                                <label>{{ _('Visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes above; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side.')) }}</label>
                                 <div class="field">
                                     {% if 'is_visible' in restricted_fields %}
                                         {# Visibility is admin-managed for this user (no change_contest_visibility
@@ -2288,11 +2424,11 @@
                                         <input type="hidden" id="id_is_visible" value="{% if prefill.is_visible %}true{% else %}false{% endif %}">
                                         <div class="check-grid">
                                             <label><input type="checkbox" id="id_is_private" name="is_private"{% if prefill.is_private %} checked{% endif %}> {{ _('Private to listed users') }}</label>
-                                            <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to organizations / classes') }}</label>
+                                            <label><input type="checkbox" id="id_is_organization_private" name="is_organization_private"{% if prefill.is_organization_private %} checked{% endif %}> {{ _('Private to courses / classes') }}</label>
                                         </div>
                                         <div class="ac-help">{{ _('Whether the assignment is listed is managed by administrators.') }}</div>
                                     {% else %}
-                                        {% if not can_edit_private and prefill.vis_mode in ('private', 'org') %}
+                                        {% if contest and not can_edit_private and prefill.vis_mode in ('private', 'org') %}
                                             {# The stored contest is private/org-scoped, but this user lacks
                                                create_private_contest: show a read-only note instead of a seg
                                                whose Private/Org options would silently not apply. #}
@@ -2303,14 +2439,14 @@
                                             </div>
                                         {% else %}
                                         <div class="seg" id="vis-seg">
-                                            <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
                                             <label><input type="radio" name="vis_mode" value="public"{% if prefill.vis_mode == 'public' %} checked{% endif %}><span>{{ _('Public') }}</span></label>
                                             {% if can_edit_private %}
-                                            <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Org') }}</span></label>
+                                            <label><input type="radio" name="vis_mode" value="org"{% if prefill.vis_mode == 'org' %} checked{% endif %}><span>{{ _('Course') }}</span></label>
                                             <label><input type="radio" name="vis_mode" value="private"{% if prefill.vis_mode == 'private' %} checked{% endif %}><span>{{ _('Private') }}</span></label>
                                             {% endif %}
+                                            <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
                                         </div>
-                                        <div class="ac-help">{{ _('Org / Private restrict access; pick the organizations/classes or users in the sections above / under Advanced → Private users.') }}</div>
+                                        <div class="ac-help">{{ _('Course / Private restrict access; pick the courses/classes or users in the sections above / under Advanced → Private users.') }}</div>
                                         {% endif %}
                                     {% endif %}
                                 </div>
@@ -2336,10 +2472,10 @@
                         <div class="form-content">
                             <div class="cp-toolbar">
                                 <button type="button" class="btn-soft"><i class="fa fa-search"></i> {{ _('From library') }}</button>
-                                {# "Create new" opens the Django admin problem editor; hide it for users
-                                   who could not use that page anyway (needs judge.add_problem). #}
-                                {% if perms.judge.add_problem %}
-                                <button type="button" class="btn-soft alt"><i class="fa fa-plus"></i> {{ _('Create new') }}</button>
+                                {# Same audience as the problem-list "New problem" entry: the unified
+                                   create_v2 page, not the classic Django admin add form. #}
+                                {% if perms.judge.create_private_problem or perms.judge.add_problem %}
+                                <a class="btn-soft alt" id="cp-create-new" href="{{ url('problem_create_v2') }}?from=assignment" target="_blank"><i class="fa fa-plus"></i> {{ _('Create new') }}</a>
                                 {% endif %}
                                 <span class="spacer"></span>
                                 <span class="count" id="cp-count">{{ prefill.problems|length if prefill.problems else 0 }} {{ _('problems') }}</span>
@@ -2536,7 +2672,15 @@
                     </p>
                     <div class="advanced-hidden">
                         <div class="fold-body adv-outer">
-                            <!-- Key -->
+                            <div class="form-row">
+                                <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Auto-generated from the name — edit it only if you need a specific ID.')) }}</label>
+                                <div class="field">
+                                    <input type="text" id="id_key" name="key" required
+                                           placeholder="{{ _('Auto-generated from name') }}"
+                                           pattern="[a-z0-9]+" maxlength="20"
+                                           value="{{ prefill.key or '' }}">
+                                </div>
+                            </div>
                             <!-- Format & scoreboard -->
                             <details class="adv-sub" open>
                                 <summary>{{ _('Format & scoreboard') }} <span class="chev"></span></summary>
@@ -2614,7 +2758,7 @@
                                     </div>
                                     {% endif %}
                                     <div class="form-row">
-                                        <label>{{ _('Join orgs') }}{{ tip(_('Who may join — separate from who may see the assignment.')) }}</label>
+                                        <label>{{ _('Join courses') }}{{ tip(_('Who may join — separate from who may see the assignment.')) }}</label>
                                         <div class="field">
                                             <select id="id_join_organizations" name="join_organizations" data-oj-select>
                                                 <option value="">{{ _('— No extra limit —') }}</option>
@@ -2630,10 +2774,10 @@
                                         <label>{{ _('Join restriction') }}</label>
                                         <div class="field">
                                             <div class="check-grid">
-                                                {# is_private / is_organization_private are driven by the List visibility
+                                                {# is_private / is_organization_private are driven by the Visibility
                                                    seg control in Basic information (or by the checkboxes shown in its
                                                    place when visibility is admin-managed); only the join limit stays here. #}
-                                                <label><input type="checkbox" id="id_limit_join_organizations" name="limit_join_organizations"{% if prefill.limit_join_organizations %} checked{% endif %}> {{ _('Limit who may join (join orgs)') }}</label>
+                                                <label><input type="checkbox" id="id_limit_join_organizations" name="limit_join_organizations"{% if prefill.limit_join_organizations %} checked{% endif %}> {{ _('Limit who may join (join courses)') }}</label>
                                             </div>
                                         </div>
                                     </div>
@@ -2893,7 +3037,7 @@
                     </div>
                 </div>
                 <div class="so-filters">
-                    <select id="lib-f-org"><option value="">{{ _('All orgs') }}</option></select>
+                    <select id="lib-f-org"><option value="">{{ _('All courses') }}</option></select>
                     <select id="lib-f-group"><option value="">{{ _('All groups') }}</option></select>
                     <select id="lib-f-type"><option value="">{{ _('All types') }}</option></select>
                     <select id="lib-f-diff"><option value="">{{ _('All difficulties') }}</option>
@@ -2916,7 +3060,7 @@
                             <tr>
                                 <th data-sort="id">ID</th>
                                 <th data-sort="name">{{ _('Title') }}</th>
-                                <th>{{ _('Org') }}</th>
+                                <th>{{ _('Course') }}</th>
                                 <th data-sort="group">{{ _('Group') }}</th>
                                 <th>{{ _('Type') }}</th>
                                 <th data-sort="diff">{{ _('Diff') }}</th>

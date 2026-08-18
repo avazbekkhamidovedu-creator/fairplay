@@ -183,6 +183,8 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         body = response.json()
         self.assertTrue(body['ok'])
         problem = Problem.objects.get(code=body['code'])
+        self.assertEqual(body['id'], problem.id)
+        self.assertEqual(body['name'], 'HTTP vs TCP')
         self.assertEqual(problem.name, 'HTTP vs TCP')
         self.assertTrue(ProblemMCQConfig.objects.filter(problem=problem, multiple_select=False).exists())
 

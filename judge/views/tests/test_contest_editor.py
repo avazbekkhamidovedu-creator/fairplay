@@ -571,6 +571,29 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         # it would otherwise leak between tests.
         cache.delete(DEFAULT_PRESET_CACHE_KEY)
 
+    def test_create_defaults_vis_mode_course(self):
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['prefill']['vis_mode'], 'org')
+        self.assertRegex(response.content.decode(), r'name="vis_mode" value="org"\s*checked')
+
+    def test_assignment_id_lives_in_advanced(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        before, after = html.split('class="advanced-hidden"', 1)
+        self.assertNotIn('id="id_key"', before)
+        self.assertIn('id="id_key"', after)
+
+    def test_create_new_problem_links_to_v2(self):
+        adder = create_user(username='fields_problem_adder', user_permissions=(
+            'create_private_contest', 'create_private_problem',
+        ))
+        self.client.force_login(adder)
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('/problems/new/', html)
+        self.assertIn('from=assignment', html)
+        self.assertIn('id="cp-create-new"', html)
+        self.assertNotIn('/admin/judge/problem/add/', html)
+
     def _post(self, **overrides):
         now = timezone.now()
         data = {
@@ -989,15 +1012,30 @@ class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    def test_tag_create_rejects_duplicate(self):
-        ContestTag.objects.create(name='dup-tag', color='#ff0000')
+    def test_tag_create_returns_existing_on_duplicate(self):
+        existing = ContestTag.objects.create(name='dup-tag', color='#ff0000')
         self.client.force_login(self.editor)
         response = self.client.post(
             reverse('contest_tag_create'),
             data=json.dumps({'name': 'dup-tag'}), content_type='application/json',
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('already exists', json.loads(response.content)['error'])
+        self.assertEqual(response.status_code, 200, response.content)
+        data = json.loads(response.content)
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['tag']['id'], existing.id)
+        self.assertEqual(ContestTag.objects.filter(name='dup-tag').count(), 1)
+
+    def test_tag_create_allowed_for_contest_creator(self):
+        # Same permission that opens Add Assignment must be able to create tags
+        # (preset pills Homework/Quiz/Exam POST here on first use).
+        creator = create_user(username='tag_contest_creator',
+                              user_permissions=('create_private_contest',))
+        self.client.force_login(creator)
+        response = self.client.post(
+            reverse('contest_tag_create'),
+            data=json.dumps({'name': 'homework'}), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
 
     def test_tag_create_denied_for_normal_user(self):
         self.client.force_login(self.normal)

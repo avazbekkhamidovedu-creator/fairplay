@@ -140,8 +140,8 @@ $(function () {
                             </button>
                         </form>
                         {% if add_assignment_url %}
-                            <a class="action-link" href="{{ add_assignment_url }}">
-                                <i class="fa fa-plus"></i> {{ _('Add assignment') }}
+                            <a class="oj-btn oj-btn-primary" href="{{ add_assignment_url }}">
+                                <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
                             </a>
                         {% endif %}
                     </div>
@@ -301,7 +301,9 @@ $(function () {
             <div id="assign-empty" class="empty" {% if assignments %}hidden{% endif %}>
                 {{ _('No assignments match your filters.') }}
                 {% if can_edit and add_assignment_url %}
-                    <a href="{{ add_assignment_url }}">{{ _('Add assignment') }}</a>
+                    <a class="oj-btn oj-btn-primary" href="{{ add_assignment_url }}">
+                        <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
+                    </a>
                 {% endif %}
             </div>
             {% endif %}
