@@ -163,6 +163,7 @@ class SimpleContestCreationForm(ContestForm):
             'is_rated', 'rate_all', 'rating_floor', 'rating_ceiling', 'performance_ceiling_override',
             'rate_exclude', 'access_code', 'private_contestants', 'organizations', 'classes',
             'join_organizations', 'view_contest_scoreboard', 'view_contest_submissions', 'banned_users',
+            'ai_grading_mode', 'ai_grading_auto_delay_minutes',
         )
 
     def __init__(self, *args, **kwargs):
@@ -175,7 +176,7 @@ class SimpleContestCreationForm(ContestForm):
             'summary', 'format_name', 'format_config', 'problem_label_script', 'is_rated', 'rate_all',
             'rating_floor', 'rating_ceiling', 'performance_ceiling_override', 'rate_exclude', 'access_code',
             'private_contestants', 'organizations', 'classes', 'join_organizations', 'view_contest_scoreboard',
-            'view_contest_submissions', 'banned_users',
+            'view_contest_submissions', 'banned_users', 'ai_grading_mode', 'ai_grading_auto_delay_minutes',
         ):
             self.fields[field_name].required = False
         self.fields['creation_preset'].choices = (
@@ -185,6 +186,12 @@ class SimpleContestCreationForm(ContestForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        if not cleaned_data.get('ai_grading_mode'):
+            cleaned_data['ai_grading_mode'] = Contest.AI_GRADING_OFF
+        if cleaned_data.get('ai_grading_auto_delay_minutes') in (None, ''):
+            cleaned_data['ai_grading_auto_delay_minutes'] = (
+                Contest._meta.get_field('ai_grading_auto_delay_minutes').default
+            )
         if cleaned_data.get('embedded_advanced_mode'):
             cleaned_data['key'] = cleaned_data.get('key') or getattr(self, 'generated_simple_key', '')
             return cleaned_data
@@ -365,6 +372,10 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                 'view_contest_scoreboard': [],
                 'view_contest_submissions': [],
                 'banned_users': [],
+                'ai_grading_mode': Contest.AI_GRADING_OFF,
+                'ai_grading_auto_delay_minutes': str(
+                    Contest._meta.get_field('ai_grading_auto_delay_minutes').default,
+                ),
             },
             'display': {
                 'authors': [{'id': str(profile.id), 'text': profile.user.username}] if profile else [],
@@ -401,6 +412,8 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         obj.is_private = False
         obj.is_organization_private = False
         obj.limit_join_organizations = False
+        obj.ai_grading_mode = Contest.AI_GRADING_OFF
+        obj.ai_grading_auto_delay_minutes = Contest._meta.get_field('ai_grading_auto_delay_minutes').default
 
     def get_actions(self, request):
         actions = super(ContestAdmin, self).get_actions(request)
