@@ -99,6 +99,36 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
             {organization.pk},
         )
 
+    def test_upload_matches_organization_without_classes_or_members(self):
+        organization = Organization.objects.create(
+            name='Empty Course', slug='empty-course', short_name='EMPTY', about='',
+        )
+        response = self.upload([
+            ['name', 'question_type', 'description', 'organizations', 'options', 'answer'],
+            ['Empty course scope', 'multiple_choice', 'Choose the prime.', 'empty-course', '4\n5', '2'],
+        ])
+
+        self.assertEqual(response.status_code, 200)
+        item = ProblemImportDraft.objects.get(owner=self.creator.profile).items.get()
+        self.assertFalse(item.config_needs_review)
+        self.assertEqual(item.editor_data, {'organizations': [organization.pk]})
+
+        response = self.client.post(
+            reverse('problem_import_item_action', args=(item.draft_id, item.pk, 'create')),
+            {
+                'name': item.name,
+                'question_type': item.submission_type,
+                'description': item.description,
+                'answer': item.answer,
+                'options': item.options,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertSetEqual(
+            set(Problem.objects.get(name='Empty course scope').organizations.values_list('pk', flat=True)),
+            {organization.pk},
+        )
+
     def test_partial_organization_draft_keeps_imported_code_languages(self):
         organization = Organization.objects.create(
             name='CS 201', slug='cs201', short_name='CS201', about='',
