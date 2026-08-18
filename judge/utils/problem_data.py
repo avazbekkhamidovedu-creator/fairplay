@@ -7,6 +7,7 @@ import yaml
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
+from django.db import transaction
 from django.urls import reverse
 from django.utils.translation import gettext as _
 
@@ -257,16 +258,26 @@ class ProblemDataCompiler(object):
     def generate(cls, *args, **kwargs):
         self = cls(*args, **kwargs)
         self.compile()
-        # The init.yml was just (re)written/deleted; tell judges to rescan so the change
-        # is picked up without a judge restart. Best-effort: a bridge outage must not break
-        # saving problem data.
+        # Notify after COMMIT: create-v2 wraps save+generate in atomic(), and
+        # JudgeHandler maps reported codes through Problem.objects.filter().
+        # Notifying inside the transaction made the first save invisible to judges.
+        notify_judges_of_problem_data(self.problem.code)
+
+
+def notify_judges_of_problem_data(problem_code=None):
+    """Ask connected judges to rescan problem data. Safe inside or outside atomic()."""
+    code = problem_code or ''
+
+    def _notify():
         try:
             from judge.judgeapi import update_problems
             update_problems()
         except OSError:
             logger.warning(
                 'Problem data for %s was saved, but judges could not be notified because the bridge is unavailable.',
-                self.problem.code,
+                code or '?',
             )
         except Exception:
-            logger.exception('Failed to notify judges of problem data update for %s', self.problem.code)
+            logger.exception('Failed to notify judges of problem data update for %s', code or '?')
+
+    transaction.on_commit(_notify)

@@ -53,6 +53,7 @@ from judge.utils.problems import _get_result_data, user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.seb import request_matches_seb, seb_launch_context
 from judge.utils.stats import get_bar_chart, get_pie_chart
+from judge.utils.user_search import profile_choice_label
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
 
@@ -1256,7 +1257,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 linked_preset = contest.seb_preset
             for field in self._bool_fields:
                 prefill[field] = getattr(contest, field)
-            # Profile M2M → (id, username); organization/class/tag M2M → (id, name).
+            # Profile M2M → (id, "Name (username)"); organization/class/tag M2M → (id, name).
             for field in self._m2m_fields:
                 related = getattr(contest, field)
                 if field in ('organizations', 'join_organizations', 'classes'):
@@ -1264,8 +1265,12 @@ class ContestCreate(LoginRequiredMixin, View):
                 elif field == 'tags':
                     prefill[field] = [(t.id, t.name) for t in related.all()]
                 else:
-                    prefill[field] = [(p.id, p.user.username) for p in related.all()]
-            prefill['authors'] = [(p.id, p.user.username) for p in contest.authors.all()]
+                    prefill[field] = [
+                        (p.id, profile_choice_label(p)) for p in related.select_related('user')
+                    ]
+            prefill['authors'] = [
+                (p.id, profile_choice_label(p)) for p in contest.authors.select_related('user')
+            ]
             # Problems currently attached to the contest, in display order.
             # Per-problem options (partial / pretested / max submissions / out
             # prefix / result visibility) ride along so the editor round-trips

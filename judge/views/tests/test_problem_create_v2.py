@@ -5,6 +5,8 @@ import zipfile
 from io import BytesIO
 from unittest import mock
 
+from django.contrib.admin.models import ADDITION, CHANGE, LogEntry
+from django.contrib.contenttypes.models import ContentType
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -15,9 +17,19 @@ from judge.models import (Language, LanguageLimit, License, Problem, ProblemClar
                           ProblemFileConfig, ProblemFillBlankConfig, ProblemHarness, ProblemMCQConfig,
                           ProblemShortAnswerConfig, ProblemTemplate, ProblemTestCase, ProblemTranslation,
                           ProblemType, Solution, problem_data_storage)
-from judge.models.tests.util import CommonDataMixin, create_organization, create_user
+from judge.models.tests.util import CommonDataMixin, create_organization, create_problem, create_user
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import ProblemCreateV2View
+
+
+def _problem_log_entries(problem, user=None):
+    qs = LogEntry.objects.filter(
+        content_type=ContentType.objects.get_for_model(Problem),
+        object_id=str(problem.pk),
+    ).order_by('action_time', 'pk')
+    if user is not None:
+        qs = qs.filter(user=user)
+    return list(qs)
 
 
 class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
@@ -44,6 +56,17 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
 
         self.client.force_login(self.users['creator'])
         self.assertEqual(self.client.get(reverse('problem_create_v2')).status_code, 200)
+
+    def test_edit_data_user_pickers_use_name_username_label(self):
+        creator = self.users['creator']
+        creator.first_name = 'Zhang'
+        creator.save(update_fields=['first_name'])
+        problem = create_problem(code='namedauth', authors=('mcq_creator',))
+        data = ProblemCreateV2View()._build_edit_data(problem)
+        row = data['authors'][0]
+        self.assertEqual(row['username'], 'mcq_creator')
+        self.assertEqual(row['name'], 'Zhang')
+        self.assertEqual(row['text'], 'Zhang (mcq_creator)')
 
     def test_create_private_problem_can_choose_programming(self):
         """Instructors have create_private_problem, not add_problem; programming must still be offered."""
@@ -293,6 +316,28 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         problem = Problem.objects.get(code=body['code'])
         self.assertEqual(problem.cases.count(), 2)
         self.assertTrue(ProblemTestCase.objects.filter(dataset=problem, input_file='01.in').exists())
+
+    @mock.patch('judge.judgeapi.update_problems')
+    def test_create_code_notifies_judges_after_commit(self, update_problems):
+        self.client.force_login(self.users['staff_adder'])
+        payload = {
+            'type': 'programming',
+            'name': 'Judge Notify',
+            'description': 'Read two integers.',
+            'points': 10,
+            'group_id': self.group.id,
+            'testcases': [
+                {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+            ],
+        }
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse('problem_create_v2'),
+                data=json.dumps(payload),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(update_problems.called)
 
     def test_rejects_unimplemented_type(self):
         self.client.force_login(self.users['creator'])
@@ -1132,6 +1177,121 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         problem.refresh_from_db()
         self.assertEqual(problem.name, 'Keep Cases Edited')
         self.assertEqual(problem.cases.count(), 1)
+
+    def test_create_writes_admin_log_entry(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Logged create',
+                'description': 'Statement text.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        problem = Problem.objects.get(code=response.json()['code'])
+        logs = _problem_log_entries(problem, self.users['creator'])
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].action_flag, ADDITION)
+        self.assertEqual(logs[0].object_repr, 'Logged create')
+        self.assertEqual(json.loads(logs[0].change_message), [{'added': {}}])
+
+    def test_edit_writes_admin_log_entry_with_changed_fields(self):
+        self.client.force_login(self.users['creator'])
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Before edit',
+                'description': 'Original statement.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.content)
+        code = create_resp.json()['code']
+        problem = Problem.objects.get(code=code)
+
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'After edit',
+                'description': 'Updated statement.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'edit_code': code,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        logs = _problem_log_entries(problem, self.users['creator'])
+        self.assertEqual(len(logs), 2)
+        self.assertEqual(logs[0].action_flag, ADDITION)
+        self.assertEqual(logs[1].action_flag, CHANGE)
+        problem.refresh_from_db()
+        self.assertEqual(logs[1].object_repr, 'After edit')
+        fields = json.loads(logs[1].change_message)[0]['changed']['fields']
+        self.assertIn('problem name', fields)
+        self.assertIn('problem body', fields)
+
+    def test_edit_reason_replaces_structured_change_message(self):
+        self.client.force_login(self.users['creator'])
+        create_resp = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Reasoned edit',
+                'description': 'Original.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.content)
+        code = create_resp.json()['code']
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[code]),
+            data=json.dumps({
+                'type': 'single',
+                'name': 'Reasoned edit',
+                'description': 'Updated.',
+                'points': 5,
+                'group_id': self.group.id,
+                'options': [
+                    {'text': 'A', 'correct': True},
+                    {'text': 'B', 'correct': False},
+                ],
+                'edit_code': code,
+                'edit_reason': 'Clarify the statement',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        problem = Problem.objects.get(code=code)
+        change = _problem_log_entries(problem, self.users['creator'])[-1]
+        self.assertEqual(change.action_flag, CHANGE)
+        self.assertEqual(change.change_message, 'Clarify the statement')
 
 
 class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):

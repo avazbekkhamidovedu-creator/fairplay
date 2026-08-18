@@ -22,6 +22,7 @@ from judge.models import Class, Contest, Language, Organization, Problem, Proble
     WebAuthnCredential
 from judge.utils.mail import validate_email_domain
 from judge.utils.subscription import newsletter_id
+from judge.utils.user_search import apply_profile_choice_labels
 from judge.widgets import AceWidget, HeavySelect2MultipleWidget, MartorWidget, Select2MultipleWidget, Select2Widget
 
 TOTP_CODE_LENGTH = 6
@@ -335,6 +336,7 @@ class OrganizationSiteForm(ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         if 'slots' in self.fields:
             self.fields['slots'].required = False
         if 'logo_override_image' in self.fields:
@@ -494,6 +496,7 @@ class ClassSiteForm(ModelForm):
     def __init__(self, *args, organization=None, **kwargs):
         self.organization = organization
         super().__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         year = timezone.now().year
         year_choices = [('', _('Select…'))]
         for start in range(year + 1, year - 4, -1):

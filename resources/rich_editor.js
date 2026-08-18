@@ -162,7 +162,7 @@
   function syncMarkdownFromRich(editor) {
     const parts = editorParts(editor);
     if (!parts.rich || !parts.ta) return;
-    parts.ta.value = normalizePipeTables(htmlToMd(parts.rich.innerHTML));
+    parts.ta.value = normalizePipeTables(serializeRichRoot(parts.rich));
   }
 
   /** Rebuild contenteditable projection from Markdown textarea. */
@@ -596,7 +596,7 @@
     const node = selectionNode(area);
     const block = node && node.closest && node.closest('.code-block');
     if (!block || !area.contains(block)) return false;
-    const codeEl = block.querySelector('code') || block.querySelector('pre');
+    const codeEl = block.querySelector('pre') || block.querySelector('code');
     if (!codeEl) return false;
     const after = textAfterCaret(codeEl);
     const atEnd = after === '';
@@ -1395,7 +1395,7 @@
       </div>
       <div id="rte-mention-popover" class="rte-popover" hidden>
         <div class="rte-popover-title">${t('Mention user')}</div>
-        <label class="rte-field"><span>${t('Username')}</span><input type="text" class="rte-mention-input" placeholder="${t('Search users…')}" autocomplete="off"></label>
+        <label class="rte-field"><span>${t('Name or username')}</span><input type="text" class="rte-mention-input" placeholder="${t('Search users…')}" autocomplete="off"></label>
         <ul class="rte-mention-results"></ul>
         <div class="rte-popover-actions">
           <button type="button" class="rte-btn-cancel">${t('Cancel')}</button>
@@ -1614,18 +1614,25 @@
     mentionTimer = setTimeout(() => searchUsers(q), 200);
   }
 
+  function formatUserLabel(name, username) {
+    username = (username || '').trim();
+    name = (name || '').trim() || username;
+    if (!username) return name;
+    return name + ' (' + username + ')';
+  }
+
   function searchUsers(q) {
     const o = ensureOverlays();
     if (!o || !config.searchUsersUrl) return;
     const list = o.mention.querySelector('.rte-mention-results');
-    const username = (q || '').trim();
-    if (!username || /\s/.test(username)) {
-      list.innerHTML = '<li class="muted">' + t('Type part of a username to search') + '</li>';
+    const query = (q || '').trim();
+    if (!query) {
+      list.innerHTML = '<li class="muted">' + t('Type a name or username to search') + '</li>';
       return;
     }
     list.innerHTML = '<li class="muted">' + t('Searching…') + '</li>';
     const url = config.searchUsersUrl + (config.searchUsersUrl.indexOf('?') >= 0 ? '&' : '?') +
-      'username=' + encodeURIComponent(username);
+      'username=' + encodeURIComponent(query);
     fetch(url, { credentials: 'same-origin' })
       .then(r => r.json())
       .then(body => {
@@ -1634,7 +1641,8 @@
           return;
         }
         list.innerHTML = body.data.map(u =>
-          '<li data-username="' + escapeAttr(u.username) + '">@' + escapeHtmlText(u.username) + '</li>'
+          '<li data-username="' + escapeAttr(u.username) + '">' +
+          escapeHtmlText(u.text || formatUserLabel(u.name, u.username)) + '</li>'
         ).join('');
       })
       .catch(() => { list.innerHTML = '<li class="muted">' + t('Search failed') + '</li>'; });
@@ -1798,6 +1806,30 @@
     return /^[\w+#.-]{1,40}$/.test(lang) ? lang : '';
   }
 
+  function nodeToCodeText(node) {
+    if (!node) return '';
+    if (node.nodeType === 3) return node.nodeValue || '';
+    if (node.nodeType !== 1) return '';
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'br') return '\n';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return '';
+    if (node.classList && node.classList.contains('code-block-lang')) return '';
+    let out = '';
+    node.childNodes.forEach(ch => { out += nodeToCodeText(ch); });
+    if ((tag === 'div' || tag === 'p' || tag === 'li') && out && !/\n$/.test(out)) out += '\n';
+    return out;
+  }
+
+  function codeBlockBodyText(el) {
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    const lang = clone.querySelector && clone.querySelector('.code-block-lang');
+    if (lang) lang.remove();
+    const pre = clone.querySelector && (clone.querySelector('pre') || clone.querySelector('code'));
+    const raw = nodeToCodeText(pre || clone);
+    return raw.replace(/^\n+/, '').replace(/\n+$/, '');
+  }
+
   function fenceToMd(el) {
     if (!el) return '```\n```';
     const codeEl = el.querySelector ? el.querySelector('code') : null;
@@ -1813,9 +1845,7 @@
       }
     }
     lang = sanitizeCodeLang(lang);
-    const raw = ((codeEl ? codeEl.textContent : el.textContent) || '')
-      .replace(/^\n+/, '').replace(/\n+$/, '');
-    return '```' + lang + '\n' + raw + '\n```';
+    return '```' + lang + '\n' + codeBlockBodyText(el) + '\n```';
   }
 
   function renderFencedCodeHtml(lang, body) {
@@ -1827,8 +1857,10 @@
         '<input type="text" class="code-block-lang-input" value="' + escapeAttr(lang) +
           '" placeholder="c++, python…" maxlength="40" spellcheck="false" autocomplete="off">' +
       '</div>';
-    return '<div class="code-block"' + (lang ? ' data-lang="' + escapeAttr(lang) + '"' : '') + '>' +
-      label + '<pre><code' + langAttr + '>' + code + '</code></pre></div>';
+    return '<div class="code-block" contenteditable="false"' +
+      (lang ? ' data-lang="' + escapeAttr(lang) + '"' : '') + '>' +
+      label + '<pre contenteditable="true" spellcheck="false"><code' + langAttr + '>' +
+      code + '</code></pre></div>';
   }
 
   function serializeBlocks(nodes) {
@@ -1852,6 +1884,11 @@
       // Soft break inside a paragraph run
       if (tag === 'br') {
         inlineBuf += '\n';
+        return;
+      }
+      if (tag === 'code' && (n.textContent || '').indexOf('\n') !== -1) {
+        flushInline();
+        out += fenceToMd(n) + '\n\n';
         return;
       }
       // Inline elements must NOT start a new markdown line (that was shredding prose).
@@ -1917,6 +1954,10 @@
           break;
         case 'hr': out += '---\n\n'; break;
         case 'div': case 'p': {
+          if (n.querySelector && n.querySelector('.code-block, pre')) {
+            out += serializeBlocks(Array.prototype.slice.call(n.childNodes));
+            break;
+          }
           const inner = serializeInline(n).trim();
           if (inner) out += inner + '\n\n';
           break;
@@ -1929,13 +1970,17 @@
     return out;
   }
 
-  function htmlToMd(html) {
-    const root = document.createElement('div');
-    root.innerHTML = html || '';
+  function serializeRichRoot(root) {
     return serializeBlocks(Array.prototype.slice.call(root.childNodes))
       .replace(/[ \t]+\n/g, '\n')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
+  }
+
+  function htmlToMd(html) {
+    const root = document.createElement('div');
+    root.innerHTML = html || '';
+    return serializeRichRoot(root);
   }
 
   function escapeHtmlText(t) {
