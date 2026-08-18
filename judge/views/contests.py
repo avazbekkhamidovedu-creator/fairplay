@@ -12,8 +12,10 @@ from zoneinfo import ZoneInfo
 import markdown
 from django import forms
 from django.conf import settings
+from django.contrib.admin.models import ADDITION, CHANGE, LogEntry
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.contrib.auth.views import redirect_to_login
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Case, Count, F, FloatField, IntegerField, Max, Min, Q, Sum, Value, When
@@ -53,6 +55,7 @@ from judge.utils.problems import _get_result_data, user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.seb import request_matches_seb, seb_launch_context
 from judge.utils.stats import get_bar_chart, get_pie_chart
+from judge.utils.user_search import profile_choice_label
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
 
@@ -693,14 +696,14 @@ class ContestCreate(LoginRequiredMixin, View):
         # choices) keeps this working even for formats added via the registry.
         format_name = payload.get('format_name', 'default')
         if format_name not in contest_format.formats:
-            raise ValidationError(_('Invalid contest format: "%(name)s".') % {'name': format_name})
+            raise ValidationError(_('Invalid assignment format: "%(name)s".') % {'name': format_name})
         contest.format_name = format_name
         format_config = payload.get('format_config')
         if format_config is not None and str(format_config).strip():
             try:
                 contest.format_config = json.loads(format_config)
             except ValueError:
-                raise ValidationError(_('Invalid contest format configuration JSON.'))
+                raise ValidationError(_('Invalid assignment format configuration JSON.'))
         elif format_config is not None:
             contest.format_config = None
 
@@ -955,7 +958,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 continue
             if allowed_ids is not None and problem.id not in allowed_ids:
                 raise ValidationError(
-                    _('You are not allowed to attach problem "%(code)s" to this contest.') % {'code': problem.code})
+                    _('You are not allowed to attach problem "%(code)s" to this assignment.') % {'code': problem.code})
             try:
                 points = int(raw_points) if raw_points not in (None, '') else 100
             except (TypeError, ValueError):
@@ -1006,7 +1009,7 @@ class ContestCreate(LoginRequiredMixin, View):
             # (e.g. from full_clean()); flatten them into one readable line.
             return JsonResponse({'error': ' '.join(exception.messages)}, status=400)
         logger.exception('Contest save failed: %s', exception)
-        return JsonResponse({'error': _('Failed to save contest.')}, status=500)
+        return JsonResponse({'error': _('Failed to save assignment.')}, status=500)
 
     def _create(self, request, payload):
         """Validate identity, insert a new ``judge_contest`` row, return redirect."""
@@ -1016,10 +1019,10 @@ class ContestCreate(LoginRequiredMixin, View):
                 return JsonResponse({'error': _('Missing required field: %s') % field}, status=400)
         key = payload.get('key', '')
         if not re.match(r'^[a-z0-9]+$', key):
-            return JsonResponse({'error': _('Contest key must contain only lowercase letters and numbers.')},
+            return JsonResponse({'error': _('Assignment key must contain only lowercase letters and numbers.')},
                                 status=400)
         if Contest.objects.filter(key=key).exists():
-            return JsonResponse({'error': _('A contest with this key already exists.')}, status=400)
+            return JsonResponse({'error': _('An assignment with this key already exists.')}, status=400)
 
         try:
             with transaction.atomic():
@@ -1034,6 +1037,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 self._save_m2m(contest, payload)
                 contest.authors.add(request.profile)  # the creator becomes an author
                 self._sync_problems(contest, payload)
+                self._log_assignment(request, contest, added=True)
                 return self._action_response(payload, contest.key)
         except Exception as e:
             return self._error_response(e)
@@ -1049,11 +1053,11 @@ class ContestCreate(LoginRequiredMixin, View):
                 if new_key != contest.key:
                     if not re.match(r'^[a-z0-9]+$', new_key):
                         return JsonResponse(
-                            {'error': _('Contest key must contain only lowercase letters and numbers.')},
+                            {'error': _('Assignment key must contain only lowercase letters and numbers.')},
                             status=400,
                         )
                     if Contest.objects.filter(key=new_key).exclude(pk=contest.pk).exists():
-                        return JsonResponse({'error': _('A contest with this key already exists.')}, status=400)
+                        return JsonResponse({'error': _('An assignment with this key already exists.')}, status=400)
                     contest.key = new_key
 
                 self._apply_payload(contest, payload)
@@ -1072,9 +1076,22 @@ class ContestCreate(LoginRequiredMixin, View):
                     except (TypeError, ValueError):
                         raise ValidationError(_('Invalid value for "authors".'))
                 self._sync_problems(contest, payload)
+                self._log_assignment(request, contest, added=False)
                 return self._action_response(payload, contest.key)
         except Exception as e:
             return self._error_response(e)
+
+    @staticmethod
+    def _log_assignment(request, contest, added):
+        """Write a Django admin LogEntry so frontend saves show up in Log entries."""
+        LogEntry.objects.log_action(
+            user_id=request.user.pk,
+            content_type_id=ContentType.objects.get_for_model(Contest).pk,
+            object_id=contest.pk,
+            object_repr=_('Assignment: %s') % contest.name,
+            action_flag=ADDITION if added else CHANGE,
+            change_message=_('Added assignment.') if added else _('Changed assignment.'),
+        )
 
     @staticmethod
     def _action_response(payload, key):
@@ -1189,7 +1206,7 @@ class ContestCreate(LoginRequiredMixin, View):
         prefill = {
             'name': '', 'key': '', 'description': '', 'summary': '', 'og_image': '',
             'logo_override_image': '', 'access_code': '', 'problem_label_script': '',
-            'format_config': '', 'format_name': 'default', 'scoreboard_visibility': 'V',
+            'format_config': '', 'format_name': 'exam', 'scoreboard_visibility': 'V',
             'points_precision': 3, 'rating_floor': '', 'rating_ceiling': '',
             'performance_ceiling_override': '', 'start_time': '', 'end_time': '',
             'locked_after': '', 'duration_hours': 0, 'duration_minutes': 0,
@@ -1256,7 +1273,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 linked_preset = contest.seb_preset
             for field in self._bool_fields:
                 prefill[field] = getattr(contest, field)
-            # Profile M2M → (id, username); organization/class/tag M2M → (id, name).
+            # Profile M2M → (id, "Name (username)"); organization/class/tag M2M → (id, name).
             for field in self._m2m_fields:
                 related = getattr(contest, field)
                 if field in ('organizations', 'join_organizations', 'classes'):
@@ -1264,8 +1281,10 @@ class ContestCreate(LoginRequiredMixin, View):
                 elif field == 'tags':
                     prefill[field] = [(t.id, t.name) for t in related.all()]
                 else:
-                    prefill[field] = [(p.id, p.user.username) for p in related.all()]
-            prefill['authors'] = [(p.id, p.user.username) for p in contest.authors.all()]
+                    prefill[field] = [(p.id, profile_choice_label(p)) for p in related.select_related('user')]
+            prefill['authors'] = [
+                (p.id, profile_choice_label(p)) for p in contest.authors.select_related('user')
+            ]
             # Problems currently attached to the contest, in display order.
             # Per-problem options (partial / pretested / max submissions / out
             # prefix / result visibility) ride along so the editor round-trips
@@ -1276,11 +1295,12 @@ class ContestCreate(LoginRequiredMixin, View):
                     'code': cp.problem.code,
                     'name': cp.problem.name,
                     'points': cp.points,
-                    'letter': chr(65 + idx),
+                    'letter': str(idx + 1),
                     'partial': cp.partial,
                     'is_pretested': cp.is_pretested,
                     'max_submissions': cp.max_submissions if cp.max_submissions is not None else '',
-                    'output_prefix': cp.output_prefix_override if cp.output_prefix_override is not None else '',
+                    'output_prefix': (cp.output_prefix_override
+                                      if cp.output_prefix_override is not None else 10000),
                     'hide_results': cp.hide_results,  # three-state: None/True/False
                 }
                 for idx, cp in enumerate(contest.contest_problems.all().order_by('order'))
@@ -1304,7 +1324,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 prefill['vis_mode'] = 'hidden'
 
         ctx = {
-            'title': _('Edit Contest') if contest else _('Add Contest'),
+            'title': _('Edit Assignment') if contest else _('Add Assignment'),
             'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
             'now': timezone.now(),
             'organizations': Organization.objects.all(),
