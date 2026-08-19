@@ -1,9 +1,9 @@
-# Merge Organization.instructors with ProblemCodeConfig, and let instructors
-# create assignments (private contests).
+# Grant Instructors create_private_contest so verified teachers get
+# Add Assignment and can open ContestCreate.
 #
-# ContestCreate and the "Add Assignment" tab are gated on
-# judge.create_private_contest. The Instructors group previously omitted it, so
-# verified teachers could make courses/problems but not assignments.
+# develop already merged 0194_organization_instructors with 0200_problemcodeconfig
+# (0201_merge_... -> 0202_contest_allow_ai_hints). Depend on that leaf instead of
+# repeating the same merge, matching the !86 handling of a duplicate 0201 merge.
 
 from django.db import migrations
 
@@ -40,8 +40,7 @@ def detach_create_assignment_permission(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('judge', '0194_organization_instructors'),
-        ('judge', '0200_problemcodeconfig'),
+        ('judge', '0202_contest_allow_ai_hints'),
     ]
 
     operations = [
