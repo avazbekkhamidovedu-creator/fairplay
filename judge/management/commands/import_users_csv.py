@@ -1,39 +1,15 @@
 """
-Management command to import users from a CSV file and optionally attach them
-to a DMOJ organization by slug.  This command is designed to work with
-the upstream DMOJ `online‑judge` repository.  It reads rows from a CSV
-containing at minimum the columns `username`, `first_name`, `last_name` and
-`email`, creates or updates the corresponding `auth.User` instances, ensures
-each has a `judge.Profile`, and (optionally) adds the profile to a target
-`Organization` by slug.
+Management command to import users from a CSV (Canvas / NetID roster) and
+optionally attach them to an organization by slug.
 
-Key features:
-
-* Update existing users’ names and emails without changing their passwords.
-* Activate users if requested, since DMOJ accounts can be inactive by default.
-* Dry‑run mode to parse and validate without committing changes.
-* Optional creation of the target organization if it does not exist.
-
-To install this command, place this file inside your site project’s
-`judge/management/commands` directory, then run it with:
+CSV must include a header row. Accepted columns: NetID or username,
+First name / first_name, Last Name / last_name, Email / email (or
+netid@duke.edu). New accounts use username=NetID with an unusable local
+password; students sign in via Duke NetID SSO.
 
 ```
-python manage.py import_users_csv path/to/users.csv --org-slug your‑org
+python manage.py import_users_csv path/to/users.csv --org-slug your-org
 ```
-
-The default password for newly created users is `123456`, but this can be
-overridden with the `--password` flag.  See the argument parser below
-for more flags.
-
-The weak default is intentional: on first login, the pwned-password check
-(judge/utils/pwned.py + DMOJLoginMiddleware) forces the user to set a new
-password before they can use the site.  Note the residual risk that an
-account can be taken over by whoever logs into it first, so distribute
-credentials promptly and prefer importing shortly before first use.
-
-This implementation relies on the actual schema of the DMOJ `Profile` model,
-where membership is stored in the `organizations` many‑to‑many field and
-exposed on `Organization` via the `members` reverse relation【940562129592725†L198-L207】.
 """
 
 import csv
@@ -53,8 +29,9 @@ class DryRunRollback(Exception):
 
 class Command(BaseCommand):
     help = (
-        'Import users from a CSV (username,first_name,last_name,email) and'
-        ' optionally attach them to a single Organization by slug.'
+        'Import users from a CSV (username/NetID, first_name, last_name, email) and'
+        ' optionally attach them to a single Organization by slug. Canvas roster'
+        ' exports are accepted. New accounts use unusable passwords (NetID SSO).'
     )
 
     def add_arguments(self, parser):
@@ -65,8 +42,11 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--password',
-            default='123456',
-            help='Default password for newly created users (default: 123456).',
+            default=None,
+            help=(
+                'Optional local password for newly created users. Omit to leave an '
+                'unusable password (students use NetID SSO).'
+            ),
         )
         parser.add_argument(
             '--org-slug',
@@ -211,18 +191,21 @@ class Command(BaseCommand):
     # --- helpers ---
     def _read_csv(self, path: Path):
         """Load CSV rows into a list of dictionaries and trim whitespace."""
+        from judge.utils.import_export import (
+            REQUIRED_CSV_FIELDS, csv_row_to_user_fields, resolve_csv_headers,
+        )
+
         rows = []
         with path.open('r', newline='', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f)
-            required = {'username', 'first_name', 'last_name', 'email'}
-            headers = {h.strip() for h in (reader.fieldnames or [])}
-            missing = required - headers
+            header_map = resolve_csv_headers(reader.fieldnames)
+            missing = [field for field in REQUIRED_CSV_FIELDS if field not in header_map]
             if missing:
                 raise CommandError(
                     f"CSV missing required headers: {', '.join(sorted(missing))}",
                 )
             for raw in reader:
-                row = {k.strip(): (v or '').strip() for k, v in raw.items()}
+                row = csv_row_to_user_fields(raw, header_map)
                 if not row.get('username'):
                     continue
                 rows.append(row)
@@ -279,7 +262,6 @@ class Command(BaseCommand):
         first_name = row.get('first_name', '')
         last_name = row.get('last_name', '')
         email = row.get('email', '')
-        default_pw = opts.get('password')
 
         try:
             user = User.objects.get(username=username)
@@ -308,13 +290,21 @@ class Command(BaseCommand):
         except User.DoesNotExist:
             pass
 
-        # Create new user
+        # Create new user (NetID SSO by default: unusable local password).
         try:
-            user = User.objects.create_user(
-                username=username,
-                email=email or '',
-                password=default_pw,
-            )
+            password = opts.get('password')
+            if password:
+                user = User.objects.create_user(
+                    username=username,
+                    email=email or '',
+                    password=password,
+                )
+            else:
+                user = User.objects.create_user(
+                    username=username,
+                    email=email or '',
+                )
+                user.set_unusable_password()
             # Set names after creation to avoid uniqueness issues on username
             user.first_name = first_name or ''
             user.last_name = last_name or ''
