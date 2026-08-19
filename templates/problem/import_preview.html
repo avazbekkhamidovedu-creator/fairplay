@@ -2,19 +2,38 @@
 
 {% block body_class %}problem-import-preview{% endblock %}
 
+{% block title_row %}{% endblock %}
+
+{% block title_ruler %}{% endblock %}
+
 {% block media %}
     <style>
         html, body.problem-import-preview { height: 100%; overflow: hidden; }
-        body.problem-import-preview #page-container { height: 100vh; min-height: 0; overflow: hidden; }
-        body.problem-import-preview #content { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-        body.problem-import-preview #content-body { display: flex; flex: 1 1 auto; min-height: 0; padding-bottom: 0; }
-        body.problem-import-preview #content-body > .content-body { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+        body.problem-import-preview #page-container {
+            box-sizing: border-box; height: 100dvh; margin: 0; min-height: 0;
+            overflow: hidden; padding-top: var(--nav-height, 52px);
+        }
+        body.problem-import-preview #page-container > br { display: none; }
+        body.problem-import-preview #content {
+            display: flex; flex: 1 1 auto; flex-direction: column; margin: 0;
+            max-width: none; min-height: 0; overflow: hidden; padding: 0; width: 100%;
+        }
+        body.problem-import-preview #content-body {
+            display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 0;
+        }
+        body.problem-import-preview #content-body > .content-body {
+            box-sizing: border-box; display: flex; flex: 1 1 auto; flex-direction: column;
+            min-height: 0; overflow: hidden; padding: 0.75em 1em 1em;
+        }
         .import-preview-layout { display: grid; flex: 1 1 auto; gap: 1.25em; grid-template-columns: minmax(13rem, 22rem) minmax(0, 1fr); min-height: 0; }
         .import-problem-list { align-self: stretch; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
         .import-problem-list-header { align-items: center; display: flex; gap: 0.65em; justify-content: space-between; }
         .import-problem-list h2 { margin: 0; }
         .import-problem-list-header .button { flex: 0 0 auto; white-space: nowrap; }
-        .import-problem-nav { display: grid; flex: 1 1 auto; gap: 0.2em; margin: 0.8em 0; min-height: 0; overflow-y: auto; padding-right: 0.2em; }
+        .import-problem-nav {
+            display: grid; flex: 1 1 auto; gap: 0.2em; margin: 0.8em 0; min-height: 0;
+            overflow-y: auto; padding-right: 0.2em; scrollbar-gutter: stable;
+        }
         .import-problem-nav a {
             align-items: center; border-left: 3px solid transparent; box-sizing: border-box;
             color: var(--oj-text, inherit); display: flex; gap: 0.5em; min-width: 0;
@@ -33,8 +52,11 @@
         .import-problem-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .import-problem-entry { min-width: 0; }
         .import-problem-nav a.has-error { font-weight: 700; }
-        .import-preview-panel { min-height: 0; min-width: 0; overflow: hidden; }
-        .import-editor-frame { border: 0; box-sizing: border-box; display: block; height: 100%; min-height: 0; width: 100%; }
+        .import-preview-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+        .import-editor-frame {
+            border: 0; box-sizing: border-box; display: block; flex: 1 1 auto;
+            height: auto; min-height: 0; width: 100%;
+        }
         .import-created-panel { margin: 0; }
         .import-created-panel .tag-type { margin-right: 0.45em; }
         #create-all-problems { background: var(--oj-link, #2980b9); color: var(--oj-btn-text, #fff); }
@@ -44,7 +66,7 @@
             body.problem-import-preview #page-container { height: auto; overflow: visible; }
             body.problem-import-preview #content { display: block; overflow: visible; }
             body.problem-import-preview #content-body,
-            body.problem-import-preview #content-body > .content-body { display: block; }
+            body.problem-import-preview #content-body > .content-body { display: block; overflow: visible; }
             .import-preview-layout { display: block; }
             .import-problem-list { height: auto; max-height: 45vh; margin-bottom: 1em; }
             .import-editor-frame { height: 75vh; }
