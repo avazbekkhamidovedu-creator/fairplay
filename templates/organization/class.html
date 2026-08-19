@@ -133,17 +133,15 @@ $(function () {
                         <a class="action-link" href="{{ url('class_edit', organization.id, organization.slug, object.id, object.slug) }}">
                             <i class="fa fa-pencil"></i> {{ _('Edit class') }}
                         </a>
+                        <a class="action-link" href="{{ url('class_clone', organization.id, organization.slug, object.id, object.slug) }}">
+                            <i class="fa fa-copy"></i> {{ _('Clone class') }}
+                        </a>
                         <form method="post" action="{{ url('class_delete', organization.id, organization.slug, object.id, object.slug) }}">
                             {% csrf_token %}
                             <button type="submit" class="action-link danger js-delete-class">
                                 <i class="fa fa-trash"></i> {{ _('Delete class') }}
                             </button>
                         </form>
-                        {% if add_assignment_url %}
-                            <a class="oj-btn oj-btn-primary" href="{{ add_assignment_url }}">
-                                <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
-                            </a>
-                        {% endif %}
                     </div>
                 {% elif request.user.is_authenticated %}
                     {% if class_joined %}
@@ -238,50 +236,65 @@ $(function () {
             {% if not can_view_content %}
                 <div class="empty">{{ _('Join this class to view assignments.') }}</div>
             {% else %}
-            <div class="class-filters">
-                <div>
-                    <label for="f-assign-q">{{ _('Search assignment') }}</label>
-                    <input id="f-assign-q" type="text" placeholder="{{ _('Homework / Quiz / Midterm') }}" autocomplete="off">
+            <div class="assignments-toolbar materials-toolbar">
+                <div class="class-filters assignments-filters">
+                    <div>
+                        <label for="f-assign-q">{{ _('Search assignment') }}</label>
+                        <input id="f-assign-q" type="text" placeholder="{{ _('Homework / Quiz / Midterm') }}" autocomplete="off">
+                    </div>
+                    <div>
+                        <label for="f-assign-tag">{{ _('Tags') }}</label>
+                        <select id="f-assign-tag" class="oj-select">
+                            <option value="">{{ _('All tags') }}</option>
+                            {% for t in assignment_tags %}
+                                <option value="{{ t }}">{{ t }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="f-assign-status">{{ _('Status') }}</label>
+                        <select id="f-assign-status" class="oj-select">
+                            <option value="">{{ _('All statuses') }}</option>
+                            <option value="open">{{ _('Open') }}</option>
+                            <option value="released">{{ _('Released') }}</option>
+                            <option value="scheduled">{{ _('Scheduled') }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="f-assign-sort">{{ _('Sort') }}</label>
+                        <select id="f-assign-sort" class="oj-select">
+                            <option value="due">{{ _('Due date') }}</option>
+                            <option value="name">{{ _('Title') }}</option>
+                            <option value="type">{{ _('Type') }}</option>
+                        </select>
+                    </div>
                 </div>
-                <div>
-                    <label for="f-assign-tag">{{ _('Tags') }}</label>
-                    <select id="f-assign-tag" class="oj-select">
-                        <option value="">{{ _('All tags') }}</option>
-                        {% for t in assignment_tags %}
-                            <option value="{{ t }}">{{ t }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div>
-                    <label for="f-assign-status">{{ _('Status') }}</label>
-                    <select id="f-assign-status" class="oj-select">
-                        <option value="">{{ _('All statuses') }}</option>
-                        <option value="open">{{ _('Open') }}</option>
-                        <option value="released">{{ _('Released') }}</option>
-                        <option value="scheduled">{{ _('Scheduled') }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="f-assign-sort">{{ _('Sort') }}</label>
-                    <select id="f-assign-sort" class="oj-select">
-                        <option value="due">{{ _('Due date') }}</option>
-                        <option value="name">{{ _('Title') }}</option>
-                        <option value="type">{{ _('Type') }}</option>
-                    </select>
-                </div>
+                {% if can_edit and (link_assignment_url or create_assignment_url) %}
+                    <div class="materials-actions assignments-actions">
+                        {% if link_assignment_url %}
+                            <a class="oj-btn oj-btn-outline" href="{{ link_assignment_url }}">
+                                <i class="fa fa-link"></i> {{ _('Add from library') }}
+                            </a>
+                        {% endif %}
+                        {% if create_assignment_url %}
+                            <a class="oj-btn oj-btn-primary" href="{{ create_assignment_url }}">
+                                <i class="fa fa-plus"></i> {{ _('Add new') }}
+                            </a>
+                        {% endif %}
+                    </div>
+                {% endif %}
             </div>
 
             <div id="assign-list" class="assign-list">
                 {% for row in assignments %}
-                    <a class="assign-row js-assign-row"
-                       href="{{ row.contest.get_absolute_url() }}"
+                    <div class="assign-row js-assign-row"
                        data-name="{{ row.contest.name|lower }}"
                        data-summary="{{ row.summary|lower }}"
                        data-status="{{ row.status_key }}"
                        data-type="{{ row.format_name|lower }}"
                        data-tags="|{{ row.tag_names|join('|') }}|"
                        data-sort-due="{{ row.contest.end_time.isoformat() }}">
-                        <div class="assign-main">
+                        <a class="assign-main" href="{{ row.contest.get_absolute_url() }}">
                             <div class="assign-title">{{ row.contest.name }}</div>
                             <div class="assign-badges">
                                 <span class="assign-status assign-status-{{ row.status_key }}">{{ row.status_label }}</span>
@@ -293,16 +306,29 @@ $(function () {
                             {% if row.summary %}
                                 <div class="assign-summary">{{ row.summary }}</div>
                             {% endif %}
-                        </div>
+                        </a>
                         <div class="assign-timing">{{ row.timing_label }}</div>
-                    </a>
+                        {% if can_edit %}
+                            <form method="post" action="{{ url('class_assignment_clone', organization.id, organization.slug, object.id, object.slug, row.contest.key) }}" class="assign-clone-form">
+                                {% csrf_token %}
+                                <button type="submit" class="oj-btn oj-btn-outline" title="{{ _('Clone this problem list') }}">
+                                    <i class="fa fa-copy"></i> {{ _('Clone') }}
+                                </button>
+                            </form>
+                        {% endif %}
+                    </div>
                 {% endfor %}
             </div>
             <div id="assign-empty" class="empty" {% if assignments %}hidden{% endif %}>
                 {{ _('No assignments match your filters.') }}
-                {% if can_edit and add_assignment_url %}
-                    <a class="oj-btn oj-btn-primary" href="{{ add_assignment_url }}">
-                        <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
+                {% if can_edit and link_assignment_url %}
+                    <a class="oj-btn oj-btn-outline" href="{{ link_assignment_url }}">
+                        <i class="fa fa-link"></i> {{ _('Add from library') }}
+                    </a>
+                {% endif %}
+                {% if create_assignment_url %}
+                    <a class="oj-btn oj-btn-primary" href="{{ create_assignment_url }}">
+                        <i class="fa fa-plus"></i> {{ _('Add new') }}
                     </a>
                 {% endif %}
             </div>

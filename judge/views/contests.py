@@ -38,7 +38,6 @@ from django.views.generic.detail import BaseDetailView, DetailView, SingleObject
 from django.views.generic.list import BaseListView
 from icalendar import Calendar as ICalendar, Event
 from markdown_katex import KatexExtension
-from reversion import revisions
 
 from judge import contest_format
 from judge import event_poster as event
@@ -50,6 +49,7 @@ from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
+from judge.utils.class_clone import clone_contest
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, user_completed_ids
 from judge.utils.ranker import ranker
@@ -500,7 +500,46 @@ class ContestCreate(LoginRequiredMixin, View):
                 raise PermissionDenied
         return super().dispatch(request, *args, **kwargs)
 
+    @staticmethod
+    def _parse_class_create_id(raw):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _resolve_class_create_target(self, request):
+        """When opening create from a class page, return that class if manageable."""
+        from judge.views.organization import profile_manages_class
+
+        class_id = self._parse_class_create_id(request.GET.get('class'))
+        if class_id is None and request.method == 'POST':
+            class_id = self._parse_class_create_id(request.session.get('contest_create_class_id'))
+        if class_id is None:
+            return None
+        class_obj = Class.objects.filter(pk=class_id, is_active=True).select_related('organization').first()
+        if class_obj is None:
+            return None
+        if not profile_manages_class(request.profile, class_obj, request.user):
+            return None
+        return class_obj
+
+    def _remember_class_create_target(self, request, class_obj):
+        if class_obj is None:
+            request.session.pop('contest_create_class_id', None)
+            request.session.pop('contest_create_return_url', None)
+            return
+        request.session['contest_create_class_id'] = class_obj.id
+        request.session['contest_create_return_url'] = class_obj.get_absolute_url() + '?tab=assignments'
+
+    def _link_contest_to_class(self, request, contest, class_obj):
+        if class_obj is None:
+            return
+        contest.organizations.add(class_obj.organization)
+        contest.classes.add(class_obj)
+
     def get(self, request, *args, **kwargs):
+        if self.contest is None:
+            self._remember_class_create_target(request, self._resolve_class_create_target(request))
         context = self.get_context_data()
         return render(request, self.template_name, context)
 
@@ -1048,10 +1087,15 @@ class ContestCreate(LoginRequiredMixin, View):
                 contest.authors.add(request.profile)  # the creator becomes an author
                 self._sync_problems(contest, payload)
                 contest_id = contest.pk
+                class_target = self._resolve_class_create_target(request)
+                if class_target is not None:
+                    self._link_contest_to_class(request, contest, class_target)
                 self._log_assignment(request, contest, added=True)
             from judge.utils.contest_ai import schedule_batch_ai_grade
             transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
-            return self._action_response(payload, contest.key)
+            return_url = request.session.pop('contest_create_return_url', None)
+            request.session.pop('contest_create_class_id', None)
+            return self._action_response(payload, contest.key, return_url=return_url)
         except Exception as e:
             return self._error_response(e)
 
@@ -1111,7 +1155,7 @@ class ContestCreate(LoginRequiredMixin, View):
         )
 
     @staticmethod
-    def _action_response(payload, key):
+    def _action_response(payload, key, *, return_url=None):
         """Build the post-save response from the ``action`` button clicked.
 
         ``save`` (default) → redirect to the contest page; ``continue`` → back
@@ -1123,8 +1167,12 @@ class ContestCreate(LoginRequiredMixin, View):
             action = 'save'
         if action == 'another':
             return JsonResponse({'ok': True, 'action': 'another'})
-        redirect = reverse('contest_edit', args=[key]) if action == 'continue' \
-            else reverse('contest_view', args=[key])
+        if action == 'continue':
+            redirect = reverse('contest_edit', args=[key])
+        elif action == 'save' and return_url:
+            redirect = return_url
+        else:
+            redirect = reverse('contest_view', args=[key])
         return JsonResponse({'ok': True, 'action': action, 'redirect': redirect})
 
     # ── template context ────────────────────────────────────────────────────
@@ -1247,6 +1295,7 @@ class ContestCreate(LoginRequiredMixin, View):
         # necessarily the current site default (staff may have published a
         # newer one, or retired this one).
         linked_preset = None
+        class_target = None
 
         if contest is not None:
             total = int(contest.time_limit.total_seconds()) if contest.time_limit else 0
@@ -1343,6 +1392,17 @@ class ContestCreate(LoginRequiredMixin, View):
             else:
                 prefill['vis_mode'] = 'hidden'
 
+        if contest is None:
+            class_target = self._resolve_class_create_target(self.request)
+            if class_target is not None:
+                org = class_target.organization
+                prefill['organizations'] = [(org.id, org.name)]
+                prefill['classes'] = [(class_target.id, class_target.name)]
+                prefill['vis_mode'] = 'org'
+                prefill['is_organization_private'] = True
+                prefill['is_private'] = False
+                prefill['is_visible'] = True
+
         ctx = {
             'title': _('Edit Assignment') if contest else _('Add Assignment'),
             'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
@@ -1380,6 +1440,7 @@ class ContestCreate(LoginRequiredMixin, View):
             # configuration rather than whichever one is default today.
             'seb_linked_preset': linked_preset,
             'prefill': prefill,
+            'class_create_target': class_target if contest is None else None,
         }
         ctx.update(self._library_filter_context())
         return ctx
@@ -1800,43 +1861,13 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         if not self.request.user.is_authenticated:
             return False
         contest = self.get_object()
-        return contest.is_viewable_by_org_admin(self.request.user)
+        return contest.is_editable_by(self.request.user) or contest.is_viewable_by_org_admin(self.request.user)
 
     def form_valid(self, form):
-        contest = self.object
-
-        tags = contest.tags.all()
-        organizations = contest.organizations.all()
-        private_contestants = contest.private_contestants.all()
-        view_contest_scoreboard = contest.view_contest_scoreboard.all()
-        contest_problems = list(contest.contest_problems.all())
-        old_key = contest.key
-
-        contest.pk = None
-        contest.is_visible = False
-        contest.user_count = 0
-        contest.locked_after = None
-        # A clone is a fresh, unrun contest: never carry over the finalize state, or its results would
-        # be revealed (and folded into the scoreboard) before it has even started.
-        contest.results_finalized = False
-        contest.key = form.cleaned_data['key']
-        with revisions.create_revision(atomic=True):
-            contest.save()
-            contest.tags.set(tags)
-            contest.organizations.set(organizations)
-            contest.private_contestants.set(private_contestants)
-            contest.view_contest_scoreboard.set(view_contest_scoreboard)
-            contest.authors.add(self.request.profile)
-
-            for problem in contest_problems:
-                problem.contest = contest
-                problem.pk = None
-            ContestProblem.objects.bulk_create(contest_problems)
-
-            revisions.set_user(self.request.user)
-            revisions.set_comment(_('Cloned contest from %s') % old_key)
-
-        return HttpResponseRedirect(reverse('admin:judge_contest_change', args=(contest.id,)))
+        clone = clone_contest(
+            self.object, form.cleaned_data['key'], self.request.profile,
+        )
+        return HttpResponseRedirect(reverse('contest_edit', args=(clone.key,)))
 
 
 class ContestAccessDenied(Exception):

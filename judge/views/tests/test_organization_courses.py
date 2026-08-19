@@ -1,7 +1,7 @@
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
-from judge.models import Class, ClassMaterial, InstructorVerificationRequest, Organization, OrganizationRequest
+from judge.models import Class, ClassMaterial, Contest, InstructorVerificationRequest, Organization, OrganizationRequest
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.views.organization import safe_redirect_url
 
@@ -210,6 +210,33 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
         self.client.force_login(self.admin)
         response = self.client.get(self._class_url())
         self.assertEqual(response.status_code, 200)
+
+    def test_assignment_actions_live_on_assignments_tab(self):
+        self.client.force_login(self.admin)
+        html = self.client.get(self._class_url()).content.decode()
+        self.assertIn('Add from library', html)
+        self.assertNotIn('>Add Assignment<', html)
+        self.assertNotIn('Add Assignment</a>', html)
+
+    def test_member_does_not_see_assignment_actions(self):
+        self.client.force_login(self.member)
+        html = self.client.get(self._class_url()).content.decode()
+        self.assertNotIn('Add from library', html)
+        self.assertNotIn('Add new', html)
+
+    def test_class_admin_with_create_permission_sees_add_new(self):
+        from django.contrib.auth.models import Permission
+        from judge.models.notification import ensure_instructors_group
+
+        ensure_instructors_group()
+        teacher = create_user(username='class_admin_creator', is_staff=True)
+        perm = Permission.objects.get(codename='create_private_contest', content_type__app_label='judge')
+        teacher.user_permissions.add(perm)
+        self.klass.admins.add(teacher.profile)
+        self.client.force_login(teacher)
+        html = self.client.get(self._class_url()).content.decode()
+        self.assertIn('Add from library', html)
+        self.assertIn('Add new', html)
 
     def test_pending_can_open_class_but_not_download(self):
         pending = create_user(username='class_pending')
@@ -656,3 +683,92 @@ class ClassSiteFormTests(CommonDataMixin, TestCase):
         }, organization=org)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data['name'], '2026-2027 Spring - Session 1 Prof. Huang')
+
+
+class ClassCloneTest(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        from django.core.files.base import ContentFile
+
+        from judge.models.tests.util import create_contest, create_contest_problem, create_problem
+
+        cls.org = cls.organizations['open']
+        cls.admin = cls.users['staff_organization_admin']
+        cls.student = create_user(username='clone_class_student')
+        cls.klass = Class.objects.create(
+            organization=cls.org,
+            name='Clone Source Session',
+            slug='clone-source-session',
+            description='Syllabus for CS',
+            academic_year='2025-2026',
+            term_session='Fall - Session 1',
+            instructor_names='Prof. Huang',
+        )
+        cls.klass.admins.add(cls.admin.profile)
+        cls.klass.members.add(cls.student.profile)
+        folder = ClassMaterial.objects.create(
+            class_obj=cls.klass, name='Notes', is_folder=True, uploaded_by=cls.admin.profile,
+        )
+        file_row = ClassMaterial.objects.create(
+            class_obj=cls.klass, name='week1.pdf', is_folder=False, parent=folder,
+            uploaded_by=cls.admin.profile,
+        )
+        file_row.file.save('week1.pdf', ContentFile(b'%PDF-notes'), save=True)
+        cls.problem = create_problem(code='clonehwprob', is_public=True)
+        cls.contest = create_contest(
+            key='clonehw', name='Homework 1', authors=('staff_organization_admin',),
+            is_visible=True,
+        )
+        cls.contest.classes.add(cls.klass)
+        create_contest_problem(contest=cls.contest, problem=cls.problem, points=100, order=1)
+
+    def _clone_url(self):
+        return reverse('class_clone', args=[self.org.id, self.org.slug, self.klass.id, self.klass.slug])
+
+    def test_student_cannot_clone_class(self):
+        self.client.force_login(self.student)
+        response = self.client.get(self._clone_url())
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_clone_copies_materials_and_assignments_not_students(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(self._clone_url(), {
+            'academic_year': '2026-2027',
+            'term_session': 'Fall - Session 1',
+            'instructor_names': 'Prof. Huang',
+            'copy_materials': 'on',
+            'copy_assignments': 'on',
+        })
+        self.assertEqual(response.status_code, 302, getattr(response, 'content', b'')[:500])
+        dest = Class.objects.exclude(id=self.klass.id).get(organization=self.org, instructor_names='Prof. Huang')
+        self.assertIn('2026-2027', dest.name)
+        self.assertEqual(dest.description, 'Syllabus for CS')
+        self.assertFalse(dest.members.exists())
+        self.assertTrue(dest.admins.filter(id=self.admin.profile.id).exists())
+        self.assertEqual(ClassMaterial.objects.filter(class_obj=dest, is_folder=True).count(), 1)
+        copied_file = ClassMaterial.objects.get(class_obj=dest, is_folder=False)
+        self.assertEqual(copied_file.name, 'week1.pdf')
+        copied_file.file.open('rb')
+        self.assertEqual(copied_file.file.read(), b'%PDF-notes')
+        copied_file.file.close()
+        clones = Contest.objects.filter(classes=dest)
+        self.assertEqual(clones.count(), 1)
+        clone = clones.get()
+        self.assertNotEqual(clone.key, self.contest.key)
+        self.assertFalse(clone.is_visible)
+        self.assertEqual(list(clone.problems.values_list('code', flat=True)), ['clonehwprob'])
+        self.assertTrue(Contest.objects.filter(key='clonehw').exists())
+
+    def test_clone_assignment_only(self):
+        self.client.force_login(self.admin)
+        url = reverse(
+            'class_assignment_clone',
+            args=[self.org.id, self.org.slug, self.klass.id, self.klass.slug, self.contest.key],
+        )
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        clone = Contest.objects.exclude(id=self.contest.id).get(classes=self.klass)
+        self.assertEqual(clone.name, self.contest.name)
+        self.assertFalse(clone.is_visible)
+        self.assertIn(reverse('contest_edit', args=[clone.key]), response.url)

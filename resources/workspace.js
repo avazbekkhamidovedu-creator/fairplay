@@ -577,6 +577,22 @@
       updateFileUploadResult(status.file_upload);
       return;
     }
+    if (awaitingManualAiGrade(status)) {
+      var savedHeading = document.createElement('h3');
+      savedHeading.textContent = gettext('Answer saved');
+      var savedMsg = document.createElement('p');
+      savedMsg.textContent = gettext(
+        'Your answer has been saved. Press the button below to run AI grading.'
+      );
+      wrap.appendChild(savedHeading);
+      wrap.appendChild(savedMsg);
+      ensureAiGradeButton(wrap, status);
+      main.appendChild(wrap);
+      updateSubmittedSource(status.source, status.answer_display);
+      updateFileUploadResult(status.file_upload);
+      updateAiGradeSection(status);
+      return;
+    }
     var heading = document.createElement('h3');
     heading.textContent = isCodeProblem() ? gettext('Execution results') : gettext('Judging results');
     var line = document.createElement('p');
@@ -610,6 +626,66 @@
     main.appendChild(wrap);
     updateSubmittedSource(status.source, status.answer_display);
     updateFileUploadResult(status.file_upload);
+    updateAiGradeSection(status);
+  }
+  function ensureAiGradeButton(container, status) {
+    if (!container || !status || !status.can_trigger_ai_grade || !status.ai_grade_url) return null;
+    var btn = $('#ai-grade-btn');
+    if (!btn) {
+      var row = document.createElement('p');
+      row.style.marginTop = '0.75rem';
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tool-btn ai-grade-btn';
+      btn.id = 'ai-grade-btn';
+      btn.textContent = gettext('View AI grading');
+      row.appendChild(btn);
+      container.appendChild(row);
+    } else {
+      var row = btn.closest('p') || btn.parentNode;
+      if (row && row !== container && container.appendChild) {
+        if (row.tagName !== 'P') {
+          var holder = document.createElement('p');
+          holder.style.marginTop = '0.75rem';
+          holder.appendChild(btn);
+          container.appendChild(holder);
+        } else {
+          container.appendChild(row);
+        }
+      }
+    }
+    btn.hidden = false;
+    btn.disabled = false;
+    btn.textContent = gettext('View AI grading');
+    app.dataset.aiGradeUrl = status.ai_grade_url;
+    return btn;
+  }
+  function updateAiGradeSection(status) {
+    var show = status && status.can_trigger_ai_grade && status.ai_grade_url;
+    if (show) {
+      ensureAiGradeButton($('#workspace-result-main .ws-result-summary') || $('#workspace-result-main'), status);
+    }
+    var section = $('#workspace-result-ai-grade');
+    if (section) section.hidden = true;
+    if (!show) {
+      var btn = $('#ai-grade-btn');
+      if (btn) btn.hidden = true;
+      return;
+    }
+    app.dataset.aiGradeUrl = status.ai_grade_url;
+    var help = $('#ai-grade-help');
+    if (help && status.ai_grade_remaining != null && Number(status.ai_grade_remaining) > 0) {
+      help.textContent = gettext(
+        'AI grading uses your latest submission for this problem. Press the button to score this version.'
+      ) + ' (' + status.ai_grade_remaining + ' ' + gettext('uses remaining') + ')';
+    }
+    var result = $('#ai-grade-result');
+    if (result) result.hidden = true;
+    var btn = $('#ai-grade-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = gettext('View AI grading');
+    }
   }
   function formatAnswerDisplay(rows) {
     if (!rows || !rows.length) return '';
@@ -626,6 +702,18 @@
       var main = document.createElement('div');
       main.id = 'workspace-result-main';
       box.insertBefore(main, box.firstChild);
+    }
+    if (!$('#workspace-result-ai-grade')) {
+      var aiGrade = document.createElement('div');
+      aiGrade.id = 'workspace-result-ai-grade';
+      aiGrade.className = 'ai-grade-section';
+      aiGrade.hidden = true;
+      var aiResult = document.createElement('div');
+      aiResult.id = 'ai-grade-result';
+      aiResult.className = 'ai-hint-result';
+      aiResult.hidden = true;
+      aiGrade.appendChild(aiResult);
+      box.appendChild(aiGrade);
     }
     if (!$('#workspace-result-file')) {
       var fileBlock = document.createElement('div');
@@ -834,6 +922,9 @@
     if (status.is_graded === false) return true;
     return status.status === 'QU' || status.status === 'P' || status.status === 'G';
   }
+  function awaitingManualAiGrade(status) {
+    return !!(status && status.can_trigger_ai_grade && status.result === 'IR');
+  }
   function applyStatusPayload(status, button) {
     if (!status) return;
     if (status.source || (status.answer_display && status.answer_display.length)) {
@@ -847,7 +938,9 @@
       refreshResultPanel(status.id);
     } else if (!isFileProblem()) {
       renderFormalStatus(status);
-      if (status.id && !status.results_hidden) appendTestcasesPanel(status.id);
+      if (status.id && !status.results_hidden && !awaitingManualAiGrade(status)) {
+        appendTestcasesPanel(status.id);
+      }
     } else {
       renderFormalStatus(status);
     }
@@ -1043,22 +1136,66 @@
     // File uploads are human-graded: do not poll or inject judge-queue HTML.
     if (isCodeProblem()) {
       refreshResultPanel(app.dataset.submissionId);
-    } else if (!isFileProblem()) {
-      appendTestcasesPanel(app.dataset.submissionId);
-    }
-    if (!isFileProblem() && app.dataset.submissionGraded !== '1' && app.dataset.statusUrl) {
-      pollFormal(app.dataset.statusUrl, null);
-    } else if (app.dataset.statusUrl && !isCodeProblem() && !isFileProblem()) {
-      // Refresh comments + readable answer for SSR-selected non-code submission.
+    } else if (!isFileProblem() && app.dataset.statusUrl) {
       fetch(app.dataset.statusUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
         .then(function (response) { return response.json(); })
         .then(function (status) {
-          if (status.answer_display || status.source) updateSubmittedSource(status.source, status.answer_display);
-          if (status.comments_html != null) updateResultComments(status.comments_html);
+          applyStatusPayload(status, null);
+          if (statusIsPending(status)) pollFormal(app.dataset.statusUrl, null);
         })
         .catch(function () { /* keep SSR */ });
+    } else if (!isFileProblem()) {
+      appendTestcasesPanel(app.dataset.submissionId);
     }
   }
+
+  (function initAiGrading() {
+    document.addEventListener('click', function (event) {
+      var btn = event.target && event.target.closest ? event.target.closest('#ai-grade-btn') : null;
+      if (!btn) return;
+      var gradeUrl = app.dataset.aiGradeUrl;
+      if (!gradeUrl || btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = gettext('Grading…');
+      fetch(gradeUrl, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'X-CSRFToken': csrfToken(),
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'application/json',
+        },
+      })
+        .then(function (response) {
+          return response.json().then(function (json) {
+            return { ok: response.ok, json: json };
+          });
+        })
+        .then(function (res) {
+          var box = $('#ai-grade-result');
+          if (box) box.hidden = false;
+          if (res.ok && res.json.ok) {
+            if (box) box.textContent = gettext('AI grading finished. Reloading…');
+            location.reload();
+          } else {
+            if (box) {
+              box.textContent = (res.json && res.json.error) || gettext('Request failed. Please try again.');
+            }
+            btn.disabled = false;
+            btn.textContent = gettext('View AI grading');
+          }
+        })
+        .catch(function () {
+          var box = $('#ai-grade-result');
+          if (box) {
+            box.hidden = false;
+            box.textContent = gettext('Request failed. Please try again.');
+          }
+          btn.disabled = false;
+          btn.textContent = gettext('View AI grading');
+        });
+    });
+  })();
 
   (function initAiHints() {
     var btn = $('#ai-hint-btn');
@@ -1140,6 +1277,7 @@
           clearCurrentDrafts();
           app.dataset.submissionGraded = '0';
           if (payload.status_url) app.dataset.statusUrl = payload.status_url;
+          if (payload.ai_grade_url) app.dataset.aiGradeUrl = payload.ai_grade_url;
           if (payload.submission_id) {
             app.dataset.submissionId = String(payload.submission_id);
             app.dataset.aiHintUrl = '/submission/' + payload.submission_id + '/ai-hint';
@@ -1154,7 +1292,8 @@
               refreshResultPanel(payload.submission_id);
             } else {
               renderFormalStatus(payload);
-              if (payload.submission_id && !payload.results_hidden) {
+              updateAiGradeSection(payload);
+              if (payload.submission_id && !payload.results_hidden && !awaitingManualAiGrade(payload)) {
                 appendTestcasesPanel(payload.submission_id);
               }
             }

@@ -11,6 +11,9 @@
 {% elif ai_batch_pending %}
     <h3>{{ _('Awaiting AI grading') }}</h3>
     <p>{{ _('This assignment uses batch AI grading. Scores use your latest submission per problem and will appear after the teacher runs AI grading (or automatically after the contest ends).') }}</p>
+{% elif ai_awaiting_manual %}
+    <h3>{{ _('Answer saved') }}</h3>
+    <p>{{ _('Your answer has been saved. Press "View AI grading" to score this submission.') }}</p>
 {% elif submission.problem.submission_type in ('F', 'M') %}
     {# File uploads wait for a human grader. MCQ uses the summary (Result + Score), not fake test cases. #}
 {% elif submission.status != 'IE' %}
@@ -95,7 +98,9 @@
                   </td>
                   <td class="ac">
                     <span class="ai-sq-status case-{{ tc.status }}">
-                      {% if tc.status == 'AC' %}{{ _('Correct') }}{% else %}{{ _('Partial') }}{% endif %}
+                      {% if tc.status == 'AC' %}{{ _('Correct') }}
+                      {% elif tc.status == 'IR' %}{{ _('Awaiting AI') }}
+                      {% else %}{{ _('Partial') }}{% endif %}
                     </span>
                   </td>
                   <td class="ai-sq-feedback">
@@ -120,7 +125,9 @@
                   <td class="ai-sq-score ac"><strong>{{ submission.case_points|floatformat(1) }} / {{ submission.case_total|floatformat(1) }}</strong></td>
                   <td class="ac">
                     <span class="case-{{ submission.result }}">
-                      {% if submission.result == 'AC' %}{{ _('All correct') }}{% else %}{{ _('Partial credit') }}{% endif %}
+                      {% if submission.result == 'AC' %}{{ _('All correct') }}
+                      {% elif submission.result == 'IR' %}{{ _('Awaiting AI') }}
+                      {% else %}{{ _('Partial credit') }}{% endif %}
                     </span>
                   </td>
                   <td></td>
@@ -296,7 +303,9 @@
           </td>
           <td class="ac">
             <span class="ai-sq-status case-{{ tc.status }}">
-              {% if tc.status == 'AC' %}{{ _('Correct') }}{% else %}{{ _('Partial') }}{% endif %}
+              {% if tc.status == 'AC' %}{{ _('Correct') }}
+              {% elif tc.status == 'IR' %}{{ _('Awaiting AI') }}
+              {% else %}{{ _('Partial') }}{% endif %}
             </span>
           </td>
           <td class="ai-sq-feedback">

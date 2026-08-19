@@ -28,6 +28,22 @@
       opacity: .35;
       cursor: not-allowed;
     }
+    .ai-grade-section {
+      margin-bottom: 1rem;
+      padding: .85rem 1rem;
+      border: 1px solid var(--oj-accent, #2980B9);
+      border-radius: var(--oj-radius, 6px);
+      background: color-mix(in srgb, var(--oj-accent, #2980B9) 8%, var(--oj-surface, #fff));
+    }
+    .ai-grade-section[hidden] { display: none !important; }
+    .ai-grade-btn {
+      font-weight: 600;
+      background: var(--oj-accent, #2980B9);
+      color: #fff;
+      border-color: var(--oj-accent, #2980B9);
+    }
+    .ai-grade-btn:hover:not(:disabled) { filter: brightness(1.05); }
+    .ai-grade-btn:disabled { opacity: .65; }
   </style>
   {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
@@ -77,6 +93,7 @@
      data-event-ws="{{ EVENT_DAEMON_LOCATION }}"
      data-event-poll="{{ EVENT_DAEMON_POLL_LOCATION }}"
      {% if ai_hints_possible %}data-ai-hints-possible="1" data-ai-hints-remaining="{{ ai_hints_remaining }}"{% if workspace_submission %} data-ai-hint-url="{{ url('submission_ai_hint', workspace_submission.id) }}"{% endif %}{% endif %}
+     {% if workspace_submission and workspace_submission.ai_grade_url %}data-ai-grade-url="{{ workspace_submission.ai_grade_url }}"{% endif %}
      {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}data-image-upload-url="{{ url('martor_image_uploader') }}"{% endif %}>
   <div class="ws-toolbar{% if workspace_in_contest %} has-leave{% endif %}">
     <div class="ws-toolbar-left">
@@ -437,6 +454,10 @@
         </div>
         <div class="ws-tab-panel" id="panel-result">
           <div id="workspace-submit-status">
+            <div id="workspace-result-ai-grade" class="ai-grade-section" hidden aria-hidden="true">
+              {# Primary button lives in #workspace-result-main when IR; this block is a JS fallback anchor. #}
+              <div id="ai-grade-result" class="ai-hint-result" hidden></div>
+            </div>
             <div id="workspace-result-main">
               {% if workspace_submission %}
                 <div class="ws-result-summary">
@@ -452,6 +473,12 @@
                   {% elif workspace_submission.results_hidden %}
                     <h3>{{ _('Results hidden') }}</h3>
                     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
+                  {% elif workspace_submission.result == 'IR' and workspace_submission.can_trigger_ai_grade %}
+                    <h3>{{ _('Answer saved') }}</h3>
+                    <p>{{ _('Your answer has been saved. Press the button below to run AI grading.') }}</p>
+                    <p style="margin-top:0.75rem;">
+                      <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI grading') }}</button>
+                    </p>
                   {% else %}
                     <h3>{% if workspace_is_code %}{{ _('Execution results') }}{% else %}{{ _('Judging results') }}{% endif %}</h3>
                     <p>
@@ -642,5 +669,5 @@
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
-  <script src="{{ static('workspace.js') }}?v=ws-nav-progress-3{% if DMOJ_STATIC_VERSION %}&amp;rel={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+  <script src="{{ static('workspace.js') }}?v=ws-ai-grade-2{% if DMOJ_STATIC_VERSION %}&amp;rel={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}

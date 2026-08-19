@@ -209,6 +209,26 @@
   white-space: pre-wrap;
   line-height: 1.55;
 }
+.ai-grade-section {
+  margin-bottom: 1rem;
+  padding: .85rem 1rem;
+  border: 1px solid var(--oj-accent);
+  border-radius: var(--oj-radius);
+  background: color-mix(in srgb, var(--oj-accent) 8%, var(--oj-surface));
+}
+.ai-grade-section[hidden] { display: none !important; }
+.ai-grade-btn {
+  font-weight: 600;
+  background: var(--oj-accent);
+  color: #fff;
+  border-color: var(--oj-accent);
+}
+.ai-grade-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.ai-grade-btn:disabled {
+  opacity: .65;
+}
 .ws-tabs .tab-hidden { display: none; }
 .ws-tab-panel { display: none; padding: 1.25rem; }
 .ws-tab-panel.active { display: block; }

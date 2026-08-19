@@ -394,16 +394,16 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         sa = [p for kind, p, _cp in info['problems'] if kind == 'sa'][0]
         self.student.profile.current_contest = info['part']
         self.student.profile.save()
-        with mock.patch('judge.views.problem.ProblemMixin._grade_in_background', create=True):
-            resp = self.student_client.post(
-                reverse('problem_submit', args=[sa.code]),
-                {'answer': 'the answer is 42'},
-            )
+        resp = self.student_client.post(
+            reverse('problem_submit', args=[sa.code]),
+            {'answer': 'the answer is 42'},
+        )
         self.assertEqual(resp.status_code, 302, resp.content)
         sub = Submission.objects.filter(user=self.student.profile, problem=sa).latest('id')
         self.assertEqual(sub.contest_object_id, info['contest'].id)
         self.assertEqual(sub.status, 'D')
         self.assertNotEqual(sub.status, 'QU')
+        self.assertEqual(sub.result, 'IR')
 
     def test_http_submit_mcq_never_offers_ai(self):
         info = self.contests['hw1']
@@ -492,9 +492,18 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertNotContains(self._status(self.student_client, sub), 'View AI grading')
         self.assertNotContains(self._status(self.teacher_client, sub), 'View AI grading')
 
-    def test_practice_short_answer_still_auto_grades(self):
-        """No contest → existing problem-level behaviour (AI may run immediately)."""
+    @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=10)
+    def test_practice_short_answer_defers_to_ai_button(self):
+        """No contest → submit stores the answer; LLM runs only on button."""
         p = create_problem(code='practiceai', submission_type='S', points=10, is_public=True)
         ProblemShortAnswerConfig.objects.create(problem=p, reference_answer='x')
-        sub = _done_sub(self.student, p, None, '{"text": "x"}', language=self.answer)
-        self.assertTrue(should_run_ai_now(sub))
+        self.student_client.post(
+            reverse('problem_submit', args=[p.code]),
+            {'answer': 'maybe x'},
+        )
+        sub = Submission.objects.filter(user=self.student.profile, problem=p).latest('id')
+        self.assertFalse(should_run_ai_now(sub))
+        self.assertTrue(should_run_ai_now(sub, manual_trigger=True))
+        self.assertEqual(sub.result, 'IR')
+        page = self._status(self.student_client, sub)
+        self.assertContains(page, 'View AI grading')

@@ -53,29 +53,28 @@ def contest_ai_mode(contest):
 
 
 def should_run_ai_now(submission, *, batch_pass=False, manual_trigger=False):
-    """Whether this submission should hit the LLM *right now*."""
+    """Whether this submission should hit the LLM *right now*.
+
+    Submit never auto-invokes the model — only ``manual_trigger`` (student/teacher
+    button) or ``batch_pass`` (teacher batch job) may run AI grading.
+    """
     if not problem_has_ai_grading(submission.problem):
         return False
     if batch_pass or getattr(submission, '_ai_batch_pass', False):
         return True
     if manual_trigger:
         return True
-    contest = getattr(submission, 'contest_object', None)
-    if contest is None:
-        return True
-    mode = contest_ai_mode(contest)
-    if mode in ('off', 'batch', 'realtime'):
-        return False
     return False
 
 
 def contest_awaits_student_ai(submission):
-    """Contest homework mode: graded without AI until the student requests it."""
+    """Submit stores the answer; the LLM runs only when the student presses the button."""
+    if not problem_has_ai_grading(submission.problem):
+        return False
     contest = getattr(submission, 'contest_object', None)
-    return (
-        contest_ai_mode(contest) == 'realtime'
-        and problem_has_ai_grading(submission.problem)
-    )
+    if contest is None:
+        return True
+    return contest_ai_mode(contest) == 'realtime'
 
 
 def contest_defers_ai(submission):

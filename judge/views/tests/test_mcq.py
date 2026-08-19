@@ -6,7 +6,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from judge.models import Class, Organization, Problem, ProblemMCQConfig, ProblemMCQOption, Submission, SubmissionSource
+from judge.models import Class, Language, Organization, Problem, ProblemMCQConfig, ProblemMCQOption, Submission, SubmissionSource
 from judge.models.tests.util import CommonDataMixin, create_problem, create_user
 from judge.submission_grading import grade_internally
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
@@ -386,6 +386,33 @@ class MCQSubmitViewTestCase(CommonDataMixin, TestCase):
         sub = Submission.objects.get(problem=self.problem, user=self.users['normal'].profile)
         self.assertEqual(sub.result, 'WA')
         self.assertEqual(sub.points, 0)
+
+    def test_mcq_not_blocked_by_other_problems_in_flight_code(self):
+        """MCQ must not hit the judge-queue cap from unrelated code submissions."""
+        from judge.models import Judge
+        from judge.models.tests.util import create_problem
+
+        other = create_problem(code='queueother', is_public=True, allowed_languages=('PY3',))
+        lang = Language.objects.get(key='PY3')
+        judge = Judge.objects.create(name='mcqguardjudge', auth_key='mcqguardkey', online=True)
+        judge.problems.add(other)
+        judge.runtimes.add(lang)
+        for _ in range(2):
+            Submission.objects.create(
+                user=self.users['normal'].profile, problem=other, language=lang,
+                status='P', result='QU',
+            )
+
+        self.client.force_login(self.users['normal'])
+        response = self.client.post(
+            reverse('problem_submit', args=['quizsub']),
+            {'options': str(self.opt_b.id), 'workspace': '1'},
+            HTTP_X_WORKSPACE_SUBMIT='1',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(
+            Submission.objects.filter(problem=self.problem, user=self.users['normal'].profile).exists(),
+        )
 
     def test_submit_page_does_not_leak_answer_key(self):
         self.client.force_login(self.users['normal'])

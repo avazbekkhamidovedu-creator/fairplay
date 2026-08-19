@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block media %}
+<style>
+    .course-redesign .class-form-field .rich-editor { height: 120px; }
+</style>
+{% endblock %}
+
+{% block js_media %}
+<script type="text/javascript">
+$(function () {
+    var $name = $('#id_name');
+    var $year = $('#id_academic_year');
+    var $term = $('#id_term_session');
+    var $instructors = $('#id_instructor_names');
+    var userEditedName = false;
+    function suggestedClassName() {
+        var parts = [];
+        var year = ($year.val() || '').trim();
+        var term = ($term.val() || '').trim();
+        var instructors = ($instructors.val() || '').trim();
+        if (year) parts.push(year);
+        if (term) parts.push(term);
+        if (instructors) parts.push(instructors);
+        return parts.join(' ');
+    }
+    function syncClassName() {
+        if (userEditedName) return;
+        $name.val(suggestedClassName());
+    }
+    $name.on('input', function () {
+        userEditedName = ($name.val() || '').trim() !== suggestedClassName();
+    });
+    $year.add($term).on('change input', syncClassName);
+    $instructors.on('input change keyup paste', syncClassName);
+});
+</script>
+{% endblock %}
+
+{% block title_ruler %}{% endblock %}
+
+{% block title_row %}
+    {% set tab = 'course' %}
+    {% set title = _('Course') %}
+    {% set title_url = url('organization_list') %}
+    {% set title_crumbs = [
+        {'label': organization.short_name or organization.name, 'url': organization.get_absolute_url()},
+        {'label': class.name, 'url': class.get_absolute_url()},
+        {'label': _('Clone'), 'url': None},
+    ] %}
+    {% include "organization/course-tabs.html" %}
+{% endblock %}
+
+{% block body %}
+<div class="course-redesign oj-ui">
+    <div class="course-form-wrap class-form-demo">
+        {% include "messages.html" %}
+        <p class="muted">
+            {{ _('This creates a new class in the same course. Students and submissions are not copied.') }}
+            {{ _('Source has %(assignments)d assignments and %(materials)d materials.',
+                assignments=assignment_count, materials=material_count) }}
+        </p>
+        <form action="" method="post" class="course-form">
+            {% csrf_token %}
+            {% if form.non_field_errors() %}
+                <div class="form-errors">{{ form.non_field_errors() }}</div>
+            {% endif %}
+
+            <section class="class-form-module">
+                <h2>{{ _('New offering') }}</h2>
+                <div class="class-form-grid">
+                    <div class="class-form-field">
+                        <label for="id_academic_year">{{ form.academic_year.label }}</label>
+                        {{ form.academic_year }}
+                        {{ form.academic_year.errors }}
+                    </div>
+                    <div class="class-form-field">
+                        <label for="id_term_session">{{ form.term_session.label }}</label>
+                        {{ form.term_session }}
+                        {{ form.term_session.errors }}
+                    </div>
+                    <div class="class-form-field">
+                        <label for="id_instructor_names">{{ form.instructor_names.label }}</label>
+                        {{ form.instructor_names }}
+                        {{ form.instructor_names.errors }}
+                    </div>
+                    <div class="class-form-field class-form-field-wide">
+                        <label for="id_name">{{ form.name.label }}</label>
+                        {{ form.name }}
+                        {{ form.name.errors }}
+                    </div>
+                    <div class="class-form-field">
+                        <label for="id_start_date">{{ form.start_date.label }}</label>
+                        {{ form.start_date }}
+                        {{ form.start_date.errors }}
+                    </div>
+                    <div class="class-form-field">
+                        <label for="id_end_date">{{ form.end_date.label }}</label>
+                        {{ form.end_date }}
+                        {{ form.end_date.errors }}
+                    </div>
+                </div>
+            </section>
+
+            <section class="class-form-module">
+                <h2>{{ _('What to copy') }}</h2>
+                <div class="class-form-field">
+                    <label>{{ form.copy_materials }} {{ form.copy_materials.label }}</label>
+                    <div class="help">{{ form.copy_materials.help_text }}</div>
+                </div>
+                <div class="class-form-field">
+                    <label>{{ form.copy_assignments }} {{ form.copy_assignments.label }}</label>
+                    <div class="help">{{ form.copy_assignments.help_text }}</div>
+                </div>
+            </section>
+
+            <div class="class-form-actions">
+                <button type="submit" class="oj-btn oj-btn-primary">
+                    <i class="fa fa-copy"></i> {{ _('Clone class') }}
+                </button>
+                <a class="oj-btn oj-btn-outline" href="{{ class.get_absolute_url() }}">{{ _('Cancel') }}</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

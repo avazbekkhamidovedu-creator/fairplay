@@ -644,6 +644,50 @@
                 setTimeout(function () { toastEl.style.display = 'none'; }, 2500);
             }
 
+            var DRAFT_KEY = 'dkuoj_contest_draft';
+            var CHECK_KEY_URL = {{ url('contest_check_key')|tojson }};
+            var keyExistsMsg = {{ _('An assignment with this key already exists.')|tojson }};
+
+            function normalizeContestKey(raw) {
+                return (raw || '').toLowerCase().replace(/[^a-z0-9]+/g, '').substring(0, 20);
+            }
+
+            function checkContestKey(key) {
+                if (!key) return Promise.resolve(null);
+                return fetch(CHECK_KEY_URL + '?key=' + encodeURIComponent(key), {
+                    method: 'GET',
+                    cache: 'no-cache',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (data) { return data && typeof data.exists === 'boolean' ? data.exists : null; })
+                .catch(function () { return null; });
+            }
+
+            function ensureUniqueKey(base) {
+                base = normalizeContestKey(base);
+                if (!base) return Promise.resolve(base);
+                return checkContestKey(base).then(function (exists) {
+                    if (exists === false) return base;
+                    if (exists === null) return base;
+                    var i = 2;
+                    function tryNext() {
+                        if (i > 999) {
+                            var ts = Date.now().toString().slice(-6);
+                            return base.substring(0, 20 - ts.length) + ts;
+                        }
+                        var suffix = String(i++);
+                        var candidate = base.substring(0, 20 - suffix.length) + suffix;
+                        return checkContestKey(candidate).then(function (taken) {
+                            if (taken === false) return candidate;
+                            if (taken === null) return candidate;
+                            return tryNext();
+                        });
+                    }
+                    return tryNext();
+                });
+            }
+
             // ── Form submission ───────────────────────────────────────────────
             // Registered FIRST on purpose: even if some cosmetic initializer
             // below throws (a missing element, a broken translation, ...), the
@@ -847,40 +891,76 @@
                 // NB: use getAttribute('action') not form.action — a hidden
                 // input with name="action" (the save-action button) would
                 // hijack the named property and break the URL.
-                for (var i = 0; i < submitBtns.length; i++) submitBtns[i].disabled = true;
-                fetch(form.getAttribute('action'), {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': fd.get('csrfmiddlewaretoken') || ''
-                    },
-                    body: JSON.stringify(data)
-                })
-                .then(function (r) { return r.json(); })
-                .then(function (res) {
-                    if (res.ok) {
-                        if (res.action === 'another') {
-                            // "Save and add another": stay put and clear the form.
-                            if (typeof window.resetFormForAnother === 'function') window.resetFormForAnother();
-                            else form.reset();
-                            showToast({{ _("Assignment saved — create another one.")|htmltojs }});
+                function submitPayload() {
+                    for (var i = 0; i < submitBtns.length; i++) submitBtns[i].disabled = true;
+                    fetch(form.getAttribute('action'), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': fd.get('csrfmiddlewaretoken') || ''
+                        },
+                        body: JSON.stringify(data)
+                    })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (res.ok) {
+                            try { localStorage.removeItem(DRAFT_KEY); } catch (err) {}
+                            if (res.action === 'another') {
+                                // "Save and add another": stay put and clear the form.
+                                if (typeof window.resetFormForAnother === 'function') window.resetFormForAnother();
+                                else form.reset();
+                                showToast({{ _("Assignment saved — create another one.")|htmltojs }});
+                            } else {
+                                window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
+                            }
                         } else {
-                            window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
+                            var err = res.error || {{ _("Failed to save assignment")|htmltojs }};
+                            var keyEl = document.getElementById('id_key');
+                            if (keyEl && (err === keyExistsMsg || err.indexOf('already exists') !== -1)) {
+                                var stem = normalizeContestKey(keyEl.value).replace(/\d+$/, '') || keyEl.value;
+                                ensureUniqueKey(stem).then(function (unique) {
+                                    if (unique && unique !== keyEl.value) {
+                                        keyEl.value = unique;
+                                        keyEl.dataset.autoGen = '1';
+                                        data.key = unique;
+                                        var msg = {{ _('That key is taken — updated to "{0}". Click Save again.')|tojson }};
+                                        showToast(msg.replace('{0}', unique), true);
+                                    } else {
+                                        showToast(err, true);
+                                    }
+                                });
+                            } else {
+                                showToast(err, true);
+                            }
                         }
-                    } else {
-                        showToast(res.error || {{ _("Failed to save assignment")|htmltojs }}, true);
-                    }
-                })
-                .catch(function () {
-                    showToast({{ _("An error occurred while saving")|htmltojs }}, true);
-                })
-                .finally(function () {
-                    // common.js disables every submit button on any form submit to prevent
-                    // double submission; since we keep the page (fetch + preventDefault),
-                    // re-enable the buttons so the user can retry after an error.
-                    var btns = form.querySelectorAll('button[type=submit]');
-                    for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
-                });
+                    })
+                    .catch(function () {
+                        showToast({{ _("An error occurred while saving")|htmltojs }}, true);
+                    })
+                    .finally(function () {
+                        // common.js disables every submit button on any form submit to prevent
+                        // double submission; since we keep the page (fetch + preventDefault),
+                        // re-enable the buttons so the user can retry after an error.
+                        var btns = form.querySelectorAll('button[type=submit]');
+                        for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+                    });
+                }
+
+                if (!window.DMOJ_IS_EDIT && data.key) {
+                    ensureUniqueKey(data.key).then(function (unique) {
+                        if (unique && unique !== data.key) {
+                            data.key = unique;
+                            var keyEl = document.getElementById('id_key');
+                            if (keyEl) {
+                                keyEl.value = unique;
+                                keyEl.dataset.autoGen = '1';
+                            }
+                        }
+                        submitPayload();
+                    });
+                } else {
+                    submitPayload();
+                }
             });
 
             // --- UTC ↔ wall-clock helpers (shared by the submit handler, the
@@ -1073,12 +1153,18 @@
             // Backend requires the key to be lowercase letters/digits only (^[a-z0-9]+$), no hyphens.
             var nameInput = document.getElementById('id_name');
             var keyInput = document.getElementById('id_key');
+            var keyGenTimer = null;
             if (nameInput && keyInput) {
                 nameInput.addEventListener('input', function () {
                     if (!keyInput.value || keyInput.dataset.autoGen === '1') {
-                        var slug = this.value.toLowerCase().replace(/[^a-z0-9]+/g, '');
-                        keyInput.value = slug.substring(0, 20);
+                        var slug = normalizeContestKey(this.value);
                         keyInput.dataset.autoGen = '1';
+                        if (keyGenTimer) clearTimeout(keyGenTimer);
+                        keyGenTimer = setTimeout(function () {
+                            ensureUniqueKey(slug).then(function (unique) {
+                                if (keyInput.dataset.autoGen === '1') keyInput.value = unique;
+                            });
+                        }, 300);
                     }
                 });
                 keyInput.addEventListener('input', function () {
@@ -2440,7 +2526,6 @@
             {% endif %}
 
             // --- Draft autosave (6c, create mode only) ---
-            var DRAFT_KEY = 'dkuoj_contest_draft';
             function collectDraft() {
                 var fd = new FormData(form);
                 var draft = {
@@ -2461,7 +2546,12 @@
                 var nameEl = document.getElementById('id_name');
                 var keyEl = document.getElementById('id_key');
                 if (nameEl && draft.name) nameEl.value = draft.name;
-                if (keyEl && draft.key) keyEl.value = draft.key;
+                if (keyEl && draft.key) {
+                    ensureUniqueKey(draft.key).then(function (unique) {
+                        keyEl.value = unique;
+                        keyEl.dataset.autoGen = unique !== draft.key ? '1' : '0';
+                    });
+                }
                 if (draft.tags && draft.tags.length) {
                     draft.tags.forEach(function (id) {
                         var opt = document.getElementById('id_tags').querySelector('option[value="' + id + '"]');
