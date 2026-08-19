@@ -693,6 +693,98 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertNotIn('id="id_key"', before)
         self.assertIn('id="id_key"', after)
 
+    def test_create_prefills_auto_increment_assignment_id(self):
+        occupied = Contest.generate_unique_key()
+        self.assertRegex(occupied, r'^c\d{6}$')
+        create_contest(
+            key=occupied, name='Occupied auto key',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('superuser',),
+        )
+        response = self.client.get(reverse('contest_create'))
+        key = response.context['prefill']['key']
+        self.assertRegex(key, r'^c\d{6}$')
+        self.assertNotEqual(key, occupied)
+        self.assertFalse(Contest.objects.filter(key=key).exists())
+        html = response.content.decode()
+        self.assertIn('value="%s"' % key, html)
+        self.assertIn('generateUniqueContestKey', html)
+        self.assertNotIn("replace(/[^a-z0-9]+/g, '')", html)
+
+    def test_preview_title_comes_before_time(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        preview = html.split('id="pv-body"', 1)[1].split('</aside>', 1)[0]
+        self.assertLess(preview.find('id="pv-title"'), preview.find('id="pv-time"'))
+
+    def test_create_empty_key_is_auto_incremented_not_name(self):
+        response = self._post(name='Homework Name Copy', key='')
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(name='Homework Name Copy')
+        self.assertNotEqual(contest.key, 'homeworknamecopy')
+        self.assertRegex(contest.key, r'^c\d{6}$')
+
+    def test_per_problem_options_greyed_by_type(self):
+        from judge.models.question import ProblemMCQConfig
+        code = create_problem('lock-code', is_public=True, submission_type='C')
+        single = create_problem('lock-single', is_public=True, submission_type='M')
+        ProblemMCQConfig.objects.create(problem=single, multiple_select=False, is_true_false=False)
+        truefalse = create_problem('lock-tf', is_public=True, submission_type='M')
+        ProblemMCQConfig.objects.create(problem=truefalse, multiple_select=False, is_true_false=True)
+        multi = create_problem('lock-multi', is_public=True, submission_type='M')
+        ProblemMCQConfig.objects.create(problem=multi, multiple_select=True)
+        blank = create_problem('lock-blank', is_public=True, submission_type='B')
+        short = create_problem('lock-short', is_public=True, submission_type='S')
+        filep = create_problem('lock-file', is_public=True, submission_type='F')
+
+        lib = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('applyCpOptionLocks', lib)
+        self.assertIn('data-format="single"', lib)
+        self.assertIn('data-format="truefalse"', lib)
+        self.assertIn('data-format="multiple"', lib)
+        self.assertIn('.cp-opt-partial', lib)
+
+        response = self._post(
+            name='Option locks', key='optlocks',
+            problems=[
+                {'id': code.id, 'points': 100},
+                {'id': single.id, 'points': 100},
+                {'id': truefalse.id, 'points': 100},
+                {'id': multi.id, 'points': 100},
+                {'id': blank.id, 'points': 100},
+                {'id': short.id, 'points': 100},
+                {'id': filep.id, 'points': 100},
+            ],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        html = self.client.get(reverse('contest_edit', args=['optlocks'])).content.decode()
+
+        def row_for(problem):
+            marker = 'data-pid="%s"' % problem.id
+            start = html.find(marker)
+            self.assertNotEqual(start, -1, marker)
+            open_div = html.rfind('<div class="cp-row"', 0, start)
+            nxt = html.find('<div class="cp-row"', start + 1)
+            if nxt == -1:
+                nxt = html.find('id="cp-empty"', start)
+            return html[open_div:nxt]
+
+        def assert_locked(row, partial, code_opts):
+            partial_chunk = row.split('cp-opt-partial', 1)[1].split('</label>', 1)[0]
+            pretest_chunk = row.split('cp-opt-pretested', 1)[1].split('</label>', 1)[0]
+            out_chunk = row.split('cp-opt-out-prefix', 1)[1].split('</label>', 1)[0]
+            self.assertEqual(' disabled' in partial_chunk, partial)
+            self.assertEqual(' disabled' in pretest_chunk, code_opts)
+            self.assertEqual(' disabled' in out_chunk, code_opts)
+
+        assert_locked(row_for(code), False, False)
+        assert_locked(row_for(single), True, True)
+        assert_locked(row_for(truefalse), True, True)
+        assert_locked(row_for(multi), False, True)
+        assert_locked(row_for(blank), False, True)
+        assert_locked(row_for(short), True, True)
+        assert_locked(row_for(filep), True, True)
+
     def test_format_and_virtual_live_in_basic(self):
         html = self.client.get(reverse('contest_create')).content.decode()
         before, after = html.split('class="advanced-hidden"', 1)

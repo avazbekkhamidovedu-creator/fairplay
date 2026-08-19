@@ -2688,7 +2688,7 @@
           try {
             window.opener.postMessage({
               kind: 'assignment-problem-created',
-              problem: { id: res.body.id, code: res.body.code, name: res.body.name || '' }
+              problem: { id: res.body.id, code: res.body.code, name: res.body.name || '', format: res.body.format || '' }
             }, window.location.origin);
           } catch (e) { /* opener gone */ }
           if (action !== 'another' && action !== 'continue') {
