@@ -1744,6 +1744,10 @@
 }
 
 /* ── Toast ─────────────────────────────────────────────────────────────────── */
+/* Solid fill + --oj-btn-text (always light). Do not use --oj-surface /
+   --oj-heading-text as the label colour — those tokens are white in the
+   light theme and read as a blank white chip. Keep hex fallbacks in case
+   --oj-* tokens are missing from a stale stylesheet. */
 
 #toast {
     display: none;
@@ -1751,15 +1755,29 @@
     left: 50%;
     bottom: 1.5rem;
     transform: translateX(-50%);
-    background: var(--oj-accent);
-    color: #fff;
+    background: var(--oj-accent, #278bc2);
+    background-color: var(--oj-accent, #278bc2);
+    color: var(--oj-btn-text, #fff);
+    border: 1px solid var(--oj-accent, #278bc2);
     padding: 0.55rem 1.1rem;
     border-radius: var(--oj-radius);
     z-index: 400;
     font-size: 13px;
+    font-weight: 600;
+    box-shadow: var(--oj-shadow-modal, 0 6px 20px rgba(0, 0, 0, 0.2));
 
     &.err {
-        background: var(--oj-danger);
+        background: var(--oj-danger, #d64545);
+        background-color: var(--oj-danger, #d64545);
+        color: var(--oj-btn-text, #fff);
+        border-color: var(--oj-danger, #d64545);
+    }
+
+    &.warn {
+        background: var(--oj-warning, #f57f17);
+        background-color: var(--oj-warning, #f57f17);
+        color: var(--oj-btn-text, #fff);
+        border-color: var(--oj-warning, #f57f17);
     }
 }
 

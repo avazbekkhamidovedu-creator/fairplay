@@ -19,7 +19,7 @@ from django.utils import timezone
 
 from judge.admin.stored_file import StoredFileRecordAdmin
 from judge.models import StoredFileRecord
-from judge.storage import generate_submission_key
+from judge.storage import generate_editor_attachment_key, generate_submission_key
 from judge.storage.box import BoxSFTPStorage
 from judge.storage.mirror import MirrorTerminalError, mirror_record, verify_record
 from judge.storage.resilient import ResilientStorage, StorageUnavailableError
@@ -578,3 +578,8 @@ class KeySchemeTestCase(TestCase):
             key = generate_submission_key(1, bad, now=now)
             self.assertRegex(key, r'^submissions/2026/07/1/[0-9a-f]{32}(\.[a-z0-9]{1,10})?$')
             self.assertNotIn('..', key)
+
+    def test_editor_attachment_key_shape(self):
+        now = timezone.datetime(2026, 8, 18, tzinfo=timezone.utc)
+        key = generate_editor_attachment_key(9, 'Handout (final).PDF', now=now)
+        self.assertRegex(key, r'^editor_attachments/2026/08/9/[0-9a-f]{32}\.pdf$')

@@ -27,6 +27,7 @@
             var csrf = document.querySelector('[name=csrfmiddlewaretoken]');
             RichEditor.configure({
                 imageUploadUrl: '{{ url("martor_image_uploader") }}',
+                fileUploadUrl: '{{ url("editor_file_uploader") }}',
                 csrfToken: csrf ? csrf.value : '',
             });
             function syncRichEditorSources() {

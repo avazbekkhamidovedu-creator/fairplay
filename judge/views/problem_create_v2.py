@@ -47,7 +47,9 @@ from judge.models import (Class, Language, LanguageLimit, License, Organization,
                           Solution, SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
-from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
+from judge.utils.problem_create import (apply_simple_problem_defaults, default_problem_group, default_problem_type,
+                                        log_problem_admin_entry, problem_admin_changed_fields, problem_admin_snapshot)
+from judge.utils.user_search import profile_choice_payload, profile_choice_payloads
 
 # Types the redesigned page offers but the backend cannot grade/store yet.
 NOT_IMPLEMENTED_TYPES = {'compound', 'other'}
@@ -225,15 +227,13 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'problem_preview_url': reverse('problem_preview'),
             'problem_preview_batch_url': reverse('problem_preview_batch'),
             'image_upload_url': reverse('martor_image_uploader'),
+            'file_upload_url': reverse('editor_file_uploader'),
             'search_users_url': reverse('martor_search_user'),
             'profile_select2_url': reverse('profile_select2'),
             'class_select2_url': reverse('class_select2'),
             # Escape <>& so |safe inline JSON cannot break out of <script>.
             'current_profile_json': (
-                json.dumps({
-                    'id': profile.id,
-                    'username': profile.username,
-                } if profile else {'id': None, 'username': ''})
+                json.dumps(profile_choice_payload(profile))
                 .replace('<', '\\u003c')
                 .replace('>', '\\u003e')
                 .replace('&', '\\u0026')
@@ -307,6 +307,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             if existing is None:
                 return JsonResponse({'error': _('Problem not found.')}, status=404)
 
+        before = problem_admin_snapshot(existing) if existing is not None else None
         try:
             # Mirror classic VersionAdmin: store an optional edit-reason comment on the revision.
             with revisions.create_revision(atomic=True):
@@ -340,6 +341,14 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             return JsonResponse({'error': str(e)}, status=400)
         except BadZipfile:
             return JsonResponse({'error': _('Your zip file is invalid!')}, status=400)
+
+        # Same django.contrib.admin LogEntry path as classic ProblemAdmin saves.
+        log_problem_admin_entry(
+            request, problem,
+            created=existing is None,
+            changed_fields=None if existing is None else problem_admin_changed_fields(before, problem),
+            message=(payload.get('edit_reason') or '').strip(),
+        )
 
         action = payload.get('action') or 'save'
         if action == 'another':
@@ -496,12 +505,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         else:
             data['type'] = 'single'
 
-        from django.db.models import F as DbF
-        data['authors'] = list(problem.authors.annotate(username=DbF('user__username')).values('id', 'username'))
-        data['curators'] = list(problem.curators.annotate(username=DbF('user__username')).values('id', 'username'))
-        data['testers'] = list(problem.testers.annotate(username=DbF('user__username')).values('id', 'username'))
-        data['banned_users'] = list(
-            problem.banned_users.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['authors'] = profile_choice_payloads(problem.authors)
+        data['curators'] = profile_choice_payloads(problem.curators)
+        data['testers'] = profile_choice_payloads(problem.testers)
+        data['banned_users'] = profile_choice_payloads(problem.banned_users)
         data['classes'] = list(problem.classes.values('id', 'name'))
         data['license_id'] = problem.license_id or ''
         data['is_manually_managed'] = problem.is_manually_managed
@@ -523,7 +530,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 'is_public': sol.is_public,
                 'publish_on': timezone.localtime(sol.publish_on).strftime('%Y-%m-%d %H:%M') if sol.publish_on else '',
                 'content': sol.content or '',
-                'authors': list(sol.authors.annotate(username=DbF('user__username')).values('id', 'username')),
+                'authors': profile_choice_payloads(sol.authors),
             }
         else:
             data['solution'] = {'is_public': False, 'publish_on': '', 'content': '', 'authors': []}
@@ -1107,6 +1114,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 self._save_testcases(problem, cleaned_cases or [], checker=checker)
             if 'harness' in payload:
                 self._save_harness(problem, payload)
+        # Always ping judges after the row exists (first create used to notify
+        # inside atomic(), so Judge.problems never picked up the new code).
+        from judge.utils.problem_data import notify_judges_of_problem_data
+        notify_judges_of_problem_data(problem.code)
         return problem
 
     def _save_code_config(self, problem, payload):

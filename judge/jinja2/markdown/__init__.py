@@ -24,6 +24,8 @@ from .. import registry
 logger = logging.getLogger('judge.html')
 
 NOFOLLOW_WHITELIST = settings.NOFOLLOW_EXCLUDED
+# Pygments / fence info-string: keep class names and the visible language label safe.
+_CODE_LANG_RE = re.compile(r'^[\w+#.\-]{1,40}$')
 
 
 class CodeSafeInlineGrammar(mistune.InlineGrammar):
@@ -76,9 +78,16 @@ class AwesomeRenderer(MathRenderer, mistune.Renderer):
         return '<a href="%s" title="%s"%s>%s</a>' % (link, title, self._link_rel(link), text)
 
     def block_code(self, code, lang=None):
+        lang = (lang or '').strip() or None
+        if lang and not _CODE_LANG_RE.match(lang):
+            lang = None
         if not lang:
             return '\n<pre><code>%s</code></pre>\n' % mistune.escape(code).rstrip()
-        return highlight_code(code, lang)
+        lang_esc = mistune.escape(lang)
+        return (
+            '\n<div class="code-block" data-lang="%s">'
+            '<div class="code-block-lang">%s</div>%s</div>\n'
+        ) % (lang_esc, lang_esc, highlight_code(code, lang))
 
     def block_html(self, html):
         if self.texoid and html.startswith('<latex'):

@@ -462,6 +462,9 @@ BLEACH_USER_SAFE_TAGS = [
 
 BLEACH_USER_SAFE_ATTRS = {
     '*': ['id', 'class', 'style'],
+    'div': ['data-lang'],
+    'code': ['data-lang'],
+    'pre': ['data-lang'],
     'img': ['src', 'alt', 'title', 'width', 'height', 'data-src', 'align'],
     'a': ['href', 'alt', 'title'],
     'abbr': ['title'],

@@ -154,3 +154,16 @@ class TestFragmentUtils(SimpleTestCase):
         self.assertEqual(tree.text, 'z')
 
         self.assertHTMLEqual(fragment_tree_to_str(tree), 'z<p>a</p><p>b</p>')
+
+    def test_fenced_code_shows_language_label(self):
+        html = str(markdown('```python\nprint(1)\n```', 'problem'))
+        self.assertIn('code-block', html)
+        self.assertIn('code-block-lang', html)
+        self.assertIn('python', html)
+        self.assertIn('data-lang="python"', html)
+        self.assertIn('print', html)
+
+    def test_plain_fence_has_no_language_label(self):
+        html = str(markdown('```\nint x = 1;\n```', 'problem'))
+        self.assertIn('int x = 1', html)
+        self.assertNotIn('code-block-lang', html)
