@@ -38,18 +38,29 @@ $(function () {
             = window.onfocus = window.onblur = onchange;
 
     function onchange(evt) {
-        var v = 'window-visible', h = 'window-hidden', evtMap = {
-            focus: v, focusin: v, pageshow: v, blur: h, focusout: h, pagehide: h
-        };
+        var v = 'window-visible',
+            h = 'window-hidden',
+            evtMap = {
+                focus: v, focusin: v, pageshow: v, blur: h, focusout: h, pagehide: h
+            },
+            state;
 
         evt = evt || window.event;
         if (evt.type in evtMap)
-            document.body.className = evtMap[evt.type];
+            state = evtMap[evt.type];
         else
-            document.body.className = this[hidden] ? 'window-hidden' : 'window-visible';
+            state = this[hidden] ? h : v;
+
+        // Keep page-specific classes such as problem-import-preview. Replacing
+        // className here previously disabled every style scoped to those classes.
+        document.body.className = document.body.className
+            .replace(/(^|\s)window-(?:visible|hidden)(?=\s|$)/g, ' ')
+            .replace(/\s+/g, ' ')
+            .replace(/^\s+|\s+$/g, '');
+        document.body.className += (document.body.className ? ' ' : '') + state;
 
         if ('$' in window)
-            $(window).trigger('dmoj:' + document.body.className);
+            $(window).trigger('dmoj:' + state);
     }
 
     // set the initial state (but only if browser supports the Page Visibility API)
