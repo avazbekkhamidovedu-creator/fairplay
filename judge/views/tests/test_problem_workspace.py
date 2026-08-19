@@ -305,7 +305,25 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'id="fp-group"', html=False)
         self.assertIn('workspace_organizations', response.context)
 
-    def test_practice_course_filter_lists_membership_and_public(self):
+    def test_workspace_toolbar_has_progress_not_in_drawer(self):
+        practice = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(practice, 'ws-toolbar-progress')
+        self.assertContains(practice, 'id="toolbar-progress-bar"', html=False)
+        self.assertNotContains(practice, 'id="drawer-bar"', html=False)
+        self.assertNotContains(practice, 'id="drawer-solved-frac"', html=False)
+
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        assignment = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(assignment.context['workspace_mode'], 'assignment')
+        self.assertContains(assignment, 'ws-toolbar-progress')
+        self.assertContains(assignment, 'id="toolbar-progress-bar"', html=False)
+        self.assertNotContains(assignment, 'id="drawer-progress"', html=False)
+        self.assertNotContains(practice, 'id="drawer-close"', html=False)
+        self.assertNotContains(assignment, 'id="drawer-close"', html=False)
+
+    def test_practice_course_filter_lists_membership_without_public_sentinel(self):
         mine = create_organization(name='WsMine')
         other = create_organization(name='WsOther')
         self.user.profile.organizations.add(mine)
@@ -313,9 +331,12 @@ class ProblemWorkspaceTestCase(TestCase):
         names = {org.name for org in response.context['workspace_organizations']}
         self.assertIn(mine.name, names)
         self.assertNotIn(other.name, names)
-        self.assertContains(response, 'value="%s"' % response.context['workspace_public_course_value'], html=False)
-        self.assertContains(response, mine.name)
-        self.assertNotContains(response, other.name)
+        course = response.content.decode().split('id="fp-course"', 1)[1].split('</select>', 1)[0]
+        self.assertNotIn('value="public"', course)
+        self.assertNotRegex(course, r'>\s*Public\s*<')
+        self.assertIn(mine.name, course)
+        self.assertNotIn(other.name, course)
+        # Public problems stay in the drawer; filtering is "all courses" when none are selected.
         self.assertContains(response, 'data-public="1"', html=False)
 
     def test_anonymous_problem_detail_stays_in_practice(self):
@@ -471,6 +492,25 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'classic status page')
         self.assertNotContains(response, 'non-AC formal')
         self.assertNotContains(response, 'complexity budget')
+
+    def test_ai_hints_possible_when_assignment_allows(self):
+        problem = create_problem(code='ws-ai-asg', is_public=True, ai_hints_enabled=False)
+        contest = create_contest(
+            key='wsaiasg', name='AI Assignment',
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(days=1),
+            allow_ai_hints=True,
+            is_visible=True,
+        )
+        create_contest_problem(contest=contest, problem=problem, points=100, order=1)
+        participation = create_contest_participation(contest=contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        with mock.patch('judge.ai_hints.is_configured', return_value=True):
+            response = self.client.get(reverse('problem_detail', args=[problem.code]))
+        self.assertTrue(response.context['ai_hints_possible'])
+        problem.refresh_from_db()
+        self.assertFalse(problem.ai_hints_enabled)
 
     def test_mcq_result_shows_verdict_and_score_over_max(self):
         self.mcq.points = 10

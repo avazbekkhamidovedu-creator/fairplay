@@ -214,9 +214,9 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
         if first_failed:
             context['first_failed_case_id'] = first_failed.case
 
-        # AI hints context
+        # AI hints context: problem flag OR the assignment this submission belongs to.
         context['ai_hints_possible'] = (
-            submission.problem.ai_hints_enabled
+            ai_hints.hints_enabled_for(submission.problem, submission.contest_object)
             and ai_hints.is_configured()
         )
         context['ai_hints_enabled'] = (
@@ -231,14 +231,15 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
 
         from judge.question_types.code import AI_GRADE_BATCH
         from judge.utils.contest_ai import (
-            AI_BATCH_PENDING, student_can_see_code_ai, student_can_trigger_ai,
+            AI_BATCH_PENDING, ai_grade_context, student_can_see_code_ai,
         )
         context['ai_batch_pending'] = (submission.error or '') == AI_BATCH_PENDING
         show_code_ai = student_can_see_code_ai(self.request.user, submission)
         context['ai_rubric_cases'] = list(
             submission.test_cases.filter(batch=AI_GRADE_BATCH).order_by('case'),
         ) if show_code_ai else []
-        context['can_trigger_ai_grade'] = student_can_trigger_ai(self.request.user, submission)
+        context.update(ai_grade_context(self.request.user, submission))
+        context['can_trigger_ai_grade'] = context['can_trigger']
 
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         if settings.DMOJ_ENABLE_COMMENTS:
@@ -305,8 +306,9 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
     def post(self, request, *args, **kwargs):
         submission = self.get_object()
 
-        # Gate 1: feature enabled on this problem
-        if not submission.problem.ai_hints_enabled:
+        # Gate 1: feature enabled on this problem, or on the assignment this
+        # submission was made in (does not mutate Problem.ai_hints_enabled).
+        if not ai_hints.hints_enabled_for(submission.problem, submission.contest_object):
             return JsonResponse({'error': 'AI hints are not enabled for this problem.'}, status=403)
 
         # Gate 2: backend configured
@@ -359,21 +361,52 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
     """POST /submission/<id>/ai-grade — student/teacher trigger, latest submit only."""
 
     def post(self, request, *args, **kwargs):
+        from django.utils.translation import gettext as _
+
         from judge import llm
-        from judge.utils.contest_ai import run_ai_for_submission, student_can_trigger_ai
+        from judge.ai_grading_quota import is_teacher_viewer, try_reserve
+        from judge.utils.contest_ai import ai_grade_context, run_ai_for_submission
 
         submission = self.get_object()
-        if not student_can_trigger_ai(request.user, submission):
+        ctx = ai_grade_context(request.user, submission)
+        if not ctx['can_trigger']:
+            if ctx.get('quota_disabled'):
+                return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
+            if ctx.get('rate_limited'):
+                return JsonResponse({
+                    'error': _('Too many AI grading requests for this problem. Try again in %(seconds)s seconds.') % {
+                        'seconds': ctx.get('rate_limit_seconds', 300),
+                    },
+                }, status=429)
             return JsonResponse(
                 {'error': _('You can only request AI grading on your latest submission.')},
                 status=403,
             )
         if not llm.is_configured():
             return JsonResponse({'error': _('AI grading is not configured on this server.')}, status=503)
+
+        reserved = True
+        if not is_teacher_viewer(request.user, submission):
+            reserved, err = try_reserve(submission.user_id, submission.problem_id)
+            if not reserved:
+                if err and err.startswith('rate_limited'):
+                    secs = err.split(':', 1)[-1]
+                    msg = _(
+                        'Too many AI grading requests for this problem. '
+                        'Try again in %(seconds)s seconds.',
+                    ) % {'seconds': secs}
+                    return JsonResponse({'error': msg}, status=429)
+                if err == 'quota_disabled':
+                    return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
+                return JsonResponse({'error': _('AI grading quota exhausted.')}, status=429)
+
         try:
-            status = run_ai_for_submission(submission, batch_pass=False)
+            status = run_ai_for_submission(submission, manual_trigger=True)
         except Exception:
             import logging
+            from judge.ai_grading_quota import refund
+            if not is_teacher_viewer(request.user, submission):
+                refund(submission.user_id)
             logging.getLogger(__name__).exception(
                 'Manual AI grade failed for submission %d', submission.id,
             )

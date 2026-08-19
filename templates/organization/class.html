@@ -140,8 +140,8 @@ $(function () {
                             </button>
                         </form>
                         {% if add_assignment_url %}
-                            <a class="action-link" href="{{ add_assignment_url }}">
-                                <i class="fa fa-plus"></i> {{ _('Add assignment') }}
+                            <a class="oj-btn oj-btn-primary" href="{{ add_assignment_url }}">
+                                <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
                             </a>
                         {% endif %}
                     </div>
@@ -301,7 +301,9 @@ $(function () {
             <div id="assign-empty" class="empty" {% if assignments %}hidden{% endif %}>
                 {{ _('No assignments match your filters.') }}
                 {% if can_edit and add_assignment_url %}
-                    <a href="{{ add_assignment_url }}">{{ _('Add assignment') }}</a>
+                    <a class="oj-btn oj-btn-primary" href="{{ add_assignment_url }}">
+                        <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
+                    </a>
                 {% endif %}
             </div>
             {% endif %}
@@ -430,8 +432,8 @@ $(function () {
             <div class="student-list">
                 {% for rank, user in users %}
                     <a class="student-row js-student-row" href="{{ url('user_page', user.user.username) }}"
-                       data-name="{{ user.user.username|lower }}">
-                        <span class="student-name">{{ user.user.username }}</span>
+                       data-name="{{ (user.user.username ~ ' ' ~ (user.username_display_override or '') ~ ' ' ~ (user.user.first_name or '') ~ ' ' ~ (user.user.last_name or ''))|lower }}">
+                        <span class="student-name">{{ user.username_display_override or user.user.get_full_name() or user.user.username }} ({{ user.user.username }})</span>
                         <span class="student-meta">{{ _('Rank #%(rank)d', rank=rank) }}</span>
                         <span class="student-meta">
                             {% if user.rating %}{{ _('Rating %(rating)d', rating=user.rating) }}{% else %}{{ _('Unrated') }}{% endif %}

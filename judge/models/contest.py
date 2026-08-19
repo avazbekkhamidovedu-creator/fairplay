@@ -230,9 +230,15 @@ class Contest(models.Model):
                                            validators=[MinValueValidator(0), MaxValueValidator(10)],
                                            help_text=_('Number of digits to round points to.'))
     allow_virtual_participation = models.BooleanField(
-        verbose_name=_('allow virtual participation'),
+        verbose_name=_('allow virtual join'),
         default=True,
-        help_text=_('Allow users to participate virtually after the contest ends.'),
+        help_text=_('Allow users to join virtually after the assignment ends.'),
+    )
+    allow_ai_hints = models.BooleanField(
+        verbose_name=_('allow AI hints'),
+        default=False,
+        help_text=_('When this assignment is active, students can use AI Hint on every attached '
+                    "problem. Each problem's own AI Hint setting is unchanged outside this assignment."),
     )
     seb_required = models.BooleanField(
         verbose_name=_('require Safe Exam Browser'),
@@ -301,7 +307,7 @@ class Contest(models.Model):
     def clean(self):
         # Django will complain if you didn't fill in start_time or end_time, so we don't have to.
         if self.start_time and self.end_time and self.start_time >= self.end_time:
-            raise ValidationError('What is this? A contest that ended before it starts?')
+            raise ValidationError(_('What is this? An assignment that ended before it starts?'))
         self.format_class.validate(self.format_config)
 
         try:

@@ -1,6 +1,8 @@
 import json
 from unittest import mock
 
+from django.contrib.admin.models import ADDITION, LogEntry
+from django.contrib.contenttypes.models import ContentType
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
@@ -96,6 +98,36 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertSetEqual(
             set(Problem.objects.get(name='Organization scope').organizations.values_list('pk', flat=True)),
+            {organization.pk},
+        )
+
+    def test_upload_matches_organization_without_classes_or_members(self):
+        organization = Organization.objects.create(
+            name='Empty Course', slug='empty-course', short_name='EMPTY', about='',
+        )
+        response = self.upload([
+            ['name', 'question_type', 'description', 'organizations', 'options', 'answer'],
+            ['Empty course scope', 'multiple_choice', 'Choose the prime.', 'empty-course', '4\n5', '2'],
+        ])
+
+        self.assertEqual(response.status_code, 200)
+        item = ProblemImportDraft.objects.get(owner=self.creator.profile).items.get()
+        self.assertFalse(item.config_needs_review)
+        self.assertEqual(item.editor_data, {'organizations': [organization.pk]})
+
+        response = self.client.post(
+            reverse('problem_import_item_action', args=(item.draft_id, item.pk, 'create')),
+            {
+                'name': item.name,
+                'question_type': item.submission_type,
+                'description': item.description,
+                'answer': item.answer,
+                'options': item.options,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertSetEqual(
+            set(Problem.objects.get(name='Empty course scope').organizations.values_list('pk', flat=True)),
             {organization.pk},
         )
 
@@ -210,6 +242,35 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
             {'import-type', 'number_theory', 'primes', 'hard'},
         )
         self.assertEqual(Solution.objects.get(problem=problem).content, '5 is the only prime option.')
+
+    def test_create_writes_admin_log_entry(self):
+        self.upload([
+            ['name', 'question_type', 'description'],
+            ['Logged import', 'multiple_choice', 'Which number is prime?'],
+        ])
+        draft = ProblemImportDraft.objects.get(owner=self.creator.profile)
+        item = draft.items.get()
+        response = self.client.post(reverse('problem_import_item_action', args=(draft.pk, item.pk, 'create')), {
+            'name': item.name,
+            'question_type': 'M',
+            'description': item.description,
+            'answer': '2',
+            'options': '4\n5',
+            'correct_options': '2',
+            'blanks': '',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['ok'])
+        problem = Problem.objects.get(name='Logged import')
+        logs = LogEntry.objects.filter(
+            content_type=ContentType.objects.get_for_model(Problem),
+            object_id=str(problem.pk),
+            user=self.creator,
+        )
+        self.assertEqual(logs.count(), 1)
+        self.assertEqual(logs.get().action_flag, ADDITION)
+        self.assertEqual(logs.get().object_repr, 'Logged import')
+        self.assertEqual(json.loads(logs.get().change_message), [{'added': {}}])
 
     def test_can_manually_save_unrecognized_multiple_choice_options_and_answer(self):
         self.upload([
@@ -698,3 +759,11 @@ class ProblemImportPreviewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.json()['count'], 2)
         self.assertEqual(draft.items.filter(created_problem__isnull=False).count(), 2)
         self.assertEqual(Problem.objects.filter(name__in=['Prime check', 'Capital']).count(), 2)
+        created = Problem.objects.filter(name__in=['Prime check', 'Capital'])
+        logs = LogEntry.objects.filter(
+            content_type=ContentType.objects.get_for_model(Problem),
+            object_id__in=[str(pk) for pk in created.values_list('pk', flat=True)],
+            action_flag=ADDITION,
+            user=self.creator,
+        )
+        self.assertEqual(logs.count(), 2)

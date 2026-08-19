@@ -26,6 +26,7 @@ from judge.models import Class, Language, LanguageLimit, Organization, Problem, 
 from judge.utils import simple_xlsx
 from judge.utils.language_matching import matching_languages
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
+from judge.utils.user_search import apply_profile_choice_labels, profile_choice_label
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, AdminSelect2MultipleWidget, \
     AdminSelect2Widget, CheckboxSelectMultipleWithSelectAll
@@ -42,6 +43,7 @@ WORKBOOK_EXTENSION_NAMESPACES = {
     'x15ac': 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac',
     'xr': 'http://schemas.microsoft.com/office/spreadsheetml/2014/revision',
     'xr2': 'http://schemas.microsoft.com/office/spreadsheetml/2015/revision2',
+    'xr3': 'http://schemas.microsoft.com/office/spreadsheetml/2016/revision3',
     'xr6': 'http://schemas.microsoft.com/office/spreadsheetml/2016/revision6',
     'xr10': 'http://schemas.microsoft.com/office/spreadsheetml/2016/revision10',
 }
@@ -51,6 +53,27 @@ DOC_PROPERTIES_VT_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/do
 
 def _excel_template_question_type_range():
     return 'B2:B{}'.format(settings.PROBLEM_EXCEL_TEMPLATE_MAX_ROW)
+
+
+def _serialize_excel_xml(element):
+    """Preserve namespaces named only by Office compatibility attributes."""
+    markup_namespace = WORKBOOK_EXTENSION_NAMESPACES['mc']
+    prefixes = set(element.attrib.get('{%s}Ignorable' % markup_namespace, '').split())
+    prefixes.update(
+        prefix
+        for choice in element.findall('.//{%s}Choice' % markup_namespace)
+        for prefix in choice.attrib.get('Requires', '').split()
+    )
+    content = ET.tostring(element, encoding='utf-8', xml_declaration=True)
+    root_start = content.find(b'<', content.find(b'?>') + 2)
+    root_end = content.find(b'>', root_start)
+    root_tag = content[root_start:root_end]
+    declarations = b''.join(
+        ' xmlns:{}="{}"'.format(prefix, WORKBOOK_EXTENSION_NAMESPACES[prefix]).encode('utf-8')
+        for prefix in sorted(prefixes)
+        if prefix in WORKBOOK_EXTENSION_NAMESPACES and 'xmlns:{}='.format(prefix).encode('ascii') not in root_tag
+    )
+    return content[:root_end] + declarations + content[root_end:]
 
 
 def decode_markdown_upload(uploaded_file):
@@ -85,6 +108,7 @@ class ProblemForm(ModelForm):
 
     def __init__(self, *args, **kwargs):
         super(ProblemForm, self).__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         self.fields['authors'].widget.can_add_related = False
         self.fields['curators'].widget.can_add_related = False
         self.fields['testers'].widget.can_add_related = False
@@ -312,6 +336,7 @@ class ProblemClarificationInline(admin.StackedInline):
 class ProblemSolutionForm(ModelForm):
     def __init__(self, *args, **kwargs):
         super(ProblemSolutionForm, self).__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         self.fields['authors'].widget.can_add_related = False
 
     class Meta:
@@ -561,7 +586,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 'banned_users': [],
             },
             'display': {
-                'authors': [{'id': str(profile.id), 'text': profile.user.username}] if profile else [],
+                'authors': [{'id': str(profile.id), 'text': profile_choice_label(profile)}] if profile else [],
                 'types': [{'id': str(default_type.id), 'text': str(default_type)}] if default_type else [],
                 'group': {'id': str(default_group.id), 'text': str(default_group)} if default_group else None,
             },
@@ -1040,9 +1065,6 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 )
                 sheet_data_index = list(example_sheet).index(example_sheet.find('x:sheetData', namespace))
                 example_sheet.insert(sheet_data_index + 1, protection)
-            # x14 is referenced only by mc:Choice, so ElementTree would otherwise omit its declaration.
-            example_sheet.set('xmlns:x14', WORKBOOK_EXTENSION_NAMESPACES['x14'])
-
             relationship_numbers = [
                 int(match.group(1))
                 for relationship in relationships
@@ -1197,9 +1219,6 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
             ET.register_namespace('r', simple_xlsx.REL_NS)
             for prefix, uri in WORKBOOK_EXTENSION_NAMESPACES.items():
                 ET.register_namespace(prefix, uri)
-            # x15 is referenced only by mc:Ignorable, so ElementTree would otherwise omit its declaration.
-            workbook.set('xmlns:x15', WORKBOOK_EXTENSION_NAMESPACES['x15'])
-
             output = io.BytesIO()
             with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as target:
                 for info in source.infolist():
@@ -1210,19 +1229,19 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                     elif info.filename == app_properties_path:
                         content = ET.tostring(app_properties, encoding='utf-8', xml_declaration=True)
                     elif info.filename == 'xl/workbook.xml':
-                        content = ET.tostring(workbook, encoding='utf-8', xml_declaration=True)
+                        content = _serialize_excel_xml(workbook)
                     elif info.filename == 'xl/_rels/workbook.xml.rels':
                         content = ET.tostring(relationships, encoding='utf-8', xml_declaration=True)
                     elif info.filename == reference_sheet_path:
-                        content = ET.tostring(reference_sheet, encoding='utf-8', xml_declaration=True)
+                        content = _serialize_excel_xml(reference_sheet)
                     elif info.filename == example_sheet_path:
-                        content = ET.tostring(example_sheet, encoding='utf-8', xml_declaration=True)
+                        content = _serialize_excel_xml(example_sheet)
                     else:
                         content = source.read(info.filename)
                     target.writestr(info, content)
                 target.writestr(
                     problems_sheet_path,
-                    ET.tostring(problems_sheet, encoding='utf-8', xml_declaration=True),
+                    _serialize_excel_xml(problems_sheet),
                 )
         return output.getvalue()
 

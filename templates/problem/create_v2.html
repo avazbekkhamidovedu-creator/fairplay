@@ -41,11 +41,19 @@
   <style>
     /* Integrate with the base.html layout: do not lock height to 100vh; scroll with the page. */
     .v2-main { display: block; }
-    .v2-top { padding: 0.55rem 1.5rem 0.75rem; border-bottom: 1px solid var(--admin-border); background: var(--admin-bg,#f8f8f8); flex-shrink: 0; }
-    .v2-top .breadcrumb { margin: 0; }
-    .v2-top h1 { margin: 0.15rem 0 0; }
-    .v2-top .note { margin: 0.55rem 0 0; }
-    .v2-type-hint { font-size: var(--oj-font-size, 14px); color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
+    /* Sit on the site page background — no grey pad behind the form cards. */
+    .pcv2 { background: transparent; }
+    /* Edit-only problem / clone links: plain text, not a grey type bar. */
+    .v2-edit-meta {
+      margin: 0 0 0.45rem;
+      padding: 0;
+      font-size: 13px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.85rem;
+      background: none;
+      border: none;
+    }
 
     /* Hide noisy Basic-tab banners/hints; keep `.help` for Advanced field guidance. */
     .form-content .note,
@@ -186,10 +194,11 @@
     .pv-sub .pv-sub-t { font-weight: 600; margin-bottom: 0.35rem; }
     .pv-badge { display: inline-block; font-size: 11px; background: #f3e5f5; color: #7b1fa2; border-radius: 4px; padding: 0.05rem 0.4rem; font-weight: 600; }
 
-    /* Two columns: the form scrolls with the page and the preview is a matching sticky card. */
-    .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
-    .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
-    .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
+    /* Two columns: the form scrolls with the page and the preview is a matching sticky card.
+       Align with the tab row (no extra grey gutter); keep a modest gap between columns. */
+    .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; column-gap: 1.25rem; }
+    .v2-left { min-width: 0; padding: 0.25rem 0 2rem; }
+    .v2-right { min-width: 0; padding: 0.25rem 0 2rem; position: sticky; top: 56px; align-self: start; }
     /* Preview card: match fieldset.module heading bar (dark admin header) */
     .pv-panel { border: 1px solid var(--admin-border); border-radius: var(--oj-radius-md, 6px); background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 80px); box-shadow: var(--oj-shadow, none); }
     .v2-right .pv-head {
@@ -200,7 +209,7 @@
     #preview-body { padding: 1rem; overflow-y: auto; }
     @media (max-width: 900px) {
       .v2-split { grid-template-columns: 1fr; }
-      .v2-right { position: static; padding: 0 1.5rem 3rem; }
+      .v2-right { position: static; padding: 0 0 2rem; }
       .pv-panel { max-height: none; }
     }
 
@@ -222,7 +231,6 @@
     #page-container,
     #content,
     #content-body { margin: 0; max-width: none; padding: 0; width: auto; }
-    .v2-top { display: none; }
     .v2-right { display: none; }
     .v2-split { display: block; }
     .v2-left { padding: 0.75rem; }
@@ -233,7 +241,7 @@
 {% endblock %}
 
 {% block body %}
-  <div class="pcv2">
+  <div class="pcv2 pcv2-problem">
   <main class="v2-main" id="content-main">
     {% if import_editor_mode and (import_type_needs_review or import_name_needs_review or import_data_needs_review or import_config_needs_review) %}
     <fieldset class="module import-review-notice">
@@ -257,13 +265,14 @@
       </div>
     </fieldset>
     {% endif %}
-    <div class="v2-top">
-      <span class="v2-type-hint">{{ _('Current type:') }} <span class="tag-type regular" id="type-badge">{{ _('Single choice') }}</span></span>
-      {% if edit_code %}&mdash; <a href="{{ edit_detail_url }}">{{ edit_name or edit_code }}</a>{% endif %}
+    {% if edit_code or (can_clone_problem and clone_url) %}
+    <p class="v2-edit-meta">
+      {% if edit_code %}<a href="{{ edit_detail_url }}">{{ edit_name or edit_code }}</a>{% endif %}
       {% if can_clone_problem and clone_url %}
-        &mdash; <a href="{{ clone_url }}"><i class="fa fa-copy"></i> {{ _('Clone') }}</a>
+        <a href="{{ clone_url }}"><i class="fa fa-copy"></i> {{ _('Clone') }}</a>
       {% endif %}
-    </div>
+    </p>
+    {% endif %}
 
     <div class="v2-split">
     <form id="add-problem-form" class="v2-left" novalidate>
@@ -276,7 +285,7 @@
             <label>{{ _('Type') }} <span class="req">*</span></label>
             <div class="field">
               <div class="type-pills" id="type-pills">
-                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires staff permission to create programming problems') }}" style="opacity:0.45;"{% endif %}>
+                <label class="type-pill" data-save="programming" {% if not can_create_code %}title="{{ _('Requires permission to create problems') }}" style="opacity:0.45;"{% endif %}>
                   <input type="radio" name="qtype" value="programming" onchange="selectType('programming')" {% if not can_create_code %}disabled{% endif %}><span>{{ _('Programming') }}</span></label>
                 <label class="type-pill" data-save="mcq">
                   <input type="radio" name="qtype" value="single" {% if can_create_mcq %}checked{% endif %} onchange="selectType('single')"><span>{{ _('Single choice') }}</span></label>
@@ -324,7 +333,7 @@
           <div class="form-row">
             <label>{{ _('Public visible') }}</label>
             <div class="field">
-              <input type="checkbox" id="f-public" {% if not can_change_public %}disabled{% endif %}>
+              <input type="checkbox" id="f-public" {% if can_change_public %}checked{% else %}disabled{% endif %}>
             </div>
           </div>
           <div class="form-row">
@@ -357,6 +366,10 @@
           <div class="form-row">
             <label>{{ _('Points') }} <span class="req">*</span></label>
             <div class="field"><input type="number" id="f-points" value="1" min="0" step="0.5" style="max-width:120px;"></div>
+          </div>
+          <div class="form-row">
+            <label>{{ _('AI hints enabled') }}</label>
+            <div class="field"><input type="checkbox" id="f-ai-hints" checked><div class="help">{{ _('Allow AI hints') }}</div></div>
           </div>
 
           <!-- Fill-blank: optional per-blank points. -->
@@ -398,7 +411,7 @@
             <label>{{ _('AI Grading') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
-                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
+                <input type="checkbox" id="f-ai" checked onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
               </label>
               <div class="help" id="ai-help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. In an assignment/exam, the teacher chooses realtime (each submit) or batch (latest submit after the contest). Always uses the latest submission. Requires LITELLM_API_BASE.') }}</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
@@ -725,7 +738,6 @@
             <div class="form-row"><label>{{ _('Is full markup') }}</label><div class="field"><input type="checkbox" id="f-full-markup" {% if not can_full_markup %}disabled{% endif %}><div class="help">{% if can_full_markup %}{{ _('Allow full HTML markup in the statement') }}{% else %}{{ _('You do not have permission to change this flag') }}{% endif %}</div></div></div>
             <div class="form-row"><label>{{ _('View test cases') }}</label><div class="field"><input type="checkbox" id="f-view-cases"><div class="help">{{ _('Allow contestants to download failed test samples') }}</div></div></div>
             <div class="form-row"><label>{{ _('View tester') }}</label><div class="field"><input type="checkbox" id="f-view-tester"><div class="help">{{ _('Allow downloading the tester file') }}</div></div></div>
-            <div class="form-row"><label>{{ _('AI hints enabled') }}</label><div class="field"><input type="checkbox" id="f-ai-hints"><div class="help">{{ _('Allow AI hints') }}</div></div></div>
             <div class="form-row"><label>{{ _('License') }}</label><div class="field"><select id="f-license">
               <option value="">{{ _('— None —') }}</option>
               {% for lic in licenses %}<option value="{{ lic.id }}">{{ lic.display or lic.name }}</option>{% endfor %}
@@ -885,7 +897,7 @@
     </aside>
     </div><!-- /.v2-split -->
 
-    <div id="save-toast" style="display:none;position:fixed;left:50%;bottom:2rem;transform:translateX(-50%);background:var(--dmoj-green);color:#fff;padding:0.6rem 1.2rem;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.2);z-index:300;font-size:14px;"></div>
+    <div id="save-toast"></div>
     <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="RichEditor.onImagePicked(event)">
   </main>
 
@@ -933,6 +945,7 @@
     const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
     const PROBLEM_PREVIEW_BATCH_URL = '{{ problem_preview_batch_url }}';
     const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
+    const FILE_UPLOAD_URL = '{{ file_upload_url }}';
     const SEARCH_USERS_URL = '{{ search_users_url }}';
     const PROFILE_SELECT2_URL = '{{ profile_select2_url }}';
     const CLASS_SELECT2_URL = '{{ class_select2_url }}';
@@ -952,6 +965,7 @@
     const EDIT_DETAIL_URL = '{{ edit_detail_url }}';
     const EDIT_DATA = {{ edit_data_json|safe }};
     const IMPORT_EDITOR_MODE = {{ 'true' if import_editor_mode else 'false' }};
+    const FROM_ASSIGNMENT = new URLSearchParams(window.location.search).get('from') === 'assignment';
     const IMPORT_ITEM_ID = '{{ import_item_id }}';
     const IMPORT_FORMAT_URL = '{{ import_format_url }}';
     const IMPORT_CREATE_URL = '{{ import_create_url }}';
@@ -1281,9 +1295,6 @@
     function selectType(type) {
       currentType = type;
       const meta = TYPE_META[type];
-      const badge = document.getElementById('type-badge');
-      badge.textContent = meta.title;
-      badge.className = 'tag-type ' + meta.badge;
       setTypeTag(meta.tag);
 
       document.getElementById('stem-label').firstChild.textContent = (type === 'compound') ? (gettext('Main stem') + ' ') : (gettext('Description') + ' ');
@@ -2103,6 +2114,13 @@
       }
       return [...sel.selectedOptions].map(o => parseInt(o.value, 10)).filter(n => !Number.isNaN(n));
     }
+    function userChoiceLabel(u) {
+      if (!u) return '';
+      if (u.text) return u.text;
+      const username = u.username || '';
+      const name = (u.name || '').trim() || username;
+      return name ? (name + ' (' + username + ')') : username;
+    }
     function ensureOption(sel, id, text, selected) {
       if (!sel || id == null) return null;
       let opt = [...sel.options].find(o => String(o.value) === String(id));
@@ -2153,7 +2171,7 @@
       });
       // Only pre-select the current user when creating a new problem.
       if (!EDIT_CODE && CURRENT_PROFILE && CURRENT_PROFILE.id) {
-        ensureOption(document.getElementById('f-authors'), CURRENT_PROFILE.id, CURRENT_PROFILE.username, true);
+        ensureOption(document.getElementById('f-authors'), CURRENT_PROFILE.id, userChoiceLabel(CURRENT_PROFILE), true);
       }
     }
     function bindEditorialCollapse() {
@@ -2381,15 +2399,15 @@
       setVal('f-summary', d.summary || '');
       setChk('f-short-circuit', d.short_circuit);
       setVal('f-edit-reason', '');
-      (d.authors || []).forEach(u => ensureOption(document.getElementById('f-authors'), u.id, u.username, true));
-      (d.curators || []).forEach(u => ensureOption(document.getElementById('f-curators'), u.id, u.username, true));
-      (d.testers || []).forEach(u => ensureOption(document.getElementById('f-testers'), u.id, u.username, true));
-      (d.banned_users || []).forEach(u => ensureOption(document.getElementById('f-banned-users'), u.id, u.username, true));
+      (d.authors || []).forEach(u => ensureOption(document.getElementById('f-authors'), u.id, userChoiceLabel(u), true));
+      (d.curators || []).forEach(u => ensureOption(document.getElementById('f-curators'), u.id, userChoiceLabel(u), true));
+      (d.testers || []).forEach(u => ensureOption(document.getElementById('f-testers'), u.id, userChoiceLabel(u), true));
+      (d.banned_users || []).forEach(u => ensureOption(document.getElementById('f-banned-users'), u.id, userChoiceLabel(u), true));
       (d.classes || []).forEach(c => ensureOption(document.getElementById('f-classes'), c.id, c.name, true));
       if (d.solution) {
         setChk('f-sol-public', d.solution.is_public);
         setVal('f-sol-publish', d.solution.publish_on || '');
-        (d.solution.authors || []).forEach(u => ensureOption(document.getElementById('f-sol-authors'), u.id, u.username, true));
+        (d.solution.authors || []).forEach(u => ensureOption(document.getElementById('f-sol-authors'), u.id, userChoiceLabel(u), true));
         if (typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
           try { RichEditor.setMarkdown('editorial', d.solution.content || ''); } catch (e) { /* mount may lag */ }
         }
@@ -2533,8 +2551,14 @@
     }
     function showToast(msg, ok) {
       const t = document.getElementById('save-toast');
-      t.textContent = msg; t.style.background = ok ? 'var(--dmoj-green)' : 'var(--danger)';
-      t.style.display = 'block'; clearTimeout(t._timer);
+      if (!t) return;
+      t.textContent = msg;
+      t.classList.toggle('err', !ok);
+      t.classList.toggle('ok', !!ok);
+      t.style.removeProperty('background');
+      t.style.removeProperty('color');
+      t.style.display = 'block';
+      clearTimeout(t._timer);
       t._timer = setTimeout(() => { t.style.display = 'none'; }, ok ? 1500 : 2500);
     }
     function resetForm() {
@@ -2695,8 +2719,25 @@
           return;
         }
         showToast('{{ _("Saved") }} ' + res.body.code, true);
-        if (res.body.redirect) setTimeout(function() { location.href = res.body.redirect; }, 600);
-        else resetForm();
+        if (FROM_ASSIGNMENT && window.opener && !window.opener.closed && res.body.id) {
+          try {
+            window.opener.postMessage({
+              kind: 'assignment-problem-created',
+              problem: { id: res.body.id, code: res.body.code, name: res.body.name || '' }
+            }, window.location.origin);
+          } catch (e) { /* opener gone */ }
+          if (action !== 'another' && action !== 'continue') {
+            setTimeout(function() { window.close(); }, 400);
+            return;
+          }
+        }
+        if (res.body.redirect) {
+          var next = res.body.redirect;
+          if (FROM_ASSIGNMENT && action === 'another') {
+            next += (next.indexOf('?') === -1 ? '?' : '&') + 'from=assignment';
+          }
+          setTimeout(function() { location.href = next; }, 600);
+        } else resetForm();
       }).catch(function(err) {
         console.error('[add-problem] network/fetch error:', err);
         var networkMessage = '{{ _("Network error — please check your connection and try again.") }}';
@@ -2850,12 +2891,15 @@
 
     RichEditor.configure({
       imageUploadUrl: IMAGE_UPLOAD_URL,
+      fileUploadUrl: FILE_UPLOAD_URL,
       searchUsersUrl: SEARCH_USERS_URL,
       csrfToken: CSRF_TOKEN,
       onChange: renderPreview,
       messages: {
         uploadFailed: '{{ _("Image upload failed.") }}',
         uploadFailedAuth: '{{ _("Image upload failed. Make sure you are signed in with upload permission.") }}',
+        fileUploadFailed: '{{ _("File upload failed.") }}',
+        fileUploadFailedAuth: '{{ _("File upload failed. Make sure you are signed in with upload permission.") }}',
       },
     });
     RichEditor.mount();

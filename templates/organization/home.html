@@ -7,12 +7,8 @@ $(function () {
     $('#instructor-verification-btn').on('click', function () {
         $('#instructor-verification-modal').prop('hidden', false);
     });
-    $('#instructor-verification-modal .js-close-modal, #join-request-modal .js-close-modal').on('click', function () {
+    $('#instructor-verification-modal .js-close-modal').on('click', function () {
         $(this).closest('.course-modal').prop('hidden', true);
-    });
-    $('.js-open-join-modal').on('click', function (e) {
-        e.preventDefault();
-        $('#join-request-modal').prop('hidden', false);
     });
     $('.js-delete-course').on('click', function () {
         return confirm({{ _('Delete this course? This cannot be undone.')|htmltojs }});
@@ -188,10 +184,10 @@ $(function () {
                             {% csrf_token %}
                             <button type="submit" class="button">{{ _('Join course') }}</button>
                         </form>
-                    {% elif join_request_form %}
-                        <button type="button" class="button js-open-join-modal">{{ _('Request membership') }}</button>
+                    {% elif can_request_from_list %}
+                        <a class="button" href="{{ url('organization_list') }}?join={{ organization.id }}">{{ _('Request from course list') }}</a>
                     {% else %}
-                        <p class="muted">{{ _('This course is not open for applications yet (no classes available).') }}</p>
+                        <p class="muted">{{ _('This course is not open for applications yet.') }}</p>
                     {% endif %}
                 {% else %}
                     <p class="muted">{{ _('Log in to join this course.') }}</p>
@@ -328,32 +324,4 @@ $(function () {
 </div>
 
 {% include "organization/instructor-verification-modal.html" %}
-
-{% if join_request_form %}
-<div id="join-request-modal" class="course-modal" hidden>
-    <div class="course-modal-backdrop js-close-modal"></div>
-    <div class="course-modal-dialog" role="dialog" aria-labelledby="join-title">
-        <h2 id="join-title">{{ _('Request course membership') }}</h2>
-        <form method="post" action="{{ url('request_organization', organization.id, organization.slug) }}" class="join-modal-form">
-            {% csrf_token %}
-            <input type="hidden" name="next" value="{{ request.path }}">
-            {% if join_request_form.non_field_errors() %}
-                <div class="form-errors">{{ join_request_form.non_field_errors() }}</div>
-            {% endif %}
-            {% if join_request_form.show_classes %}
-                <label for="{{ join_request_form.class_.id_for_label }}">{{ _('Target class') }}</label>
-                {{ join_request_form.class_ }}
-                {{ join_request_form.class_.errors }}
-            {% endif %}
-            <label for="{{ join_request_form.reason.id_for_label }}">{{ _('Reason') }}</label>
-            {{ join_request_form.reason }}
-            {{ join_request_form.reason.errors }}
-            <p style="margin-top: 0.85rem;">
-                <button type="submit" class="button">{{ _('Submit request') }}</button>
-                <button type="button" class="button js-close-modal">{{ _('Cancel') }}</button>
-            </p>
-        </form>
-    </div>
-</div>
-{% endif %}
 {% endblock %}

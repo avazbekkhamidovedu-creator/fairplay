@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import zipfile
 from unittest import TestCase as StdlibTestCase
 from unittest import mock
@@ -404,6 +405,12 @@ class ProblemAdminCreationTestCase(CommonDataMixin, TestCase):
                 [title.text for title in app_properties.findall('a:TitlesOfParts/vt:vector/vt:lpstr', app_namespace)],
                 ['Instructions', 'Problems', 'Example Problems'],
             )
+            for path in ('xl/workbook.xml', reference_path, problems_path, example_path):
+                xml_text = workbook.read(path).decode('utf-8')
+                root_tag = re.search(r'<[^!?][^>]*>', xml_text).group(0)
+                ignorable = re.search(r'mc:Ignorable="([^"]*)"', root_tag)
+                for prefix in ignorable.group(1).split() if ignorable else ():
+                    self.assertIn('xmlns:{}='.format(prefix), root_tag)
 
     def test_admin_problem_excel_template_respects_visible_scope(self):
         scoped_admin = create_user(

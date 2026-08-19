@@ -47,7 +47,9 @@ from judge.models import (Class, Language, LanguageLimit, License, Organization,
                           Solution, SubmissionSourceAccess)
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
-from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_group, default_problem_type
+from judge.utils.problem_create import (apply_simple_problem_defaults, default_problem_group, default_problem_type,
+                                        log_problem_admin_entry, problem_admin_changed_fields, problem_admin_snapshot)
+from judge.utils.user_search import profile_choice_payload, profile_choice_payloads
 
 # Types the redesigned page offers but the backend cannot grade/store yet.
 NOT_IMPLEMENTED_TYPES = {'compound', 'other'}
@@ -133,6 +135,11 @@ def _can_create_any(user):
     return user.has_perm('judge.create_private_problem') or (user.is_staff and user.has_perm('judge.add_problem'))
 
 
+def _can_create_code(user):
+    """Programming problems: course instructors (create_private_problem) or site add_problem."""
+    return _can_create_any(user)
+
+
 @method_decorator(ensure_csrf_cookie, name='dispatch')
 class ProblemCreateV2View(LoginRequiredMixin, View):
     template_name = 'problem/create_v2.html'
@@ -184,7 +191,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 {'name': t['name'], 'full': t['full_name'] or t['name']}
                 for t in ProblemType.objects.order_by('full_name', 'name').values('name', 'full_name')
             ]),
-            'can_create_code': user.is_staff and user.has_perm('judge.add_problem'),
+            'can_create_code': _can_create_code(user),
             'can_create_mcq': user.has_perm('judge.create_private_problem'),
             'can_create_file': user.has_perm('judge.create_private_problem'),
             'can_import_excel_problems': user.has_perm('judge.create_private_problem'),
@@ -220,15 +227,13 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'problem_preview_url': reverse('problem_preview'),
             'problem_preview_batch_url': reverse('problem_preview_batch'),
             'image_upload_url': reverse('martor_image_uploader'),
+            'file_upload_url': reverse('editor_file_uploader'),
             'search_users_url': reverse('martor_search_user'),
             'profile_select2_url': reverse('profile_select2'),
             'class_select2_url': reverse('class_select2'),
             # Escape <>& so |safe inline JSON cannot break out of <script>.
             'current_profile_json': (
-                json.dumps({
-                    'id': profile.id,
-                    'username': profile.username,
-                } if profile else {'id': None, 'username': ''})
+                json.dumps(profile_choice_payload(profile))
                 .replace('<', '\\u003c')
                 .replace('>', '\\u003e')
                 .replace('&', '\\u0026')
@@ -302,6 +307,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             if existing is None:
                 return JsonResponse({'error': _('Problem not found.')}, status=404)
 
+        before = problem_admin_snapshot(existing) if existing is not None else None
         try:
             # Mirror classic VersionAdmin: store an optional edit-reason comment on the revision.
             with revisions.create_revision(atomic=True):
@@ -336,16 +342,30 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         except BadZipfile:
             return JsonResponse({'error': _('Your zip file is invalid!')}, status=400)
 
+        # Same django.contrib.admin LogEntry path as classic ProblemAdmin saves.
+        log_problem_admin_entry(
+            request, problem,
+            created=existing is None,
+            changed_fields=None if existing is None else problem_admin_changed_fields(before, problem),
+            message=(payload.get('edit_reason') or '').strip(),
+        )
+
         action = payload.get('action') or 'save'
         if action == 'another':
             # Land on a fresh add-problem page.
-            return JsonResponse({'ok': True, 'code': problem.code, 'redirect': reverse('problem_create_v2')})
-        if action == 'continue':
+            redirect = reverse('problem_create_v2')
+        elif action == 'continue':
             # Reopen this problem on the add page for further edits.
             redirect = reverse('problem_edit_v2', args=[problem.code])
         else:
             redirect = reverse('problem_detail', args=[problem.code])
-        return JsonResponse({'ok': True, 'code': problem.code, 'redirect': redirect})
+        return JsonResponse({
+            'ok': True,
+            'id': problem.id,
+            'code': problem.code,
+            'name': problem.name,
+            'redirect': redirect,
+        })
 
     # ------------------------------------------------------------------ edit support
     def _get_editable_problem(self, request, code):
@@ -485,12 +505,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         else:
             data['type'] = 'single'
 
-        from django.db.models import F as DbF
-        data['authors'] = list(problem.authors.annotate(username=DbF('user__username')).values('id', 'username'))
-        data['curators'] = list(problem.curators.annotate(username=DbF('user__username')).values('id', 'username'))
-        data['testers'] = list(problem.testers.annotate(username=DbF('user__username')).values('id', 'username'))
-        data['banned_users'] = list(
-            problem.banned_users.annotate(username=DbF('user__username')).values('id', 'username'))
+        data['authors'] = profile_choice_payloads(problem.authors)
+        data['curators'] = profile_choice_payloads(problem.curators)
+        data['testers'] = profile_choice_payloads(problem.testers)
+        data['banned_users'] = profile_choice_payloads(problem.banned_users)
         data['classes'] = list(problem.classes.values('id', 'name'))
         data['license_id'] = problem.license_id or ''
         data['is_manually_managed'] = problem.is_manually_managed
@@ -512,7 +530,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 'is_public': sol.is_public,
                 'publish_on': timezone.localtime(sol.publish_on).strftime('%Y-%m-%d %H:%M') if sol.publish_on else '',
                 'content': sol.content or '',
-                'authors': list(sol.authors.annotate(username=DbF('user__username')).values('id', 'username')),
+                'authors': profile_choice_payloads(sol.authors),
             }
         else:
             data['solution'] = {'is_public': False, 'publish_on': '', 'content': '', 'authors': []}
@@ -1040,7 +1058,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
     def _create_code(self, request, payload, name, problem=None, zip_upload=None):
         user = request.user
-        if not (user.is_staff and user.has_perm('judge.add_problem')):
+        if not _can_create_code(user):
             raise PermissionError(_('You do not have permission to create code problems.'))
 
         # Inline test cases: sync only when the client sends ``testcases`` (or a ZIP upload).
@@ -1096,6 +1114,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 self._save_testcases(problem, cleaned_cases or [], checker=checker)
             if 'harness' in payload:
                 self._save_harness(problem, payload)
+        # Always ping judges after the row exists (first create used to notify
+        # inside atomic(), so Judge.problems never picked up the new code).
+        from judge.utils.problem_data import notify_judges_of_problem_data
+        notify_judges_of_problem_data(problem.code)
         return problem
 
     def _save_code_config(self, problem, payload):

@@ -2,8 +2,8 @@
 
 Teachers pick a mode when creating an assignment/exam:
 
-* ``realtime`` — grade each submit as it arrives (homework). A newer submit
-  cancels an older one that is still queued/grading.
+* ``realtime`` — students (and teachers) request AI grading via a button on the
+  submission page; nothing is sent to the LLM until they click it.
 * ``batch`` — do not call the LLM during the contest; a teacher button (and an
   optional timer after ``end_time``) grades **only the latest** submission per
   (participation, problem).
@@ -52,19 +52,30 @@ def contest_ai_mode(contest):
     return getattr(contest, 'ai_grading_mode', None) or 'off'
 
 
-def should_run_ai_now(submission, *, batch_pass=False):
+def should_run_ai_now(submission, *, batch_pass=False, manual_trigger=False):
     """Whether this submission should hit the LLM *right now*."""
     if not problem_has_ai_grading(submission.problem):
         return False
     if batch_pass or getattr(submission, '_ai_batch_pass', False):
         return True
+    if manual_trigger:
+        return True
     contest = getattr(submission, 'contest_object', None)
     if contest is None:
         return True
     mode = contest_ai_mode(contest)
-    if mode in ('off', 'batch'):
+    if mode in ('off', 'batch', 'realtime'):
         return False
-    return mode == 'realtime'
+    return False
+
+
+def contest_awaits_student_ai(submission):
+    """Contest homework mode: graded without AI until the student requests it."""
+    contest = getattr(submission, 'contest_object', None)
+    return (
+        contest_ai_mode(contest) == 'realtime'
+        and problem_has_ai_grading(submission.problem)
+    )
 
 
 def contest_defers_ai(submission):
@@ -160,7 +171,7 @@ def persist_code_ai_rows(submission, rows):
     return len(rows)
 
 
-def run_ai_for_submission(submission, *, batch_pass=False):
+def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False):
     """Grade one submission with AI (code rubric or internal LLM types).
 
     Returns a short status string. Skips (and does not error) when this is no
@@ -173,7 +184,7 @@ def run_ai_for_submission(submission, *, batch_pass=False):
         return 'skipped-not-latest'
     if not problem_has_ai_grading(submission.problem):
         return 'skipped-no-ai'
-    if not should_run_ai_now(submission, batch_pass=batch_pass):
+    if not should_run_ai_now(submission, batch_pass=batch_pass, manual_trigger=manual_trigger):
         return 'skipped-mode'
 
     st = submission.problem.submission_type
@@ -250,23 +261,77 @@ def student_can_see_code_ai(user, submission):
 
 
 def student_can_trigger_ai(user, submission):
-    """Homework-style manual trigger (same idea as AI hints)."""
+    """Show the on-demand AI grading button (teachers always; students when quota allows)."""
+    from judge.ai_grading_quota import get_remaining, is_rate_limited, is_teacher_viewer
+
     if user is None or not user.is_authenticated:
         return False
     if not problem_has_ai_grading(submission.problem):
         return False
     try:
-        if submission.user.user_id != user.id and not user.has_perm('judge.rejudge_submission'):
-            return False
+        is_owner = submission.user.user_id == user.id
     except Exception:
+        is_owner = False
+    if not is_owner and not user.has_perm('judge.rejudge_submission'):
         return False
     if submission.status != 'D':
         return False
+    if not is_latest_submission(submission):
+        return False
+
     contest = getattr(submission, 'contest_object', None)
     mode = contest_ai_mode(contest)
-    if contest is not None and mode != 'realtime':
+    teacher = is_teacher_viewer(user, submission)
+    if contest is not None and mode == 'off':
         return False
-    return is_latest_submission(submission)
+    if contest is not None and mode == 'batch' and not teacher:
+        return False
+    if teacher:
+        return True
+    if contest is None or mode == 'realtime':
+        if student_quota_disabled():
+            return False
+        try:
+            profile_id = submission.user_id
+        except Exception:
+            return False
+        if get_remaining(profile_id) <= 0:
+            return False
+        if is_rate_limited(profile_id, submission.problem_id):
+            return False
+        return True
+    return False
+
+
+def student_quota_disabled():
+    from judge.ai_grading_quota import student_quota_limit
+    return student_quota_limit() <= 0
+
+
+def ai_grade_context(user, submission):
+    """Template/API context for the on-demand AI grading button."""
+    from judge.ai_grading_quota import (
+        get_remaining, is_rate_limited, is_teacher_viewer, rate_limit_remaining_seconds,
+    )
+
+    ctx = {
+        'can_trigger': student_can_trigger_ai(user, submission),
+        'is_teacher': is_teacher_viewer(user, submission),
+        'remaining': 0,
+        'rate_limited': False,
+        'rate_limit_seconds': 0,
+        'quota_disabled': student_quota_disabled() and not is_teacher_viewer(user, submission),
+    }
+    if not ctx['is_teacher'] and user is not None and user.is_authenticated:
+        try:
+            profile_id = submission.user_id
+        except Exception:
+            profile_id = None
+        if profile_id is not None:
+            ctx['remaining'] = get_remaining(profile_id)
+            ctx['rate_limited'] = is_rate_limited(profile_id, submission.problem_id)
+            ctx['rate_limit_seconds'] = rate_limit_remaining_seconds(profile_id, submission.problem_id)
+    return ctx
 
 
 def schedule_batch_ai_grade(contest_id):
@@ -317,7 +382,7 @@ def schedule_batch_ai_grade(contest_id):
 def ai_mode_help_text():
     return _(
         'AI grading always uses each student’s latest submission per problem. '
-        'Realtime grades a submit as it arrives (a newer submit cancels one still '
-        'queued). Batch waits until you press the button on the Grade page, or until '
+        'On demand shows a button after submit; AI runs only when requested. '
+        'Batch waits until you press the button on the Grade page, or until '
         'the delay after the contest ends.',
     )

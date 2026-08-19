@@ -125,8 +125,9 @@ class ContestAIGradingHelpersTestCase(CommonDataMixin, TestCase):
         self.assertFalse(is_latest_submission(self.older))
         self.assertTrue(is_latest_submission(self.newer))
 
-    def test_should_run_ai_now_realtime(self):
-        self.assertTrue(should_run_ai_now(self.newer))
+    def test_should_run_ai_now_realtime_deferred(self):
+        self.assertFalse(should_run_ai_now(self.newer))
+        self.assertTrue(should_run_ai_now(self.newer, manual_trigger=True))
 
     def test_should_run_ai_now_batch_skips_live(self):
         self.contest.ai_grading_mode = Contest.AI_GRADING_BATCH
@@ -146,6 +147,15 @@ class ContestAIGradingHelpersTestCase(CommonDataMixin, TestCase):
         self.assertEqual(latest[(self.part.id, self.cp.id)].id, self.newer.id)
 
     def test_supersede_aborts_older_in_realtime(self):
+        self.contest.ai_grading_mode = Contest.AI_GRADING_OFF
+        self.contest.save(update_fields=['ai_grading_mode'])
+        self.newer.contest_object = None
+        self.newer.contest_object_id = None
+        self.newer.save(update_fields=['contest_object'])
+        self.older.contest_object = None
+        self.older.contest_object_id = None
+        self.older.save(update_fields=['contest_object'])
+        self.newer = Submission.objects.select_related('contest_object', 'problem').get(pk=self.newer.pk)
         with mock.patch.object(Submission, 'abort') as abort:
             aborted = supersede_older_in_flight(self.newer)
         self.assertEqual(aborted, 1)
@@ -164,13 +174,17 @@ class ContestAIGradingHelpersTestCase(CommonDataMixin, TestCase):
         self.newer.status = 'D'
         self.newer.result = 'AC'
         self.newer.save(update_fields=['status', 'result'])
-        self.assertTrue(student_can_trigger_ai(self.student, self.newer))
+        # Student quota is 0 by default — button hidden for students.
+        self.assertFalse(student_can_trigger_ai(self.student, self.newer))
         self.assertFalse(student_can_trigger_ai(self.student, self.older))
+        # Teachers can always trigger in on-demand (realtime) mode.
+        self.assertTrue(student_can_trigger_ai(self.author, self.newer))
 
         self.contest.ai_grading_mode = Contest.AI_GRADING_BATCH
         self.contest.save(update_fields=['ai_grading_mode'])
         self.newer = Submission.objects.select_related('contest_object', 'problem', 'user__user').get(pk=self.newer.pk)
         self.assertFalse(student_can_trigger_ai(self.student, self.newer))
+        self.assertTrue(student_can_trigger_ai(self.author, self.newer))
 
 
 class ContestBatchAIGradeViewTestCase(CommonDataMixin, TestCase):

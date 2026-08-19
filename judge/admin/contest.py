@@ -19,6 +19,7 @@ from reversion.admin import VersionAdmin
 
 from judge.models import Class, Contest, ContestProblem, ContestSubmission, Profile, Rating, Submission
 from judge.ratings import rate_contest
+from judge.utils.user_search import apply_profile_choice_labels, profile_choice_label
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminAceWidget, AdminHeavySelect2MultipleWidget, AdminHeavySelect2Widget, \
     AdminMartorWidget, AdminSelect2MultipleWidget, AdminSelect2Widget, PrivateFileInput
@@ -85,6 +86,7 @@ class ContestProblemInline(SortableInlineAdminMixin, admin.TabularInline):
 class ContestForm(ModelForm):
     def __init__(self, *args, **kwargs):
         super(ContestForm, self).__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         if 'rate_exclude' in self.fields:
             if self.instance and self.instance.id:
                 self.fields['rate_exclude'].queryset = \
@@ -378,7 +380,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                 ),
             },
             'display': {
-                'authors': [{'id': str(profile.id), 'text': profile.user.username}] if profile else [],
+                'authors': [{'id': str(profile.id), 'text': profile_choice_label(profile)}] if profile else [],
             },
         }
 

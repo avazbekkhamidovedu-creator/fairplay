@@ -1,4 +1,4 @@
-from django.db.models import F, Q
+from django.db.models import Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.encoding import smart_str
@@ -7,14 +7,23 @@ from django.views.generic.list import BaseListView
 
 from judge.jinja2.gravatar import gravatar
 from judge.models import Class, Comment, Contest, Organization, Problem, Profile
+from judge.utils.user_search import (
+    format_user_label, profile_choice_label, profile_person_name, profile_user_search_q,
+)
 
 
 def _get_user_queryset(term):
     qs = Profile.objects
     if term.endswith(' '):
-        qs = qs.filter(user__username=term.strip())
+        exact = term.strip()
+        qs = qs.filter(
+            Q(user__username=exact) |
+            Q(username_display_override=exact) |
+            Q(user__first_name=exact) |
+            Q(user__last_name=exact),
+        )
     else:
-        qs = qs.filter(user__username__icontains=term)
+        qs = qs.filter(profile_user_search_q(term))
     return qs
 
 
@@ -42,10 +51,10 @@ class Select2View(BaseListView):
 
 class UserSelect2View(Select2View):
     def get_queryset(self):
-        return _get_user_queryset(self.term).annotate(username=F('user__username')).only('id')
+        return _get_user_queryset(self.term).select_related('user').order_by('user__username')
 
     def get_name(self, obj):
-        return obj.username
+        return profile_choice_label(obj)
 
 
 class OrganizationSelect2View(Select2View):
@@ -154,19 +163,25 @@ class UserSearchSelect2View(BaseListView):
         self.gravatar_size = request.GET.get('gravatar_size', 128)
         self.gravatar_default = request.GET.get('gravatar_default', None)
 
-        self.object_list = self.get_queryset().values_list('pk', 'user__username', 'user__email', 'display_rank',
-                                                           'username_display_override')
+        self.object_list = self.get_queryset().values_list(
+            'pk', 'user__username', 'user__email', 'display_rank',
+            'username_display_override', 'user__first_name', 'user__last_name',
+        )
 
         context = self.get_context_data()
 
         return JsonResponse({
             'results': [
                 {
-                    'text': username_override or username,
+                    'text': format_user_label(
+                        profile_person_name(first_name, last_name, username_override, username),
+                        username,
+                    ),
                     'id': username,
                     'gravatar_url': gravatar(email, self.gravatar_size, self.gravatar_default),
                     'display_rank': display_rank,
-                } for pk, username, email, display_rank, username_override in context['object_list']],
+                } for pk, username, email, display_rank, username_override, first_name, last_name
+                in context['object_list']],
             'more': context['page_obj'].has_next(),
         })
 
@@ -180,17 +195,20 @@ class ContestUserSearchSelect2View(UserSearchSelect2View):
         if not contest.is_accessible_by(self.request.user) or not contest.can_see_full_scoreboard(self.request.user):
             raise Http404()
 
-        return Profile.objects.filter(contest_history__contest=contest,
-                                      user__username__icontains=self.term).distinct()
+        return Profile.objects.filter(contest_history__contest=contest).filter(
+            profile_user_search_q(self.term),
+        ).distinct()
 
 
 class TicketUserSelect2View(UserSearchSelect2View):
     def get_queryset(self):
-        return Profile.objects.filter(tickets__isnull=False,
-                                      user__username__icontains=self.term).distinct()
+        return Profile.objects.filter(tickets__isnull=False).filter(
+            profile_user_search_q(self.term),
+        ).distinct()
 
 
 class AssigneeSelect2View(UserSearchSelect2View):
     def get_queryset(self):
-        return Profile.objects.filter(assigned_tickets__isnull=False,
-                                      user__username__icontains=self.term).distinct()
+        return Profile.objects.filter(assigned_tickets__isnull=False).filter(
+            profile_user_search_q(self.term),
+        ).distinct()

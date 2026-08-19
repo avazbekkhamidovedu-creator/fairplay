@@ -121,12 +121,15 @@
                                 if (data['status'] == 200) {
                                     var wordList = [];
                                     for (var i = 0; i < data['data'].length; i++) {
-                                        wordList.push(data['data'][i].username)
+                                        var row = data['data'][i];
+                                        var uname = row.username;
+                                        var label = row.text || ((row.name || uname) + ' (' + uname + ')');
+                                        wordList.push({ username: uname, label: label });
                                     }
                                     callback(null, wordList.map(function (word) {
                                         return {
-                                            caption: word,
-                                            value: word,
+                                            caption: word.label,
+                                            value: word.username,
                                             meta: 'username' // this should return as text only.
                                         };
                                     }));

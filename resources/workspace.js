@@ -6,7 +6,7 @@
   var $$ = function (selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); };
   var body = $('#ws-body'), drawer = $('#ws-drawer'), backdrop = $('#drawer-backdrop');
   var source = $('#workspace-source'), mount = $('#monaco-editor'), editor = null, runTimer = null;
-  var layoutKey = 'dkuoj-ws-layout', splitKey = 'dkuoj-ws-split-', ideSplitKey = 'dkuoj-ws-ide-split', page = 0, pageSize = 6;
+  var layoutKey = 'dkuoj-ws-layout', splitKey = 'dkuoj-ws-split-', ideSplitKey = 'dkuoj-ws-ide-split', page = 0;
   var ACE_TO_MONACO = {
     c_cpp: 'cpp', cpp: 'cpp', c: 'c', csharp: 'csharp', golang: 'go', go: 'go',
     java: 'java', javascript: 'javascript', python: 'python', rust: 'rust',
@@ -21,6 +21,7 @@
     var overview = $('#btn-overview');
     overview.setAttribute('aria-expanded', String(show));
     overview.classList.toggle('is-active', show);
+    if (show) renderDrawer();
   }
   function layout(mode) { body.classList.toggle('layout-lr', mode === 'lr'); body.classList.toggle('layout-tb', mode === 'tb'); $('#layout-mode').textContent = mode === 'lr' ? gettext('Left-right') : gettext('Top-bottom'); localStorage.setItem(layoutKey, mode); applySplit(); }
   function applySplit() { var mode = body.classList.contains('layout-tb') ? 'tb' : 'lr'; var percent = localStorage.getItem(splitKey + mode) || '50'; body.style.setProperty('--workspace-split', percent + '%'); }
@@ -88,7 +89,8 @@
   }
 
   $('#btn-overview').addEventListener('click', function () { showDrawer(!drawer.classList.contains('open')); });
-  $('#drawer-close').addEventListener('click', function () { showDrawer(false); });
+  var drawerClose = $('#drawer-close');
+  if (drawerClose) drawerClose.addEventListener('click', function () { showDrawer(false); });
   backdrop.addEventListener('click', function () { showDrawer(false); });
   document.addEventListener('keydown', function (event) { if (event.key === 'Escape') showDrawer(false); });
   $('#layout-toggle').addEventListener('click', function () { layout(body.classList.contains('layout-lr') ? 'tb' : 'lr'); });
@@ -127,10 +129,23 @@
   else if (darkQuery.addListener) darkQuery.addListener(syncMonacoTheme);
 
   var items = $$('.drawer-problem');
-  // Practice drawer paginates; assignment lists are short and have no pager UI.
+  // Practice drawer paginates to fill the visible list; assignment lists are short and have no pager UI.
   var useDrawerPaging = !!$('#drawer-page-info');
   function drawerPageSize() {
-    return useDrawerPaging ? pageSize : Math.max(items.length, 1);
+    if (!useDrawerPaging) return Math.max(items.length, 1);
+    var list = $('#drawer-problems');
+    var available = list ? list.clientHeight : 0;
+    if (available < 48) available = Math.max(160, (window.innerHeight || 800) - 280);
+    var row = 0;
+    var sample = items[0];
+    if (sample) {
+      var wasHidden = sample.hidden;
+      sample.hidden = false;
+      row = sample.getBoundingClientRect().height;
+      sample.hidden = wasHidden;
+    }
+    if (!(row > 20)) row = 72;
+    return Math.max(1, Math.floor(available / row));
   }
   function multiValues(id) {
     var el = document.getElementById(id);
@@ -154,10 +169,7 @@
   }
   function matchesCourse(item, courses) {
     if (!courses.length) return true;
-    var wantPublic = courses.indexOf('public') !== -1;
-    var orgIds = courses.filter(function (code) { return code !== 'public'; });
-    if (wantPublic && item.dataset.public === '1') return true;
-    return orgIds.length ? tokenHit(item.dataset.orgs, orgIds) : false;
+    return tokenHit(item.dataset.orgs, courses);
   }
   function matchesFormat(item, formats) {
     if (!formats.length) return true;
@@ -193,12 +205,16 @@
         && ac >= min && ac <= max;
     });
   }
+  var renderingDrawer = false;
   function interpolate(message, values) {
     return Object.keys(values).reduce(function (text, key) {
       return text.split('%(' + key + ')s').join(values[key]);
     }, message);
   }
   function renderDrawer() {
+    if (renderingDrawer) return;
+    renderingDrawer = true;
+    try {
     var visible = visibleItems();
     var size = drawerPageSize();
     var pages = Math.max(1, Math.ceil(visible.length / size));
@@ -214,22 +230,25 @@
         {page: page + 1, pages: pages, count: visible.length},
       );
     }
-    var solvedFrac = $('#drawer-solved-frac');
+    var progressLabel = $('#toolbar-progress-label');
     var solvedCount = visible.filter(function (x) { return x.dataset.status === 'solved'; }).length;
-    if (solvedFrac) solvedFrac.textContent = solvedCount + '/' + visible.length;
-    var bar = $('#drawer-bar');
-    if (bar) bar.style.width = (visible.length ? (solvedCount / visible.length * 100) : 0) + '%';
-    var progress = $('#drawer-progress');
-    if (progress) {
-      progress.textContent = interpolate(gettext('%(solved)s / %(total)s answered'), {
-        solved: items.filter(function (x) { return x.dataset.status !== 'unsolved'; }).length,
-        total: items.length,
-      });
+    var answeredCount = items.filter(function (x) { return x.dataset.status !== 'unsolved'; }).length;
+    var isPractice = !!(app.dataset.mode === 'practice');
+    var done = isPractice ? solvedCount : answeredCount;
+    var total = isPractice ? visible.length : items.length;
+    if (progressLabel) progressLabel.textContent = done + ' / ' + total;
+    var bar = $('#toolbar-progress-bar');
+    if (bar) {
+      bar.max = Math.max(total, 1);
+      bar.value = done;
     }
     var prev = $('#drawer-page-prev');
     var next = $('#drawer-page-next');
     if (prev) prev.disabled = page === 0;
     if (next) next.disabled = page + 1 >= pages;
+    } finally {
+      renderingDrawer = false;
+    }
   }
   ['drawer-q', 'fp-type', 'fp-diff', 'fp-course', 'fp-tags', 'fp-status', 'drawer-filter-status', 'fp-ac-min', 'fp-ac-max'].forEach(function (id) {
     var element = document.getElementById(id);
@@ -261,11 +280,29 @@
   $('#drawer-page-prev') && $('#drawer-page-prev').addEventListener('click', function () { page--; renderDrawer(); });
   $('#drawer-page-next') && $('#drawer-page-next').addEventListener('click', function () { page++; renderDrawer(); });
   renderDrawer();
-  var current = $('.drawer-problem.active'), index = items.indexOf(current);
-  $('#btn-prev').disabled = index <= 0;
-  $('#btn-next').disabled = index < 0 || index === items.length - 1;
-  $('#btn-prev').addEventListener('click', function () { if (index > 0) location.assign(items[index - 1].href); });
-  $('#btn-next').addEventListener('click', function () { if (index + 1 < items.length) location.assign(items[index + 1].href); });
+  window.addEventListener('resize', function () { renderDrawer(); });
+  var drawerList = $('#drawer-problems');
+  if (drawerList && window.ResizeObserver) {
+    new window.ResizeObserver(function () { renderDrawer(); }).observe(drawerList);
+  }
+  var current = $('.drawer-problem.active');
+  var index = items.indexOf(current);
+  var prevBtn = $('#btn-prev');
+  var nextBtn = $('#btn-next');
+  function setProblemNav(button, disabled, enabledTitle, disabledTitle) {
+    if (!button) return;
+    button.disabled = disabled;
+    button.setAttribute('aria-disabled', String(disabled));
+    button.title = disabled ? disabledTitle : enabledTitle;
+    button.style.opacity = disabled ? '0.35' : '';
+    button.style.cursor = disabled ? 'not-allowed' : '';
+  }
+  var atFirst = items.length === 0 || index <= 0;
+  var atLast = items.length === 0 || index < 0 || index >= items.length - 1;
+  setProblemNav(prevBtn, atFirst, gettext('Previous problem'), gettext('Already the first problem'));
+  setProblemNav(nextBtn, atLast, gettext('Next problem'), gettext('Already the last problem'));
+  if (prevBtn) prevBtn.addEventListener('click', function () { if (index > 0) location.assign(items[index - 1].href); });
+  if (nextBtn) nextBtn.addEventListener('click', function () { if (index >= 0 && index + 1 < items.length) location.assign(items[index + 1].href); });
 
   // Duration countdown: server remaining seconds (participation.time_remaining); does not pause on leave.
   var timerExpired = false;

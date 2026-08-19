@@ -1,13 +1,39 @@
 {% extends "base.html" %}
 
+{% block body_class %}problem-import-preview{% endblock %}
+
+{% block title_row %}{% endblock %}
+
+{% block title_ruler %}{% endblock %}
+
 {% block media %}
     <style>
-        .import-preview-layout { display: grid; gap: 1.25em; grid-template-columns: minmax(13rem, 22rem) minmax(0, 1fr); }
-        .import-problem-list { align-self: start; position: sticky; top: 1em; }
+        html, body.problem-import-preview { height: 100%; overflow: hidden; }
+        body.problem-import-preview #page-container {
+            box-sizing: border-box; height: 100dvh; margin: 0; min-height: 0;
+            overflow: hidden; padding-top: var(--nav-height, 52px);
+        }
+        body.problem-import-preview #page-container > br { display: none; }
+        body.problem-import-preview #content {
+            display: flex; flex: 1 1 auto; flex-direction: column; margin: 0;
+            max-width: none; min-height: 0; overflow: hidden; padding: 0; width: 100%;
+        }
+        body.problem-import-preview #content-body {
+            display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 0;
+        }
+        body.problem-import-preview #content-body > .content-body {
+            box-sizing: border-box; display: flex; flex: 1 1 auto; flex-direction: column;
+            min-height: 0; overflow: hidden; padding: 0.75em 1em 1em;
+        }
+        .import-preview-layout { display: grid; flex: 1 1 auto; gap: 1.25em; grid-template-columns: minmax(13rem, 22rem) minmax(0, 1fr); min-height: 0; }
+        .import-problem-list { align-self: stretch; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
         .import-problem-list-header { align-items: center; display: flex; gap: 0.65em; justify-content: space-between; }
         .import-problem-list h2 { margin: 0; }
         .import-problem-list-header .button { flex: 0 0 auto; white-space: nowrap; }
-        .import-problem-nav { display: grid; gap: 0.2em; margin: 0.8em 0; }
+        .import-problem-nav {
+            display: grid; flex: 1 1 auto; gap: 0.2em; margin: 0.8em 0; min-height: 0;
+            overflow-y: auto; padding-right: 0.2em; scrollbar-gutter: stable;
+        }
         .import-problem-nav a {
             align-items: center; border-left: 3px solid transparent; box-sizing: border-box;
             color: var(--oj-text, inherit); display: flex; gap: 0.5em; min-width: 0;
@@ -25,19 +51,25 @@
         .import-problem-type { flex: 0 0 auto; font-size: 0.78em; }
         .import-problem-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .import-problem-entry { min-width: 0; }
-        .import-problem-issues { display: flex; flex-wrap: wrap; gap: 0.3em; margin: 0.3em 0.4em 0.5em; }
-        .import-problem-issues .tag-type { font-size: 0.8em; }
         .import-problem-nav a.has-error { font-weight: 700; }
-        .import-preview-panel { min-width: 0; }
-        .import-editor-frame { border: 0; box-sizing: border-box; display: block; min-height: 78vh; width: 100%; }
+        .import-preview-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+        .import-editor-frame {
+            border: 0; box-sizing: border-box; display: block; flex: 1 1 auto;
+            height: auto; min-height: 0; width: 100%;
+        }
         .import-created-panel { margin: 0; }
         .import-created-panel .tag-type { margin-right: 0.45em; }
         #create-all-problems { background: var(--oj-link, #2980b9); color: var(--oj-btn-text, #fff); }
         .import-preview-status { display: block; margin-top: 0.65em; min-height: 1.2em; }
         @media (max-width: 760px) {
-            .import-preview-layout { grid-template-columns: 1fr; }
-            .import-problem-list { position: static; }
-            .import-editor-frame { min-height: 90vh; }
+            html, body.problem-import-preview { overflow: auto; }
+            body.problem-import-preview #page-container { height: auto; overflow: visible; }
+            body.problem-import-preview #content { display: block; overflow: visible; }
+            body.problem-import-preview #content-body,
+            body.problem-import-preview #content-body > .content-body { display: block; overflow: visible; }
+            .import-preview-layout { display: block; }
+            .import-problem-list { height: auto; max-height: 45vh; margin-bottom: 1em; }
+            .import-editor-frame { height: 75vh; }
         }
     </style>
 {% endblock %}
@@ -52,13 +84,9 @@
 
             function csrfToken() { return $('input[name="csrfmiddlewaretoken"]').first().val() || ''; }
             function navButton(itemId) { return $('.import-problem-nav a[data-item-id="' + itemId + '"]'); }
-            function reviewLabels(item) {
-                var labels = [];
-                if (item.name_needs_review) labels.push('{{ _("Name")|escapejs }}');
-                if (item.type_needs_review) labels.push('{{ _("Question type")|escapejs }}');
-                if (item.data_needs_review) labels.push('{{ _("Test data")|escapejs }}');
-                if (item.config_needs_review) labels.push('{{ _("Configuration")|escapejs }}');
-                return labels;
+            function needsReview(item) {
+                return item.name_needs_review || item.type_needs_review || item.data_needs_review ||
+                    item.config_needs_review || item.formatting_error;
             }
             function stateIcon(needsReview) {
                 if (needsReview) {
@@ -68,23 +96,12 @@
             }
             function updateReviewState(itemId, item) {
                 var button = navButton(itemId);
-                var entry = button.closest('.import-problem-entry');
-                var labels = reviewLabels(item);
-                button.toggleClass('has-error error', labels.length > 0);
+                var hasReviewIssue = needsReview(item);
+                button.toggleClass('has-error error', hasReviewIssue);
                 button.find('.import-problem-state')
-                    .toggleClass('is-ready', !labels.length)
-                    .toggleClass('needs-review', labels.length > 0)
-                    .html(stateIcon(labels.length > 0));
-                entry.find('.import-problem-issues').remove();
-                if (!labels.length) return;
-                var issues = $('<div>', {
-                    'class': 'import-problem-issues',
-                    'aria-label': '{{ _("This problem needs review")|escapejs }}',
-                });
-                labels.forEach(function (label) {
-                    $('<span>', {'class': 'tag-type regular', text: label}).appendTo(issues);
-                });
-                issues.appendTo(entry);
+                    .toggleClass('is-ready', !hasReviewIssue)
+                    .toggleClass('needs-review', hasReviewIssue)
+                    .html(stateIcon(hasReviewIssue));
             }
             function refreshLeftItem(itemId, item) {
                 var button = navButton(itemId);
@@ -225,14 +242,6 @@
                             <span class="tag-type import-problem-type {{ item.preview_type_class }}">{{ item.preview_type_label }}</span>
                             <span class="import-problem-name">{{ item.name }}</span>
                         </a>
-                        {% if item.name_needs_review or item.type_needs_review or item.data_needs_review or item.config_needs_review %}
-                        <div class="import-problem-issues" aria-label="{{ _('This problem needs review') }}">
-                            {% if item.name_needs_review %}<span class="tag-type regular">{{ _('Name') }}</span>{% endif %}
-                            {% if item.type_needs_review %}<span class="tag-type regular">{{ _('Question type') }}</span>{% endif %}
-                            {% if item.data_needs_review %}<span class="tag-type regular">{{ _('Test data') }}</span>{% endif %}
-                            {% if item.config_needs_review %}<span class="tag-type regular">{{ _('Configuration') }}</span>{% endif %}
-                        </div>
-                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
