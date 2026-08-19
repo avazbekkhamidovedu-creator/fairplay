@@ -280,6 +280,8 @@ def _editor_data_for_item(item):
         'points': 10,
         'is_public': True,
         'partial': False,
+        'ai': True,
+        'ai_hints_enabled': True,
         'organizations': [],
         'group_id': '',
         'difficulty': DIFFICULTY_VALUES.get(item.difficulty, item.difficulty) or 'medium',
