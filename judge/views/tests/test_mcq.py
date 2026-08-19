@@ -6,7 +6,10 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from judge.models import Class, Language, Organization, Problem, ProblemMCQConfig, ProblemMCQOption, Submission, SubmissionSource
+from judge.models import (
+    Class, Language, Organization, Problem, ProblemMCQConfig, ProblemMCQOption,
+    Submission, SubmissionSource,
+)
 from judge.models.tests.util import CommonDataMixin, create_problem, create_user
 from judge.submission_grading import grade_internally
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
