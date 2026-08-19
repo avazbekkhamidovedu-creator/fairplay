@@ -28,13 +28,13 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
     def test_rate_limit_after_five_requests(self):
         pid = 42
         uid = self.student.profile.id
-        for _ in range(4):
+        for i in range(5):
             ok, err = try_reserve(uid, pid)
             self.assertTrue(ok, err)
+        self.assertTrue(is_rate_limited(uid, pid))
         ok, err = try_reserve(uid, pid)
         self.assertFalse(ok)
         self.assertTrue(err.startswith('rate_limited'))
-        self.assertTrue(is_rate_limited(uid, pid))
 
     @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=10)
     def test_successful_reserve_decrements_quota(self):

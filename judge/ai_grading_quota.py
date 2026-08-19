@@ -49,8 +49,13 @@ def is_rate_limited(user_id: int, problem_id: int) -> bool:
 
 
 def rate_limit_remaining_seconds(user_id: int, problem_id: int) -> int:
-    key = _cooldown_key(user_id, problem_id)
-    return max(0, int(cache.ttl(key) or 0))
+    until = cache.get(_cooldown_key(user_id, problem_id))
+    if not until:
+        return 0
+    try:
+        return max(0, int(float(until) - time.time()))
+    except (TypeError, ValueError):
+        return _COOLDOWN_SECONDS
 
 
 def get_remaining(user_id: int) -> int:
@@ -85,12 +90,14 @@ def try_reserve(user_id: int, problem_id: int) -> tuple[bool, str | None]:
     timestamps = list(cache.get(_rate_key(user_id, problem_id)) or [])
     now = time.time()
     recent = [t for t in timestamps if now - t < _RATE_WINDOW_SECONDS]
+    if len(recent) >= _RATE_LIMIT_COUNT:
+        cache.set(_cooldown_key(user_id, problem_id), time.time() + _COOLDOWN_SECONDS, _COOLDOWN_SECONDS)
+        refund(user_id)
+        return False, f'rate_limited:{_COOLDOWN_SECONDS}'
     recent.append(now)
     cache.set(_rate_key(user_id, problem_id), recent, _RATE_WINDOW_SECONDS)
     if len(recent) >= _RATE_LIMIT_COUNT:
-        cache.set(_cooldown_key(user_id, problem_id), True, _COOLDOWN_SECONDS)
-        refund(user_id)
-        return False, f'rate_limited:{_COOLDOWN_SECONDS}'
+        cache.set(_cooldown_key(user_id, problem_id), time.time() + _COOLDOWN_SECONDS, _COOLDOWN_SECONDS)
     return True, None
 
 

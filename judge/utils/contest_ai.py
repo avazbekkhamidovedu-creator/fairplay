@@ -272,7 +272,8 @@ def student_can_trigger_ai(user, submission):
         is_owner = submission.user.user_id == user.id
     except Exception:
         is_owner = False
-    if not is_owner and not user.has_perm('judge.rejudge_submission'):
+    teacher = is_teacher_viewer(user, submission)
+    if not is_owner and not teacher:
         return False
     if submission.status != 'D':
         return False
@@ -281,7 +282,6 @@ def student_can_trigger_ai(user, submission):
 
     contest = getattr(submission, 'contest_object', None)
     mode = contest_ai_mode(contest)
-    teacher = is_teacher_viewer(user, submission)
     if contest is not None and mode == 'off':
         return False
     if contest is not None and mode == 'batch' and not teacher:
