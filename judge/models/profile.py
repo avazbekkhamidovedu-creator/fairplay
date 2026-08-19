@@ -570,11 +570,11 @@ class OrganizationRequest(models.Model):
         if not (self.organization.class_required and self.request_class is None):
             return
         # Site teachers may request a course without picking a class.
-        from judge.models.notification import INSTRUCTORS_GROUP
+        from judge.models.notification import user_in_instructors_group
         user = getattr(self.user, 'user', None)
         if user is not None and (
             user.has_perm('judge.add_organization') or
-            user.groups.filter(name=INSTRUCTORS_GROUP).exists()
+            user_in_instructors_group(user)
         ):
             return
         raise ValidationError('Organization requires a class to be specified')

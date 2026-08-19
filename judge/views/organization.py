@@ -25,9 +25,7 @@ from reversion import revisions
 from judge.forms import ClassAssignmentsForm, ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
 from judge.models import AdminNotification, Class, ClassMaterial, Contest, InstructorVerificationRequest, \
     Organization, OrganizationRequest, Profile
-from judge.models.notification import (
-    INSTRUCTORS_GROUP, ensure_instructors_group,
-)
+from judge.models.notification import ensure_instructors_group, user_in_instructors_group
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, notify_instructor_verification,
 )
@@ -159,7 +157,7 @@ def profile_is_site_teacher(profile, user=None):
         return False
     if user.has_perm('judge.add_organization'):
         return True
-    return user.groups.filter(name=INSTRUCTORS_GROUP).exists()
+    return user_in_instructors_group(user)
 
 
 def profile_is_org_member(profile, org):

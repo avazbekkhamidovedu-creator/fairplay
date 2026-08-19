@@ -420,6 +420,27 @@ class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
         self.assertFalse(self.klass.admins.filter(id=self.applicant.profile.id).exists())
         self.assertFalse(self.org.admins.filter(id=self.applicant.profile.id).exists())
 
+    def test_ensure_instructors_group_merges_singular_alias(self):
+        from django.contrib.auth.models import Group, Permission
+        from judge.models.notification import INSTRUCTORS_GROUP, INSTRUCTOR_PERMISSION_CODENAMES, \
+            ensure_instructors_group, user_in_instructors_group
+
+        alias = Group.objects.create(name='Instructor')
+        alias.user_set.add(self.applicant)
+        leftover = Permission.objects.filter(content_type__app_label='judge', codename='add_problem').first()
+        if leftover is not None:
+            alias.permissions.add(leftover)
+
+        group = ensure_instructors_group()
+        self.assertEqual(group.name, INSTRUCTORS_GROUP)
+        self.assertFalse(Group.objects.filter(name='Instructor').exists())
+        self.assertTrue(group.user_set.filter(id=self.applicant.id).exists())
+        self.assertTrue(user_in_instructors_group(self.applicant))
+        attached = set(group.permissions.filter(content_type__app_label='judge')
+                       .values_list('codename', flat=True))
+        self.assertTrue(set(INSTRUCTOR_PERMISSION_CODENAMES).issubset(attached))
+        self.assertNotIn('add_problem', attached)
+
     def test_site_teacher_joining_class_becomes_instructor(self):
         from judge.models.notification import ensure_instructors_group
         from judge.views.organization import (
