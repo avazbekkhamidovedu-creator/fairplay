@@ -428,7 +428,8 @@ class ClassSiteForm(ModelForm):
     member_csv = forms.FileField(
         required=False,
         label=_('Import members CSV'),
-        help_text=_('Optional. CSV with a username column; rows are added to Members on save.'),
+        help_text=_('Optional on create: Canvas roster CSV is imported when you save. '
+                    'On edit, use Import CSV to import immediately.'),
     )
 
     class Meta:

@@ -350,6 +350,7 @@ urlpatterns = [
             path('', organization.ClassHome.as_view(), name='class_home'),
             path('/join', organization.RequestJoinClass.as_view(), name='class_join'),
             path('/edit', organization.EditClass.as_view(), name='class_edit'),
+            path('/import-members', organization.ClassImportMembers.as_view(), name='class_import_members'),
             path('/assignments', organization.ClassLinkAssignmentsView.as_view(),
                  name='class_link_assignments'),
             path('/materials', organization.ClassMaterialActionView.as_view(),

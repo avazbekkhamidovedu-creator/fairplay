@@ -4,9 +4,20 @@
 <div class="course-redesign oj-ui">
     <div class="course-form-wrap course-import">
         <h2>{{ _('Import Users to') }} {{ organization.name }}</h2>
-        <p>
-            {{ _('Upload a CSV file with the following columns:') }} <code>username</code>, <code>first_name</code>, <code>last_name</code>, <code>email</code>, <code>password</code> (optional).
-        </p>
+        <div class="helptext" style="margin:0 0 1rem">
+            <p style="margin:0 0 0.5rem">
+                {{ _('The CSV must include a header row. Required columns (Canvas roster exports work as-is):') }}
+            </p>
+            <ul style="margin:0 0 0.5rem;padding-left:1.25rem">
+                <li><code>NetID</code> {{ _('or') }} <code>username</code> — {{ _('used as the login username') }}</li>
+                <li><code>First name</code> {{ _('or') }} <code>first_name</code></li>
+                <li><code>Last Name</code> {{ _('or') }} <code>last_name</code></li>
+                <li><code>Email</code> {{ _('or') }} <code>email</code> ({{ _('Canvas') }} <code>netid@duke.edu</code> {{ _('is accepted if Email is missing') }})</li>
+            </ul>
+            <p style="margin:0">
+                {{ _('Extra Canvas columns (Display Name, Duke Unique ID, Section(s), …) are ignored. New accounts are pre-registered with username=NetID and no local password — students sign in with Duke NetID SSO. Existing accounts are added to this course/class; optionally refresh their names/emails below.') }}
+            </p>
+        </div>
 
         <form enctype="multipart/form-data" method="post" class="course-form">
             {% csrf_token %}
@@ -39,7 +50,7 @@
                     {{ form.update_existing.label }}
                 </label>
                 <div class="helptext indent">
-                    {{ _('Update names/emails if username already exists. Passwords are never updated.') }}
+                    {{ _('Existing usernames are always added to the course/class. Check this to also refresh names and emails from the CSV. Passwords are never changed.') }}
                 </div>
             </div>
 

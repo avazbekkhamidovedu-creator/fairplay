@@ -60,6 +60,11 @@
             $('#id_member_csv').on('change', function () {
                 var name = (this.files && this.files[0] && this.files[0].name) || '';
                 $('#csv-filename').text(name ? name : {{ _('No file chosen')|htmltojs }});
+                {% if form_mode == 'edit' and class %}
+                if (this.files && this.files[0]) {
+                    $('#class-csv-import-form').trigger('submit');
+                }
+                {% endif %}
             });
 
             {% if form_mode != 'edit' %}
@@ -204,6 +209,7 @@
                         {{ form.members }}
                         {% if form.members.help_text %}<div class="helptext">{{ form.members.help_text }}</div>{% endif %}
                         {{ form.members.errors }}
+                        {% if form_mode != 'edit' %}
                         <div class="members-toolbar">
                             <button type="button" class="button" id="btn-import-csv">
                                 <i class="fa fa-upload"></i> {{ _('Import CSV') }}
@@ -212,6 +218,10 @@
                             <div class="visually-hidden">{{ form.member_csv }}</div>
                             {{ form.member_csv.errors }}
                         </div>
+                        <div class="helptext" style="margin-top:0.45rem">
+                            {{ _('On create, the CSV is imported when you click Save class. Required header: NetID (or username), First name, Last Name, Email.') }}
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </section>
@@ -241,6 +251,33 @@
                 <a class="button" href="{% if class %}{{ class.get_absolute_url() }}{% else %}{{ organization.get_absolute_url() }}{% endif %}">{{ _('Cancel') }}</a>
             </div>
         </form>
+
+        {% if form_mode == 'edit' and class %}
+        <section class="class-form-module" style="margin-top:0.9rem">
+            <h2>{{ _('Import students') }}</h2>
+            <form id="class-csv-import-form" method="post"
+                  action="{{ url('class_import_members', organization.id, organization.slug, class.id, class.slug) }}"
+                  enctype="multipart/form-data" class="course-form">
+                {% csrf_token %}
+                <div class="class-form-grid">
+                    <div class="class-form-field full">
+                        <div class="helptext" style="margin:0 0 0.55rem">
+                            {{ _('Choose a Canvas roster CSV to import into this class immediately. Required header columns: NetID (or username), First name, Last Name, Email. Existing accounts are added to the class; new accounts are pre-registered with username=NetID and no local password (students sign in with Duke NetID SSO).') }}
+                        </div>
+                        <div class="members-toolbar">
+                            <button type="button" class="button" id="btn-import-csv">
+                                <i class="fa fa-upload"></i> {{ _('Import CSV') }}
+                            </button>
+                            <span id="csv-filename" class="helptext">{{ _('No file chosen') }}</span>
+                            <div class="visually-hidden">
+                                <input type="file" name="member_csv" id="id_member_csv" accept=".csv,text/csv">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </section>
+        {% endif %}
     </div>
 </div>
 {% include "organization/instructor-verification-modal.html" %}
