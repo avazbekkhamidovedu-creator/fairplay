@@ -12,8 +12,7 @@ import judge.storage
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('judge', '0201_instructor_create_assignment'),
-        ('judge', '0202_contest_allow_ai_hints'),
+        ('judge', '0203_merge_instructor_create_assignment_and_contest_allow_ai_hints'),
     ]
 
     operations = [
