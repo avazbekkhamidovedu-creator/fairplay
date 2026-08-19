@@ -35,14 +35,15 @@ WORKDIR /app
 
 # Build/runtime libs: mysqlclient (libmysqlclient), lxml (libxml2/xslt),
 # git for the git+https requirements, curl for healthchecks,
-# gettext (msgfmt) for `manage.py compilemessages` in the entrypoint.
+# gettext (msgfmt) for `manage.py compilemessages` in the entrypoint,
+# mariadb-client for consistent production database dumps.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config git curl gettext \
-        default-libmysqlclient-dev libxml2-dev libxslt1-dev \
+        default-libmysqlclient-dev mariadb-client libxml2-dev libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install -r requirements.txt "gunicorn[gevent]" mysqlclient
+RUN pip install -r requirements.txt "gunicorn[gevent]" mysqlclient "awscli<2"
 
 COPY . .
 # Bring in the compiled CSS from the styles stage.
