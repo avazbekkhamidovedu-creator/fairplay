@@ -296,7 +296,9 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         (_('Scheduling'), {'fields': ('start_time', 'end_time', 'time_limit')}),
         (_('Details'), {'fields': ('description', 'og_image', 'logo_override_image', 'tags', 'summary')}),
         (_('Format'), {'fields': ('format_name', 'format_config', 'problem_label_script')}),
-        (_('Auto grading'), {'fields': ('allow_ai_hints', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes')}),
+        (_('Auto grading'), {'fields': (
+            'allow_ai_hints', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes',
+        )}),
         (_('Rating'), {'fields': ('is_rated', 'rate_all', 'rating_floor', 'rating_ceiling',
                                   'performance_ceiling_override', 'rate_exclude')}),
         (_('Access'), {'fields': ('access_code', 'private_contestants', 'organizations', 'classes',
