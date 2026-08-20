@@ -322,12 +322,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         return request.POST.get('embedded_advanced_mode') in ('1', 'on', 'true', 'True')
 
     def generate_contest_key(self):
-        max_key = 1000000
-        for i in range(max_key):
-            key = 'c{:06d}'.format(i)
-            if not Contest.objects.filter(key=key).exists():
-                return key
-        return 'contest{}'.format(str(timezone.now().timestamp()).replace('.', '')[-6:])
+        return Contest.generate_unique_key()
 
     def get_simple_preset_defaults(self, request):
         profile = getattr(request.user, 'profile', None)

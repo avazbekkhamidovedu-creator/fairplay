@@ -286,6 +286,15 @@ class Contest(models.Model):
                     'Anything filled in above overrides the preset for this contest.'),
     )
 
+    @classmethod
+    def generate_unique_key(cls):
+        """Next unused assignment/contest id in the clone/admin series ``c000000``."""
+        for i in range(1000000):
+            key = 'c{:06d}'.format(i)
+            if not cls.objects.filter(key=key).exists():
+                return key
+        return 'contest{}'.format(str(timezone.now().timestamp()).replace('.', '')[-6:])
+
     @cached_property
     def format_class(self):
         return contest_format.formats[self.format_name]

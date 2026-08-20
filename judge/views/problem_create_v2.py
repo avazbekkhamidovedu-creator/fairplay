@@ -364,6 +364,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'id': problem.id,
             'code': problem.code,
             'name': problem.name,
+            'format': problem.format_filter_code,
             'redirect': redirect,
         })
 
