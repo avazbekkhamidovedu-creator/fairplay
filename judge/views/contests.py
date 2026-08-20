@@ -1304,7 +1304,7 @@ class ContestCreate(LoginRequiredMixin, View):
                     'format': cp.problem.format_filter_code,
                 }
                 for idx, cp in enumerate(
-                    contest.contest_problems.select_related('problem', 'problem__mcq_config').order_by('order')
+                    contest.contest_problems.select_related('problem', 'problem__mcq_config').order_by('order'),
                 )
             ]
             # Target score (pure UX, not a model field): backfill from the sum
