@@ -314,4 +314,3 @@ class InContestSubmissionListOwnOnlyTest(CommonDataMixin, TestCase):
         content = self.client.get(reverse('all_submissions')).content
         self.assertIn(('id="%d"' % self.own_sub.id).encode(), content)
         self.assertNotIn(('id="%d"' % self.classmate_sub.id).encode(), content)
-

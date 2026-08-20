@@ -673,4 +673,3 @@ class StudentVisibleScoreTestCase(GradeTestBase):
         status = self._status_as(self.student, self.submission)
         self.assertContains(status, '12.5/25')
         self.assertNotContains(status, '20/25')
-
