@@ -184,7 +184,7 @@ def persist_code_ai_rows(submission, rows):
     return len(rows)
 
 
-def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False):
+def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False, rejudge_user=None):
     """Grade one submission with AI (code rubric or internal LLM types).
 
     Returns a short status string. Skips (and does not error) when this is no
@@ -215,7 +215,7 @@ def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False)
         _notify_status(submission)
         return 'code-ai'
     submission._ai_batch_pass = True
-    submission.judge(rejudge=True, force_judge=True)
+    submission.judge(rejudge=True, force_judge=True, rejudge_user=rejudge_user)
     return 'internal-ai'
 
 

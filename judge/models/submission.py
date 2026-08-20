@@ -173,6 +173,11 @@ class Submission(models.Model):
                 judge_submission(self, *args, rejudge=rejudge, **kwargs)
             elif not grader.is_manual:
                 from judge.submission_grading import grade_internally
+                # Bridge path sets rejudged_date in judge_submission; mirror that
+                # for internal graders (MCQ / short-answer / AI fill-blank) so
+                # Grade-page status polling can tell a rejudge finished.
+                if rejudge:
+                    self.rejudged_date = timezone.now()
                 grade_internally(self)
 
     judge.alters_data = True

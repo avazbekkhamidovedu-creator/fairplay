@@ -53,7 +53,7 @@ def rejudge_submission(request):
     st = submission.problem.submission_type
     if (st in (ProblemSubmissionType.SHORT_ANSWER, ProblemSubmissionType.FILL_BLANK) and
             problem_has_ai_grading(submission.problem)):
-        run_ai_for_submission(submission, manual_trigger=True)
+        run_ai_for_submission(submission, manual_trigger=True, rejudge_user=request.user)
     else:
         submission.judge(rejudge=True, rejudge_user=request.user)
 
