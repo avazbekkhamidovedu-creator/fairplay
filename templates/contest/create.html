@@ -494,14 +494,11 @@
         .cp-list.is-exam .cp-options .cp-opt.cp-results {
             display: inline-flex;
         }
-        /* Grey out options that do not apply to this problem type. Values stay
-           in the DOM (and still round-trip) so switching types is not required.
-           Partial credit stays available for every problem type. */
-        .cp-opt.is-na,
+        /* Pretest only / Out prefix apply only to programming problems.
+           Hide them for every other type instead of greying them out. */
         .cp-row:not([data-format="C"]) .cp-opt-pretested,
         .cp-row:not([data-format="C"]) .cp-opt-out-prefix {
-            opacity: 0.45;
-            pointer-events: none;
+            display: none;
         }
         .cp-options select,
         .cp-options input[type=number] {
@@ -1783,32 +1780,20 @@
             window.syncExamResultsVisibility = function () {
                 var list = document.getElementById('cp-list');
                 if (list) list.classList.toggle('is-exam', isExamFormat());
-                document.querySelectorAll('.cp-list .cp-row[data-pid]').forEach(applyCpOptionLocks);
             };
-            var NA_TITLE = {{ _('Does not apply to this problem type.')|htmltojs }};
-            function applyCpOptionLocks(row) {
-                if (!row) return;
-                var fmt = (row.dataset.format || '').toLowerCase();
-                var isCode = fmt === 'c';
-                function lock(sel, on) {
-                    var el = row.querySelector(sel);
-                    if (!el) return;
-                    el.classList.toggle('is-na', on);
-                    if (on) el.setAttribute('title', NA_TITLE);
-                    else if (el.getAttribute('title') === NA_TITLE) el.removeAttribute('title');
-                    Array.prototype.forEach.call(el.querySelectorAll('input, select'), function (inp) {
-                        inp.disabled = on;
-                    });
-                }
-                lock('.cp-opt-pretested', !isCode);
-                lock('.cp-opt-out-prefix', !isCode);
-            }
             var formatSel = document.getElementById('id_format_name');
             if (formatSel) formatSel.addEventListener('change', window.syncExamResultsVisibility);
             window.syncExamResultsVisibility();
             function libRowHtml(row, letter) {
                 var code = row.dataset.code || '';
+                var isCode = (row.dataset.format || '').toLowerCase() === 'c';
                 var solveUrl = code ? '/problem/' + encodeURIComponent(code) : '#';
+                var codeOpts = isCode
+                    ? ('<label class="cp-opt cp-opt-pretested"><input type="checkbox" class="cp-pretested"> ' + {{ _('Pretest only')|htmltojs }} + '</label>')
+                    : '';
+                var outOpts = isCode
+                    ? ('<label class="cp-opt cp-opt-out-prefix" title="' + {{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.')|htmltojs }} + '">' + {{ _('Out prefix')|htmltojs }} + ' <input type="number" class="cp-out-prefix" min="0" placeholder="0" value="10000" style="width:56px"></label>')
+                    : '';
                 return '<span class="cp-drag" title="' + {{ _('Drag to reorder')|htmltojs }} + '">⠿</span>' +
                     '<span class="label-letter">' + letter + '</span>' +
                     '<span class="pname">' + escapeHtml(row.dataset.name || 'Problem ' + row.dataset.pid) + '</span>' +
@@ -1821,10 +1806,10 @@
                     '</span>' +
                     '<div class="cp-options">' +
                     '<label class="cp-opt cp-opt-partial"><input type="checkbox" class="cp-partial" checked> ' + {{ _('Partial credit')|htmltojs }} + '</label>' +
-                    '<label class="cp-opt cp-opt-pretested"><input type="checkbox" class="cp-pretested"> ' + {{ _('Pretest only')|htmltojs }} + '</label>' +
+                    codeOpts +
                     '<label class="cp-opt cp-results" data-exam-only="hide_results" title="' + {{ _('What results students can see after judging.')|htmltojs }} + '">' + {{ _('Results')|htmltojs }} +
                     ' <select class="cp-results"><option value="">' + {{ _('Default')|htmltojs }} + '</option><option value="hide">' + {{ _('Hide')|htmltojs }} + '</option><option value="show">' + {{ _('Show')|htmltojs }} + '</option></select></label>' +
-                    '<label class="cp-opt cp-opt-out-prefix" title="' + {{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.')|htmltojs }} + '">' + {{ _('Out prefix')|htmltojs }} + ' <input type="number" class="cp-out-prefix" min="0" placeholder="0" value="10000" style="width:56px"></label>' +
+                    outOpts +
                     '</div>' +
                     '<div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>';
             }
@@ -1845,6 +1830,7 @@
                 fake.dataset.pid = pid;
                 fake.dataset.code = meta.code || '';
                 fake.dataset.name = meta.name || ('Problem ' + pid);
+                fake.dataset.format = meta.format || '';
                 var r = document.createElement('div');
                 r.className = 'cp-row';
                 r.dataset.pid = pid;
@@ -1853,7 +1839,6 @@
                 r.setAttribute('draggable', 'true');
                 r.innerHTML = libRowHtml(fake, '?');
                 cpList.appendChild(r);
-                applyCpOptionLocks(r);
                 if (typeof window.updateProblemIds === 'function') window.updateProblemIds();
                 if (typeof window.syncExamResultsVisibility === 'function') window.syncExamResultsVisibility();
                 return true;
@@ -2215,7 +2200,6 @@
                         r.dataset.format = row.dataset.format || '';
                         r.setAttribute('draggable', 'true');
                         r.innerHTML = libRowHtml(row, '?');
-                        applyCpOptionLocks(r);
                         if (insertAfter) {
                             cpList.insertBefore(r, insertAfter.nextSibling);
                             insertAfter = r; // chain subsequent rows after this one
@@ -2894,10 +2878,11 @@
                                     {# Per-problem options (admin parity): partial credit, pretest-only,
                                        max submissions, result visibility and output prefix. #}
                                     {% set fmt = p.format or '' %}
-                                    {% set lock_code = fmt != 'C' %}
                                     <div class="cp-options">
                                         <label class="cp-opt cp-opt-partial"><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}> {{ _('Partial credit') }}</label>
-                                        <label class="cp-opt cp-opt-pretested{% if lock_code %} is-na{% endif %}"{% if lock_code %} title="{{ _('Does not apply to this problem type.') }}"{% endif %}><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}{% if lock_code %} disabled{% endif %}> {{ _('Pretest only') }}</label>
+                                        {% if fmt == 'C' %}
+                                        <label class="cp-opt cp-opt-pretested"><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}> {{ _('Pretest only') }}</label>
+                                        {% endif %}
                                         {# exam-only: ContestProblem.hide_results is honored only when format=exam. Hidden (not reset) on other formats so edit can switch back without losing the three-state. #}
                                         <label class="cp-opt cp-results" data-exam-only="hide_results" title="{{ _('What results students can see after judging.') }}">{{ _('Results') }}
                                             <select class="cp-results">
@@ -2906,7 +2891,9 @@
                                                 <option value="show"{% if p.hide_results is sameas(false) %} selected{% endif %}>{{ _('Show') }}</option>
                                             </select>
                                         </label>
-                                        <label class="cp-opt cp-opt-out-prefix{% if lock_code %} is-na{% endif %}" title="{% if lock_code %}{{ _('Does not apply to this problem type.') }}{% else %}{{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.') }}{% endif %}">{{ _('Out prefix') }} <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px" value="{{ p.output_prefix if p.output_prefix != '' and p.output_prefix is not none else 10000 }}"{% if lock_code %} disabled{% endif %}></label>
+                                        {% if fmt == 'C' %}
+                                        <label class="cp-opt cp-opt-out-prefix" title="{{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.') }}">{{ _('Out prefix') }} <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px" value="{{ p.output_prefix if p.output_prefix != '' and p.output_prefix is not none else 10000 }}"></label>
+                                        {% endif %}
                                     </div>
                                     <div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>
                                 </div>

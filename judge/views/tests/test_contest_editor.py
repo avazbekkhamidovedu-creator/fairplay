@@ -724,7 +724,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertNotEqual(contest.key, 'homeworknamecopy')
         self.assertRegex(contest.key, r'^c\d{6}$')
 
-    def test_per_problem_options_greyed_by_type(self):
+    def test_per_problem_code_options_hidden_for_other_types(self):
         from judge.models.question import ProblemMCQConfig
         code = create_problem('lock-code', is_public=True, submission_type='C')
         single = create_problem('lock-single', is_public=True, submission_type='M')
@@ -738,13 +738,13 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         filep = create_problem('lock-file', is_public=True, submission_type='F')
 
         lib = self.client.get(reverse('contest_create')).content.decode()
-        self.assertIn('applyCpOptionLocks', lib)
+        self.assertNotIn('applyCpOptionLocks', lib)
         self.assertIn('data-format="single"', lib)
         self.assertIn('data-format="truefalse"', lib)
         self.assertIn('data-format="multiple"', lib)
         self.assertIn('cp-opt-partial', lib)
-        self.assertIn('.cp-opt-pretested', lib)
-        self.assertNotIn(':not([data-format="multiple"]) .cp-opt-partial', lib)
+        self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-pretested', lib)
+        self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-out-prefix', lib)
 
         response = self._post(
             name='Option locks', key='optlocks',
@@ -771,21 +771,23 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
                 nxt = html.find('id="cp-empty"', start)
             return html[open_div:nxt]
 
-        def assert_locked(row, partial, code_opts):
-            partial_chunk = row.split('cp-opt-partial', 1)[1].split('</label>', 1)[0]
-            pretest_chunk = row.split('cp-opt-pretested', 1)[1].split('</label>', 1)[0]
-            out_chunk = row.split('cp-opt-out-prefix', 1)[1].split('</label>', 1)[0]
-            self.assertEqual(' disabled' in partial_chunk, partial)
-            self.assertEqual(' disabled' in pretest_chunk, code_opts)
-            self.assertEqual(' disabled' in out_chunk, code_opts)
+        def assert_code_opts(row, is_code):
+            self.assertIn('cp-opt-partial', row)
+            self.assertNotIn(' disabled', row.split('cp-opt-partial', 1)[1].split('</label>', 1)[0])
+            if is_code:
+                self.assertIn('cp-opt-pretested', row)
+                self.assertIn('cp-opt-out-prefix', row)
+            else:
+                self.assertNotIn('cp-opt-pretested', row)
+                self.assertNotIn('cp-opt-out-prefix', row)
 
-        assert_locked(row_for(code), False, False)
-        assert_locked(row_for(single), False, True)
-        assert_locked(row_for(truefalse), False, True)
-        assert_locked(row_for(multi), False, True)
-        assert_locked(row_for(blank), False, True)
-        assert_locked(row_for(short), False, True)
-        assert_locked(row_for(filep), False, True)
+        assert_code_opts(row_for(code), True)
+        assert_code_opts(row_for(single), False)
+        assert_code_opts(row_for(truefalse), False)
+        assert_code_opts(row_for(multi), False)
+        assert_code_opts(row_for(blank), False)
+        assert_code_opts(row_for(short), False)
+        assert_code_opts(row_for(filep), False)
 
     def test_format_and_virtual_live_in_basic(self):
         html = self.client.get(reverse('contest_create')).content.decode()
