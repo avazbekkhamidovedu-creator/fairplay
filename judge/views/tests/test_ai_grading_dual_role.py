@@ -92,24 +92,28 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
             return problems
 
         specs = [
-            ('hw1', 'Homework 1 Algorithms', Contest.AI_GRADING_REALTIME, 'default',
+            ('hw1', 'Homework 1 Algorithms', True, 'default',
              ['codeai', 'mcq', 'file']),
-            ('hw2', 'Homework 2 Written', Contest.AI_GRADING_REALTIME, 'default',
+            ('hw2', 'Homework 2 Written', True, 'default',
              ['sa', 'fbex', 'codeno']),
-            ('ex1', 'Exam 1 Midterm', Contest.AI_GRADING_BATCH, 'exam',
+            ('ex1', 'Exam 1 Midterm', False, 'exam',
              ['codeai', 'mcq', 'fbai']),
-            ('ex2', 'Exam 2 Final', Contest.AI_GRADING_BATCH, 'exam',
+            ('ex2', 'Exam 2 Final', False, 'exam',
              ['sa', 'codeno', 'file']),
-            ('off1', 'Practice Off A', Contest.AI_GRADING_OFF, 'default',
+            ('off1', 'Practice Off A', False, 'default',
              ['codeai', 'mcq']),
-            ('off2', 'Practice Off B', Contest.AI_GRADING_OFF, 'default',
+            ('off2', 'Practice Off B', False, 'default',
              ['sa', 'fbai']),
         ]
         cls.contests = {}
-        for key, name, mode, fmt, kinds in specs:
+        for key, name, allow_student, fmt, kinds in specs:
             contest = create_contest(
                 key=key, name=name, authors=('aie2e_teacher',),
-                ai_grading_mode=mode, format_name=fmt, is_visible=True,
+                allow_student_ai_grading=allow_student,
+                ai_grading_mode=(
+                    Contest.AI_GRADING_REALTIME if allow_student else Contest.AI_GRADING_OFF
+                ),
+                format_name=fmt, is_visible=True,
                 start_time=now - timezone.timedelta(hours=1),
                 end_time=now + timezone.timedelta(hours=3),
             )
@@ -122,7 +126,8 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
             part = create_contest_participation(contest=contest, user=cls.student.profile)
             create_contest_participation(contest=contest, user=cls.other.profile)
             cls.contests[key] = {
-                'contest': contest, 'mode': mode, 'problems': cps, 'part': part, 'format': fmt,
+                'contest': contest, 'allow_student': allow_student, 'problems': cps,
+                'part': part, 'format': fmt,
             }
 
     def setUp(self):
@@ -190,14 +195,18 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
                 if problem_has_ai_grading(problem):
                     self.assertTrue(should_run_ai_now(sub, batch_pass=True))
 
-    def test_off_never_runs_ai(self):
+    def test_off_never_auto_runs_ai_teachers_can_trigger(self):
         for key in ('off1', 'off2'):
             for kind, problem, _cp in self.contests[key]['problems']:
                 sub = _done_sub(self.student, problem, self.contests[key]['contest'], 'x')
                 self.assertFalse(should_run_ai_now(sub))
                 self.assertFalse(student_can_trigger_ai(self.student, sub))
-                self.assertFalse(student_can_trigger_ai(self.teacher, sub))
+                if problem_has_ai_grading(problem):
+                    self.assertTrue(student_can_trigger_ai(self.teacher, sub))
+                else:
+                    self.assertFalse(student_can_trigger_ai(self.teacher, sub))
 
+    @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=0)
     def test_student_quota_zero_hides_button_teacher_sees_it_on_homework_ai(self):
         for key in ('hw1', 'hw2'):
             for kind, problem, sub in self._subs_for(key):
@@ -229,13 +238,22 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
                 else:
                     self.assertNotContains(teacher_page, 'View AI grading')
 
-    def test_off_neither_role_sees_button(self):
+    def test_off_student_hidden_teacher_can_force_ai(self):
+        """AI grading Off: students never see the button; teachers still can
+        force a pass so they can verify LLM scores (same as grade-desk Rejudge)."""
         for key in ('off1', 'off2'):
             for kind, problem, sub in self._subs_for(key):
-                for client in (self.student_client, self.teacher_client):
-                    page = self._status(client, sub)
-                    self.assertEqual(page.status_code, 200)
-                    self.assertNotContains(page, 'View AI grading')
+                student_page = self._status(self.student_client, sub)
+                self.assertEqual(student_page.status_code, 200)
+                self.assertNotContains(student_page, 'View AI grading')
+                teacher_page = self._status(self.teacher_client, sub)
+                self.assertEqual(teacher_page.status_code, 200)
+                if problem_has_ai_grading(problem):
+                    self.assertTrue(student_can_trigger_ai(self.teacher, sub), msg='%s %s' % (key, kind))
+                    self.assertContains(teacher_page, 'View AI grading')
+                else:
+                    self.assertFalse(student_can_trigger_ai(self.teacher, sub), msg='%s %s' % (key, kind))
+                    self.assertNotContains(teacher_page, 'View AI grading')
 
     def test_other_student_cannot_view_or_trigger(self):
         _, _, sub = self._subs_for('hw1')[0]
@@ -331,52 +349,58 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
                 self.assertEqual(resp.status_code, 200, 'attempt %s %s' % (i, resp.content))
             resp = self._ai_post(self.student_client, sa)
             self.assertEqual(resp.status_code, 429)
+            self.assertIn('try again later', resp.json()['error'].lower())
+            # Button stays available; limit is soft (no ban).
             page = self._status(self.student_client, sa)
-            self.assertNotContains(page, 'View AI grading')
+            self.assertContains(page, 'View AI grading')
             # A different AI problem is still allowed (limit is per problem).
             code_ai = [row for row in self._subs_for('hw1') if row[0] == 'codeai'][0][2]
             resp = self._ai_post(self.student_client, code_ai)
             self.assertEqual(resp.status_code, 200, resp.content)
 
     def test_contest_pages_explain_mode_to_both_roles(self):
-        for key, needle in (
-            ('hw1', 'on demand'),
-            ('hw2', 'on demand'),
-            ('ex1', 'after the assignment ends'),
-            ('ex2', 'after the assignment ends'),
-        ):
+        for key in ('hw1', 'hw2'):
             url = reverse('contest_view', args=[key])
             for client in (self.student_client, self.teacher_client):
                 html = client.get(url).content.decode().lower()
-                self.assertIn(needle, html, msg='%s' % key)
+                self.assertIn('on demand', html, msg='%s' % key)
+        for key in ('ex1', 'ex2', 'off1', 'off2'):
+            url = reverse('contest_view', args=[key])
+            for client in (self.student_client, self.teacher_client):
+                html = client.get(url).content.decode().lower()
+                self.assertNotIn('on demand', html, msg='%s' % key)
 
     def test_grade_page_batch_button_teacher_only(self):
-        for key, expect_btn in (('hw1', False), ('ex1', True), ('ex2', True), ('off1', False)):
+        # Button shows whenever the contest has AI-enabled problems.
+        for key, expect_btn in (
+            ('hw1', True), ('hw2', True), ('ex1', True), ('ex2', True),
+            ('off1', True), ('off2', True),
+        ):
             url = reverse('contest_grade', args=[key])
             teacher = self.teacher_client.get(url)
             self.assertEqual(teacher.status_code, 200, key)
             if expect_btn:
                 self.assertTrue(teacher.context['grade_ai_batch'])
-                self.assertIn('Run AI grading', teacher.content.decode())
+                self.assertIn('Batch grading', teacher.content.decode())
             else:
                 self.assertFalse(teacher.context['grade_ai_batch'])
             student = self.student_client.get(url)
             self.assertIn(student.status_code, (302, 403, 404))
 
-    def test_batch_endpoint_student_forbidden_homework_rejected_exam_ok(self):
+    def test_batch_endpoint_student_forbidden_teachers_ok(self):
         student = self.student_client.post(reverse('contest_grade_ai', args=['ex1']))
         self.assertEqual(student.status_code, 403)
-        teacher_hw = self.teacher_client.post(reverse('contest_grade_ai', args=['hw1']))
-        self.assertEqual(teacher_hw.status_code, 400)
-        teacher_off = self.teacher_client.post(reverse('contest_grade_ai', args=['off1']))
-        self.assertEqual(teacher_off.status_code, 400)
         with mock.patch('judge.tasks.contest.batch_ai_grade.delay'):
             with self.captureOnCommitCallbacks(execute=True):
+                teacher_hw = self.teacher_client.post(reverse('contest_grade_ai', args=['hw1']))
+                teacher_off = self.teacher_client.post(reverse('contest_grade_ai', args=['off1']))
                 teacher_ex = self.teacher_client.post(reverse('contest_grade_ai', args=['ex1']))
+        self.assertEqual(teacher_hw.status_code, 200, teacher_hw.content)
+        self.assertEqual(teacher_off.status_code, 200, teacher_off.content)
         self.assertEqual(teacher_ex.status_code, 200, teacher_ex.content)
         self.assertTrue(teacher_ex.json()['ok'])
 
-    def test_create_form_shows_on_demand_label(self):
+    def test_create_form_shows_student_ai_checkbox(self):
         editor = create_user(
             username='aie2e_editor',
             user_permissions=(
@@ -386,8 +410,10 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         client = Client()
         client.force_login(editor)
         html = client.get(reverse('contest_create')).content.decode()
-        self.assertIn('id_ai_grading_mode', html)
-        self.assertIn('On demand', html)
+        self.assertIn('id_allow_student_ai_grading', html)
+        self.assertIn('Allow Student Use AI Grading', html)
+        self.assertIn('Allow Student Use AI Hint', html)
+        self.assertNotIn('id_ai_grading_mode', html)
 
     def test_http_submit_short_answer_homework_does_not_queue_ai(self):
         info = self.contests['hw2']
@@ -438,7 +464,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertNotContains(self._status(self.student_client, sub), 'View AI grading')
         self.assertNotContains(self._status(self.teacher_client, sub), 'View AI grading')
 
-    def test_http_submit_exam_fill_blank_ai_marks_batch_pending(self):
+    def test_http_submit_exam_fill_blank_ai_awaits_teacher(self):
         info = self.contests['ex1']
         fb = [p for kind, p, _cp in info['problems'] if kind == 'fbai'][0]
         self.student.profile.current_contest = info['part']
@@ -449,15 +475,17 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(resp.status_code, 302, resp.content)
         sub = Submission.objects.filter(user=self.student.profile, problem=fb).latest('id')
-        self.assertEqual(sub.error, 'AI_BATCH_PENDING')
+        self.assertEqual(sub.status, 'D')
+        self.assertEqual(sub.result, 'IR')
+        self.assertNotEqual(sub.error, 'AI_BATCH_PENDING')
         student_page = self._status(self.student_client, sub)
         self.assertContains(student_page, 'Results hidden')
         self.assertNotContains(student_page, 'View AI grading')
         teacher_page = self._status(self.teacher_client, sub)
-        self.assertContains(teacher_page, 'Awaiting AI grading')
+        self.assertContains(teacher_page, 'Answer saved')
         self.assertContains(teacher_page, 'View AI grading')
 
-    def test_http_submit_exam_short_answer_marks_batch_pending(self):
+    def test_http_submit_exam_short_answer_awaits_teacher(self):
         info = self.contests['ex2']
         sa = [p for kind, p, _cp in info['problems'] if kind == 'sa'][0]
         self.student.profile.current_contest = info['part']
@@ -468,15 +496,17 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(resp.status_code, 302, resp.content)
         sub = Submission.objects.filter(user=self.student.profile, problem=sa).latest('id')
-        self.assertEqual(sub.error, 'AI_BATCH_PENDING')
+        self.assertEqual(sub.status, 'D')
+        self.assertEqual(sub.result, 'IR')
+        self.assertNotEqual(sub.error, 'AI_BATCH_PENDING')
         page = self._status(self.student_client, sub)
         self.assertContains(page, 'Results hidden')
         self.assertNotContains(page, 'View AI grading')
         teacher_page = self._status(self.teacher_client, sub)
-        self.assertContains(teacher_page, 'Awaiting AI grading')
+        self.assertContains(teacher_page, 'Answer saved')
         self.assertContains(teacher_page, 'View AI grading')
 
-    def test_http_submit_off_short_answer_finishes_without_ai_button(self):
+    def test_http_submit_off_short_answer_finishes_without_student_ai_button(self):
         info = self.contests['off2']
         sa = [p for kind, p, _cp in info['problems'] if kind == 'sa'][0]
         self.student.profile.current_contest = info['part']
@@ -490,7 +520,8 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertEqual(sub.status, 'D')
         self.assertNotEqual(sub.error, 'AI_BATCH_PENDING')
         self.assertNotContains(self._status(self.student_client, sub), 'View AI grading')
-        self.assertNotContains(self._status(self.teacher_client, sub), 'View AI grading')
+        # Teachers can still force AI even when students are not allowed.
+        self.assertContains(self._status(self.teacher_client, sub), 'View AI grading')
 
     @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=10)
     def test_practice_short_answer_defers_to_ai_button(self):

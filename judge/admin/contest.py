@@ -115,6 +115,12 @@ class ContestForm(ModelForm):
                 _('You must select organizations before selecting classes.'),
             )
 
+        if 'allow_student_ai_grading' in cleaned_data:
+            cleaned_data['ai_grading_mode'] = (
+                Contest.AI_GRADING_REALTIME if cleaned_data.get('allow_student_ai_grading')
+                else Contest.AI_GRADING_OFF
+            )
+
         return cleaned_data
 
     class Meta:
@@ -165,7 +171,7 @@ class SimpleContestCreationForm(ContestForm):
             'is_rated', 'rate_all', 'rating_floor', 'rating_ceiling', 'performance_ceiling_override',
             'rate_exclude', 'access_code', 'private_contestants', 'organizations', 'classes',
             'join_organizations', 'view_contest_scoreboard', 'view_contest_submissions', 'banned_users',
-            'ai_grading_mode', 'ai_grading_auto_delay_minutes',
+            'allow_student_ai_grading', 'ai_grading_mode', 'ai_grading_auto_delay_minutes',
         )
 
     def __init__(self, *args, **kwargs):
@@ -178,7 +184,7 @@ class SimpleContestCreationForm(ContestForm):
             'summary', 'format_name', 'format_config', 'problem_label_script', 'is_rated', 'rate_all',
             'rating_floor', 'rating_ceiling', 'performance_ceiling_override', 'rate_exclude', 'access_code',
             'private_contestants', 'organizations', 'classes', 'join_organizations', 'view_contest_scoreboard',
-            'view_contest_submissions', 'banned_users', 'ai_grading_mode', 'ai_grading_auto_delay_minutes',
+            'view_contest_submissions', 'banned_users', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes',
         ):
             self.fields[field_name].required = False
         self.fields['creation_preset'].choices = (
@@ -188,12 +194,15 @@ class SimpleContestCreationForm(ContestForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        if not cleaned_data.get('ai_grading_mode'):
-            cleaned_data['ai_grading_mode'] = Contest.AI_GRADING_OFF
         if cleaned_data.get('ai_grading_auto_delay_minutes') in (None, ''):
             cleaned_data['ai_grading_auto_delay_minutes'] = (
                 Contest._meta.get_field('ai_grading_auto_delay_minutes').default
             )
+        # Keep legacy mode in sync with the student checkbox.
+        if cleaned_data.get('allow_student_ai_grading'):
+            cleaned_data['ai_grading_mode'] = Contest.AI_GRADING_REALTIME
+        else:
+            cleaned_data['ai_grading_mode'] = Contest.AI_GRADING_OFF
         if cleaned_data.get('embedded_advanced_mode'):
             cleaned_data['key'] = cleaned_data.get('key') or getattr(self, 'generated_simple_key', '')
             return cleaned_data
@@ -255,9 +264,9 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
             'classes': ('embedded-advanced-fields',),
             'fields': ('format_name', 'format_config', 'problem_label_script'),
         }),
-        (_('Advanced AI grading'), {
+        (_('Advanced Auto grading'), {
             'classes': ('embedded-advanced-fields',),
-            'fields': ('ai_grading_mode', 'ai_grading_auto_delay_minutes'),
+            'fields': ('allow_ai_hints', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes'),
         }),
         (_('Advanced Rating'), {
             'classes': ('embedded-advanced-fields',),
@@ -287,7 +296,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         (_('Scheduling'), {'fields': ('start_time', 'end_time', 'time_limit')}),
         (_('Details'), {'fields': ('description', 'og_image', 'logo_override_image', 'tags', 'summary')}),
         (_('Format'), {'fields': ('format_name', 'format_config', 'problem_label_script')}),
-        (_('AI grading'), {'fields': ('ai_grading_mode', 'ai_grading_auto_delay_minutes')}),
+        (_('Auto grading'), {'fields': ('allow_ai_hints', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes')}),
         (_('Rating'), {'fields': ('is_rated', 'rate_all', 'rating_floor', 'rating_ceiling',
                                   'performance_ceiling_override', 'rate_exclude')}),
         (_('Access'), {'fields': ('access_code', 'private_contestants', 'organizations', 'classes',
@@ -369,7 +378,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                 'view_contest_scoreboard': [],
                 'view_contest_submissions': [],
                 'banned_users': [],
-                'ai_grading_mode': Contest.AI_GRADING_OFF,
+                'allow_student_ai_grading': False,
                 'ai_grading_auto_delay_minutes': str(
                     Contest._meta.get_field('ai_grading_auto_delay_minutes').default,
                 ),
@@ -409,6 +418,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         obj.is_private = False
         obj.is_organization_private = False
         obj.limit_join_organizations = False
+        obj.allow_student_ai_grading = False
         obj.ai_grading_mode = Contest.AI_GRADING_OFF
         obj.ai_grading_auto_delay_minutes = Contest._meta.get_field('ai_grading_auto_delay_minutes').default
 
@@ -476,6 +486,11 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         ):
             self.apply_creation_defaults(request, obj)
 
+        # Keep legacy mode aligned with the student checkbox (mode is not on the form UI).
+        obj.ai_grading_mode = (
+            Contest.AI_GRADING_REALTIME if obj.allow_student_ai_grading else Contest.AI_GRADING_OFF
+        )
+
         # `private_contestants` and `organizations` will not appear in `cleaned_data` if user cannot edit it
         if form.changed_data:
             if 'private_contestants' in form.changed_data:
@@ -501,6 +516,9 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
 
         if form.changed_data and 'locked_after' in form.changed_data:
             self.set_locked_after(obj, form.cleaned_data['locked_after'])
+
+        from judge.utils.contest_ai import schedule_batch_ai_grade
+        schedule_batch_ai_grade(obj.id)
 
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)

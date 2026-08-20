@@ -122,6 +122,32 @@ class ContestGradeRejudgeEndpointTestCase(GradeTestBase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response['Location'], '/problem/grade-perm-prob')
 
+    def test_short_answer_rejudge_runs_ai_not_ir_placeholder(self):
+        """Teachers clicking Rejudge on ANS must invoke the LLM path (manual_trigger),
+        not plain grade_internally which would stamp IR when AI mode is off."""
+        from judge.models import ContestProblem, ContestSubmission, Language, SubmissionSource
+        from judge.models.tests.util import create_contest_participation
+
+        sa = create_problem(code='grade-var-sa', submission_type='S', points=100)
+        cp = ContestProblem.objects.create(contest=self.contest, problem=sa, points=100, order=9)
+        part = create_contest_participation(contest=self.contest, user=self.student.profile)
+        sub = Submission.objects.create(
+            user=self.student.profile, problem=sa,
+            language=Language.get_default_language(),
+            result='IR', status='D', contest_object=self.contest,
+            points=0, case_points=0, case_total=100,
+        )
+        SubmissionSource.objects.create(submission=sub, source='{"text":"bad to computer"}')
+        ContestSubmission.objects.create(submission=sub, problem=cp, participation=part, points=0)
+
+        with mock.patch('judge.utils.contest_ai.run_ai_for_submission', return_value='internal-ai') as run, \
+                mock.patch.object(Submission, 'judge') as judge:
+            response = self._rejudge(self.superuser, {'id': str(sub.id)})
+        self.assertEqual(response.status_code, 200)
+        run.assert_called_once()
+        self.assertTrue(run.call_args.kwargs.get('manual_trigger'))
+        judge.assert_not_called()
+
 
 class ContestGradeCanRejudgeFlagTestCase(GradeTestBase):
     """The grade page's Rejudge button is only enabled for staff + permission."""
@@ -499,6 +525,23 @@ class ContestGradeStatusTestCase(GradeTestBase):
         self.assertEqual(data['total'], 100)
         self.assertTrue(data['is_graded'])
         self.assertIn('test_cases', data)
+
+    def test_status_test_cases_include_ai_feedback_fields(self):
+        """Poll payload must keep feedback/extended_feedback so the grade desk
+        can show the same Detailed Feedback as the submission status page."""
+        from judge.models import SubmissionTestCase
+        SubmissionTestCase.objects.filter(submission=self.submission).delete()
+        SubmissionTestCase.objects.create(
+            submission=self.submission, case=1, status='WA', points=11.5, total=100,
+            feedback='Overall', extended_feedback='Too brief — missing self-replication.',
+        )
+        data = json.loads(self._status(self.curator, {'submission': str(self.submission.id)}).content)
+        self.assertEqual(len(data['test_cases']), 1)
+        tc = data['test_cases'][0]
+        self.assertEqual(tc['feedback'], 'Overall')
+        self.assertIn('self-replication', tc['extended_feedback'])
+        self.assertEqual(tc['total'], 100)
+        self.assertIn('batch', tc)
 
     def test_missing_submission_param_is_400(self):
         self.assertEqual(self._status(self.curator, {}).status_code, 400)

@@ -44,11 +44,37 @@ def rejudge_submission(request):
     if not submission.problem.is_subs_manageable_by(request.user):
         return HttpResponseForbidden()
 
-    submission.judge(rejudge=True, rejudge_user=request.user)
+    # Short-answer / AI fill-blank: plain rejudge only writes IR placeholders
+    # ("AI grading is off…") because should_run_ai_now is false. Teachers
+    # clicking Rejudge expect a fresh LLM pass — same as "View AI grading".
+    from judge.models import ProblemSubmissionType
+    from judge.utils.contest_ai import problem_has_ai_grading, run_ai_for_submission
+
+    st = submission.problem.submission_type
+    if (st in (ProblemSubmissionType.SHORT_ANSWER, ProblemSubmissionType.FILL_BLANK) and
+            problem_has_ai_grading(submission.problem)):
+        run_ai_for_submission(submission, manual_trigger=True)
+    else:
+        submission.judge(rejudge=True, rejudge_user=request.user)
 
     redirect = request.POST.get('path', None)
+    if redirect:
+        return HttpResponseRedirect(redirect)
 
-    return HttpResponseRedirect(redirect) if redirect else HttpResponse('success', content_type='text/plain')
+    # Grade-page / AJAX callers refresh status themselves; return JSON so the
+    # UI can update without a blocking alert(responseText).
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest' or \
+            'application/json' in (request.headers.get('accept') or ''):
+        submission.refresh_from_db()
+        return JsonResponse({
+            'ok': True,
+            'id': submission.id,
+            'status': submission.status,
+            'result': submission.result,
+            'is_graded': submission.is_graded,
+            'was_rejudged': submission.rejudged_date is not None,
+        })
+    return HttpResponse('success', content_type='text/plain')
 
 
 @login_required

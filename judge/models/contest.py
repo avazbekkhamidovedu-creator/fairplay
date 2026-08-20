@@ -159,23 +159,31 @@ class Contest(models.Model):
     AI_GRADING_BATCH = 'batch'
     AI_GRADING_MODE_CHOICES = (
         (AI_GRADING_OFF, _('Off')),
-        (AI_GRADING_REALTIME, _('Realtime (grade each submit)')),
-        (AI_GRADING_BATCH, _('Batch (latest submits after the contest)')),
+        (AI_GRADING_REALTIME, _('On demand — student requests AI grading')),
+        (AI_GRADING_BATCH, _('Batch — latest submits after the contest')),
     )
     ai_grading_mode = models.CharField(
-        verbose_name=_('AI grading'), max_length=16,
+        verbose_name=_('AI grading (legacy mode)'), max_length=16,
         choices=AI_GRADING_MODE_CHOICES, default=AI_GRADING_OFF,
-        help_text=_('When AI-enabled problems in this assignment/exam are graded. '
-                    'Always uses each student’s latest submission per problem. '
-                    'Realtime grades a submit as it arrives (a newer submit cancels '
-                    'one still queued). Batch waits for the Grade-page button, or '
-                    'for the delay after the contest ends.'),
+        help_text=_('Legacy field kept for older assignments. Prefer '
+                    '“allow student AI grading”. Synced from that checkbox on save: '
+                    'on → on-demand, off → off. Teachers can always run AI from the '
+                    'Grade page regardless of this value.'),
     )
-    ai_grading_auto_delay_minutes = models.PositiveIntegerField(
-        verbose_name=_('batch AI delay after end (minutes)'),
-        default=30,
-        help_text=_('For batch mode: automatically grade latest submissions this many '
-                    'minutes after the contest ends. 0 disables auto-run (manual button only).'),
+    allow_student_ai_grading = models.BooleanField(
+        verbose_name=_('allow student use AI grading'),
+        default=False,
+        help_text=_('When enabled, students can request AI grading on the submission '
+                    'page (subject to quota). Teachers can always run AI grading from '
+                    'the Grade page or submission page.'),
+    )
+    ai_grading_auto_delay_minutes = models.IntegerField(
+        verbose_name=_('auto-grade delay after end (minutes)'),
+        default=120,
+        help_text=_('Minutes after the contest ends to re-grade each student’s latest '
+                    'objective submissions (multiple choice, true/false, exact fill-blank). '
+                    'Does not call the LLM. −1 = Off (no auto-run). 0 = run at end time. '
+                    'Teachers can still use Batch grading on the Grade page anytime.'),
     )
     ai_grading_scheduled_task_id = models.CharField(
         verbose_name=_('scheduled batch AI task id'), max_length=255, blank=True, default='',
@@ -235,7 +243,7 @@ class Contest(models.Model):
         help_text=_('Allow users to join virtually after the assignment ends.'),
     )
     allow_ai_hints = models.BooleanField(
-        verbose_name=_('allow AI hints'),
+        verbose_name=_('allow student use AI hints'),
         default=False,
         help_text=_('When this assignment is active, students can use AI Hint on every attached '
                     "problem. Each problem's own AI Hint setting is unchanged outside this assignment."),

@@ -763,3 +763,11 @@ class ContestGradeWorkspaceLayoutTestCase(GradeTestBase):
         self.assertIn('<script type="text/javascript">', html)
         self.assertIsNotNone(re.search(r'var submissions = (\[.*?\]);', html, re.S))
         self.assertIsNotNone(re.search(r'var problems = (\[.*?\]);', html, re.S))
+
+    def test_ai_feedback_table_contract_in_script(self):
+        """Grade desk JS must render the same Detailed Feedback columns as the
+        submission status page for short-answer / fill-blank."""
+        html = self._page_html()
+        self.assertIn('gd-ai-grading', html)
+        self.assertIn('Detailed Feedback', html)
+        self.assertIn("problem_type === 'S'", html)

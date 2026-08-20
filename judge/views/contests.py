@@ -410,6 +410,7 @@ class ContestCreate(LoginRequiredMixin, View):
         'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
         'show_short_display', 'is_private', 'is_organization_private',
         'limit_join_organizations', 'seb_required', 'allow_ai_hints',
+        'allow_student_ai_grading',
     )
     _text_fields = (
         'name', 'description', 'access_code', 'problem_label_script',
@@ -729,15 +730,26 @@ class ContestCreate(LoginRequiredMixin, View):
         # Duration: the frontend edits hours+minutes, the model stores a timedelta.
         contest.time_limit = self._parse_duration(payload)
 
-        mode = payload.get('ai_grading_mode') or Contest.AI_GRADING_OFF
-        if mode not in dict(Contest.AI_GRADING_MODE_CHOICES):
-            raise ValidationError(_('Invalid AI grading mode.'))
-        contest.ai_grading_mode = mode
+        # Student AI grading checkbox (teachers always have AI via Grade page).
+        # Keep legacy ai_grading_mode in sync for older code paths / admin.
+        if 'allow_student_ai_grading' in payload:
+            allow_student = bool(payload.get('allow_student_ai_grading'))
+        else:
+            # Backward-compatible JSON clients that still post ai_grading_mode.
+            mode = payload.get('ai_grading_mode') or Contest.AI_GRADING_OFF
+            if mode not in dict(Contest.AI_GRADING_MODE_CHOICES):
+                raise ValidationError(_('Invalid AI grading mode.'))
+            allow_student = mode == Contest.AI_GRADING_REALTIME
+        contest.allow_student_ai_grading = allow_student
+        contest.ai_grading_mode = (
+            Contest.AI_GRADING_REALTIME if allow_student else Contest.AI_GRADING_OFF
+        )
         try:
-            delay = int(payload.get('ai_grading_auto_delay_minutes', 30))
+            delay = int(payload.get('ai_grading_auto_delay_minutes', 120))
         except (TypeError, ValueError):
-            delay = 30
-        contest.ai_grading_auto_delay_minutes = max(0, min(delay, 24 * 60))
+            delay = 120
+        # −1 = Off; 0 = at end time; positive = minutes after end.
+        contest.ai_grading_auto_delay_minutes = max(-1, min(delay, 24 * 60))
 
         # ── Deadline follows a duration increase ────────────────────────────
         # Editing an existing contest: when the per-student duration grows, the
@@ -1268,10 +1280,11 @@ class ContestCreate(LoginRequiredMixin, View):
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
             'allow_ai_hints': False,
+            'allow_student_ai_grading': False,
             'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
             'problems': [],
             'target_score': 100,
-            'ai_grading_mode': 'off', 'ai_grading_auto_delay_minutes': 30,
+            'ai_grading_mode': 'off', 'ai_grading_auto_delay_minutes': 120,
         }
         for field in self._m2m_fields:
             prefill[field] = []
@@ -1303,6 +1316,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 'format_name': contest.format_name,
                 'ai_grading_mode': contest.ai_grading_mode,
                 'ai_grading_auto_delay_minutes': contest.ai_grading_auto_delay_minutes,
+                'allow_student_ai_grading': contest.allow_student_ai_grading,
                 'scoreboard_visibility': contest.scoreboard_visibility,
                 'points_precision': contest.points_precision,
                 'rating_floor': contest.rating_floor if contest.rating_floor is not None else '',
@@ -2291,8 +2305,14 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
         manual_grades = SubmissionManualGrade.objects.filter(submission__contest_object=contest)
         context['grade_released_count'] = manual_grades.filter(released=True).count()
         context['grade_unreleased_count'] = manual_grades.filter(released=False).count()
-        # Batch AI grading toolbar (independent of per-submission manual release).
-        context['grade_ai_batch'] = contest.ai_grading_mode == Contest.AI_GRADING_BATCH
+        # Teachers can always run AI grading when the contest has AI-enabled problems.
+        from judge.utils.contest_ai import problem_has_ai_grading
+        context['grade_ai_batch'] = any(
+            problem_has_ai_grading(cp.problem)
+            for cp in contest.contest_problems.select_related(
+                'problem', 'problem__code_config', 'problem__fill_blank_config',
+            )
+        )
         context['grade_ai_batch_done'] = bool(contest.ai_grading_batch_finished_at)
 
         payload = []
@@ -2408,12 +2428,15 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
                         'time': tc.time,
                         'memory': tc.memory,
                         'points': tc.points,
+                        'total': tc.total,
                         # batch=-1 marks supplementary AI rubric rows (teacher-only feedback).
                         'batch': tc.batch,
                         'feedback': tc.feedback or '',
                         'extended_feedback': tc.extended_feedback or '',
                     } for tc in sub.test_cases.all()
                 ],
+                'case_points': sub.case_points,
+                'case_total': sub.case_total,
                 # Manual-grading metadata (评分与评语 state).
                 'review_note': sub.review_note or '',
                 'reviewed_by': sub.reviewed_by.user.username if sub.reviewed_by else None,
@@ -2582,6 +2605,9 @@ class ContestGradeStatus(ContestMixin, DetailView):
             'time': submission.time,
             'memory': submission.memory,
             'is_graded': submission.is_graded,
+            'was_rejudged': submission.rejudged_date is not None,
+            'rejudged_date': submission.rejudged_date.isoformat() if submission.rejudged_date else None,
+            'judged_date': submission.judged_date.isoformat() if submission.judged_date else None,
             'review_note': submission.review_note or '',
             'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
             'released': bool(manual_grade and manual_grade.released),
@@ -2592,6 +2618,10 @@ class ContestGradeStatus(ContestMixin, DetailView):
                     'time': tc.time,
                     'memory': tc.memory,
                     'points': tc.points,
+                    'total': tc.total,
+                    'batch': tc.batch,
+                    'feedback': tc.feedback or '',
+                    'extended_feedback': tc.extended_feedback or '',
                 } for tc in submission.test_cases.all()
             ],
         })
@@ -2652,8 +2682,6 @@ class ContestBatchAIGrade(View):
 
     def post(self, request, *args, **kwargs):
         contest = self.object
-        if contest.ai_grading_mode != Contest.AI_GRADING_BATCH:
-            return JsonResponse({'error': _('This assignment is not in batch AI grading mode.')}, status=400)
         from judge.tasks.contest import batch_ai_grade
         transaction.on_commit(lambda key=contest.key: batch_ai_grade.delay(key, auto=False))
         return JsonResponse({'ok': True, 'queued': True})

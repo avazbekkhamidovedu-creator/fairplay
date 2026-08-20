@@ -12,7 +12,7 @@ from judge.models import Contest, ContestMoss, ContestParticipation, ContestSubm
 from judge.utils.celery import Progress
 
 __all__ = ('rescore_contest', 'finalize_contest_results', 'unfinalize_contest_results',
-           'run_moss', 'batch_ai_grade')
+           'run_moss', 'batch_ai_grade', 'auto_grade_contest')
 
 
 @shared_task(bind=True)
@@ -142,8 +142,9 @@ def run_moss(self, contest_key):
 def batch_ai_grade(self, contest_key, auto=False):
     """Grade the latest submission per (participation, problem) with AI.
 
-    Used for exam-style batch mode: teacher button, or the delayed auto-run
-    after ``end_time``. Idempotent if ``auto`` and a batch already finished.
+    Triggered by the Grade-page “Run AI grading” button. ``auto`` is retained for
+    older scheduled jobs; new auto-runs use :func:`auto_grade_contest` instead.
+    Idempotent if ``auto`` and a batch already finished.
     """
     from judge.utils.contest_ai import (
         latest_submissions_for_contest, problem_has_ai_grading, run_ai_for_submission,
@@ -151,8 +152,6 @@ def batch_ai_grade(self, contest_key, auto=False):
 
     with transaction.atomic():
         contest = Contest.objects.select_for_update().get(key=contest_key)
-        if contest.ai_grading_mode != Contest.AI_GRADING_BATCH:
-            return 0
         if auto and contest.ai_grading_batch_finished_at is not None:
             return 0
         # Serialize concurrent runs (double-clicked button, or auto vs manual):
@@ -182,6 +181,36 @@ def batch_ai_grade(self, contest_key, auto=False):
 
     contest.ai_grading_batch_finished_at = timezone.now()
     contest.save(update_fields=['ai_grading_batch_finished_at'])
+    for participation in contest.users.iterator():
+        participation.recompute_results()
+    return graded
+
+
+@shared_task(bind=True)
+def auto_grade_contest(self, contest_key, auto=False):
+    """Re-grade latest objective submissions (no LLM).
+
+    Scheduled after ``end_time`` + ``ai_grading_auto_delay_minutes``. Multiple
+    choice, true/false, and exact fill-blank are rejudged; AI types are skipped.
+    """
+    from judge.utils.contest_ai import (
+        latest_submissions_for_contest, problem_is_objective_machine_graded,
+    )
+
+    contest = Contest.objects.get(key=contest_key)
+    latest = latest_submissions_for_contest(contest)
+    targets = [sub for sub in latest.values() if problem_is_objective_machine_graded(sub.problem)]
+    graded = 0
+    with Progress(self, max(len(targets), 1), stage=_('Auto-grading objective submissions')) as p:
+        for submission in targets:
+            try:
+                submission.judge(rejudge=True, force_judge=True)
+            except Exception:
+                logger = __import__('logging').getLogger(__name__)
+                logger.exception('Objective auto-grade failed for submission %s', submission.id)
+            graded += 1
+            p.done = graded
+
     for participation in contest.users.iterator():
         participation.recompute_results()
     return graded
