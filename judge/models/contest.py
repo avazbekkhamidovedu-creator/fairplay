@@ -384,24 +384,6 @@ class Contest(models.Model):
             return True
         return False
 
-    def can_see_submissions(self, user):
-        """Whether ``user`` may list and open others' submissions in this contest.
-
-        Distinct from ``can_see_full_scoreboard``: a Visible scoreboard does not
-        grant access to classmates' source or per-user submission lists.
-        """
-        if not user.is_authenticated:
-            return False
-        if user.has_perm('judge.view_all_submission'):
-            return True
-        if self.is_editable_by(user):
-            return True
-        if self.view_contest_submissions.filter(id=user.profile.id).exists():
-            return True
-        if self.tester_see_submissions and user.profile.id in self.tester_ids:
-            return True
-        return False
-
     def has_completed_contest(self, user):
         if user.is_authenticated:
             participation = self.users.filter(virtual=ContestParticipation.LIVE, user=user.profile).first()

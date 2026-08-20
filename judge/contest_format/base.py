@@ -66,7 +66,7 @@ class BaseContestFormat(metaclass=ABCMeta):
         :param contest_problem: The ContestProblem object representing the problem in question.
         :param cell_url: Optional href override (editors land on the Grade page).
             ``None`` uses the per-user contest submission list; ``''`` renders the
-            cell with no href (classmates must not open another user's list).
+            cell with no href.
         :return: An HTML fragment, marked as safe for Jinja2.
         """
         raise NotImplementedError()

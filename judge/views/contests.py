@@ -2491,7 +2491,7 @@ class ContestBatchAIGrade(View):
         return JsonResponse({'ok': True, 'queued': True})
 
 
-def make_contest_ranking_profile(contest, participation, contest_problems, scoring_map=None, viewer=None):
+def make_contest_ranking_profile(contest, participation, contest_problems, scoring_map=None):
     def display_user_problem(contest_problem):
         # When the contest format is changed, `format_data` might be invalid.
         # This will cause `display_user_problem` to error, so we display '???' instead.
@@ -2501,18 +2501,11 @@ def make_contest_ranking_profile(contest, participation, contest_problems, scori
             if sub is not None:
                 cell_url = '%s?submission=%d' % (
                     reverse('contest_grade', args=[contest.key]), sub.id)
-        elif viewer is None or participation.user_id != viewer.id:
-            # Students: own row may still link to their submission list; others do not.
-            cell_url = ''
         try:
             return contest.format.display_user_problem(
                 participation, contest_problem, cell_url=cell_url)
         except (KeyError, TypeError, ValueError):
             return mark_safe('<td>???</td>')
-
-    result_url = None
-    if scoring_map is None and (viewer is None or participation.user_id != viewer.id):
-        result_url = ''
 
     user = participation.user
     return ContestRankingProfile(
@@ -2526,25 +2519,24 @@ def make_contest_ranking_profile(contest, participation, contest_problems, scori
         organization=user.organization,
         participation_rating=participation.rating.rating if hasattr(participation, 'rating') else None,
         problem_cells=[display_user_problem(contest_problem) for contest_problem in contest_problems],
-        result_cell=contest.format.display_participation_result(participation, result_url=result_url),
+        result_cell=contest.format.display_participation_result(participation),
         participation=participation,
         display_name=user.display_name,
     )
 
 
-def base_contest_ranking_list(contest, problems, queryset, scoring_map=None, viewer=None):
-    return [make_contest_ranking_profile(contest, participation, problems,
-                                         scoring_map=scoring_map, viewer=viewer)
+def base_contest_ranking_list(contest, problems, queryset, scoring_map=None):
+    return [make_contest_ranking_profile(contest, participation, problems, scoring_map=scoring_map)
             for participation in
             queryset.select_related('user__user', 'rating').defer('user__about', 'user__organizations__about')]
 
 
-def contest_ranking_list(contest, problems, scoring_map=None, viewer=None):
+def contest_ranking_list(contest, problems, scoring_map=None):
     return base_contest_ranking_list(contest, problems, contest.users.filter(virtual=0)
                                      .prefetch_related('user__organizations')
                                      .annotate(submission_cnt=Count('submission'))
                                      .order_by('is_disqualified', '-score', 'cumtime', 'tiebreaker', '-submission_cnt'),
-                                     scoring_map=scoring_map, viewer=viewer)
+                                     scoring_map=scoring_map)
 
 
 def get_contest_ranking_list(request, contest, participation=None, ranking_list=contest_ranking_list,
@@ -2552,15 +2544,12 @@ def get_contest_ranking_list(request, contest, participation=None, ranking_list=
     problems = list(contest.contest_problems.select_related('problem').defer('problem__description').order_by('order'))
 
     scoring_map = None
-    viewer = None
     if (request is not None and getattr(request, 'user', None) is not None
-            and request.user.is_authenticated):
-        viewer = request.profile
-        if contest.is_editable_by(request.user):
-            from judge.utils.contest_grade import scoring_submissions_for_contest
-            scoring_map = scoring_submissions_for_contest(contest)
+            and request.user.is_authenticated and contest.is_editable_by(request.user)):
+        from judge.utils.contest_grade import scoring_submissions_for_contest
+        scoring_map = scoring_submissions_for_contest(contest)
 
-    users = ranker(ranking_list(contest, problems, scoring_map=scoring_map, viewer=viewer),
+    users = ranker(ranking_list(contest, problems, scoring_map=scoring_map),
                    key=attrgetter('points', 'cumtime', 'tiebreaker'))
 
     if show_current_virtual:
@@ -2570,7 +2559,7 @@ def get_contest_ranking_list(request, contest, participation=None, ranking_list=
                 participation = None
         if participation is not None and participation.virtual:
             users = chain([('-', make_contest_ranking_profile(
-                contest, participation, problems, scoring_map=scoring_map, viewer=viewer))], users)
+                contest, participation, problems, scoring_map=scoring_map))], users)
     return users, problems
 
 

@@ -1,9 +1,8 @@
 """Grade-desk entry points: ranking cells and the submission list/status “grade” link.
 
 1. Contest editors clicking a ranking problem cell land on that assignment’s
-   Grade page with the scoring submission selected. Students may still link
-   their own row to the per-user submission list; classmates’ cells have no
-   href.
+   Grade page with the scoring submission selected. Students still link ranking
+   cells to the per-user submission list (including classmates).
 2. The submission-page grade link opens practice Grade (all practice rows
    the viewer can edit) or the assignment Grade page, matching the
    submission’s contest_object.
@@ -56,7 +55,7 @@ class RankingGradeDeepLinkTestCase(GradeTestBase):
         self.assertIn(self.user_subs_href, html)
         self.assertNotIn(self.grade_href, html)
 
-    def test_student_ranking_other_cell_has_no_user_submissions_link(self):
+    def test_student_ranking_other_cell_links_user_submissions(self):
         classmate = create_user(username='grade_rank_classmate')
         part = ContestParticipation.objects.create(
             contest=self.contest, user=classmate.profile,
@@ -80,7 +79,7 @@ class RankingGradeDeepLinkTestCase(GradeTestBase):
         response = self._client(self.student).get(self.ranking_url)
         self.assertEqual(response.status_code, 200)
         html = response.content.decode()
-        self.assertNotIn(classmate_href, html)
+        self.assertIn(classmate_href, html)
         self.assertIn(self.user_subs_href, html)
         self.assertNotIn(self.grade_href, html)
 

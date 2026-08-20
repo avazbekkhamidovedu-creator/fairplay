@@ -504,26 +504,23 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
                                                               language=self.request.LANGUAGE_CODE), to_attr='_trans'))
         if self.in_contest:
             queryset = queryset.filter(contest_object=self.contest)
-            # Visible scoreboard ≠ everyone's submissions. Non-editors always
-            # see only their own assignment/exam rows while in contest.
-            if not self.contest.can_see_submissions(self.request.user):
-                if self.request.user.is_authenticated:
-                    queryset = queryset.filter(user=self.request.profile)
-                else:
-                    queryset = queryset.none()
+            if not self.contest.can_see_full_scoreboard(self.request.user):
+                queryset = queryset.filter(user=self.request.profile)
         else:
             queryset = queryset.select_related('contest_object').defer('contest_object__description')
 
             if not self.request.user.has_perm('judge.see_private_contest'):
-                # Own rows + practice + contests the viewer may inspect
-                # (editors / view_contest_submissions / tester_see_submissions).
-                # Do not dump classmates' assignment rows just because the
-                # scoreboard is Visible or the contest has ended.
+                # Show submissions for any contest you can edit or where you can see submissions
                 contest_queryset = Contest.objects.filter(
                     Q(authors=self.request.profile) |
                     Q(curators=self.request.profile) |
                     Q(tester_see_submissions=True, testers=self.request.profile) |
-                    Q(view_contest_submissions=self.request.profile),
+                    Q(view_contest_submissions=self.request.profile) |
+                    Q(scoreboard_visibility=Contest.SCOREBOARD_VISIBLE) |
+                    Q(end_time__lt=timezone.now(), scoreboard_visibility__in=(
+                        Contest.SCOREBOARD_AFTER_PARTICIPATION,
+                        Contest.SCOREBOARD_AFTER_CONTEST,
+                    )),
                 ).distinct()
 
                 queryset = queryset.filter(
@@ -916,7 +913,7 @@ class UserAllContestSubmissions(ForceContestMixin, AllUserSubmissions):
         super().access_check(request)
         if not self.contest.users.filter(user_id=self.profile.id).exists():
             raise Http404()
-        if not self.is_own and not self.contest.can_see_submissions(self.request.user):
+        if not self.is_own and not self.contest.can_see_full_scoreboard(self.request.user):
             raise Http404()
 
     def get_content_title(self):
@@ -957,8 +954,6 @@ class UserContestSubmissions(ForceContestMixin, UserProblemSubmissions):
     def access_check(self, request):
         super(UserContestSubmissions, self).access_check(request)
         if not self.contest.users.filter(user_id=self.profile.id).exists():
-            raise Http404()
-        if not self.is_own and not self.contest.can_see_submissions(request.user):
             raise Http404()
 
     def get_content_title(self):

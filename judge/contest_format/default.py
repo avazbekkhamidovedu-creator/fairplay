@@ -49,7 +49,7 @@ class DefaultContestFormat(BaseContestFormat):
         """Resolve a ranking problem-cell href.
 
         ``None`` falls back to the per-user contest submission list. ``''`` means
-        no link (students must not open a classmate's list).
+        no link.
         """
         if cell_url is not None:
             return cell_url

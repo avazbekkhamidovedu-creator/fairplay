@@ -186,29 +186,32 @@ class Submission(models.Model):
         if not user.is_authenticated:
             return False
         profile = user.profile
+        source_visibility = self.problem.submission_source_visibility
         if self.problem.is_editable_by(user):
             return True
-        if user.has_perm('judge.view_all_submission'):
+        elif user.has_perm('judge.view_all_submission'):
             return True
-        if self.user_id == profile.id:
+        elif self.user_id == profile.id:
             return True
-
-        # Assignment/exam rows: never unlock via SOLVED/ALWAYS for classmates,
-        # including after the contest ends.
-        contest = self.contest_object
-        if contest is not None:
-            return contest.can_see_submissions(user)
-
-        source_visibility = self.problem.submission_source_visibility
-        if source_visibility == SubmissionSourceAccess.ALWAYS:
+        elif source_visibility == SubmissionSourceAccess.ALWAYS:
             return True
-        if source_visibility == SubmissionSourceAccess.SOLVED and \
+        elif source_visibility == SubmissionSourceAccess.SOLVED and \
                 (self.problem.is_public or self.problem.testers.filter(id=profile.id).exists()) and \
                 self.problem.is_solved_by(user):
             return True
-        if source_visibility == SubmissionSourceAccess.ONLY_OWN and \
+        elif source_visibility == SubmissionSourceAccess.ONLY_OWN and \
                 self.problem.testers.filter(id=profile.id).exists():
             return True
+
+        contest = self.contest_object
+        # If user is an author or curator of the contest the submission was made in, or they can see in-contest subs
+        if contest is not None and (
+            user.profile.id in contest.editor_ids or
+            contest.view_contest_submissions.filter(id=user.profile.id).exists() or
+            (contest.tester_see_submissions and user.profile.id in contest.tester_ids)
+        ):
+            return True
+
         return False
 
     def update_contest(self):

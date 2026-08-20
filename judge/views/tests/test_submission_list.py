@@ -2,7 +2,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestSubmission, Language, ProblemSubmissionType, Submission
+from judge.models import Language, ProblemSubmissionType, Submission
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
 
@@ -267,50 +267,3 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
         self.client.force_login(self.users['normal'])
         response = self.client.post(reverse('submission_bulk_rejudge'), {'ids': [self.sub_alice_a.id]})
         self.assertEqual(response.status_code, 403)
-
-
-class InContestSubmissionListOwnOnlyTest(CommonDataMixin, TestCase):
-    """Visible scoreboard does not dump classmates' assignment submissions."""
-
-    @classmethod
-    def setUpTestData(cls):
-        super().setUpTestData()
-        cls.users.update({
-            'list_student': create_user(username='list_student'),
-            'list_classmate': create_user(username='list_classmate'),
-        })
-        problem = create_problem(code='listownp', name='List Own', is_public=True)
-        contest = create_contest(
-            key='listown', name='List Own HW', is_visible=True,
-            start_time=timezone.now() - timezone.timedelta(days=1),
-            end_time=timezone.now() + timezone.timedelta(days=1),
-            scoreboard_visibility=Contest.SCOREBOARD_VISIBLE,
-        )
-        cp = create_contest_problem(contest=contest, problem=problem)
-        student_part = create_contest_participation(contest=contest, user=cls.users['list_student'].profile)
-        classmate_part = create_contest_participation(contest=contest, user=cls.users['list_classmate'].profile)
-        cls.users['list_student'].profile.current_contest = student_part
-        cls.users['list_student'].profile.save()
-        lang = Language.get_python3()
-        cls.own_sub = Submission.objects.create(
-            user=cls.users['list_student'].profile, problem=problem, language=lang,
-            result='AC', status='D', case_points=100, case_total=100,
-            contest_object=contest, time=0.1, memory=1024,
-        )
-        ContestSubmission.objects.create(
-            submission=cls.own_sub, problem=cp, participation=student_part, points=100,
-        )
-        cls.classmate_sub = Submission.objects.create(
-            user=cls.users['list_classmate'].profile, problem=problem, language=lang,
-            result='AC', status='D', case_points=100, case_total=100,
-            contest_object=contest, time=0.1, memory=1024,
-        )
-        ContestSubmission.objects.create(
-            submission=cls.classmate_sub, problem=cp, participation=classmate_part, points=100,
-        )
-
-    def test_in_contest_list_contains_only_own_rows(self):
-        self.client.force_login(self.users['list_student'])
-        content = self.client.get(reverse('all_submissions')).content
-        self.assertIn(('id="%d"' % self.own_sub.id).encode(), content)
-        self.assertNotIn(('id="%d"' % self.classmate_sub.id).encode(), content)
