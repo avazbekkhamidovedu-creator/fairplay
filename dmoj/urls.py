@@ -355,6 +355,7 @@ urlpatterns = [
             path('/clone', organization.ClassClone.as_view(), name='class_clone'),
             path('/assignments/<str:contest>/clone', organization.ClassAssignmentClone.as_view(),
                  name='class_assignment_clone'),
+            path('/import-members', organization.ClassImportMembers.as_view(), name='class_import_members'),
             path('/assignments', organization.ClassLinkAssignmentsView.as_view(),
                  name='class_link_assignments'),
             path('/materials', organization.ClassMaterialActionView.as_view(),

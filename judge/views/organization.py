@@ -1825,7 +1825,11 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
         context['instructor_apply_class_id'] = self.object.id
 
         if can_view_content:
-            ranked_users = list(users_for_template(self.object.members, self.order))
+            # Students tab: class members who are not class instructors/admins.
+            student_qs = self.object.members.exclude(
+                id__in=self.object.admins.values_list('id', flat=True),
+            )
+            ranked_users = list(users_for_template(student_qs, self.order))
         else:
             ranked_users = []
         context['users'] = ranked_users
@@ -2005,6 +2009,29 @@ def apply_class_member_csv(form, class_obj, organization):
     return result
 
 
+def _flash_class_csv_import_result(request, csv_result):
+    """Surface create/link counts and any import errors after class create/edit."""
+    if csv_result is None:
+        return
+    messages.info(
+        request,
+        _('CSV import: %(created)d created, %(updated)d updated, %(linked)d linked to class.') % {
+            'created': csv_result.created,
+            'updated': csv_result.updated,
+            'linked': csv_result.class_linked,
+        },
+    )
+    for err in csv_result.errors[:10]:
+        messages.error(request, err)
+    if len(csv_result.errors) > 10:
+        messages.error(
+            request,
+            _('…and %(count)d more CSV import error(s).') % {
+                'count': len(csv_result.errors) - 10,
+            },
+        )
+
+
 class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
     template_name = 'organization/create_class.html'
     form_class = ClassSiteForm
@@ -2051,14 +2078,7 @@ class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
         csv_result = apply_class_member_csv(form, new_class, self.object)
         sync_class_members_to_organization(new_class)
         messages.success(self.request, _('Class "%s" created successfully.') % new_class.name)
-        if csv_result is not None:
-            messages.info(
-                self.request,
-                _('CSV import: %(created)d created, %(linked)d linked to class.') % {
-                    'created': csv_result.created,
-                    'linked': csv_result.class_linked,
-                },
-            )
+        _flash_class_csv_import_result(self.request, csv_result)
         return HttpResponseRedirect(new_class.get_absolute_url())
 
 
@@ -2097,18 +2117,19 @@ class EditClass(LoginRequiredMixin, TitleMixin, FormView):
         return context
 
     def form_valid(self, form):
+        previous_admin_ids = set(self.object.admins.values_list('id', flat=True))
         form.save()
+        # HeavySelect2 often omits admins on submit (empty POST → clears M2M). If the
+        # class previously had administrators and the submit cleared them all, restore.
+        submitted_admins = form.cleaned_data.get('admins')
+        if previous_admin_ids and (submitted_admins is None or not submitted_admins.exists()):
+            self.object.admins.add(*previous_admin_ids)
+        # The editor who just saved must remain able to edit.
+        self.object.admins.add(self.request.profile)
         csv_result = apply_class_member_csv(form, self.object, self.object.organization)
         sync_class_members_to_organization(self.object)
         messages.success(self.request, _('Class "%s" updated.') % self.object.name)
-        if csv_result is not None:
-            messages.info(
-                self.request,
-                _('CSV import: %(created)d created, %(linked)d linked to class.') % {
-                    'created': csv_result.created,
-                    'linked': csv_result.class_linked,
-                },
-            )
+        _flash_class_csv_import_result(self.request, csv_result)
         return HttpResponseRedirect(self.object.get_absolute_url())
 
 
@@ -2207,6 +2228,33 @@ class ClassAssignmentClone(LoginRequiredMixin, View):
             },
         )
         return HttpResponseRedirect(reverse('contest_edit', args=[clone.key]))
+
+
+class ClassImportMembers(LoginRequiredMixin, View):
+    """Import a Canvas/roster CSV into an existing class immediately (no Save class)."""
+
+    def post(self, request, *args, **kwargs):
+        class_obj = get_object_or_404(Class, id=kwargs['cpk'])
+        org = class_obj.organization
+        if not (org.admins.filter(id=request.profile.id).exists() or
+                class_obj.admins.filter(id=request.profile.id).exists() or
+                request.user.has_perm('judge.edit_all_organization')):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to import members for this class.'),
+                                   status=403)
+
+        csv_file = request.FILES.get('member_csv')
+        if not csv_file:
+            messages.error(request, _('Choose a CSV file to import.'))
+            return HttpResponseRedirect(reverse('class_edit', args=[org.id, org.slug, class_obj.id, class_obj.slug]))
+
+        result = process_user_csv(
+            csv_file, organization=org, target_class=class_obj,
+            update_existing=True, activate=True,
+        )
+        sync_class_members_to_organization(class_obj)
+        _flash_class_csv_import_result(request, result)
+        return HttpResponseRedirect(class_obj.get_absolute_url() + '?tab=info')
 
 
 class DeleteClass(LoginRequiredMixin, View):
@@ -2454,7 +2502,11 @@ class OrganizationImportForm(forms.Form):
         label=gettext_lazy('Target Class'),
         empty_label=gettext_lazy('-- No class (organization only) --'),
     )
-    update_existing = forms.BooleanField(required=False, label=gettext_lazy('Update existing users'))
+    update_existing = forms.BooleanField(
+        required=False,
+        initial=True,
+        label=gettext_lazy('Update existing users'),
+    )
     activate = forms.BooleanField(required=False, initial=True, label=gettext_lazy('Activate users'))
 
     def __init__(self, *args, organization=None, **kwargs):
