@@ -525,3 +525,32 @@ window.dkuojRefreshSelects = function () {
         observer.observe(document.documentElement, {childList: true, subtree: true});
     }
 })();
+
+// ── Reusable auto-dismissing toast ──────────────────────────────────────
+// window.showToast('Grade saved', 'success') / ('...', 'error') / ('...', 'info')
+// Shows a top-right toast with a ✓ / ✗ / i icon that fades out after ~3s.
+window.showToast = function (message, type) {
+    type = type || 'info';
+    var container = document.getElementById('dku-toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'dku-toast-container';
+        container.className = 'dku-toast-container';
+        document.body.appendChild(container);
+    }
+    var toast = document.createElement('div');
+    toast.className = 'dku-toast dku-toast-' + type;
+    var icon = document.createElement('span');
+    icon.className = 'dku-toast-icon';
+    icon.textContent = type === 'success' ? '✓' : (type === 'error' ? '✗' : 'i');
+    var msg = document.createElement('span');
+    msg.className = 'dku-toast-msg';
+    msg.textContent = message;
+    toast.appendChild(icon);
+    toast.appendChild(msg);
+    container.appendChild(toast);
+    setTimeout(function () {
+        toast.classList.add('dku-toast-leave');
+        setTimeout(function () { toast.remove(); }, 200);
+    }, 3000);
+};

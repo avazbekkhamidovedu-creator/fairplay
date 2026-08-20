@@ -194,6 +194,11 @@ class ProblemFillBlankConfig(models.Model):
         help_text=_('Exact match compares each blank to its accepted answers; AI grading asks the '
                     'configured model to score the response against the rubric (falls back to exact '
                     'match when no model is configured).'))
+    requires_manual_review = models.BooleanField(
+        verbose_name=_('require teacher review after AI scoring'), default=False,
+        help_text=_('Keep AI-graded submissions in the pending queue until a teacher reviews them '
+                    'on the grade page (the AI score is stored, but the submission is only marked '
+                    'graded once a teacher saves a manual grade).'))
     ai_rubric = models.TextField(
         verbose_name=_('AI rubric'), blank=True,
         help_text=_('Grading guidance sent to the model (never shown to students).'))
@@ -272,6 +277,11 @@ class ProblemShortAnswerConfig(models.Model):
     """Per-problem short-answer settings. Graded by the LLM against a reference answer + rubric."""
     problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='short_answer_config',
                                    on_delete=CASCADE)
+    requires_manual_review = models.BooleanField(
+        verbose_name=_('require teacher review after AI scoring'), default=False,
+        help_text=_('Keep AI-graded submissions in the pending queue until a teacher reviews them '
+                    'on the grade page (the AI score is stored, but the submission is only marked '
+                    'graded once a teacher saves a manual grade).'))
     reference_answer = models.TextField(
         verbose_name=_('reference answer'), blank=True,
         help_text=_('Model answer the response is compared against (never shown to students).'))

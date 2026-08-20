@@ -38,7 +38,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import ContestProblem, Language, Submission, SubmissionSource
+from judge.models import ContestProblem, Language, Submission, SubmissionManualGrade, SubmissionSource
 from judge.models.tests.util import create_contest, create_problem, create_user
 
 XSS_SOURCE = '</script><script>alert(document.cookie)</script>'
@@ -211,7 +211,10 @@ class ContestGradeSaveValidationTestCase(GradeTestBase):
         response = self._post(submission=self.submission.id, score='42.5')
         self.assertEqual(response.status_code, 200)
         self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 42.5)
+        # The machine score is preserved; the manual override lives in its own table.
+        self.assertEqual(self.submission.points, 50.0)
+        grade = SubmissionManualGrade.objects.get(submission=self.submission)
+        self.assertEqual(grade.points, 42.5)
         self.assertEqual(response.json()['score'], 42.5)
 
     def test_missing_submission_id_is_400(self):
@@ -250,22 +253,22 @@ class ContestGradeSaveValidationTestCase(GradeTestBase):
     def test_negative_score_clamped_to_zero(self):
         response = self._post(submission=self.submission.id, score='-999')
         self.assertEqual(response.status_code, 200)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 0.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 0.0)
         self.assertEqual(response.json()['score'], 0.0)
 
     def test_over_max_score_clamped_to_total(self):
         response = self._post(submission=self.submission.id, score='9999')
         self.assertEqual(response.status_code, 200)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 100.0)  # case_total ceiling
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 100.0)  # case_total ceiling
         self.assertEqual(response.json()['score'], 100.0)
 
     def test_blank_score_treated_as_zero(self):
         response = self._post(submission=self.submission.id, score='')
         self.assertEqual(response.status_code, 200)
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 0.0)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.submission).points, 0.0)
 
     # ── Review note (评语) persistence ──────────────────────────────────────
 
@@ -307,12 +310,10 @@ class ContestGradeSaveValidationTestCase(GradeTestBase):
         """
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.curator)
-        before = self.submission.points
         response = client.post(self.save_url, {'submission': self.submission.id, 'score': '80'})
         self.assertEqual(response.status_code, 403)
-        # The view never ran, so the score must be untouched.
-        self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, before)
+        # The view never ran, so no manual grade may be created.
+        self.assertFalse(SubmissionManualGrade.objects.filter(submission=self.submission).exists())
 
 
 class ContestGradeMutationTestCase(GradeTestBase):
@@ -435,12 +436,16 @@ class ContestGradePayloadTestCase(GradeTestBase):
     def test_release_flag_in_context(self):
         response = self._client(self.curator).get(self.grade_url)
         self.assertEqual(response.status_code, 200)
-        self.assertIn('grade_released', response.context)
-        self.assertFalse(response.context['grade_released'])
-        self.contest.results_finalized = True
-        self.contest.save(update_fields=['results_finalized'])
+        self.assertIn('grade_released_count', response.context)
+        self.assertIn('grade_unreleased_count', response.context)
+        self.assertEqual(response.context['grade_released_count'], 0)
+        self.assertEqual(response.context['grade_unreleased_count'], 0)
+        # Saving a manual grade creates an unreleased override.
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '80'})
         response = self._client(self.curator).get(self.grade_url)
-        self.assertTrue(response.context['grade_released'])
+        self.assertEqual(response.context['grade_released_count'], 0)
+        self.assertEqual(response.context['grade_unreleased_count'], 1)
 
 
 class ContestGradeJSValidityTestCase(GradeTestBase):
@@ -507,42 +512,58 @@ class ContestGradeWorkflowTestCase(GradeTestBase):
         self.assertIn('"points": 77.0', html)
         self.assertIn('"review_note": "Nice work"', html)
 
-        # 4. DB agrees.
+        # 4. DB agrees: the machine score is untouched, the manual grade is stored.
         self.submission.refresh_from_db()
-        self.assertEqual(self.submission.points, 77.0)
+        self.assertEqual(self.submission.points, 50.0)
+        grade = SubmissionManualGrade.objects.get(submission=self.submission)
+        self.assertEqual(grade.points, 77.0)
         self.assertEqual(self.submission.review_note, 'Nice work')
         self.assertEqual(self.submission.reviewed_by, self.curator.profile)
 
 
 class ContestGradeReleaseTestCase(GradeTestBase):
-    """The Release / Unrelease endpoint toggles ``Contest.results_finalized``.
+    """The "Release All" endpoint releases every manual grade in the contest.
 
     Same authorization contract as the save endpoint: 401 anonymous, 403
-    authenticated non-editor, 200 editor. Releasing grades reveals hidden
-    results to students, so it is exactly as sensitive as editing a score.
+    authenticated non-editor, 200 editor. Releasing reveals a teacher's manual
+    override to the student, so it is exactly as sensitive as editing a score.
     """
 
     def _post(self, user):
         return self._client(user).post(self.release_url)
 
+    def _save_grade(self, score='77'):
+        """Save a manual grade for the shared submission and return the record."""
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': score})
+        return SubmissionManualGrade.objects.get(submission=self.submission)
+
     def test_anonymous_gets_401(self):
         self.assertEqual(Client().post(self.release_url).status_code, 401)
 
-    def test_editors_can_toggle_release(self):
-        self.contest.refresh_from_db()
-        self.assertFalse(self.contest.results_finalized)
+    def test_release_all_marks_manual_grades_released(self):
+        grade = self._save_grade()
+        self.assertFalse(grade.released)
         response = self._post(self.curator)
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(response.json()['released'])
-        self.contest.refresh_from_db()
-        self.assertTrue(self.contest.results_finalized)
+        grade.refresh_from_db()
+        self.assertTrue(grade.released)
 
-        # A second call unreleases (toggle semantics).
-        response = self._post(self.edit_all)
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()['released'])
-        self.contest.refresh_from_db()
-        self.assertFalse(self.contest.results_finalized)
+    def test_release_all_is_idempotent(self):
+        self._save_grade()
+        first = self._post(self.curator)
+        self.assertEqual(first.status_code, 200)
+        second = self._post(self.edit_all)
+        self.assertEqual(second.status_code, 200)
+        grade = SubmissionManualGrade.objects.get(submission=self.submission)
+        self.assertTrue(grade.released)
+
+    def test_release_all_does_not_touch_submission_points(self):
+        self._save_grade('77')
+        self._post(self.curator)
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 50.0)
 
     def test_non_editors_get_403(self):
         # curator_no_perm is intentionally excluded: curator membership alone
@@ -558,14 +579,13 @@ class ContestGradeReleaseTestCase(GradeTestBase):
         self.assertEqual(self._post(self.tester).status_code, 403)
 
     def test_get_is_side_effect_free(self):
-        """GET must never toggle the flag (DMOJ convention: Http404 from the
-        GET handler becomes a generic-message page via ContestMixin.dispatch).
-        The security property is that a GET cannot release or unrelease."""
-        self.contest.refresh_from_db()
-        self.assertFalse(self.contest.results_finalized)
+        """GET must never release (DMOJ convention: Http404 from the GET handler
+        becomes a generic-message page via ContestMixin.dispatch)."""
+        grade = self._save_grade()
+        self.assertFalse(grade.released)
         self._client(self.curator).get(self.release_url)
-        self.contest.refresh_from_db()
-        self.assertFalse(self.contest.results_finalized)
+        grade.refresh_from_db()
+        self.assertFalse(grade.released)
 
 
 class ContestGradeFileUploadTestCase(GradeTestBase):
@@ -665,7 +685,7 @@ class ContestGradeWorkspaceLayoutTestCase(GradeTestBase):
         html = self._page_html()
         for element in (
             'id="grade-app"', 'class="ws-app"',
-            'class="ws-toolbar"',
+            'class="ws-toolbar has-leave"', 'ws-toolbar-center',
             'id="ws-body"', 'class="ws-body layout-lr"',
             'id="ws-drawer"', 'class="ws-drawer grade-drawer"',
             'id="drawer-backdrop"',
@@ -683,7 +703,7 @@ class ContestGradeWorkspaceLayoutTestCase(GradeTestBase):
         for element in (
             'id="btn-overview"', 'id="ctx-home"', 'id="btn-prev"', 'id="btn-next"',
             'id="layout-toggle"', 'id="layout-mode"',
-            'id="btn-release"', 'id="btn-rejudge"', 'id="btn-submit-current"',
+            'id="btn-release"', 'id="btn-rejudge"', 'id="btn-save-current"',
         ):
             self.assertIn(element, html, 'missing toolbar element: %s' % element)
         # The context label links back to the contest detail page.
