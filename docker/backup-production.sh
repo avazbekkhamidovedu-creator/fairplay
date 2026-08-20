@@ -69,11 +69,27 @@ docker run --rm \
     "$DKUOJ_IMAGE" manage.py dump_database --output /backup/database.sql.gz
 
 echo 'Archiving site data'
-tar -czf "$staging/site-data.tar.gz" \
-    -C "$site_dir" .env local_settings.py docker-compose.yml static media
-tar -czf "$staging/judge-data.tar.gz" -C "$judge_dir" .
-tar -czf "$staging/problem-data.tar.gz" \
-    -C "$(dirname "$problem_dir")" "$(basename "$problem_dir")"
+# The site/judge/problem trees hold root-owned, non-searchable directories
+# written by the containers (they run as root), which host-side tar running as
+# the deploy user cannot stat. Archive inside a root container instead, then
+# hand the results back to the invoking user so the verify, move and prune
+# steps below still work under this script's umask.
+docker run --rm \
+    --user 0:0 \
+    -e OWNER="$(id -u):$(id -g)" \
+    -e PROBLEM_BASE="$(basename "$problem_dir")" \
+    -v "$site_dir:/data/site:ro" \
+    -v "$judge_dir:/data/judge:ro" \
+    -v "$(dirname "$problem_dir"):/data/problem-parent:ro" \
+    -v "$staging:/backup" \
+    --entrypoint sh \
+    "$DKUOJ_IMAGE" -euc '
+        tar -czf /backup/site-data.tar.gz \
+            -C /data/site .env local_settings.py docker-compose.yml static media
+        tar -czf /backup/judge-data.tar.gz -C /data/judge .
+        tar -czf /backup/problem-data.tar.gz -C /data/problem-parent "$PROBLEM_BASE"
+        chown -R "$OWNER" /backup
+    '
 
 cat > "$staging/metadata.env" <<EOF
 BACKUP_ID=$backup_id
