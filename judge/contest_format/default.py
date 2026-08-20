@@ -45,29 +45,65 @@ class DefaultContestFormat(BaseContestFormat):
         participation.format_data = format_data
         participation.save()
 
-    def display_user_problem(self, participation, contest_problem):
+    def problem_cell_url(self, participation, contest_problem, cell_url=None):
+        """Resolve a ranking problem-cell href.
+
+        ``None`` falls back to the per-user contest submission list. ``''`` means
+        no link (students must not open a classmate's list).
+        """
+        if cell_url is not None:
+            return cell_url
+        return reverse(
+            'contest_user_submissions',
+            args=[self.contest.key, participation.user.user.username, contest_problem.problem.code],
+        )
+
+    @staticmethod
+    def wrap_problem_cell(state, inner, url):
+        if url:
+            return format_html(
+                '<td class="{state}"><a href="{url}">{inner}</a></td>',
+                state=state, url=url, inner=inner,
+            )
+        return format_html('<td class="{state}">{inner}</td>', state=state, inner=inner)
+
+    def participation_result_url(self, participation, result_url=None):
+        if result_url is not None:
+            return result_url
+        return reverse('contest_all_user_submissions',
+                       args=[self.contest.key, participation.user.user.username])
+
+    @staticmethod
+    def wrap_result_cell(inner, url):
+        if url:
+            return format_html(
+                '<td class="user-points"><a href="{url}">{inner}</a></td>',
+                url=url, inner=inner,
+            )
+        return format_html('<td class="user-points">{inner}</td>', inner=inner)
+
+    def display_user_problem(self, participation, contest_problem, cell_url=None):
         format_data = (participation.format_data or {}).get(str(contest_problem.id))
         if format_data:
-            return format_html(
-                '<td class="{state}"><a href="{url}">{points}<div class="solving-time">{time}</div></a></td>',
-                state=(('pretest-' if self.contest.run_pretests_only and contest_problem.is_pretested else '') +
-                       self.best_solution_state(format_data['points'], contest_problem.points)),
-                url=reverse('contest_user_submissions',
-                            args=[self.contest.key, participation.user.user.username, contest_problem.problem.code]),
+            inner = format_html(
+                '{points}<div class="solving-time">{time}</div>',
                 points=floatformat(format_data['points']),
                 time=nice_repr(timedelta(seconds=format_data['time']), 'noday'),
             )
+            state = (('pretest-' if self.contest.run_pretests_only and contest_problem.is_pretested else '') +
+                     self.best_solution_state(format_data['points'], contest_problem.points))
+            return self.wrap_problem_cell(
+                state, inner, self.problem_cell_url(participation, contest_problem, cell_url))
         else:
             return mark_safe('<td></td>')
 
-    def display_participation_result(self, participation):
-        return format_html(
-            '<td class="user-points"><a href="{url}">{points}<div class="solving-time">{cumtime}</div></a></td>',
-            url=reverse('contest_all_user_submissions',
-                        args=[self.contest.key, participation.user.user.username]),
+    def display_participation_result(self, participation, result_url=None):
+        inner = format_html(
+            '{points}<div class="solving-time">{cumtime}</div>',
             points=floatformat(participation.score, -self.contest.points_precision),
             cumtime=nice_repr(timedelta(seconds=participation.cumtime), 'noday'),
         )
+        return self.wrap_result_cell(inner, self.participation_result_url(participation, result_url))
 
     def get_problem_breakdown(self, participation, contest_problems):
         return [(participation.format_data or {}).get(str(contest_problem.id)) for contest_problem in contest_problems]

@@ -116,19 +116,23 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertLess(html.index('class="cl-users"'), html.index('class="cl-actions"'))
 
     def test_solved_column_renders_before_users(self):
-        """A user who ACed a contest problem sees 'Solved x/y' in its own
+        """A user with a live contest full AC sees 'Solved x/y' in its own
         column, positioned before the participant count."""
-        from judge.models import ContestProblem, Submission, SubmissionSource
-        from judge.models.tests.util import create_problem
-        from judge.models import Language
+        from judge.models import ContestProblem, ContestSubmission, Language, Submission, SubmissionSource
+        from judge.models.tests.util import create_contest_participation, create_problem
 
         problem = create_problem('solved-prob', is_public=True)
-        ContestProblem.objects.create(contest=self.past_contest, problem=problem, points=100, order=1)
+        cp = ContestProblem.objects.create(contest=self.past_contest, problem=problem, points=100, order=1)
+        part = create_contest_participation(contest=self.past_contest, user=self.users['normal_user'].profile)
         submission = Submission.objects.create(
             user=self.users['normal_user'].profile, problem=problem,
             language=Language.objects.get(key='PY3'), result='AC', points=1,
+            contest_object=self.past_contest,
         )
         SubmissionSource.objects.create(submission=submission, source='print(1)')
+        ContestSubmission.objects.create(
+            submission=submission, problem=cp, participation=part, points=100,
+        )
 
         self.client.force_login(self.users['normal_user'])
         response = self.client.get(reverse('contest_list'))
@@ -137,6 +141,72 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertIn('Solved 1/1', html)
         # Solved column comes before the users column in the card.
         self.assertLess(html.index('class="cl-solved-col"'), html.index('class="cl-users"'))
+
+    def test_solved_count_uses_live_contest_ac_not_practice(self):
+        """Practice AC on the same public problem does not increment the
+        assignment-list solve; a live contest full AC does."""
+        from judge.models import ContestParticipation, ContestProblem, ContestSubmission, \
+            Language, Submission, SubmissionSource
+        from judge.models.tests.util import create_contest_participation, create_problem
+
+        problem = create_problem('list-solve-prob', is_public=True)
+        cp = ContestProblem.objects.create(
+            contest=self.past_contest, problem=problem, points=100, order=1,
+        )
+        lang = Language.objects.get(key='PY3')
+        profile = self.users['normal_user'].profile
+
+        practice = Submission.objects.create(
+            user=profile, problem=problem, language=lang,
+            result='AC', points=problem.points,
+        )
+        SubmissionSource.objects.create(submission=practice, source='print(1)')
+
+        self.client.force_login(self.users['normal_user'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertNotIn('Solved 1/1', html)
+        self.assertIn('Solved 0/1', html)
+
+        part = create_contest_participation(contest=self.past_contest, user=profile)
+        self.assertEqual(part.virtual, ContestParticipation.LIVE)
+        contest_sub = Submission.objects.create(
+            user=profile, problem=problem, language=lang,
+            result='AC', points=problem.points, contest_object=self.past_contest,
+        )
+        SubmissionSource.objects.create(submission=contest_sub, source='print(1)')
+        ContestSubmission.objects.create(
+            submission=contest_sub, problem=cp, participation=part, points=100,
+        )
+
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertIn('Solved 1/1', html)
+        self.assertNotIn('Solved 0/1', html)
+
+    def test_solved_count_is_personal_for_editors(self):
+        """Editors viewing the list see their own live contest progress, not all students'."""
+        from judge.models import ContestProblem, ContestSubmission, Language, Submission, SubmissionSource
+        from judge.models.tests.util import create_contest_participation, create_problem
+
+        problem = create_problem('editor-solve-prob', is_public=True)
+        cp = ContestProblem.objects.create(
+            contest=self.past_contest, problem=problem, points=100, order=1,
+        )
+        lang = Language.objects.get(key='PY3')
+        student = self.users['normal_user'].profile
+        part = create_contest_participation(contest=self.past_contest, user=student)
+        submission = Submission.objects.create(
+            user=student, problem=problem, language=lang,
+            result='AC', points=problem.points, contest_object=self.past_contest,
+        )
+        SubmissionSource.objects.create(submission=submission, source='print(1)')
+        ContestSubmission.objects.create(
+            submission=submission, problem=cp, participation=part, points=100,
+        )
+
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertIn('Solved 0/1', html)
+        self.assertNotIn('Solved 1/1', html)
 
 
 class ContestCreateViewTestCase(CommonDataMixin, TestCase):

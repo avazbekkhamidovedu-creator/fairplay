@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ _('Grade') }} — {{ contest.name }}{% endblock %}
+{% block title %}{{ _('Grade') }} — {{ grade_home_label }}{% endblock %}
 {% block html_class %}workspace-page{% endblock %}
 {% block body_class %}workspace-page{% endblock %}
 {% block title_row %}{% endblock %}
@@ -566,15 +566,15 @@
             // source can never break out of this <script> block (stored XSS).
             var submissions = {{ grade_submissions_json|tojson }};
             var problems = {{ grade_problems_json|tojson }};
-            var saveUrl = {{ url('contest_grade_save', contest.key)|tojson }};
-            var releaseUrl = {{ url('contest_grade_release', contest.key)|tojson }};
+            var saveUrl = {{ grade_save_url|tojson }};
+            var releaseUrl = {{ grade_release_url|tojson }};
             var rejudgeUrl = {{ url('submission_rejudge')|tojson }};
-            var statusUrl = {{ url('contest_grade_status', contest.key)|tojson }};
+            var statusUrl = {{ grade_status_url|tojson }};
             // Release is now per-submission (manual grade override). These counts
             // drive the "Release All" button hint only.
             var unreleasedCount = {{ grade_unreleased_count|tojson }};
             var releasedCount = {{ grade_released_count|tojson }};
-            var aiBatchUrl = {{ url('contest_grade_ai', contest.key)|tojson }};
+            var aiBatchUrl = {{ grade_ai_url|tojson }};
             var aiBatchMode = {{ 'true' if grade_ai_batch else 'false' }};
             var aiBatchDone = {{ 'true' if grade_ai_batch_done else 'false' }};
             // Rejudge additionally needs staff + the rejudge_submission perm
@@ -582,15 +582,17 @@
             var canRejudge = {{ 'true' if request.user.is_staff and request.user.has_perm('judge.rejudge_submission') else 'false' }};
             var selectedId = null;
             var filteredRows = [];
-            // Deep-link: ?submission=<id> (from the submission list's "grade" link)
-            // pre-selects that submission; renderList() falls back to the first
-            // row if the id is absent or filtered out. Show all submissions so
-            // a deep-linked non-final attempt is still visible.
+            // Deep-link: ?submission=<id> (from ranking cells / the submission
+            // list's "grade" link) pre-selects that submission; renderList()
+            // falls back to the first row if the id is absent or filtered out.
+            // Show all submissions and participations so a deep-linked non-final
+            // or virtual attempt is still visible and stays selected.
             try {
                 var urlSub = new URLSearchParams(window.location.search).get('submission');
                 if (urlSub) {
                     selectedId = parseInt(urlSub, 10);
                     $('#f-queue').val('all');
+                    if ($('#f-part').length) $('#f-part').val('all');
                 }
             } catch (e) { /* ignore — deep-link is best-effort */ }
 
@@ -637,7 +639,8 @@
             // ── Filtering (queue / participation / problem / type / user / attempts) ─
             function filtered() {
                 var q = $('#f-queue').val();
-                var part = $('#f-part').val();
+                var $part = $('#f-part');
+                var part = $part.length ? $part.val() : 'all';
                 var problem = $('#f-problem').val();
                 var type = $('#f-type').val();
                 var user = $('#f-user').val().trim().toLowerCase();
@@ -1212,7 +1215,7 @@
         <div class="ws-toolbar has-leave">
             <div class="ws-toolbar-left">
                 <button type="button" class="tool-btn icon-only" id="btn-overview" title="{{ _('Submission list') }}" aria-label="{{ _('Submission list') }}"><i class="fa fa-bars"></i></button>
-                <a class="ctx-label" id="ctx-home" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+                <a class="ctx-label" id="ctx-home" href="{{ grade_home_url }}">{{ grade_home_label }}</a>
                 <span class="nav-arrows">
                     <button type="button" class="tool-btn icon-only" id="btn-prev" title="{{ _('Previous submission') }}" aria-label="{{ _('Previous submission') }}"><i class="fa fa-chevron-left"></i></button>
                     <button type="button" class="tool-btn icon-only" id="btn-next" title="{{ _('Next submission') }}" aria-label="{{ _('Next submission') }}"><i class="fa fa-chevron-right"></i></button>
@@ -1251,6 +1254,7 @@
                                 <option value="graded">{{ _('Graded') }}</option>
                             </select>
                         </div>
+                        {% if grade_show_participation %}
                         <div>
                             <label for="f-part">{{ _('Participation') }}</label>
                             <select id="f-part">
@@ -1259,6 +1263,7 @@
                                 <option value="virtual">{{ _('Virtual') }}</option>
                             </select>
                         </div>
+                        {% endif %}
                         <div>
                             <label for="f-problem">{{ _('Problem') }}</label>
                             <select id="f-problem">
