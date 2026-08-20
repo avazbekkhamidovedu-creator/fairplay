@@ -1002,6 +1002,19 @@ class ContestTestCase(CommonDataMixin, TestCase):
         self.assertEqual(participation.start, participation.real_start)
         self.assertIsInstance(participation.end_time, timezone.datetime)
 
+    def test_generate_unique_key_skips_occupied_c_series(self):
+        first = Contest.generate_unique_key()
+        self.assertRegex(first, r'^c\d{6}$')
+        create_contest(
+            key=first,
+            start_time=timezone.now() - timezone.timedelta(days=1),
+            end_time=timezone.now() + timezone.timedelta(days=1),
+            authors=('superuser',),
+        )
+        second = Contest.generate_unique_key()
+        self.assertRegex(second, r'^c\d{6}$')
+        self.assertNotEqual(second, first)
+
 
 class ContestTagTestCase(TestCase):
     @classmethod

@@ -1013,11 +1013,9 @@ class ContestCreate(LoginRequiredMixin, View):
 
     def _create(self, request, payload):
         """Validate identity, insert a new ``judge_contest`` row, return redirect."""
-        # Basic identity checks: both name and key are mandatory.
-        for field in ('name', 'key'):
-            if not payload.get(field):
-                return JsonResponse({'error': _('Missing required field: %s') % field}, status=400)
-        key = payload.get('key', '')
+        if not payload.get('name'):
+            return JsonResponse({'error': _('Missing required field: %s') % 'name'}, status=400)
+        key = (payload.get('key') or '').strip() or Contest.generate_unique_key()
         if not re.match(r'^[a-z0-9]+$', key):
             return JsonResponse({'error': _('Assignment key must contain only lowercase letters and numbers.')},
                                 status=400)
@@ -1302,8 +1300,12 @@ class ContestCreate(LoginRequiredMixin, View):
                     'output_prefix': (cp.output_prefix_override
                                       if cp.output_prefix_override is not None else 10000),
                     'hide_results': cp.hide_results,  # three-state: None/True/False
+                    # Library/filter code: C / B / S / F / single / multiple / truefalse.
+                    'format': cp.problem.format_filter_code,
                 }
-                for idx, cp in enumerate(contest.contest_problems.all().order_by('order'))
+                for idx, cp in enumerate(
+                    contest.contest_problems.select_related('problem', 'problem__mcq_config').order_by('order'),
+                )
             ]
             # Target score (pure UX, not a model field): backfill from the sum
             # of problem points so the editor's target input matches reality.
@@ -1322,6 +1324,9 @@ class ContestCreate(LoginRequiredMixin, View):
                 prefill['vis_mode'] = 'public'
             else:
                 prefill['vis_mode'] = 'hidden'
+        else:
+            # Same auto-increment series as clone / admin (c000000, c000001, …).
+            prefill['key'] = Contest.generate_unique_key()
 
         ctx = {
             'title': _('Edit Assignment') if contest else _('Add Assignment'),
