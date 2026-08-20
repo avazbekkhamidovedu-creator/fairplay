@@ -2125,7 +2125,6 @@ class EditClass(LoginRequiredMixin, TitleMixin, FormView):
         return HttpResponseRedirect(self.object.get_absolute_url())
 
 
-
 class ClassImportMembers(LoginRequiredMixin, View):
     """Import a Canvas/roster CSV into an existing class immediately (no Save class)."""
 

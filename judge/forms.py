@@ -715,7 +715,6 @@ class ContestCloneForm(Form):
         return key
 
 
-
 class ProblemPointsVoteForm(ModelForm):
     note = CharField(max_length=8192, required=False)
 

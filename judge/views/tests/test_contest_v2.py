@@ -266,7 +266,6 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
         self.assertTrue(contest.is_visible)
         self.assertEqual(contest.authors.count(), 1)
 
-
     def test_post_missing_fields(self):
         self.client.force_login(self.users['staff_contest_edit_all'])
         data = {'name': 'Incomplete Contest'}

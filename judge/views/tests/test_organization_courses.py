@@ -1,7 +1,7 @@
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
-from judge.models import Class, ClassMaterial, Contest, InstructorVerificationRequest, Organization, OrganizationRequest
+from judge.models import Class, ClassMaterial, InstructorVerificationRequest, Organization, OrganizationRequest
 from judge.models.tests.util import CommonDataMixin, create_user
 from judge.views.organization import safe_redirect_url
 
@@ -683,5 +683,3 @@ class ClassSiteFormTests(CommonDataMixin, TestCase):
         }, organization=org)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data['name'], '2026-2027 Spring - Session 1 Prof. Huang')
-
-
