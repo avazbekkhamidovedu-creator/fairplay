@@ -143,10 +143,9 @@ def build_grade_payload(submissions, final_ids):
         contest_submission = sub.contest_or_none
         if contest_submission is not None:
             display_points = contest_submission.points
-            display_total = contest_submission.problem.points
         else:
             display_points = sub.points
-            display_total = sub.case_total or sub.problem.points
+        display_total = grade_points_total(sub)
         manual_grade = sub.manual_grade_override
         if manual_grade is not None and manual_grade.points is not None:
             manual_points = manual_grade.points
@@ -256,12 +255,21 @@ def student_display_points(submission):
     return submission.points
 
 
-def student_display_points_total(submission):
-    """Student-visible denominator: assignment points, else ``problem.points``."""
+def grade_points_total(submission):
+    """Denominator for Grade-desk display, status poll, and Save clamp.
+
+    Assignment: ``ContestProblem.points``. Practice / detached: ``problem.points``.
+    Never ``case_total`` — MCQ judging is often 0/1 on a 100-point problem.
+    """
     contest_submission = submission.contest_or_none
     if contest_submission is not None:
         return contest_submission.problem.points
     return submission.problem.points
+
+
+def student_display_points_total(submission):
+    """Student-visible denominator: same scale as the Grade desk."""
+    return grade_points_total(submission)
 
 
 def student_display_released(submission):
@@ -287,11 +295,10 @@ def attach_student_display_scores(submissions):
 def apply_manual_grade(profile, submission, score, note=None):
     """Persist a manual override for ``submission``. Returns ``(grade, score, total)``."""
     contest_submission = submission.contest_or_none
+    total = grade_points_total(submission)
     if contest_submission is not None:
-        total = contest_submission.problem.points
         machine_points = contest_submission.points
     else:
-        total = submission.case_total or submission.problem.points
         machine_points = submission.points
     score = min(max(score, 0), total)
 

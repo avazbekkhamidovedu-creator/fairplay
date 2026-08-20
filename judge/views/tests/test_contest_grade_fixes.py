@@ -180,17 +180,17 @@ class ContestGradeTotalUsesAssignmentPointsTestCase(GradeTestBase):
         self.assertEqual(row['total'], 25)      # ContestProblem.points, not 100
         self.assertEqual(row['points'], 12.5)   # ContestSubmission.points, not 50
 
-    def test_standalone_submission_falls_back_to_problem_scale(self):
-        """A submission with no ContestSubmission row keeps the old behavior."""
+    def test_standalone_submission_uses_problem_points_not_case_total(self):
+        """No ContestSubmission: Grade total is problem.points, never case_total."""
         lone = Submission.objects.create(
             user=self.student.profile, problem=self.problem,
             language=Language.objects.get(key='PY3'), result='AC', status='D',
-            contest_object=self.contest, points=80.0, case_total=100,
+            contest_object=self.contest, points=1.0, case_total=100,
         )
         payload = self._grade_payload()
         row = next(s for s in payload if s['id'] == lone.id)
-        self.assertEqual(row['total'], 100)
-        self.assertEqual(row['points'], 80.0)
+        self.assertEqual(row['total'], self.problem.points)  # 1, not case_total 100
+        self.assertEqual(row['points'], 1.0)
 
     def test_save_endpoint_clamps_to_assignment_total(self):
         response = self._client(self.curator).post(
@@ -537,8 +537,10 @@ class StudentVisibleScoreTestCase(GradeTestBase):
             case_points=1, case_total=1, time=0, memory=0,
         )
         SubmissionSource.objects.create(submission=cls.practice_mcq_sub, source='print(2)')
+        cls.practice_grade_url = reverse('practice_grade')
         cls.practice_save_url = reverse('practice_grade_save')
         cls.practice_release_url = reverse('practice_grade_release')
+        cls.practice_status_url = reverse('practice_grade_status')
 
     def _list_as(self, user, submission):
         response = self._client(user).get(
@@ -554,6 +556,34 @@ class StudentVisibleScoreTestCase(GradeTestBase):
             reverse('problem_detail', args=[submission.problem.code])
             + '?submission=%d' % submission.id,
         )
+
+    def _practice_grade_payload(self):
+        response = self._client(self.superuser).get(self.practice_grade_url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode('utf-8')
+        return json.loads(html.split('var submissions = ')[1].split(';\n')[0])
+
+    def test_practice_grade_payload_uses_problem_points_not_case_total(self):
+        row = next(s for s in self._practice_grade_payload()
+                   if s['id'] == self.practice_mcq_sub.id)
+        self.assertEqual(row['total'], 100)
+        self.assertNotEqual(row['total'], self.practice_mcq_sub.case_total)
+
+    def test_practice_save_does_not_clamp_to_case_total(self):
+        save = self._client(self.superuser).post(
+            self.practice_save_url, {'submission': self.practice_mcq_sub.id, 'score': '88'})
+        self.assertEqual(save.status_code, 200, save.content)
+        body = save.json()
+        self.assertEqual(body['score'], 88.0)
+        self.assertEqual(body['total'], 100)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.practice_mcq_sub).points, 88.0)
+
+    def test_practice_grade_status_uses_problem_points(self):
+        response = self._client(self.superuser).get(
+            self.practice_status_url, {'submission': self.practice_mcq_sub.id})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['total'], 100)
 
     def test_practice_list_uses_problem_points_not_case_total(self):
         score = self._list_as(self.student, self.practice_mcq_sub)

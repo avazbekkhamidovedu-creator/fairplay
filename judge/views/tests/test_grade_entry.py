@@ -106,15 +106,15 @@ class SubmissionGradeEntryTestCase(CommonDataMixin, TestCase):
         )
         cls.student = create_user(username='grade_entry_student')
         cls.practice_problem = create_problem(
-            code='grade-entry-prac', name='Practice Prob', is_public=True,
+            code='grade-entry-prac', name='Practice Prob', is_public=True, points=100,
             authors=('grade_entry_teacher',),
         )
         cls.other_problem = create_problem(
-            code='grade-entry-other', name='Other Practice', is_public=True,
+            code='grade-entry-other', name='Other Practice', is_public=True, points=100,
             authors=('grade_entry_other',),
         )
         cls.assignment_problem = create_problem(
-            code='grade-entry-asgn', name='Assignment Prob', is_public=True,
+            code='grade-entry-asgn', name='Assignment Prob', is_public=True, points=100,
         )
         lang = Language.get_python3()
         now = timezone.now()

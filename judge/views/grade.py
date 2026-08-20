@@ -16,7 +16,7 @@ from django.views.generic import TemplateView, View
 from judge.models import Problem, Submission, SubmissionManualGrade
 from judge.utils.contest_grade import (
     apply_manual_grade, build_grade_payload, can_open_practice_grade,
-    practice_final_submission_ids, practice_grade_queryset,
+    grade_points_total, practice_final_submission_ids, practice_grade_queryset,
 )
 
 
@@ -137,7 +137,7 @@ class PracticeGradeStatus(PracticeGradeAuthMixin, View):
                 .prefetch_related('test_cases').get()
         except Submission.DoesNotExist:
             return JsonResponse({'error': _('Submission not found.')}, status=404)
-        total = submission.case_total or submission.problem.points
+        total = grade_points_total(submission)
         manual_grade = submission.manual_grade_override
         if manual_grade is not None and manual_grade.points is not None:
             points = manual_grade.points

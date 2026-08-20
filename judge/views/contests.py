@@ -2391,8 +2391,8 @@ class ContestGradeStatus(ContestMixin, DetailView):
         except Submission.DoesNotExist:
             return JsonResponse({'error': _('Submission not found.')}, status=404)
         contest_submission = submission.contest_or_none
-        total = contest_submission.problem.points if contest_submission is not None \
-            else (submission.case_total or submission.problem.points)
+        from judge.utils.contest_grade import grade_points_total
+        total = grade_points_total(submission)
         # Mirror the grade payload's point scale (contest-scaled when part of
         # the assignment) so a polled rejudge result agrees with the row shown.
         # A manual override always wins (actual score), including for standalone
