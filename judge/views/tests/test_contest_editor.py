@@ -742,7 +742,9 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('data-format="single"', lib)
         self.assertIn('data-format="truefalse"', lib)
         self.assertIn('data-format="multiple"', lib)
-        self.assertIn('.cp-opt-partial', lib)
+        self.assertIn('cp-opt-partial', lib)
+        self.assertIn('.cp-opt-pretested', lib)
+        self.assertNotIn(':not([data-format="multiple"]) .cp-opt-partial', lib)
 
         response = self._post(
             name='Option locks', key='optlocks',
