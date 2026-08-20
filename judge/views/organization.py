@@ -14,6 +14,7 @@ from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedi
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import json_script
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
 from django.utils.translation import gettext as _, gettext_lazy, ngettext
@@ -24,9 +25,7 @@ from reversion import revisions
 from judge.forms import ClassAssignmentsForm, ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
 from judge.models import AdminNotification, Class, ClassMaterial, Contest, InstructorVerificationRequest, \
     Organization, OrganizationRequest, Profile
-from judge.models.notification import (
-    INSTRUCTORS_GROUP, SITE_ADMINISTRATORS_GROUP, ensure_instructors_group,
-)
+from judge.models.notification import ensure_instructors_group, user_in_instructors_group
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, notify_instructor_verification,
 )
@@ -43,7 +42,8 @@ __all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers', 'Organiz
            'AdminNotificationInboxView', 'InstructorVerificationSubmitView',
            'KickUserWidgetView', 'ClassHome', 'RequestJoinClass',
            'OrganizationImportUsers', 'CreateClass', 'EditClass', 'DeleteClass',
-           'ClassLinkAssignmentsView', 'ClassMaterialActionView', 'ClassMaterialDownloadView']
+           'ClassLinkAssignmentsView', 'ClassMaterialActionView', 'ClassMaterialDownloadView',
+           'ClassImportMembers']
 
 
 # Materials upload policy (extensions lowercase, without leading dot).
@@ -158,7 +158,7 @@ def profile_is_site_teacher(profile, user=None):
         return False
     if user.has_perm('judge.add_organization'):
         return True
-    return user.groups.filter(name=INSTRUCTORS_GROUP).exists()
+    return user_in_instructors_group(user)
 
 
 def profile_is_org_member(profile, org):
@@ -270,12 +270,10 @@ def users_for_template(users, order):
 
 
 def user_can_review_site_teacher_verifications(user):
-    """Site-wide teacher applications: Site Administrators / edit_all / superuser."""
+    """Site-wide teacher applications: Django superusers."""
     if not user or not user.is_authenticated:
         return False
-    if user.is_superuser or user.has_perm('judge.edit_all_organization'):
-        return True
-    return user.groups.filter(name=SITE_ADMINISTRATORS_GROUP).exists()
+    return user.is_superuser
 
 
 def instructor_verifications_for_reviewer(profile, user=None):
@@ -459,6 +457,25 @@ def promote_site_teacher_on_class_join(profile, class_obj):
     if profile is None or class_obj is None:
         return False
     return maybe_add_course_instructor(profile, class_obj.organization)
+
+
+def apply_approved_join_request(obj):
+    """Grant course/class membership after an OrganizationRequest is approved.
+
+    Site teachers who picked a class are added as class instructors (co-teaching).
+    Students are added as class members only.
+    """
+    if obj.grants_organization or obj.request_class_id:
+        obj.user.organizations.add(obj.organization)
+        maybe_add_course_instructor(obj.user, obj.organization)
+    if obj.request_class:
+        if profile_is_site_teacher(obj.user, getattr(obj.user, 'user', None)):
+            grant_class_instructor_role(obj.user, obj.request_class)
+            maybe_add_course_instructor(obj.user, obj.organization)
+        else:
+            obj.user.classes.add(obj.request_class)
+            promote_site_teacher_on_class_join(obj.user, obj.request_class)
+    cache.delete(make_template_fragment_key('org_member_count', (obj.organization_id,)))
 
 
 def maybe_add_course_instructor(profile, org):
@@ -815,7 +832,16 @@ class OrganizationList(TitleMixin, ListView):
             names = org.instructor_name_list
             org.instructor_line = ', '.join(names) if names else _('TBA')
             org.instructor_count = len(names)
+        classes_by_org = {}
+        org_ids = [o.id for o in orgs]
+        for cls in Class.objects.filter(organization_id__in=org_ids, is_active=True).order_by('name') \
+                .only('id', 'name', 'organization_id'):
+            classes_by_org.setdefault(cls.organization_id, []).append({'id': cls.id, 'name': cls.name})
         context['organizations'] = orgs
+        context['join_classes_script'] = json_script(
+            {str(oid): classes_by_org.get(oid, []) for oid in org_ids},
+            'join-classes-json',
+        )
         context.update(course_inbox_chrome_context(self.request))
         # Keep list-page review totals (already computed above) if chrome helper differs.
         context['can_review_any'] = can_review_any
@@ -855,21 +881,14 @@ class OrganizationHome(OrganizationDetailView):
         context.update(course_inbox_chrome_context(self.request))
         # Per-course badge on the detail page link.
         context['org_pending_review_count'] = context['review_pending_count']
-        context['join_request_form'] = None
-        active_classes = self.object.classes.filter(is_active=True)
-        can_apply = (
+        context['can_request_from_list'] = bool(
             profile is not None and
             not context['can_manage'] and
             profile not in self.object and
             not context['user_pending'] and
-            not self.object.is_open and
-            not (self.object.class_required and not active_classes.exists())
+            not self.object.is_open,
         )
-        if can_apply:
-            context['join_request_form'] = OrganizationRequestForm(
-                class_required=self.object.class_required,
-                class_queryset=active_classes,
-            )
+        active_classes = self.object.classes.filter(is_active=True)
 
         classes = active_classes.prefetch_related('admins__user', 'members')
         if profile is not None:
@@ -1065,17 +1084,30 @@ class LeaveOrganization(OrganizationMembershipChange):
 
 
 class OrganizationRequestForm(Form):
-    class_ = forms.ModelChoiceField(Class.objects.all())
-    reason = forms.CharField(widget=forms.Textarea)
+    class_ = forms.ModelChoiceField(Class.objects.all(), required=False)
+    reason = forms.CharField(widget=forms.Textarea, required=False)
 
-    def __init__(self, *args, class_required: bool, class_queryset, **kwargs) -> None:
+    def __init__(self, *args, class_required: bool, class_queryset, for_teacher: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.fields['class_'].required = class_required
+        self.for_teacher = for_teacher
+        has_classes = bool(class_queryset)
+        if for_teacher:
+            self.fields['class_'].required = False
+            self.fields['reason'].required = False
+            self.show_classes = has_classes
+            self.fields['class_'].empty_label = _('None — course only (not co-teaching)')
+            self.fields['reason'].widget.attrs['placeholder'] = _(
+                'Optional. Leave class empty unless you will co-teach that section.',
+            )
+        else:
+            self.fields['class_'].required = class_required or has_classes
+            self.fields['reason'].required = True
+            self.show_classes = class_required or has_classes
+            self.fields['class_'].empty_label = _('Select a class…')
         self.fields['class_'].queryset = class_queryset
         self.fields['class_'].label_from_instance = attrgetter('name')
         self.fields['class_'].widget.attrs.update({'class': 'oj-select'})
         self.fields['reason'].widget.attrs.update({'rows': 5, 'class': 'oj-input'})
-        self.show_classes = class_required or bool(class_queryset)
 
 
 class RequestJoinOrganization(LoginRequiredMixin, SingleObjectMixin, FormView):
@@ -1099,14 +1131,18 @@ class RequestJoinOrganization(LoginRequiredMixin, SingleObjectMixin, FormView):
                                    _('You already have a pending request to join %s.') % self.object.name)
         if self.object.is_open:
             raise Http404()
-        if self.object.class_required and not self.object.classes.filter(is_active=True).exists():
+        is_teacher = profile_is_site_teacher(profile, request.user)
+        if (not is_teacher and self.object.class_required and
+                not self.object.classes.filter(is_active=True).exists()):
             return generic_message(self.request, _("Can't request to join %s") % self.object.name,
                                    _('This course requires a class, but no classes are available yet.'))
         return super(RequestJoinOrganization, self).dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self) -> dict:
         kwargs = super().get_form_kwargs()
-        kwargs['class_required'] = self.object.class_required
+        is_teacher = profile_is_site_teacher(self.request.profile, self.request.user)
+        kwargs['for_teacher'] = is_teacher
+        kwargs['class_required'] = False if is_teacher else self.object.class_required
         kwargs['class_queryset'] = self.object.classes.filter(is_active=True)
         return kwargs
 
@@ -1119,8 +1155,11 @@ class RequestJoinOrganization(LoginRequiredMixin, SingleObjectMixin, FormView):
         request = OrganizationRequest()
         request.organization = self.get_object()
         request.user = self.request.profile
-        request.reason = form.cleaned_data['reason']
-        request.request_class = form.cleaned_data['class_']
+        reason = (form.cleaned_data.get('reason') or '').strip()
+        if not reason and getattr(form, 'for_teacher', False):
+            reason = _('Course instructor')
+        request.reason = reason
+        request.request_class = form.cleaned_data.get('class_')
         request.state = 'P'
         request.grants_organization = True
         request.save()
@@ -1130,6 +1169,15 @@ class RequestJoinOrganization(LoginRequiredMixin, SingleObjectMixin, FormView):
         return HttpResponseRedirect(safe_redirect_url(
             self.request, next_url, request.organization.get_absolute_url(),
         ))
+
+    def form_invalid(self, form):
+        next_url = self.request.POST.get('next') or self.request.GET.get('next')
+        if next_url:
+            messages.error(self.request, _('Please complete the membership request.'))
+            return HttpResponseRedirect(safe_redirect_url(
+                self.request, next_url, self.object.get_absolute_url(),
+            ))
+        return super().form_invalid(form)
 
 
 class OrganizationRequestDetail(LoginRequiredMixin, TitleMixin, DetailView):
@@ -1222,13 +1270,7 @@ class OrganizationRequestView(OrganizationRequestBaseView):
             approved, rejected = 0, 0
             for obj in formset.save():
                 if obj.state == 'A':
-                    # Class membership always implies course membership.
-                    if getattr(obj, 'grants_organization', True) or obj.request_class_id:
-                        obj.user.organizations.add(obj.organization)
-                        maybe_add_course_instructor(obj.user, obj.organization)
-                    if obj.request_class:
-                        obj.user.classes.add(obj.request_class)
-                        promote_site_teacher_on_class_join(obj.user, obj.request_class)
+                    apply_approved_join_request(obj)
                     approved += 1
                 elif obj.state == 'R':
                     rejected += 1
@@ -1461,13 +1503,7 @@ class InstructorJoinRequestsView(LoginRequiredMixin, TitleMixin, View):
         approved = rejected = reopened = deleted = 0
 
         def grant_membership(obj):
-            if obj.grants_organization or obj.request_class_id:
-                obj.user.organizations.add(obj.organization)
-                maybe_add_course_instructor(obj.user, obj.organization)
-            if obj.request_class:
-                obj.user.classes.add(obj.request_class)
-                promote_site_teacher_on_class_join(obj.user, obj.request_class)
-            cache.delete(make_template_fragment_key('org_member_count', (obj.organization_id,)))
+            apply_approved_join_request(obj)
 
         def revoke_membership(obj):
             if obj.grants_organization:
@@ -1788,7 +1824,11 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
         context['instructor_apply_class_id'] = self.object.id
 
         if can_view_content:
-            ranked_users = list(users_for_template(self.object.members, self.order))
+            # Students tab: class members who are not class instructors/admins.
+            student_qs = self.object.members.exclude(
+                id__in=self.object.admins.values_list('id', flat=True),
+            )
+            ranked_users = list(users_for_template(student_qs, self.order))
         else:
             ranked_users = []
         context['users'] = ranked_users
@@ -1961,14 +2001,43 @@ def apply_class_member_csv(form, class_obj, organization):
     return result
 
 
+def _flash_class_csv_import_result(request, csv_result):
+    """Surface create/link counts and any import errors after class create/edit."""
+    if csv_result is None:
+        return
+    messages.info(
+        request,
+        _('CSV import: %(created)d created, %(updated)d updated, %(linked)d linked to class.') % {
+            'created': csv_result.created,
+            'updated': csv_result.updated,
+            'linked': csv_result.class_linked,
+        },
+    )
+    for err in csv_result.errors[:10]:
+        messages.error(request, err)
+    if len(csv_result.errors) > 10:
+        messages.error(
+            request,
+            _('…and %(count)d more CSV import error(s).') % {
+                'count': len(csv_result.errors) - 10,
+            },
+        )
+
+
 class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
     template_name = 'organization/create_class.html'
     form_class = ClassSiteForm
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['organization'] = self.object
+        return kwargs
 
     def get_form(self, form_class=None):
         form = super().get_form(form_class)
         if self.request.method == 'GET':
             form.fields['admins'].initial = [self.request.profile.pk]
+            form.fields['instructor_names'].initial = self.request.profile.display_name
         return form
 
     def get_context_data(self, **kwargs):
@@ -2001,14 +2070,7 @@ class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
         csv_result = apply_class_member_csv(form, new_class, self.object)
         sync_class_members_to_organization(new_class)
         messages.success(self.request, _('Class "%s" created successfully.') % new_class.name)
-        if csv_result is not None:
-            messages.info(
-                self.request,
-                _('CSV import: %(created)d created, %(linked)d linked to class.') % {
-                    'created': csv_result.created,
-                    'linked': csv_result.class_linked,
-                },
-            )
+        _flash_class_csv_import_result(self.request, csv_result)
         return HttpResponseRedirect(new_class.get_absolute_url())
 
 
@@ -2032,6 +2094,7 @@ class EditClass(LoginRequiredMixin, TitleMixin, FormView):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs['instance'] = self.object
+        kwargs['organization'] = self.object.organization
         return kwargs
 
     def get_title(self):
@@ -2046,19 +2109,47 @@ class EditClass(LoginRequiredMixin, TitleMixin, FormView):
         return context
 
     def form_valid(self, form):
+        previous_admin_ids = set(self.object.admins.values_list('id', flat=True))
         form.save()
+        # HeavySelect2 often omits admins on submit (empty POST → clears M2M). If the
+        # class previously had administrators and the submit cleared them all, restore.
+        submitted_admins = form.cleaned_data.get('admins')
+        if previous_admin_ids and (submitted_admins is None or not submitted_admins.exists()):
+            self.object.admins.add(*previous_admin_ids)
+        # The editor who just saved must remain able to edit.
+        self.object.admins.add(self.request.profile)
         csv_result = apply_class_member_csv(form, self.object, self.object.organization)
         sync_class_members_to_organization(self.object)
         messages.success(self.request, _('Class "%s" updated.') % self.object.name)
-        if csv_result is not None:
-            messages.info(
-                self.request,
-                _('CSV import: %(created)d created, %(linked)d linked to class.') % {
-                    'created': csv_result.created,
-                    'linked': csv_result.class_linked,
-                },
-            )
+        _flash_class_csv_import_result(self.request, csv_result)
         return HttpResponseRedirect(self.object.get_absolute_url())
+
+
+class ClassImportMembers(LoginRequiredMixin, View):
+    """Import a Canvas/roster CSV into an existing class immediately (no Save class)."""
+
+    def post(self, request, *args, **kwargs):
+        class_obj = get_object_or_404(Class, id=kwargs['cpk'])
+        org = class_obj.organization
+        if not (org.admins.filter(id=request.profile.id).exists() or
+                class_obj.admins.filter(id=request.profile.id).exists() or
+                request.user.has_perm('judge.edit_all_organization')):
+            return generic_message(request, _('Access Denied'),
+                                   _('You do not have permission to import members for this class.'),
+                                   status=403)
+
+        csv_file = request.FILES.get('member_csv')
+        if not csv_file:
+            messages.error(request, _('Choose a CSV file to import.'))
+            return HttpResponseRedirect(reverse('class_edit', args=[org.id, org.slug, class_obj.id, class_obj.slug]))
+
+        result = process_user_csv(
+            csv_file, organization=org, target_class=class_obj,
+            update_existing=True, activate=True,
+        )
+        sync_class_members_to_organization(class_obj)
+        _flash_class_csv_import_result(request, result)
+        return HttpResponseRedirect(class_obj.get_absolute_url() + '?tab=info')
 
 
 class DeleteClass(LoginRequiredMixin, View):
@@ -2268,7 +2359,7 @@ class ClassLinkAssignmentsView(LoginRequiredMixin, TitleMixin, FormView):
         return kwargs
 
     def get_title(self):
-        return _('Manage assignments - %s') % self.object.name
+        return _('Add from library - %s') % self.object.name
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -2306,7 +2397,11 @@ class OrganizationImportForm(forms.Form):
         label=gettext_lazy('Target Class'),
         empty_label=gettext_lazy('-- No class (organization only) --'),
     )
-    update_existing = forms.BooleanField(required=False, label=gettext_lazy('Update existing users'))
+    update_existing = forms.BooleanField(
+        required=False,
+        initial=True,
+        label=gettext_lazy('Update existing users'),
+    )
     activate = forms.BooleanField(required=False, initial=True, label=gettext_lazy('Activate users'))
 
     def __init__(self, *args, organization=None, **kwargs):

@@ -574,6 +574,9 @@
             // drive the "Release All" button hint only.
             var unreleasedCount = {{ grade_unreleased_count|tojson }};
             var releasedCount = {{ grade_released_count|tojson }};
+            var aiBatchUrl = {{ url('contest_grade_ai', contest.key)|tojson }};
+            var aiBatchMode = {{ 'true' if grade_ai_batch else 'false' }};
+            var aiBatchDone = {{ 'true' if grade_ai_batch_done else 'false' }};
             // Rejudge additionally needs staff + the rejudge_submission perm
             // (enforced server-side by the widget too); disable the button when absent.
             var canRejudge = {{ 'true' if request.user.is_staff and request.user.has_perm('judge.rejudge_submission') else 'false' }};
@@ -1105,6 +1108,28 @@
                   .always(function () { $btn.prop('disabled', false); });
             });
 
+            function refreshAiBatchButton() {
+                if (!aiBatchMode) return;
+                var $btn = $('#btn-ai-grade');
+                $btn.html('<i class="fa fa-magic"></i> ' + (aiBatchDone
+                    ? '{{ _('Re-run AI grading') }}'
+                    : '{{ _('Run AI grading') }}'));
+            }
+
+            $('#btn-ai-grade').on('click', function () {
+                var $btn = $(this).prop('disabled', true);
+                $.post(aiBatchUrl).done(function (res) {
+                    if (!res.ok) { alert(res.error || '{{ _('Failed') }}'); return; }
+                    aiBatchDone = false;
+                    refreshAiBatchButton();
+                    alert('{{ _('AI grading queued. It grades each student’s latest submission per problem. Refresh this page when it finishes.') }}');
+                }).fail(function (xhr) {
+                    var msg = '{{ _('Failed to start AI grading') }}';
+                    try { msg = (xhr.responseJSON && xhr.responseJSON.error) || msg; } catch (e) {}
+                    alert(msg);
+                }).always(function () { $btn.prop('disabled', false); });
+            });
+
             // Queueing only schedules the judge — the verdict lands asynchronously.
             // Poll the per-submission status endpoint until the judge finishes,
             // then patch the in-memory row and re-render.
@@ -1174,6 +1199,7 @@
             $('#btn-next').on('click', function () { moveSelection(1); });
 
             refreshReleaseButton();
+            refreshAiBatchButton();
             renderList();
             renderLeft();
             renderRight();
@@ -1199,6 +1225,9 @@
                 <button type="button" class="tool-btn release-btn" id="btn-release" title="{{ _('Reveal every saved manual grade to students') }}"><i class="fa fa-flag-checkered"></i> {{ _('Release All') }}</button>
             </div>
             <div class="grade-actions">
+                {% if grade_ai_batch %}
+                <button type="button" class="tool-btn" id="btn-ai-grade" title="{{ _('Grade each student’s latest submission per problem with AI') }}"><i class="fa fa-magic"></i> {{ _('Run AI grading') }}</button>
+                {% endif %}
                 <button type="button" class="tool-btn" id="btn-rejudge" disabled title="{{ _('Requires staff + rejudge permission') }}"><i class="fa fa-refresh"></i> {{ _('Rejudge') }}</button>
                 <button type="button" class="tool-btn submit-btn" id="btn-save-current" disabled><i class="fa fa-check"></i> {{ _('Save grading') }}</button>
             </div>

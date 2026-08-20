@@ -19,6 +19,7 @@ from reversion.admin import VersionAdmin
 
 from judge.models import Class, Contest, ContestProblem, ContestSubmission, Profile, Rating, Submission
 from judge.ratings import rate_contest
+from judge.utils.user_search import apply_profile_choice_labels, profile_choice_label
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminAceWidget, AdminHeavySelect2MultipleWidget, AdminHeavySelect2Widget, \
     AdminMartorWidget, AdminSelect2MultipleWidget, AdminSelect2Widget, PrivateFileInput
@@ -85,6 +86,7 @@ class ContestProblemInline(SortableInlineAdminMixin, admin.TabularInline):
 class ContestForm(ModelForm):
     def __init__(self, *args, **kwargs):
         super(ContestForm, self).__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         if 'rate_exclude' in self.fields:
             if self.instance and self.instance.id:
                 self.fields['rate_exclude'].queryset = \
@@ -163,6 +165,7 @@ class SimpleContestCreationForm(ContestForm):
             'is_rated', 'rate_all', 'rating_floor', 'rating_ceiling', 'performance_ceiling_override',
             'rate_exclude', 'access_code', 'private_contestants', 'organizations', 'classes',
             'join_organizations', 'view_contest_scoreboard', 'view_contest_submissions', 'banned_users',
+            'ai_grading_mode', 'ai_grading_auto_delay_minutes',
         )
 
     def __init__(self, *args, **kwargs):
@@ -175,7 +178,7 @@ class SimpleContestCreationForm(ContestForm):
             'summary', 'format_name', 'format_config', 'problem_label_script', 'is_rated', 'rate_all',
             'rating_floor', 'rating_ceiling', 'performance_ceiling_override', 'rate_exclude', 'access_code',
             'private_contestants', 'organizations', 'classes', 'join_organizations', 'view_contest_scoreboard',
-            'view_contest_submissions', 'banned_users',
+            'view_contest_submissions', 'banned_users', 'ai_grading_mode', 'ai_grading_auto_delay_minutes',
         ):
             self.fields[field_name].required = False
         self.fields['creation_preset'].choices = (
@@ -185,6 +188,12 @@ class SimpleContestCreationForm(ContestForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        if not cleaned_data.get('ai_grading_mode'):
+            cleaned_data['ai_grading_mode'] = Contest.AI_GRADING_OFF
+        if cleaned_data.get('ai_grading_auto_delay_minutes') in (None, ''):
+            cleaned_data['ai_grading_auto_delay_minutes'] = (
+                Contest._meta.get_field('ai_grading_auto_delay_minutes').default
+            )
         if cleaned_data.get('embedded_advanced_mode'):
             cleaned_data['key'] = cleaned_data.get('key') or getattr(self, 'generated_simple_key', '')
             return cleaned_data
@@ -246,6 +255,10 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
             'classes': ('embedded-advanced-fields',),
             'fields': ('format_name', 'format_config', 'problem_label_script'),
         }),
+        (_('Advanced AI grading'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('ai_grading_mode', 'ai_grading_auto_delay_minutes'),
+        }),
         (_('Advanced Rating'), {
             'classes': ('embedded-advanced-fields',),
             'fields': (
@@ -274,6 +287,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         (_('Scheduling'), {'fields': ('start_time', 'end_time', 'time_limit')}),
         (_('Details'), {'fields': ('description', 'og_image', 'logo_override_image', 'tags', 'summary')}),
         (_('Format'), {'fields': ('format_name', 'format_config', 'problem_label_script')}),
+        (_('AI grading'), {'fields': ('ai_grading_mode', 'ai_grading_auto_delay_minutes')}),
         (_('Rating'), {'fields': ('is_rated', 'rate_all', 'rating_floor', 'rating_ceiling',
                                   'performance_ceiling_override', 'rate_exclude')}),
         (_('Access'), {'fields': ('access_code', 'private_contestants', 'organizations', 'classes',
@@ -308,12 +322,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         return request.POST.get('embedded_advanced_mode') in ('1', 'on', 'true', 'True')
 
     def generate_contest_key(self):
-        max_key = 1000000
-        for i in range(max_key):
-            key = 'c{:06d}'.format(i)
-            if not Contest.objects.filter(key=key).exists():
-                return key
-        return 'contest{}'.format(str(timezone.now().timestamp()).replace('.', '')[-6:])
+        return Contest.generate_unique_key()
 
     def get_simple_preset_defaults(self, request):
         profile = getattr(request.user, 'profile', None)
@@ -360,9 +369,13 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                 'view_contest_scoreboard': [],
                 'view_contest_submissions': [],
                 'banned_users': [],
+                'ai_grading_mode': Contest.AI_GRADING_OFF,
+                'ai_grading_auto_delay_minutes': str(
+                    Contest._meta.get_field('ai_grading_auto_delay_minutes').default,
+                ),
             },
             'display': {
-                'authors': [{'id': str(profile.id), 'text': profile.user.username}] if profile else [],
+                'authors': [{'id': str(profile.id), 'text': profile_choice_label(profile)}] if profile else [],
             },
         }
 
@@ -396,6 +409,8 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         obj.is_private = False
         obj.is_organization_private = False
         obj.limit_join_organizations = False
+        obj.ai_grading_mode = Contest.AI_GRADING_OFF
+        obj.ai_grading_auto_delay_minutes = Contest._meta.get_field('ai_grading_auto_delay_minutes').default
 
     def get_actions(self, request):
         actions = super(ContestAdmin, self).get_actions(request)

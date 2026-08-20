@@ -42,7 +42,7 @@
   color: var(--oj-text) !important;
   padding: .35rem .7rem;
 }
-.ws-app .ws-toolbar .tool-btn:hover,
+.ws-app .ws-toolbar .tool-btn:hover:not(:disabled),
 .ws-app .ws-toolbar .layout-toggle:hover {
   border-color: var(--oj-accent);
   color: var(--oj-accent) !important;
@@ -53,9 +53,11 @@
 .ws-toolbar-left {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: .35rem .55rem;
   min-width: 0;
+  flex: 1 1 auto;
+  max-width: none;
 }
 .ws-toolbar.has-leave {
   display: grid;
@@ -76,7 +78,39 @@
   white-space: nowrap;
 }
 .ws-toolbar .nav-arrows { display: inline-flex; gap: .25rem; }
-.ws-layout-switch { margin-left: .15rem; }
+.ws-layout-switch { margin-left: .15rem; flex: 0 0 auto; }
+.ws-toolbar.has-leave .ws-toolbar-left {
+  max-width: none;
+}
+.ws-toolbar-progress {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: .55rem;
+  flex: 0 0 auto;
+}
+.ws-toolbar-progress .solved-frac {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--oj-heading);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ws-toolbar-progress progress {
+  display: block;
+  flex: 0 0 160px;
+  width: 160px;
+  height: 10px;
+  accent-color: var(--oj-accent);
+}
+.ws-app .ws-toolbar .tool-btn:disabled,
+.ws-app .ws-toolbar .tool-btn:disabled:hover {
+  opacity: .38;
+  cursor: not-allowed;
+  border-color: var(--oj-border);
+}
 /* Submit / timer on the right (prototype .submit-cluster { margin-left: auto }) */
 .submit-cluster {
   display: inline-flex;
@@ -174,6 +208,26 @@
   background: var(--oj-surface);
   white-space: pre-wrap;
   line-height: 1.55;
+}
+.ai-grade-section {
+  margin-bottom: 1rem;
+  padding: .85rem 1rem;
+  border: 1px solid var(--oj-accent);
+  border-radius: var(--oj-radius);
+  background: color-mix(in srgb, var(--oj-accent) 8%, var(--oj-surface));
+}
+.ai-grade-section[hidden] { display: none !important; }
+.ai-grade-btn {
+  font-weight: 600;
+  background: var(--oj-accent);
+  color: #fff;
+  border-color: var(--oj-accent);
+}
+.ai-grade-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.ai-grade-btn:disabled {
+  opacity: .65;
 }
 .ws-tabs .tab-hidden { display: none; }
 .ws-tab-panel { display: none; padding: 1.25rem; }
@@ -354,8 +408,7 @@
 }
 .ws-drawer.open { transform: translateX(0); }
 .ws-drawer-summary, .ws-drawer-progress {
-  position: relative;
-  padding: .55rem 2.5rem .55rem .9rem;
+  padding: .55rem .9rem;
   border-bottom: 1px solid var(--oj-border);
   color: var(--oj-text-muted);
   font-size: var(--oj-font-size-sm, 12px);
@@ -381,6 +434,7 @@
   align-items: center;
   gap: .4rem;
   min-width: 0;
+  width: 100%;
   border: 1px solid var(--oj-border);
   border-radius: 999px;
   padding: .3rem .65rem;
@@ -579,26 +633,6 @@
   height: 100%;
   border-radius: 2px;
   background: var(--oj-accent);
-}
-.ws-drawer .drawer-progress-close,
-.ws-drawer .drawer-summary-close {
-  position: absolute;
-  top: .45rem;
-  right: .7rem;
-  width: 24px;
-  height: 24px;
-  border: 0;
-  border-radius: var(--oj-radius);
-  background: transparent;
-  color: var(--oj-text-muted);
-  font-size: 1.05rem;
-  line-height: 1;
-  cursor: pointer;
-}
-.ws-drawer .drawer-progress-close:hover,
-.ws-drawer .drawer-summary-close:hover {
-  background: var(--oj-bg);
-  color: var(--oj-text);
 }
 
 #right-programming {
@@ -973,15 +1007,6 @@
   border-radius: 4px;
   background: var(--oj-surface) !important;
   color: var(--oj-text) !important;
-  box-shadow: none !important;
-}
-.ws-app .ws-drawer .drawer-progress-close,
-.ws-app .ws-drawer .drawer-summary-close {
-  width: 24px !important;
-  height: 24px !important;
-  border: 0 !important;
-  background: transparent !important;
-  color: var(--oj-text-muted) !important;
   box-shadow: none !important;
 }
 .ws-app .ws-drawer-pagination {

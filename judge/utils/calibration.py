@@ -174,6 +174,41 @@ def round_half(value: float) -> float:
     return round(value * 2.0) / 2.0
 
 
+def redistribute_half_points(raw_weights, total):
+    """Snap *raw_weights* onto a 0.5 grid that sums exactly to *total*.
+
+    Used so AI-decomposed / auto-split grading-table rows never land on awkward
+    fractions like 0.3 / 0.7.  *total* itself is also snapped to 0.5.  When every
+    weight is zero (or the list is empty) the total is split as evenly as the
+    0.5 grid allows.
+    """
+    n = len(raw_weights or [])
+    if n == 0:
+        return []
+    total_halves = int(round(round_half(float(total or 0)) * 2.0))
+    if total_halves <= 0:
+        return [0.0] * n
+
+    cleaned = [max(0.0, float(w or 0)) for w in raw_weights]
+    weight_sum = sum(cleaned)
+    if weight_sum <= 0:
+        cleaned = [1.0] * n
+        weight_sum = float(n)
+
+    exact = [w / weight_sum * total_halves for w in cleaned]
+    floors = [int(math.floor(x)) for x in exact]
+    remainder = total_halves - sum(floors)
+    # Largest-remainder: give leftover half-units to the biggest fractional parts.
+    order = sorted(
+        range(n),
+        key=lambda i: (exact[i] - floors[i], cleaned[i]),
+        reverse=True,
+    )
+    for i in order[:max(0, remainder)]:
+        floors[i] += 1
+    return [h / 2.0 for h in floors]
+
+
 def calibrate(raw_score: float, max_score: float,
               strictness: str = 'normal', model: str = DEFAULT_MODEL) -> float:
     """Full calibration pipeline: spline → preset → round.

@@ -5,6 +5,46 @@
 {% block title_row %}{% endblock %}
 {% block title_ruler %}{% endblock %}
 {% block media %}
+  <style>
+    .ws-toolbar-progress {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: .55rem;
+      flex: 0 0 auto;
+    }
+    .ws-toolbar-progress .solved-frac {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .ws-toolbar-progress progress {
+      display: block;
+      width: 160px;
+      height: 10px;
+      accent-color: var(--oj-accent, #2980B9);
+    }
+    .ws-app .ws-toolbar .nav-arrows .tool-btn:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+    }
+    .ai-grade-section {
+      margin-bottom: 1rem;
+      padding: .85rem 1rem;
+      border: 1px solid var(--oj-accent, #2980B9);
+      border-radius: var(--oj-radius, 6px);
+      background: color-mix(in srgb, var(--oj-accent, #2980B9) 8%, var(--oj-surface, #fff));
+    }
+    .ai-grade-section[hidden] { display: none !important; }
+    .ai-grade-btn {
+      font-weight: 600;
+      background: var(--oj-accent, #2980B9);
+      color: #fff;
+      border-color: var(--oj-accent, #2980B9);
+    }
+    .ai-grade-btn:hover:not(:disabled) { filter: brightness(1.05); }
+    .ai-grade-btn:disabled { opacity: .65; }
+  </style>
   {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
     <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
@@ -53,6 +93,7 @@
      data-event-ws="{{ EVENT_DAEMON_LOCATION }}"
      data-event-poll="{{ EVENT_DAEMON_POLL_LOCATION }}"
      {% if ai_hints_possible %}data-ai-hints-possible="1" data-ai-hints-remaining="{{ ai_hints_remaining }}"{% if workspace_submission %} data-ai-hint-url="{{ url('submission_ai_hint', workspace_submission.id) }}"{% endif %}{% endif %}
+     {% if workspace_submission and workspace_submission.ai_grade_url %}data-ai-grade-url="{{ workspace_submission.ai_grade_url }}"{% endif %}
      {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}data-image-upload-url="{{ url('martor_image_uploader') }}"{% endif %}>
   <div class="ws-toolbar{% if workspace_in_contest %} has-leave{% endif %}">
     <div class="ws-toolbar-left">
@@ -72,6 +113,10 @@
         <button class="tool-btn icon-only" id="btn-next" type="button" title="{{ _('Next problem') }}"><i class="fa fa-chevron-right"></i></button>
       </span>
       <div class="ws-layout-switch"><button class="layout-toggle" type="button" id="layout-toggle"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button></div>
+      <div class="ws-toolbar-progress" title="{% if workspace_mode == 'practice' %}{{ _('solved (current filter)') }}{% else %}{{ _('answered') }}{% endif %}">
+        <span class="solved-frac" id="toolbar-progress-label">0/0</span>
+        <progress id="toolbar-progress-bar" max="1" value="0" aria-hidden="true"></progress>
+      </div>
     </div>
     {% if workspace_in_contest %}
       <div class="ws-toolbar-center">
@@ -92,14 +137,6 @@
     <div class="ws-drawer-backdrop" id="drawer-backdrop"></div>
     <aside class="ws-drawer" id="ws-drawer" aria-label="{{ _('Problem set') }}">
       {% if workspace_mode == 'practice' %}
-        <div class="ws-drawer-progress">
-          <button class="close-btn drawer-progress-close" id="drawer-close" type="button" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button>
-          <div class="ws-drawer-solved-line">
-            <span class="solved-frac" id="drawer-solved-frac">0/0</span>
-            {{ _('solved (current filter)') }}
-          </div>
-          <div class="bar" aria-hidden="true"><span id="drawer-bar" style="width:0%"></span></div>
-        </div>
         <div class="ws-drawer-toolbar">
           <div class="ws-drawer-search">
             <i class="fa fa-search" aria-hidden="true"></i>
@@ -150,8 +187,6 @@
         </div>
       {% else %}
         <div class="ws-drawer-summary">
-          <button class="close-btn drawer-summary-close" id="drawer-close" type="button" aria-label="{{ _('Close') }}"><i class="fa fa-times"></i></button>
-          <span id="drawer-progress"></span>
           <select id="drawer-filter-status">
             <option value="">{{ _('All') }}</option>
             <option value="answered">{{ _('Answered') }}</option>
@@ -419,6 +454,10 @@
         </div>
         <div class="ws-tab-panel" id="panel-result">
           <div id="workspace-submit-status">
+            <div id="workspace-result-ai-grade" class="ai-grade-section" hidden aria-hidden="true">
+              {# Primary button lives in #workspace-result-main when IR; this block is a JS fallback anchor. #}
+              <div id="ai-grade-result" class="ai-hint-result" hidden></div>
+            </div>
             <div id="workspace-result-main">
               {% if workspace_submission %}
                 <div class="ws-result-summary">
@@ -434,6 +473,12 @@
                   {% elif workspace_submission.results_hidden %}
                     <h3>{{ _('Results hidden') }}</h3>
                     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
+                  {% elif workspace_submission.result == 'IR' and workspace_submission.can_trigger_ai_grade %}
+                    <h3>{{ _('Answer saved') }}</h3>
+                    <p>{{ _('Your answer has been saved. Press the button below to run AI grading.') }}</p>
+                    <p style="margin-top:0.75rem;">
+                      <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI grading') }}</button>
+                    </p>
                   {% else %}
                     <h3>{% if workspace_is_code %}{{ _('Execution results') }}{% else %}{{ _('Judging results') }}{% endif %}</h3>
                     <p>
@@ -633,5 +678,5 @@
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
-  <script src="{{ static('workspace.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+  <script src="{{ static('workspace.js') }}?v=ws-ai-grade-2{% if DMOJ_STATIC_VERSION %}&amp;rel={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}

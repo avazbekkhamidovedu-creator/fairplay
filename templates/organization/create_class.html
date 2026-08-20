@@ -4,6 +4,12 @@
     {{ form.media.css }}
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
     <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
+    <style>
+        .course-redesign .class-form-field .rich-editor {
+            height: 360px;
+            max-height: 360px;
+        }
+    </style>
 {% endblock %}
 
 {% block js_media %}
@@ -21,6 +27,7 @@
                 var csrf = document.querySelector('[name=csrfmiddlewaretoken]');
                 RichEditor.configure({
                     imageUploadUrl: '{{ url("martor_image_uploader") }}',
+                    fileUploadUrl: '{{ url("editor_file_uploader") }}',
                     csrfToken: csrf ? csrf.value : '',
                 });
                 function syncRichEditorSources() {
@@ -33,6 +40,7 @@
                     var name = ta.getAttribute('data-rich-editor');
                     var mount = document.createElement('div');
                     mount.setAttribute('data-rich-mount', name);
+                    mount.setAttribute('data-compact', '');
                     ta.parentNode.insertBefore(mount, ta);
                     RichEditor.mount(ta.parentNode);
                     ta.setAttribute('aria-hidden', 'true');
@@ -52,7 +60,40 @@
             $('#id_member_csv').on('change', function () {
                 var name = (this.files && this.files[0] && this.files[0].name) || '';
                 $('#csv-filename').text(name ? name : {{ _('No file chosen')|htmltojs }});
+                {% if form_mode == 'edit' and class %}
+                if (this.files && this.files[0]) {
+                    $('#class-csv-import-form').trigger('submit');
+                }
+                {% endif %}
             });
+
+            {% if form_mode != 'edit' %}
+            var $name = $('#id_name');
+            var $year = $('#id_academic_year');
+            var $term = $('#id_term_session');
+            var $instructors = $('#id_instructor_names');
+            var userEditedName = false;
+            function suggestedClassName() {
+                var parts = [];
+                var year = ($year.val() || '').trim();
+                var term = ($term.val() || '').trim();
+                var instructors = ($instructors.val() || '').trim();
+                if (year) parts.push(year);
+                if (term) parts.push(term);
+                if (instructors) parts.push(instructors);
+                return parts.join(' ');
+            }
+            function syncClassName() {
+                if (userEditedName) return;
+                $name.val(suggestedClassName());
+            }
+            $name.on('input', function () {
+                userEditedName = ($name.val() || '').trim() !== suggestedClassName();
+            });
+            $year.add($term).on('change input', syncClassName);
+            $instructors.on('input change keyup paste', syncClassName);
+            syncClassName();
+            {% endif %}
         });
     </script>
 {% endblock %}
@@ -87,22 +128,6 @@
             {% if form.non_field_errors() %}
                 <div class="form-errors">{{ form.non_field_errors() }}</div>
             {% endif %}
-
-            <section class="class-form-module">
-                <h2>{{ _('Class identity') }}</h2>
-                <div class="class-form-grid">
-                    <div class="class-form-field full">
-                        <label for="{{ form.name.id_for_label }}">{{ form.name.label }} <span aria-hidden="true">*</span></label>
-                        {{ form.name }}
-                        {{ form.name.errors }}
-                    </div>
-                    <div class="class-form-field full">
-                        <label for="{{ form.description.id_for_label }}">{{ form.description.label }}</label>
-                        {{ form.description }}
-                        {{ form.description.errors }}
-                    </div>
-                </div>
-            </section>
 
             <section class="class-form-module">
                 <h2>{{ _('Academic offering') }}</h2>
@@ -142,14 +167,31 @@
             </section>
 
             <section class="class-form-module">
-                <h2>{{ _('People') }}</h2>
+                <h2>{{ _('Class identity') }}</h2>
                 <div class="class-form-grid">
-                    <div class="class-form-field">
-                        <label for="{{ form.instructor_names.id_for_label }}">{{ form.instructor_names.label }}</label>
+                    <div class="class-form-field full">
+                        <label for="{{ form.instructor_names.id_for_label }}">{{ form.instructor_names.label }} <span aria-hidden="true">*</span></label>
                         {{ form.instructor_names }}
                         {% if form.instructor_names.help_text %}<div class="helptext">{{ form.instructor_names.help_text }}</div>{% endif %}
                         {{ form.instructor_names.errors }}
                     </div>
+                    <div class="class-form-field full">
+                        <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
+                        {{ form.name }}
+                        {% if form.name.help_text %}<div class="helptext">{{ form.name.help_text }}</div>{% endif %}
+                        {{ form.name.errors }}
+                    </div>
+                    <div class="class-form-field full">
+                        <label for="{{ form.description.id_for_label }}">{{ form.description.label }}</label>
+                        {{ form.description }}
+                        {{ form.description.errors }}
+                    </div>
+                </div>
+            </section>
+
+            <section class="class-form-module">
+                <h2>{{ _('People') }}</h2>
+                <div class="class-form-grid">
                     <div class="class-form-field">
                         <label for="{{ form.ta_names.id_for_label }}">{{ form.ta_names.label }}</label>
                         {{ form.ta_names }}
@@ -167,6 +209,7 @@
                         {{ form.members }}
                         {% if form.members.help_text %}<div class="helptext">{{ form.members.help_text }}</div>{% endif %}
                         {{ form.members.errors }}
+                        {% if form_mode != 'edit' %}
                         <div class="members-toolbar">
                             <button type="button" class="button" id="btn-import-csv">
                                 <i class="fa fa-upload"></i> {{ _('Import CSV') }}
@@ -175,6 +218,10 @@
                             <div class="visually-hidden">{{ form.member_csv }}</div>
                             {{ form.member_csv.errors }}
                         </div>
+                        <div class="helptext" style="margin-top:0.45rem">
+                            {{ _('On create, the CSV is imported when you click Save class. Required header: NetID (or username), First name, Last Name, Email.') }}
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </section>
@@ -204,6 +251,33 @@
                 <a class="button" href="{% if class %}{{ class.get_absolute_url() }}{% else %}{{ organization.get_absolute_url() }}{% endif %}">{{ _('Cancel') }}</a>
             </div>
         </form>
+
+        {% if form_mode == 'edit' and class %}
+        <section class="class-form-module" style="margin-top:0.9rem">
+            <h2>{{ _('Import students') }}</h2>
+            <form id="class-csv-import-form" method="post"
+                  action="{{ url('class_import_members', organization.id, organization.slug, class.id, class.slug) }}"
+                  enctype="multipart/form-data" class="course-form">
+                {% csrf_token %}
+                <div class="class-form-grid">
+                    <div class="class-form-field full">
+                        <div class="helptext" style="margin:0 0 0.55rem">
+                            {{ _('Choose a Canvas roster CSV to import into this class immediately. Required header columns: NetID (or username), First name, Last Name, Email. Existing accounts are added to the class; new accounts are pre-registered with username=NetID and no local password (students sign in with Duke NetID SSO).') }}
+                        </div>
+                        <div class="members-toolbar">
+                            <button type="button" class="button" id="btn-import-csv">
+                                <i class="fa fa-upload"></i> {{ _('Import CSV') }}
+                            </button>
+                            <span id="csv-filename" class="helptext">{{ _('No file chosen') }}</span>
+                            <div class="visually-hidden">
+                                <input type="file" name="member_csv" id="id_member_csv" accept=".csv,text/csv">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </section>
+        {% endif %}
     </div>
 </div>
 {% include "organization/instructor-verification-modal.html" %}

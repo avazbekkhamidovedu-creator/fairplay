@@ -188,11 +188,66 @@
 .rich-editor-body pre code {
   background: transparent; padding: 0; font-size: inherit;
 }
+.rich-editor-body .code-block {
+  margin: 0.5em 0;
+  border: 1px solid var(--oj-border);
+  background: var(--oj-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.rich-editor-body .code-block-lang {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--oj-text-muted);
+  padding: 0.15em 0.5em;
+  border-bottom: 1px solid var(--oj-border);
+  background: var(--oj-surface-muted);
+  user-select: none;
+}
+.rich-editor-body .code-block-lang-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  color: var(--oj-text-muted);
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 0.15em 0.25em;
+  outline: none;
+}
+.rich-editor-body .code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  outline: none;
+  min-height: 2.4em;
+  white-space: pre-wrap;
+}
 .rich-editor-body ul, .rich-editor-body ol {
   margin: 0.4em 0; padding-left: 1.6em;
 }
 .rich-editor-body li { margin: 0.15em 0; }
 .rich-editor-body img { max-width: 100%; cursor: pointer; vertical-align: middle; }
+.rich-editor-body a.rte-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+  background: var(--oj-surface-muted);
+  text-decoration: none;
+}
+.rich-editor-body a.rte-attachment:before {
+  content: "\f0c6"; /* fa-paperclip */
+  font-family: FontAwesome;
+  font-size: 0.9em;
+  color: var(--oj-text-muted);
+}
 .rich-editor-body img.img-selected { outline: 2px solid var(--oj-accent); outline-offset: 1px; }
 
 /* Match site .h-scrollable-table / .table (problem markdown renderer).

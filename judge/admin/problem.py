@@ -26,6 +26,7 @@ from judge.models import Class, Language, LanguageLimit, Organization, Problem, 
 from judge.utils import simple_xlsx
 from judge.utils.language_matching import matching_languages
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
+from judge.utils.user_search import apply_profile_choice_labels, profile_choice_label
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget, AdminSelect2MultipleWidget, \
     AdminSelect2Widget, CheckboxSelectMultipleWithSelectAll
@@ -107,6 +108,7 @@ class ProblemForm(ModelForm):
 
     def __init__(self, *args, **kwargs):
         super(ProblemForm, self).__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         self.fields['authors'].widget.can_add_related = False
         self.fields['curators'].widget.can_add_related = False
         self.fields['testers'].widget.can_add_related = False
@@ -334,6 +336,7 @@ class ProblemClarificationInline(admin.StackedInline):
 class ProblemSolutionForm(ModelForm):
     def __init__(self, *args, **kwargs):
         super(ProblemSolutionForm, self).__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         self.fields['authors'].widget.can_add_related = False
 
     class Meta:
@@ -583,7 +586,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
                 'banned_users': [],
             },
             'display': {
-                'authors': [{'id': str(profile.id), 'text': profile.user.username}] if profile else [],
+                'authors': [{'id': str(profile.id), 'text': profile_choice_label(profile)}] if profile else [],
                 'types': [{'id': str(default_type.id), 'text': str(default_type)}] if default_type else [],
                 'group': {'id': str(default_group.id), 'text': str(default_group)} if default_group else None,
             },

@@ -5,6 +5,7 @@ from judge.models.choices import ACE_THEMES, EFFECTIVE_MATH_ENGINES, MATH_ENGINE
 from judge.models.comment import Comment, CommentLock, CommentVote
 from judge.models.contest import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestSubmission, \
     ContestTag, Rating
+from judge.models.editor_attachment import EditorAttachment
 from judge.models.interface import BlogPost, MiscConfig, NavigationBar, validate_regex
 from judge.models.notification import AdminNotification, InstructorVerificationRequest, TeacherVerificationRequest
 from judge.models.problem import LanguageLimit, License, Problem, ProblemClarification, ProblemGroup, \

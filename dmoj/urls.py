@@ -17,6 +17,7 @@ from judge.views import (
     license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission,
     register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
+from judge.views.editor_attachment import editor_file_download, editor_file_uploader
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
     ProblemCreateV2AIProblemTypeView, ProblemCreateV2OrganizationView,
@@ -207,6 +208,7 @@ urlpatterns = [
         path('/abort', submission.abort_submission, name='submission_abort'),
         path('/test_case/<int:case>/<str:type>', download_test_case, name='submission_test_case_download'),
         path('/ai-hint', submission.SubmissionAIHint.as_view(), name='submission_ai_hint'),
+        path('/ai-grade', submission.SubmissionAIGrade.as_view(), name='submission_ai_grade'),
         path('/file', file_upload.submission_file_download, name='submission_file_download'),
         path('/grade-file', file_upload.submission_file_grade, name='submission_file_grade'),
     ])),
@@ -281,6 +283,7 @@ urlpatterns = [
         path('/grade/save', contests.ContestGradeSave.as_view(), name='contest_grade_save'),
         path('/grade/status', contests.ContestGradeStatus.as_view(), name='contest_grade_status'),
         path('/grade/release', contests.ContestGradeRelease.as_view(), name='contest_grade_release'),
+        path('/grade/ai', contests.ContestBatchAIGrade.as_view(), name='contest_grade_ai'),
 
         path('/rank/<str:problem>/',
              paged_list_view(ranked_submission.ContestRankedSubmission, 'contest_ranked_submissions')),
@@ -349,6 +352,7 @@ urlpatterns = [
             path('', organization.ClassHome.as_view(), name='class_home'),
             path('/join', organization.RequestJoinClass.as_view(), name='class_join'),
             path('/edit', organization.EditClass.as_view(), name='class_edit'),
+            path('/import-members', organization.ClassImportMembers.as_view(), name='class_import_members'),
             path('/assignments', organization.ClassLinkAssignmentsView.as_view(),
                  name='class_link_assignments'),
             path('/materials', organization.ClassMaterialActionView.as_view(),
@@ -437,6 +441,8 @@ urlpatterns = [
             path('upload-image', martor_image_uploader, name='martor_image_uploader'),
             path('search-user', markdown_search_user, name='martor_search_user'),
         ])),
+        path('upload-file', editor_file_uploader, name='editor_file_uploader'),
+        path('files/<uuid:file_uuid>/', editor_file_download, name='editor_file_download'),
     ])),
 
     path('feed/', include([

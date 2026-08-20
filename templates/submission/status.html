@@ -125,6 +125,53 @@
     <hr class="half-hr">
     <br>
 
+    {% if can_trigger_ai_grade %}
+    <div id="ai-grade-section" class="ai-hint-section" style="margin: 1em 0;">
+        <button id="ai-grade-btn" class="btn btn-info" type="button">{{ _('View AI grading') }}</button>
+        <p style="font-size:12px;color:var(--oj-text-muted);margin:0.4em 0 0;">
+            {% if is_teacher %}
+                {{ _('Run AI grading on this submission (teachers are not quota-limited).') }}
+            {% else %}
+                {{ _('AI grading uses your latest submission for this problem. Press the button to score this version.') }}
+                {% if remaining is defined and remaining > 0 %}
+                    ({{ remaining }} {{ _('use') }}{{ 's' if remaining != 1 else '' }} {{ _('remaining') }})
+                {% endif %}
+            {% endif %}
+        </p>
+        <div id="ai-grade-result" style="display:none; margin-top: 0.75em; padding: 0.75em;
+             background: #f0f8ff; border-left: 4px solid #4a90d9;"></div>
+    </div>
+    <script type="text/javascript">
+    document.getElementById('ai-grade-btn').addEventListener('click', function () {
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = '{{ _('Grading…') }}';
+        fetch('{{ url('submission_ai_grade', submission.id) }}', {
+            method: 'POST',
+            headers: {'X-CSRFToken': '{{ csrf_token }}', 'X-Requested-With': 'XMLHttpRequest'},
+            credentials: 'same-origin',
+        }).then(function (r) { return r.json().then(function (data) { return {ok: r.ok, data: data}; }); })
+          .then(function (res) {
+            var box = document.getElementById('ai-grade-result');
+            box.style.display = 'block';
+            if (res.ok && res.data.ok) {
+                box.textContent = '{{ _('AI grading finished. Reloading…') }}';
+                location.reload();
+            } else {
+                box.textContent = (res.data && res.data.error) || '{{ _('Request failed. Please try again.') }}';
+                btn.disabled = false;
+                btn.textContent = '{{ _('View AI grading') }}';
+            }
+        }).catch(function () {
+            document.getElementById('ai-grade-result').style.display = 'block';
+            document.getElementById('ai-grade-result').textContent = '{{ _('Request failed. Please try again.') }}';
+            btn.disabled = false;
+            btn.textContent = '{{ _('View AI grading') }}';
+        });
+    });
+    </script>
+    {% endif %}
+
     {% if ai_hints_possible %}
     <div id="ai-hint-section" class="ai-hint-section" style="margin: 1em 0;{% if not ai_hints_enabled %} display:none;{% endif %}">
         <button id="ai-hint-btn" class="btn btn-info"

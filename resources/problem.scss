@@ -375,8 +375,10 @@ ul.problem-list {
 
     .input-num {
         width: 72px;
-        padding: 4px 8px;
-        text-align: center;
+        padding: 0 8px;
+        text-align: left;
+        height: var(--oj-control-height);
+        line-height: calc(var(--oj-control-height) - 2px);
     }
 
     [disabled] {
@@ -660,8 +662,12 @@ ul.problem-list {
     }
 
     .chip-placeholder {
+        display: inline-flex;
+        align-items: center;
         color: var(--text-muted);
         font-size: var(--oj-font-size);
+        text-align: left;
+        line-height: 1.4;
     }
 
     .chip {
@@ -751,10 +757,83 @@ ul.problem-list {
     .filter-controls .select2-container--dmoj .select2-selection--single .select2-selection__rendered {
         padding-left: 10px;
         line-height: calc(var(--oj-control-height) - 2px);
+        text-align: left;
     }
 
     .filter-controls .select2-container--dmoj .select2-selection--single .select2-selection__arrow {
         height: 100%;
+    }
+}
+
+/* Filter hint / placeholder text: left-aligned and vertically centered. */
+.problem-list-redesign .filter-card {
+    .input,
+    .select {
+        text-align: left;
+        height: var(--oj-control-height);
+        padding-top: 0;
+        padding-bottom: 0;
+        line-height: calc(var(--oj-control-height) - 2px);
+    }
+
+    .input::placeholder,
+    .select::placeholder {
+        text-align: left;
+        line-height: inherit;
+    }
+
+    /* Select2 multi (type / difficulty / course / tags): drop the default
+       margin-top: 5px so placeholder + search sit on the vertical midline. */
+    .select2-container .select2-selection--multiple {
+        display: flex;
+        align-items: center;
+        box-sizing: border-box;
+
+        .select2-selection__rendered {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            width: 100%;
+            min-height: calc(var(--oj-control-height) - 2px);
+            padding: 2px 8px;
+            text-align: left;
+        }
+
+        .select2-selection__choice,
+        .select2-selection__placeholder,
+        .select2-search--inline {
+            float: none;
+            margin-top: 0;
+        }
+
+        .select2-selection__placeholder {
+            text-align: left;
+            line-height: 1.4;
+        }
+
+        .select2-search--inline {
+            display: flex;
+            align-items: center;
+            flex: 1 1 auto;
+        }
+
+        .select2-search__field {
+            margin-top: 0;
+            padding: 0;
+            height: auto;
+            line-height: 1.4;
+            text-align: left;
+        }
+
+        .select2-search__field::placeholder {
+            text-align: left;
+            line-height: inherit;
+        }
+    }
+
+    .select2-container--dmoj .select2-selection--single .select2-selection__placeholder {
+        text-align: left;
     }
 }
 

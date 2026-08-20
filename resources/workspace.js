@@ -6,7 +6,7 @@
   var $$ = function (selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); };
   var body = $('#ws-body'), drawer = $('#ws-drawer'), backdrop = $('#drawer-backdrop');
   var source = $('#workspace-source'), mount = $('#monaco-editor'), editor = null, runTimer = null;
-  var layoutKey = 'dkuoj-ws-layout', splitKey = 'dkuoj-ws-split-', ideSplitKey = 'dkuoj-ws-ide-split', page = 0, pageSize = 6;
+  var layoutKey = 'dkuoj-ws-layout', splitKey = 'dkuoj-ws-split-', ideSplitKey = 'dkuoj-ws-ide-split', page = 0;
   var ACE_TO_MONACO = {
     c_cpp: 'cpp', cpp: 'cpp', c: 'c', csharp: 'csharp', golang: 'go', go: 'go',
     java: 'java', javascript: 'javascript', python: 'python', rust: 'rust',
@@ -21,6 +21,7 @@
     var overview = $('#btn-overview');
     overview.setAttribute('aria-expanded', String(show));
     overview.classList.toggle('is-active', show);
+    if (show) renderDrawer();
   }
   function layout(mode) { body.classList.toggle('layout-lr', mode === 'lr'); body.classList.toggle('layout-tb', mode === 'tb'); $('#layout-mode').textContent = mode === 'lr' ? gettext('Left-right') : gettext('Top-bottom'); localStorage.setItem(layoutKey, mode); applySplit(); }
   function applySplit() { var mode = body.classList.contains('layout-tb') ? 'tb' : 'lr'; var percent = localStorage.getItem(splitKey + mode) || '50'; body.style.setProperty('--workspace-split', percent + '%'); }
@@ -88,7 +89,8 @@
   }
 
   $('#btn-overview').addEventListener('click', function () { showDrawer(!drawer.classList.contains('open')); });
-  $('#drawer-close').addEventListener('click', function () { showDrawer(false); });
+  var drawerClose = $('#drawer-close');
+  if (drawerClose) drawerClose.addEventListener('click', function () { showDrawer(false); });
   backdrop.addEventListener('click', function () { showDrawer(false); });
   document.addEventListener('keydown', function (event) { if (event.key === 'Escape') showDrawer(false); });
   $('#layout-toggle').addEventListener('click', function () { layout(body.classList.contains('layout-lr') ? 'tb' : 'lr'); });
@@ -127,10 +129,23 @@
   else if (darkQuery.addListener) darkQuery.addListener(syncMonacoTheme);
 
   var items = $$('.drawer-problem');
-  // Practice drawer paginates; assignment lists are short and have no pager UI.
+  // Practice drawer paginates to fill the visible list; assignment lists are short and have no pager UI.
   var useDrawerPaging = !!$('#drawer-page-info');
   function drawerPageSize() {
-    return useDrawerPaging ? pageSize : Math.max(items.length, 1);
+    if (!useDrawerPaging) return Math.max(items.length, 1);
+    var list = $('#drawer-problems');
+    var available = list ? list.clientHeight : 0;
+    if (available < 48) available = Math.max(160, (window.innerHeight || 800) - 280);
+    var row = 0;
+    var sample = items[0];
+    if (sample) {
+      var wasHidden = sample.hidden;
+      sample.hidden = false;
+      row = sample.getBoundingClientRect().height;
+      sample.hidden = wasHidden;
+    }
+    if (!(row > 20)) row = 72;
+    return Math.max(1, Math.floor(available / row));
   }
   function multiValues(id) {
     var el = document.getElementById(id);
@@ -190,12 +205,16 @@
         && ac >= min && ac <= max;
     });
   }
+  var renderingDrawer = false;
   function interpolate(message, values) {
     return Object.keys(values).reduce(function (text, key) {
       return text.split('%(' + key + ')s').join(values[key]);
     }, message);
   }
   function renderDrawer() {
+    if (renderingDrawer) return;
+    renderingDrawer = true;
+    try {
     var visible = visibleItems();
     var size = drawerPageSize();
     var pages = Math.max(1, Math.ceil(visible.length / size));
@@ -211,22 +230,25 @@
         {page: page + 1, pages: pages, count: visible.length},
       );
     }
-    var solvedFrac = $('#drawer-solved-frac');
+    var progressLabel = $('#toolbar-progress-label');
     var solvedCount = visible.filter(function (x) { return x.dataset.status === 'solved'; }).length;
-    if (solvedFrac) solvedFrac.textContent = solvedCount + '/' + visible.length;
-    var bar = $('#drawer-bar');
-    if (bar) bar.style.width = (visible.length ? (solvedCount / visible.length * 100) : 0) + '%';
-    var progress = $('#drawer-progress');
-    if (progress) {
-      progress.textContent = interpolate(gettext('%(solved)s / %(total)s answered'), {
-        solved: items.filter(function (x) { return x.dataset.status !== 'unsolved'; }).length,
-        total: items.length,
-      });
+    var answeredCount = items.filter(function (x) { return x.dataset.status !== 'unsolved'; }).length;
+    var isPractice = !!(app.dataset.mode === 'practice');
+    var done = isPractice ? solvedCount : answeredCount;
+    var total = isPractice ? visible.length : items.length;
+    if (progressLabel) progressLabel.textContent = done + ' / ' + total;
+    var bar = $('#toolbar-progress-bar');
+    if (bar) {
+      bar.max = Math.max(total, 1);
+      bar.value = done;
     }
     var prev = $('#drawer-page-prev');
     var next = $('#drawer-page-next');
     if (prev) prev.disabled = page === 0;
     if (next) next.disabled = page + 1 >= pages;
+    } finally {
+      renderingDrawer = false;
+    }
   }
   ['drawer-q', 'fp-type', 'fp-diff', 'fp-course', 'fp-tags', 'fp-status', 'drawer-filter-status', 'fp-ac-min', 'fp-ac-max'].forEach(function (id) {
     var element = document.getElementById(id);
@@ -258,11 +280,29 @@
   $('#drawer-page-prev') && $('#drawer-page-prev').addEventListener('click', function () { page--; renderDrawer(); });
   $('#drawer-page-next') && $('#drawer-page-next').addEventListener('click', function () { page++; renderDrawer(); });
   renderDrawer();
-  var current = $('.drawer-problem.active'), index = items.indexOf(current);
-  $('#btn-prev').disabled = index <= 0;
-  $('#btn-next').disabled = index < 0 || index === items.length - 1;
-  $('#btn-prev').addEventListener('click', function () { if (index > 0) location.assign(items[index - 1].href); });
-  $('#btn-next').addEventListener('click', function () { if (index + 1 < items.length) location.assign(items[index + 1].href); });
+  window.addEventListener('resize', function () { renderDrawer(); });
+  var drawerList = $('#drawer-problems');
+  if (drawerList && window.ResizeObserver) {
+    new window.ResizeObserver(function () { renderDrawer(); }).observe(drawerList);
+  }
+  var current = $('.drawer-problem.active');
+  var index = items.indexOf(current);
+  var prevBtn = $('#btn-prev');
+  var nextBtn = $('#btn-next');
+  function setProblemNav(button, disabled, enabledTitle, disabledTitle) {
+    if (!button) return;
+    button.disabled = disabled;
+    button.setAttribute('aria-disabled', String(disabled));
+    button.title = disabled ? disabledTitle : enabledTitle;
+    button.style.opacity = disabled ? '0.35' : '';
+    button.style.cursor = disabled ? 'not-allowed' : '';
+  }
+  var atFirst = items.length === 0 || index <= 0;
+  var atLast = items.length === 0 || index < 0 || index >= items.length - 1;
+  setProblemNav(prevBtn, atFirst, gettext('Previous problem'), gettext('Already the first problem'));
+  setProblemNav(nextBtn, atLast, gettext('Next problem'), gettext('Already the last problem'));
+  if (prevBtn) prevBtn.addEventListener('click', function () { if (index > 0) location.assign(items[index - 1].href); });
+  if (nextBtn) nextBtn.addEventListener('click', function () { if (index >= 0 && index + 1 < items.length) location.assign(items[index + 1].href); });
 
   // Duration countdown: server remaining seconds (participation.time_remaining); does not pause on leave.
   var timerExpired = false;
@@ -537,6 +577,22 @@
       updateFileUploadResult(status.file_upload);
       return;
     }
+    if (awaitingManualAiGrade(status)) {
+      var savedHeading = document.createElement('h3');
+      savedHeading.textContent = gettext('Answer saved');
+      var savedMsg = document.createElement('p');
+      savedMsg.textContent = gettext(
+        'Your answer has been saved. Press the button below to run AI grading.'
+      );
+      wrap.appendChild(savedHeading);
+      wrap.appendChild(savedMsg);
+      ensureAiGradeButton(wrap, status);
+      main.appendChild(wrap);
+      updateSubmittedSource(status.source, status.answer_display);
+      updateFileUploadResult(status.file_upload);
+      updateAiGradeSection(status);
+      return;
+    }
     var heading = document.createElement('h3');
     heading.textContent = isCodeProblem() ? gettext('Execution results') : gettext('Judging results');
     var line = document.createElement('p');
@@ -589,6 +645,66 @@
     }
     updateSubmittedSource(status.source, status.answer_display);
     updateFileUploadResult(status.file_upload);
+    updateAiGradeSection(status);
+  }
+  function ensureAiGradeButton(container, status) {
+    if (!container || !status || !status.can_trigger_ai_grade || !status.ai_grade_url) return null;
+    var btn = $('#ai-grade-btn');
+    if (!btn) {
+      var row = document.createElement('p');
+      row.style.marginTop = '0.75rem';
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tool-btn ai-grade-btn';
+      btn.id = 'ai-grade-btn';
+      btn.textContent = gettext('View AI grading');
+      row.appendChild(btn);
+      container.appendChild(row);
+    } else {
+      var row = btn.closest('p') || btn.parentNode;
+      if (row && row !== container && container.appendChild) {
+        if (row.tagName !== 'P') {
+          var holder = document.createElement('p');
+          holder.style.marginTop = '0.75rem';
+          holder.appendChild(btn);
+          container.appendChild(holder);
+        } else {
+          container.appendChild(row);
+        }
+      }
+    }
+    btn.hidden = false;
+    btn.disabled = false;
+    btn.textContent = gettext('View AI grading');
+    app.dataset.aiGradeUrl = status.ai_grade_url;
+    return btn;
+  }
+  function updateAiGradeSection(status) {
+    var show = status && status.can_trigger_ai_grade && status.ai_grade_url;
+    if (show) {
+      ensureAiGradeButton($('#workspace-result-main .ws-result-summary') || $('#workspace-result-main'), status);
+    }
+    var section = $('#workspace-result-ai-grade');
+    if (section) section.hidden = true;
+    if (!show) {
+      var btn = $('#ai-grade-btn');
+      if (btn) btn.hidden = true;
+      return;
+    }
+    app.dataset.aiGradeUrl = status.ai_grade_url;
+    var help = $('#ai-grade-help');
+    if (help && status.ai_grade_remaining != null && Number(status.ai_grade_remaining) > 0) {
+      help.textContent = gettext(
+        'AI grading uses your latest submission for this problem. Press the button to score this version.'
+      ) + ' (' + status.ai_grade_remaining + ' ' + gettext('uses remaining') + ')';
+    }
+    var result = $('#ai-grade-result');
+    if (result) result.hidden = true;
+    var btn = $('#ai-grade-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = gettext('View AI grading');
+    }
   }
   function formatAnswerDisplay(rows) {
     if (!rows || !rows.length) return '';
@@ -605,6 +721,18 @@
       var main = document.createElement('div');
       main.id = 'workspace-result-main';
       box.insertBefore(main, box.firstChild);
+    }
+    if (!$('#workspace-result-ai-grade')) {
+      var aiGrade = document.createElement('div');
+      aiGrade.id = 'workspace-result-ai-grade';
+      aiGrade.className = 'ai-grade-section';
+      aiGrade.hidden = true;
+      var aiResult = document.createElement('div');
+      aiResult.id = 'ai-grade-result';
+      aiResult.className = 'ai-hint-result';
+      aiResult.hidden = true;
+      aiGrade.appendChild(aiResult);
+      box.appendChild(aiGrade);
     }
     if (!$('#workspace-result-file')) {
       var fileBlock = document.createElement('div');
@@ -813,6 +941,9 @@
     if (status.is_graded === false) return true;
     return status.status === 'QU' || status.status === 'P' || status.status === 'G';
   }
+  function awaitingManualAiGrade(status) {
+    return !!(status && status.can_trigger_ai_grade && status.result === 'IR');
+  }
   function applyStatusPayload(status, button) {
     if (!status) return;
     if (status.source || (status.answer_display && status.answer_display.length)) {
@@ -826,7 +957,9 @@
       refreshResultPanel(status.id);
     } else if (!isFileProblem()) {
       renderFormalStatus(status);
-      if (status.id && !status.results_hidden) appendTestcasesPanel(status.id);
+      if (status.id && !status.results_hidden && !awaitingManualAiGrade(status)) {
+        appendTestcasesPanel(status.id);
+      }
     } else {
       renderFormalStatus(status);
     }
@@ -1022,22 +1155,66 @@
     // File uploads are human-graded: do not poll or inject judge-queue HTML.
     if (isCodeProblem()) {
       refreshResultPanel(app.dataset.submissionId);
-    } else if (!isFileProblem()) {
-      appendTestcasesPanel(app.dataset.submissionId);
-    }
-    if (!isFileProblem() && app.dataset.submissionGraded !== '1' && app.dataset.statusUrl) {
-      pollFormal(app.dataset.statusUrl, null);
-    } else if (app.dataset.statusUrl && !isCodeProblem() && !isFileProblem()) {
-      // Refresh comments + readable answer for SSR-selected non-code submission.
+    } else if (!isFileProblem() && app.dataset.statusUrl) {
       fetch(app.dataset.statusUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
         .then(function (response) { return response.json(); })
         .then(function (status) {
-          if (status.answer_display || status.source) updateSubmittedSource(status.source, status.answer_display);
-          if (status.comments_html != null) updateResultComments(status.comments_html);
+          applyStatusPayload(status, null);
+          if (statusIsPending(status)) pollFormal(app.dataset.statusUrl, null);
         })
         .catch(function () { /* keep SSR */ });
+    } else if (!isFileProblem()) {
+      appendTestcasesPanel(app.dataset.submissionId);
     }
   }
+
+  (function initAiGrading() {
+    document.addEventListener('click', function (event) {
+      var btn = event.target && event.target.closest ? event.target.closest('#ai-grade-btn') : null;
+      if (!btn) return;
+      var gradeUrl = app.dataset.aiGradeUrl;
+      if (!gradeUrl || btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = gettext('Grading…');
+      fetch(gradeUrl, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'X-CSRFToken': csrfToken(),
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'application/json',
+        },
+      })
+        .then(function (response) {
+          return response.json().then(function (json) {
+            return { ok: response.ok, json: json };
+          });
+        })
+        .then(function (res) {
+          var box = $('#ai-grade-result');
+          if (box) box.hidden = false;
+          if (res.ok && res.json.ok) {
+            if (box) box.textContent = gettext('AI grading finished. Reloading…');
+            location.reload();
+          } else {
+            if (box) {
+              box.textContent = (res.json && res.json.error) || gettext('Request failed. Please try again.');
+            }
+            btn.disabled = false;
+            btn.textContent = gettext('View AI grading');
+          }
+        })
+        .catch(function () {
+          var box = $('#ai-grade-result');
+          if (box) {
+            box.hidden = false;
+            box.textContent = gettext('Request failed. Please try again.');
+          }
+          btn.disabled = false;
+          btn.textContent = gettext('View AI grading');
+        });
+    });
+  })();
 
   (function initAiHints() {
     var btn = $('#ai-hint-btn');
@@ -1119,6 +1296,7 @@
           clearCurrentDrafts();
           app.dataset.submissionGraded = '0';
           if (payload.status_url) app.dataset.statusUrl = payload.status_url;
+          if (payload.ai_grade_url) app.dataset.aiGradeUrl = payload.ai_grade_url;
           if (payload.submission_id) {
             app.dataset.submissionId = String(payload.submission_id);
             app.dataset.aiHintUrl = '/submission/' + payload.submission_id + '/ai-hint';
@@ -1133,7 +1311,8 @@
               refreshResultPanel(payload.submission_id);
             } else {
               renderFormalStatus(payload);
-              if (payload.submission_id && !payload.results_hidden) {
+              updateAiGradeSection(payload);
+              if (payload.submission_id && !payload.results_hidden && !awaitingManualAiGrade(payload)) {
                 appendTestcasesPanel(payload.submission_id);
               }
             }

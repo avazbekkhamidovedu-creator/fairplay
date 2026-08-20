@@ -34,6 +34,12 @@
   line-height: 1.231;
 }
 
+/* Problem create/edit: inherit the site page (white), not a nested grey pad.
+   Contest create still uses the default .pcv2 grey; leave that alone. */
+.pcv2.pcv2-problem {
+  background: transparent;
+}
+
 .pcv2 a { color: var(--pcv2-link); text-decoration: none; }
 .pcv2 a:hover { color: var(--oj-link); text-decoration: underline; }
 
@@ -234,6 +240,16 @@ fieldset.module .form-content { padding: 1rem; }
   font-size: var(--oj-font-size, 14px);
   font-family: inherit;
   box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.06);
+}
+.form-row input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.form-row input[type="number"]::-webkit-inner-spin-button,
+.form-row input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
 }
 .v2-left fieldset.module { width: 100%; box-sizing: border-box; min-width: 0; margin-inline: 0; }
 .v2-left .form-row .field input[type="text"],
@@ -796,6 +812,22 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-stem h3 { font-size: 1rem; margin: 0.4rem 0; }
 .pv-stem code { background: var(--admin-bg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
 .pv-stem pre { background: var(--oj-bg); padding: 0.5rem; border-radius: 4px; overflow: auto; font-size: 12px; }
+.pv-stem .code-block {
+  margin: 0.6em 0;
+  border: 1px solid var(--oj-border);
+  background: var(--oj-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pv-stem .code-block-lang {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--oj-text-muted);
+  padding: 0.3em 0.7em;
+  border-bottom: 1px solid var(--oj-border);
+}
+.pv-stem .code-block pre { margin: 0; border: 0; border-radius: 0; }
 .pv-stem u { text-decoration: none; border-bottom: 1.5px solid var(--oj-accent); padding: 0 1.2em; }
 .pv-options { display: flex; flex-direction: column; gap: 0.55rem; }
 .pv-option { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 14px; }
@@ -811,6 +843,21 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-option-body pre {
   background: var(--oj-bg); padding: 0.45rem 0.65rem; border-radius: 4px; overflow: auto; font-size: 12px; margin: 0.35em 0;
 }
+.pv-option-body .code-block {
+  margin: 0.35em 0;
+  border: 1px solid var(--oj-border);
+  background: var(--oj-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pv-option-body .code-block-lang {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--oj-text-muted);
+  padding: 0.25em 0.65em;
+  border-bottom: 1px solid var(--oj-border);
+}
+.pv-option-body .code-block pre { margin: 0; border: 0; border-radius: 0; }
 .pv-option-body code { background: var(--oj-bg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
 .pv-option-body pre code { background: transparent; padding: 0; }
 .pv-option-body ul, .pv-option-body ol { margin: 0.3em 0; padding-left: 1.4em; }
@@ -1144,6 +1191,48 @@ a.btn-soft:focus {
   border-color: var(--admin-border);
 }
 
+/* Save/result toasts (problem #save-toast + assignment #toast).
+   Never use --oj-surface / --oj-heading-text as the label colour — those
+   tokens are "text on dark chrome" and become white-on-white on light pages.
+   Never use --dmoj-green (removed in the token cleanup; invalid var() drops
+   the background and leaves color:#fff). Pair solid fills with --oj-btn-text. */
+.pcv2 #toast,
+.pcv2 #save-toast {
+  display: none;
+  position: fixed;
+  left: 50%;
+  bottom: 2rem;
+  transform: translateX(-50%);
+  z-index: 9999;
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--oj-radius, 4px);
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 600;
+  pointer-events: none;
+  box-shadow: var(--oj-shadow-modal, 0 6px 20px rgba(0, 0, 0, 0.2));
+  background: var(--oj-accent, #278bc2);
+  background-color: var(--oj-accent, #278bc2);
+  color: var(--oj-btn-text, #fff);
+  border: 1px solid var(--oj-accent, #278bc2);
+}
+
+.pcv2 #toast.err,
+.pcv2 #save-toast.err {
+  background: var(--oj-danger, #d64545);
+  background-color: var(--oj-danger, #d64545);
+  color: var(--oj-btn-text, #fff);
+  border-color: var(--oj-danger, #d64545);
+}
+
+.pcv2 #toast.warn,
+.pcv2 #save-toast.warn {
+  background: var(--oj-warning, #f57f17);
+  background-color: var(--oj-warning, #f57f17);
+  color: var(--oj-btn-text, #fff);
+  border-color: var(--oj-warning, #f57f17);
+}
+
 /* --- dark theme overrides ---
    Classic OJ loads resources/dark/*.css (vars-dark) via media query in base.html.
    The dark-compiled CSS already provides correct --oj-* token values for dark mode,
@@ -1163,6 +1252,9 @@ a.btn-soft:focus {
     --pcv2-accent-soft: rgba(41, 128, 185, 0.18);
     background: var(--admin-bg);
     color: var(--text);
+  }
+  .pcv2.pcv2-problem {
+    background: transparent;
   }
 
   .pcv2 fieldset.module,
@@ -1274,6 +1366,29 @@ a.btn-soft:focus {
   }
   .pcv2 .rich-editor-markdown textarea { background: var(--card-bg) !important; color: var(--text) !important; }
   .pcv2 .harness-monaco { border-color: var(--admin-border); }
+
+  /* Toasts keep solid fill + light text in dark mode (do not inherit --text). */
+  .pcv2 #toast,
+  .pcv2 #save-toast {
+    background: var(--oj-accent, #278bc2);
+    background-color: var(--oj-accent, #278bc2);
+    color: var(--oj-btn-text, #fff);
+    border-color: var(--oj-accent, #278bc2);
+  }
+  .pcv2 #toast.err,
+  .pcv2 #save-toast.err {
+    background: var(--oj-danger, #d64545);
+    background-color: var(--oj-danger, #d64545);
+    color: var(--oj-btn-text, #fff);
+    border-color: var(--oj-danger, #d64545);
+  }
+  .pcv2 #toast.warn,
+  .pcv2 #save-toast.warn {
+    background: var(--oj-warning, #f57f17);
+    background-color: var(--oj-warning, #f57f17);
+    color: var(--oj-btn-text, #fff);
+    border-color: var(--oj-warning, #f57f17);
+  }
 }
 
 /* Keep accent soft-tints aligned for both themes. */

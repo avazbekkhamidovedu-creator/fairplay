@@ -8,6 +8,7 @@ from reversion.admin import VersionAdmin
 
 from judge.models import Organization
 from judge.utils.organization_membership import sync_class_members_to_organization
+from judge.utils.user_search import apply_profile_choice_labels
 from judge.widgets import AdminHeavySelect2MultipleWidget, AdminMartorWidget
 
 
@@ -16,6 +17,10 @@ class ClassForm(ModelForm):
         widgets = {
             'admins': AdminHeavySelect2MultipleWidget(data_view='profile_select2'),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
 
 
 class ClassAdmin(VersionAdmin):
@@ -71,6 +76,10 @@ class OrganizationForm(ModelForm):
             'admins': AdminHeavySelect2MultipleWidget(data_view='profile_select2'),
             'about': AdminMartorWidget(attrs={'data-markdownfy-url': reverse_lazy('organization_preview')}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
 
 
 class OrganizationAdmin(VersionAdmin):

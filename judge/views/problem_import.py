@@ -31,7 +31,7 @@ from judge.models import Language, Organization, Problem, ProblemBlank, ProblemD
     ProblemSubmissionType, ProblemTestCase, ProblemType, Solution, problem_data_storage
 from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
     store_docx_image
-from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type
+from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type, log_problem_admin_entry
 from judge.utils.problem_data import ProblemDataCompiler
 from judge.utils.simple_xlsx import validate_xlsx_upload
 from judge.views.problem_create_v2 import ProblemCreateV2View
@@ -280,6 +280,8 @@ def _editor_data_for_item(item):
         'points': 10,
         'is_public': True,
         'partial': False,
+        'ai': True,
+        'ai_hints_enabled': True,
         'organizations': [],
         'group_id': '',
         'difficulty': DIFFICULTY_VALUES.get(item.difficulty, item.difficulty) or 'medium',
@@ -709,6 +711,7 @@ class ProblemImportPreviewView(LoginRequiredMixin, View):
             'type_choices': ProblemImportItem.TYPE_CHOICES,
             'languages': languages,
             'image_upload_url': reverse('martor_image_uploader'),
+            'file_upload_url': reverse('editor_file_uploader'),
             'title': _('Excel import preview'),
             'content_title': _('Excel import preview'),
             'feedback': request.GET.get('feedback', ''),
@@ -1635,6 +1638,7 @@ def _create_problem(request, item, promoted_images=None, created_data_directorie
     try:
         description, stored_images = _promote_draft_images(item, item.description)
         problem = _create_problem_records(request, item, description, item_data_directories)
+        log_problem_admin_entry(request, problem, created=True)
         # The BinaryField data is no longer needed once every referenced image is public.
         item.images.all().delete()
         if promoted_images is not None:

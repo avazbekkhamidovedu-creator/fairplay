@@ -110,9 +110,27 @@ class FillBlankQuestionType(QuestionType):
         # AI mode scores the whole response; fall back to exact matching if the model is unavailable
         # or errors, so a misconfigured LLM never leaves a submission ungraded.
         if config is not None and config.grading_mode == GRADE_AI:
-            graded = self._grade_ai(problem, config, blanks, answers)
-            if graded is not None:
-                return graded
+            from judge.utils.contest_ai import contest_awaits_student_ai, contest_defers_ai, should_run_ai_now
+            if should_run_ai_now(submission):
+                graded = self._grade_ai(problem, config, blanks, answers)
+                if graded is not None:
+                    return graded
+            elif contest_defers_ai(submission):
+                weights = _blank_weights(blanks)
+                case_total = sum(weights)
+                cases = [{
+                    'case': index + 1, 'status': 'IR', 'points': 0, 'total': weight,
+                    'feedback': _('Awaiting batch AI grading.'),
+                } for index, weight in enumerate(weights)]
+                return GradingResult(case_points=0, case_total=case_total, result='IE', cases=cases)
+            elif contest_awaits_student_ai(submission):
+                weights = _blank_weights(blanks)
+                case_total = sum(weights)
+                cases = [{
+                    'case': index + 1, 'status': 'IR', 'points': 0, 'total': weight,
+                    'feedback': _('Request AI grading to score this submission.'),
+                } for index, weight in enumerate(weights)]
+                return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
         return self._grade_exact(config, blanks, answers)
 
     def _grade_exact(self, config, blanks, answers):

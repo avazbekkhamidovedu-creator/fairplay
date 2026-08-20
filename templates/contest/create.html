@@ -22,25 +22,14 @@
     <style>
         /* Integrated into the site shell (extends base.html): no 100vh lock, scrolls with the page */
         .v2-main { display: block; }
-        .v2-top {
-            padding: 0.55rem 1.5rem 0.75rem;
-            border-bottom: 1px solid var(--admin-border);
-            background: var(--admin-bg, #f8f8f8);
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
-        .v2-top .crumb { margin: 0; font-size: 12px; color: var(--muted); }
-        .v2-top .crumb a { color: var(--pcv2-link, var(--oj-link)); }
-        .v2-top .sp-layout-switch { margin-left: auto; }
+        /* Sit on the site page background — no grey pad behind the form cards. */
+        .pcv2 { background: transparent; }
 
         /* Two-column split: the left column scrolls with the page, the right preview is a card sticky to the viewport */
         /* overflow must stay visible: .sp-split sets overflow:hidden which would break the sticky preview. */
-        .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; overflow: visible; }
-        .v2-left { min-width: 0; padding: 1.25rem 1.5rem 3rem; }
-        .v2-right { min-width: 0; padding: 1.25rem 1.5rem 3rem 0; position: sticky; top: 56px; align-self: start; }
+        .v2-split { display: grid; grid-template-columns: 1fr 1fr; align-items: start; overflow: visible; column-gap: 1.25rem; }
+        .v2-left { min-width: 0; padding: 0.25rem 0 2rem; }
+        .v2-right { min-width: 0; padding: 0.25rem 0 2rem; position: sticky; top: 56px; align-self: start; }
         /* Preview card: match fieldset.module heading bar (dark admin header) */
         .pv-panel {
             border: 1px solid var(--admin-border);
@@ -65,15 +54,58 @@
             flex-shrink: 0;
         }
         #pv-body { padding: 1rem; overflow-y: auto; flex: 1; min-height: 0; }
-
-        /* Top-bottom layout (layout switch) */
-        .v2-split.layout-tb { grid-template-columns: 1fr; }
-        .v2-split.layout-tb .v2-right { position: static; padding-left: 1.5rem; max-height: none; }
-        .v2-split.layout-tb .pv-panel { max-height: none; }
+        /* Preview header: title above time as a single column. Global #banner
+           .date is a full-width centered hero; leaving the h2 outside it made
+           the title sit on the left of that hero and look stacked/overlapping. */
+        #pv-body #banner {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.4rem;
+            border-bottom: 1px solid var(--oj-border, #ddd);
+            padding-bottom: 0.85rem;
+            margin: 0 0 1rem;
+        }
+        #pv-body .pv-contest-title {
+            display: block;
+            float: none;
+            position: static;
+            width: 100%;
+            margin: 0;
+            text-align: center;
+            font-size: 1.35rem;
+            font-weight: 600;
+            line-height: 1.3;
+            color: var(--oj-heading, inherit);
+        }
+        #pv-body #banner .date {
+            display: block;
+            width: 100%;
+            float: none;
+            position: static;
+            text-align: center;
+            font-size: 0.95rem;
+            font-weight: 600;
+            line-height: 1.4;
+            color: var(--oj-link, #1958c1);
+        }
+        #pv-body .pv-tags {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.4rem;
+            margin: 0.5rem 0 1rem;
+        }
+        #pv-body .pv-tags .badge {
+            display: inline-block;
+            position: static;
+            float: none;
+            margin: 0;
+        }
 
         @media (max-width: 900px) {
             .v2-split { grid-template-columns: 1fr; }
-            .v2-right { position: static; padding: 0 1.5rem 3rem; }
+            .v2-right { position: static; padding: 0 0 2rem; }
             .pv-panel { max-height: none; }
         }
 
@@ -121,6 +153,33 @@
         /* Visibility cross-coupling: rows whose scoping is ignored by the
            current List-visibility mode are struck through, dimmed and made
            non-interactive. pointer-events only — the value stays submitted. */
+        .pcv2 .form-row.nowrap-label > label {
+            white-space: nowrap;
+            width: auto;
+            min-width: 160px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        /* Hide native number spinners: the grey stepper block clips the
+           rounded input corners (Pts / Max / Out prefix / duration / …). */
+        .pcv2 input[type="number"] {
+            -moz-appearance: textfield;
+            appearance: textfield;
+        }
+        .pcv2 input[type="number"]::-webkit-inner-spin-button,
+        .pcv2 input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            appearance: none;
+            margin: 0;
+        }
+        .so-table .col-check {
+            width: 36px;
+            text-align: center;
+            vertical-align: middle;
+        }
+        .so-table .col-check input { cursor: pointer; }
+
         .pcv2 .form-row.vis-muted { opacity: .5; }
         .pcv2 .form-row.vis-muted > label { text-decoration: line-through; text-decoration-thickness: 1.5px; }
         .pcv2 .form-row.vis-muted .field { pointer-events: none; }
@@ -435,6 +494,12 @@
         .cp-list.is-exam .cp-options .cp-opt.cp-results {
             display: inline-flex;
         }
+        /* Pretest only / Out prefix apply only to programming problems.
+           Hide them for every other type instead of greying them out. */
+        .cp-row:not([data-format="C"]) .cp-opt-pretested,
+        .cp-row:not([data-format="C"]) .cp-opt-out-prefix {
+            display: none;
+        }
         .cp-options select,
         .cp-options input[type=number] {
             border: 1px solid var(--oj-border);
@@ -446,6 +511,16 @@
             -webkit-box-sizing: border-box;
             -moz-box-sizing: border-box;
             box-sizing: border-box;
+        }
+        .cp-options input[type=number] {
+            -moz-appearance: textfield;
+            appearance: textfield;
+        }
+        .cp-options input[type=number]::-webkit-inner-spin-button,
+        .cp-options input[type=number]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            appearance: none;
+            margin: 0;
         }
         /* The Results dropdown reuses the edit page's standard select design
            (.oj-select / select[data-oj-select]) — native appearance removed,
@@ -847,7 +922,7 @@
                             window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
                         }
                     } else {
-                        showToast(res.error || {{ _("Failed to save contest")|htmltojs }}, true);
+                        showToast(res.error || {{ _("Failed to save assignment")|htmltojs }}, true);
                     }
                 })
                 .catch(function () {
@@ -1032,27 +1107,70 @@
             });
             // RichEditor changes do not bubble as form events; hook its onChange.
             if (typeof RichEditor !== 'undefined' && RichEditor.configure) {
-                RichEditor.configure({ onChange: function () { syncPreview(); } });
+                var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                RichEditor.configure({
+                    onChange: function () { syncPreview(); },
+                    fileUploadUrl: {{ url('editor_file_uploader')|tojson }},
+                    imageUploadUrl: {{ url('martor_image_uploader')|tojson }},
+                    csrfToken: csrfMeta ? csrfMeta.content : '',
+                    messages: {
+                        fileUploadFailed: {{ _('File upload failed.')|tojson }},
+                        fileUploadFailedAuth: {{ _('File upload failed. Make sure you are signed in with upload permission.')|tojson }},
+                    },
+                });
             }
             syncPreview();
             syncPreviewProblems();
             syncScoreSummary();
 
-            // --- Auto-generate key from name ---
-            // Backend requires the key to be lowercase letters/digits only (^[a-z0-9]+$), no hyphens.
-            var nameInput = document.getElementById('id_name');
+            // --- Auto-increment assignment ID (same series as clone: c000000) ---
+            // Do not copy the assignment name. The server prefills the next free
+            // key; this JS only fills blanks and "Save and add another".
             var keyInput = document.getElementById('id_key');
-            if (nameInput && keyInput) {
-                nameInput.addEventListener('input', function () {
-                    if (!keyInput.value || keyInput.dataset.autoGen === '1') {
-                        var slug = this.value.toLowerCase().replace(/[^a-z0-9]+/g, '');
-                        keyInput.value = slug.substring(0, 20);
-                        keyInput.dataset.autoGen = '1';
+            var CHECK_KEY_URL = {{ url('contest_check_key')|tojson }};
+            var isEditMode = {{ 'true' if contest else 'false' }};
+
+            function checkContestKey(key) {
+                if (!key) return Promise.resolve(null);
+                return fetch(CHECK_KEY_URL + '?key=' + encodeURIComponent(key), {
+                    method: 'GET',
+                    cache: 'no-cache',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                }).then(function (response) {
+                    if (!response.ok) return null;
+                    return response.json().then(function (data) { return data.exists; });
+                }).catch(function () { return null; });
+            }
+
+            function generateUniqueContestKey() {
+                var max = 1000000;
+                function tryIndex(i) {
+                    if (i >= max) {
+                        return Promise.resolve('contest' + String(Date.now()).slice(-6));
                     }
-                });
+                    var key = 'c' + String(i).padStart(6, '0');
+                    return checkContestKey(key).then(function (exists) {
+                        if (exists === false) return key;
+                        if (exists === null) throw new Error('check failed');
+                        return tryIndex(i + 1);
+                    });
+                }
+                return tryIndex(0);
+            }
+
+            if (keyInput && !isEditMode) {
+                keyInput.dataset.autoGen = keyInput.value ? '1' : '0';
                 keyInput.addEventListener('input', function () {
                     this.dataset.autoGen = '0';
                 });
+                if (!keyInput.value) {
+                    generateUniqueContestKey().then(function (key) {
+                        if (!keyInput.value || keyInput.dataset.autoGen === '1') {
+                            keyInput.value = key;
+                            keyInput.dataset.autoGen = '1';
+                        }
+                    }).catch(function () {});
+                }
             }
 
             // --- Date helpers: datetime-local inputs are wall-clock local time; toISOString() would shift to UTC ---
@@ -1246,19 +1364,6 @@
                         : {{ _('Advanced')|htmltojs }};
                 }
             };
-
-            // --- Layout toggle ---
-            var splitEl = document.querySelector('.sp-split');
-            document.querySelectorAll('.sp-layout-switch button').forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    var active = document.querySelector('.sp-layout-switch .active');
-                    if (active) active.classList.remove('active');
-                    this.classList.add('active');
-                    if (splitEl) {
-                        splitEl.className = 'v2-split sp-split ' + this.dataset.layout;
-                    }
-                });
-            });
 
             // --- Visibility segmented control + scoping cross-coupling ---
             // 'org' mode makes Organization/Class relevant and ignores
@@ -1482,9 +1587,21 @@
                     return null;
                 });
             }
+            function clearOtherPresetTags(keepName) {
+                PRESET_TAG_NAMES.forEach(function (name) {
+                    if (name === keepName) return;
+                    var existing = findTagByName(name);
+                    if (existing && tagSelect) {
+                        var opt = tagSelect.querySelector('option[value="' + existing.id + '"]');
+                        if (opt) opt.selected = false;
+                    }
+                    var input = document.querySelector('#tag-presets input[data-tag-name="' + name + '"]');
+                    if (input) input.checked = false;
+                });
+            }
             function applyPresetTag(name, selected) {
-                // Local toggle first (same feel as problem difficulty radios).
-                // Only hit the network when the tag is not in the hidden <select>.
+                // Homework / Quiz / Exam are mutually exclusive (0 or 1).
+                if (selected) clearOtherPresetTags(name);
                 var existing = findTagByName(name);
                 if (existing) {
                     selectTagById(String(existing.id), selected);
@@ -1496,8 +1613,10 @@
                 createTagByName(name).then(function (tag) {
                     presetBusy[name] = false;
                     var input = document.querySelector('#tag-presets input[data-tag-name="' + name + '"]');
-                    if (tag && input && input.checked) selectTagById(String(tag.id), true);
-                    else syncPresetChecks();
+                    if (tag && input && input.checked) {
+                        clearOtherPresetTags(name);
+                        selectTagById(String(tag.id), true);
+                    } else syncPresetChecks();
                 });
             }
             // ── Tag modal (same chrome as the problem-type modal) ─────────────
@@ -1524,7 +1643,17 @@
                     var input = document.createElement('input');
                     input.type = 'checkbox';
                     input.value = t.id;
-                    if (selected.has(t.id)) input.checked = true;
+                    if (selected.has(t.id) || selected.has(String(t.id))) input.checked = true;
+                    if (isPresetName(t.name)) {
+                        input.addEventListener('change', function () {
+                            if (!input.checked) return;
+                            Array.prototype.forEach.call(box.querySelectorAll('input'), function (other) {
+                                if (other === input) return;
+                                var otherTag = knownTags.find(function (x) { return String(x.id) === String(other.value); });
+                                if (otherTag && isPresetName(otherTag.name)) other.checked = false;
+                            });
+                        });
+                    }
                     var span = document.createElement('span');
                     span.textContent = t.name;
                     label.appendChild(input);
@@ -1557,6 +1686,7 @@
                 if (!raw) { showToast({{ _('Please enter a tag name.')|htmltojs }}, true); return; }
                 createTagByName(raw).then(function (tag) {
                     if (!tag) return;
+                    if (isPresetName(tag.name)) clearOtherPresetTags(tag.name);
                     selectTagById(String(tag.id), true);
                     syncTagModalOptions();
                     document.getElementById('nt-tag').value = '';
@@ -1565,11 +1695,19 @@
                 });
             }
             function applyTagSelection() {
-                var chosen = new Set(Array.prototype.map.call(
-                    document.querySelectorAll('#tag-options input:checked'),
-                    function (i) { return i.value; }));
+                var checked = Array.prototype.slice.call(
+                    document.querySelectorAll('#tag-options input:checked'));
+                var chosenIds = [];
+                var lastPresetId = null;
+                checked.forEach(function (input) {
+                    var tag = knownTags.find(function (t) { return String(t.id) === String(input.value); });
+                    if (tag && isPresetName(tag.name)) lastPresetId = String(input.value);
+                    else chosenIds.push(String(input.value));
+                });
+                if (lastPresetId) chosenIds.push(lastPresetId);
+                var chosen = new Set(chosenIds);
                 Array.prototype.forEach.call(tagSelect.options, function (opt) {
-                    opt.selected = chosen.has(opt.value);
+                    opt.selected = chosen.has(String(opt.value));
                 });
                 syncTagPills();
                 closeTagModal();
@@ -1619,6 +1757,18 @@
             if (sebDefault) sebDefault.addEventListener('change', syncSebDefault);
             syncSebDefault();
 
+            function syncAiBatchDelayRow() {
+                var modeEl = document.getElementById('id_ai_grading_mode');
+                var row = document.getElementById('ai-batch-delay-row');
+                if (!modeEl || !row) return;
+                row.style.display = modeEl.value === 'batch' ? '' : 'none';
+            }
+            var aiModeEl = document.getElementById('id_ai_grading_mode');
+            if (aiModeEl) {
+                aiModeEl.addEventListener('change', syncAiBatchDelayRow);
+                syncAiBatchDelayRow();
+            }
+
             // --- From library button + enhanced bank (filters/sort/pagination) ---
             var libBtn = document.getElementById('cp-from-library');
             var slideover = document.getElementById('problem-library');
@@ -1648,7 +1798,14 @@
             window.syncExamResultsVisibility();
             function libRowHtml(row, letter) {
                 var code = row.dataset.code || '';
+                var isCode = (row.dataset.format || '').toLowerCase() === 'c';
                 var solveUrl = code ? '/problem/' + encodeURIComponent(code) : '#';
+                var codeOpts = isCode
+                    ? ('<label class="cp-opt cp-opt-pretested"><input type="checkbox" class="cp-pretested"> ' + {{ _('Pretest only')|htmltojs }} + '</label>')
+                    : '';
+                var outOpts = isCode
+                    ? ('<label class="cp-opt cp-opt-out-prefix" title="' + {{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.')|htmltojs }} + '">' + {{ _('Out prefix')|htmltojs }} + ' <input type="number" class="cp-out-prefix" min="0" placeholder="0" value="10000" style="width:56px"></label>')
+                    : '';
                 return '<span class="cp-drag" title="' + {{ _('Drag to reorder')|htmltojs }} + '">⠿</span>' +
                     '<span class="label-letter">' + letter + '</span>' +
                     '<span class="pname">' + escapeHtml(row.dataset.name || 'Problem ' + row.dataset.pid) + '</span>' +
@@ -1660,11 +1817,11 @@
                     '<button type="button" class="btn-icon danger" title="' + {{ _('Remove')|htmltojs }} + '" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button>' +
                     '</span>' +
                     '<div class="cp-options">' +
-                    '<label class="cp-opt"><input type="checkbox" class="cp-partial" checked> ' + {{ _('Partial credit')|htmltojs }} + '</label>' +
-                    '<label class="cp-opt"><input type="checkbox" class="cp-pretested"> ' + {{ _('Pretest only')|htmltojs }} + '</label>' +
+                    '<label class="cp-opt cp-opt-partial"><input type="checkbox" class="cp-partial" checked> ' + {{ _('Partial credit')|htmltojs }} + '</label>' +
+                    codeOpts +
                     '<label class="cp-opt cp-results" data-exam-only="hide_results" title="' + {{ _('What results students can see after judging.')|htmltojs }} + '">' + {{ _('Results')|htmltojs }} +
                     ' <select class="cp-results"><option value="">' + {{ _('Default')|htmltojs }} + '</option><option value="hide">' + {{ _('Hide')|htmltojs }} + '</option><option value="show">' + {{ _('Show')|htmltojs }} + '</option></select></label>' +
-                    '<label class="cp-opt" title="' + {{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.')|htmltojs }} + '">' + {{ _('Out prefix')|htmltojs }} + ' <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px"></label>' +
+                    outOpts +
                     '</div>' +
                     '<div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>';
             }
@@ -1685,10 +1842,12 @@
                 fake.dataset.pid = pid;
                 fake.dataset.code = meta.code || '';
                 fake.dataset.name = meta.name || ('Problem ' + pid);
+                fake.dataset.format = meta.format || '';
                 var r = document.createElement('div');
                 r.className = 'cp-row';
                 r.dataset.pid = pid;
                 r.dataset.code = meta.code || '';
+                r.dataset.format = meta.format || '';
                 r.setAttribute('draggable', 'true');
                 r.innerHTML = libRowHtml(fake, '?');
                 cpList.appendChild(r);
@@ -1701,7 +1860,7 @@
                 var rows = document.querySelectorAll('.cp-list .cp-row[data-pid]');
                 rows.forEach(function (r, i) {
                     var letter = r.querySelector('.label-letter');
-                    if (letter) letter.textContent = String.fromCharCode(65 + i);
+                    if (letter) letter.textContent = String(i + 1);
                 });
             }
             // Toggle a row's inline statement preview (4b). The preview loads
@@ -1773,8 +1932,49 @@
                     slideover.classList.remove('open');
                 });
 
-                // Library pagination state.
+                // Library pagination state. Picked ids survive filter/page re-renders.
                 var libPage = 0, libPageSize = 10, libSortKey = null, libSortDesc = false;
+                var libPicked = new Set();
+                var libLastSlice = [];
+                var libLastTotal = 0;
+
+                function libRowCheck(row) {
+                    return row ? row.querySelector('.lib-row-check') : null;
+                }
+                function setLibRowPicked(row, picked) {
+                    if (!row || !row.dataset.pid) return;
+                    var pid = String(row.dataset.pid);
+                    if (row.classList.contains('added')) {
+                        row.classList.remove('picked');
+                        libPicked.delete(pid);
+                        var addedCb = libRowCheck(row);
+                        if (addedCb) { addedCb.checked = false; addedCb.disabled = true; }
+                        return;
+                    }
+                    row.classList.toggle('picked', !!picked);
+                    if (picked) libPicked.add(pid);
+                    else libPicked.delete(pid);
+                    var cb = libRowCheck(row);
+                    if (cb) { cb.checked = !!picked; cb.disabled = false; }
+                }
+                function syncLibSelectAll(slice) {
+                    var selectAll = document.getElementById('lib-select-all');
+                    if (!selectAll) return;
+                    var eligible = (slice || []).filter(function (row) { return !row.classList.contains('added'); });
+                    var nPicked = eligible.filter(function (row) { return libPicked.has(String(row.dataset.pid)); }).length;
+                    selectAll.disabled = !eligible.length;
+                    selectAll.checked = eligible.length > 0 && nPicked === eligible.length;
+                    selectAll.indeterminate = nPicked > 0 && nPicked < eligible.length;
+                }
+                function refreshLibSelectionUi() {
+                    var countEl = document.getElementById('lib-count');
+                    if (countEl) {
+                        countEl.textContent = {{ _('Selected')|htmltojs }} + ' ' +
+                            libPicked.size + ' · ' +
+                            {{ _('Showing')|htmltojs }} + ' ' + libLastSlice.length + ' / ' + libLastTotal;
+                    }
+                    syncLibSelectAll(libLastSlice);
+                }
 
                 function selectedValues(id) {
                     var el = document.getElementById(id);
@@ -1865,8 +2065,9 @@
                     slice.forEach(function (row) {
                         var isAdded = added.indexOf(row.dataset.pid) !== -1;
                         row.style.display = '';
-                        row.classList.toggle('picked', isAdded && row.classList.contains('picked'));
                         if (isAdded) {
+                            libPicked.delete(String(row.dataset.pid));
+                            row.classList.remove('picked');
                             var nameCell = row.querySelector('.ptitle');
                             if (nameCell && !row.querySelector('.added-flag')) {
                                 var flag = document.createElement('span');
@@ -1874,17 +2075,19 @@
                                 flag.textContent = ' · ' + {{ _('added')|htmltojs }};
                                 nameCell.appendChild(flag);
                             }
-                            row.classList.add('added'); // visually dimmed via CSS if desired
+                            row.classList.add('added');
+                            var addedCb = libRowCheck(row);
+                            if (addedCb) { addedCb.checked = false; addedCb.disabled = true; }
                         } else {
                             var flagEl = row.querySelector('.added-flag');
                             if (flagEl) flagEl.remove();
                             row.classList.remove('added');
+                            setLibRowPicked(row, libPicked.has(String(row.dataset.pid)));
                         }
                     });
-                    var countEl = document.getElementById('lib-count');
-                    if (countEl) countEl.textContent = {{ _('Selected')|htmltojs }} + ' ' +
-                        tbody.querySelectorAll('tr.picked:not(.added)').length + ' · ' +
-                        {{ _('Showing')|htmltojs }} + ' ' + slice.length + ' / ' + total;
+                    libLastSlice = slice;
+                    libLastTotal = total;
+                    refreshLibSelectionUi();
                     var pager = document.getElementById('lib-pager');
                     if (pager) {
                         pager.innerHTML = '<button type="button" data-page="' + (libPage - 1) + '"' +
@@ -1932,6 +2135,7 @@
                 var libSearch = document.getElementById('lib-search');
                 if (libSearch) libSearch.addEventListener('input', function () { libPage = 0; renderLib(); });
                 slideover.querySelector('.so-table thead').addEventListener('click', function (e) {
+                    if (e.target.closest('input[type="checkbox"]')) return;
                     var th = e.target.closest('th[data-sort]');
                     if (!th) return;
                     var key = th.dataset.sort;
@@ -1939,10 +2143,30 @@
                     else { libSortKey = key; libSortDesc = false; }
                     renderLib();
                 });
-                // Click to select rows (skip added rows).
+                var libSelectAll = document.getElementById('lib-select-all');
+                if (libSelectAll) {
+                    libSelectAll.addEventListener('change', function () {
+                        libLastSlice.forEach(function (row) {
+                            if (row.classList.contains('added')) return;
+                            setLibRowPicked(row, libSelectAll.checked);
+                        });
+                        refreshLibSelectionUi();
+                    });
+                }
+                // Click to select rows (skip added rows). Checkbox is the source of truth.
                 slideover.querySelector('#lib-results').addEventListener('click', function(e) {
+                    if (e.target.closest('input[type="checkbox"]')) return;
                     var row = e.target.closest('tr[data-pid]');
-                    if (row && !row.classList.contains('added')) row.classList.toggle('picked');
+                    if (!row || row.classList.contains('added')) return;
+                    setLibRowPicked(row, !row.classList.contains('picked'));
+                    refreshLibSelectionUi();
+                });
+                slideover.querySelector('#lib-results').addEventListener('change', function(e) {
+                    if (!e.target.classList.contains('lib-row-check')) return;
+                    var row = e.target.closest('tr[data-pid]');
+                    if (!row || row.classList.contains('added')) return;
+                    setLibRowPicked(row, e.target.checked);
+                    refreshLibSelectionUi();
                 });
 
                 // +Add button: add picked problems to contest (at insert position).
@@ -1977,10 +2201,15 @@
                         insertAfter = children[insertIndex];
                     }
                     newRows.forEach(function (row) {
+                        libPicked.delete(String(row.dataset.pid));
+                        row.classList.remove('picked');
+                        var cb = libRowCheck(row);
+                        if (cb) { cb.checked = false; cb.disabled = true; }
                         var r = document.createElement('div');
                         r.className = 'cp-row';
                         r.dataset.pid = row.dataset.pid;
                         r.dataset.code = row.dataset.code || '';
+                        r.dataset.format = row.dataset.format || '';
                         r.setAttribute('draggable', 'true');
                         r.innerHTML = libRowHtml(row, '?');
                         if (insertAfter) {
@@ -2107,7 +2336,7 @@
                 });
             }
 
-            // --- Profile multi-selects: select2 user search (reuses the profile_select2 data source) ---
+            // --- Profile multi-selects: select2 user search (profile_select2 matches name or username) ---
             if (window.jQuery && jQuery.fn.select2) {
                 document.querySelectorAll('.profile-select2').forEach(function (sel) {
                     jQuery(sel).select2({
@@ -2211,7 +2440,7 @@
                 try {
                     descMount.innerHTML = RichEditor.html('desc', {
                         compact: true,
-                        placeholder: {{ _('Contest description (supports Markdown)')|tojson }},
+                        placeholder: {{ _('Assignment description (supports Markdown)')|tojson }},
                     });
                     RichEditor.mount();
                     RichEditor.init();
@@ -2386,6 +2615,12 @@
                 var nameEl2 = document.getElementById('id_name');
                 if (nameEl2) nameEl2.focus();
                 try { localStorage.removeItem(DRAFT_KEY); } catch (err) {}
+                if (keyInput && !isEditMode) {
+                    generateUniqueContestKey().then(function (key) {
+                        keyInput.value = key;
+                        keyInput.dataset.autoGen = '1';
+                    }).catch(function () {});
+                }
             };
 
             } catch (e) {
@@ -2403,19 +2638,7 @@
     {%- endmacro %}
     <div class="pcv2">
         <main class="v2-main" id="content-main">
-            <div class="v2-top">
-                <span class="crumb">
-                    <a href="{{ url('contest_list') }}">{{ _('Assignments') }}</a>
-                    {% if contest %} / <a href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a> / {% endif %}
-                    / {{ _('Edit Assignment') if contest else _('Add Assignment') }}
-                </span>
-                <div class="sp-layout-switch">
-                    <button class="active" data-layout="layout-lr" title="{{ _('Editor on the left, preview on the right') }}">{{ _('Horizontal') }}</button>
-                    <button data-layout="layout-tb" title="{{ _('Editor on top, preview below') }}">{{ _('Vertical') }}</button>
-                </div>
-            </div>
-
-            <div class="v2-split sp-split layout-lr">
+            <div class="v2-split sp-split">
                 <form id="contest-form" class="v2-left" method="post" action="{{ save_url }}" novalidate>
                     {% csrf_token %}
                     <input type="hidden" name="problem_ids" id="problem-ids" value="{% for p in prefill.problems %}{{ p.id }}{% if not loop.last %},{% endif %}{% endfor %}">
@@ -2428,7 +2651,7 @@
                                 <label>{{ _('Name') }} <span class="req">*</span></label>
                                 <div class="field">
                                     <input type="text" id="id_name" name="name" required
-                                           placeholder="{{ _('Contest name') }}" maxlength="100"
+                                           placeholder="{{ _('Assignment name') }}" maxlength="100"
                                            value="{{ prefill.name or '' }}">
                                 </div>
                             </div>
@@ -2491,7 +2714,7 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Contest format') }}{{ tip(_('The contest format module to use.')) }}</label>
+                                <label>{{ _('Assignment format') }}{{ tip(_('The assignment format module to use.')) }}</label>
                                 <div class="field">
                                     <select id="id_format_name" name="format_name" data-oj-select>
                                         <option value="default"{% if prefill.format_name == 'default' %} selected{% endif %}>{{ _('Default') }}</option>
@@ -2504,15 +2727,15 @@
                                     </select>
                                 </div>
                             </div>
-                            <div class="form-row">
-                                <label>{{ _('Allow virtual participation') }}{{ tip(_('Allow users to participate virtually after the contest ends.')) }}</label>
+                            <div class="form-row nowrap-label">
+                                <label>{{ _('Allow virtual join') }}{{ tip(_('Allow users to join virtually after the assignment ends.')) }}</label>
                                 <div class="field">
                                     <input type="checkbox" id="id_allow_virtual_participation" name="allow_virtual_participation"{% if prefill.allow_virtual_participation %} checked{% endif %}>
                                 </div>
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes below; Private = listed, restricted to the users listed under Advanced → Private users. This seg control is the single source of truth — the underlying flags are derived from it server-side.')) }}</label>
+                                <label>{{ _('Visibility') }}{{ tip(_('Whether the assignment appears in the student-facing list. Hidden = not listed; Public = listed for everyone; Course = listed, restricted to the courses/classes below; Private = listed, restricted to the users listed under Advanced → Private assignees. This seg control is the single source of truth — the underlying flags are derived from it server-side.')) }}</label>
                                 <div class="field">
                                     {% if 'is_visible' in restricted_fields %}
                                         {# Visibility is admin-managed for this user (no change_contest_visibility
@@ -2544,14 +2767,14 @@
                                             {% endif %}
                                             <label><input type="radio" name="vis_mode" value="hidden"{% if prefill.vis_mode == 'hidden' %} checked{% endif %}><span>{{ _('Hidden') }}</span></label>
                                         </div>
-                                        <div class="ac-help">{{ _('Course / Private restrict access; pick the courses/classes below, or users under Advanced → Private users.') }}</div>
+                                        <div class="ac-help">{{ _('Course / Private restrict access; pick the courses/classes below, or users under Advanced → Private assignees.') }}</div>
                                         {% endif %}
                                     {% endif %}
                                 </div>
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Course') }}{{ tip(_('If non-empty, only these organizations may see the contest.')) }}</label>
+                                <label>{{ _('Course') }}{{ tip(_('If non-empty, only these organizations may see the assignment.')) }}</label>
                                 <div class="field">
                                     {# Scoping a contest to an organization needs create_private_contest; without
                                        it the select is hidden (server also skips the field on save). #}
@@ -2572,7 +2795,7 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Class') }}{{ tip(_('If organization private, only these classes may see the contest.')) }}</label>
+                                <label>{{ _('Class') }}{{ tip(_('If organization private, only these classes may see the assignment.')) }}</label>
                                 <div class="field">
                                     {% if 'organizations' in restricted_fields %}
                                         <div class="ac-help">{{ _('Course scoping is managed by administrators.') }}</div>
@@ -2653,7 +2876,7 @@
                                     <span></span>
                                 </div>
                                 {% for p in prefill.problems %}
-                                <div class="cp-row" data-pid="{{ p.id }}" data-code="{{ p.code }}" draggable="true">
+                                <div class="cp-row" data-pid="{{ p.id }}" data-code="{{ p.code }}" data-format="{{ p.format or '' }}" draggable="true">
                                     <span class="cp-drag" title="{{ _('Drag to reorder') }}">⠿</span>
                                     <span class="label-letter">{{ p.letter }}</span>
                                     <span class="pname">{{ p.name }}</span>
@@ -2666,9 +2889,12 @@
                                     </span>
                                     {# Per-problem options (admin parity): partial credit, pretest-only,
                                        max submissions, result visibility and output prefix. #}
+                                    {% set fmt = p.format or '' %}
                                     <div class="cp-options">
-                                        <label class="cp-opt"><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}> {{ _('Partial credit') }}</label>
-                                        <label class="cp-opt"><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}> {{ _('Pretest only') }}</label>
+                                        <label class="cp-opt cp-opt-partial"><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}> {{ _('Partial credit') }}</label>
+                                        {% if fmt == 'C' %}
+                                        <label class="cp-opt cp-opt-pretested"><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}> {{ _('Pretest only') }}</label>
+                                        {% endif %}
                                         {# exam-only: ContestProblem.hide_results is honored only when format=exam. Hidden (not reset) on other formats so edit can switch back without losing the three-state. #}
                                         <label class="cp-opt cp-results" data-exam-only="hide_results" title="{{ _('What results students can see after judging.') }}">{{ _('Results') }}
                                             <select class="cp-results">
@@ -2677,7 +2903,9 @@
                                                 <option value="show"{% if p.hide_results is sameas(false) %} selected{% endif %}>{{ _('Show') }}</option>
                                             </select>
                                         </label>
-                                        <label class="cp-opt" title="{{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.') }}">{{ _('Out prefix') }} <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px" value="{{ p.output_prefix }}"></label>
+                                        {% if fmt == 'C' %}
+                                        <label class="cp-opt cp-opt-out-prefix" title="{{ _('Number of output characters shown to students after judging — 0 means none, so only the verdict is visible.') }}">{{ _('Out prefix') }} <input type="number" class="cp-out-prefix" min="0" placeholder="0" style="width:56px" value="{{ p.output_prefix if p.output_prefix != '' and p.output_prefix is not none else 10000 }}"></label>
+                                        {% endif %}
                                     </div>
                                     <div class="cp-preview" style="grid-column:1 / -1;display:none;padding:0.5rem 0.75rem;background:var(--oj-surface-muted, #f4f4f4);border-radius:4px;font-size:12px;"></div>
                                 </div>
@@ -2703,19 +2931,13 @@
                                are gone — nothing here auto-toggles seb_required. #}
                             {% if can_edit_access_code %}
                             <div class="form-row" id="cheat-accesscode-row">
-                                <label>{{ _('Access code') }}{{ tip(_('An optional code to prompt contestants before they are allowed to join the contest. Leave it blank to disable.')) }}</label>
-                                <div class="field">
-                                    <div class="ac-inline">
-                                        {# Backfill the stored code: without this, reopening an existing contest
-                                           shows an empty field and saving would wipe the access code. #}
-                                        <input type="text" id="id_access_code" name="access_code"
-                                               placeholder="{{ _('Optional') }}" value="{{ prefill.access_code or '' }}">
-                                        <button type="button" id="gen-access-code" class="btn-soft">{{ _('Generate') }}</button>
-                                    </div>
-                                    {# This help text lives INSIDE #cheat-accesscode-row so the
-                                       cheat-level toggle (updateCheatFields) hides it together
-                                       with the input — it must only appear at Medium/Custom. #}
-                                    <div class="ac-help">{{ _('Students must enter a code before joining.') }}</div>
+                                <label>{{ _('Access code') }}{{ tip(_('An optional code to prompt participants before they are allowed to join the assignment. Leave it blank to disable.')) }}</label>
+                                <div class="field ac-inline">
+                                    {# Backfill the stored code: without this, reopening an existing contest
+                                       shows an empty field and saving would wipe the access code. #}
+                                    <input type="text" id="id_access_code" name="access_code"
+                                           placeholder="{{ _('Optional') }}" value="{{ prefill.access_code or '' }}">
+                                    <button type="button" id="gen-access-code" class="btn-soft">{{ _('Generate') }}</button>
                                 </div>
                             </div>
                             {% endif %}
@@ -2726,7 +2948,7 @@
                                     <label>{{ _('SEB') }}</label>
                                     <div class="field">
                                         <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.4rem;">
-                                            <input type="checkbox" id="id_seb_required" name="seb_required"{% if prefill.seb_required %} checked{% endif %}> {{ _('Require Safe Exam Browser') }}{{ tip(_('If enabled, non-staff participants can only access this contest from inside Safe Exam Browser.')) }}
+                                            <input type="checkbox" id="id_seb_required" name="seb_required"{% if prefill.seb_required %} checked{% endif %}> {{ _('Require Safe Exam Browser') }}{{ tip(_('If enabled, non-staff participants can only access this assignment from inside Safe Exam Browser.')) }}
                                         </label>
                                         <div class="ac-help" style="margin-bottom:0.4rem;">
                                             {{ _('Staff always bypass. At least one Browser Exam Key hash is required when SEB is on.') }}
@@ -2823,7 +3045,34 @@
                     </fieldset>
                     {% endif %}
 
-                    <!-- ④ Advanced: order matches ContestAdmin.add_fieldsets
+                    <!-- ④ AI grading -->
+                    <fieldset class="module">
+                        <h2>{{ _('AI grading') }}</h2>
+                        <div class="form-content">
+                            <div class="form-row">
+                                <label>{{ _('When to grade') }}</label>
+                                <div class="field">
+                                    <select id="id_ai_grading_mode" name="ai_grading_mode">
+                                        <option value="off"{% if prefill.ai_grading_mode == 'off' or not prefill.ai_grading_mode %} selected{% endif %}>{{ _('Off') }}</option>
+                                        <option value="realtime"{% if prefill.ai_grading_mode == 'realtime' %} selected{% endif %}>{{ _('On demand — student requests AI grading (homework)') }}</option>
+                                        <option value="batch"{% if prefill.ai_grading_mode == 'batch' %} selected{% endif %}>{{ _('Batch — latest submits after the contest (exam)') }}</option>
+                                    </select>
+                                    <div class="help">{{ _('AI grading always uses each student’s latest submission per problem. On demand shows a button after submit; AI runs only when the student (or teacher) requests it. Batch waits for the Grade-page button, or for the delay after the contest ends. Scores and subtask results appear on the existing submission page.') }}</div>
+                                </div>
+                            </div>
+                            <div class="form-row" id="ai-batch-delay-row">
+                                <label>{{ _('Auto-run after end') }}</label>
+                                <div class="field ac-inline">
+                                    <input type="number" id="id_ai_grading_auto_delay_minutes" name="ai_grading_auto_delay_minutes"
+                                           value="{{ prefill.ai_grading_auto_delay_minutes if prefill.ai_grading_auto_delay_minutes is not none else 30 }}" min="0" max="1440">
+                                    <span class="unit">{{ _('minutes (0 = manual only)') }}</span>
+                                    <div class="help">{{ _('Batch mode only. Default 30 minutes after the contest ends. Teachers can still press “Run AI grading” on the Grade page at any time.') }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- ⑤ Advanced: order matches ContestAdmin.add_fieldsets
                          (Identity → Settings → Format → Details → Rating → Access → Justice),
                          minus fields already moved to the main form. Format sits above
                          remaining Details so it stays in the upper half with Settings. -->
@@ -2839,10 +3088,10 @@
                                 <summary>{{ _('Identity') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
                                     <div class="form-row">
-                                        <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Auto-generated from the name — edit it only if you need a specific ID.')) }}</label>
+                                        <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Auto-incremented like c000000 — edit it only if you need a specific ID.')) }}</label>
                                         <div class="field">
                                             <input type="text" id="id_key" name="key" required
-                                                   placeholder="{{ _('Auto-generated from name') }}"
+                                                   placeholder="{{ _('Auto-incremented') }}"
                                                    pattern="[a-z0-9]+" maxlength="20"
                                                    value="{{ prefill.key or '' }}">
                                         </div>
@@ -2851,7 +3100,7 @@
                                     <div class="ac-help" style="margin-bottom:0.5rem;">{{ _('Roles are managed by the assignment authors (or administrators).') }}</div>
                                     {% else %}
                                     <div class="form-row">
-                                        <label>{{ _('Authors') }}{{ tip(_('These users will be able to edit the contest.')) }}</label>
+                                        <label>{{ _('Authors') }}{{ tip(_('These users will be able to edit the assignment.')) }}</label>
                                         <div class="field">
                                             <select name="authors" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.authors or [] %}
@@ -2861,7 +3110,7 @@
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Curators') }}{{ tip(_('These users will be able to edit the contest, but will not be listed as authors.')) }}</label>
+                                        <label>{{ _('Curators') }}{{ tip(_('These users will be able to edit the assignment, but will not be listed as authors.')) }}</label>
                                         <div class="field">
                                             <select name="curators" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.curators or [] %}
@@ -2871,7 +3120,7 @@
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Testers') }}{{ tip(_('These users will be able to view the contest, but not edit it.')) }}</label>
+                                        <label>{{ _('Testers') }}{{ tip(_('These users will be able to view the assignment, but not edit it.')) }}</label>
                                         <div class="field">
                                             <select name="testers" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.testers or [] %}
@@ -2882,12 +3131,12 @@
                                     </div>
                                     {% endif %}
                                     <div class="check-grid">
-                                        <label><input type="checkbox" id="id_tester_see_submissions" name="tester_see_submissions"{% if prefill.tester_see_submissions %} checked{% endif %}> {{ _('Testers see submissions') }}{{ tip(_('If testers can see in-contest submissions.')) }}</label>
+                                        <label><input type="checkbox" id="id_tester_see_submissions" name="tester_see_submissions"{% if prefill.tester_see_submissions %} checked{% endif %}> {{ _('Testers see submissions') }}{{ tip(_('If testers can see in-assignment submissions.')) }}</label>
                                         <label><input type="checkbox" id="id_tester_see_scoreboard" name="tester_see_scoreboard"{% if prefill.tester_see_scoreboard %} checked{% endif %}> {{ _('Testers see scoreboard') }}{{ tip(_('If testers can see the scoreboard.')) }}</label>
                                     </div>
                                     {% if 'authors' not in restricted_fields %}
                                     <div class="form-row" style="margin-top:0.65rem;">
-                                        <label>{{ _('Spectators') }}{{ tip(_('These users will be able to spectate the contest, but not see the problems ahead of time.')) }}</label>
+                                        <label>{{ _('Spectators') }}{{ tip(_('These users will be able to spectate the assignment, but not see the problems ahead of time.')) }}</label>
                                         <div class="field">
                                             <select name="spectators" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.spectators or [] %}
@@ -2908,12 +3157,12 @@
                                         <label><input type="checkbox" id="id_use_clarifications" name="use_clarifications"{% if prefill.use_clarifications %} checked{% endif %}> {{ _('Use clarifications (no comments)') }}{{ tip(_('Use clarification system instead of comments.')) }}</label>
                                         <label><input type="checkbox" id="id_hide_problem_tags" name="hide_problem_tags"{% if prefill.hide_problem_tags %} checked{% endif %}> {{ _('Hide problem tags') }}{{ tip(_('Whether problem tags should be hidden by default.')) }}</label>
                                         <label><input type="checkbox" id="id_hide_problem_authors" name="hide_problem_authors"{% if prefill.hide_problem_authors %} checked{% endif %}> {{ _('Hide problem authors') }}{{ tip(_('Whether problem authors should be hidden by default.')) }}</label>
-                                        <label><input type="checkbox" id="id_show_short_display" name="show_short_display"{% if prefill.show_short_display %} checked{% endif %}> {{ _('Show short settings on contest page') }}{{ tip(_('Whether to show a section containing contest settings on the contest page or not.')) }}</label>
-                                        <label><input type="checkbox" id="id_run_pretests_only" name="run_pretests_only"{% if prefill.run_pretests_only %} checked{% endif %}> {{ _('Run pretests only') }}{{ tip(_('Whether judges should grade pretests only, versus all testcases. Commonly set during a contest, then unset prior to rejudging user submissions when the contest ends.')) }}</label>
+                                        <label><input type="checkbox" id="id_show_short_display" name="show_short_display"{% if prefill.show_short_display %} checked{% endif %}> {{ _('Show short settings on assignment page') }}{{ tip(_('Whether to show a section containing assignment settings on the assignment page or not.')) }}</label>
+                                        <label><input type="checkbox" id="id_run_pretests_only" name="run_pretests_only"{% if prefill.run_pretests_only %} checked{% endif %}> {{ _('Run pretests only') }}{{ tip(_('Whether judges should grade pretests only, versus all testcases. Commonly set during an assignment, then unset prior to rejudging user submissions when the assignment ends.')) }}</label>
                                     </div>
                                     {% if 'locked_after' not in restricted_fields %}
                                     <div class="form-row" style="margin-top:0.65rem;">
-                                        <label>{{ _('Contest lock') }}{{ tip(_('Prevent submissions from this contest from being rejudged after this date.')) }}</label>
+                                        <label>{{ _('Assignment lock') }}{{ tip(_('Prevent submissions from this assignment from being rejudged after this date.')) }}</label>
                                         <div class="field">
                                             <input type="datetime-local" id="id_locked_after" name="locked_after"
                                                    value="{{ prefill.locked_after or '' }}">
@@ -2921,11 +3170,11 @@
                                     </div>
                                     {% endif %}
                                     <div class="form-row">
-                                        <label>{{ _('Scoreboard visibility') }}{{ tip(_('Scoreboard visibility through the duration of the contest.')) }}</label>
+                                        <label>{{ _('Scoreboard visibility') }}{{ tip(_('Scoreboard visibility through the duration of the assignment.')) }}</label>
                                         <div class="field">
                                             <select id="id_scoreboard_visibility" name="scoreboard_visibility" data-oj-select>
-                                                <option value="V"{% if prefill.scoreboard_visibility == 'V' %} selected{% endif %}>{{ _('Visible during contest') }}</option>
-                                                <option value="C"{% if prefill.scoreboard_visibility == 'C' %} selected{% endif %}>{{ _('Hidden for duration of contest') }}</option>
+                                                <option value="V"{% if prefill.scoreboard_visibility == 'V' %} selected{% endif %}>{{ _('Visible during assignment') }}</option>
+                                                <option value="C"{% if prefill.scoreboard_visibility == 'C' %} selected{% endif %}>{{ _('Hidden for duration of assignment') }}</option>
                                                 <option value="P"{% if prefill.scoreboard_visibility == 'P' %} selected{% endif %}>{{ _('Hidden for duration of participation') }}</option>
                                                 <option value="H"{% if prefill.scoreboard_visibility == 'H' %} selected{% endif %}>{{ _('Hidden permanently') }}</option>
                                             </select>
@@ -2947,7 +3196,7 @@
                                 <summary>{{ _('Format') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
                                     <div class="form-row">
-                                        <label>{{ _('Contest format configuration') }}{{ tip(_('A JSON object to serve as the configuration for the chosen contest format module. Leave empty to use None. Exact format depends on the contest format selected.')) }}</label>
+                                        <label>{{ _('Assignment format configuration') }}{{ tip(_('A JSON object to serve as the configuration for the chosen assignment format module. Leave empty to use None. Exact format depends on the assignment format selected.')) }}</label>
                                         <div class="field">
                                             <textarea id="id_format_config" name="format_config" rows="3"
                                                       placeholder='{{ _('Optional JSON, e.g. {"points": [100, 100, 150]}') }}'>{{ prefill.format_config or '' }}</textarea>
@@ -2955,7 +3204,7 @@
                                     </div>
                                     {% if 'problem_label_script' not in restricted_fields %}
                                     <div class="form-row">
-                                        <label>{{ _('Contest problem label script') }}{{ tip(_('A custom Lua function to generate problem labels. Requires a single function with an integer parameter, the zero-indexed contest problem index, and returns a string, the label.')) }}</label>
+                                        <label>{{ _('Assignment problem label script') }}{{ tip(_('A custom Lua function to generate problem labels. Requires a single function with an integer parameter, the zero-indexed assignment problem index, and returns a string, the label.')) }}</label>
                                         <div class="field">
                                             <textarea id="id_problem_label_script" name="problem_label_script" rows="3"
                                                       placeholder="{{ _('Custom Lua function for problem labels') }}">{{ prefill.problem_label_script or '' }}</textarea>
@@ -2976,9 +3225,9 @@
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('Logo') }}{{ tip(_('This image will replace the default site logo for users inside the contest.')) }}</label>
+                                        <label>{{ _('Logo') }}{{ tip(_('This image will replace the default site logo for users inside the assignment.')) }}</label>
                                         <div class="field">
-                                            <input type="text" id="id_logo_override_image" name="logo_override_image" placeholder="{{ _('URL of contest logo override') }}" value="{{ prefill.logo_override_image or '' }}">
+                                            <input type="text" id="id_logo_override_image" name="logo_override_image" placeholder="{{ _('URL of assignment logo override') }}" value="{{ prefill.logo_override_image or '' }}">
                                         </div>
                                     </div>
                                     <div class="form-row">
@@ -3000,7 +3249,7 @@
                                        when the user lacks the permission. #}
                                     {% if 'is_rated' not in restricted_fields %}
                                     <div class="check-grid">
-                                        <label><input type="checkbox" id="id_is_rated" name="is_rated"{% if prefill.is_rated %} checked{% endif %}> {{ _('Contest rated') }}{{ tip(_('Whether this contest can be rated.')) }}</label>
+                                        <label><input type="checkbox" id="id_is_rated" name="is_rated"{% if prefill.is_rated %} checked{% endif %}> {{ _('Assignment rated') }}{{ tip(_('Whether this assignment can be rated.')) }}</label>
                                         <label><input type="checkbox" id="id_rate_all" name="rate_all"{% if prefill.rate_all %} checked{% endif %}> {{ _('Rate all') }}{{ tip(_('Rate users even if they make no submissions.')) }}</label>
                                     </div>
                                     {% endif %}
@@ -3045,7 +3294,7 @@
                                 <div class="fold-body">
                                     {% if 'private_contestants' not in restricted_fields %}
                                     <div class="form-row">
-                                        <label>{{ _('Private contestants') }}{{ tip(_('If non-empty, only these users may see the contest.')) }}</label>
+                                        <label>{{ _('Private assignees') }}{{ tip(_('If non-empty, only these users may see the assignment.')) }}</label>
                                         <div class="field">
                                             <select id="id_private_contestants" name="private_contestants"
                                                     multiple class="profile-select2" style="width:100%;max-width:500px;">
@@ -3058,7 +3307,7 @@
                                     </div>
                                     {% endif %}
                                     <div class="form-row">
-                                        <label>{{ _('Join organizations') }}{{ tip(_('If non-empty, only these organizations may join the contest.')) }}</label>
+                                        <label>{{ _('Join organizations') }}{{ tip(_('If non-empty, only these organizations may join the assignment.')) }}</label>
                                         <div class="field">
                                             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.4rem;">
                                                 <input type="checkbox" id="id_limit_join_organizations" name="limit_join_organizations"{% if prefill.limit_join_organizations %} checked{% endif %}> {{ _('limit organizations that can join') }}
@@ -3083,7 +3332,7 @@
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <label>{{ _('View submissions') }}{{ tip(_('These users will be able to see in-contest submissions.')) }}</label>
+                                        <label>{{ _('View submissions') }}{{ tip(_('These users will be able to see in-assignment submissions.')) }}</label>
                                         <div class="field">
                                             <select name="view_contest_submissions" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.view_contest_submissions or [] %}
@@ -3100,7 +3349,7 @@
                                 <summary>{{ _('Justice') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
                                     <div class="form-row">
-                                        <label>{{ _('Banned users') }}{{ tip(_('Bans the selected users from joining this contest.')) }}</label>
+                                        <label>{{ _('Banned users') }}{{ tip(_('Bans the selected users from joining this assignment.')) }}</label>
                                         <div class="field">
                                             <select name="banned_users" multiple class="profile-select2" style="width:100%;max-width:500px;">
                                                 {% for pid, uname in prefill.banned_users or [] %}
@@ -3137,10 +3386,9 @@
                         <div class="pv-head">{{ _('Student view preview') }}</div>
                         <div id="pv-body">
                             <div id="banner">
+                                <h2 class="pv-contest-title" id="pv-title">{{ _('Untitled assignment') }}</h2>
                                 <span class="date" id="pv-time">{{ _('—') }}</span>
                             </div>
-
-                            <h2 class="pv-contest-title" id="pv-title">{{ _('Untitled assignment') }}</h2>
 
                             <div class="pv-tags">
                                 <span id="pv-visibility" class="badge badge-st-past">{{ _('Hidden') }}</span>
@@ -3237,6 +3485,7 @@
                     <table class="so-table problem-list-redesign oj-ui">
                         <thead>
                             <tr>
+                                <th class="col-check"><input type="checkbox" id="lib-select-all"></th>
                                 <th class="col-name" data-sort="name">{{ _('Title') }}</th>
                                 <th class="col-course">{{ _('Course') }}</th>
                                 <th class="col-type" data-sort="type">{{ _('Problem type') }}</th>
@@ -3256,6 +3505,7 @@
                                 data-ac="{{ problem.ac_rate|round(1) }}"
                                 data-public="{{ '1' if problem.is_public and not problem.is_organization_private else '0' }}"
                                 data-status="{% if problem.id in lib_completed_ids %}solved{% else %}unsolved{% endif %}">
+                                <td class="col-check"><input type="checkbox" class="lib-row-check"></td>
                                 <td class="ptitle col-name">{{ problem.name }}</td>
                                 <td class="col-course">{% for o in problem.organizations.all() %}{{ o.name }}{% if not loop.last %}, {% endif %}{% else %}<span class="num">{{ _('Public') }}</span>{% endfor %}</td>
                                 <td class="col-type">
@@ -3290,7 +3540,7 @@
                             </tr>
                             {% endfor %}
                             {% if not problems %}
-                            <tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
+                            <tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
                             {% endif %}
                         </tbody>
                     </table>

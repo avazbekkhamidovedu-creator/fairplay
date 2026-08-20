@@ -10,6 +10,8 @@ rather than password authentication.
 import json
 from datetime import datetime, timedelta
 
+from django.contrib.admin.models import ADDITION, CHANGE, LogEntry
+from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
@@ -79,6 +81,8 @@ class ContestEditorHelperTestCase(TestCase):
             response = ContestCreate._error_response(RuntimeError('internal secret'))
         self.assertEqual(response.status_code, 500)
         self.assertNotIn('secret', json.loads(response.content)['error'])
+        self.assertIn('assignment', json.loads(response.content)['error'].lower())
+        self.assertNotIn('contest', json.loads(response.content)['error'].lower())
 
 
 class ContestEditViewTestCase(CommonDataMixin, TestCase):
@@ -184,6 +188,19 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.context['prefill']['name'], 'Editable')
         self.assertEqual(response.context['prefill']['description'], 'original description')
         self.assertFalse(response.context['prefill']['allow_ai_hints'])
+
+    def test_edit_profile_selects_use_name_username_labels(self):
+        """Authors/curators chips match profile_select2: Name (username)."""
+        self.curator.first_name = '张三'
+        self.curator.save()
+        self.client.force_login(self.editor)
+        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
+        labels = [label for _, label in response.context['prefill']['curators']]
+        self.assertIn('张三 (contest_curator)', labels)
+        self.assertContains(response, '张三 (contest_curator)')
+        html = response.content.decode()
+        self.assertNotIn('class="crumb"', html)
+        self.assertNotIn('sp-layout-switch', html)
 
     def test_post_roundtrips_allow_ai_hints(self):
         self.client.force_login(self.editor)
@@ -350,6 +367,24 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertTrue(self.contest.run_pretests_only)
         self.assertTrue(self.contest.tester_see_scoreboard)
         self.assertEqual(self.contest.time_limit, timedelta(hours=1))
+
+    def test_update_writes_assignment_log_entry(self):
+        self.client.force_login(self.editor)
+        payload = self._full_payload(name='Logged Edit')
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        ct = ContentType.objects.get_for_model(Contest)
+        entry = LogEntry.objects.filter(content_type=ct, object_id=str(self.contest.pk)).latest('action_time')
+        self.assertEqual(entry.action_flag, CHANGE)
+        self.assertEqual(entry.user_id, self.editor.id)
+        for blob in (entry.object_repr, entry.change_message):
+            self.assertIn('assignment', blob.lower())
+            self.assertNotIn('contest', blob.lower())
 
     def test_post_renames_key(self):
         self.client.force_login(self.editor)
@@ -595,11 +630,164 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.context['prefill']['vis_mode'], 'org')
         self.assertRegex(response.content.decode(), r'name="vis_mode" value="org"\s*checked')
 
+    def test_create_defaults_format_exam(self):
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['prefill']['format_name'], 'exam')
+        html = response.content.decode()
+        self.assertRegex(html, r'value="exam"\s+selected')
+
+    def test_create_page_omits_crumb_and_layout_switch(self):
+        """Tabs stay; the crumb row and Horizontal/Vertical switch under them do not."""
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('Add Assignment', html)
+        self.assertIn('fa-list', html)
+        self.assertIn('fa-calendar', html)
+        self.assertNotIn('class="crumb"', html)
+        self.assertNotIn('sp-layout-switch', html)
+        self.assertNotIn('data-layout="layout-lr"', html)
+        self.assertNotIn('data-layout="layout-tb"', html)
+        self.assertNotIn('>Horizontal<', html)
+        self.assertNotIn('>Vertical<', html)
+        self.assertIn('class="v2-split', html)
+        self.assertIn('.pcv2 { background: transparent', html)
+        # User pickers still talk to the shared profile_select2 (name + username).
+        self.assertIn(reverse('profile_select2'), html)
+        self.assertIn('class="profile-select2"', html)
+
+    def test_virtual_join_label_not_participation(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('Allow virtual join', html)
+        self.assertNotIn('Allow virtual participation', html)
+        self.assertIn('nowrap-label', html)
+
+    def test_library_has_select_all_and_row_checkboxes(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('id="lib-select-all"', html)
+        self.assertIn('lib-row-check', html)
+        self.assertIn('colspan="7"', html)
+        create_problem('lib-check-prob', is_public=True)
+        html_with_rows = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('class="lib-row-check"', html_with_rows)
+
+    def test_lib_row_html_out_prefix_defaults_to_10000(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('class="cp-out-prefix"', html)
+        self.assertIn('value="10000"', html)
+
+    def test_create_writes_assignment_log_entry(self):
+        response = self._post(name='Logged Assignment', key='loggedasgn')
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='loggedasgn')
+        ct = ContentType.objects.get_for_model(Contest)
+        entry = LogEntry.objects.filter(content_type=ct, object_id=str(contest.pk)).latest('action_time')
+        self.assertEqual(entry.action_flag, ADDITION)
+        self.assertEqual(entry.user_id, self.editor.id)
+        for blob in (entry.object_repr, entry.change_message):
+            self.assertIn('assignment', blob.lower())
+            self.assertNotIn('contest', blob.lower())
+
     def test_assignment_id_lives_in_advanced(self):
         html = self.client.get(reverse('contest_create')).content.decode()
         before, after = html.split('class="advanced-hidden"', 1)
         self.assertNotIn('id="id_key"', before)
         self.assertIn('id="id_key"', after)
+
+    def test_create_prefills_auto_increment_assignment_id(self):
+        occupied = Contest.generate_unique_key()
+        self.assertRegex(occupied, r'^c\d{6}$')
+        create_contest(
+            key=occupied, name='Occupied auto key',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('superuser',),
+        )
+        response = self.client.get(reverse('contest_create'))
+        key = response.context['prefill']['key']
+        self.assertRegex(key, r'^c\d{6}$')
+        self.assertNotEqual(key, occupied)
+        self.assertFalse(Contest.objects.filter(key=key).exists())
+        html = response.content.decode()
+        self.assertIn('value="%s"' % key, html)
+        self.assertIn('generateUniqueContestKey', html)
+        self.assertNotIn("replace(/[^a-z0-9]+/g, '')", html)
+
+    def test_preview_title_comes_before_time(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        preview = html.split('id="pv-body"', 1)[1].split('</aside>', 1)[0]
+        self.assertLess(preview.find('id="pv-title"'), preview.find('id="pv-time"'))
+
+    def test_create_empty_key_is_auto_incremented_not_name(self):
+        response = self._post(name='Homework Name Copy', key='')
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(name='Homework Name Copy')
+        self.assertNotEqual(contest.key, 'homeworknamecopy')
+        self.assertRegex(contest.key, r'^c\d{6}$')
+
+    def test_per_problem_code_options_hidden_for_other_types(self):
+        from judge.models.question import ProblemMCQConfig
+        code = create_problem('lock-code', is_public=True, submission_type='C')
+        single = create_problem('lock-single', is_public=True, submission_type='M')
+        ProblemMCQConfig.objects.create(problem=single, multiple_select=False, is_true_false=False)
+        truefalse = create_problem('lock-tf', is_public=True, submission_type='M')
+        ProblemMCQConfig.objects.create(problem=truefalse, multiple_select=False, is_true_false=True)
+        multi = create_problem('lock-multi', is_public=True, submission_type='M')
+        ProblemMCQConfig.objects.create(problem=multi, multiple_select=True)
+        blank = create_problem('lock-blank', is_public=True, submission_type='B')
+        short = create_problem('lock-short', is_public=True, submission_type='S')
+        filep = create_problem('lock-file', is_public=True, submission_type='F')
+
+        lib = self.client.get(reverse('contest_create')).content.decode()
+        self.assertNotIn('applyCpOptionLocks', lib)
+        self.assertIn('data-format="single"', lib)
+        self.assertIn('data-format="truefalse"', lib)
+        self.assertIn('data-format="multiple"', lib)
+        self.assertIn('cp-opt-partial', lib)
+        self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-pretested', lib)
+        self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-out-prefix', lib)
+
+        response = self._post(
+            name='Option locks', key='optlocks',
+            problems=[
+                {'id': code.id, 'points': 100},
+                {'id': single.id, 'points': 100},
+                {'id': truefalse.id, 'points': 100},
+                {'id': multi.id, 'points': 100},
+                {'id': blank.id, 'points': 100},
+                {'id': short.id, 'points': 100},
+                {'id': filep.id, 'points': 100},
+            ],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        html = self.client.get(reverse('contest_edit', args=['optlocks'])).content.decode()
+
+        def row_for(problem):
+            marker = 'data-pid="%s"' % problem.id
+            start = html.find(marker)
+            self.assertNotEqual(start, -1, marker)
+            open_div = html.rfind('<div class="cp-row"', 0, start)
+            nxt = html.find('<div class="cp-row"', start + 1)
+            if nxt == -1:
+                nxt = html.find('id="cp-empty"', start)
+            return html[open_div:nxt]
+
+        def assert_code_opts(row, is_code):
+            self.assertIn('cp-opt-partial', row)
+            self.assertNotIn(' disabled', row.split('cp-opt-partial', 1)[1].split('</label>', 1)[0])
+            if is_code:
+                self.assertIn('cp-opt-pretested', row)
+                self.assertIn('cp-opt-out-prefix', row)
+            else:
+                self.assertNotIn('cp-opt-pretested', row)
+                self.assertNotIn('cp-opt-out-prefix', row)
+
+        assert_code_opts(row_for(code), True)
+        assert_code_opts(row_for(single), False)
+        assert_code_opts(row_for(truefalse), False)
+        assert_code_opts(row_for(multi), False)
+        assert_code_opts(row_for(blank), False)
+        assert_code_opts(row_for(short), False)
+        assert_code_opts(row_for(filep), False)
 
     def test_format_and_virtual_live_in_basic(self):
         html = self.client.get(reverse('contest_create')).content.decode()
@@ -642,12 +830,12 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         before, advanced = html.split('class="advanced-hidden"', 1)
         self.assertIn('class="oj-tip"', advanced)
         self.assertIn('oj-tip-pop', advanced)
-        self.assertIn('These users will be able to edit the contest.', advanced)
+        self.assertIn('These users will be able to edit the assignment.', advanced)
         self.assertGreater(advanced.count('class="oj-tip"'), 10)
         basic = before[before.find('Basic information'):]
-        self.assertIn('The contest format module to use.', basic)
-        self.assertIn('Allow users to participate virtually after the contest ends.', basic)
-        self.assertIn('A JSON object to serve as the configuration for the chosen contest format module.', advanced)
+        self.assertIn('The assignment format module to use.', basic)
+        self.assertIn('Allow users to join virtually after the assignment ends.', basic)
+        self.assertIn('A JSON object to serve as the configuration for the chosen assignment format module.', advanced)
 
     def test_advanced_fields_round_trip(self):
         response = self._post(
@@ -1183,7 +1371,7 @@ class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(len(problems), 1)
         self.assertEqual(problems[0]['id'], self.problem.id)
         self.assertEqual(problems[0]['points'], 100)
-        self.assertEqual(problems[0]['letter'], 'A')
+        self.assertEqual(problems[0]['letter'], '1')
 
     def test_post_updates_problem_points(self):
         response = self.client.post(
@@ -1607,11 +1795,31 @@ class ContestEditorProblemOptionsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problems[0]['output_prefix'], 7)
         self.assertEqual(problems[0]['hide_results'], False)
 
+    def test_prefill_output_prefix_defaults_to_10000_when_empty(self):
+        from judge.models import ContestProblem
+        ContestProblem.objects.create(
+            contest=self.contest, problem=self.problem, points=100, order=1,
+            output_prefix_override=None,
+        )
+        response = self.client.get(reverse('contest_edit', args=['proboptscontest']))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['prefill']['problems'][0]['output_prefix'], 10000)
+        html = response.content.decode()
+        self.assertIn('value="10000"', html)
+
+    def test_prefill_output_prefix_zero_is_kept(self):
+        from judge.models import ContestProblem
+        ContestProblem.objects.create(
+            contest=self.contest, problem=self.problem, points=100, order=1,
+            output_prefix_override=0,
+        )
+        response = self.client.get(reverse('contest_edit', args=['proboptscontest']))
+        self.assertEqual(response.context['prefill']['problems'][0]['output_prefix'], 0)
+
     def test_results_markup_is_exam_only(self):
-        """Results lives in ``.cp-results`` (exam-only). Default format pages
-        ship the control in markup/JS but do not mark ``.cp-list`` as exam, so
-        CSS keeps it hidden. ``syncExamResultsVisibility`` toggles ``is-exam``
-        when ``#id_format_name`` changes to exam."""
+        """Results lives in ``.cp-results`` (exam-only). Create defaults to exam,
+        so ``.cp-list`` is marked ``is-exam``. ``syncExamResultsVisibility``
+        toggles that class when ``#id_format_name`` changes."""
         html = self.client.get(reverse('contest_create')).content.decode()
         self.assertIn('class="cp-opt cp-results"', html)
         self.assertIn('data-exam-only="hide_results"', html)
@@ -1619,9 +1827,9 @@ class ContestEditorProblemOptionsTestCase(CommonDataMixin, TestCase):
         self.assertIn('.cp-list.is-exam .cp-options .cp-opt.cp-results', html)
         self.assertIn("fmt.value === 'exam'", html)
         self.assertIn('syncExamResultsVisibility', html)
-        # Create defaults to Default format — list is not exam-active.
+        # Create defaults to Exam format — list is exam-active.
         self.assertIn('id="cp-list"', html)
-        self.assertNotIn('class="cp-list is-exam"', html)
+        self.assertIn('class="cp-list is-exam"', html)
 
     def test_exam_edit_marks_cp_list_is_exam(self):
         from judge.models import ContestProblem

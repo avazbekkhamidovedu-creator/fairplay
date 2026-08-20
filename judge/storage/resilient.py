@@ -49,6 +49,17 @@ def generate_class_material_key(class_id, original_name, now=None):
     )
 
 
+def generate_editor_attachment_key(user_id, original_name, now=None):
+    """Object key for files attached from the rich-text editor (same store as submissions)."""
+    now = now or timezone.now()
+    ext = posixpath.splitext(original_name)[1].lower()
+    if not _EXT_RE.fullmatch(ext):
+        ext = ''
+    return 'editor_attachments/%04d/%02d/%d/%s%s' % (
+        now.year, now.month, user_id or 0, uuid.uuid4().hex, ext,
+    )
+
+
 def generate_seb_config_key(scope, original_name, now=None):
     """Object key for Safe Exam Browser ``.seb`` configs (same store as submission files).
 

@@ -24,9 +24,15 @@
             {% endif %}
             {% if form.show_classes %}
                 <div class="form-row">
-                    <label for="{{ form.class_.id_for_label }}"><b>{{ _('Select your class:') }}</b></label>
+                    <label for="{{ form.class_.id_for_label }}"><b>
+                        {% if form.for_teacher %}{{ _('Class (optional):') }}
+                        {% else %}{{ _('Select your class:') }}{% endif %}
+                    </b></label>
                     {{ form.class_ }}
                     {{ form.class_.errors }}
+                    {% if form.for_teacher %}
+                        <p>{{ _('Leave empty unless you will co-teach that section.') }}</p>
+                    {% endif %}
                 </div>
             {% endif %}
             <div class="form-row">

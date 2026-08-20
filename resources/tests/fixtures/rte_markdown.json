@@ -76,6 +76,18 @@
       "markdown": "<script>alert(1)</script>",
       "expect_substrings": ["&lt;script&gt;"],
       "forbid_substrings": ["<script>alert"]
+    },
+    {
+      "id": "fenced_code_lang",
+      "markdown": "```python\nprint(1)\n```",
+      "expect_substrings": ["code-block", "code-block-lang", "python", "print"],
+      "forbid_substrings": ["<code>python"]
+    },
+    {
+      "id": "fenced_code_plain",
+      "markdown": "```\nint x = 1;\n```",
+      "expect_substrings": ["int x = 1", "<pre>", "<code>"],
+      "forbid_substrings": ["code-block-lang"]
     }
   ]
 }
