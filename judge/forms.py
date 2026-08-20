@@ -11,7 +11,7 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import RegexValidator
 from django.db.models import Q
-from django.forms import BooleanField, CharField, ChoiceField, DateField, Form, ModelForm, ModelMultipleChoiceField, \
+from django.forms import BooleanField, CharField, ChoiceField, Form, ModelForm, ModelMultipleChoiceField, \
     MultipleChoiceField
 from django.urls import reverse_lazy
 from django.utils import timezone
@@ -714,69 +714,6 @@ class ContestCloneForm(Form):
             raise ValidationError(_('Contest with key already exists.'))
         return key
 
-
-class ClassCloneForm(Form):
-    name = CharField(max_length=128, required=False, label=_('Name'))
-    academic_year = CharField(max_length=16, required=False, label=_('Academic year'))
-    term_session = CharField(max_length=64, required=False, label=_('Term and session'))
-    instructor_names = CharField(max_length=512, required=True, label=_('Instructors'))
-    start_date = DateField(required=False, label=_('Class start'))
-    end_date = DateField(required=False, label=_('Class end'))
-    copy_materials = BooleanField(
-        required=False, initial=True, label=_('Copy course materials'),
-        help_text=_('Folders and files on the Materials tab. Students are not copied.'),
-    )
-    copy_assignments = BooleanField(
-        required=False, initial=True, label=_('Copy assignments (problem lists)'),
-        help_text=_('Creates new hidden assignments with the same problems. Submissions are not copied.'),
-    )
-
-    def __init__(self, *args, source=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.source = source
-        year = timezone.now().year
-        year_choices = [('', _('Select…'))]
-        for start in range(year + 1, year - 4, -1):
-            label = '%d-%d' % (start, start + 1)
-            year_choices.append((label, label))
-        self.fields['academic_year'].widget = forms.Select(choices=year_choices, attrs={'class': 'oj-select'})
-        self.fields['term_session'].widget = forms.Select(
-            choices=list(ClassSiteForm.TERM_SESSION_CHOICES), attrs={'class': 'oj-select'},
-        )
-        self.fields['name'].widget.attrs.update({
-            'class': 'oj-input',
-            'placeholder': _('Generated from year, session, and instructor'),
-            'autocomplete': 'off',
-        })
-        self.fields['instructor_names'].widget.attrs.update({'class': 'oj-input'})
-        self.fields['start_date'].widget = forms.DateInput(attrs={'class': 'oj-input', 'type': 'date'})
-        self.fields['end_date'].widget = forms.DateInput(attrs={'class': 'oj-input', 'type': 'date'})
-        self.fields['copy_materials'].widget.attrs.update({'class': 'oj-checkbox'})
-        self.fields['copy_assignments'].widget.attrs.update({'class': 'oj-checkbox'})
-
-    def clean_instructor_names(self):
-        names = (self.cleaned_data.get('instructor_names') or '').strip()
-        if not names:
-            raise ValidationError(_('Enter at least one instructor name.'))
-        return names
-
-    def clean(self):
-        cleaned = super().clean()
-        name = (cleaned.get('name') or '').strip()
-        if not name:
-            parts = [p for p in (
-                (cleaned.get('academic_year') or '').strip(),
-                (cleaned.get('term_session') or '').strip(),
-                (cleaned.get('instructor_names') or '').strip(),
-            ) if p]
-            name = ' '.join(parts)
-        if not name:
-            raise ValidationError(_('Enter a class name, or fill year, session, and instructor.'))
-        cleaned['name'] = name[:128]
-        start, end = cleaned.get('start_date'), cleaned.get('end_date')
-        if start and end and end < start:
-            self.add_error('end_date', _('The end date must be after the start date.'))
-        return cleaned
 
 
 class ProblemPointsVoteForm(ModelForm):

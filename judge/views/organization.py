@@ -22,14 +22,13 @@ from django.views.generic import DetailView, FormView, ListView, UpdateView, Vie
 from django.views.generic.detail import SingleObjectMixin, SingleObjectTemplateResponseMixin
 from reversion import revisions
 
-from judge.forms import ClassAssignmentsForm, ClassCloneForm, ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
+from judge.forms import ClassAssignmentsForm, ClassSiteForm, EditOrganizationForm, OrganizationSiteForm
 from judge.models import AdminNotification, Class, ClassMaterial, Contest, InstructorVerificationRequest, \
     Organization, OrganizationRequest, Profile
 from judge.models.notification import ensure_instructors_group, user_in_instructors_group
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, notify_instructor_verification,
 )
-from judge.utils.class_clone import clone_class, clone_contest, unique_contest_key
 from judge.utils.import_export import process_user_csv
 from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.utils.ranker import ranker
@@ -44,7 +43,7 @@ __all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers', 'Organiz
            'KickUserWidgetView', 'ClassHome', 'RequestJoinClass',
            'OrganizationImportUsers', 'CreateClass', 'EditClass', 'DeleteClass',
            'ClassLinkAssignmentsView', 'ClassMaterialActionView', 'ClassMaterialDownloadView',
-           'ClassClone', 'ClassAssignmentClone']
+           'ClassImportMembers']
 
 
 # Materials upload policy (extensions lowercase, without leading dot).
@@ -1914,19 +1913,12 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
 
         context.update(course_inbox_chrome_context(self.request))
         if can_edit:
-            context['link_assignment_url'] = reverse(
+            context['add_assignment_url'] = reverse(
                 'class_link_assignments',
                 args=[org.id, org.slug, self.object.id, self.object.slug],
             )
         else:
-            context['link_assignment_url'] = ''
-        if can_edit and self.request.user.has_perm('judge.create_private_contest'):
-            from django.utils.http import urlencode
-            context['create_assignment_url'] = (
-                reverse('contest_create') + '?' + urlencode({'class': self.object.id})
-            )
-        else:
-            context['create_assignment_url'] = ''
+            context['add_assignment_url'] = ''
 
         context.update(self.get_sort_context())
         return context
@@ -2132,102 +2124,6 @@ class EditClass(LoginRequiredMixin, TitleMixin, FormView):
         _flash_class_csv_import_result(self.request, csv_result)
         return HttpResponseRedirect(self.object.get_absolute_url())
 
-
-class ClassClone(LoginRequiredMixin, TitleMixin, FormView):
-    """Copy a class offering: description, materials, and assignment problem lists."""
-
-    template_name = 'organization/clone_class.html'
-    form_class = ClassCloneForm
-
-    def get_object(self):
-        return get_object_or_404(Class, id=self.kwargs['cpk'])
-
-    def dispatch(self, request, *args, **kwargs):
-        self.object = self.get_object()
-        org = self.object.organization
-        if self.object.slug != kwargs.get('cslug') or org.id != kwargs.get('pk') or org.slug != kwargs.get('slug'):
-            return HttpResponsePermanentRedirect(reverse(
-                'class_clone',
-                args=[org.id, org.slug, self.object.id, self.object.slug],
-            ))
-        if not profile_manages_class(request.profile, self.object, request.user):
-            return generic_message(request, _('Access Denied'),
-                                   _('You do not have permission to clone this class.'), status=403)
-        return super().dispatch(request, *args, **kwargs)
-
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs['source'] = self.object
-        return kwargs
-
-    def get_initial(self):
-        src = self.object
-        return {
-            'instructor_names': src.instructor_names or self.request.profile.display_name,
-            'copy_materials': True,
-            'copy_assignments': True,
-        }
-
-    def get_title(self):
-        return _('Clone class - %s') % self.object.name
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['organization'] = self.object.organization
-        context['class'] = self.object
-        context['title'] = self.get_title()
-        context['assignment_count'] = Contest.objects.filter(classes=self.object).count()
-        context['material_count'] = ClassMaterial.objects.filter(class_obj=self.object).count()
-        context.update(course_inbox_chrome_context(self.request))
-        return context
-
-    def form_valid(self, form):
-        data = form.cleaned_data
-        dest, materials, assignments = clone_class(
-            self.object,
-            name=data['name'],
-            profile=self.request.profile,
-            copy_materials=data.get('copy_materials', True),
-            copy_assignments=data.get('copy_assignments', True),
-            academic_year=data.get('academic_year') or '',
-            term_session=data.get('term_session') or '',
-            instructor_names=data['instructor_names'],
-            start_date=data.get('start_date'),
-            end_date=data.get('end_date'),
-        )
-        messages.success(
-            self.request,
-            _('Cloned class “%(name)s” with %(materials)d materials and %(assignments)d assignments.') % {
-                'name': dest.name,
-                'materials': materials,
-                'assignments': assignments,
-            },
-        )
-        return HttpResponseRedirect(dest.get_absolute_url())
-
-
-class ClassAssignmentClone(LoginRequiredMixin, View):
-    """Clone one assignment's problem list onto the same class."""
-
-    http_method_names = ['post']
-
-    def post(self, request, *args, **kwargs):
-        class_obj = get_object_or_404(Class, id=kwargs['cpk'])
-        if not profile_manages_class(request.profile, class_obj, request.user):
-            return generic_message(request, _('Access Denied'),
-                                   _('You do not have permission to clone assignments for this class.'), status=403)
-        contest = get_object_or_404(Contest, key=kwargs['contest'], classes=class_obj)
-        clone = clone_contest(
-            contest, unique_contest_key(contest.key), request.profile,
-            target_class=class_obj, copy_private_contestants=False,
-        )
-        messages.success(
-            request,
-            _('Cloned assignment “%(src)s” as “%(dst)s” (hidden until you publish it).') % {
-                'src': contest.name, 'dst': clone.name,
-            },
-        )
-        return HttpResponseRedirect(reverse('contest_edit', args=[clone.key]))
 
 
 class ClassImportMembers(LoginRequiredMixin, View):

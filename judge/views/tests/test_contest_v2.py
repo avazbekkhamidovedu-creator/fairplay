@@ -5,7 +5,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Class, Contest, ContestTag, Organization, Submission
+from judge.models import Contest, ContestTag, Organization, Submission
 from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
 
 
@@ -266,43 +266,6 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
         self.assertTrue(contest.is_visible)
         self.assertEqual(contest.authors.count(), 1)
 
-    def test_create_from_class_links_and_returns_to_class(self):
-        klass = Class.objects.create(
-            organization=self.organization,
-            name='Section A',
-            slug='section-a',
-        )
-        klass.admins.add(self.users['contest_creator'].profile)
-        self.client.force_login(self.users['contest_creator'])
-        create_url = reverse('contest_create') + '?class=%d' % klass.id
-        response = self.client.get(create_url)
-        self.assertEqual(response.status_code, 200)
-        prefill = response.context['prefill']
-        self.assertEqual(prefill['classes'], [(klass.id, klass.name)])
-        self.assertEqual(prefill['organizations'], [(self.organization.id, self.organization.name)])
-
-        now = timezone.now()
-        response = self.client.post(
-            create_url,
-            data=json.dumps({
-                'name': 'Class Homework',
-                'key': 'classhw1',
-                'start_time': (now + timedelta(hours=1)).isoformat(),
-                'end_time': (now + timedelta(hours=3)).isoformat(),
-                'format_name': 'default',
-                'vis_mode': 'org',
-                'organizations': [self.organization.id],
-                'classes': [klass.id],
-            }),
-            content_type='application/json',
-        )
-        self.assertEqual(response.status_code, 200, response.content)
-        result = response.json()
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['redirect'], klass.get_absolute_url() + '?tab=assignments')
-        contest = Contest.objects.get(key='classhw1')
-        self.assertTrue(contest.classes.filter(id=klass.id).exists())
-        self.assertTrue(contest.organizations.filter(id=self.organization.id).exists())
 
     def test_post_missing_fields(self):
         self.client.force_login(self.users['staff_contest_edit_all'])
