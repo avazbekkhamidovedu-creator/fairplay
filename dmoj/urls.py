@@ -208,6 +208,7 @@ urlpatterns = [
         path('/abort', submission.abort_submission, name='submission_abort'),
         path('/test_case/<int:case>/<str:type>', download_test_case, name='submission_test_case_download'),
         path('/ai-hint', submission.SubmissionAIHint.as_view(), name='submission_ai_hint'),
+        path('/ai-grade', submission.SubmissionAIGrade.as_view(), name='submission_ai_grade'),
         path('/file', file_upload.submission_file_download, name='submission_file_download'),
         path('/grade-file', file_upload.submission_file_grade, name='submission_file_grade'),
     ])),
@@ -282,6 +283,7 @@ urlpatterns = [
         path('/grade/save', contests.ContestGradeSave.as_view(), name='contest_grade_save'),
         path('/grade/status', contests.ContestGradeStatus.as_view(), name='contest_grade_status'),
         path('/grade/release', contests.ContestGradeRelease.as_view(), name='contest_grade_release'),
+        path('/grade/ai', contests.ContestBatchAIGrade.as_view(), name='contest_grade_ai'),
 
         path('/rank/<str:problem>/',
              paged_list_view(ranked_submission.ContestRankedSubmission, 'contest_ranked_submissions')),

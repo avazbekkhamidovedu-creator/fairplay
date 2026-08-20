@@ -1757,6 +1757,18 @@
             if (sebDefault) sebDefault.addEventListener('change', syncSebDefault);
             syncSebDefault();
 
+            function syncAiBatchDelayRow() {
+                var modeEl = document.getElementById('id_ai_grading_mode');
+                var row = document.getElementById('ai-batch-delay-row');
+                if (!modeEl || !row) return;
+                row.style.display = modeEl.value === 'batch' ? '' : 'none';
+            }
+            var aiModeEl = document.getElementById('id_ai_grading_mode');
+            if (aiModeEl) {
+                aiModeEl.addEventListener('change', syncAiBatchDelayRow);
+                syncAiBatchDelayRow();
+            }
+
             // --- From library button + enhanced bank (filters/sort/pagination) ---
             var libBtn = document.getElementById('cp-from-library');
             var slideover = document.getElementById('problem-library');
@@ -3034,7 +3046,34 @@
                     </fieldset>
                     {% endif %}
 
-                    <!-- ④ Advanced: order matches ContestAdmin.add_fieldsets
+                    <!-- ④ AI grading -->
+                    <fieldset class="module">
+                        <h2>{{ _('AI grading') }}</h2>
+                        <div class="form-content">
+                            <div class="form-row">
+                                <label>{{ _('When to grade') }}</label>
+                                <div class="field">
+                                    <select id="id_ai_grading_mode" name="ai_grading_mode">
+                                        <option value="off"{% if prefill.ai_grading_mode == 'off' or not prefill.ai_grading_mode %} selected{% endif %}>{{ _('Off') }}</option>
+                                        <option value="realtime"{% if prefill.ai_grading_mode == 'realtime' %} selected{% endif %}>{{ _('On demand — student requests AI grading (homework)') }}</option>
+                                        <option value="batch"{% if prefill.ai_grading_mode == 'batch' %} selected{% endif %}>{{ _('Batch — latest submits after the contest (exam)') }}</option>
+                                    </select>
+                                    <div class="help">{{ _('AI grading always uses each student’s latest submission per problem. On demand shows a button after submit; AI runs only when the student (or teacher) requests it. Batch waits for the Grade-page button, or for the delay after the contest ends. Scores and subtask results appear on the existing submission page.') }}</div>
+                                </div>
+                            </div>
+                            <div class="form-row" id="ai-batch-delay-row">
+                                <label>{{ _('Auto-run after end') }}</label>
+                                <div class="field ac-inline">
+                                    <input type="number" id="id_ai_grading_auto_delay_minutes" name="ai_grading_auto_delay_minutes"
+                                           value="{{ prefill.ai_grading_auto_delay_minutes if prefill.ai_grading_auto_delay_minutes is not none else 30 }}" min="0" max="1440">
+                                    <span class="unit">{{ _('minutes (0 = manual only)') }}</span>
+                                    <div class="help">{{ _('Batch mode only. Default 30 minutes after the contest ends. Teachers can still press “Run AI grading” on the Grade page at any time.') }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- ⑤ Advanced: order matches ContestAdmin.add_fieldsets
                          (Identity → Settings → Format → Details → Rating → Access → Justice),
                          minus fields already moved to the main form. Format sits above
                          remaining Details so it stays in the upper half with Settings. -->

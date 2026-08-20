@@ -3,7 +3,6 @@ import logging
 import os
 import re
 import shutil
-import threading
 from datetime import timedelta
 from operator import itemgetter
 from random import randrange
@@ -101,6 +100,20 @@ def get_contest_submission_count(problem, profile, virtual):
         .filter(problem__problem=problem, participation__virtual=virtual)
         .count()
     )
+
+
+def workspace_ai_grade_fields(request, submission):
+    """On-demand AI grading button state for the Workspace / submit JSON."""
+    from judge.utils.contest_ai import ai_grade_context
+
+    ctx = ai_grade_context(request.user, submission)
+    fields = {
+        'can_trigger_ai_grade': bool(ctx.get('can_trigger')),
+        'ai_grade_remaining': ctx.get('remaining', 0),
+    }
+    if fields['can_trigger_ai_grade']:
+        fields['ai_grade_url'] = reverse('submission_ai_grade', args=[submission.id])
+    return fields
 
 
 def workspace_display_points(submission, request):
@@ -615,6 +628,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                         'problem_workspace_submission_status',
                         args=(self.object.code, selected_submission.id),
                     ),
+                    **({} if results_hidden else workspace_ai_grade_fields(self.request, selected_submission)),
                 }
                 # Result-tab comments = submission page (sub:ID), gated by DMOJ_ENABLE_COMMENTS + CommentLock.
                 if settings.DMOJ_ENABLE_COMMENTS:
@@ -1743,8 +1757,17 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 'answer_display': get_workspace_answer_display(submission) if source is not None else [],
                 'file_upload': get_workspace_file_upload(submission),
                 'status_url': reverse('problem_workspace_submission_status', args=(self.object.code, submission.id)),
+                **({} if hidden else workspace_ai_grade_fields(self.request, submission)),
             })
         return super().form_valid(form)
+
+    def _in_flight_code_submissions(self):
+        """Queued/running judge-bridge submissions for this user on this problem only."""
+        return Submission.objects.filter(
+            user=self.request.profile,
+            problem=self.object,
+            rejudged_date__isnull=True,
+        ).exclude(status__in=['D', 'IE', 'CE', 'AB']).count()
 
     def _submission_blocked_response(self):
         """Pre-submit guards shared by every question type. Returns a response if blocked."""
@@ -1763,12 +1786,11 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                     _('Join the assignment to submit'),
                     _('This problem belongs to an assignment. Enter the assignment to submit a solution.'),
                 )
+        # Judge-bridge spam cap: code problems only, scoped to this problem.
         if (
-            not self.request.user.has_perm('judge.spam_submission')
-            and Submission.objects.filter(user=self.request.profile, rejudged_date__isnull=True)
-            .exclude(status__in=['D', 'IE', 'CE', 'AB'])
-            .count()
-            >= settings.DMOJ_SUBMISSION_LIMIT
+            self.is_code
+            and not self.request.user.has_perm('judge.spam_submission')
+            and self._in_flight_code_submissions() >= settings.DMOJ_SUBMISSION_LIMIT
         ):
             if self._wants_workspace_json():
                 return self._workspace_json_error(_('You submitted too many submissions.'), status=429)
@@ -1861,6 +1883,8 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
         # Save a query.
         self.new_submission.source = source
+        from judge.utils.contest_ai import supersede_older_in_flight
+        supersede_older_in_flight(self.new_submission)
         self.new_submission.judge(force_judge=True, judge_id=form.cleaned_data['judge'])
 
         return self._workspace_success_response(form)
@@ -1874,48 +1898,14 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             self._attach_contest(self.new_submission)
             self.grader.store_answer(self.new_submission, form.cleaned_data)
 
-        # Defer AI grading to a background thread so the submission page
-        # loads immediately with a spinner; the websocket event fires when
-        # grading completes and the page updates in-place.
-        if self._needs_ai_grading():
-            self.new_submission.status = 'QU'
-            self.new_submission.save(update_fields=['status'])
-            threading.Thread(
-                target=self._grade_in_background,
-                args=(self.new_submission,),
-                daemon=True,
-            ).start()
+        from judge.utils.contest_ai import contest_defers_ai, mark_awaiting_batch_ai, supersede_older_in_flight
+        supersede_older_in_flight(self.new_submission)
+        if contest_defers_ai(self.new_submission):
+            mark_awaiting_batch_ai(self.new_submission)
         else:
             self.new_submission.judge(force_judge=True)
 
         return self._workspace_success_response(form)
-
-    def _needs_ai_grading(self):
-        """Return True if this submission type requires an LLM call (and thus
-        synchronous grading would block the submit response)."""
-        from judge.models import ProblemSubmissionType
-        st = self.object.submission_type
-        if st == ProblemSubmissionType.SHORT_ANSWER:
-            return True
-        if st == ProblemSubmissionType.FILL_BLANK:
-            from judge.models.question import GRADE_AI
-            try:
-                config = self.object.fill_blank_config
-            except Exception:
-                return False
-            return config.grading_mode == GRADE_AI
-        return False
-
-    @staticmethod
-    def _grade_in_background(submission):
-        """Called from a daemon thread to grade the submission and fire the
-        websocket event so the status page updates."""
-        try:
-            submission.judge(force_judge=True)
-        except Exception:
-            logger = logging.getLogger(__name__)
-            logger.exception('Background AI grading failed for submission %d',
-                             submission.id)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -2424,6 +2414,7 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
                 'problem_workspace_submission_status',
                 args=(problem.code, submission.id),
             ),
+            **({} if hidden else workspace_ai_grade_fields(request, submission)),
         })
 
 

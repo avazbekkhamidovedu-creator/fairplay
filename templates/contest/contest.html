@@ -198,6 +198,16 @@
                 {{ _('This assignment is time-limited: you get %(time)s from the moment you start, and it closes at %(end)s — if the deadline arrives first, your remaining time is forfeited.', time=bold(contest.time_limit|timedelta('localized-no-seconds')), end=bold(contest.end_time|date(_("F j, Y, G:i T")))) }}
             </div>
         {% endif %}
+        {% if contest.ai_grading_mode == 'realtime' or contest.ai_grading_mode == 'batch' %}
+            <div class="dur-note" style="text-align:left;max-width:640px;margin-left:auto;margin-right:auto;">
+                <i class="fa fa-magic"></i>
+                {% if contest.ai_grading_mode == 'realtime' %}
+                    {{ _('AI grading is available on demand. After you submit, open the submission page and press “View AI grading” to request a score. Only your latest submission per problem is graded.') }}
+                {% else %}
+                    {{ _('AI grading runs after the assignment ends (teacher button, or automatically after a short delay). Only each student’s latest submission per problem is graded. Scores then appear on the existing submission page.') }}
+                {% endif %}
+            </div>
+        {% endif %}
         {% if contest.show_short_display %}
             <div id="details">
                 <ul>

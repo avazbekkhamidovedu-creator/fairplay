@@ -211,6 +211,29 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
         response = self.client.get(self._class_url())
         self.assertEqual(response.status_code, 200)
 
+    def test_assignment_actions_live_on_assignments_tab(self):
+        self.client.force_login(self.admin)
+        html = self.client.get(self._class_url()).content.decode()
+        self.assertIn('Add Assignment', html)
+
+    def test_member_does_not_see_assignment_actions(self):
+        self.client.force_login(self.member)
+        html = self.client.get(self._class_url()).content.decode()
+        self.assertNotIn('Add Assignment', html)
+
+    def test_class_admin_with_create_permission_sees_add_assignment(self):
+        from django.contrib.auth.models import Permission
+        from judge.models.notification import ensure_instructors_group
+
+        ensure_instructors_group()
+        teacher = create_user(username='class_admin_creator', is_staff=True)
+        perm = Permission.objects.get(codename='create_private_contest', content_type__app_label='judge')
+        teacher.user_permissions.add(perm)
+        self.klass.admins.add(teacher.profile)
+        self.client.force_login(teacher)
+        html = self.client.get(self._class_url()).content.decode()
+        self.assertIn('Add Assignment', html)
+
     def test_pending_can_open_class_but_not_download(self):
         pending = create_user(username='class_pending')
         pending.profile.organizations.add(self.org)
@@ -419,6 +442,27 @@ class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
         # Not automatically a class or course admin.
         self.assertFalse(self.klass.admins.filter(id=self.applicant.profile.id).exists())
         self.assertFalse(self.org.admins.filter(id=self.applicant.profile.id).exists())
+
+    def test_ensure_instructors_group_merges_singular_alias(self):
+        from django.contrib.auth.models import Group, Permission
+        from judge.models.notification import INSTRUCTORS_GROUP, INSTRUCTOR_PERMISSION_CODENAMES, \
+            ensure_instructors_group, user_in_instructors_group
+
+        alias = Group.objects.create(name='Instructor')
+        alias.user_set.add(self.applicant)
+        leftover = Permission.objects.filter(content_type__app_label='judge', codename='add_problem').first()
+        if leftover is not None:
+            alias.permissions.add(leftover)
+
+        group = ensure_instructors_group()
+        self.assertEqual(group.name, INSTRUCTORS_GROUP)
+        self.assertFalse(Group.objects.filter(name='Instructor').exists())
+        self.assertTrue(group.user_set.filter(id=self.applicant.id).exists())
+        self.assertTrue(user_in_instructors_group(self.applicant))
+        attached = set(group.permissions.filter(content_type__app_label='judge')
+                       .values_list('codename', flat=True))
+        self.assertTrue(set(INSTRUCTOR_PERMISSION_CODENAMES).issubset(attached))
+        self.assertNotIn('add_problem', attached)
 
     def test_site_teacher_joining_class_becomes_instructor(self):
         from judge.models.notification import ensure_instructors_group

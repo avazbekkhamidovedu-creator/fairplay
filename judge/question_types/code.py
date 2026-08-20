@@ -6,9 +6,9 @@ score; its grading/submit hooks are never invoked by the internal path.
 
 When a problem has a ``ProblemCodeConfig`` with ``ai_enabled``, the judge bridge calls
 :func:`supplementary_ai_grade` after test-case grading completes.  The rubric score is stored as
-extra ``SubmissionTestCase`` rows (their ``case`` numbers start after the real test cases) so
-teachers can review it on the grade page — it never changes the AC/WA verdict or the
-student-visible points.
+extra ``SubmissionTestCase`` rows (their ``case`` numbers start after the real test cases). It
+never changes the AC/WA verdict or the test-case points. Students see the rubric on the
+submission page in realtime assignments, and after batch grading in exams.
 """
 import logging
 
@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 # Sentinel batch number for supplementary AI rubric rows.  Real judge batches are positive
 # integers (or NULL for unbatched cases); -1 marks rows that must be excluded from the points
-# aggregate in on_grading_end and from the student-facing status page (rubric feedback is
-# teacher-only), while still being visible on the grade page.
+# aggregate in on_grading_end. Students see them when contest AI mode allows it
+# (`student_can_see_code_ai`); they never change AC/WA.
 AI_GRADE_BATCH = -1
 
 
@@ -144,7 +144,7 @@ def supplementary_ai_grade(submission):
     # sub-question pass/fail only (informational — never fed back into submission.points).
     # batch=AI_GRADE_BATCH marks these rows so on_grading_end skips them in the aggregate and
     # the student status page hides them (rubric feedback is teacher-only).
-    offset = submission.test_cases.count()
+    offset = submission.test_cases.exclude(batch=AI_GRADE_BATCH).count()
     return [
         {
             'case': offset + i + 1,

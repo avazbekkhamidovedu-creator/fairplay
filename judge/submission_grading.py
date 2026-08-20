@@ -94,5 +94,5 @@ def grade_internally(submission):
 
     return finalize_submission(
         submission, case_points=outcome.case_points, case_total=outcome.case_total,
-        result=outcome.result, status='D',
+        result=outcome.result, status='D', error='',
     )

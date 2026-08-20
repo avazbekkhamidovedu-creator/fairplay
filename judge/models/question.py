@@ -300,8 +300,8 @@ class ProblemCodeConfig(models.Model):
     Test-case judging (the judge bridge) remains the source of truth for AC/WA; when
     ``ai_enabled`` is set, the configured model *additionally* scores the submitted source against
     the rubric / grading table after the judge finishes.  That rubric score is stored as extra
-    ``SubmissionTestCase`` rows (never shown to students, never changes the AC/WA verdict) so
-    teachers can review it on the grade page.
+    ``SubmissionTestCase`` rows (batch=-1). Students see them in realtime assignments and after
+    batch grading in exams; the AC/WA verdict is never changed.
     """
     problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='code_config',
                                    on_delete=CASCADE)

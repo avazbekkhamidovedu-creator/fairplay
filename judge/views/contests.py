@@ -67,7 +67,7 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
            'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease',
-           'ContestSEBConfig', 'SEBQuit', 'ContestTagCreateView', 'ContestSEBFileView',
+           'ContestBatchAIGrade', 'ContestSEBConfig', 'SEBQuit', 'ContestTagCreateView', 'ContestSEBFileView',
            'ContestFinalizeView', 'ContestUnfinalizeView']
 
 
@@ -729,6 +729,16 @@ class ContestCreate(LoginRequiredMixin, View):
         # Duration: the frontend edits hours+minutes, the model stores a timedelta.
         contest.time_limit = self._parse_duration(payload)
 
+        mode = payload.get('ai_grading_mode') or Contest.AI_GRADING_OFF
+        if mode not in dict(Contest.AI_GRADING_MODE_CHOICES):
+            raise ValidationError(_('Invalid AI grading mode.'))
+        contest.ai_grading_mode = mode
+        try:
+            delay = int(payload.get('ai_grading_auto_delay_minutes', 30))
+        except (TypeError, ValueError):
+            delay = 30
+        contest.ai_grading_auto_delay_minutes = max(0, min(delay, 24 * 60))
+
         # ── Deadline follows a duration increase ────────────────────────────
         # Editing an existing contest: when the per-student duration grows, the
         # global deadline must grow by the SAME amount, measured from
@@ -1035,8 +1045,11 @@ class ContestCreate(LoginRequiredMixin, View):
                 self._save_m2m(contest, payload)
                 contest.authors.add(request.profile)  # the creator becomes an author
                 self._sync_problems(contest, payload)
+                contest_id = contest.pk
                 self._log_assignment(request, contest, added=True)
-                return self._action_response(payload, contest.key)
+            from judge.utils.contest_ai import schedule_batch_ai_grade
+            transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
+            return self._action_response(payload, contest.key)
         except Exception as e:
             return self._error_response(e)
 
@@ -1074,8 +1087,12 @@ class ContestCreate(LoginRequiredMixin, View):
                     except (TypeError, ValueError):
                         raise ValidationError(_('Invalid value for "authors".'))
                 self._sync_problems(contest, payload)
+                contest_id = contest.pk
+                contest_key = contest.key
                 self._log_assignment(request, contest, added=False)
-                return self._action_response(payload, contest.key)
+            from judge.utils.contest_ai import schedule_batch_ai_grade
+            transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
+            return self._action_response(payload, contest_key)
         except Exception as e:
             return self._error_response(e)
 
@@ -1092,7 +1109,7 @@ class ContestCreate(LoginRequiredMixin, View):
         )
 
     @staticmethod
-    def _action_response(payload, key):
+    def _action_response(payload, key, *, return_url=None):
         """Build the post-save response from the ``action`` button clicked.
 
         ``save`` (default) → redirect to the contest page; ``continue`` → back
@@ -1104,8 +1121,12 @@ class ContestCreate(LoginRequiredMixin, View):
             action = 'save'
         if action == 'another':
             return JsonResponse({'ok': True, 'action': 'another'})
-        redirect = reverse('contest_edit', args=[key]) if action == 'continue' \
-            else reverse('contest_view', args=[key])
+        if action == 'continue':
+            redirect = reverse('contest_edit', args=[key])
+        elif action == 'save' and return_url:
+            redirect = return_url
+        else:
+            redirect = reverse('contest_view', args=[key])
         return JsonResponse({'ok': True, 'action': action, 'redirect': redirect})
 
     # ── template context ────────────────────────────────────────────────────
@@ -1219,6 +1240,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
             'problems': [],
             'target_score': 100,
+            'ai_grading_mode': 'off', 'ai_grading_auto_delay_minutes': 30,
         }
         for field in self._m2m_fields:
             prefill[field] = []
@@ -1248,6 +1270,8 @@ class ContestCreate(LoginRequiredMixin, View):
                                          if 'problem_label_script' not in restricted else ''),
                 'format_config': json.dumps(contest.format_config, ensure_ascii=False) if contest.format_config else '',
                 'format_name': contest.format_name,
+                'ai_grading_mode': contest.ai_grading_mode,
+                'ai_grading_auto_delay_minutes': contest.ai_grading_auto_delay_minutes,
                 'scoreboard_visibility': contest.scoreboard_visibility,
                 'points_precision': contest.points_precision,
                 'rating_floor': contest.rating_floor if contest.rating_floor is not None else '',
@@ -2223,6 +2247,8 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
         # Whether grades are currently released to students (drives the
         # Release / Unrelease toolbar button state).
         context['grade_released'] = contest.results_finalized
+        context['grade_ai_batch'] = contest.ai_grading_mode == Contest.AI_GRADING_BATCH
+        context['grade_ai_batch_done'] = bool(contest.ai_grading_batch_finished_at)
 
         payload = []
         latest_seen = set()
@@ -2442,6 +2468,37 @@ class ContestGradeRelease(ContestMixin, DetailView):
         self.object.results_finalized = not self.object.results_finalized
         self.object.save(update_fields=['results_finalized'])
         return JsonResponse({'ok': True, 'released': self.object.results_finalized})
+
+
+class ContestBatchAIGrade(View):
+    """Start (or re-run) batch AI grading of latest submissions."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': _('Not authenticated.')}, status=401)
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
+        if not self.object.is_editable_by(request.user):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        contest = self.object
+        started = contest.ai_grading_batch_started_at
+        finished = contest.ai_grading_batch_finished_at
+        return JsonResponse({
+            'ok': True,
+            'mode': contest.ai_grading_mode,
+            'started_at': started.isoformat() if started else None,
+            'finished_at': finished.isoformat() if finished else None,
+        })
+
+    def post(self, request, *args, **kwargs):
+        contest = self.object
+        if contest.ai_grading_mode != Contest.AI_GRADING_BATCH:
+            return JsonResponse({'error': _('This assignment is not in batch AI grading mode.')}, status=400)
+        from judge.tasks.contest import batch_ai_grade
+        transaction.on_commit(lambda key=contest.key: batch_ai_grade.delay(key, auto=False))
+        return JsonResponse({'ok': True, 'queued': True})
 
 
 def make_contest_ranking_profile(contest, participation, contest_problems):

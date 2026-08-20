@@ -673,6 +673,8 @@ LITELLM_TIMEOUT = 120              # seconds
 AZURE_PROFILES = {}
 
 DMOJ_AI_HINT_DAILY_LIMIT = 5
+# Student on-demand AI grading quota (0 = disabled for students; teachers are unlimited).
+DMOJ_AI_GRADING_STUDENT_QUOTA = 0
 
 LITELLM_PROFILES = {
     # The importer deliberately uses a named profile so an installation can route
