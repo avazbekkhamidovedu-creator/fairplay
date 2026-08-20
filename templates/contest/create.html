@@ -495,11 +495,11 @@
             display: inline-flex;
         }
         /* Grey out options that do not apply to this problem type. Values stay
-           in the DOM (and still round-trip) so switching types is not required. */
+           in the DOM (and still round-trip) so switching types is not required.
+           Partial credit stays available for every problem type. */
         .cp-opt.is-na,
         .cp-row:not([data-format="C"]) .cp-opt-pretested,
-        .cp-row:not([data-format="C"]) .cp-opt-out-prefix,
-        .cp-row:not([data-format="C"]):not([data-format="B"]):not([data-format="multiple"]) .cp-opt-partial {
+        .cp-row:not([data-format="C"]) .cp-opt-out-prefix {
             opacity: 0.45;
             pointer-events: none;
         }
@@ -1790,7 +1790,6 @@
                 if (!row) return;
                 var fmt = (row.dataset.format || '').toLowerCase();
                 var isCode = fmt === 'c';
-                var partialApplies = isCode || fmt === 'b' || fmt === 'multiple';
                 function lock(sel, on) {
                     var el = row.querySelector(sel);
                     if (!el) return;
@@ -1801,7 +1800,6 @@
                         inp.disabled = on;
                     });
                 }
-                lock('.cp-opt-partial', !partialApplies);
                 lock('.cp-opt-pretested', !isCode);
                 lock('.cp-opt-out-prefix', !isCode);
             }
@@ -2897,9 +2895,8 @@
                                        max submissions, result visibility and output prefix. #}
                                     {% set fmt = p.format or '' %}
                                     {% set lock_code = fmt != 'C' %}
-                                    {% set lock_partial = fmt not in ['C', 'B', 'multiple'] %}
                                     <div class="cp-options">
-                                        <label class="cp-opt cp-opt-partial{% if lock_partial %} is-na{% endif %}"{% if lock_partial %} title="{{ _('Does not apply to this problem type.') }}"{% endif %}><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}{% if lock_partial %} disabled{% endif %}> {{ _('Partial credit') }}</label>
+                                        <label class="cp-opt cp-opt-partial"><input type="checkbox" class="cp-partial"{% if p.partial %} checked{% endif %}> {{ _('Partial credit') }}</label>
                                         <label class="cp-opt cp-opt-pretested{% if lock_code %} is-na{% endif %}"{% if lock_code %} title="{{ _('Does not apply to this problem type.') }}"{% endif %}><input type="checkbox" class="cp-pretested"{% if p.is_pretested %} checked{% endif %}{% if lock_code %} disabled{% endif %}> {{ _('Pretest only') }}</label>
                                         {# exam-only: ContestProblem.hide_results is honored only when format=exam. Hidden (not reset) on other formats so edit can switch back without losing the three-state. #}
                                         <label class="cp-opt cp-results" data-exam-only="hide_results" title="{{ _('What results students can see after judging.') }}">{{ _('Results') }}

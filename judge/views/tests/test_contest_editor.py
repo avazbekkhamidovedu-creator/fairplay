@@ -778,12 +778,12 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             self.assertEqual(' disabled' in out_chunk, code_opts)
 
         assert_locked(row_for(code), False, False)
-        assert_locked(row_for(single), True, True)
-        assert_locked(row_for(truefalse), True, True)
+        assert_locked(row_for(single), False, True)
+        assert_locked(row_for(truefalse), False, True)
         assert_locked(row_for(multi), False, True)
         assert_locked(row_for(blank), False, True)
-        assert_locked(row_for(short), True, True)
-        assert_locked(row_for(filep), True, True)
+        assert_locked(row_for(short), False, True)
+        assert_locked(row_for(filep), False, True)
 
     def test_format_and_virtual_live_in_basic(self):
         html = self.client.get(reverse('contest_create')).content.decode()
