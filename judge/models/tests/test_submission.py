@@ -188,3 +188,44 @@ class SubmissionTestCase(CommonDataMixin, TestCase):
             },
         }
         self._test_object_methods_with_users(self.ie_submission, data)
+
+    def test_contest_submission_not_unlocked_by_practice_ac(self):
+        """Practice AC + SOLVED on a public problem must not open a classmate's contest source."""
+        student = create_user(username='subvis-student')
+        classmate = create_user(username='subvis-classmate')
+        teacher = create_user(username='subvis-teacher', user_permissions=('edit_own_contest',))
+        problem = create_problem(code='subvis-p', is_public=True, points=1)
+        contest = create_contest(
+            key='subvisc', is_visible=True, authors=('subvis-teacher',),
+        )
+        create_contest_problem(contest=contest, problem=problem)
+        create_contest_participation(contest=contest, user=classmate.profile)
+
+        practice = Submission.objects.create(
+            user=student.profile, problem=problem, language=Language.get_python3(),
+            result='AC', status='D', points=1, case_total=1, contest_object=None,
+        )
+        contest_sub = Submission.objects.create(
+            user=classmate.profile, problem=problem, language=Language.get_python3(),
+            result='AC', status='D', points=1, case_total=1, contest_object=contest,
+        )
+        own_contest = Submission.objects.create(
+            user=student.profile, problem=problem, language=Language.get_python3(),
+            result='WA', status='D', points=0, case_total=1, contest_object=contest,
+        )
+
+        self.assertTrue(problem.is_solved_by(student))
+        self.assertFalse(contest_sub.can_see_detail(student))
+        self.assertTrue(own_contest.can_see_detail(student))
+        self.assertTrue(contest_sub.can_see_detail(teacher))
+        self.assertTrue(practice.can_see_detail(student))
+        # Classmate's practice row is visible after SOLVED; contest row is not.
+        classmate_practice = Submission.objects.create(
+            user=classmate.profile, problem=problem, language=Language.get_python3(),
+            result='AC', status='D', points=1, case_total=1, contest_object=None,
+        )
+        self.assertTrue(classmate_practice.can_see_detail(student))
+
+        contest.end_time = timezone.now() - timezone.timedelta(hours=1)
+        contest.save(update_fields=['end_time'])
+        self.assertFalse(contest_sub.can_see_detail(student))
