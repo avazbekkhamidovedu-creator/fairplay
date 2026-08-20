@@ -1251,7 +1251,6 @@ class ContestCreate(LoginRequiredMixin, View):
         # necessarily the current site default (staff may have published a
         # newer one, or retired this one).
         linked_preset = None
-        class_target = None
 
         if contest is not None:
             total = int(contest.time_limit.total_seconds()) if contest.time_limit else 0
@@ -1348,17 +1347,6 @@ class ContestCreate(LoginRequiredMixin, View):
             else:
                 prefill['vis_mode'] = 'hidden'
 
-        if contest is None:
-            class_target = self._resolve_class_create_target(self.request)
-            if class_target is not None:
-                org = class_target.organization
-                prefill['organizations'] = [(org.id, org.name)]
-                prefill['classes'] = [(class_target.id, class_target.name)]
-                prefill['vis_mode'] = 'org'
-                prefill['is_organization_private'] = True
-                prefill['is_private'] = False
-                prefill['is_visible'] = True
-
         ctx = {
             'title': _('Edit Assignment') if contest else _('Add Assignment'),
             'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
@@ -1396,7 +1384,6 @@ class ContestCreate(LoginRequiredMixin, View):
             # configuration rather than whichever one is default today.
             'seb_linked_preset': linked_preset,
             'prefill': prefill,
-            'class_create_target': class_target if contest is None else None,
         }
         ctx.update(self._library_filter_context())
         return ctx

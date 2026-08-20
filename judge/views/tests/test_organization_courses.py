@@ -214,17 +214,14 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
     def test_assignment_actions_live_on_assignments_tab(self):
         self.client.force_login(self.admin)
         html = self.client.get(self._class_url()).content.decode()
-        self.assertIn('Add from library', html)
-        self.assertNotIn('>Add Assignment<', html)
-        self.assertNotIn('Add Assignment</a>', html)
+        self.assertIn('Add Assignment', html)
 
     def test_member_does_not_see_assignment_actions(self):
         self.client.force_login(self.member)
         html = self.client.get(self._class_url()).content.decode()
-        self.assertNotIn('Add from library', html)
-        self.assertNotIn('Add new', html)
+        self.assertNotIn('Add Assignment', html)
 
-    def test_class_admin_with_create_permission_sees_add_new(self):
+    def test_class_admin_with_create_permission_sees_add_assignment(self):
         from django.contrib.auth.models import Permission
         from judge.models.notification import ensure_instructors_group
 
@@ -235,8 +232,7 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
         self.klass.admins.add(teacher.profile)
         self.client.force_login(teacher)
         html = self.client.get(self._class_url()).content.decode()
-        self.assertIn('Add from library', html)
-        self.assertIn('Add new', html)
+        self.assertIn('Add Assignment', html)
 
     def test_pending_can_open_class_but_not_download(self):
         pending = create_user(username='class_pending')
