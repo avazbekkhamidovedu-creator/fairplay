@@ -2525,31 +2525,40 @@ def make_contest_ranking_profile(contest, participation, contest_problems, scori
     )
 
 
-def base_contest_ranking_list(contest, problems, queryset, scoring_map=None):
+def base_contest_ranking_list(contest, problems, queryset, scoring_map_factory=None):
+    # Materialize first so the Grade deep-link map can be scoped to exactly the
+    # participations this page renders (see `scoring_submissions_for_contest`);
+    # a per-user page must not scan every submission in the contest.
+    participations = list(
+        queryset.select_related('user__user', 'rating').defer('user__about', 'user__organizations__about'))
+    scoring_map = scoring_map_factory([p.id for p in participations]) if scoring_map_factory is not None else None
     return [make_contest_ranking_profile(contest, participation, problems, scoring_map=scoring_map)
-            for participation in
-            queryset.select_related('user__user', 'rating').defer('user__about', 'user__organizations__about')]
+            for participation in participations]
 
 
-def contest_ranking_list(contest, problems, scoring_map=None):
+def contest_ranking_list(contest, problems, scoring_map_factory=None):
     return base_contest_ranking_list(contest, problems, contest.users.filter(virtual=0)
                                      .prefetch_related('user__organizations')
                                      .annotate(submission_cnt=Count('submission'))
                                      .order_by('is_disqualified', '-score', 'cumtime', 'tiebreaker', '-submission_cnt'),
-                                     scoring_map=scoring_map)
+                                     scoring_map_factory=scoring_map_factory)
 
 
 def get_contest_ranking_list(request, contest, participation=None, ranking_list=contest_ranking_list,
                              show_current_virtual=True, ranker=ranker):
     problems = list(contest.contest_problems.select_related('problem').defer('problem__description').order_by('order'))
 
-    scoring_map = None
+    scoring_map_factory = None
     if (request is not None and getattr(request, 'user', None) is not None
             and request.user.is_authenticated and contest.is_editable_by(request.user)):
         from judge.utils.contest_grade import scoring_submissions_for_contest
-        scoring_map = scoring_submissions_for_contest(contest)
 
-    users = ranker(ranking_list(contest, problems, scoring_map=scoring_map),
+        def make_scoring_map(participation_ids):
+            return scoring_submissions_for_contest(contest, participation_ids=participation_ids)
+
+        scoring_map_factory = make_scoring_map
+
+    users = ranker(ranking_list(contest, problems, scoring_map_factory=scoring_map_factory),
                    key=attrgetter('points', 'cumtime', 'tiebreaker'))
 
     if show_current_virtual:
@@ -2558,8 +2567,9 @@ def get_contest_ranking_list(request, contest, participation=None, ranking_list=
             if participation is None or participation.contest_id != contest.id:
                 participation = None
         if participation is not None and participation.virtual:
+            virtual_map = scoring_map_factory([participation.id]) if scoring_map_factory is not None else None
             users = chain([('-', make_contest_ranking_profile(
-                contest, participation, problems, scoring_map=scoring_map))], users)
+                contest, participation, problems, scoring_map=virtual_map))], users)
     return users, problems
 
 

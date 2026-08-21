@@ -250,9 +250,8 @@
                 {% else %}
                     <b>{{ _('Final score:') }}</b>
                 {% endif %}
-                {{ submission.display_points|floatformat(-1) }}/{{ submission.display_points_total|floatformat(-1) }}
-                {% with points=(submission.display_points or 0)|roundfloat(3), total=submission.display_points_total|floatformat(-1) %}
-                    ({{ _('%(points)s/%(total)s points', points=points, total=total) }})
+                {% with points=submission.display_points|floatformat(-1), total=submission.display_points_total|floatformat(-1) %}
+                    {{ _('%(points)s/%(total)s points', points=points, total=total) }}
                 {% endwith %}
                 {% if is_pretest and submission.result == "AC" %}
                     <br>

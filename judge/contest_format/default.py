@@ -67,9 +67,7 @@ class DefaultContestFormat(BaseContestFormat):
             )
         return format_html('<td class="{state}">{inner}</td>', state=state, inner=inner)
 
-    def participation_result_url(self, participation, result_url=None):
-        if result_url is not None:
-            return result_url
+    def participation_result_url(self, participation):
         return reverse('contest_all_user_submissions',
                        args=[self.contest.key, participation.user.user.username])
 
@@ -97,13 +95,13 @@ class DefaultContestFormat(BaseContestFormat):
         else:
             return mark_safe('<td></td>')
 
-    def display_participation_result(self, participation, result_url=None):
+    def display_participation_result(self, participation):
         inner = format_html(
             '{points}<div class="solving-time">{cumtime}</div>',
             points=floatformat(participation.score, -self.contest.points_precision),
             cumtime=nice_repr(timedelta(seconds=participation.cumtime), 'noday'),
         )
-        return self.wrap_result_cell(inner, self.participation_result_url(participation, result_url))
+        return self.wrap_result_cell(inner, self.participation_result_url(participation))
 
     def get_problem_breakdown(self, participation, contest_problems):
         return [(participation.format_data or {}).get(str(contest_problem.id)) for contest_problem in contest_problems]

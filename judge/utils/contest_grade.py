@@ -6,6 +6,7 @@ Virtual participations are never final.
 """
 from __future__ import annotations
 
+from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -13,7 +14,7 @@ from judge.models import ContestParticipation, ContestSubmission, Problem, Submi
 from judge.models.problem import ProblemSubmissionType
 
 
-def scoring_submissions_for_contest(contest, live_only=False):
+def scoring_submissions_for_contest(contest, live_only=False, participation_ids=None):
     """Map (participation_id, contest_problem_id) → scoring Submission.
 
     When the format scores latest, the newest ``(date, id)`` wins; otherwise
@@ -21,7 +22,18 @@ def scoring_submissions_for_contest(contest, live_only=False):
     tie-break. ``live_only=True`` drops virtual participations (grade-page
     final marker). Ranking editor links pass ``live_only=False`` so a virtual
     row still deep-links the attempt that cell represents.
+
+    ``participation_ids`` scopes the scan to the rows actually being rendered;
+    the ranking views pass the page's participations so a per-user page does
+    not walk every submission in the contest. ``None`` means the whole contest
+    (the Grade desk, which needs every row anyway); an empty sequence short-
+    circuits to an empty map.
     """
+    if participation_ids is not None:
+        participation_ids = list(participation_ids)
+        if not participation_ids:
+            return {}
+
     fmt = contest.format
     latest = {}
     best = {}
@@ -31,6 +43,8 @@ def scoring_submissions_for_contest(contest, live_only=False):
           .order_by('submission__date', 'submission_id'))
     if live_only:
         qs = qs.filter(participation__virtual=ContestParticipation.LIVE)
+    if participation_ids is not None:
+        qs = qs.filter(participation_id__in=participation_ids)
     for cs in qs:
         key = (cs.participation_id, cs.problem_id)
         sub = cs.submission
@@ -96,8 +110,20 @@ def can_open_practice_grade(user):
     return Problem.get_editable_problems(user).exists()
 
 
+#: How many practice rows the Grade desk inlines into the page. The desk ships
+#: full source + every test case per row inside one <script> block, so an
+#: unbounded list is the whole submission table for a superuser. Override with
+#: ``DMOJ_PRACTICE_GRADE_PAGE_SIZE``.
+PRACTICE_GRADE_PAGE_SIZE = 300
+
+
 def practice_grade_queryset(user):
-    """Practice submissions the user is allowed to grade (no contest/assignment)."""
+    """Practice submissions the user is allowed to grade (no contest/assignment).
+
+    This is the **permission scope**, not the page: Save / Status resolve any
+    submission id through it, so it must stay unbounded. The rendered page uses
+    ``practice_grade_page`` instead.
+    """
     problems = Problem.get_editable_problems(user)
     return (Submission.objects
             .filter(contest_object__isnull=True, problem__in=problems)
@@ -106,6 +132,42 @@ def practice_grade_queryset(user):
             .prefetch_related('test_cases', 'problem__fill_blank_config',
                               'problem__short_answer_config', 'manual_grade')
             .order_by('-date'))
+
+
+def practice_grade_page(user, pinned_id=None, limit=None):
+    """The bounded slice of practice rows the Grade desk renders.
+
+    Returns ``(submissions, final_ids, truncated)``. Newest ``limit`` rows, plus
+    the ``?submission=`` deep-link target when it falls outside that window so a
+    link from the submission list never lands on an empty desk.
+
+    ``final_ids`` is computed from the window (which is newest-first, so the
+    first row seen per ``(user, problem)`` is that pair's final version). A
+    pinned row from outside the window is checked against the full scope, since
+    the window cannot tell whether something newer exists for its pair.
+    """
+    if limit is None:
+        limit = getattr(settings, 'DMOJ_PRACTICE_GRADE_PAGE_SIZE', PRACTICE_GRADE_PAGE_SIZE)
+    scope = practice_grade_queryset(user)
+    window = list(scope[:limit + 1])
+    truncated = len(window) > limit
+    if truncated:
+        window = window[:limit]
+
+    final_ids = practice_final_submission_ids(window)
+
+    submissions = window
+    if pinned_id is not None and not any(sub.id == pinned_id for sub in window):
+        pinned = scope.filter(id=pinned_id).first()
+        if pinned is not None:
+            submissions = window + [pinned]
+            newer_exists = (Submission.objects
+                            .filter(contest_object__isnull=True, user_id=pinned.user_id,
+                                    problem_id=pinned.problem_id, date__gt=pinned.date)
+                            .exists())
+            if not newer_exists:
+                final_ids.add(pinned.id)
+    return submissions, final_ids, truncated
 
 
 def contest_grade_queryset(contest):
@@ -158,16 +220,13 @@ def build_grade_payload(submissions, final_ids):
             machine_points = display_points
             released = False
         answer_display = get_workspace_answer_display(sub) if source else []
-        if manual_grade is not None:
-            is_pending = False
-        elif sub.points is None:
-            is_pending = get_grader(sub.problem.submission_type).is_manual
-        elif sub.reviewed_by is not None:
+        # "Pending" means awaiting teacher review: a manually-graded type
+        # (file upload) with no score yet. Everything else resolves on its own —
+        # a code submission still in the judge queue is NOT pending.
+        if manual_grade is not None or sub.points is not None:
             is_pending = False
         else:
-            config = getattr(sub.problem, 'fill_blank_config', None) or \
-                getattr(sub.problem, 'short_answer_config', None)
-            is_pending = bool(config and config.requires_manual_review)
+            is_pending = get_grader(sub.problem.submission_type).is_manual
         payload.append({
             'id': sub.id,
             'user': sub.user.user.username,

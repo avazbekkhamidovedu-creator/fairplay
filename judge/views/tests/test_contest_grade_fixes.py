@@ -17,10 +17,10 @@ Covers four contracts that were broken or unguarded:
    fill-blank / short-answer submissions now ship an ``answer_display`` list
    (same rows as the student workspace) instead of raw JSON source.
 4. **Pending queue semantics.** ``is_pending`` means "awaiting teacher review":
-   manual types with no score, or AI-graded fill-blank/short-answer problems
-   flagged "require teacher review after AI scoring" on the config. The
-   create page no longer exposes that checkbox. A code submission still in the
-   judge queue is NOT pending.
+   a manually-graded type (file upload) with no score yet. The old
+   "require teacher review after AI scoring" per-problem flag is retired — the
+   Grade desk replaced that queue — so an AI-scored answer is not pending, and
+   neither is a code submission still sitting in the judge queue.
 """
 
 import json
@@ -275,28 +275,13 @@ class ContestGradePendingSemanticsTestCase(GradeTestBase):
         self.assertEqual(row['points'], 50.0)
         self.assertFalse(row['is_pending'])
 
-    def test_fill_blank_with_manual_review_flag_is_pending(self):
+    def test_ai_graded_fill_blank_with_a_score_is_not_pending(self):
+        """``requires_manual_review`` is retired: an AI-scored answer resolves itself."""
         from judge.models import ProblemBlank
         fb = create_problem('grade-pending-fb', submission_type='B')
         ProblemBlank.objects.create(problem=fb, order=0, answers='x', points=1)
         ContestProblem.objects.create(contest=self.contest, problem=fb, points=5, order=4)
-        ProblemFillBlankConfig.objects.create(
-            problem=fb, grading_mode='ai', requires_manual_review=True)
-        sub = Submission.objects.create(
-            user=self.student.profile, problem=fb,
-            language=Language.objects.get(key='PY3'), result='AC', status='D',
-            contest_object=self.contest, points=5.0, case_total=1,
-        )
-        SubmissionSource.objects.create(submission=sub, source=json.dumps({'answers': ['x']}))
-        self.assertTrue(self._payload_row(sub)['is_pending'])
-
-    def test_fill_blank_without_review_flag_is_not_pending(self):
-        from judge.models import ProblemBlank
-        fb = create_problem('grade-pending-fb2', submission_type='B')
-        ProblemBlank.objects.create(problem=fb, order=0, answers='x', points=1)
-        ContestProblem.objects.create(contest=self.contest, problem=fb, points=5, order=5)
-        ProblemFillBlankConfig.objects.create(
-            problem=fb, grading_mode='ai', requires_manual_review=False)
+        ProblemFillBlankConfig.objects.create(problem=fb, grading_mode='ai')
         sub = Submission.objects.create(
             user=self.student.profile, problem=fb,
             language=Language.objects.get(key='PY3'), result='AC', status='D',
@@ -305,21 +290,13 @@ class ContestGradePendingSemanticsTestCase(GradeTestBase):
         SubmissionSource.objects.create(submission=sub, source=json.dumps({'answers': ['x']}))
         self.assertFalse(self._payload_row(sub)['is_pending'])
 
-    def test_reviewed_pending_submission_leaves_pending(self):
-        from judge.models import ProblemBlank
-        fb = create_problem('grade-pending-fb3', submission_type='B')
-        ProblemBlank.objects.create(problem=fb, order=0, answers='x', points=1)
-        ContestProblem.objects.create(contest=self.contest, problem=fb, points=5, order=6)
-        ProblemFillBlankConfig.objects.create(
-            problem=fb, grading_mode='ai', requires_manual_review=True)
-        sub = Submission.objects.create(
-            user=self.student.profile, problem=fb,
-            language=Language.objects.get(key='PY3'), result='AC', status='D',
-            contest_object=self.contest, points=5.0, case_total=1,
-            reviewed_by=self.curator.profile, reviewed_at=timezone.now(),
-        )
-        SubmissionSource.objects.create(submission=sub, source=json.dumps({'answers': ['x']}))
-        self.assertFalse(self._payload_row(sub)['is_pending'])
+    def test_requires_manual_review_field_is_gone(self):
+        self.assertNotIn(
+            'requires_manual_review',
+            [f.name for f in ProblemFillBlankConfig._meta.get_fields()])
+        self.assertNotIn(
+            'requires_manual_review',
+            [f.name for f in ProblemShortAnswerConfig._meta.get_fields()])
 
     def test_queued_code_submission_is_not_pending(self):
         """A code submission waiting on the judge resolves itself — not pending."""
@@ -349,8 +326,8 @@ class ContestGradePendingSemanticsTestCase(GradeTestBase):
         self.assertTrue(self._payload_row(sub)['virtual'])
 
 
-class RequireManualReviewRoundTripTestCase(GradeTestBase):
-    """The problem editor no longer persists the review-required flag."""
+class RequireManualReviewRetiredTestCase(GradeTestBase):
+    """The review-required flag is retired: the editor neither writes nor prefills it."""
 
     def test_create_page_ignores_ai_review_payload(self):
         from judge.models import Problem
@@ -368,8 +345,7 @@ class RequireManualReviewRoundTripTestCase(GradeTestBase):
                                content_type='application/json')
         self.assertEqual(response.status_code, 200)
         problem = Problem.objects.get(code=response.json()['code'])
-        config = ProblemFillBlankConfig.objects.get(problem=problem)
-        self.assertFalse(config.requires_manual_review)
+        self.assertTrue(ProblemFillBlankConfig.objects.filter(problem=problem).exists())
         self.assertNotIn('aiReview', ProblemCreateV2View()._build_edit_data(problem))
 
     def test_short_answer_create_ignores_ai_review_payload(self):
@@ -387,24 +363,8 @@ class RequireManualReviewRoundTripTestCase(GradeTestBase):
                                content_type='application/json')
         self.assertEqual(response.status_code, 200)
         problem = Problem.objects.get(code=response.json()['code'])
-        config = ProblemShortAnswerConfig.objects.get(problem=problem)
-        self.assertFalse(config.requires_manual_review)
+        self.assertTrue(ProblemShortAnswerConfig.objects.filter(problem=problem).exists())
         self.assertNotIn('aiReview', ProblemCreateV2View()._build_edit_data(problem))
-
-    def test_requires_manual_review_defaults_false(self):
-        from judge.models import Problem
-        editor = create_user(username='pmr_editor3', user_permissions=('create_private_problem',))
-        client = Client()
-        client.force_login(editor)
-        payload = {
-            'type': 'blank', 'name': 'No review', 'description': 'Q {{blank}}',
-            'points': 2, 'blanks': ['ans'], 'ai': True,
-        }
-        response = client.post(reverse('problem_create_v2'), data=json.dumps(payload),
-                               content_type='application/json')
-        self.assertEqual(response.status_code, 200)
-        problem = Problem.objects.get(code=response.json()['code'])
-        self.assertFalse(ProblemFillBlankConfig.objects.get(problem=problem).requires_manual_review)
 
 
 class GradePageFilterDefaultsTestCase(GradeTestBase):

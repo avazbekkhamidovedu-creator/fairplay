@@ -118,13 +118,13 @@ class ECOOContestFormat(DefaultContestFormat):
         else:
             return mark_safe('<td></td>')
 
-    def display_participation_result(self, participation, result_url=None):
+    def display_participation_result(self, participation):
         inner = format_html(
             '{points}<div class="solving-time">{cumtime}</div>',
             points=floatformat(participation.score, -self.contest.points_precision),
             cumtime=nice_repr(timedelta(seconds=participation.cumtime), 'noday') if self.config['cumtime'] else '',
         )
-        return self.wrap_result_cell(inner, self.participation_result_url(participation, result_url))
+        return self.wrap_result_cell(inner, self.participation_result_url(participation))
 
     def get_short_form_display(self):
         yield _('The score on your **last** non-CE submission for each problem will be used.')

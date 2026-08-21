@@ -72,14 +72,12 @@ class BaseContestFormat(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def display_participation_result(self, participation, result_url=None):
+    def display_participation_result(self, participation):
         """
         Returns the HTML fragment to show a user's performance on the whole contest. This is expected to use
         information from the format_data field instead of computing it from scratch.
 
         :param participation: The ContestParticipation object.
-        :param result_url: Optional href override. ``None`` uses the per-user contest
-            submission list; ``''`` renders the cell with no href.
         :return: An HTML fragment, marked as safe for Jinja2.
         """
         raise NotImplementedError()

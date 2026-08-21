@@ -248,6 +248,14 @@
             font-size: 11.5px;
             color: var(--oj-text-muted, #666);
         }
+        .grade-list-note {
+            padding: .4rem .75rem;
+            font-size: 11.5px;
+            line-height: 1.4;
+            color: var(--oj-text-muted, #666);
+            background: var(--oj-surface-alt, #f6f6f6);
+            border-bottom: 1px solid var(--oj-border, #ccc);
+        }
         .grade-list-head {
             display: flex;
             align-items: center;
@@ -1301,6 +1309,12 @@
                 </div>
                 <div class="ws-drawer-body">
                     <div class="grade-list-head"><i class="fa fa-list"></i> {{ _('Submissions') }}</div>
+                    {% if grade_truncated %}
+                        <div class="grade-list-note">
+                            <i class="fa fa-info-circle"></i>
+                            {{ _('Showing the %(count)s most recent submissions. Filter or open a submission directly to reach older ones.', count=grade_truncated_count) }}
+                        </div>
+                    {% endif %}
                     <div class="submission-list" id="submission-list"></div>
                 </div>
             </aside>

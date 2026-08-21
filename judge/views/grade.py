@@ -16,7 +16,7 @@ from django.views.generic import TemplateView, View
 from judge.models import Problem, Submission, SubmissionManualGrade
 from judge.utils.contest_grade import (
     apply_manual_grade, build_grade_payload, can_open_practice_grade,
-    grade_points_total, practice_final_submission_ids, practice_grade_queryset,
+    grade_points_total, practice_grade_page, practice_grade_queryset,
 )
 
 
@@ -71,8 +71,15 @@ class PracticeGrade(PracticeGradeAuthMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        submissions = list(practice_grade_queryset(self.request.user))
+        # Bounded page: the desk inlines full source + test cases per row, so it
+        # lists the newest N practice rows and pins the ?submission= deep-link
+        # target when it falls outside that window.
+        pinned_id = self.request.GET.get('submission')
+        pinned_id = int(pinned_id) if pinned_id and pinned_id.isdigit() else None
+        submissions, final_ids, truncated = practice_grade_page(self.request.user, pinned_id=pinned_id)
         context['contest'] = None
+        context['grade_truncated'] = truncated
+        context['grade_truncated_count'] = len(submissions)
         context['grade_submissions'] = submissions
         context['grade_problems'] = _practice_grade_problems(submissions, self.request)
         manual_grades = SubmissionManualGrade.objects.filter(
@@ -90,8 +97,7 @@ class PracticeGrade(PracticeGradeAuthMixin, TemplateView):
         context['grade_home_url'] = reverse('all_submissions')
         context['grade_home_label'] = _('Practice Grade')
         context['grade_show_participation'] = False
-        context['grade_submissions_json'] = build_grade_payload(
-            submissions, practice_final_submission_ids(submissions))
+        context['grade_submissions_json'] = build_grade_payload(submissions, final_ids)
         context['grade_problems_json'] = context['grade_problems']
         return context
 

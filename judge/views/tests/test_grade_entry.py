@@ -9,14 +9,16 @@
 """
 import json
 from datetime import timedelta
+from unittest import mock
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from judge.models import ContestParticipation, ContestSubmission, Language, Submission, SubmissionSource
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_problem, \
     create_problem, create_user
+from judge.utils import contest_grade
 from judge.views.tests.test_contest_grade import GradeTestBase
 
 
@@ -87,6 +89,44 @@ class RankingGradeDeepLinkTestCase(GradeTestBase):
         html = self._client(self.curator).get(self.grade_url).content.decode()
         self.assertIn("$('#f-queue').val('all')", html)
         self.assertIn("$('#f-part').val('all')", html)
+
+    def test_ranking_scoring_map_is_scoped_to_rendered_participations(self):
+        """A per-user participation page must not scan the whole contest."""
+        classmate = create_user(username='grade_rank_scoped')
+        other_part = ContestParticipation.objects.create(
+            contest=self.contest, user=classmate.profile,
+            real_start=timezone.now() - timedelta(hours=1),
+        )
+        other_part.recompute_results()
+
+        seen = []
+        real = contest_grade.scoring_submissions_for_contest
+
+        def spy(contest, live_only=False, participation_ids=None):
+            seen.append(participation_ids)
+            return real(contest, live_only=live_only, participation_ids=participation_ids)
+
+        with mock.patch.object(contest_grade, 'scoring_submissions_for_contest', spy):
+            response = self._client(self.curator).get(
+                reverse('contest_participation', args=[self.contest.key, self.student.username]))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(seen, 'editor ranking should build a scoping map')
+        for ids in seen:
+            self.assertIsNotNone(ids, 'ranking must scope the scan, not walk the whole contest')
+            self.assertNotIn(other_part.id, ids)
+
+    def test_ranking_scoring_map_not_built_for_students(self):
+        seen = []
+        real = contest_grade.scoring_submissions_for_contest
+
+        def spy(contest, live_only=False, participation_ids=None):
+            seen.append(participation_ids)
+            return real(contest, live_only=live_only, participation_ids=participation_ids)
+
+        with mock.patch.object(contest_grade, 'scoring_submissions_for_contest', spy):
+            response = self._client(self.student).get(self.ranking_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(seen, [])
 
 
 class SubmissionGradeEntryTestCase(CommonDataMixin, TestCase):
@@ -229,6 +269,38 @@ class SubmissionGradeEntryTestCase(CommonDataMixin, TestCase):
             'submission': self.contest_sub.id, 'score': '10',
         })
         self.assertEqual(response.status_code, 404)
+
+    def test_practice_grade_page_is_bounded_and_says_so(self):
+        """The desk inlines full source per row, so it caps the list and says it did."""
+        with override_settings(DMOJ_PRACTICE_GRADE_PAGE_SIZE=1):
+            response = self._client(self.teacher).get(self.practice_grade_url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        payload = _grade_payload(html)
+        self.assertEqual([row['id'] for row in payload], [self.practice_sub.id])
+        self.assertIn('most recent submissions', html)
+
+    def test_practice_grade_page_pins_deep_link_outside_the_window(self):
+        """A ?submission= link to an older row still opens on that row."""
+        with override_settings(DMOJ_PRACTICE_GRADE_PAGE_SIZE=1):
+            response = self._client(self.teacher).get(
+                self.practice_grade_url + '?submission=%d' % self.practice_older.id)
+        self.assertEqual(response.status_code, 200)
+        payload = _grade_payload(response.content.decode())
+        by_id = {row['id']: row for row in payload}
+        self.assertIn(self.practice_older.id, by_id)
+        # Pinned from outside the window: it is not this pair's final version.
+        self.assertFalse(by_id[self.practice_older.id]['is_latest'])
+        self.assertTrue(by_id[self.practice_sub.id]['is_latest'])
+
+    def test_practice_grade_save_reaches_rows_outside_the_page_window(self):
+        """The page cap must not shrink what Save is allowed to grade."""
+        with override_settings(DMOJ_PRACTICE_GRADE_PAGE_SIZE=1):
+            response = self._client(self.teacher).post(reverse('practice_grade_save'), {
+                'submission': self.practice_older.id, 'score': '5',
+            })
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['score'], 5)
 
     def test_practice_grade_save_updates_score(self):
         response = self._client(self.teacher).post(reverse('practice_grade_save'), {

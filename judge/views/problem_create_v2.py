@@ -1498,7 +1498,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 case_sensitive=bool(payload.get('caseSensitive')),
                 trim_whitespace=bool(payload.get('trimWhitespace', True)),
                 grading_mode=GRADE_AI if bool(payload.get('ai')) else GRADE_EXACT,
-                requires_manual_review=False,
                 ai_rubric=(payload.get('rubric') or '').strip(),
                 grading_table=payload.get('gradingTable') or None,
             )
@@ -1543,7 +1542,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ProblemShortAnswerConfig.objects.create(
                 problem=problem,
                 reference_answer=(payload.get('shortAnswer') or '').strip(),
-                requires_manual_review=False,
                 ai_rubric=(payload.get('rubric') or '').strip(),
                 grading_table=payload.get('gradingTable') or None,
             )
