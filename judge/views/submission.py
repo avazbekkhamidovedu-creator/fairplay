@@ -378,7 +378,12 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
         from django.utils.translation import gettext as _
 
         from judge import llm
-        from judge.ai_grading_quota import is_teacher_viewer, rate_window_seconds, try_reserve
+        from judge.ai_grading_quota import (
+            is_teacher_viewer,
+            rate_limit_remaining_seconds,
+            rate_window_seconds,
+            try_reserve,
+        )
         from judge.utils.contest_ai import ai_grade_context, run_ai_for_submission
 
         submission = self.get_object()
@@ -404,7 +409,11 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
             reserved, err = try_reserve(submission.user_id, submission.problem_id)
             if not reserved:
                 if err and err.startswith('rate_limited'):
-                    return JsonResponse({'error': _('Please try again later.')}, status=429)
+                    return JsonResponse({
+                        'error': _('Please try again later. Try again in %(seconds)s seconds.') % {
+                            'seconds': rate_limit_remaining_seconds(submission.user_id, submission.problem_id),
+                        },
+                    }, status=429)
                 if err == 'quota_disabled':
                     return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
                 return JsonResponse({'error': _('AI grading quota exhausted.')}, status=429)

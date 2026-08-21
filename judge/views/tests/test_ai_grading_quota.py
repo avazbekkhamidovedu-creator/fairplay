@@ -209,7 +209,10 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         self.assertFalse(ok)
         self.assertEqual(get_remaining(uid), remaining_before)
 
-    @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=10)
+    @override_settings(
+        DMOJ_AI_GRADING_STUDENT_QUOTA=10,
+        DMOJ_AI_GRADING_RATE_LIMIT=2,
+    )
     def test_rate_limit_count_is_configurable(self):
         pid = 99
         uid = self.student.profile.id
@@ -309,19 +312,19 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         # Staff flag alone is NOT teacher status — explicit permissions are
         # required (never group/roster membership).
         staff = create_user(username='ai_quota_staff', is_staff=True)
-        problem = create_problem(code='ai_quota_staff_problem', is_public=True)
+        problem = create_problem(code='ai_quota_staff', is_public=True)
         sub = _sub(self.student, problem)
         self.assertFalse(is_teacher_viewer(staff, sub))
 
     def test_is_teacher_viewer_true_with_rejudge_permission(self):
         grader = create_user(username='ai_quota_grader', user_permissions=('rejudge_submission',))
-        problem = create_problem(code='ai_quota_grader_problem', is_public=True)
+        problem = create_problem(code='ai_quota_grader', is_public=True)
         sub = _sub(self.student, problem)
         self.assertTrue(is_teacher_viewer(grader, sub))
 
     def test_is_teacher_viewer_true_with_edit_all_contest_permission(self):
         editor = create_user(username='ai_quota_editor', user_permissions=('edit_all_contest',))
-        problem = create_problem(code='ai_quota_editor_problem', is_public=True)
+        problem = create_problem(code='ai_quota_editor', is_public=True)
         sub = _sub(self.student, problem)
         self.assertTrue(is_teacher_viewer(editor, sub))
 
@@ -329,7 +332,7 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         # judge.add_organization is the site-teacher grant (same as
         # profile_is_site_teacher's permission branch — no group lookup).
         teacher = create_user(username='ai_quota_site_teacher', user_permissions=('add_organization',))
-        problem = create_problem(code='ai_quota_site_teacher_problem', is_public=True)
+        problem = create_problem(code='ai_quota_teacher', is_public=True)
         sub = _sub(self.student, problem)
         self.assertTrue(is_teacher_viewer(teacher, sub))
 
@@ -337,7 +340,7 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         # The author has no special permissions; only their contest
         # membership grants teacher status.
         contest = create_contest(key='ai_quota_contest', authors=('ai_quota_author',))
-        problem = create_problem(code='ai_quota_contest_problem', is_public=True)
+        problem = create_problem(code='ai_quota_contest', is_public=True)
         sub = _sub(self.student, problem, contest)
         self.assertTrue(is_teacher_viewer(self.contest_author, sub))
         # A plain student still does not count as a teacher for that contest.
@@ -365,7 +368,8 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
 
         client = Client()
         client.force_login(self.student)
-        resp = client.post(reverse('submission_ai_grade', args=[sub.id]))
+        with mock.patch('judge.llm.is_configured', return_value=True):
+            resp = client.post(reverse('submission_ai_grade', args=[sub.id]))
         self.assertEqual(resp.status_code, 429, resp.content)
         match = re.search(rb'Try again in (\d+) seconds', resp.content)
         self.assertIsNotNone(match, resp.content)

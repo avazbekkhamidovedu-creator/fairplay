@@ -549,6 +549,7 @@ class CodeAIRejudgeTestCase(CommonDataMixin, TestCase):
         handler = JudgeHandler.__new__(JudgeHandler)
         handler.name = 'test-judge'
         handler.batch_id = None
+        handler.judge_address = '[127.0.0.1]:9999'
         handler._post_update_submission = mock.Mock()
         with mock.patch('judge.bridge.judge_handler.event.post'), \
                 mock.patch('judge.bridge.judge_handler.json_log'):
