@@ -113,8 +113,8 @@ class ContestEditPreservesSubmissionsTestCase(GradeTestBase):
 
     def test_edit_with_duration_change_preserves_submissions(self):
         """The exact user-reported scenario: change duration, keep submissions."""
-        # Give the contest an initial per-student duration so the extension
-        # passes the "only extend, never shorten" guard.
+        # Give the contest an initial per-student duration so the edit is a
+        # genuine 1h → 2h extension.
         from datetime import timedelta as td
         self.contest.time_limit = td(hours=1)
         self.contest.save(update_fields=['time_limit'])

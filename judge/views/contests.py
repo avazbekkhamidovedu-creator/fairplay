@@ -755,14 +755,20 @@ class ContestCreate(LoginRequiredMixin, View):
         # −1 = Off; 0 = at end time; positive = minutes after end.
         contest.ai_grading_auto_delay_minutes = max(-1, min(delay, 24 * 60))
 
-        # ── Deadline follows a duration increase ────────────────────────────
-        # Editing an existing contest: when the per-student duration grows, the
-        # global deadline must grow by the SAME amount, measured from
-        # max(old deadline, now). Otherwise the increase is silently capped by
-        # the stale deadline and students see no extra time — "duration +1h"
-        # must actually give students +1h. Using ``now`` as the floor also
-        # covers a contest whose deadline already passed: the extension then
-        # starts from the present instead of from a past date.
+        # ── Duration increase follows through to joined students ────────────
+        # start_time / end_time / time_limit are stored exactly as submitted —
+        # the server never rewrites the deadline. A duration *increase* still
+        # needs a nudge on the participation rows though:
+        # ``ContestParticipation.end_time`` is
+        # ``min(real_start + time_limit, contest.end_time)`` anchored to the
+        # immutable ``real_start``, so raising ``time_limit`` alone is invisible
+        # to anyone whose ``real_start + new_limit`` is already in the past
+        # (they still see "Your time is up!").
+        #
+        # The extension is still capped by ``end_time``: raising the duration
+        # without also pushing the deadline out gives students nothing extra,
+        # by design. The editor pre-fills the recomputed deadline into the
+        # visible end-time field so the teacher sees it and can override it.
         existing = getattr(self, 'contest', None)
         old_row = None
         if existing is not None and existing.pk is not None:
@@ -776,20 +782,12 @@ class ContestCreate(LoginRequiredMixin, View):
                 new_limit = contest.time_limit
                 if old_limit is not None and new_limit is not None and new_limit > old_limit \
                         and old_end is not None:
-                    increase = new_limit - old_limit
-                    contest.end_time = max(old_end, timezone.now()) + increase
-                    # Also extend the windows of students who have ALREADY
-                    # joined. Their deadline is `min(real_start + time_limit,
-                    # end_time)` anchored to the immutable `real_start`, so a
-                    # contest-level change alone is invisible to anyone whose
-                    # `real_start + new_limit` is already in the past (they
-                    # still see "Your time is up!"). Shift `real_start` later
-                    # so each student's new deadline is exactly
-                    # `max(old deadline, now) + increase` — active students
-                    # keep their start (their end just grows), finished
-                    # students restart their window from now. Spectators have
-                    # no personal window (their end is the contest's), so they
-                    # are left untouched.
+                    # Shift ``real_start`` later so each student's new deadline
+                    # becomes ``max(old deadline, now) + increase`` — active
+                    # students keep their start (their end just grows), finished
+                    # students restart their window from now. Spectators have no
+                    # personal window (their end is the contest's), so they are
+                    # left untouched.
                     _now = timezone.now()
                     shifted = []
                     for participation in existing.users.exclude(
@@ -802,45 +800,13 @@ class ContestCreate(LoginRequiredMixin, View):
                     if shifted:
                         ContestParticipation.objects.bulk_update(shifted, ['real_start'])
                         self._restore_missing_sessions(shifted)
-
-        # ── "Only extend, never shorten" guard ──────────────────────────────
-        # Once students have joined (a participation exists), shrinking the
-        # duration or pulling the deadline earlier would retroactively end
-        # those students' windows mid-run: the middleware clears their
-        # current_contest on the next request, kicking them out of the exam.
-        # To protect active participants we refuse such edits server-side:
-        #   - duration may only stay equal or grow (None = no personal limit
-        #     is treated as "already unlimited", so going to a finite value is
-        #     a shrink and is rejected);
-        #   - end_time may only stay equal or move later.
-        # This mirrors the frontend validation, but is authoritative — a
-        # crafted JSON payload cannot bypass it.
-        if existing is not None and existing.pk is not None and old_row is not None \
-                and existing.users.exists():
-            old_limit = old_row['time_limit']
-            old_end = old_row['end_time']
-            new_limit = contest.time_limit
-            if old_limit is None:
-                if new_limit is not None:
-                    raise ValidationError(
-                        _('Students have already joined. The duration can only be '
-                          'increased — it cannot be changed from unlimited to a fixed time.'))
-            elif new_limit is None:
-                # Removing a personal limit is always an extension (the window
-                # becomes "until the contest ends"), so it is allowed. It also
-                # extends every joined student's window — restore missing
-                # sessions the same way the duration-increase path does.
-                self._restore_missing_sessions(
-                    existing.users.exclude(virtual=ContestParticipation.SPECTATE)
-                    .only('id', 'virtual', 'user_id'))
-            elif new_limit < old_limit:
-                raise ValidationError(
-                    _('Students have already joined. The duration can only be '
-                      'increased, not shortened.'))
-            if old_end is not None and end_time < old_end:
-                raise ValidationError(
-                    _('Students have already joined. The end time can only be '
-                      'extended, not brought earlier.'))
+                elif old_limit is not None and new_limit is None:
+                    # Removing the personal limit extends every joined student's
+                    # window to "until the contest ends", so restore missing
+                    # sessions the same way the increase path does.
+                    self._restore_missing_sessions(
+                        existing.users.exclude(virtual=ContestParticipation.SPECTATE)
+                        .only('id', 'virtual', 'user_id'))
         return contest
 
     @staticmethod
@@ -1425,11 +1391,12 @@ class ContestCreate(LoginRequiredMixin, View):
             # Whether the user may scope a contest to a private audience at all
             # (drives which seg options the visibility control offers).
             'can_edit_private': self.request.user.has_perm('judge.create_private_contest'),
-            # Whether students have joined: when true, duration/end_time may
-            # only be extended (the server refuses shortening — see the guard
-            # in _apply_payload). The frontend mirrors this to give instant
-            # feedback instead of a round-trip error.
-            'has_participants': bool(contest is not None and contest.users.exists()),
+            # Whether real students have joined (spectators excluded — a
+            # teacher previewing their own assignment must not count). Purely
+            # advisory: the editor warns that shortening the duration or the
+            # end time will end those students' windows, but never blocks it.
+            'has_participants': bool(contest is not None and contest.users.exclude(
+                virtual=ContestParticipation.SPECTATE).exists()),
             # The staff-published SEB configuration offered by the one-click
             # checkbox, or None when no administrator has set one up yet (the
             # template then explains why the checkbox is disabled).

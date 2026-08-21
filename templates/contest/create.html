@@ -849,35 +849,6 @@
                     }
                 }
 
-                // "Only extend, never shorten" save-time guard (mirrors the
-                // server rule in ContestCreate._apply_payload). Once students
-                // have joined, shrinking the duration or pulling the deadline
-                // earlier would end their windows mid-run, so we refuse to
-                // submit such a change and tell the teacher why. The teacher
-                // can type freely while editing; the check happens here.
-                if (guardActive) {
-                    var newDurH = parseInt(document.getElementById('id_duration_hours').value || 0, 10);
-                    var newDurM = parseInt(document.getElementById('id_duration_minutes').value || 0, 10);
-                    var newTotal = newDurH * 60 + newDurM;
-                    var savedTotal = savedDurH * 60 + savedDurM;
-                    // No limit (blank inputs) is always allowed: it removes the
-                    // personal window entirely, i.e. only extends.
-                    var noLimit = document.getElementById('id_duration_none').checked;
-                    if (!noLimit && newTotal < savedTotal) {
-                        showToast({{ _('Students have already joined — the duration can only be increased, not shortened.')|htmltojs }}, true);
-                        var btns = form.querySelectorAll('button[type=submit]');
-                        for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
-                        return;
-                    }
-                    var newEndVal = document.getElementById('id_end_time').value;
-                    if (savedEnd && newEndVal && newEndVal < savedEnd) {
-                        showToast({{ _('Students have already joined — the end time can only be extended, not brought earlier.')|htmltojs }}, true);
-                        var btns2 = form.querySelectorAll('button[type=submit]');
-                        for (var j = 0; j < btns2.length; j++) btns2[j].disabled = false;
-                        return;
-                    }
-                }
-
                 // Edit-mode rescore warning: changing problems or the format
                 // (name/config) forces a rescore of existing submissions.
                 if (window.DMOJ_IS_EDIT && window.DMOJ_EDIT_PREFILL) {
@@ -1236,16 +1207,13 @@
             var endInput = document.getElementById('id_end_time');
             var durH = document.getElementById('id_duration_hours');
             var durM = document.getElementById('id_duration_minutes');
-            // "Only extend, never shorten" guard (mirrors the server rule):
-            // once students have joined, shrinking the duration or pulling the
-            // deadline earlier would end their windows mid-run. The check runs
-            // at save time (submit handler) so the teacher can type freely,
-            // then gets a clear error instead of a silent revert.
-            // `guardActive` comes from the template (has_participants on an
-            // existing contest).
-            var guardActive = {{ 'true' if has_participants else 'false' }};
+            // Whether real students (spectators excluded) have already joined
+            // this existing assignment. Advisory only — shortening the duration
+            // or the end time is allowed, but it ends those students' windows
+            // on their next request, so we say so inline before they save.
+            var hasParticipants = {{ 'true' if has_participants else 'false' }};
             // Initial (saved) duration — used to restore the "No limit" toggle
-            // and as the lower bound for the save-time check.
+            // and to detect a shortening for the advisory below.
             var savedDurH = durH ? parseInt(durH.value || 0, 10) : 0;
             var savedDurM = durM ? parseInt(durM.value || 0, 10) : 0;
             var savedEnd = endInput ? endInput.value : '';
@@ -1255,12 +1223,14 @@
                 // is the per-student window. For NEW contests end_time is
                 // auto-filled as start + duration; once the teacher edits it
                 // manually it becomes theirs. For EDITS, a duration *increase*
-                // must also extend the deadline by the same amount, measured
-                // from max(old deadline, now) — mirroring the server rule in
-                // ContestCreate._apply_payload — so students really get the
-                // added time (and an already-passed deadline still extends
-                // from "now").
+                // pre-fills the deadline with max(old deadline, now) + increase,
+                // because a student's window is capped by end_time — without
+                // that bump "+1h duration" would give them nothing. The server
+                // stores whatever this visible field ends up holding, so the
+                // teacher can always override the suggestion.
                 var endWarnEl = document.getElementById('dur-end-warning');
+                var durShortEl = document.getElementById('dur-shorten-warning');
+                var endShortEl = document.getElementById('end-shorten-warning');
                 function calcEnd() {
                     var s = parseLocalInput(startInput.value);
                     var h = parseInt(durH.value || 0, 10);
@@ -1277,8 +1247,8 @@
                                 d.setMinutes(d.getMinutes() + increase);
                                 endInput.value = toLocalInput(d);
                             }
-                            // No increase (or a shrink, which the save guard
-                            // rejects anyway) → leave the deadline untouched.
+                            // No increase (or a shrink) → leave the deadline
+                            // alone; it is the teacher's to set.
                         } else {
                             // Create mode: auto-fill only while the deadline is
                             // still auto-derived, never overwriting a manual one.
@@ -1294,11 +1264,13 @@
                         endInput.value = '';
                     }
                     syncEndWarning();
+                    syncShortenWarning();
                 }
                 // A manual end_time edit marks the deadline as teacher-owned.
                 endInput.addEventListener('input', function () {
                     endInput.dataset.autoDerived = '';
                     syncEndWarning();
+                    syncShortenWarning();
                     syncPreview();
                     syncScoreSummary();
                 });
@@ -1325,6 +1297,38 @@
                         endWarnEl.style.display = 'none';
                     }
                 }
+                // Shortening advisory. Cutting the duration or pulling the
+                // deadline in is allowed, but every student who already joined
+                // loses their window as soon as the middleware next runs (and a
+                // SEB exam sends them to the quit URL). Warn inline before the
+                // save rather than blocking it — the teacher may well mean it.
+                function syncShortenWarning() {
+                    if (!hasParticipants) return;
+                    if (durShortEl) {
+                        var noLimitBox = document.getElementById('id_duration_none');
+                        var noLimit = noLimitBox && noLimitBox.checked;
+                        var newTotal = (parseInt(durH.value || 0, 10)) * 60 + (parseInt(durM.value || 0, 10));
+                        var savedTotal = savedDurH * 60 + savedDurM;
+                        // "No limit" removes the personal window entirely, i.e.
+                        // it only ever extends — never a shortening.
+                        if (!noLimit && savedTotal && newTotal < savedTotal) {
+                            durShortEl.style.display = '';
+                            durShortEl.textContent = {{ _('Students have already joined — shortening the duration ends their windows the next time they load a page.')|htmltojs }};
+                        } else {
+                            durShortEl.style.display = 'none';
+                        }
+                    }
+                    if (endShortEl) {
+                        // datetime-local values are zero-padded ISO, so a plain
+                        // string compare orders them correctly.
+                        if (savedEnd && endInput.value && endInput.value < savedEnd) {
+                            endShortEl.style.display = '';
+                            endShortEl.textContent = {{ _('Students have already joined — an earlier end time ends their windows the next time they load a page.')|htmltojs }};
+                        } else {
+                            endShortEl.style.display = 'none';
+                        }
+                    }
+                }
                 startInput.addEventListener('change', function () {
                     calcEnd();
                     // start/end changed programmatically — refresh preview + cache
@@ -1336,6 +1340,7 @@
                 durH.addEventListener('input', function () { calcEnd(); syncPreview(); syncScoreSummary(); });
                 durM.addEventListener('input', function () { calcEnd(); syncPreview(); syncScoreSummary(); });
                 syncEndWarning();
+                syncShortenWarning();
 
                 // Default validity: tomorrow -> tomorrow + 3h (initial Range-mode values)
                 if (!startInput.value && !endInput.value) {
@@ -1383,6 +1388,7 @@
                     durNone.addEventListener('change', function () {
                         syncDurNone();
                         calcEnd();
+                        syncShortenWarning();
                         syncPreview();
                         syncScoreSummary();
                     });
@@ -2697,7 +2703,7 @@
                             </div>
 
                             <div class="form-row">
-                                <label>{{ _('Duration') }}{{ tip(_('Each participant gets this much time from the moment they start. The assignment closes at the end time below — if the deadline arrives first, the timer stops even with time left. Validity and duration are independent. Once students have joined, the duration can only be increased — shortening it would end their windows mid-run and is blocked.')) }}</label>
+                                <label>{{ _('Duration') }}{{ tip(_('Each participant gets this much time from the moment they start. The assignment closes at the end time below — if the deadline arrives first, the timer stops even with time left. Validity and duration are independent. Shortening the duration after students have joined ends their windows on their next page load.')) }}</label>
                                 <div class="field ac-inline">
                                     <input type="number" id="id_duration_hours" name="duration_hours"
                                            min="0" max="1000" value="{% if contest and (prefill.duration_hours or prefill.duration_minutes) %}{{ prefill.duration_hours }}{% endif %}">
@@ -2711,11 +2717,12 @@
                                     </label>
                                 </div>
                                 <div class="dur-note" id="dur-end-warning" style="display:none;margin-top:0.4rem;"></div>
+                                <div class="dur-note" id="dur-shorten-warning" style="display:none;margin-top:0.4rem;"></div>
                             </div>
 
                             <div class="form-row stacked validity-row">
                                 <div class="validity-head">
-                                    <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time. Once students have joined, the end time can only be extended, not brought earlier.', tz=user_timezone)) }}</label>
+                                    <label>{{ _('Validity') }}{{ tip(_('Times are shown in your timezone (%(tz)s) and stored as UTC, so students in any timezone see them in their own local time. Bringing the end time earlier after students have joined ends their windows on their next page load.', tz=user_timezone)) }}</label>
                                     <div class="seg">
                                         <label><input type="radio" name="validity_type" value="range" hidden checked><span>{{ _('Range') }}</span></label>
                                         <label><input type="radio" name="validity_type" value="permanent" hidden><span>{{ _('Permanent') }}</span></label>
@@ -2731,6 +2738,7 @@
                                                    value="{{ prefill.end_time or '' }}">
                                         </div>
                                     </div>
+                                    <div class="dur-note" id="end-shorten-warning" style="display:none;margin-top:0.4rem;"></div>
                                     <div class="tz-selector">
                                         <span class="tz-label"><i class="fa fa-clock-o"></i> {{ _('Timezone') }}:</span>
                                         <span class="oj-single-select tz-drop">

@@ -1901,12 +1901,14 @@ class ContestEditorProblemOptionsTestCase(CommonDataMixin, TestCase):
 
 
 class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
-    """"Only extend, never shorten" guard for duration / end_time.
+    """Editing duration / end_time on a contest students have already joined.
 
-    Once students have joined a contest, shrinking the personal time window
-    or pulling the deadline earlier would retroactively end those students'
-    participation mid-run (the middleware clears their current_contest on the
-    next request). These tests lock in that the server refuses such edits.
+    Shrinking the personal window or pulling the deadline earlier does
+    retroactively end those students' participation (the middleware clears
+    their current_contest on the next request), but that is the teacher's
+    call to make — a mis-typed deadline has to be fixable. The editor only
+    warns; it must not refuse. These tests lock in that every direction is
+    accepted, and that an extension still reaches the joined students.
     """
 
     @classmethod
@@ -1959,18 +1961,19 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.time_limit, timedelta(hours=1))
 
-    # ── duration: only extend ─────────────────────────────────────────────
+    # ── duration: any direction ───────────────────────────────────────────
 
-    def test_cannot_shrink_duration_with_participants(self):
+    def test_can_shrink_duration_with_participants(self):
+        # Shortening a live window is destructive but permitted: the teacher
+        # is warned in the editor, not blocked.
         self._add_participant()
         response = self.client.post(
             reverse('contest_edit', args=['guardcontest']),
             data=json.dumps(self._payload(duration_hours=1)), content_type='application/json',
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('only be increased', json.loads(response.content)['error'])
+        self.assertEqual(response.status_code, 200, response.content)
         self.contest.refresh_from_db()
-        self.assertEqual(self.contest.time_limit, timedelta(hours=2))  # unchanged
+        self.assertEqual(self.contest.time_limit, timedelta(hours=1))
 
     def test_can_extend_duration_with_participants(self):
         self._add_participant()
@@ -1982,9 +1985,9 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.time_limit, timedelta(hours=3))
 
-    def test_cannot_switch_unlimited_to_finite_with_participants(self):
-        # A contest with no personal limit treats that as "already unlimited";
-        # imposing a finite duration later is a shrink and must be refused.
+    def test_can_switch_unlimited_to_finite_with_participants(self):
+        # Imposing a finite duration on a previously unlimited contest is a
+        # shrink for everyone already in it, and is allowed all the same.
         # Use a fresh contest so the shared setUpTestData object is untouched.
         _now = timezone.now()
         unlimited = create_contest(
@@ -2010,12 +2013,13 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
                 'is_visible': False,
             }), content_type='application/json',
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('unlimited', json.loads(response.content)['error'])
+        self.assertEqual(response.status_code, 200, response.content)
+        unlimited.refresh_from_db()
+        self.assertEqual(unlimited.time_limit, timedelta(hours=2))
 
     def test_can_remove_finite_duration_with_participants(self):
-        # Removing a personal limit always extends (window becomes "until the
-        # contest ends"), so it stays allowed even with participants.
+        # Removing a personal limit extends every window to "until the contest
+        # ends" — and must restore the sessions the middleware had cleared.
         self._add_participant()
         response = self.client.post(
             reverse('contest_edit', args=['guardcontest']),
@@ -2026,9 +2030,11 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertIsNone(self.contest.time_limit)
 
-    # ── end_time: only extend ─────────────────────────────────────────────
+    # ── end_time: any direction ───────────────────────────────────────────
 
-    def test_cannot_pull_end_time_earlier_with_participants(self):
+    def test_can_pull_end_time_earlier_with_participants(self):
+        # The case this whole change is about: fixing a mis-typed deadline on
+        # an assignment students have already opened.
         self._add_participant()
         now = timezone.now()
         earlier_end = now + timedelta(days=1)  # was now + 5 days
@@ -2037,10 +2043,9 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
             data=json.dumps(self._payload(end_time=earlier_end.isoformat())),
             content_type='application/json',
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('end time', json.loads(response.content)['error'])
+        self.assertEqual(response.status_code, 200, response.content)
         self.contest.refresh_from_db()
-        self.assertGreater(self.contest.end_time, earlier_end)  # unchanged
+        self.assertEqual(self.contest.end_time, earlier_end)
 
     def test_can_push_end_time_later_with_participants(self):
         self._add_participant()
@@ -2055,69 +2060,83 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.end_time, later_end)
 
-    # ── duration increase extends the deadline ─────────────────────────────
-    # The deadline must follow a duration increase by the same amount, measured
-    # from max(old deadline, now) — otherwise the stale deadline caps the new
-    # timer and students see no extra time ("duration +1h" must be real).
+    # ── duration increase reaches joined students ──────────────────────────
+    # The submitted end_time is stored verbatim — the server never rewrites it.
+    # A duration increase still shifts each joined student's ``real_start`` so
+    # the extra time reaches people whose window had already run out, but it
+    # remains capped by whatever deadline the teacher set.
 
-    def test_duration_increase_extends_deadline(self):
-        """Deadline still ahead: new end = old end + increase (contest AND student)."""
+    def test_duration_increase_keeps_submitted_deadline(self):
+        """Deadline still ahead: the student's window grows by the increase and
+        end_time is exactly what was posted."""
         part = self._add_participant()
-        old_end = self.contest.end_time  # now + 5 days
         # The student's deadline is min(real_start + 2h, now + 5d) = real_start + 2h.
         old_student_deadline = ContestParticipation.objects.get(pk=part.pk).end_time
+        payload = self._payload(duration_hours=3)
         response = self.client.post(
             reverse('contest_edit', args=['guardcontest']),
-            data=json.dumps(self._payload(duration_hours=3)), content_type='application/json',
+            data=json.dumps(payload), content_type='application/json',
         )
         self.assertEqual(response.status_code, 200, response.content)
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.time_limit, timedelta(hours=3))
-        self.assertEqual(self.contest.end_time, old_end + timedelta(hours=1))
-        # The joined student's own window must also grow by the same amount —
-        # not just the global deadline (otherwise they still see time up).
+        # No server-side deadline push: the posted value is stored as-is.
+        self.assertEqual(self.contest.end_time, datetime.fromisoformat(payload['end_time']))
+        # The joined student's own window still grows by the same amount — the
+        # view shifts their real_start, which their deadline is anchored to.
         fresh = ContestParticipation.objects.get(pk=part.pk)
         self.assertEqual(fresh.end_time, old_student_deadline + timedelta(hours=1))
 
-    def test_duration_increase_extends_from_now_when_deadline_passed(self):
-        """Deadline already passed: the extension starts from *now* (the stale
-        past date must not be used as the base, or students still get nothing)."""
+    def test_duration_increase_alone_is_capped_by_a_passed_deadline(self):
+        """Deadline already passed: raising the duration on its own gives the
+        student nothing (end_time still caps their window) — that is deliberate,
+        the deadline is the teacher's to set. Pushing end_time out as well, which
+        the editor pre-fills into the visible field, revives them."""
         _now = timezone.now()
+        past_end = _now - timedelta(days=2) + timedelta(hours=2)
         expired = create_contest(
             key='guardexpired', name='Guard Expired',
             start_time=_now - timedelta(days=2),
-            end_time=_now - timedelta(days=2) + timedelta(hours=2),
+            end_time=past_end,
             authors=('superuser',),
             time_limit=timedelta(hours=2),
         )
-        from judge.models import ContestParticipation
         part = ContestParticipation.objects.create(
             contest=expired,
             user=create_user(username='guard_student_expired').profile,
             real_start=_now - timedelta(days=2),
         )
-        response = self.client.post(
-            reverse('contest_edit', args=['guardexpired']),
-            data=json.dumps({
+
+        def _post(**overrides):
+            body = {
                 'name': 'Guard Expired', 'key': 'guardexpired',
                 'start_time': (_now - timedelta(days=2)).isoformat(),
-                'end_time': (_now - timedelta(days=2) + timedelta(hours=2)).isoformat(),
+                'end_time': past_end.isoformat(),
                 'duration_hours': 3, 'duration_minutes': 0,
                 'is_visible': False,
-            }), content_type='application/json',
-        )
+            }
+            body.update(overrides)
+            return body, self.client.post(
+                reverse('contest_edit', args=['guardexpired']),
+                data=json.dumps(body), content_type='application/json',
+            )
+
+        # 1. Duration 2h → 3h, deadline left in the past.
+        body, response = _post()
         self.assertEqual(response.status_code, 200, response.content)
         expired.refresh_from_db()
         self.assertEqual(expired.time_limit, timedelta(hours=3))
-        # new end = now + 1h (tolerating wall-clock drift during the request).
-        expected = timezone.now() + timedelta(hours=1)
-        self.assertLess(abs((expired.end_time - expected).total_seconds()), 5)
-        self.assertGreater(expired.end_time, _now)
-        # The student whose window had already finished must be extended from
-        # now too (this is the "still shows Your time is up!" regression).
+        self.assertEqual(expired.end_time, past_end)  # stored verbatim
+        # Still expired: min(real_start + 3h, past end) is in the past.
+        self.assertLess(ContestParticipation.objects.get(pk=part.pk).end_time, _now)
+
+        # 2. Now push the deadline out too — the student is back in.
+        new_end = _now + timedelta(days=1)
+        body, response = _post(end_time=new_end.isoformat())
+        self.assertEqual(response.status_code, 200, response.content)
+        expired.refresh_from_db()
+        self.assertEqual(expired.end_time, datetime.fromisoformat(body['end_time']))
         fresh = ContestParticipation.objects.get(pk=part.pk)
-        expected_student = timezone.now() + timedelta(hours=1)
-        self.assertLess(abs((fresh.end_time - expected_student).total_seconds()), 5)
         self.assertGreater(fresh.end_time, _now)
 
 
@@ -2195,8 +2214,9 @@ class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
         self.assertFalse(p.ended)
 
     def test_extending_duration_rescues_participant(self):
-        # The "only extend" rule is meaningful because extending the duration
-        # after a student joined moves their deadline and un-expires them.
+        # Extending the duration after a student joined moves their deadline
+        # and un-expires them — this is what the editor's real_start shift and
+        # session restore are ultimately for.
         contest = self._mk_contest(time_limit=timedelta(hours=1))
         started = timezone.now() - timedelta(hours=2)
         p = self._mk_participation(contest, real_start=started)
@@ -2213,8 +2233,9 @@ class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
         self.assertFalse(p.ended)
 
     def test_shrinking_duration_expires_participant(self):
-        # And shrinking it retroactively expires someone mid-run — which is
-        # exactly why the server refuses that edit once participants exist.
+        # And shrinking it retroactively expires someone mid-run. The editor
+        # allows that (a wrong deadline has to be fixable) but warns first —
+        # this is the damage the warning is about.
         contest = self._mk_contest(time_limit=timedelta(hours=3))
         started = timezone.now() - timedelta(hours=2)
         p = self._mk_participation(contest, real_start=started)
