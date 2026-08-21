@@ -1,4 +1,6 @@
+import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -41,68 +43,93 @@ def _window_limit() -> int:
     return int(getattr(settings, 'DMOJ_AI_HINT_WINDOW_LIMIT', 5))
 
 
+_LOCK_TTL = 10     # seconds before a stale mutex auto-releases (crashed holder)
+_LOCK_WAIT = 2.0   # max seconds to wait for the mutex before forcing through
+
+
 def _cache_key(user_id: int) -> str:
-    """Per-user, per-window cache key (a fixed time bucket, not a calendar day)."""
-    window = int(timezone.now().timestamp() // _window_seconds())
-    return f'ai_hint_window:{user_id}:{window}'
+    return f'ai_hint_window:{user_id}'
 
 
-def _ttl_to_window_end() -> int:
-    """Seconds until the current window rolls over and the quota resets."""
-    seconds = _window_seconds()
-    elapsed = int(timezone.now().timestamp()) % seconds
-    return max(1, seconds - elapsed)
+def _lock_key(user_id: int) -> str:
+    return f'ai_hint_window:{user_id}:lock'
 
 
-def _seed_used_count(user_id: int) -> None:
-    """Ensure the current window's counter exists, seeding it from the DB on cold cache."""
-    key = _cache_key(user_id)
-    if cache.add(key, 0, _ttl_to_window_end()):
-        from judge.models.ai_hints import AIHintLog
-        since = timezone.now() - timedelta(seconds=_window_seconds())
-        used = AIHintLog.objects.filter(
-            user_id=user_id, requested_at__gte=since, success=True,
-        ).count()
-        if used:
-            try:
-                cache.incr(key, used)
-            except ValueError:
-                cache.set(key, used, _ttl_to_window_end())
+def _now_ts() -> float:
+    return timezone.now().timestamp()
+
+
+def _prune(ts: list[float]) -> list[float]:
+    """Drop reservations older than one window, keeping the list ascending."""
+    cutoff = _now_ts() - _window_seconds()
+    return [t for t in ts if t > cutoff]
+
+
+def _load(user_id: int) -> list[float]:
+    """Recent reservation timestamps (ascending), seeded from the DB on cold cache."""
+    raw = cache.get(_cache_key(user_id))
+    if raw is not None:
+        try:
+            return [float(t) for t in json.loads(raw)]
+        except (TypeError, ValueError):
+            return []
+    from judge.models.ai_hints import AIHintLog
+    since = timezone.now() - timedelta(seconds=_window_seconds())
+    stamps = AIHintLog.objects.filter(
+        user_id=user_id, requested_at__gte=since, success=True,
+    ).values_list('requested_at', flat=True)
+    ts = sorted(s.timestamp() for s in stamps)
+    _store(user_id, ts)
+    return ts
+
+
+def _store(user_id: int, ts: list[float]) -> None:
+    cache.set(_cache_key(user_id), json.dumps(ts), _window_seconds())
+
+
+class _mutex:
+    """Cache-backed mutex so the read-modify-write on the timestamp list stays atomic."""
+
+    def __init__(self, key: str):
+        self.key = key
+
+    def __enter__(self):
+        deadline = time.monotonic() + _LOCK_WAIT
+        while not cache.add(self.key, 1, _LOCK_TTL):
+            if time.monotonic() >= deadline:
+                # A crashed holder left the lock behind; break the deadlock.
+                cache.delete(self.key)
+                break
+            time.sleep(0.01)
+        return self
+
+    def __exit__(self, *exc):
+        cache.delete(self.key)
+        return False
 
 
 def get_remaining(user_id: int) -> int:
-    limit = _window_limit()
-    _seed_used_count(user_id)
-    used = cache.get(_cache_key(user_id)) or 0
-    return max(0, limit - used)
+    return max(0, _window_limit() - len(_prune(_load(user_id))))
 
 
 def try_reserve(user_id: int) -> bool:
-    """Atomically claim one hint slot for the current window; the caller must refund() on failure.
-
-    Incrementing before the API call (instead of after) closes the race where
-    concurrent requests all pass a quota check and then each spend a slot.
-    """
-    limit = _window_limit()
-    key = _cache_key(user_id)
-    _seed_used_count(user_id)
-    try:
-        used = cache.incr(key)
-    except ValueError:
-        cache.set(key, 1, _ttl_to_window_end())
-        used = 1
-    if used > limit:
-        refund(user_id)
-        return False
-    return True
+    """Atomically claim one hint slot for the sliding window; refund() on failure."""
+    with _mutex(_lock_key(user_id)):
+        ts = _prune(_load(user_id))
+        if len(ts) >= _window_limit():
+            return False
+        ts.append(_now_ts())
+        _store(user_id, ts)
+        return True
 
 
 def refund(user_id: int) -> None:
-    """Return a slot reserved by try_reserve() (e.g. the API call failed)."""
-    try:
-        cache.decr(_cache_key(user_id))
-    except ValueError:
-        pass
+    """Return the most recent reservation (e.g. the API call failed)."""
+    with _mutex(_lock_key(user_id)):
+        ts = _prune(_load(user_id))
+        if ts:
+            ts.pop()
+            _store(user_id, ts)
 
 
 def is_configured() -> bool:
