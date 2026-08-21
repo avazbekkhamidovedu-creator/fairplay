@@ -17,7 +17,7 @@ from django.utils import timezone
 from judge.models import (
     Contest, ContestSubmission, Language, ProblemBlank, ProblemCodeConfig, ProblemFileConfig,
     ProblemFillBlankConfig, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig,
-    Submission, SubmissionSource,
+    Submission, SubmissionSource, SubmissionTestCase,
 )
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.models.tests.util import (
@@ -25,7 +25,7 @@ from judge.models.tests.util import (
     create_problem, create_user,
 )
 from judge.utils.contest_ai import (
-    problem_has_ai_grading, should_run_ai_now, student_can_trigger_ai,
+    contest_awaits_student_ai, problem_has_ai_grading, should_run_ai_now, student_can_trigger_ai,
 )
 
 
@@ -538,3 +538,113 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertEqual(sub.result, 'IR')
         page = self._status(self.student_client, sub)
         self.assertContains(page, 'View AI grading')
+
+
+class CodeAIJudgeIRTestCase(CommonDataMixin, TestCase):
+    """A judge ``IR`` (Invalid Return) on a code+AI problem is a real verdict.
+
+    Before the fix, ``contest_awaits_student_ai`` treated every AI-graded problem
+    (code included) as "awaiting AI" on submit, so a genuine judge ``IR`` was
+    rendered as "Answer saved" and the real test-case results were hidden.
+    Code problems always flow through the judge bridge, so their ``IR`` is an
+    Invalid Return — never the synthetic awaiting-AI placeholder used by the
+    internally-graded AI types (short answer / AI fill-blank).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.teacher = create_user(
+            username='codeir_teacher',
+            user_permissions=('view_all_submission', 'rejudge_submission'),
+        )
+        cls.student = create_user(username='codeir_student')
+        cls.py = Language.objects.get(key='PY3')
+        cls.codeai = create_problem(code='codeir-ai', submission_type='C', points=10, is_public=True)
+        cls.codeai.allowed_languages.add(cls.py)
+        ProblemCodeConfig.objects.create(problem=cls.codeai, ai_enabled=True, ai_rubric='style')
+        cls.codeno = create_problem(code='codeir-no', submission_type='C', points=10, is_public=True)
+        cls.codeno.allowed_languages.add(cls.py)
+        ProblemCodeConfig.objects.create(problem=cls.codeno, ai_enabled=False)
+        cls.sa = create_problem(code='codeir-sa', submission_type='S', points=10, is_public=True)
+        ProblemShortAnswerConfig.objects.create(problem=cls.sa, reference_answer='42')
+
+    def setUp(self):
+        cache.clear()
+        self.student_client = Client()
+        self.student_client.force_login(self.student)
+        self.teacher_client = Client()
+        self.teacher_client.force_login(self.teacher)
+
+    def _code_sub(self, problem, result, *cases):
+        sub = Submission.objects.create(
+            user=self.student.profile, problem=problem, language=self.py,
+            status='D', result=result, points=0,
+            case_points=0, case_total=float(problem.points or 0),
+            time=0, memory=0,
+        )
+        SubmissionSource.objects.create(submission=sub, source='print(1)')
+        for i, status in enumerate(cases, start=1):
+            SubmissionTestCase.objects.create(
+                submission=sub, case=i, status=status, points=0, total=5, time=0, memory=0,
+            )
+        return sub
+
+    def _status(self, client, sub):
+        return client.get(reverse('submission_status', args=[sub.id]))
+
+    def test_contest_awaits_student_ai_excludes_code(self):
+        code_ai_sub = self._code_sub(self.codeai, 'WA', 'WA', 'WA')
+        code_no_sub = self._code_sub(self.codeno, 'AC', 'AC')
+        sa_sub = Submission.objects.create(
+            user=self.student.profile, problem=self.sa, language=Language.get_answer_language(),
+            status='D', result='IR', points=0, case_points=0, case_total=10,
+        )
+        SubmissionSource.objects.create(submission=sa_sub, source='{"text": "42"}')
+        self.assertFalse(contest_awaits_student_ai(code_ai_sub))
+        self.assertFalse(contest_awaits_student_ai(code_no_sub))
+        # The internally-graded AI types still await the on-demand pass.
+        self.assertTrue(contest_awaits_student_ai(sa_sub))
+
+    def test_code_ir_judge_verdict_is_not_rendered_as_answer_saved(self):
+        """A code+AI submission whose judge verdict is IR (Invalid Return) must
+        show the real execution results — never the 'Answer saved' awaiting-AI
+        state. The on-demand AI button must still be available for the teacher."""
+        sub = self._code_sub(self.codeai, 'IR', 'IR', 'IR', 'IR')
+        self.assertFalse(contest_awaits_student_ai(sub))
+        widget = self.teacher_client.get(
+            reverse('submission_testcases_query'), {'id': sub.id},
+        )
+        self.assertEqual(widget.status_code, 200, widget.content)
+        self.assertContains(widget, 'Execution Results')
+        self.assertNotContains(widget, 'Answer saved')
+        # The real IR verdict rows are shown.
+        self.assertContains(widget, 'case-IR')
+        # Teachers can still trigger the supplementary AI rubric pass.
+        page = self._status(self.teacher_client, sub)
+        self.assertContains(page, 'View AI grading')
+        self.assertNotContains(page, 'Answer saved')
+
+    def test_code_wa_verdict_is_not_rendered_as_answer_saved(self):
+        """Same for a plain WA verdict — only the synthetic awaiting-AI result
+        may ever show 'Answer saved'."""
+        sub = self._code_sub(self.codeai, 'WA', 'WA', 'WA', 'WA')
+        self.assertFalse(contest_awaits_student_ai(sub))
+        widget = self.teacher_client.get(
+            reverse('submission_testcases_query'), {'id': sub.id},
+        )
+        self.assertEqual(widget.status_code, 200, widget.content)
+        self.assertContains(widget, 'Execution Results')
+        self.assertNotContains(widget, 'Answer saved')
+        self.assertContains(widget, 'case-WA')
+
+    def test_code_without_ai_never_awaits(self):
+        sub = self._code_sub(self.codeno, 'IR', 'IR', 'IR')
+        self.assertFalse(contest_awaits_student_ai(sub))
+        widget = self.teacher_client.get(
+            reverse('submission_testcases_query'), {'id': sub.id},
+        )
+        self.assertEqual(widget.status_code, 200, widget.content)
+        self.assertContains(widget, 'Execution Results')
+        self.assertNotContains(widget, 'Answer saved')
+        self.assertNotContains(widget, 'View AI grading')

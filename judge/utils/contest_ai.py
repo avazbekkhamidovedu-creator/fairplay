@@ -85,8 +85,17 @@ def should_run_ai_now(submission, *, batch_pass=False, manual_trigger=False):
 
 
 def contest_awaits_student_ai(submission):
-    """Submit stores the answer; the LLM runs only on an explicit request."""
+    """Submit stores the answer; the LLM runs only on an explicit request.
+
+    Code problems are excluded: they always flow through the judge bridge and
+    receive a real verdict. For code, ``IR`` means Invalid Return — a genuine
+    judge result — never the synthetic "awaiting AI" placeholder that the
+    internally-graded AI types (short answer / AI fill-blank) produce.
+    """
     if not problem_has_ai_grading(submission.problem):
+        return False
+    from judge.models import ProblemSubmissionType
+    if submission.problem.submission_type == ProblemSubmissionType.CODE:
         return False
     # Practice and every contest: never auto-call the LLM on submit.
     return True
