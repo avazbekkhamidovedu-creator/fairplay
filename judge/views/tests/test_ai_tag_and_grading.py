@@ -13,12 +13,14 @@ Two related but distinct concerns live here:
 import json
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from judge.models import Language, Problem, ProblemCodeConfig, Submission, SubmissionSource
-from judge.models.tests.util import CommonDataMixin, create_problem, create_problem_type, create_user
+from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_problem_type, create_user
 from judge.question_types.ai_grading import call_llm, parse_calibrated_scores, sub_score_cases
+from judge.question_types.code import combine_code_score
+from judge.utils.contest_ai import persist_code_ai_rows
 from judge.utils.problem_create import default_problem_group
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIProblemTypeView,
@@ -278,6 +280,136 @@ class CodeSupplementaryAIGradeTestCase(CommonDataMixin, TestCase):
         self.assertEqual(self.submission.points, 10.0)
 
 
+class CombineCodeScoreTestCase(TestCase):
+    """Unit tests for judge.question_types.code.combine_code_score.
+
+    The final programming grade is the weighted mix of the test-case score and
+    the AI rubric score, with the invariant that the AI score ratio never drops
+    below the test-case score ratio (a submission that earned N% from the tests
+    cannot be scored lower by the model).
+    """
+
+    def test_default_weight_clamps_ai_below_testcase(self):
+        # Test cases 30%, AI only 20% → AI is clamped up to 30%; the final
+        # score never drops below the test-case score.
+        ai_score, final = combine_code_score(30, 100, 100, 20, 100, partial=True)
+        self.assertEqual(ai_score, 30.0)
+        self.assertEqual(final, 30.0)  # 30*0.7 + 30*0.3
+
+    def test_ai_above_testcase_keeps_its_score(self):
+        ai_score, final = combine_code_score(30, 100, 100, 80, 100, partial=True)
+        self.assertEqual(ai_score, 80.0)
+        self.assertEqual(final, 45.0)  # 30*0.7 + 80*0.3
+
+    def test_ratio_clamp_uses_ratios_not_points(self):
+        # The AI rubric total differs from the problem points; the *ratio* is
+        # what must be clamped: test cases 30/100 = 30%, AI 10/50 = 20%.
+        ai_score, final = combine_code_score(30, 100, 100, 10, 50, partial=True)
+        self.assertEqual(ai_score, 30.0)
+        self.assertEqual(final, 30.0)
+
+    def test_partial_false_is_all_or_nothing(self):
+        # A perfect combined score is preserved.
+        _, final = combine_code_score(100, 100, 100, 100, 100, partial=False)
+        self.assertEqual(final, 100.0)
+        # Any shortfall collapses the whole combined score to zero.
+        ai_score, final = combine_code_score(99, 100, 100, 99, 100, partial=False)
+        self.assertEqual(ai_score, 99.0)
+        self.assertEqual(final, 0.0)
+
+    def test_never_exceeds_problem_points(self):
+        _, final = combine_code_score(100, 100, 100, 100, 100, partial=True)
+        self.assertEqual(final, 100.0)
+
+    @override_settings(DMOJ_AI_GRADING_WEIGHT=0.5)
+    def test_weight_is_configurable(self):
+        ai_score, final = combine_code_score(30, 100, 100, 80, 100, partial=True)
+        self.assertEqual(ai_score, 80.0)
+        self.assertEqual(final, 55.0)  # 30*0.5 + 80*0.5
+
+    def test_zero_totals_are_safe(self):
+        self.assertEqual(
+            combine_code_score(0, 0, 100, 0, 0, partial=True), (0.0, 0.0))
+
+    def test_zero_problem_points(self):
+        self.assertEqual(
+            combine_code_score(30, 100, 0, 20, 100, partial=True), (0.0, 0.0))
+
+
+class CodeAICombinedPersistTestCase(CommonDataMixin, TestCase):
+    """persist_code_ai_rows writes the AI rows and recombines the score.
+
+    The judge finalizes with the pure test-case score first; once the AI
+    rubric score lands, ``persist_code_ai_rows`` rewrites ``submission.points``
+    as the weighted combination and refreshes the contest standing.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.student = create_user(username='ai_combine_student')
+        cls.problem = create_problem('ai-combine-prob', points=10, partial=True)
+        ProblemCodeConfig.objects.create(problem=cls.problem, ai_enabled=True)
+        # A submission already finalized with the pure test-case score.
+        cls.submission = Submission.objects.create(
+            user=cls.student.profile, problem=cls.problem,
+            language=Language.objects.get(key='PY3'),
+            result='WA', status='D', points=3.0, case_points=3, case_total=10,
+        )
+
+    def _rows(self, points=5, total=10):
+        return [{
+            'case': 1, 'status': 'WA', 'points': points, 'total': total,
+            'batch': -1, 'feedback': '[AI] Overall', 'extended_feedback': '',
+        }]
+
+    def test_persist_writes_rows_and_combines_score(self):
+        from judge.question_types.code import AI_GRADE_BATCH
+
+        persist_code_ai_rows(self.submission, self._rows())
+        self.submission.refresh_from_db()
+        # AI ratio (5/10 = 50%) is above the test-case ratio (3/10 = 30%): kept as-is.
+        self.assertEqual(self.submission.ai_points, 5.0)
+        # final = 3*0.7 + 5*0.3 = 3.6
+        self.assertEqual(self.submission.points, 3.6)
+        self.assertTrue(self.submission.test_cases.filter(batch=AI_GRADE_BATCH).exists())
+
+    def test_ai_below_testcase_ratio_is_clamped(self):
+        # AI 1/10 = 10% < test-case 30% → clamped up to 30% (3 points).
+        persist_code_ai_rows(self.submission, self._rows(points=1, total=10))
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.ai_points, 3.0)
+        # final = 3*0.7 + 3*0.3 = 3.0
+        self.assertEqual(self.submission.points, 3.0)
+
+    def test_empty_rows_change_nothing(self):
+        self.assertEqual(persist_code_ai_rows(self.submission, []), 0)
+        self.submission.refresh_from_db()
+        self.assertIsNone(self.submission.ai_points)
+        self.assertEqual(self.submission.points, 3.0)
+
+    def test_contest_score_uses_combined_ratio(self):
+        from django.utils import timezone
+
+        from judge.models import ContestParticipation, ContestProblem, ContestSubmission
+
+        contest = create_contest(key='ai-combine-contest')
+        cp = ContestProblem.objects.create(
+            contest=contest, problem=self.problem, points=100, order=1, partial=True)
+        part = ContestParticipation.objects.create(
+            contest=contest, user=self.student.profile, real_start=timezone.now(),
+        )
+        ContestSubmission.objects.create(
+            submission=self.submission, problem=cp, participation=part, points=3.0)
+        self.submission.contest_object = contest
+        self.submission.save(update_fields=['contest_object'])
+
+        persist_code_ai_rows(self.submission, self._rows())
+        self.submission.contest.refresh_from_db()
+        # Combined ratio 3.6/10 → 36 on the contest scale (100).
+        self.assertEqual(self.submission.contest.points, 36.0)
+
+
 class CodeConfigRoundTripTestCase(CommonDataMixin, TestCase):
     """Code problems persist + reload their supplementary AI config via create_v2."""
 
@@ -329,3 +461,98 @@ class CodeConfigRoundTripTestCase(CommonDataMixin, TestCase):
         html = response.content.decode()
         self.assertIn('"ai": true', html)
         self.assertIn('Rubric text', html)
+
+
+class CodeAIRejudgeTestCase(CommonDataMixin, TestCase):
+    """A teacher-triggered rejudge must restore the code AI rubric pass.
+
+    ``on_grading_begin`` wipes every test-case row — including the AI rubric
+    rows (batch=-1) — and clears ``ai_points``; ``_maybe_run_code_ai_grade``
+    reruns the LLM for rejudged submissions (``rejudged_date`` set) so the AI
+    feedback and the combined score come back instead of being lost. A fresh
+    submit never auto-runs AI (the student must press the button).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.student = create_user(username='ai_rejudge_student')
+        cls.problem = create_problem('ai-rejudge-prob', points=10, partial=True,
+                                     submission_type='C', is_public=True)
+        cls.problem.allowed_languages.add(Language.objects.get(key='PY3'))
+        ProblemCodeConfig.objects.create(problem=cls.problem, ai_enabled=True, ai_rubric='Style')
+        cls.submission = Submission.objects.create(
+            user=cls.student.profile, problem=cls.problem,
+            language=Language.objects.get(key='PY3'),
+            result='AC', status='D', points=10.0, case_points=10, case_total=10,
+        )
+        SubmissionSource.objects.create(submission=cls.submission, source='print(1)')
+
+    def _call_maybe_run(self, ai_rows=None):
+        """Invoke _maybe_run_code_ai_grade with threads executed synchronously."""
+        from judge.bridge.judge_handler import JudgeHandler
+
+        class _SyncThread:
+            def __init__(self, target, **kwargs):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        with mock.patch('threading.Thread', _SyncThread), \
+                mock.patch('judge.question_types.code.supplementary_ai_grade') as sup, \
+                mock.patch('judge.utils.contest_ai.persist_code_ai_rows') as persist:
+            sup.return_value = ai_rows
+            JudgeHandler._maybe_run_code_ai_grade(self.submission)
+        return sup, persist
+
+    def test_rejudge_reruns_code_ai(self):
+        from django.utils import timezone
+
+        self.submission.rejudged_date = timezone.now()
+        self.submission.save(update_fields=['rejudged_date'])
+        rows = [{
+            'case': 1, 'status': 'WA', 'points': 5, 'total': 10, 'batch': -1,
+            'feedback': '[AI] Overall', 'extended_feedback': '',
+        }]
+        sup, persist = self._call_maybe_run(ai_rows=rows)
+        # The thread ran synchronously; the AI pass must have executed.
+        sup.assert_called_once_with(self.submission)
+        persist.assert_called_once()
+
+    def test_fresh_submit_does_not_auto_run_ai(self):
+        # rejudged_date is None: on-demand AI stays manual-only.
+        sup, persist = self._call_maybe_run()
+        sup.assert_not_called()
+        persist.assert_not_called()
+
+    def test_review_note_survives_rejudge_requeue(self):
+        """The teacher's review note is not wiped by the rejudge requeue."""
+        from judge.models import SubmissionTestCase
+
+        self.submission.review_note = 'teacher comment'
+        self.submission.save(update_fields=['review_note'])
+        # Mirror widgets.rejudge_submission's requeue: status/points reset and
+        # every test-case row (including AI rubric rows) is deleted.
+        Submission.objects.filter(id=self.submission.id).update(
+            status='QU', result=None, points=None, case_points=0)
+        SubmissionTestCase.objects.filter(submission_id=self.submission.id).delete()
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.review_note, 'teacher comment')
+
+    def test_on_grading_begin_clears_ai_points(self):
+        """A rejudge start clears the stale AI score before the fresh pass."""
+        from judge.bridge.judge_handler import JudgeHandler
+
+        self.submission.ai_points = 5.0
+        self.submission.save(update_fields=['ai_points'])
+        handler = JudgeHandler.__new__(JudgeHandler)
+        handler.name = 'test-judge'
+        handler.batch_id = None
+        handler.judge_address = '[127.0.0.1]:9999'
+        handler._post_update_submission = mock.Mock()
+        with mock.patch('judge.bridge.judge_handler.event.post'), \
+                mock.patch('judge.bridge.judge_handler.json_log'):
+            handler.on_grading_begin({'submission-id': self.submission.id, 'pretested': False})
+        self.submission.refresh_from_db()
+        self.assertIsNone(self.submission.ai_points)

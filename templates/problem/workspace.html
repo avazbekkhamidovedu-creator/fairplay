@@ -443,7 +443,7 @@
             <div id="ai-hint-section" class="ai-hint-section"{% if not hint_ready %} hidden{% endif %}>
               <button type="button" class="tool-btn" id="ai-hint-btn"{% if ai_hints_remaining == 0 %} disabled{% endif %}>
                 {{ _('Get AI Hint') }}
-                <span id="ai-hint-quota">({{ ai_hints_remaining }} {{ _('uses remaining today') }})</span>
+                <span id="ai-hint-quota">({{ ai_hints_remaining }} {{ _('uses remaining this window') }})</span>
               </button>
               <div id="ai-hint-result" class="ai-hint-result" hidden></div>
             </div>
@@ -473,7 +473,7 @@
                   {% elif workspace_submission.results_hidden %}
                     <h3>{{ _('Results hidden') }}</h3>
                     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
-                  {% elif workspace_submission.result == 'IR' and workspace_submission.can_trigger_ai_grade %}
+                  {% elif not workspace_is_code and workspace_submission.result == 'IR' and workspace_submission.can_trigger_ai_grade %}
                     <h3>{{ _('Answer saved') }}</h3>
                     <p>{{ _('Your answer has been saved. Press the button below to run AI grading.') }}</p>
                     <p style="margin-top:0.75rem;">
@@ -493,6 +493,11 @@
                       <p><b>{{ _('Resources') }}:</b> {{ workspace_submission.time|default(0) }}s, {{ workspace_submission.memory|default(0) }}KB</p>
                     {% elif workspace_is_mcq %}
                       <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points|floatformat(-3) }} / {{ workspace_submission.points_total|floatformat(-3) }}</p>
+                    {% endif %}
+                    {% if workspace_is_code and workspace_submission.can_trigger_ai_grade %}
+                      <p style="margin-top:0.75rem;">
+                        <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI grading') }}</button>
+                      </p>
                     {% endif %}
                   {% endif %}
                 </div>

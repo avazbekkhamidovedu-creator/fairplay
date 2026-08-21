@@ -672,10 +672,22 @@ LITELLM_TIMEOUT = 120              # seconds
 # The optional 'default' key serves as a base inherited by all profiles.
 AZURE_PROFILES = {}
 
-DMOJ_AI_HINT_DAILY_LIMIT = 5
+# AI-hint rate limit: WINDOW_LIMIT hints per WINDOW_SECONDS per student.
+DMOJ_AI_HINT_WINDOW_LIMIT = 5
+DMOJ_AI_HINT_WINDOW_SECONDS = 300
 # Student on-demand AI grading: global request budget (0 = disabled for students;
-# teachers are unlimited). Per-problem rate limit is separate: 5 calls / 5 minutes.
+# teachers are unlimited). Per-problem rate limit is separate (sliding window).
 DMOJ_AI_GRADING_STUDENT_QUOTA = 100
+# On-demand AI grading rate limit: at most RATE_LIMIT requests per
+# RATE_WINDOW_SECONDS per (student, problem) — a sliding window with no
+# separate ban; the window keeps counting.
+DMOJ_AI_GRADING_RATE_LIMIT = 5
+DMOJ_AI_GRADING_RATE_WINDOW_SECONDS = 300
+# Weight of the supplementary AI rubric score in the final programming grade
+# (0..1).  final = testcase_score * (1 - weight) + ai_score * weight, where
+# ai_score is clamped so the AI score ratio never drops below the test-case
+# score ratio.  AI failures degrade to the pure test-case score.
+DMOJ_AI_GRADING_WEIGHT = 0.3
 
 LITELLM_PROFILES = {
     # The importer deliberately uses a named profile so an installation can route

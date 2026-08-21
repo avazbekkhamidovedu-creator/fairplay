@@ -942,7 +942,9 @@
     return status.status === 'QU' || status.status === 'P' || status.status === 'G';
   }
   function awaitingManualAiGrade(status) {
-    return !!(status && status.can_trigger_ai_grade && status.result === 'IR');
+    // Code problems are judged by the bridge; a judge IR (Invalid Return) is a real
+    // verdict, never the "awaiting AI" placeholder used by internal AI types.
+    return !!(status && !isCodeProblem() && status.can_trigger_ai_grade && status.result === 'IR');
   }
   function applyStatusPayload(status, button) {
     if (!status) return;
@@ -954,7 +956,9 @@
     // Code + visible results: classic testcase HTML (siblings source/comments stay).
     // Non-code: keep Judging results summary, then append AI/testcase HTML when present.
     if (status.id && isCodeProblem() && !status.results_hidden) {
-      refreshResultPanel(status.id);
+      refreshResultPanel(status.id).then(function () {
+        updateAiGradeSection(status);
+      });
     } else if (!isFileProblem()) {
       renderFormalStatus(status);
       if (status.id && !status.results_hidden && !awaitingManualAiGrade(status)) {
@@ -1154,7 +1158,9 @@
     // Code: hydrate full testcase table. Non-code: keep SSR summary and append AI/testcase HTML.
     // File uploads are human-graded: do not poll or inject judge-queue HTML.
     if (isCodeProblem()) {
-      refreshResultPanel(app.dataset.submissionId);
+      refreshResultPanel(app.dataset.submissionId).then(function () {
+        updateAiGradeSection({ can_trigger_ai_grade: !!app.dataset.aiGradeUrl, ai_grade_url: app.dataset.aiGradeUrl || null });
+      });
     } else if (!isFileProblem() && app.dataset.statusUrl) {
       fetch(app.dataset.statusUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
         .then(function (response) { return response.json(); })
@@ -1308,7 +1314,9 @@
             if (payload.file_upload) updateFileUploadResult(payload.file_upload);
             if (payload.comments_html != null) updateResultComments(payload.comments_html);
             if (isCodeProblem() && !payload.results_hidden) {
-              refreshResultPanel(payload.submission_id);
+              refreshResultPanel(payload.submission_id).then(function () {
+                updateAiGradeSection(payload);
+              });
             } else {
               renderFormalStatus(payload);
               updateAiGradeSection(payload);

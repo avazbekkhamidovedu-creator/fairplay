@@ -358,7 +358,10 @@ class JudgeHandler(ZlibPacketHandler):
 
         if Submission.objects.filter(id=packet['submission-id']).update(
                 status='G', is_pretested=packet['pretested'], current_testcase=1,
-                batch=False, judged_date=timezone.now()):
+                batch=False, judged_date=timezone.now(), ai_points=None):
+            # All test-case rows are wiped below (including the supplementary
+            # AI rubric rows); clear ai_points too so a rejudge never leaves a
+            # stale AI score while the fresh AI pass is still pending.
             SubmissionTestCase.objects.filter(submission_id=packet['submission-id']).delete()
             event.post('sub_%s' % Submission.get_id_secret(packet['submission-id']), {'type': 'grading-begin'})
             self._post_update_submission(packet['submission-id'], 'grading-begin')
@@ -445,7 +448,11 @@ class JudgeHandler(ZlibPacketHandler):
         if submission.problem.submission_type != ProblemSubmissionType.CODE:
             return
         from judge.utils.contest_ai import is_latest_submission, persist_code_ai_rows, should_run_ai_now
-        if not should_run_ai_now(submission):
+        # A fresh submit never auto-invokes the LLM (the student must press the
+        # button), but a teacher-triggered rejudge is expected to produce a full
+        # re-grade: the AI rubric rows were wiped by on_grading_begin, so rerun
+        # the rubric pass and restore the combined score + feedback.
+        if not should_run_ai_now(submission) and not submission.rejudged_date:
             return
         # Cheap pre-check inside the worker too; this just avoids spawning threads needlessly.
         try:

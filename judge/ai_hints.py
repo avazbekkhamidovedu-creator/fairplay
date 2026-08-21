@@ -1,6 +1,8 @@
+import json
 import logging
+import time
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
@@ -31,65 +33,103 @@ class HintResult:
     response_time_ms: int | None = None
 
 
+def _window_seconds() -> int:
+    """Length of one rate-limit window in seconds (5 minutes by default)."""
+    return int(getattr(settings, 'DMOJ_AI_HINT_WINDOW_SECONDS', 300))
+
+
+def _window_limit() -> int:
+    """Max AI hints a user may request within a single window."""
+    return int(getattr(settings, 'DMOJ_AI_HINT_WINDOW_LIMIT', 5))
+
+
+_LOCK_TTL = 10     # seconds before a stale mutex auto-releases (crashed holder)
+_LOCK_WAIT = 2.0   # max seconds to wait for the mutex before forcing through
+
+
 def _cache_key(user_id: int) -> str:
-    today = timezone.localdate().isoformat()
-    return f'ai_hint_daily:{user_id}:{today}'
+    return f'ai_hint_window:{user_id}'
 
 
-def _ttl_to_midnight() -> int:
-    """Seconds until the next local midnight."""
-    tomorrow = timezone.localdate() + timedelta(days=1)
-    midnight_dt = timezone.make_aware(datetime.combine(tomorrow, time.min))
-    return max(60, int((midnight_dt - timezone.now()).total_seconds()))
+def _lock_key(user_id: int) -> str:
+    return f'ai_hint_window:{user_id}:lock'
 
 
-def _seed_used_count(user_id: int) -> None:
-    """Ensure the daily counter exists, seeding it from the DB on cold cache."""
-    key = _cache_key(user_id)
-    if cache.add(key, 0, _ttl_to_midnight()):
-        from judge.models.ai_hints import AIHintLog
-        today = timezone.localdate()
-        used = AIHintLog.objects.filter(user_id=user_id, requested_at__date=today, success=True).count()
-        if used:
-            try:
-                cache.incr(key, used)
-            except ValueError:
-                cache.set(key, used, _ttl_to_midnight())
+def _now_ts() -> float:
+    return timezone.now().timestamp()
+
+
+def _prune(ts: list[float]) -> list[float]:
+    """Drop reservations older than one window, keeping the list ascending."""
+    cutoff = _now_ts() - _window_seconds()
+    return [t for t in ts if t > cutoff]
+
+
+def _load(user_id: int) -> list[float]:
+    """Recent reservation timestamps (ascending), seeded from the DB on cold cache."""
+    raw = cache.get(_cache_key(user_id))
+    if raw is not None:
+        try:
+            return [float(t) for t in json.loads(raw)]
+        except (TypeError, ValueError):
+            return []
+    from judge.models.ai_hints import AIHintLog
+    since = timezone.now() - timedelta(seconds=_window_seconds())
+    stamps = AIHintLog.objects.filter(
+        user_id=user_id, requested_at__gte=since, success=True,
+    ).values_list('requested_at', flat=True)
+    ts = sorted(s.timestamp() for s in stamps)
+    _store(user_id, ts)
+    return ts
+
+
+def _store(user_id: int, ts: list[float]) -> None:
+    cache.set(_cache_key(user_id), json.dumps(ts), _window_seconds())
+
+
+class _mutex:
+    """Cache-backed mutex so the read-modify-write on the timestamp list stays atomic."""
+
+    def __init__(self, key: str):
+        self.key = key
+
+    def __enter__(self):
+        deadline = time.monotonic() + _LOCK_WAIT
+        while not cache.add(self.key, 1, _LOCK_TTL):
+            if time.monotonic() >= deadline:
+                # A crashed holder left the lock behind; break the deadlock.
+                cache.delete(self.key)
+                break
+            time.sleep(0.01)
+        return self
+
+    def __exit__(self, *exc):
+        cache.delete(self.key)
+        return False
 
 
 def get_remaining(user_id: int) -> int:
-    limit = getattr(settings, 'DMOJ_AI_HINT_DAILY_LIMIT', 5)
-    _seed_used_count(user_id)
-    used = cache.get(_cache_key(user_id)) or 0
-    return max(0, limit - used)
+    return max(0, _window_limit() - len(_prune(_load(user_id))))
 
 
 def try_reserve(user_id: int) -> bool:
-    """Atomically claim one of today's hint slots; the caller must refund() on failure.
-
-    Incrementing before the API call (instead of after) closes the race where
-    concurrent requests all pass a quota check and then each spend a slot.
-    """
-    limit = getattr(settings, 'DMOJ_AI_HINT_DAILY_LIMIT', 5)
-    key = _cache_key(user_id)
-    _seed_used_count(user_id)
-    try:
-        used = cache.incr(key)
-    except ValueError:
-        cache.set(key, 1, _ttl_to_midnight())
-        used = 1
-    if used > limit:
-        refund(user_id)
-        return False
-    return True
+    """Atomically claim one hint slot for the sliding window; refund() on failure."""
+    with _mutex(_lock_key(user_id)):
+        ts = _prune(_load(user_id))
+        if len(ts) >= _window_limit():
+            return False
+        ts.append(_now_ts())
+        _store(user_id, ts)
+        return True
 
 
 def refund(user_id: int) -> None:
-    """Return a slot reserved by try_reserve() (e.g. the API call failed)."""
-    try:
-        cache.decr(_cache_key(user_id))
-    except ValueError:
-        pass
+    """Return the most recent reservation (e.g. the API call failed)."""
+    with _mutex(_lock_key(user_id)):
+        ts = _prune(_load(user_id))
+        if ts:
+            ts.pop()
+            _store(user_id, ts)
 
 
 def is_configured() -> bool:

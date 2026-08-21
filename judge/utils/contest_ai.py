@@ -85,8 +85,17 @@ def should_run_ai_now(submission, *, batch_pass=False, manual_trigger=False):
 
 
 def contest_awaits_student_ai(submission):
-    """Submit stores the answer; the LLM runs only on an explicit request."""
+    """Submit stores the answer; the LLM runs only on an explicit request.
+
+    Code problems are excluded: they always flow through the judge bridge and
+    receive a real verdict. For code, ``IR`` means Invalid Return — a genuine
+    judge result — never the synthetic "awaiting AI" placeholder that the
+    internally-graded AI types (short answer / AI fill-blank) produce.
+    """
     if not problem_has_ai_grading(submission.problem):
+        return False
+    from judge.models import ProblemSubmissionType
+    if submission.problem.submission_type == ProblemSubmissionType.CODE:
         return False
     # Practice and every contest: never auto-call the LLM on submit.
     return True
@@ -165,9 +174,18 @@ def mark_awaiting_batch_ai(submission):
 
 
 def persist_code_ai_rows(submission, rows):
-    """Write supplementary AI rubric rows (batch=-1) for a code submission."""
+    """Write supplementary AI rubric rows (batch=-1) and recompute the combined score.
+
+    The final submission score becomes ``test-case*(1-w) + clamped-AI*w`` (see
+    ``judge.question_types.code.combine_code_score``), stored on
+    ``submission.points`` with the AI component on ``submission.ai_points``.
+    The contest standing is refreshed so rankings use the combined score too,
+    and a ``grading-end`` event notifies the status page of the update.
+    Returns the number of rows written.
+    """
     from judge.models import SubmissionTestCase
-    from judge.question_types.code import AI_GRADE_BATCH
+    from judge.question_types.code import AI_GRADE_BATCH, combine_code_score
+    from judge.submission_grading import finalize_ai_combined
 
     if not rows:
         return 0
@@ -181,6 +199,15 @@ def persist_code_ai_rows(submission, rows):
         )
         for r in rows
     ])
+    ai_raw = sum(r.get('points') or 0 for r in rows)
+    ai_raw_total = sum(r.get('total') or 0 for r in rows)
+    ai_score, final = combine_code_score(
+        submission.case_points, submission.case_total,
+        submission.problem.points or 0, ai_raw, ai_raw_total,
+        partial=submission.problem.partial,
+    )
+    finalize_ai_combined(submission, ai_score=ai_score, final_points=final)
+    _notify_status(submission)
     return len(rows)
 
 
@@ -212,7 +239,6 @@ def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False,
         if not rows:
             return 'no-rows'
         persist_code_ai_rows(submission, rows)
-        _notify_status(submission)
         return 'code-ai'
     submission._ai_batch_pass = True
     submission.judge(rejudge=True, force_judge=True, rejudge_user=rejudge_user)
@@ -319,7 +345,8 @@ def student_quota_disabled():
 def ai_grade_context(user, submission):
     """Template/API context for the on-demand AI grading button."""
     from judge.ai_grading_quota import (
-        get_remaining, is_rate_limited, is_teacher_viewer, rate_limit_remaining_seconds,
+        get_remaining, is_rate_limited, is_teacher_viewer, rate_limit_count,
+        rate_limit_remaining_count, rate_limit_remaining_seconds, rate_window_seconds,
     )
 
     ctx = {
@@ -329,6 +356,11 @@ def ai_grade_context(user, submission):
         'rate_limited': False,
         'rate_limit_seconds': 0,
         'quota_disabled': student_quota_disabled() and not is_teacher_viewer(user, submission),
+        # Sliding-window rule, surfaced to the student as "(N uses remaining
+        # this window)" plus a tooltip with the exact limits.
+        'rate_remaining': 0,
+        'rate_limit': rate_limit_count(),
+        'rate_window_minutes': max(1, rate_window_seconds() // 60),
     }
     if not ctx['is_teacher'] and user is not None and user.is_authenticated:
         try:
@@ -337,6 +369,7 @@ def ai_grade_context(user, submission):
             profile_id = None
         if profile_id is not None:
             ctx['remaining'] = get_remaining(profile_id)
+            ctx['rate_remaining'] = rate_limit_remaining_count(profile_id, submission.problem_id)
             ctx['rate_limited'] = is_rate_limited(profile_id, submission.problem_id)
             ctx['rate_limit_seconds'] = rate_limit_remaining_seconds(profile_id, submission.problem_id)
     return ctx

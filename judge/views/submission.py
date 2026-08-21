@@ -378,7 +378,12 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
         from django.utils.translation import gettext as _
 
         from judge import llm
-        from judge.ai_grading_quota import is_teacher_viewer, try_reserve
+        from judge.ai_grading_quota import (
+            is_teacher_viewer,
+            rate_limit_remaining_seconds,
+            rate_window_seconds,
+            try_reserve,
+        )
         from judge.utils.contest_ai import ai_grade_context, run_ai_for_submission
 
         submission = self.get_object()
@@ -388,7 +393,9 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
                 return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
             if ctx.get('rate_limited'):
                 return JsonResponse({
-                    'error': _('Please try again later.'),
+                    'error': _('Too many AI grading requests for this problem. Try again in %(seconds)s seconds.') % {
+                        'seconds': ctx.get('rate_limit_seconds', rate_window_seconds()),
+                    },
                 }, status=429)
             return JsonResponse(
                 {'error': _('You can only request AI grading on your latest submission.')},
@@ -402,7 +409,11 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
             reserved, err = try_reserve(submission.user_id, submission.problem_id)
             if not reserved:
                 if err and err.startswith('rate_limited'):
-                    return JsonResponse({'error': _('Please try again later.')}, status=429)
+                    return JsonResponse({
+                        'error': _('Please try again later. Try again in %(seconds)s seconds.') % {
+                            'seconds': rate_limit_remaining_seconds(submission.user_id, submission.problem_id),
+                        },
+                    }, status=429)
                 if err == 'quota_disabled':
                     return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
                 return JsonResponse({'error': _('AI grading quota exhausted.')}, status=429)
@@ -421,7 +432,11 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
                 {'error': _('Could not reach the AI service. Please try again later.')},
                 status=503,
             )
-        return JsonResponse({'ok': True, 'status': status})
+        rate_remaining = None
+        if not is_teacher_viewer(request.user, submission):
+            from judge.ai_grading_quota import rate_limit_remaining_count
+            rate_remaining = rate_limit_remaining_count(submission.user_id, submission.problem_id)
+        return JsonResponse({'ok': True, 'status': status, 'rate_remaining': rate_remaining})
 
 
 class SubmissionSourceRaw(SubmissionSource):

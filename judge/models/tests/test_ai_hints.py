@@ -1,4 +1,4 @@
-"""Tests for the AI-hint daily quota: reservation, refunds, and cold-cache seeding."""
+"""Tests for the AI-hint window quota: reservation, refunds, and cold-cache seeding."""
 from django.core.cache import cache
 from django.test import TestCase
 
@@ -43,5 +43,5 @@ class AIHintQuotaTestCase(TestCase):
         AIHintLog.objects.create(user=self.profile, submission=submission, problem=problem, success=True)
         AIHintLog.objects.create(user=self.profile, submission=submission, problem=problem, success=False)
         cache.clear()
-        # Two successful hints today; the failed one does not count.
+        # Two successful hints in the current window; the failed one does not count.
         self.assertEqual(ai_hints.get_remaining(self.profile.id), 3)
