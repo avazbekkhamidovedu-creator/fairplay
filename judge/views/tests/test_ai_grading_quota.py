@@ -35,6 +35,10 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         ok, err = try_reserve(uid, pid)
         self.assertFalse(ok)
         self.assertTrue(err.startswith('rate_limited'))
+        # Soft limit: another attempt still counts as rate_limited (no ban key).
+        ok2, err2 = try_reserve(uid, pid)
+        self.assertFalse(ok2)
+        self.assertTrue(err2.startswith('rate_limited'))
 
     @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=10)
     def test_successful_reserve_decrements_quota(self):

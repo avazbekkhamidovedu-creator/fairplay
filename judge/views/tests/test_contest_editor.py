@@ -659,7 +659,9 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_create')).content.decode()
         self.assertIn('Allow virtual join', html)
         self.assertNotIn('Allow virtual participation', html)
-        self.assertIn('nowrap-label', html)
+        # Checkbox rows use an inline [box] label ? layout (form-row-check).
+        self.assertIn('form-row-check', html)
+        self.assertIn('id_allow_virtual_participation', html)
 
     def test_library_has_select_all_and_row_checkboxes(self):
         html = self.client.get(reverse('contest_create')).content.decode()

@@ -88,10 +88,10 @@
                     title="{% if tc.extended_feedback %}{{ _('Click to see detailed feedback') }}{% endif %}"
                     {% if tc.id %}id="{{ tc.id }}"{% endif %}>
                   <td>
-                    {% if tc.extended_feedback %}
+                    {% if tc.extended_feedback or (tc.status == 'IR' and tc.feedback) %}
                       <i class="fa fa-chevron-right fa-fw ai-chevron"></i>
                     {% endif %}
-                    <span class="ai-sq-name">{{ tc.feedback or _('Sub-question') }}</span>
+                    <span class="ai-sq-name">{% if tc.status == 'IR' and not tc.extended_feedback and tc.feedback %}{{ _('Sub-question') }}{% else %}{{ tc.feedback or _('Sub-question') }}{% endif %}</span>
                   </td>
                   <td class="ai-sq-score ac">
                     <span class="case-{{ tc.status }}">{{ tc.points|floatformat(1) }}</span> / {{ tc.total|floatformat(1) }}
@@ -104,15 +104,17 @@
                     </span>
                   </td>
                   <td class="ai-sq-feedback">
-                    {{ (tc.extended_feedback or '')[:120] }}{% if tc.extended_feedback and tc.extended_feedback|length > 120 %}&hellip;{% endif %}
+                    {% set fb = tc.extended_feedback or (tc.feedback if tc.status == 'IR' else '') %}
+                    {{ (fb or '')[:120] }}{% if fb and fb|length > 120 %}&hellip;{% endif %}
                   </td>
                 </tr>
-                {% if tc.extended_feedback %}
+                {% set fb_full = tc.extended_feedback or (tc.feedback if tc.status == 'IR' else '') %}
+                {% if fb_full %}
                 <tr style="display:none" class="ai-grading-feedback toggled">
                   <td colspan="4">
                     <div class="ai-feedback-box">
                       <strong>{{ _('Detailed Feedback') }}</strong>
-                      <p class="math-feedback">{{ tc.extended_feedback|linebreaksbr }}</p>
+                      <p class="math-feedback">{{ fb_full|linebreaksbr }}</p>
                     </div>
                   </td>
                 </tr>

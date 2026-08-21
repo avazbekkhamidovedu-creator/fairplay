@@ -388,9 +388,7 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
                 return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
             if ctx.get('rate_limited'):
                 return JsonResponse({
-                    'error': _('Too many AI grading requests for this problem. Try again in %(seconds)s seconds.') % {
-                        'seconds': ctx.get('rate_limit_seconds', 300),
-                    },
+                    'error': _('Please try again later.'),
                 }, status=429)
             return JsonResponse(
                 {'error': _('You can only request AI grading on your latest submission.')},
@@ -404,12 +402,7 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
             reserved, err = try_reserve(submission.user_id, submission.problem_id)
             if not reserved:
                 if err and err.startswith('rate_limited'):
-                    secs = err.split(':', 1)[-1]
-                    msg = _(
-                        'Too many AI grading requests for this problem. '
-                        'Try again in %(seconds)s seconds.',
-                    ) % {'seconds': secs}
-                    return JsonResponse({'error': msg}, status=429)
+                    return JsonResponse({'error': _('Please try again later.')}, status=429)
                 if err == 'quota_disabled':
                     return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
                 return JsonResponse({'error': _('AI grading quota exhausted.')}, status=429)

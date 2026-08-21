@@ -1,4 +1,4 @@
-"""Contest-level AI grading: realtime vs batch, latest-submission only."""
+"""Contest-level AI grading: student allow flag + objective auto-grade."""
 import json
 from datetime import timedelta
 from unittest import mock
@@ -52,33 +52,49 @@ class ContestAIGradingCreateTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('contest_create'))
         self.assertEqual(response.status_code, 200)
         html = response.content.decode()
-        self.assertIn('id_ai_grading_mode', html)
+        self.assertIn('id_allow_student_ai_grading', html)
         self.assertIn('id_ai_grading_auto_delay_minutes', html)
-        self.assertIn('latest submission', html.lower())
+        self.assertIn('Allow Student Use AI Grading', html)
+        self.assertIn('Allow Student Use AI Hint', html)
+        self.assertIn('id_auto_grade_after_end', html)
+        self.assertNotIn('id_ai_grading_mode', html)
 
-    def test_default_mode_is_off(self):
+    def test_default_student_ai_off_and_delay_120(self):
         response = self._post()
         self.assertEqual(response.status_code, 200, response.content)
         contest = Contest.objects.get(key='aihw')
+        self.assertFalse(contest.allow_student_ai_grading)
+        self.assertFalse(contest.allow_ai_hints)
         self.assertEqual(contest.ai_grading_mode, Contest.AI_GRADING_OFF)
-        self.assertEqual(contest.ai_grading_auto_delay_minutes, 30)
+        self.assertEqual(contest.ai_grading_auto_delay_minutes, 120)
 
-    def test_realtime_mode_saved(self):
-        response = self._post(key='aihwrt', ai_grading_mode='realtime')
+    def test_allow_student_ai_grading_saved(self):
+        response = self._post(key='aihwrt', allow_student_ai_grading=True)
         self.assertEqual(response.status_code, 200, response.content)
         contest = Contest.objects.get(key='aihwrt')
+        self.assertTrue(contest.allow_student_ai_grading)
         self.assertEqual(contest.ai_grading_mode, Contest.AI_GRADING_REALTIME)
 
-    def test_batch_mode_and_manual_only_delay(self):
-        response = self._post(
-            key='aihwex', ai_grading_mode='batch', ai_grading_auto_delay_minutes=0,
-        )
+    def test_auto_delay_off(self):
+        response = self._post(key='aihwoff', ai_grading_auto_delay_minutes=-1)
         self.assertEqual(response.status_code, 200, response.content)
-        contest = Contest.objects.get(key='aihwex')
-        self.assertEqual(contest.ai_grading_mode, Contest.AI_GRADING_BATCH)
+        contest = Contest.objects.get(key='aihwoff')
+        self.assertEqual(contest.ai_grading_auto_delay_minutes, -1)
+
+    def test_auto_delay_at_end_time(self):
+        response = self._post(key='aihw0', ai_grading_auto_delay_minutes=0)
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='aihw0')
         self.assertEqual(contest.ai_grading_auto_delay_minutes, 0)
 
-    def test_invalid_mode_rejected(self):
+    def test_legacy_realtime_mode_still_maps_to_student_allow(self):
+        response = self._post(key='aihwlegacy', ai_grading_mode='realtime')
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='aihwlegacy')
+        self.assertTrue(contest.allow_student_ai_grading)
+        self.assertEqual(contest.ai_grading_mode, Contest.AI_GRADING_REALTIME)
+
+    def test_invalid_legacy_mode_rejected(self):
         response = self._post(key='aihwbad', ai_grading_mode='whenever')
         self.assertEqual(response.status_code, 400)
 
@@ -94,6 +110,7 @@ class ContestAIGradingHelpersTestCase(CommonDataMixin, TestCase):
         cls.contest = create_contest(
             key='aihelp',
             authors=('ai_helper_author',),
+            allow_student_ai_grading=True,
             ai_grading_mode=Contest.AI_GRADING_REALTIME,
         )
         cls.cp = create_contest_problem(contest=cls.contest, problem=cls.problem, points=100, order=1)
@@ -125,30 +142,19 @@ class ContestAIGradingHelpersTestCase(CommonDataMixin, TestCase):
         self.assertFalse(is_latest_submission(self.older))
         self.assertTrue(is_latest_submission(self.newer))
 
-    def test_should_run_ai_now_realtime_deferred(self):
+    def test_should_run_ai_now_deferred_until_manual(self):
         self.assertFalse(should_run_ai_now(self.newer))
         self.assertTrue(should_run_ai_now(self.newer, manual_trigger=True))
 
-    def test_should_run_ai_now_batch_skips_live(self):
-        self.contest.ai_grading_mode = Contest.AI_GRADING_BATCH
-        self.contest.save(update_fields=['ai_grading_mode'])
-        self.newer = Submission.objects.select_related('contest_object', 'problem').get(pk=self.newer.pk)
+    def test_should_run_ai_now_batch_pass(self):
         self.assertFalse(should_run_ai_now(self.newer))
         self.assertTrue(should_run_ai_now(self.newer, batch_pass=True))
-
-    def test_should_run_ai_now_off(self):
-        self.contest.ai_grading_mode = Contest.AI_GRADING_OFF
-        self.contest.save(update_fields=['ai_grading_mode'])
-        self.newer = Submission.objects.select_related('contest_object', 'problem').get(pk=self.newer.pk)
-        self.assertFalse(should_run_ai_now(self.newer))
 
     def test_latest_submissions_for_contest_picks_newest(self):
         latest = latest_submissions_for_contest(self.contest)
         self.assertEqual(latest[(self.part.id, self.cp.id)].id, self.newer.id)
 
-    def test_supersede_aborts_older_in_realtime(self):
-        self.contest.ai_grading_mode = Contest.AI_GRADING_OFF
-        self.contest.save(update_fields=['ai_grading_mode'])
+    def test_supersede_aborts_older_when_student_allowed(self):
         self.newer.contest_object = None
         self.newer.contest_object_id = None
         self.newer.save(update_fields=['contest_object'])
@@ -161,30 +167,31 @@ class ContestAIGradingHelpersTestCase(CommonDataMixin, TestCase):
         self.assertEqual(aborted, 1)
         abort.assert_called_once()
 
-    def test_supersede_skips_batch(self):
-        self.contest.ai_grading_mode = Contest.AI_GRADING_BATCH
-        self.contest.save(update_fields=['ai_grading_mode'])
+    def test_supersede_skips_when_student_not_allowed(self):
+        self.contest.allow_student_ai_grading = False
+        self.contest.save(update_fields=['allow_student_ai_grading'])
         self.newer = Submission.objects.select_related('contest_object', 'problem').get(pk=self.newer.pk)
         with mock.patch.object(Submission, 'abort') as abort:
             aborted = supersede_older_in_flight(self.newer)
         self.assertEqual(aborted, 0)
         abort.assert_not_called()
 
-    def test_student_can_trigger_only_latest_done_realtime(self):
+    def test_student_can_trigger_only_when_allowed_teacher_always(self):
         self.newer.status = 'D'
         self.newer.result = 'AC'
         self.newer.save(update_fields=['status', 'result'])
-        # Student quota is 0 by default — button hidden for students.
-        self.assertFalse(student_can_trigger_ai(self.student, self.newer))
-        self.assertFalse(student_can_trigger_ai(self.student, self.older))
-        # Teachers can always trigger in on-demand (realtime) mode.
-        self.assertTrue(student_can_trigger_ai(self.author, self.newer))
+        with self.settings(DMOJ_AI_GRADING_STUDENT_QUOTA=0):
+            self.assertFalse(student_can_trigger_ai(self.student, self.newer))
+            self.assertFalse(student_can_trigger_ai(self.student, self.older))
+            self.assertTrue(student_can_trigger_ai(self.author, self.newer))
 
-        self.contest.ai_grading_mode = Contest.AI_GRADING_BATCH
-        self.contest.save(update_fields=['ai_grading_mode'])
-        self.newer = Submission.objects.select_related('contest_object', 'problem', 'user__user').get(pk=self.newer.pk)
-        self.assertFalse(student_can_trigger_ai(self.student, self.newer))
-        self.assertTrue(student_can_trigger_ai(self.author, self.newer))
+            self.contest.allow_student_ai_grading = False
+            self.contest.save(update_fields=['allow_student_ai_grading'])
+            self.newer = Submission.objects.select_related(
+                'contest_object', 'problem', 'user__user',
+            ).get(pk=self.newer.pk)
+            self.assertFalse(student_can_trigger_ai(self.student, self.newer))
+            self.assertTrue(student_can_trigger_ai(self.author, self.newer))
 
 
 class ContestBatchAIGradeViewTestCase(CommonDataMixin, TestCase):
@@ -193,25 +200,28 @@ class ContestBatchAIGradeViewTestCase(CommonDataMixin, TestCase):
         super().setUpTestData()
         cls.author = create_user(username='ai_batch_author', user_permissions=('edit_own_contest',))
         cls.student = create_user(username='ai_batch_student')
+        cls.problem = create_problem(code='aibatchcode', submission_type='C', points=100)
+        ProblemCodeConfig.objects.create(problem=cls.problem, ai_enabled=True, ai_rubric='rubric')
         cls.contest = create_contest(
             key='aibatch',
             authors=('ai_batch_author',),
-            ai_grading_mode=Contest.AI_GRADING_BATCH,
+            allow_student_ai_grading=False,
             is_visible=True,
         )
+        create_contest_problem(contest=cls.contest, problem=cls.problem, points=100, order=1)
         cls.url = reverse('contest_grade_ai', args=[cls.contest.key])
         cls.grade_url = reverse('contest_grade', args=[cls.contest.key])
 
     def setUp(self):
         self.contest.refresh_from_db()
 
-    def test_grade_page_shows_button_in_batch_mode(self):
+    def test_grade_page_shows_button_when_ai_problems(self):
         client = Client()
         client.force_login(self.author)
         response = client.get(self.grade_url)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context['grade_ai_batch'])
-        self.assertIn('Run AI grading', response.content.decode())
+        self.assertIn('Batch grading', response.content.decode())
 
     def test_post_queues_task(self):
         client = Client()
@@ -223,22 +233,16 @@ class ContestBatchAIGradeViewTestCase(CommonDataMixin, TestCase):
         self.assertTrue(response.json()['ok'])
         delay.assert_called_once_with(self.contest.key, auto=False)
 
-    def test_post_rejected_when_not_batch(self):
-        self.contest.ai_grading_mode = Contest.AI_GRADING_REALTIME
-        self.contest.save(update_fields=['ai_grading_mode'])
-        client = Client()
-        client.force_login(self.author)
-        response = client.post(self.url)
-        self.assertEqual(response.status_code, 400)
-
     def test_student_forbidden(self):
         client = Client()
         client.force_login(self.student)
         response = client.post(self.url)
         self.assertEqual(response.status_code, 403)
 
-    def test_contest_page_explains_batch(self):
+    def test_contest_page_explains_student_ai_when_allowed(self):
+        self.contest.allow_student_ai_grading = True
+        self.contest.save(update_fields=['allow_student_ai_grading'])
         client = Client()
         client.force_login(self.author)
         html = client.get(reverse('contest_view', args=[self.contest.key])).content.decode()
-        self.assertIn('latest submission', html.lower())
+        self.assertIn('on demand', html.lower())
