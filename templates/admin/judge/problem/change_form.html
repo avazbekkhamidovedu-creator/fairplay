@@ -1,11 +1,51 @@
 {% extends "admin/change_form.html" %}
-{% load i18n %}
+{% load i18n admin_modify %}
 
 {% block extrastyle %}{{ block.super }}
-    {% if show_embedded_advanced_toggle %}
+    <style>
+        /* Keep the organization/class multiselects a stable, readable width
+           regardless of whether anything is selected or how long the names are. */
+        #content-main .field-organizations .select2-container,
+        #content-main .field-classes .select2-container {
+            width: 100% !important;
+            min-width: 320px;
+        }
+    </style>
+    {% if show_embedded_advanced_toggle or is_advanced_add %}
+        <style>
+            #content-main .markdown-image-upload {
+                display: none !important;
+            }
+
+            #content-main .form-row.field-markdown_upload,
+            #content-main .field-markdown_upload {
+                display: none !important;
+            }
+
+            #bottombar #problem-markdown-import-button i + i {
+                margin-left: 2px;
+            }
+
+            .problem-markdown-import-status {
+                font-size: 12px;
+                display: block;
+                margin-top: 8px;
+                line-height: 1.4;
+            }
+
+            .problem-markdown-import-status.is-success {
+                color: #2d7a2d;
+            }
+
+            .problem-markdown-import-status.is-error {
+                color: #b93a32;
+            }
+        </style>
+    {% endif %}
+    {% if use_embedded_problem_layout %}
         <style>
             #content-main .embedded-advanced-fields,
-            #content-main .inline-group {
+            #content-main .inline-group.embedded-advanced-inline {
                 max-height: 0;
                 overflow: hidden;
                 opacity: 0;
@@ -18,7 +58,7 @@
             }
 
             #content-main.advanced-expanded .embedded-advanced-fields,
-            #content-main.advanced-expanded .inline-group {
+            #content-main.advanced-expanded .inline-group.embedded-advanced-inline {
                 max-height: 2000px;
                 opacity: 1;
                 overflow: hidden;
@@ -51,6 +91,8 @@
                 var $contentMain = $('#content-main');
                 var $advancedButton = $('#embedded-advanced-toggle');
                 var $preset = $('#id_creation_preset');
+                var $problemTemplateInline = $('#templates-group');
+                $('.inline-group').has('.embedded-advanced-fields').addClass('embedded-advanced-inline');
                 var presetSyncingUi = false;
                 var suppressPresetCustom = false;
                 var watchedFields = [
@@ -112,6 +154,32 @@
                         return;
                     }
                     forceTextboxValue($codeField, value, {triggerEvents: false});
+                }
+
+                function getDescriptionTextarea() {
+                    var $field = $('#id_description');
+                    if (!$field.length) {
+                        $field = $('[name="description"]');
+                    }
+                    return $field;
+                }
+
+                function overwriteDescriptionField(value) {
+                    var $descriptionField = getDescriptionTextarea();
+                    if (!$descriptionField.length) {
+                        return;
+                    }
+                    forceTextboxValue($descriptionField, value, {triggerEvents: true});
+                    if (window.ace) {
+                        try {
+                            var editor = window.ace.edit('martor-description');
+                            if (editor) {
+                                editor.setValue(value, -1);
+                                editor.clearSelection();
+                            }
+                        } catch (error) {
+                        }
+                    }
                 }
 
                 function setFieldValue(fieldName, value) {
@@ -318,12 +386,135 @@
                     }
                     var isCustomized = watchedFields.some(function (fieldName) {
                         return currentValue(fieldName) !== normalizedValue(fieldName);
-                    });
+                    }) || hasCustomizedInlineValues();
                     setPresetValue(isCustomized ? 'custom' : 'default');
                 }
 
+                function hasMeaningfulInlineValue(field) {
+                    if (!field || field.disabled || field.name.indexOf('__prefix__') !== -1) {
+                        return false;
+                    }
+                    if (field.type === 'hidden') {
+                        return false;
+                    }
+                    if (field.type === 'checkbox' || field.type === 'radio') {
+                        return field.checked;
+                    }
+                    if (field.tagName && field.tagName.toLowerCase() === 'select' && field.multiple) {
+                        var selectedValues = $(field).val() || [];
+                        return selectedValues.length > 0;
+                    }
+                    return String($(field).val() || '').trim() !== '';
+                }
+
+                function inlineGroupHasCustomizedValues(selector) {
+                    var $group = $(selector);
+                    if (!$group.length) {
+                        return false;
+                    }
+                    var hasDeleteRequest = $group.find('input[type="checkbox"][name$="-DELETE"]:checked').length > 0;
+                    if (hasDeleteRequest) {
+                        return true;
+                    }
+                    var hasFilledField = false;
+                    $group.find('.inline-related').not('.empty-form').find(':input').each(function () {
+                        if (hasMeaningfulInlineValue(this)) {
+                            hasFilledField = true;
+                            return false;
+                        }
+                    });
+                    return hasFilledField;
+                }
+
+                function hasCustomizedInlineValues() {
+                    return [
+                        '#templates-group',
+                        '#language_limits-group',
+                        '#problemclarification_set-group',
+                        '#solution-group',
+                        '#translations-group'
+                    ].some(inlineGroupHasCustomizedValues);
+                }
+
                 function schedulePresetRefresh() {
+                    updatePresetFromAdvancedFields();
                     window.setTimeout(updatePresetFromAdvancedFields, 0);
+                    window.requestAnimationFrame(updatePresetFromAdvancedFields);
+                    window.setTimeout(updatePresetFromAdvancedFields, 100);
+                }
+
+                function setImportStatus(message, isError) {
+                    var $status = $('#problem-markdown-import-status');
+                    if (!$status.length) {
+                        return;
+                    }
+                    $status
+                        .text(message || '')
+                        .removeClass('is-success is-error')
+                        .addClass(message ? (isError ? 'is-error' : 'is-success') : '');
+                }
+
+                function setImportStatusHtml(message, isError) {
+                    var $status = $('#problem-markdown-import-status');
+                    if (!$status.length) {
+                        return;
+                    }
+                    $status
+                        .html(message || '')
+                        .removeClass('is-success is-error')
+                        .addClass(message ? (isError ? 'is-error' : 'is-success') : '');
+                }
+
+                function escapeHtml(value) {
+                    return $('<div>').text(value || '').html();
+                }
+
+                function getCsrfToken() {
+                    return $('input[name="csrfmiddlewaretoken"]').first().val() || '';
+                }
+
+                function handleMarkdownCreateSuccess(data) {
+                    var links = (data.created || []).map(function (item) {
+                        var name = item.name || item.code || '';
+                        if (!item.edit_url) {
+                            return escapeHtml(name);
+                        }
+                        return '<a href="' + escapeHtml(item.edit_url) + '">' +
+                            escapeHtml(name) + '</a>';
+                    });
+                    var summary = escapeHtml(data.message || '{{ _("Markdown uploaded successfully.")|escapejs }}');
+                    if (links.length) {
+                        summary += '<br>' + links.join('<br>');
+                    }
+                    summary += '<br>{{ _("Redirecting...")|escapejs }}';
+                    setImportStatusHtml(summary, false);
+                    window.setTimeout(function () {
+                        window.location.href = data.redirect_url || '/admin/judge/problem/';
+                    }, 1200);
+                }
+
+                async function importMarkdownFile(file) {
+                    var formData = new FormData();
+                    formData.append('markdown_file', file);
+                    setImportStatus('{{ _("Uploading...")|escapejs }}', false);
+                    try {
+                        var response = await fetch('{% url "admin:judge_problem_import_markdown" %}', {
+                            method: 'POST',
+                            headers: {
+                                'X-CSRFToken': getCsrfToken(),
+                                'X-Requested-With': 'XMLHttpRequest'
+                            },
+                            body: formData
+                        });
+                        var data = await response.json();
+                        if (!response.ok || !data.ok) {
+                            setImportStatus(data.message || '{{ _("Upload failed.")|escapejs }}', true);
+                            return;
+                        }
+                        handleMarkdownCreateSuccess(data);
+                    } catch (error) {
+                        setImportStatus('{{ _("Upload failed.")|escapejs }}', true);
+                    }
                 }
 
                 $advancedButton.on('click', function () {
@@ -360,17 +551,64 @@
                     $contentMain.off('.embeddedPreset');
                     $contentMain.on(
                         'change.embeddedPreset input.embeddedPreset click.embeddedPreset',
-                        '.embedded-advanced-fields :input, .inline-group :input',
+                        '.embedded-advanced-fields :input, .embedded-extended-fields :input, .inline-group :input',
                         schedulePresetRefresh
                     );
+                    $(document).off('.embeddedPresetSelect2');
+                    $(document).on('select2:select.embeddedPresetSelect2 select2:unselect.embeddedPresetSelect2', schedulePresetRefresh);
                 }
 
-                var $presetRow = $('.form-row.field-creation_preset, .field-creation_preset').first();
-                if (!$presetRow.length && $preset.length) {
-                    $presetRow = $preset.closest('.form-row, .fieldBox, .aligned, .form-group');
+                var $optionalBasicSection = $('fieldset.module.aligned.embedded-extended-fields').first();
+                if ($optionalBasicSection.length && $problemTemplateInline.length) {
+                    var $templateAnchor = $('#problem-template-inline-anchor');
+                    if (!$templateAnchor.length) {
+                        $templateAnchor = $('<div id="problem-template-inline-anchor"></div>');
+                        $templateAnchor.insertAfter($optionalBasicSection);
+                    }
+                    $problemTemplateInline.appendTo($templateAnchor);
+                    $('#embedded-advanced-toggle-container').insertAfter($templateAnchor);
+                } else if ($optionalBasicSection.length) {
+                    $('#embedded-advanced-toggle-container').insertAfter($optionalBasicSection);
                 }
-                if ($presetRow.length && $advancedButton.length) {
-                    $('#embedded-advanced-toggle-container').insertAfter($presetRow);
+
+                $('#problem-markdown-import-button').on('click', function () {
+                    $('#problem-markdown-import-input').trigger('click');
+                });
+                $('#problem-markdown-import-input').on('change', function () {
+                    var file = this.files && this.files[0];
+                    if (!file) {
+                        return;
+                    }
+                    importMarkdownFile(file);
+                    this.value = '';
+                });
+                var $bottombar = $('#bottombar');
+                if ($bottombar.length && !$('#problem-markdown-import-button').length) {
+                    var $continueButton = $bottombar.find('button[name="_continue"]').first();
+                    var $buttonTemplate = $continueButton.length ? $continueButton : $bottombar.find('button').last();
+                    var $importButton = $buttonTemplate.clone(false, false);
+                    $importButton
+                        .attr('id', 'problem-markdown-import-button')
+                        .attr('title', '{{ _("Upload Markdown")|escapejs }}')
+                        .attr('name', '_upload_markdown');
+                    $importButton.find('span.text').text('{{ _("Upload Markdown")|escapejs }}');
+                    var $icons = $importButton.find('i');
+                    if ($icons.length >= 3) {
+                        $icons.eq(2).attr('class', 'fa fa-lg fa-upload');
+                    }
+                    if ($continueButton.length) {
+                        $importButton.insertAfter($continueButton);
+                    } else {
+                        $bottombar.append($importButton);
+                    }
+                    var $status = $('#problem-markdown-import-status');
+                    if ($status.length) {
+                        $status.insertAfter($bottombar).show();
+                    }
+                    $importButton.on('click', function (event) {
+                        event.preventDefault();
+                        $('#problem-markdown-import-input').trigger('click');
+                    });
                 }
 
                 if ($preset.val() === 'default') {
@@ -380,20 +618,93 @@
                 }
                 bindAdvancedFieldListeners();
                 updateAdvancedVisibility();
+            {% elif use_embedded_problem_layout %}
+                var advancedOpen = false;
+                var $contentMain = $('#content-main');
+                var $advancedButton = $('#embedded-advanced-toggle');
+                var $problemTemplateInline = $('#templates-group');
+                $('.inline-group').has('.embedded-advanced-fields').addClass('embedded-advanced-inline');
+
+                function updateAdvancedVisibility() {
+                    $contentMain.toggleClass('advanced-expanded', advancedOpen);
+                    $advancedButton.text(
+                        advancedOpen ? '{{ _("Hide advanced settings")|escapejs }}' : '{{ _("Advanced")|escapejs }}'
+                    );
+                }
+
+                function forceTextboxValue($field, value) {
+                    var nextValue = value == null ? '' : String(value);
+                    var domField = $field.get(0);
+                    $field.val(nextValue).trigger('input').trigger('change').trigger('change.select2');
+                    if (domField) {
+                        domField.value = nextValue;
+                        domField.defaultValue = nextValue;
+                        if (domField.tagName && domField.tagName.toLowerCase() === 'textarea') {
+                            domField.textContent = nextValue;
+                        }
+                    }
+                }
+
+                function overwriteDescriptionField(value) {
+                    var $descriptionField = $('#id_description');
+                    if (!$descriptionField.length) {
+                        $descriptionField = $('[name="description"]');
+                    }
+                    if (!$descriptionField.length) {
+                        return;
+                    }
+                    forceTextboxValue($descriptionField, value);
+                    if (window.ace) {
+                        try {
+                            var editor = window.ace.edit('martor-description');
+                            if (editor) {
+                                editor.setValue(value, -1);
+                                editor.clearSelection();
+                            }
+                        } catch (error) {
+                        }
+                    }
+                }
+
+                $advancedButton.on('click', function () {
+                    advancedOpen = !advancedOpen;
+                    updateAdvancedVisibility();
+                });
+
+                var $optionalBasicSection = $('fieldset.module.aligned.embedded-extended-fields').first();
+                if ($optionalBasicSection.length && $problemTemplateInline.length) {
+                    var $templateAnchor = $('#problem-template-inline-anchor');
+                    if (!$templateAnchor.length) {
+                        $templateAnchor = $('<div id="problem-template-inline-anchor"></div>');
+                        $templateAnchor.insertAfter($optionalBasicSection);
+                    }
+                    $problemTemplateInline.appendTo($templateAnchor);
+                    $('#embedded-advanced-toggle-container').insertAfter($templateAnchor);
+                } else if ($optionalBasicSection.length) {
+                    $('#embedded-advanced-toggle-container').insertAfter($optionalBasicSection);
+                }
+
+                updateAdvancedVisibility();
             {% endif %}
         });
     </script>
 {% endblock extrahead %}
 
-{% block form_top %}
-    {{ block.super }}
+{% block submit_buttons_bottom %}
     {% if is_advanced_add %}
         <input type="hidden" name="_advanced_mode" value="1">
-    {% elif show_embedded_advanced_toggle %}
-        {{ adminform.form.embedded_advanced_mode }}
-        <div id="embedded-advanced-toggle-container" style="margin: 12px 0 16px 120px;">
+    {% elif show_problem_layout_toggle %}
+        {% if show_embedded_advanced_toggle %}
+            {{ adminform.form.embedded_advanced_mode }}
+        {% endif %}
+        <div id="embedded-advanced-toggle-container" style="margin: 0 0 12px 0;">
             <button class="button" id="embedded-advanced-toggle" type="button">{{ _('Advanced') }}</button>
         </div>
+    {% endif %}
+    {% submit_row %}
+    {% if show_embedded_advanced_toggle or is_advanced_add %}
+        <input id="problem-markdown-import-input" type="file" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain" style="display: none;">
+        <span id="problem-markdown-import-status" class="problem-markdown-import-status" aria-live="polite" style="display: none;"></span>
     {% endif %}
 {% endblock %}
 

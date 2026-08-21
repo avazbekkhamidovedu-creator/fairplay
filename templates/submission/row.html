@@ -1,11 +1,21 @@
 {% set can_view, can_edit = submission_layout(submission, profile_id, request.user, completed_problem_ids, editable_problem_ids, tester_problem_ids) %}
-<div class="sub-result {{ submission.result_class }}">
+{% set results_hidden = not submission.results_visible_to(request.user) %}
+{% set is_code_problem = submission.problem.submission_type == 'C' %}
+{% if request.user.is_authenticated and perms.judge.rejudge_submission and perms.judge.edit_own_problem %}
+    <div class="sub-check" onclick="event.stopPropagation()">
+        <input type="checkbox" class="sub-row-check" value="{{ submission.id }}"
+               aria-label="{{ _('Select submission') }}">
+    </div>
+{% endif %}
+<div class="sub-result {% if results_hidden %}submission-hidden{% else %}{{ submission.result_class }}{% endif %}">
     <div class="score">
-        {%- if submission.is_graded -%}
+        {%- if results_hidden -%}
+            <i class="fa fa-check" title="{{ _('Submitted') }}"></i>
+        {%- elif submission.is_graded -%}
             {%- if submission.status in ('IE', 'CE', 'AB') -%}
                 ---
             {%- else -%}
-                {{ submission.case_points|floatformat(0) }} / {{ submission.case_total|floatformat(0) }}
+                {{ submission.display_points|floatformat(-1) }} / {{ submission.display_points_total|floatformat(-1) }}
             {%- endif -%}
         {%- else -%}
             <i class="fa fa-spinner fa-pulse grading-spinner"></i>
@@ -13,7 +23,11 @@
     </div>
 
     <div class="state">
-        <span title="{{ submission.long_status }}" class="status">{{ submission.short_status }}</span> |
+        {%- if results_hidden -%}
+            <span class="status">{{ _('Submitted') }}</span> |
+        {%- else -%}
+            <span title="{{ submission.long_status }}" class="status">{{ submission.short_status }}</span> |
+        {%- endif -%}
         <span class="language">{{ submission.language.short_display_name }}</span>
     </div>
 </div>
@@ -53,6 +67,17 @@
             <a href="{{ url('submission_status', submission.id) }}">
                 <i class="fa fa-eye fa-fw"></i><span class="label">{{ _('view') }}</span>
             </a>
+            {% if submission.contest_object_id and submission.contest_object.is_editable_by(request.user) %} ·
+                <a href="{{ url('contest_grade', submission.contest_object.key) }}?submission={{ submission.id }}"
+                   class="sub-grade-link" title="{{ _('Grade this submission in the grading desk') }}">
+                    <i class="fa fa-check-square-o fa-fw"></i><span class="label">{{ _('grade') }}</span>
+                </a>
+            {% elif not submission.contest_object_id and submission.problem.id in editable_problem_ids %} ·
+                <a href="{{ url('practice_grade') }}?submission={{ submission.id }}"
+                   class="sub-grade-link" title="{{ _('Grade this submission in the grading desk') }}">
+                    <i class="fa fa-check-square-o fa-fw"></i><span class="label">{{ _('grade') }}</span>
+                </a>
+            {% endif %}
             {% if perms.judge.rejudge_submission and can_edit %} ·
                 {% if not submission.is_locked %}
                     <a href="#" onclick="rejudge_submission({{ submission.id }}, event);return false">
@@ -76,7 +101,7 @@
 </div>
 
 <div class="sub-usage">
-    {% if submission.status in ('QU', 'P', 'G', 'CE', 'IE', 'AB') %}
+    {% if not is_code_problem or results_hidden or submission.status in ('QU', 'P', 'G', 'CE', 'IE', 'AB') %}
         <div class="time">---</div>
         <div class="memory">---</div>
     {% else %}

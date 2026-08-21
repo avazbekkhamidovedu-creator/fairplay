@@ -22,34 +22,34 @@
     float: right;
 }
 
-// Bootstrap-y buttons
+// Bootstrap-y buttons (colours from vars-common / tokens)
 .button, button, input[type=submit] {
-    color: white !important;
-    text-decoration: none !important;
+    color: white;
+    text-decoration: none;
     cursor: pointer;
     vertical-align: middle;
     white-space: nowrap;
     font-weight: 400;
     line-height: 1.4;
-    background: rgb(51, 122, 183) none repeat scroll 0 (0% / auto) padding-box border-box;
-    background: -webkit-linear-gradient(top, #337ab7 0, #265a88 100%) repeat-x;
-    background: linear-gradient(to bottom, #337ab7 0, #265a88 100%) repeat-x;
+    background: $btn_primary_from none repeat scroll 0 (0% / auto) padding-box border-box;
+    background: -webkit-linear-gradient(top, $btn_primary_from 0, $btn_primary_to 100%) repeat-x;
+    background: linear-gradient(to bottom, $btn_primary_from 0, $btn_primary_to 100%) repeat-x;
     border-radius: $widget_border_radius;
     padding: 6px 12px;
     display: block;
-    border: 1px solid #245580;
+    border: 1px solid $btn_primary_border;
     text-align: center;
 
     // 4k hack
     font-size: $base_font_size;
 
     &:hover {
-        background: #265a88;
+        background: $btn_primary_hover;
     }
 
     &:active {
-        border-color: #245580;
-        background: #265a88;
+        border-color: $btn_primary_border;
+        background: $btn_primary_hover;
     }
 
     &.full {
@@ -101,18 +101,44 @@ input {
     }
 
     &[type=checkbox] {
+        -webkit-appearance: none;
         appearance: none;
         vertical-align: middle;
-        border: 1px solid $color_primary50;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        width: 1.1em;
+        height: 1.1em;
+        margin: 0;
+        border: 1.5px solid $color_primary50;
         background: $color_primary0;
-        border-radius: 2px;
-        width: 0.95em;
-        height: 0.95em;
+        border-radius: 3px;
         cursor: pointer;
+        position: relative;
+
+        &:hover {
+            border-color: $highlight_blue;
+        }
+
+        &:focus-visible {
+            outline: 2px solid rgba($highlight_blue, 0.45);
+            outline-offset: 2px;
+        }
 
         &:checked {
-            appearance: auto;
-            accent-color: $highlight_blue;
+            border-color: $highlight_blue;
+            background: $highlight_blue;
+
+            &::after {
+                content: '';
+                position: absolute;
+                left: 0.28em;
+                top: 0.05em;
+                width: 0.28em;
+                height: 0.55em;
+                border: solid #fff;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+            }
         }
     }
 }
@@ -197,6 +223,90 @@ textarea:focus {
                 color: $color_primary100;
             }
         }
+
+        /* Primary CTA tab (e.g. Add problem) — top-rounded only; bottom edge
+           flush with the tabs rule (same height as sibling tabs, no white gap). */
+        &.tab-cta {
+            margin-left: 0.5em;
+            display: flex;
+            align-items: flex-end;
+
+            > a, > span {
+                border: 1px solid $btn_primary_border !important;
+                border-top-width: 1px !important;
+                border-bottom-width: 1px !important;
+                border-radius: $widget_border_radius $widget_border_radius 0 0 !important;
+                background: linear-gradient(to bottom, $btn_primary_from 0, $btn_primary_to 100%) !important;
+                color: #fff !important;
+                font-weight: 600;
+                /* Match regular tab padding/line-height so the blue meets the rule. */
+                padding: 10px 15px !important;
+                line-height: 1.42857 !important;
+                margin-bottom: -1px;
+            }
+
+            .tab-icon {
+                color: #fff !important;
+            }
+
+            > a:hover, > span:hover {
+                background: $btn_primary_hover !important;
+                color: #fff !important;
+                text-decoration: none;
+            }
+
+            &.active > a, &.active > span,
+            &.active > a:hover, &.active > span:hover {
+                background: $btn_primary_hover !important;
+                border-color: $btn_primary_border !important;
+                /* Do not use pageBg bottom — keep CTA color intersecting the tabs rule. */
+                border-bottom-color: $btn_primary_border !important;
+                color: #fff !important;
+                cursor: default;
+            }
+        }
+
+        /* Add-problem tab: New problem / Import Excel dropdown (click-to-open). */
+        &.add-problem-menu {
+            position: relative;
+            overflow: visible;
+
+            .add-problem-dropdown {
+                display: none;
+                position: absolute;
+                right: 0;
+                top: 100%;
+                z-index: 4000;
+                margin: 0;
+                padding: 0.35em 0;
+                min-width: 180px;
+                background: #fff;
+                border: 1px solid $color_primary25;
+                border-radius: 0 0 $widget_border_radius $widget_border_radius;
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            }
+
+            &.is-open .add-problem-dropdown {
+                display: block;
+            }
+
+            .add-problem-dropdown a {
+                display: block;
+                padding: 0.45em 1em;
+                white-space: nowrap;
+                color: $color_primary100 !important;
+                background: transparent !important;
+                border: none !important;
+                border-radius: 0 !important;
+                font-weight: normal;
+                line-height: 1.4;
+            }
+
+            .add-problem-dropdown a:hover {
+                background: $color_primary5 !important;
+                color: $color_primary100 !important;
+            }
+        }
     }
 
     h2 {
@@ -209,8 +319,9 @@ textarea:focus {
         padding: 0;
         list-style: outside none none;
         display: flex;
-        overflow-x: auto;
-        overflow-y: hidden;
+        /* Keep visible so absolutely/fixed menus under tabs are not clipped.
+           (If overflow-x is auto, overflow-y:visible is forced to auto.) */
+        overflow: visible;
 
         > li {
             position: relative;
@@ -393,7 +504,7 @@ a.close {
     text-align: center;
     white-space: nowrap;
     vertical-align: middle;
-    background-color: #e84848;
+    background-color: $btn_danger;
     border-radius: 10px;
     box-sizing: border-box;
 }

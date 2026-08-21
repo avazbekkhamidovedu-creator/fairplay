@@ -5,7 +5,7 @@
     {% if show_embedded_advanced_toggle %}
         <style>
             #content-main .embedded-advanced-fields,
-            #content-main .inline-group {
+            #content-main .inline-group:not(.basic-inline-group) {
                 max-height: 0;
                 overflow: hidden;
                 opacity: 0;
@@ -18,7 +18,7 @@
             }
 
             #content-main.advanced-expanded .embedded-advanced-fields,
-            #content-main.advanced-expanded .inline-group {
+            #content-main.advanced-expanded .inline-group:not(.basic-inline-group) {
                 max-height: 2000px;
                 opacity: 1;
                 overflow: hidden;
@@ -38,6 +38,22 @@
     <script>
         django.jQuery(function ($) {
             $('.rerate-link').appendTo('div#bottombar').show();
+            $('.finalize-link').appendTo('div#bottombar').show();
+            $('.finalize-link').click(function (event) {
+                if (confirm('{{ _('Are you sure you want to finalize results? This reveals hidden problem results to students and rejudges the latest submissions.')|escapejs }}')) {
+                    return true;
+                }
+                event.stopImmediatePropagation();
+                return false;
+            });
+            $('.unfinalize-link').appendTo('div#bottombar').show();
+            $('.unfinalize-link').click(function (event) {
+                if (confirm('{{ _('Are you sure you want to un-finalize results? This masks hidden problem results again and removes them from the scoreboard until you finalize once more.')|escapejs }}')) {
+                    return true;
+                }
+                event.stopImmediatePropagation();
+                return false;
+            });
             $('.rejudge-link').click(function (event) {
                 if (confirm('{{ _('Are you sure you want to rejudge ALL the submissions?')|escapejs }}')) {
                     return true;
@@ -382,8 +398,17 @@
                 if (!$presetRow.length && $preset.length) {
                     $presetRow = $preset.closest('.form-row, .fieldBox, .aligned, .form-group');
                 }
+                var $basicInlineGroup = $('.inline-group.basic-inline-group').first();
+                if (!$basicInlineGroup.length) {
+                    $basicInlineGroup = $('.inline-group').first();
+                    $basicInlineGroup.addClass('basic-inline-group');
+                }
+                if ($presetRow.length && $basicInlineGroup.length) {
+                    $basicInlineGroup.insertAfter($presetRow);
+                }
                 if ($presetRow.length && $advancedButton.length) {
-                    $('#embedded-advanced-toggle-container').insertAfter($presetRow);
+                    var $advancedAnchor = $basicInlineGroup.length ? $basicInlineGroup : $presetRow;
+                    $('#embedded-advanced-toggle-container').insertAfter($advancedAnchor);
                 }
 
                 if ($preset.val() === 'default') {
@@ -417,5 +442,40 @@
             <i class="fa fa-lg fa-signal"></i>
             <span class="text">{% trans "Rate" %}</span>
         </a>
+    {% endif %}
+    {% if original and original.format_class.has_hidden_results %}
+        {% if original.results_finalized %}
+            <a style="display: none" title="{% trans "Un-finalize results" %}"
+               href="{% url 'admin:judge_contest_unfinalize' original.pk %}"
+               class="button unfinalize-link action-link">
+                <i class="fa fa-lg fa-undo"></i>
+                <span class="text">{% trans "Un-finalize results" %}</span>
+            </a>
+        {% else %}
+            <a style="display: none" title="{% trans "Finalize results" %}"
+               href="{% url 'admin:judge_contest_finalize' original.pk %}"
+               class="button finalize-link action-link">
+                <i class="fa fa-lg fa-flag-checkered"></i>
+                <span class="text">{% trans "Finalize results" %}</span>
+            </a>
+        {% endif %}
+    {% endif %}
+    {# Results-visibility status indicator (rendered in place — must not carry the finalize-link class). #}
+    {% if original %}
+        <p class="help" style="margin-top: 8px;">
+            {% if original.format_class.has_hidden_results %}
+                {% if original.results_finalized %}
+                    <span style="display:inline-block; padding:2px 8px; border-radius:3px; background:#dff0d8; color:#3c763d; font-weight:bold;">
+                        <i class="fa fa-flag-checkered"></i> {% trans "Results: finalized" %}</span>
+                    {% trans "Hidden problem results are revealed to students and folded into the scoreboard." %}
+                {% else %}
+                    <span style="display:inline-block; padding:2px 8px; border-radius:3px; background:#fcf8e3; color:#8a6d3b; font-weight:bold;">
+                        <i class="fa fa-eye-slash"></i> {% trans "Results: not finalized" %}</span>
+                    {% trans "Results of hidden problems are masked from students until you finalize." %}
+                {% endif %}
+            {% else %}
+                {% trans "This contest format does not hide results — submission results are always visible to participants." %}
+            {% endif %}
+        </p>
     {% endif %}
 {% endblock %}

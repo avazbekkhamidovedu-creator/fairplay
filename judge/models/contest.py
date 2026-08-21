@@ -16,6 +16,8 @@ from judge.models.problem import Problem
 from judge.models.profile import Class, Organization, Profile
 from judge.models.submission import Submission
 from judge.ratings import rate_contest
+from judge.storage import generate_seb_config_key, submission_storage
+from judge.utils.seb import first_invalid_seb_key, parse_seb_keys
 
 __all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating']
 
@@ -23,6 +25,12 @@ __all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'C
 class MinValueOrNoneValidator(MinValueValidator):
     def compare(self, a, b):
         return a is not None and b is not None and super().compare(a, b)
+
+
+def seb_contest_config_upload_to(instance, filename):
+    """upload_to: opaque OSS key. Uploads only happen in edit mode, so the
+    contest already has a pk to shard by."""
+    return generate_seb_config_key('contest-%s' % (instance.pk or 0), filename)
 
 
 class ContestTag(models.Model):
@@ -140,6 +148,52 @@ class Contest(models.Model):
                                                         'testcases. Commonly set during a contest, then unset '
                                                         'prior to rejudging user submissions when the contest ends.'),
                                             default=False)
+    results_finalized = models.BooleanField(verbose_name=_('results finalized'),
+                                            help_text=_('Set by the "Finalize results" action when an exam-style '
+                                                        'contest ends: it reveals hidden problem results to students '
+                                                        'and folds them into the scoreboard. Leave unset while the '
+                                                        'contest is running.'),
+                                            default=False)
+    AI_GRADING_OFF = 'off'
+    AI_GRADING_REALTIME = 'realtime'
+    AI_GRADING_BATCH = 'batch'
+    AI_GRADING_MODE_CHOICES = (
+        (AI_GRADING_OFF, _('Off')),
+        (AI_GRADING_REALTIME, _('On demand — student requests AI grading')),
+        (AI_GRADING_BATCH, _('Batch — latest submits after the contest')),
+    )
+    ai_grading_mode = models.CharField(
+        verbose_name=_('AI grading (legacy mode)'), max_length=16,
+        choices=AI_GRADING_MODE_CHOICES, default=AI_GRADING_OFF,
+        help_text=_('Legacy field kept for older assignments. Prefer '
+                    '“allow student AI grading”. Synced from that checkbox on save: '
+                    'on → on-demand, off → off. Teachers can always run AI from the '
+                    'Grade page regardless of this value.'),
+    )
+    allow_student_ai_grading = models.BooleanField(
+        verbose_name=_('allow student use AI grading'),
+        default=False,
+        help_text=_('When enabled, students can request AI grading on the submission '
+                    'page (subject to quota). Teachers can always run AI grading from '
+                    'the Grade page or submission page.'),
+    )
+    ai_grading_auto_delay_minutes = models.IntegerField(
+        verbose_name=_('auto-grade delay after end (minutes)'),
+        default=120,
+        help_text=_('Minutes after the contest ends to re-grade each student’s latest '
+                    'objective submissions (multiple choice, true/false, exact fill-blank). '
+                    'Does not call the LLM. −1 = Off (no auto-run). 0 = run at end time. '
+                    'Teachers can still use Batch grading on the Grade page anytime.'),
+    )
+    ai_grading_scheduled_task_id = models.CharField(
+        verbose_name=_('scheduled batch AI task id'), max_length=255, blank=True, default='',
+    )
+    ai_grading_batch_started_at = models.DateTimeField(
+        verbose_name=_('batch AI started'), null=True, blank=True,
+    )
+    ai_grading_batch_finished_at = models.DateTimeField(
+        verbose_name=_('batch AI finished'), null=True, blank=True,
+    )
     show_short_display = models.BooleanField(verbose_name=_('show short form settings display'),
                                              help_text=_('Whether to show a section containing contest settings '
                                                          'on the contest page or not.'),
@@ -184,10 +238,70 @@ class Contest(models.Model):
                                            validators=[MinValueValidator(0), MaxValueValidator(10)],
                                            help_text=_('Number of digits to round points to.'))
     allow_virtual_participation = models.BooleanField(
-        verbose_name=_('allow virtual participation'),
+        verbose_name=_('allow virtual join'),
         default=True,
-        help_text=_('Allow users to participate virtually after the contest ends.'),
+        help_text=_('Allow users to join virtually after the assignment ends.'),
     )
+    allow_ai_hints = models.BooleanField(
+        verbose_name=_('allow student use AI hints'),
+        default=False,
+        help_text=_('When this assignment is active, students can use AI Hint on every attached '
+                    "problem. Each problem's own AI Hint setting is unchanged outside this assignment."),
+    )
+    seb_required = models.BooleanField(
+        verbose_name=_('require Safe Exam Browser'),
+        default=False,
+        help_text=_('If enabled, non-staff participants can only access this contest from inside Safe Exam Browser.'),
+    )
+    seb_browser_exam_keys = models.TextField(
+        verbose_name=_('allowed SEB Browser Exam Key hashes'),
+        blank=True,
+        default='',
+        help_text=_('One 64-char hex hash per line. Copy from the SEB Configuration Tool — one per '
+                    'supported platform/version. Lines may include trailing comments after the hash.'),
+    )
+    seb_config_keys = models.TextField(
+        verbose_name=_('allowed SEB Config Key hashes'),
+        blank=True,
+        default='',
+        help_text=_('One 64-char hex hash per line. Required for macOS clients (and any newer build '
+                    'that sends only the Config Key).'),
+    )
+    seb_config_file = models.FileField(
+        verbose_name=_('SEB config file (.seb)'),
+        storage=submission_storage,
+        upload_to=seb_contest_config_upload_to,
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text=_('The .seb file students download or launch via sebs:// to enter this exam.'),
+    )
+    seb_quit_url = models.URLField(
+        verbose_name=_('SEB quit URL'),
+        blank=True,
+        default='',
+        help_text=_('Must match the Quit URL set inside the .seb file. Shown to students after final '
+                    'submission so SEB auto-closes. Leave blank to disable.'),
+    )
+    seb_preset = models.ForeignKey(
+        'judge.SEBConfigPreset',
+        verbose_name=_('SEB config preset'),
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='contests',
+        help_text=_('Inherit the .seb file, key hashes and quit URL from a staff-published configuration. '
+                    'Anything filled in above overrides the preset for this contest.'),
+    )
+
+    @classmethod
+    def generate_unique_key(cls):
+        """Next unused assignment/contest id in the clone/admin series ``c000000``."""
+        for i in range(1000000):
+            key = 'c{:06d}'.format(i)
+            if not cls.objects.filter(key=key).exists():
+                return key
+        return 'contest{}'.format(str(timezone.now().timestamp()).replace('.', '')[-6:])
 
     @cached_property
     def format_class(self):
@@ -210,7 +324,7 @@ class Contest(models.Model):
     def clean(self):
         # Django will complain if you didn't fill in start_time or end_time, so we don't have to.
         if self.start_time and self.end_time and self.start_time >= self.end_time:
-            raise ValidationError('What is this? A contest that ended before it starts?')
+            raise ValidationError(_('What is this? An assignment that ended before it starts?'))
         self.format_class.validate(self.format_config)
 
         try:
@@ -222,6 +336,27 @@ class Contest(models.Model):
         else:
             if not isinstance(label, str):
                 raise ValidationError('Contest problem label script: script should return a string.')
+
+        if self.seb_required:
+            seb_errors = {}
+            # Validated against the EFFECTIVE keys: a contest that inherits a
+            # preset needs nothing of its own, which is what lets an instructor
+            # arm SEB in a single save instead of uploading a .seb by hand.
+            if not self.seb_allowed_bek():
+                seb_errors['seb_browser_exam_keys'] = _(
+                    'At least one Browser Exam Key hash is required when Safe Exam Browser is enabled.')
+            if not self.seb_allowed_config_keys():
+                seb_errors['seb_config_keys'] = _(
+                    'At least one Config Key hash is required when Safe Exam Browser is enabled '
+                    '(the macOS SEB build only sends the Config Key).')
+            # Only this contest's own fields are hex-checked; the preset
+            # validates its own keys when staff save it.
+            for field in ('seb_browser_exam_keys', 'seb_config_keys'):
+                invalid = first_invalid_seb_key(getattr(self, field))
+                if invalid is not None:
+                    seb_errors[field] = _('"%s" is not a 64-character hex hash.') % invalid
+            if seb_errors:
+                raise ValidationError(seb_errors)
 
     def is_in_contest(self, user):
         if user.is_authenticated:
@@ -470,8 +605,17 @@ class Contest(models.Model):
         if user.has_perm('judge.edit_all_contest'):
             return True
 
-        # If the user is a contest organizer or curator
-        if user.has_perm('judge.edit_own_contest') and user.profile.id in self.editor_ids:
+        # If the user is a contest organizer or curator. Being listed as an
+        # author/curator IS the grant: the curator list is only editable by
+        # people who can already edit, so membership itself is sufficient.
+        # (Sensitive fields inside the editor are still gated by their own
+        # permissions via ContestCreate._restricted_fields.)
+        # NOTE (merge): origin/develop's relaxed semantics are kept on purpose
+        # — the Teachers group carries no `edit_own_contest`, so course
+        # workflow teachers rely on author/curator membership alone to edit
+        # assignments (see ContestTagCreateView._can_create). The grade page
+        # permission tests encode this exact contract.
+        if user.is_authenticated and user.profile.id in self.editor_ids:
             return True
 
         return False
@@ -483,6 +627,40 @@ class Contest(models.Model):
         if not self.is_organization_private:
             return False
         return self.organizations.filter(admins=user.profile).exists()
+
+    _parse_seb_keys = staticmethod(parse_seb_keys)
+
+    # Every SEB accessor below resolves this contest's own value first and falls
+    # back to the linked preset, so a contest can inherit a staff-published
+    # configuration wholesale yet still override any single part of it.
+    def seb_allowed_bek(self):
+        return self._parse_seb_keys(self.seb_browser_exam_keys) or \
+            (self.seb_preset.allowed_bek() if self.seb_preset_id else [])
+
+    def seb_allowed_config_keys(self):
+        return self._parse_seb_keys(self.seb_config_keys) or \
+            (self.seb_preset.allowed_config_keys() if self.seb_preset_id else [])
+
+    @property
+    def seb_effective_config_file(self):
+        if self.seb_config_file:
+            return self.seb_config_file
+        return self.seb_preset.config_file if self.seb_preset_id else None
+
+    @property
+    def seb_effective_quit_url(self):
+        if self.seb_quit_url:
+            return self.seb_quit_url
+        return self.seb_preset.quit_url if self.seb_preset_id else ''
+
+    def user_bypasses_seb(self, user):
+        if not user.is_authenticated:
+            return False
+        if user.has_perm('judge.edit_all_contest'):
+            return True
+        pid = user.profile.id
+        return (pid in self.editor_ids or pid in self.tester_ids or
+                pid in self.spectator_ids or self.is_viewable_by_org_admin(user))
 
     @classmethod
     def get_visible_contests(cls, user):
@@ -540,6 +718,7 @@ class Contest(models.Model):
             ('contest_problem_label', _('Edit contest problem label script')),
             ('lock_contest', _('Change lock status of contest')),
             ('override_performance_ceiling', _('Override performance ceiling of contest')),
+            ('contest_seb_requirement', _('Configure Safe Exam Browser requirement on contests')),
         )
         verbose_name = _('contest')
         verbose_name_plural = _('contests')
@@ -656,6 +835,26 @@ class ContestProblem(models.Model):
                                           default=None, null=True, blank=True,
                                           validators=[MinValueOrNoneValidator(1, _('Why include a problem you '
                                                                                    "can't submit to?"))])
+    hide_results = models.BooleanField(verbose_name=_('hide results in contest'),
+                                       help_text=_("Whether to hide this problem's results from students until the "
+                                                   'contest is finalized. Leave unset to use the default for the '
+                                                   'question type (hidden for multiple-choice, shown for code). Only '
+                                                   'applies to exam-style contests.'),
+                                       default=None, null=True, blank=True)
+
+    @property
+    def results_hidden(self):
+        """Whether this problem's results are hidden during the contest (override, else type default)."""
+        if self.hide_results is not None:
+            return self.hide_results
+        from judge.question_types import get_grader
+        return get_grader(self.problem.submission_type).hide_results_in_contest
+
+    @property
+    def score_uses_latest(self):
+        """Whether scoring uses the latest (vs best) submission for this problem (type policy)."""
+        from judge.question_types import get_grader
+        return get_grader(self.problem.submission_type).contest_score_uses_latest
 
     class Meta:
         unique_together = ('problem', 'contest')

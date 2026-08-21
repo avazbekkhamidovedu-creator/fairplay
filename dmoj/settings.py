@@ -10,11 +10,14 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 import datetime
+import mimetypes
 import os
 
 from django.utils.translation import gettext_lazy as _
 from django_jinja.builtins import DEFAULT_EXTENSIONS
 from jinja2 import select_autoescape
+
+mimetypes.add_type('application/seb', '.seb')
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 
@@ -22,7 +25,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = '5*9f5q57mqmlz2#f$x1h76&jxy#yortjl1v+l*6hd18$d*yx#0'
+# This well-known development value must be overridden in local_settings.py;
+# a check below refuses to start with DEBUG = False if it is left unchanged.
+_INSECURE_DEFAULT_SECRET_KEY = '5*9f5q57mqmlz2#f$x1h76&jxy#yortjl1v+l*6hd18$d*yx#0'
+SECRET_KEY = _INSECURE_DEFAULT_SECRET_KEY
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -58,6 +64,28 @@ DMOJ_CAMO_HTTPS = False
 DMOJ_CAMO_EXCLUDE = ()
 
 DMOJ_PROBLEM_DATA_ROOT = None
+
+# Submission file storage (S3-compatible primary, e.g. Garage; generic S3 API).
+# Empty endpoint URL => local FileSystemStorage under DMOJ_SUBMISSION_FILE_ROOT (dev/tests).
+DMOJ_S3_ENDPOINT_URL = ''
+DMOJ_S3_REGION = 'garage'
+DMOJ_S3_SUBMISSION_BUCKET = 'dkuoj-submissions'
+DMOJ_S3_ACCESS_KEY = ''
+DMOJ_S3_SECRET_KEY = ''
+DMOJ_SUBMISSION_FILE_ROOT = ''  # local fallback root when DMOJ_S3_ENDPOINT_URL is empty
+
+# Box SFTP backup mirror for submission files.
+DMOJ_BACKUP_MIRROR_ENABLED = False  # master switch: mirror task + Box read fallback
+DMOJ_BOX_SFTP_HOST = 'sftp.services.box.com'
+DMOJ_BOX_SFTP_PORT = 22
+DMOJ_BOX_SFTP_USER = ''
+DMOJ_BOX_SFTP_PASSWORD = ''
+DMOJ_BOX_SFTP_ROOT = 'DKUOJ-backup'
+DMOJ_BOX_KNOWN_HOSTS = ''  # path to a pinned known_hosts file for sftp.services.box.com
+
+# The final spreadsheet row covered by the question-type dropdown in the
+# downloadable problem-import template. Override in local_settings.py if needed.
+PROBLEM_EXCEL_TEMPLATE_MAX_ROW = 1000
 
 DMOJ_PROBLEM_MIN_TIME_LIMIT = 0  # seconds
 DMOJ_PROBLEM_MAX_TIME_LIMIT = 60  # seconds
@@ -210,6 +238,7 @@ else:
                     'children': [
                         'judge.ContestParticipation',
                         'judge.ContestTag',
+                        'judge.SEBConfigPreset',
                     ],
                 },
                 ('judge.Ticket', 'fa-bell'),
@@ -304,9 +333,13 @@ MIDDLEWARE = (
     'django.contrib.redirects.middleware.RedirectFallbackMiddleware',
 )
 
-IMPERSONATE_CUSTOM_ALLOW = 'judge.impersonation.can_impersonate'
-IMPERSONATE_CUSTOM_USER_QUERYSET = 'judge.impersonation.get_impersonable_users'
-IMPERSONATE_DISABLE_LOGGING = True
+# django-impersonate reads this single dict only; flat IMPERSONATE_* names are ignored,
+# which would silently fall back to "any staff user may impersonate anyone".
+IMPERSONATE = {
+    'CUSTOM_ALLOW': 'judge.impersonation.can_impersonate',
+    'CUSTOM_USER_QUERYSET': 'judge.impersonation.get_impersonable_users',
+    'DISABLE_LOGGING': True,
+}
 
 ACCOUNT_ACTIVATION_DAYS = 7
 
@@ -429,6 +462,9 @@ BLEACH_USER_SAFE_TAGS = [
 
 BLEACH_USER_SAFE_ATTRS = {
     '*': ['id', 'class', 'style'],
+    'div': ['data-lang'],
+    'code': ['data-lang'],
+    'pre': ['data-lang'],
     'img': ['src', 'alt', 'title', 'width', 'height', 'data-src', 'align'],
     'a': ['href', 'alt', 'title'],
     'abbr': ['title'],
@@ -535,7 +571,11 @@ EVENT_DAEMON_GET = 'ws://localhost:9996/'
 EVENT_DAEMON_POLL = '/channels/'
 EVENT_DAEMON_KEY = None
 EVENT_DAEMON_AMQP_EXCHANGE = 'dmoj-events'
-EVENT_DAEMON_SUBMISSION_KEY = '6Sdmkx^%pk@GsifDfXcwX*Y7LRF%RGT8vmFpSxFBT$fwS7trc8raWfN#CSfQuKApx&$B#Gh2L7p%W!Ww'
+# Well-known development value; override in local_settings.py when EVENT_DAEMON_USE is on
+# (enforced by a check below when DEBUG = False).
+_INSECURE_DEFAULT_SUBMISSION_KEY = \
+    '6Sdmkx^%pk@GsifDfXcwX*Y7LRF%RGT8vmFpSxFBT$fwS7trc8raWfN#CSfQuKApx&$B#Gh2L7p%W!Ww'
+EVENT_DAEMON_SUBMISSION_KEY = _INSECURE_DEFAULT_SUBMISSION_KEY
 
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
@@ -562,6 +602,12 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'resources'),
 ]
 STATIC_URL = '/static/'
+
+# User uploads. Django's defaults are both empty, which makes MEDIA_ROOT resolve against
+# the server process CWD and leaves MEDIA_URL unusable as a URL prefix. Deployments that
+# serve uploads through Nginx should override MEDIA_ROOT to point at that location.
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # Define a cache
 CACHES = {}
@@ -603,12 +649,54 @@ CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 WEBAUTHN_RP_ID = None
 
+# LLM access layer (judge.llm). Supported: 'azure', 'litellm'
+LLM_PROVIDER = 'litellm'
+
 # Azure OpenAI for AI hints
 AZURE_OPENAI_ENDPOINT = None       # e.g. 'https://myinstance.openai.azure.com/'
 AZURE_OPENAI_API_KEY = None
 AZURE_OPENAI_API_VERSION = '2024-02-01'
 AZURE_OPENAI_DEPLOYMENT = None     # deployment/model name, e.g. 'gpt-4o'
-DMOJ_AI_HINT_DAILY_LIMIT = 5      # max AI hint requests per user per day
+AZURE_OPENAI_TIMEOUT = 30          # seconds before an API call is abandoned
+
+# LiteLLM gateway (OpenAI-compatible proxy)
+LITELLM_API_BASE = None            # e.g. 'http://192.168.1.100:4000'
+LITELLM_API_KEY = ''               # API key for the gateway
+LITELLM_DEFAULT_MODEL = None       # fallback model when no profile model is set
+LITELLM_TIMEOUT = 120              # seconds
+
+# Per-provider LLM profiles — task name → model + parameters.
+# Features reference a profile name (e.g. profile='hint') without
+# knowing which provider is configured.  Models are defined here
+# because model names are provider-specific.
+# The optional 'default' key serves as a base inherited by all profiles.
+AZURE_PROFILES = {}
+
+# AI-hint rate limit: WINDOW_LIMIT hints per WINDOW_SECONDS per student.
+DMOJ_AI_HINT_WINDOW_LIMIT = 5
+DMOJ_AI_HINT_WINDOW_SECONDS = 300
+# Student on-demand AI grading: global request budget (0 = disabled for students;
+# teachers are unlimited). Per-problem rate limit is separate (sliding window).
+DMOJ_AI_GRADING_STUDENT_QUOTA = 100
+# On-demand AI grading rate limit: at most RATE_LIMIT requests per
+# RATE_WINDOW_SECONDS per (student, problem) — a sliding window with no
+# separate ban; the window keeps counting.
+DMOJ_AI_GRADING_RATE_LIMIT = 5
+DMOJ_AI_GRADING_RATE_WINDOW_SECONDS = 300
+# Weight of the supplementary AI rubric score in the final programming grade
+# (0..1).  final = testcase_score * (1 - weight) + ai_score * weight, where
+# ai_score is clamped so the AI score ratio never drops below the test-case
+# score ratio.  AI failures degrade to the pure test-case score.
+DMOJ_AI_GRADING_WEIGHT = 0.3
+
+LITELLM_PROFILES = {
+    # The importer deliberately uses a named profile so an installation can route
+    # document formatting to a different LiteLLM model without changing code.
+    'question_import': {
+        'temperature': 0,
+        'max_tokens': 2000,
+    },
+}
 
 try:
     with open(os.path.join(os.path.dirname(__file__), 'local_settings.py')) as f:
@@ -616,8 +704,82 @@ try:
 except IOError:
     pass
 
+# Ensure grading/decompose/import profiles exist (setdefault preserves
+# any values already set by local_settings.py).
+LITELLM_PROFILES.setdefault('grading', {
+    'model': 'GRADING@DKUOJ',
+    'temperature': 0,
+    'max_tokens': 2048,
+    'response_format': {'type': 'json_object'},
+})
+LITELLM_PROFILES.setdefault('decompose', {
+    'model': 'qwen3.6-27B-FP8',
+    'temperature': 0,
+    'max_tokens': 1024,
+    'response_format': {'type': 'json_object'},
+})
+LITELLM_PROFILES.setdefault('question_import', {
+    'temperature': 0,
+    'max_tokens': 2000,
+})
+
 
 # Check settings are consistent
+# Refuse to run a production (DEBUG = False) site on the well-known development
+# secrets; they allow anyone to forge sessions, CSRF tokens, and event-daemon
+# messages. DEBUG = True deployments are left alone for troubleshooting.
+if not DEBUG:
+    from django.core.exceptions import ImproperlyConfigured
+
+    if SECRET_KEY == _INSECURE_DEFAULT_SECRET_KEY:
+        raise ImproperlyConfigured(
+            'SECRET_KEY is still the well-known development default; '
+            'set a unique value in local_settings.py before running with DEBUG = False.')
+    if EVENT_DAEMON_USE and EVENT_DAEMON_SUBMISSION_KEY == _INSECURE_DEFAULT_SUBMISSION_KEY:
+        raise ImproperlyConfigured(
+            'EVENT_DAEMON_SUBMISSION_KEY is still the well-known development default; '
+            'set a unique value in local_settings.py before enabling the event daemon '
+            'with DEBUG = False.')
+
+    # Submission-file storage: fail loudly rather than silently degrade to local disk.
+    # These fire only for deployments that actually use the feature (endpoint set, or
+    # the Box mirror switched on), so a site not yet using it is unaffected.
+    if DMOJ_S3_ENDPOINT_URL and not (DMOJ_S3_ACCESS_KEY and DMOJ_S3_SECRET_KEY):
+        raise ImproperlyConfigured(
+            'DMOJ_S3_ENDPOINT_URL is set but DMOJ_S3_ACCESS_KEY / DMOJ_S3_SECRET_KEY are '
+            'empty; the submission-file store cannot authenticate.')
+    if DMOJ_BACKUP_MIRROR_ENABLED:
+        if not DMOJ_S3_ENDPOINT_URL:
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but DMOJ_S3_ENDPOINT_URL is empty; the '
+                'primary store would silently be local disk. Configure the S3 endpoint or '
+                'disable the mirror.')
+        if not (DMOJ_BOX_SFTP_USER and DMOJ_BOX_SFTP_PASSWORD):
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but Box SFTP credentials are missing; the '
+                'mirror would silently write to a local directory. Set DMOJ_BOX_SFTP_USER / '
+                'DMOJ_BOX_SFTP_PASSWORD or disable the mirror.')
+        if not (DMOJ_BOX_KNOWN_HOSTS and os.path.isfile(DMOJ_BOX_KNOWN_HOSTS)):
+            raise ImproperlyConfigured(
+                'DMOJ_BACKUP_MIRROR_ENABLED is on but DMOJ_BOX_KNOWN_HOSTS is not a readable '
+                'file; without pinned host keys the SFTP backup is exposed to a first-connect '
+                'MITM. Point it at a known_hosts file for sftp.services.box.com.')
+        # A file that exists but lacks an entry for the Box host is no protection at all,
+        # so check the contents too. paramiko is only imported here (mirror on => it is
+        # installed) and handles hashed |1|... entries a substring check would miss.
+        from paramiko.hostkeys import HostKeys
+
+        # Same key form as judge.storage.box.host_key_name(), spelled out rather than
+        # imported: pulling judge code into settings at load time invites circular imports.
+        _box_host_key = (DMOJ_BOX_SFTP_HOST if DMOJ_BOX_SFTP_PORT == 22
+                         else f'[{DMOJ_BOX_SFTP_HOST}]:{DMOJ_BOX_SFTP_PORT}')
+        if not HostKeys(DMOJ_BOX_KNOWN_HOSTS).lookup(_box_host_key):
+            raise ImproperlyConfigured(
+                f'DMOJ_BOX_KNOWN_HOSTS ({DMOJ_BOX_KNOWN_HOSTS}) contains no host key for '
+                f'{_box_host_key}, so the first connection would have nothing to pin '
+                f'against. Populate it with: '
+                f'ssh-keyscan -p {DMOJ_BOX_SFTP_PORT} {DMOJ_BOX_SFTP_HOST}')
+
 assert DMOJ_PROBLEM_MIN_USER_POINTS_VOTE >= DMOJ_PROBLEM_MIN_PROBLEM_POINTS
 
 # <= 1 minute expiry is unusable UX

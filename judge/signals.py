@@ -10,7 +10,9 @@ from django.dispatch import receiver
 
 from .caching import finished_submission
 from .models import BlogPost, Comment, Contest, ContestProblem, ContestSubmission, EFFECTIVE_MATH_ENGINES, Judge, \
-    Language, License, MiscConfig, Organization, Problem, Profile, Submission, WebAuthnCredential
+    Language, License, MiscConfig, Organization, Problem, ProblemImportItem, Profile, SEBConfigPreset, Submission, \
+    WebAuthnCredential
+from .models.seb import DEFAULT_PRESET_CACHE_KEY
 
 
 def get_pdf_path(basename: str) -> Optional[str]:
@@ -148,6 +150,21 @@ def misc_config_update(sender, instance, **kwargs):
 @receiver(post_delete, sender=MiscConfig)
 def misc_config_delete(sender, instance, **kwargs):
     cache.delete('misc_config')
+
+
+@receiver(post_save, sender=SEBConfigPreset)
+@receiver(post_delete, sender=SEBConfigPreset)
+def seb_config_preset_update(sender, instance, **kwargs):
+    # Any preset write can move (or retire) the site default, so drop the
+    # cached pointer rather than trying to work out whether this row was it.
+    cache.delete(DEFAULT_PRESET_CACHE_KEY)
+
+
+@receiver(post_delete, sender=ProblemImportItem)
+def problem_import_item_delete(sender, instance, **kwargs):
+    """Draft ZIPs live in storage, so remove them when their draft row is discarded."""
+    if instance.test_data_zip:
+        instance.test_data_zip.delete(save=False)
 
 
 @receiver(post_save, sender=ContestSubmission)

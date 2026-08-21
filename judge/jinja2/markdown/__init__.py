@@ -13,7 +13,9 @@ from markupsafe import Markup
 
 from judge.highlight_code import highlight_code
 from judge.jinja2.markdown.lazy_load import lazy_load as lazy_load_processor
-from judge.jinja2.markdown.math import MathInlineGrammar, MathInlineLexer, MathRenderer
+from judge.jinja2.markdown.math import (
+    MathInlineGrammar, MathInlineLexer, MathRenderer, normalize_latex_display_math,
+)
 from judge.utils.camo import client as camo_client
 from judge.utils.texoid import TEXOID_ENABLED, TexoidRenderer
 from .bleach_whitelist import all_styles, mathml_attrs, mathml_tags
@@ -22,6 +24,8 @@ from .. import registry
 logger = logging.getLogger('judge.html')
 
 NOFOLLOW_WHITELIST = settings.NOFOLLOW_EXCLUDED
+# Pygments / fence info-string: keep class names and the visible language label safe.
+_CODE_LANG_RE = re.compile(r'^[\w+#.\-]{1,40}$')
 
 
 class CodeSafeInlineGrammar(mistune.InlineGrammar):
@@ -74,9 +78,16 @@ class AwesomeRenderer(MathRenderer, mistune.Renderer):
         return '<a href="%s" title="%s"%s>%s</a>' % (link, title, self._link_rel(link), text)
 
     def block_code(self, code, lang=None):
+        lang = (lang or '').strip() or None
+        if lang and not _CODE_LANG_RE.match(lang):
+            lang = None
         if not lang:
             return '\n<pre><code>%s</code></pre>\n' % mistune.escape(code).rstrip()
-        return highlight_code(code, lang)
+        lang_esc = mistune.escape(lang)
+        return (
+            '\n<div class="code-block" data-lang="%s">'
+            '<div class="code-block-lang">%s</div>%s</div>\n'
+        ) % (lang_esc, lang_esc, highlight_code(code, lang))
 
     def block_html(self, html):
         if self.texoid and html.startswith('<latex'):
@@ -183,7 +194,7 @@ def markdown(value, style, math_engine=None, lazy_load=False, strip_paragraphs=F
                                math=math and math_engine is not None, math_engine=math_engine)
     markdown = mistune.Markdown(renderer=renderer, inline=AwesomeInlineLexer,
                                 parse_block_html=1, parse_inline_html=1)
-    result = markdown(value)
+    result = markdown(normalize_latex_display_math(value or ''))
 
     if post_processors or strip_paragraphs:
         tree = fragments_to_tree(result)

@@ -11,9 +11,12 @@
 FROM node:20-bookworm-slim AS styles
 WORKDIR /app
 RUN npm install -g sass postcss-cli postcss autoprefixer
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY resources ./resources
 COPY make_style.sh ./
 RUN ./make_style.sh
+RUN mkdir -p resources/libs/monaco && cp -R node_modules/monaco-editor/min/vs resources/libs/monaco/vs
 
 # --- stage: wsevent (Node websocket daemon) ------------------------------
 FROM node:20-bookworm-slim AS wsevent

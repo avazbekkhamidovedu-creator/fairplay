@@ -6,7 +6,7 @@
 {% endblock %}
 {% block js_media %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
-    {% if not submission.is_graded and last_msg %}
+    {% if not submission.is_graded and last_msg and submission.results_visible_to(request.user) and submission.problem.submission_type != 'F' %}
         <script type="text/javascript">
             $(function () {
                 var blocked = false, request = false, terminalReceived = false;
@@ -69,7 +69,7 @@
             });
         </script>
     {% endif %}
-    {% if not submission.is_graded %}
+    {% if not submission.is_graded and submission.problem.submission_type != 'F' %}
         <script type="text/javascript">
             $(function () {
                 $(document).keydown(function(e) {
@@ -88,33 +88,109 @@
 
 {% block body %}
     <br>
-    <div><a href="{{ url('submission_source', submission.id) }}">{{ _('View source') }}</a></div>
+    {% if submission.problem.submission_type == 'F' %}
+        {% if submission.upload %}
+            <div><a href="{{ url('submission_file_download', submission.id) }}">{{ _('Download uploaded file') }}</a></div>
+        {% endif %}
+        {% if not submission.is_graded %}
+            <div class="file-awaiting-grading">{{ _('Awaiting grading') }}</div>
+        {% endif %}
+    {% else %}
+        <div><a href="{{ url('submission_source', submission.id) }}">{{ _('View source') }}</a></div>
+    {% endif %}
     {% if request.user == submission.user.user or perms.judge.resubmit_other %}
         <div><a href="{{ url('problem_submit', submission.problem.code, submission.id) }}">{{ _('Resubmit') }}</a></div>
     {% endif %}
-    {% if perms.judge.rejudge_submission and not submission.is_locked %}
-        {% compress js %}
-            <script type="text/javascript">
-                window.confirm_and_rejudge = function (form) {
-                    if (confirm({{ _('Are you sure you want to rejudge?')|htmltojs }})) {
-                        form.submit();
-                    }
-                };
-            </script>
-        {% endcompress %}
+    {% if grade_desk_url %}
         <div>
-            <form action="{{ url('submission_rejudge') }}" method="post">
-                {% csrf_token %}
-                <a href="#" onclick="confirm_and_rejudge(parentNode)">{{ _('Rejudge') }}</a>
-                <input type="hidden" name="id" value="{{ submission.id }}">
-                <input type="hidden" name="path" value="{{ url('submission_status', submission.id) }}">
-            </form>
+            <a href="{{ grade_desk_url }}" class="sub-grade-link"
+               title="{{ _('Grade this submission in the grading desk') }}">{{ _('Grade') }}</a>
         </div>
     {% endif %}
+    {% if submission.problem.submission_type != 'F' and perms.judge.rejudge_submission and not submission.is_locked %}
+            {% compress js %}
+                <script type="text/javascript">
+                    window.confirm_and_rejudge = function (form) {
+                        if (confirm({{ _('Are you sure you want to rejudge?')|htmltojs }})) {
+                            form.submit();
+                        }
+                    };
+                </script>
+            {% endcompress %}
+            <div>
+                <form action="{{ url('submission_rejudge') }}" method="post">
+                    {% csrf_token %}
+                    <a href="#" onclick="confirm_and_rejudge(parentNode)">{{ _('Rejudge') }}</a>
+                    <input type="hidden" name="id" value="{{ submission.id }}">
+                    <input type="hidden" name="path" value="{{ url('submission_status', submission.id) }}">
+                </form>
+            </div>
+        {% endif %}
 
     <br>
     <hr class="half-hr">
     <br>
+
+    {% if can_trigger_ai_grade %}
+    <div id="ai-grade-section" class="ai-hint-section" style="margin: 1em 0;">
+        <button id="ai-grade-btn" class="btn btn-info" type="button">
+            {{ _('View AI grading') }}
+            {% if not is_teacher %}
+            <span id="ai-grade-quota">
+                ({{ rate_remaining }} {{ _('use') }}{{ 's' if rate_remaining != 1 else '' }} {{ _('remaining this window') }})
+            </span>
+            {% endif %}
+        </button>
+        {% if not is_teacher %}
+        <i class="fa fa-question-circle" aria-hidden="true" style="cursor:help;color:var(--oj-text-muted);"
+           title="{{ _('AI grading is limited to %(limit)s runs per %(minutes)s-minute window per problem. You have %(left)s left in this window. Your overall quota is %(quota)s runs.', limit=rate_limit, minutes=rate_window_minutes, left=rate_remaining, quota=remaining) }}"></i>
+        {% endif %}
+        <p style="font-size:12px;color:var(--oj-text-muted);margin:0.4em 0 0;">
+            {% if is_teacher %}
+                {{ _('Run AI grading on this submission (teachers are not quota-limited).') }}
+            {% else %}
+                {{ _('AI grading uses your latest submission for this problem. Press the button to score this version.') }}
+            {% endif %}
+        </p>
+        <div id="ai-grade-result" style="display:none; margin-top: 0.75em; padding: 0.75em;
+             background: #f0f8ff; border-left: 4px solid #4a90d9;"></div>
+    </div>
+    <script type="text/javascript">
+    document.getElementById('ai-grade-btn').addEventListener('click', function () {
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = '{{ _('Grading…') }}';
+        fetch('{{ url('submission_ai_grade', submission.id) }}', {
+            method: 'POST',
+            headers: {'X-CSRFToken': '{{ csrf_token }}', 'X-Requested-With': 'XMLHttpRequest'},
+            credentials: 'same-origin',
+        }).then(function (r) { return r.json().then(function (data) { return {ok: r.ok, data: data}; }); })
+          .then(function (res) {
+            var box = document.getElementById('ai-grade-result');
+            box.style.display = 'block';
+            if (res.ok && res.data.ok) {
+                var quota = document.getElementById('ai-grade-quota');
+                if (quota && typeof res.data.rate_remaining === 'number') {
+                    quota.textContent = '(' + res.data.rate_remaining + ' use' +
+                        (res.data.rate_remaining === 1 ? '' : 's') +
+                        ' {{ _('remaining this window') }})';
+                }
+                box.textContent = '{{ _('AI grading finished. Reloading…') }}';
+                location.reload();
+            } else {
+                box.textContent = (res.data && res.data.error) || '{{ _('Request failed. Please try again.') }}';
+                btn.disabled = false;
+                btn.textContent = '{{ _('View AI grading') }}';
+            }
+        }).catch(function () {
+            document.getElementById('ai-grade-result').style.display = 'block';
+            document.getElementById('ai-grade-result').textContent = '{{ _('Request failed. Please try again.') }}';
+            btn.disabled = false;
+            btn.textContent = '{{ _('View AI grading') }}';
+        });
+    });
+    </script>
+    {% endif %}
 
     {% if ai_hints_possible %}
     <div id="ai-hint-section" class="ai-hint-section" style="margin: 1em 0;{% if not ai_hints_enabled %} display:none;{% endif %}">
@@ -122,7 +198,7 @@
                 {% if ai_hints_remaining == 0 %}disabled{% endif %}>
             {{ _('Get AI Hint') }}
             <span id="ai-hint-quota">
-                ({{ ai_hints_remaining }} {{ _('use') }}{{ 's' if ai_hints_remaining != 1 else '' }} {{ _('remaining today') }})
+                ({{ ai_hints_remaining }} {{ _('use') }}{{ 's' if ai_hints_remaining != 1 else '' }} {{ _('remaining this window') }})
             </span>
         </button>
         <div id="ai-hint-result" style="display:none; margin-top: 0.75em; padding: 0.75em;
@@ -171,6 +247,7 @@
     </script>
     {% endif %}
 
+    {% if submission.problem.submission_type != 'F' %}
     <div id="test-cases">{% include "submission/status-testcases.html" %}</div>
 
     {% if not submission.is_graded %}
@@ -187,6 +264,7 @@
                 </form>
             </div>
         {% endif %}
+    {% endif %}
     {% endif %}
     {% if enable_comments %}
         <br>

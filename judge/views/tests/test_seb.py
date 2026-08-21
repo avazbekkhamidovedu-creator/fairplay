@@ -1,0 +1,392 @@
+import hashlib
+import shutil
+import tempfile
+
+from django.core.files.base import ContentFile
+from django.test import Client, TestCase, override_settings
+from django.urls import reverse
+from django.utils import timezone
+
+from judge.models import ContestParticipation, SEBConfigPreset
+from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, create_user
+
+BEK = hashlib.sha256(b'browser exam key').hexdigest()
+CFG = hashlib.sha256(b'config key').hexdigest()
+
+SEB_CONFIG_BYTES = b'<plist>fake seb config</plist>'
+
+PRESET_BEK = hashlib.sha256(b'preset browser exam key').hexdigest()
+PRESET_CFG = hashlib.sha256(b'preset config key').hexdigest()
+
+PRESET_CONFIG_BYTES = b'<plist>fake preset seb config</plist>'
+
+
+def bek_header(path, key=BEK):
+    return {'HTTP_X_SAFEEXAMBROWSER_REQUESTHASH':
+            hashlib.sha256(('http://testserver%s' % path + key).encode('utf-8')).hexdigest()}
+
+
+def cfg_header(path, key=CFG):
+    return {'HTTP_X_SAFEEXAMBROWSER_CONFIGKEYHASH':
+            hashlib.sha256(('http://testserver%s' % path + key).encode('utf-8')).hexdigest()}
+
+
+@override_settings(COMPRESS_ENABLED=False, MEDIA_ROOT=tempfile.mkdtemp())
+class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(self):
+        super().setUpTestData()
+        self.users.update({
+            'seb_participant': create_user(username='seb_participant'),
+            'seb_joiner': create_user(username='seb_joiner'),
+            'seb_editor': create_user(username='seb_editor'),
+            'seb_tester': create_user(username='seb_tester'),
+            'seb_spectator': create_user(username='seb_spectator'),
+            'seb_edit_all': create_user(
+                username='seb_edit_all',
+                user_permissions=('edit_all_contest',),
+            ),
+        })
+
+        self.seb_contest = create_contest(
+            key='sebexam',
+            is_visible=True,
+            seb_required=True,
+            seb_browser_exam_keys='%s  # Windows 3.7' % BEK,
+            seb_config_keys=CFG,
+            authors=('seb_editor',),
+            testers=('seb_tester',),
+            spectators=('seb_spectator',),
+        )
+        self.seb_contest.seb_config_file.save('conf.seb', ContentFile(SEB_CONFIG_BYTES), save=True)
+
+        self.seb_contest_no_file = create_contest(
+            key='sebnofile',
+            is_visible=True,
+            seb_required=True,
+            seb_browser_exam_keys=BEK,
+            seb_config_keys=CFG,
+        )
+
+        self.plain_contest = create_contest(
+            key='plain',
+            is_visible=True,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(cls._overridden_settings['MEDIA_ROOT'], ignore_errors=True)
+
+    def setUp(self):
+        self.client = Client()
+
+    def enter_contest(self, username, contest, **kwargs):
+        profile = self.users[username].profile
+        participation = create_contest_participation(contest=contest, user=profile, **kwargs)
+        profile.current_contest = participation
+        profile.save()
+        self.client.force_login(self.users[username])
+        return participation
+
+    # ------------------------------------------------------------------ #
+    # Middleware lockdown                                                 #
+    # ------------------------------------------------------------------ #
+
+    def test_blocked_without_seb(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        response = self.client.get(reverse('home'))
+        self.assertContains(response, 'Safe Exam Browser required', status_code=403)
+
+    def test_allowed_with_valid_bek_header(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        path = reverse('home')
+        response = self.client.get(path, **bek_header(path))
+        self.assertEqual(response.status_code, 200)
+
+    def test_allowed_with_valid_config_key_header(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        path = reverse('home')
+        response = self.client.get(path, **cfg_header(path))
+        self.assertEqual(response.status_code, 200)
+
+    def test_blocked_with_wrong_hash(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        path = reverse('home')
+        response = self.client.get(path, **bek_header(path, key='f' * 64))
+        self.assertEqual(response.status_code, 403)
+
+    def test_hash_covers_query_string(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        path = reverse('home')
+        # Hash over URL including the query string is accepted...
+        response = self.client.get(path + '?foo=bar', **bek_header(path + '?foo=bar'))
+        self.assertEqual(response.status_code, 200)
+        # ...hash over the bare path is not.
+        response = self.client.get(path + '?foo=bar', **bek_header(path))
+        self.assertEqual(response.status_code, 403)
+
+    def test_exempt_paths_reachable_while_blocked(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.assertEqual(self.client.get(reverse('seb_quit')).status_code, 200)
+        self.assertNotEqual(self.client.get(reverse('auth_logout')).status_code, 403)
+        # The block page links to the .seb download; it must not itself be blocked.
+        response = self.client.get(reverse('contest_seb_config', args=('sebexam',)))
+        self.assertEqual(response.status_code, 200)
+
+    def test_bypass_users_not_blocked(self):
+        for username in ('seb_editor', 'seb_tester', 'seb_spectator', 'seb_edit_all'):
+            with self.subTest(username=username):
+                self.enter_contest(username, self.seb_contest)
+                response = self.client.get(reverse('home'))
+                self.assertEqual(response.status_code, 200)
+
+    def test_plain_contest_not_blocked(self):
+        self.enter_contest('seb_participant', self.plain_contest)
+        response = self.client.get(reverse('home'))
+        self.assertEqual(response.status_code, 200)
+
+    # ------------------------------------------------------------------ #
+    # Joining                                                             #
+    # ------------------------------------------------------------------ #
+
+    def test_join_blocked_without_seb(self):
+        self.client.force_login(self.users['seb_joiner'])
+        path = reverse('contest_join', args=('sebexam',))
+        for response in (self.client.get(path), self.client.post(path)):
+            self.assertContains(response, 'Safe Exam Browser required', status_code=403)
+        self.assertFalse(ContestParticipation.objects.filter(
+            contest=self.seb_contest, user=self.users['seb_joiner'].profile).exists())
+
+    def test_join_with_valid_header(self):
+        self.client.force_login(self.users['seb_joiner'])
+        path = reverse('contest_join', args=('sebexam',))
+        response = self.client.post(path, **bek_header(path))
+        self.assertEqual(response.status_code, 302)
+        profile = self.users['seb_joiner'].profile
+        profile.refresh_from_db()
+        self.assertIsNotNone(profile.current_contest)
+        self.assertEqual(profile.current_contest.contest, self.seb_contest)
+
+    def test_bypass_user_joins_without_seb(self):
+        self.client.force_login(self.users['seb_tester'])
+        path = reverse('contest_join', args=('sebexam',))
+        response = self.client.post(path)
+        self.assertEqual(response.status_code, 302)
+
+    def test_join_plain_contest_without_seb(self):
+        self.client.force_login(self.users['seb_joiner'])
+        response = self.client.post(reverse('contest_join', args=('plain',)))
+        self.assertEqual(response.status_code, 302)
+
+    # ------------------------------------------------------------------ #
+    # Leaving                                                             #
+    # ------------------------------------------------------------------ #
+
+    def test_leave_redirects_to_quit_page(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        path = reverse('contest_leave', args=('sebexam',))
+        response = self.client.post(path, **bek_header(path))
+        self.assertRedirects(response, reverse('seb_quit'))
+        profile = self.users['seb_participant'].profile
+        profile.refresh_from_db()
+        self.assertIsNone(profile.current_contest)
+
+    def test_leave_redirects_to_custom_quit_url(self):
+        self.seb_contest.seb_quit_url = 'https://example.com/done'
+        self.seb_contest.save()
+        self.enter_contest('seb_participant', self.seb_contest)
+        path = reverse('contest_leave', args=('sebexam',))
+        response = self.client.post(path, **bek_header(path))
+        self.assertRedirects(response, 'https://example.com/done', fetch_redirect_response=False)
+
+    def test_spectator_leave_skips_quit_page(self):
+        self.enter_contest('seb_spectator', self.seb_contest, virtual=ContestParticipation.SPECTATE)
+        response = self.client.post(reverse('contest_leave', args=('sebexam',)))
+        self.assertRedirects(response, reverse('contest_view', args=('sebexam',)),
+                             fetch_redirect_response=False)
+
+    def test_leave_plain_contest_redirects_to_contest(self):
+        self.enter_contest('seb_participant', self.plain_contest)
+        response = self.client.post(reverse('contest_leave', args=('plain',)))
+        self.assertRedirects(response, reverse('contest_view', args=('plain',)),
+                             fetch_redirect_response=False)
+
+    # ------------------------------------------------------------------ #
+    # Natural contest end                                                  #
+    # ------------------------------------------------------------------ #
+
+    def end_contest(self, contest):
+        contest.end_time = timezone.now() - timezone.timedelta(minutes=1)
+        contest.save()
+
+    def test_natural_end_redirects_to_quit_page(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        response = self.client.get(reverse('home'))
+        self.assertRedirects(response, reverse('seb_quit'))
+        profile = self.users['seb_participant'].profile
+        profile.refresh_from_db()
+        self.assertIsNone(profile.current_contest)
+
+    def test_natural_end_redirects_to_custom_quit_url(self):
+        self.seb_contest.seb_quit_url = 'https://example.com/done'
+        self.seb_contest.save()
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        response = self.client.get(reverse('home'))
+        self.assertRedirects(response, 'https://example.com/done', fetch_redirect_response=False)
+
+    def test_natural_end_redirect_fires_only_once(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 302)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 200)
+
+    def test_natural_end_no_redirect_on_exempt_path(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        response = self.client.get(reverse('seb_quit'))
+        self.assertContains(response, 'Exam finished')
+
+    def test_natural_end_spectator_not_redirected(self):
+        self.enter_contest('seb_spectator', self.seb_contest, virtual=ContestParticipation.SPECTATE)
+        self.end_contest(self.seb_contest)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 200)
+
+    def test_natural_end_bypass_user_not_redirected(self):
+        self.enter_contest('seb_tester', self.seb_contest)
+        self.end_contest(self.seb_contest)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 200)
+
+    def test_natural_end_plain_contest_not_redirected(self):
+        self.enter_contest('seb_participant', self.plain_contest)
+        self.end_contest(self.plain_contest)
+        self.assertEqual(self.client.get(reverse('home')).status_code, 200)
+
+    # ------------------------------------------------------------------ #
+    # .seb config download                                                #
+    # ------------------------------------------------------------------ #
+
+    def test_config_download(self):
+        self.client.force_login(self.users['seb_joiner'])
+        response = self.client.get(reverse('contest_seb_config', args=('sebexam',)))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/seb')
+        self.assertIn('sebexam.seb', response['Content-Disposition'])
+        self.assertEqual(b''.join(response.streaming_content), SEB_CONFIG_BYTES)
+
+    def test_config_download_requires_login(self):
+        response = self.client.get(reverse('contest_seb_config', args=('sebexam',)))
+        self.assertEqual(response.status_code, 302)
+
+    def test_config_download_missing_file(self):
+        # ContestMixin.dispatch converts Http404 into a generic "No such contest" page.
+        self.client.force_login(self.users['seb_joiner'])
+        response = self.client.get(reverse('contest_seb_config', args=('sebnofile',)))
+        self.assertContains(response, 'No such contest')
+
+    def test_config_download_when_seb_not_required(self):
+        self.client.force_login(self.users['seb_joiner'])
+        response = self.client.get(reverse('contest_seb_config', args=('plain',)))
+        self.assertContains(response, 'No such contest')
+
+    # ------------------------------------------------------------------ #
+    # Quit landing page                                                   #
+    # ------------------------------------------------------------------ #
+
+    def test_quit_page_anonymous(self):
+        response = self.client.get(reverse('seb_quit'))
+        self.assertContains(response, 'Exam finished')
+
+
+@override_settings(COMPRESS_ENABLED=False, MEDIA_ROOT=tempfile.mkdtemp())
+class ContestSEBPresetTestCase(CommonDataMixin, TestCase):
+    """A contest carrying no SEB config of its own, inheriting a site preset."""
+
+    @classmethod
+    def setUpTestData(self):
+        super().setUpTestData()
+        self.users['preset_student'] = create_user(username='preset_student')
+        self.users['preset_staff'] = create_user(
+            username='preset_staff', user_permissions=('contest_seb_requirement',))
+
+        self.preset = SEBConfigPreset(
+            name='Site default',
+            browser_exam_keys=PRESET_BEK,
+            config_keys=PRESET_CFG,
+            quit_url='https://example.com/quit',
+            is_default=True,
+        )
+        self.preset.config_file.save('default.seb', ContentFile(PRESET_CONFIG_BYTES), save=False)
+        self.preset.save()
+
+        self.preset_contest = create_contest(
+            key='presetexam',
+            is_visible=True,
+            seb_required=True,
+            seb_preset=self.preset,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(cls._overridden_settings['MEDIA_ROOT'], ignore_errors=True)
+
+    def setUp(self):
+        self.client = Client()
+
+    def enter_contest(self, username, contest):
+        profile = self.users[username].profile
+        profile.current_contest = create_contest_participation(contest=contest, user=profile)
+        profile.save()
+        self.client.force_login(self.users[username])
+
+    def test_blocked_without_seb(self):
+        self.enter_contest('preset_student', self.preset_contest)
+        response = self.client.get(reverse('home'))
+        self.assertContains(response, 'Safe Exam Browser required', status_code=403)
+
+    def test_allowed_with_preset_bek_header(self):
+        self.enter_contest('preset_student', self.preset_contest)
+        path = reverse('home')
+        response = self.client.get(path, **bek_header(path, PRESET_BEK))
+        self.assertEqual(response.status_code, 200)
+
+    def test_allowed_with_preset_config_key_header(self):
+        self.enter_contest('preset_student', self.preset_contest)
+        path = reverse('home')
+        response = self.client.get(path, **cfg_header(path, PRESET_CFG))
+        self.assertEqual(response.status_code, 200)
+
+    def test_config_download_serves_preset_file(self):
+        self.client.force_login(self.users['preset_student'])
+        response = self.client.get(reverse('contest_seb_config', args=('presetexam',)))
+        self.assertEqual(response.status_code, 200)
+        # Served under the contest's own name even though the bytes are the preset's.
+        self.assertIn('presetexam.seb', response['Content-Disposition'])
+        self.assertEqual(b''.join(response.streaming_content), PRESET_CONFIG_BYTES)
+
+    def test_preset_file_stored_under_generated_key(self):
+        # Presets live in the object store on an opaque key, like submissions.
+        self.assertRegex(self.preset.config_file.name,
+                         r'^seb_configs/\d{4}/\d{2}/presets/[0-9a-f]{32}\.seb$')
+
+    # ------------------------------------------------------------------ #
+    # Preset preview download (editor-facing)                             #
+    # ------------------------------------------------------------------ #
+
+    def test_preset_preview_requires_login(self):
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 302)
+
+    def test_preset_preview_denied_without_permission(self):
+        self.client.force_login(self.users['preset_student'])
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 403)
+
+    def test_preset_preview_allowed_with_permission(self):
+        self.client.force_login(self.users['preset_staff'])
+        response = self.client.get(reverse('seb_preset_config', args=(self.preset.id,)))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), PRESET_CONFIG_BYTES)

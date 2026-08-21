@@ -12,8 +12,8 @@ from django.utils import timezone
 
 from judge import event_poster as event
 from judge.bridge.base_handler import ZlibPacketHandler, proxy_list
-from judge.caching import finished_submission
 from judge.models import Judge, Language, LanguageLimit, Problem, RuntimeVersion, Submission, SubmissionTestCase
+from judge.submission_grading import finalize_submission
 
 logger = logging.getLogger('judge.bridge')
 json_log = logging.getLogger('judge.json.bridge')
@@ -358,7 +358,10 @@ class JudgeHandler(ZlibPacketHandler):
 
         if Submission.objects.filter(id=packet['submission-id']).update(
                 status='G', is_pretested=packet['pretested'], current_testcase=1,
-                batch=False, judged_date=timezone.now()):
+                batch=False, judged_date=timezone.now(), ai_points=None):
+            # All test-case rows are wiped below (including the supplementary
+            # AI rubric rows); clear ai_points too so a rejudge never leaves a
+            # stale AI score while the fresh AI pass is still pending.
             SubmissionTestCase.objects.filter(submission_id=packet['submission-id']).delete()
             event.post('sub_%s' % Submission.get_id_secret(packet['submission-id']), {'type': 'grading-begin'})
             self._post_update_submission(packet['submission-id'], 'grading-begin')
@@ -387,7 +390,9 @@ class JudgeHandler(ZlibPacketHandler):
         status_codes = ['SC', 'AC', 'WA', 'MLE', 'TLE', 'IR', 'RTE', 'OLE']
         batches = {}  # batch number: (points, total)
 
-        for case in SubmissionTestCase.objects.filter(submission=submission):
+        # Supplementary AI rubric rows carry batch=-1 (see code.AI_GRADE_BATCH); they are
+        # teacher-only feedback and must never contribute to the aggregate score/verdict.
+        for case in SubmissionTestCase.objects.filter(submission=submission).exclude(batch=-1):
             time += case.time
             if not case.batch:
                 points += case.points
@@ -409,20 +414,15 @@ class JudgeHandler(ZlibPacketHandler):
 
         points = round(points, 1)
         total = round(total, 1)
-        submission.case_points = points
-        submission.case_total = total
 
         problem = submission.problem
-        sub_points = round(points / total * problem.points if total > 0 else 0, 3)
-        if not problem.partial and sub_points != problem.points:
-            sub_points = 0
-
-        submission.status = 'D'
-        submission.time = time
-        submission.memory = memory
-        submission.points = sub_points
-        submission.result = status_codes[status]
-        submission.save()
+        # finalize_submission persists the scaled points and runs every downstream effect
+        # (user points, problem stats, contest standings, cache + websocket events) — the same
+        # tail shared with internally-graded (non-code) submissions.
+        sub_points = finalize_submission(
+            submission, case_points=points, case_total=total,
+            result=status_codes[status], time=time, memory=memory,
+        )
 
         json_log.info(self._make_json_log(
             packet, action='grading-end', time=time, memory=memory,
@@ -431,28 +431,47 @@ class JudgeHandler(ZlibPacketHandler):
             problem=problem.code, finish=True,
         ))
 
-        if problem.is_public and not problem.is_organization_private:
-            submission.user._updating_stats_only = True
-            submission.user.calculate_points()
-
-        problem._updating_stats_only = True
-        problem.update_stats()
-        submission.update_contest()
-
-        finished_submission(submission)
-
-        event.post('sub_%s' % submission.id_secret, {
-            'type': 'grading-end',
-            'time': time,
-            'memory': memory,
-            'points': float(points),
-            'total': float(problem.points),
-            'result': submission.result,
-        })
-        if hasattr(submission, 'contest'):
-            participation = submission.contest.participation
-            event.post('contest_%d' % participation.contest_id, {'type': 'update'})
         self._post_update_submission(submission.id, 'grading-end', done=True)
+
+        # Supplementary AI rubric scoring (optional): when the problem has an enabled code AI
+        # config, score the source against the rubric in a daemon thread after the judge verdict
+        # is final.  The rubric rows are appended as extra test cases and never change the verdict.
+        self._maybe_run_code_ai_grade(submission)
+
+    @staticmethod
+    def _maybe_run_code_ai_grade(submission):
+        from threading import Thread
+
+        from judge.models import ProblemSubmissionType
+        from judge.question_types.code import supplementary_ai_grade
+
+        if submission.problem.submission_type != ProblemSubmissionType.CODE:
+            return
+        from judge.utils.contest_ai import is_latest_submission, persist_code_ai_rows, should_run_ai_now
+        # A fresh submit never auto-invokes the LLM (the student must press the
+        # button), but a teacher-triggered rejudge is expected to produce a full
+        # re-grade: the AI rubric rows were wiped by on_grading_begin, so rerun
+        # the rubric pass and restore the combined score + feedback.
+        if not should_run_ai_now(submission) and not submission.rejudged_date:
+            return
+        # Cheap pre-check inside the worker too; this just avoids spawning threads needlessly.
+        try:
+            if not submission.problem.code_config.ai_enabled:
+                return
+        except Exception:
+            return
+
+        def _run():
+            try:
+                if not is_latest_submission(submission):
+                    return
+                rows = supplementary_ai_grade(submission)
+                if rows:
+                    persist_code_ai_rows(submission, rows)
+            except Exception:
+                logger.exception('Code AI rubric scoring failed for submission %d', submission.id)
+
+        Thread(target=_run, daemon=True).start()
 
     def on_compile_error(self, packet):
         logger.info('%s: Submission failed to compile: %s', self.name, packet['submission-id'])

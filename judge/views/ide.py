@@ -22,10 +22,9 @@ IDE_PROBLEM_CODE = 'idepractice'
 IDE_RATE_LIMIT_COUNT = 5  # runs per window
 IDE_RATE_LIMIT_WINDOW = 1  # minutes
 
-# Resource limits for IDE (lower than problem limits)
-IDE_TIME_LIMIT = 2.0  # seconds
-IDE_MEMORY_LIMIT = 65536  # KB (64 MB)
-IDE_OUTPUT_LIMIT = 10240  # bytes (10 KB)
+# Time/memory limits are NOT set here: the judge takes them from the
+# `idepractice` problem's configuration, editable in the problem admin.
+IDE_OUTPUT_LIMIT = 10240  # bytes (10 KB) shown to the user; display truncation only
 
 _ansi_converter = Ansi2HTMLConverter(inline=True)
 
@@ -45,11 +44,15 @@ class IDEView(LoginRequiredMixin, TitleMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['languages'] = Language.objects.filter(
+        languages = Language.objects.filter(
             judges__online=True,
         ).distinct().order_by('name', 'key')
-        context['ACE_URL'] = settings.ACE_URL
-        context['default_lang'] = self.request.profile.language
+        context['languages'] = languages
+        default_lang = self.request.profile.language
+        if default_lang is None or not languages.filter(id=default_lang.id).exists():
+            default_lang = languages.first()
+        context['default_lang'] = default_lang
+        # Used only to pick Monaco vs / vs-dark (IDE no longer loads Ace).
         context['ace_theme'] = self.request.profile.resolved_ace_theme
         context['rate_limit_count'] = IDE_RATE_LIMIT_COUNT
         context['rate_limit_window'] = IDE_RATE_LIMIT_WINDOW

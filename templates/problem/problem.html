@@ -4,6 +4,20 @@
     {# Ensure ACE/editor CSS is available on problem page too #}
     {% if form %}{{ form.media.css }}{% endif %}
     <style>
+        /* Highlight = background only (beat stale /static/style.css cache). */
+        .content-description mark {
+            background: #fde68a;
+            color: inherit;
+            font-style: normal !important;
+            font-weight: inherit;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+        .content-description mark em,
+        .content-description mark i {
+            font-style: normal;
+        }
+
         .title-state {
             font-size: 2em;
             float: left;
@@ -61,7 +75,7 @@
 
 
 
-{% if form %}
+{% if form and submission_type == 'C' %}
 <script type="text/javascript" src="{{ ACE_URL }}/ace.js"></script>
 {{ form.media.js }}
 {% compress js %}
@@ -478,9 +492,17 @@
                 {% if num_open_tickets %}<span class="badge">{{ num_open_tickets }}</span>{% endif %}
             </a>
         </div>
-        <div><a href="{{ url('admin:judge_problem_change', problem.id) }}">{{ _('Edit problem') }}</a></div>
-        {% if not problem.is_manually_managed %}
-            <div><a href="{{ url('problem_data', problem.code) }}">{{ _('Edit test data') }}</a></div>
+        {% if problem.submission_type == 'M' %}
+            <div><a href="{{ url('problem_mcq_edit', problem.code) }}">{{ _('Edit question') }}</a></div>
+        {% elif problem.submission_type == 'B' %}
+            <div><a href="{{ url('problem_fillblank_edit', problem.code) }}">{{ _('Edit question') }}</a></div>
+        {% elif problem.submission_type == 'F' %}
+            <div><a href="{{ url('problem_edit_v2', problem.code) }}">{{ _('Edit question') }}</a></div>
+        {% else %}
+            <div><a href="{{ url('admin:judge_problem_change', problem.id) }}">{{ _('Edit problem') }}</a></div>
+            {% if not problem.is_manually_managed %}
+                <div><a href="{{ url('problem_data', problem.code) }}">{{ _('Edit test data') }}</a></div>
+            {% endif %}
         {% endif %}
     {% elif request.user.is_authenticated and has_tickets %}
         <hr>
@@ -505,6 +527,14 @@
 
     <hr style="padding-top: 0.3em">
 
+    {% if problem.difficulty %}
+        <div class="problem-info-entry">
+            <i class="fa fa-signal fa-fw"></i><span class="pi-name">{{ _('Difficulty:') }}</span>
+            <span class="pi-value">
+                <span class="difficulty-badge diff-{{ problem.difficulty }}">{{ problem.difficulty_label }}</span>
+            </span>
+        </div>
+    {% endif %}
     <div class="problem-info-entry">
         <i class="fa fa-check fa-fw"></i><span class="pi-name">{{ _('Points:') }}</span>
         <span class="pi-value">
@@ -635,7 +665,27 @@
 {% endblock %}
 
 {% block submission_area %}
-{% if form %}
+{% if form and submission_type == 'M' %}
+<div id="submission-area">
+    <h3>{{ _('Submit solution') }}</h3>
+    {% include "problem/submit/_mcq.html" %}
+</div>
+{% elif form and submission_type == 'B' %}
+<div id="submission-area">
+    <h3>{{ _('Submit solution') }}</h3>
+    {% include "problem/submit/_fillblank.html" %}
+</div>
+{% elif form and submission_type == 'S' %}
+<div id="submission-area">
+    <h3>{{ _('Submit solution') }}</h3>
+    {% include "problem/submit/_shortanswer.html" %}
+</div>
+{% elif form and submission_type == 'F' %}
+<div id="submission-area">
+    <h3>{{ _('Submit solution') }}</h3>
+    {% include "problem/submit/_file.html" %}
+</div>
+{% elif form %}
 <div id="submission-area">
     <h3>{{ _('Submit solution') }}</h3>
     {% if not no_judges %}

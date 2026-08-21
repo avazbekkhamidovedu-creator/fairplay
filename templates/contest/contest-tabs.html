@@ -6,6 +6,7 @@
         {{ make_tab('stats', 'fa-pie-chart', url('contest_stats', contest.key), _('Statistics')) }}
     {% endif %}
     {% if can_edit %}
+        {{ make_tab('grade', 'fa-check-square-o', url('contest_grade', contest.key), _('Grade')) }}
         {{ make_tab('analytics', 'fa-line-chart', url('contest_analytics', contest.key), _('Analytics')) }}
     {% endif %}
 
@@ -23,7 +24,7 @@
         {% if perms.judge.moss_contest and has_moss_api_key %}
             {{ make_tab('moss', 'fa-gavel', url('contest_moss', contest.key), _('MOSS')) }}
         {% endif %}
-        {{ make_tab('edit', 'fa-edit', url('admin:judge_contest_change', contest.id), _('Edit')) }}
+        {{ make_tab('edit', 'fa-edit', url('contest_edit', contest.key), _('Edit')) }}
     {% endif %}
     {% if perms.judge.clone_contest %}
         {{ make_tab('clone', 'fa-copy', url('contest_clone', contest.key), _('Clone')) }}
@@ -32,7 +33,17 @@
     {% if request.user.is_authenticated %}
         {% if contest.started or is_editor or is_tester %}
             {% set in_contest = contest.is_in_contest(request.user) %}
-            {% if contest.ended %}
+            {% set seb_block_join = seb_required and not seb_user_bypasses and not seb_request_valid and not in_contest %}
+            {% if seb_block_join %}
+                <div class="contest-join-pseudotab unselectable" style="display:flex; gap:8px; align-items:center;">
+                    {% if seb_launch.sebs_url %}
+                        <a class="button" href="{{ seb_launch.sebs_url }}">{{ _('Launch in SEB') }}</a>
+                    {% endif %}
+                    {% if seb_launch.download_url %}
+                        <a class="button" href="{{ seb_launch.download_url }}">{{ _('Download config file') }}</a>
+                    {% endif %}
+                </div>
+            {% elif contest.ended %}
                 {# Allow users to leave the virtual contest #}
                 {% if in_contest %}
                     <form action="{{ url('contest_leave', contest.key) }}" method="post"
@@ -54,9 +65,13 @@
                     <form action="{{ url('contest_leave', contest.key) }}" method="post"
                           class="contest-join-pseudotab unselectable button">
                         {% csrf_token %}
-                        <input type="submit" value="
+                        <input type="submit"
+                               {% if contest.seb_required and not request.participation.spectate %}class="seb-submit-exit"{% endif %}
+                               value="
                             {%- if request.participation.spectate %}
                                 {{- _('Stop spectating') -}}
+                            {% elif contest.seb_required %}
+                                {{- _('Submit & Exit SEB') -}}
                             {% else %}
                                 {{- _('Leave contest') -}}
                             {% endif %}">

@@ -5,15 +5,23 @@ from judge.models.choices import ACE_THEMES, EFFECTIVE_MATH_ENGINES, MATH_ENGINE
 from judge.models.comment import Comment, CommentLock, CommentVote
 from judge.models.contest import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestSubmission, \
     ContestTag, Rating
+from judge.models.editor_attachment import EditorAttachment
 from judge.models.interface import BlogPost, MiscConfig, NavigationBar, validate_regex
+from judge.models.notification import AdminNotification, InstructorVerificationRequest, TeacherVerificationRequest
 from judge.models.problem import LanguageLimit, License, Problem, ProblemClarification, ProblemGroup, \
-    ProblemPointsVote, ProblemTemplate, ProblemTranslation, ProblemType, Solution, SubmissionSourceAccess, \
-    TranslatedProblemQuerySet
+    ProblemPointsVote, ProblemSubmissionType, ProblemTemplate, ProblemTranslation, ProblemType, Solution, \
+    SubmissionSourceAccess, TranslatedProblemQuerySet
 from judge.models.problem_data import CHECKERS, ProblemData, ProblemHarness, ProblemTestCase, problem_data_storage, \
     problem_directory_file
-from judge.models.profile import Class, Organization, OrganizationRequest, Profile, WebAuthnCredential
+from judge.models.profile import Class, ClassMaterial, Organization, OrganizationRequest, Profile, WebAuthnCredential
+from judge.models.question import ProblemBlank, ProblemCodeConfig, ProblemFileConfig, \
+    ProblemFillBlankConfig, ProblemImportDraft, ProblemImportImage, ProblemImportItem, \
+    ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, SubmissionFile
 from judge.models.runtime import Judge, Language, RuntimeVersion
-from judge.models.submission import SUBMISSION_RESULT, Submission, SubmissionSource, SubmissionTestCase
+from judge.models.seb import SEBConfigPreset
+from judge.models.stored_file import StoredFileRecord
+from judge.models.submission import SUBMISSION_RESULT, Submission, SubmissionManualGrade, SubmissionSource, \
+    SubmissionTestCase
 from judge.models.ticket import Ticket, TicketMessage
 
 revisions.register(Profile, exclude=['points', 'last_access', 'ip', 'rating'])

@@ -2,7 +2,7 @@
 import csv
 import io
 import zipfile
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from django.contrib.auth.models import User
 from django.db import transaction
@@ -11,6 +11,18 @@ from django.utils.translation import gettext as _
 
 from judge.models import (
     Class, Contest, ContestParticipation, ContestSubmission, Organization, Profile, SubmissionSource)
+
+# Canonical import fields -> accepted CSV headers (case-insensitive).
+# Canvas roster exports use NetID / First name / Last Name / Email (and often
+# netid@duke.edu as a second email column); prefer Email when both are present.
+# Accounts are NetID/SSO logins: no local password is set on create.
+CSV_FIELD_ALIASES = {
+    'username': ('username', 'netid'),
+    'first_name': ('first_name', 'first name', 'firstname'),
+    'last_name': ('last_name', 'last name', 'lastname'),
+    'email': ('email', 'e-mail', 'netid@duke.edu'),
+}
+REQUIRED_CSV_FIELDS = ('username', 'first_name', 'last_name', 'email')
 
 
 class UserImportResult:
@@ -23,11 +35,57 @@ class UserImportResult:
         self.class_linked = 0
 
 
+def _header_key(name: str) -> str:
+    return ' '.join((name or '').strip().lower().split())
+
+
+def resolve_csv_headers(fieldnames) -> Dict[str, str]:
+    """Map each canonical field to the first matching original header name."""
+    by_key = {}
+    for header in fieldnames or []:
+        if header is None:
+            continue
+        key = _header_key(header)
+        if key and key not in by_key:
+            # Keep the exact DictReader key so row lookups succeed.
+            by_key[key] = header
+
+    resolved = {}
+    for canon, aliases in CSV_FIELD_ALIASES.items():
+        for alias in aliases:
+            original = by_key.get(_header_key(alias))
+            if original is not None:
+                resolved[canon] = original
+                break
+    return resolved
+
+
+def csv_row_to_user_fields(raw_row: dict, header_map: Dict[str, str]) -> dict:
+    """Pull username / names / email from a raw CSV row via aliases."""
+    def get(canon: str) -> str:
+        src = header_map.get(canon)
+        if not src:
+            return ''
+        return (raw_row.get(src) or '').strip()
+
+    return {
+        'username': get('username'),
+        'first_name': get('first_name'),
+        'last_name': get('last_name'),
+        'email': get('email'),
+    }
+
+
 def process_user_csv(csv_file, organization: Organization = None, target_class: Class = None,
                      update_existing: bool = False, activate: bool = True) -> UserImportResult:
     """
-    Parses a CSV file object and imports users.
-    Expected CSV columns: username, first_name, last_name, email, password (optional)
+    Parses a CSV file object and imports users for course/class membership.
+
+    Accepts legacy columns (username, first_name, last_name, email) and Canvas
+    roster exports (NetID, First name, Last Name, Email, …).
+
+    New accounts use username=NetID with an unusable local password; students
+    sign in via Duke NetID SSO. Existing accounts are linked to the course/class.
     """
     result = UserImportResult()
 
@@ -43,18 +101,25 @@ def process_user_csv(csv_file, organization: Organization = None, target_class: 
         result.errors.append(_('CSV file is empty or missing headers.'))
         return result
 
-    required = {'username', 'first_name', 'last_name', 'email'}
-    headers = {h.strip() for h in reader.fieldnames}
-    missing = required - headers
+    header_map = resolve_csv_headers(reader.fieldnames)
+    missing = [field for field in REQUIRED_CSV_FIELDS if field not in header_map]
     if missing:
         result.errors.append(_('Missing required columns: %s') % ', '.join(sorted(missing)))
         return result
 
+    seen_usernames = set()
     for row_idx, raw in enumerate(reader, start=1):
-        row = {k.strip(): (v or '').strip() for k, v in raw.items()}
+        row = csv_row_to_user_fields(raw, header_map)
         username = row.get('username')
         if not username:
             continue
+
+        if username in seen_usernames:
+            result.skipped += 1
+            result.errors.append(_('Row %(row)d (%(username)s): duplicate username within this CSV; '
+                                   'row ignored.') % {'row': row_idx, 'username': username})
+            continue
+        seen_usernames.add(username)
 
         try:
             with transaction.atomic():
@@ -92,7 +157,6 @@ def _upsert_user(row: dict, update_existing: bool, activate: bool) -> Tuple[str,
     first_name = row.get('first_name', '')
     last_name = row.get('last_name', '')
     email = row.get('email', '')
-    password = row.get('password', '123456')  # Default password if not provided
 
     try:
         user = User.objects.get(username=username)
@@ -120,11 +184,13 @@ def _upsert_user(row: dict, update_existing: bool, activate: bool) -> Tuple[str,
             return 'skipped', user
     except User.DoesNotExist:
         try:
+            # Pre-register for NetID SSO (same as CustomNetidLoginView): username is
+            # the NetID, local password is unusable — students sign in with SSO only.
             user = User.objects.create_user(
                 username=username,
                 email=email or '',
-                password=password,
             )
+            user.set_unusable_password()
             user.first_name = first_name or ''
             user.last_name = last_name or ''
             if activate:

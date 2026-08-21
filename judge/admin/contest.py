@@ -19,9 +19,10 @@ from reversion.admin import VersionAdmin
 
 from judge.models import Class, Contest, ContestProblem, ContestSubmission, Profile, Rating, Submission
 from judge.ratings import rate_contest
+from judge.utils.user_search import apply_profile_choice_labels, profile_choice_label
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminAceWidget, AdminHeavySelect2MultipleWidget, AdminHeavySelect2Widget, \
-    AdminMartorWidget, AdminSelect2MultipleWidget, AdminSelect2Widget
+    AdminMartorWidget, AdminSelect2MultipleWidget, AdminSelect2Widget, PrivateFileInput
 
 
 class AdminHeavySelect2Widget(AdminHeavySelect2Widget):
@@ -68,8 +69,9 @@ class ContestProblemInline(SortableInlineAdminMixin, admin.TabularInline):
     model = ContestProblem
     verbose_name = _('Problem')
     verbose_name_plural = _('Problems')
+    classes = ('basic-inline-group',)
     fields = ('problem', 'points', 'partial', 'is_pretested', 'max_submissions', 'output_prefix_override', 'order',
-              'rejudge_column')
+              'hide_results', 'rejudge_column')
     readonly_fields = ('rejudge_column',)
     form = ContestProblemInlineForm
 
@@ -84,6 +86,7 @@ class ContestProblemInline(SortableInlineAdminMixin, admin.TabularInline):
 class ContestForm(ModelForm):
     def __init__(self, *args, **kwargs):
         super(ContestForm, self).__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
         if 'rate_exclude' in self.fields:
             if self.instance and self.instance.id:
                 self.fields['rate_exclude'].queryset = \
@@ -112,6 +115,12 @@ class ContestForm(ModelForm):
                 _('You must select organizations before selecting classes.'),
             )
 
+        if 'allow_student_ai_grading' in cleaned_data:
+            cleaned_data['ai_grading_mode'] = (
+                Contest.AI_GRADING_REALTIME if cleaned_data.get('allow_student_ai_grading')
+                else Contest.AI_GRADING_OFF
+            )
+
         return cleaned_data
 
     class Meta:
@@ -129,6 +138,9 @@ class ContestForm(ModelForm):
             'view_contest_scoreboard': AdminHeavySelect2MultipleWidget(data_view='profile_select2'),
             'view_contest_submissions': AdminHeavySelect2MultipleWidget(data_view='profile_select2'),
             'description': AdminMartorWidget(attrs={'data-markdownfy-url': reverse_lazy('contest_preview')}),
+            # The .seb file lives in private object storage with no linkable URL;
+            # the stock widget would 500 this form on any contest that has one.
+            'seb_config_file': PrivateFileInput,
         }
 
 
@@ -159,6 +171,7 @@ class SimpleContestCreationForm(ContestForm):
             'is_rated', 'rate_all', 'rating_floor', 'rating_ceiling', 'performance_ceiling_override',
             'rate_exclude', 'access_code', 'private_contestants', 'organizations', 'classes',
             'join_organizations', 'view_contest_scoreboard', 'view_contest_submissions', 'banned_users',
+            'allow_student_ai_grading', 'ai_grading_mode', 'ai_grading_auto_delay_minutes',
         )
 
     def __init__(self, *args, **kwargs):
@@ -171,7 +184,7 @@ class SimpleContestCreationForm(ContestForm):
             'summary', 'format_name', 'format_config', 'problem_label_script', 'is_rated', 'rate_all',
             'rating_floor', 'rating_ceiling', 'performance_ceiling_override', 'rate_exclude', 'access_code',
             'private_contestants', 'organizations', 'classes', 'join_organizations', 'view_contest_scoreboard',
-            'view_contest_submissions', 'banned_users',
+            'view_contest_submissions', 'banned_users', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes',
         ):
             self.fields[field_name].required = False
         self.fields['creation_preset'].choices = (
@@ -181,6 +194,15 @@ class SimpleContestCreationForm(ContestForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        if cleaned_data.get('ai_grading_auto_delay_minutes') in (None, ''):
+            cleaned_data['ai_grading_auto_delay_minutes'] = (
+                Contest._meta.get_field('ai_grading_auto_delay_minutes').default
+            )
+        # Keep legacy mode in sync with the student checkbox.
+        if cleaned_data.get('allow_student_ai_grading'):
+            cleaned_data['ai_grading_mode'] = Contest.AI_GRADING_REALTIME
+        else:
+            cleaned_data['ai_grading_mode'] = Contest.AI_GRADING_OFF
         if cleaned_data.get('embedded_advanced_mode'):
             cleaned_data['key'] = cleaned_data.get('key') or getattr(self, 'generated_simple_key', '')
             return cleaned_data
@@ -242,6 +264,10 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
             'classes': ('embedded-advanced-fields',),
             'fields': ('format_name', 'format_config', 'problem_label_script'),
         }),
+        (_('Advanced Auto grading'), {
+            'classes': ('embedded-advanced-fields',),
+            'fields': ('allow_ai_hints', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes'),
+        }),
         (_('Advanced Rating'), {
             'classes': ('embedded-advanced-fields',),
             'fields': (
@@ -270,10 +296,21 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         (_('Scheduling'), {'fields': ('start_time', 'end_time', 'time_limit')}),
         (_('Details'), {'fields': ('description', 'og_image', 'logo_override_image', 'tags', 'summary')}),
         (_('Format'), {'fields': ('format_name', 'format_config', 'problem_label_script')}),
+        (_('Auto grading'), {'fields': (
+            'allow_ai_hints', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes',
+        )}),
         (_('Rating'), {'fields': ('is_rated', 'rate_all', 'rating_floor', 'rating_ceiling',
                                   'performance_ceiling_override', 'rate_exclude')}),
         (_('Access'), {'fields': ('access_code', 'private_contestants', 'organizations', 'classes',
                                   'join_organizations', 'view_contest_scoreboard', 'view_contest_submissions')}),
+        (_('Safe Exam Browser'), {
+            'fields': ('seb_required', 'seb_preset', 'seb_browser_exam_keys', 'seb_config_keys',
+                       'seb_config_file', 'seb_quit_url'),
+            'description': _('Restrict the contest to clients running Safe Exam Browser. '
+                             'Staff (editors, testers, spectators, org admins) always bypass. '
+                             'Pick a preset to inherit a published configuration; the fields below '
+                             'override it per contest.'),
+        }),
         (_('Justice'), {'fields': ('banned_users',)}),
     )
     list_display = ('key', 'name', 'is_visible', 'is_rated', 'locked_after', 'start_time', 'end_time', 'time_limit',
@@ -296,12 +333,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         return request.POST.get('embedded_advanced_mode') in ('1', 'on', 'true', 'True')
 
     def generate_contest_key(self):
-        max_key = 1000000
-        for i in range(max_key):
-            key = 'c{:06d}'.format(i)
-            if not Contest.objects.filter(key=key).exists():
-                return key
-        return 'contest{}'.format(str(timezone.now().timestamp()).replace('.', '')[-6:])
+        return Contest.generate_unique_key()
 
     def get_simple_preset_defaults(self, request):
         profile = getattr(request.user, 'profile', None)
@@ -348,9 +380,13 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                 'view_contest_scoreboard': [],
                 'view_contest_submissions': [],
                 'banned_users': [],
+                'allow_student_ai_grading': False,
+                'ai_grading_auto_delay_minutes': str(
+                    Contest._meta.get_field('ai_grading_auto_delay_minutes').default,
+                ),
             },
             'display': {
-                'authors': [{'id': str(profile.id), 'text': profile.user.username}] if profile else [],
+                'authors': [{'id': str(profile.id), 'text': profile_choice_label(profile)}] if profile else [],
             },
         }
 
@@ -384,6 +420,9 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         obj.is_private = False
         obj.is_organization_private = False
         obj.limit_join_organizations = False
+        obj.allow_student_ai_grading = False
+        obj.ai_grading_mode = Contest.AI_GRADING_OFF
+        obj.ai_grading_auto_delay_minutes = Contest._meta.get_field('ai_grading_auto_delay_minutes').default
 
     def get_actions(self, request):
         actions = super(ContestAdmin, self).get_actions(request)
@@ -414,6 +453,9 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
             readonly += ['locked_after']
         if not request.user.has_perm('judge.contest_access_code'):
             readonly += ['access_code']
+        if not request.user.has_perm('judge.contest_seb_requirement'):
+            readonly += ['seb_required', 'seb_preset', 'seb_browser_exam_keys', 'seb_config_keys',
+                         'seb_config_file', 'seb_quit_url']
         if not request.user.has_perm('judge.create_private_contest'):
             readonly += ['private_contestants', 'organizations']
             if not request.user.has_perm('judge.change_contest_visibility'):
@@ -431,7 +473,11 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
 
     def get_inline_instances(self, request, obj=None):
         if obj is None and not self.is_advanced_add_mode(request, obj):
-            return []
+            return [
+                inline
+                for inline in super().get_inline_instances(request, obj)
+                if isinstance(inline, ContestProblemInline)
+            ]
         return super().get_inline_instances(request, obj)
 
     def save_model(self, request, obj, form, change):
@@ -441,6 +487,11 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
             not self.is_embedded_advanced_mode(request, obj)
         ):
             self.apply_creation_defaults(request, obj)
+
+        # Keep legacy mode aligned with the student checkbox (mode is not on the form UI).
+        obj.ai_grading_mode = (
+            Contest.AI_GRADING_REALTIME if obj.allow_student_ai_grading else Contest.AI_GRADING_OFF
+        )
 
         # `private_contestants` and `organizations` will not appear in `cleaned_data` if user cannot edit it
         if form.changed_data:
@@ -467,6 +518,9 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
 
         if form.changed_data and 'locked_after' in form.changed_data:
             self.set_locked_after(obj, form.cleaned_data['locked_after'])
+
+        from judge.utils.contest_ai import schedule_batch_ai_grade
+        schedule_batch_ai_grade(obj.id)
 
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)
@@ -540,8 +594,34 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         return [
             path('rate/all/', self.rate_all_view, name='judge_contest_rate_all'),
             path('<int:id>/rate/', self.rate_view, name='judge_contest_rate'),
+            path('<int:id>/finalize/', self.finalize_view, name='judge_contest_finalize'),
+            path('<int:id>/unfinalize/', self.unfinalize_view, name='judge_contest_unfinalize'),
             path('<int:contest_id>/judge/<int:problem_id>/', self.rejudge_view, name='judge_contest_rejudge'),
         ] + super(ContestAdmin, self).get_urls()
+
+    @method_decorator(require_POST)
+    def finalize_view(self, request, id):
+        contest = get_object_or_404(Contest, id=id)
+        if not self.has_change_permission(request, contest):
+            raise PermissionDenied()
+        from judge.tasks import finalize_contest_results
+        transaction.on_commit(finalize_contest_results.s(contest.key).delay)
+        self.message_user(request, _('Finalizing results for “%s”: hidden problem results will be revealed '
+                                     'and the latest submissions rejudged on the final configuration.')
+                          % contest.name)
+        return HttpResponseRedirect(reverse('admin:judge_contest_change', args=(id,)))
+
+    @method_decorator(require_POST)
+    def unfinalize_view(self, request, id):
+        contest = get_object_or_404(Contest, id=id)
+        if not self.has_change_permission(request, contest):
+            raise PermissionDenied()
+        from judge.tasks import unfinalize_contest_results
+        transaction.on_commit(unfinalize_contest_results.s(contest.key).delay)
+        self.message_user(request, _('Un-finalizing results for “%s”: hidden problem results will be masked '
+                                     'again and removed from the scoreboard until you finalize once more.')
+                          % contest.name)
+        return HttpResponseRedirect(reverse('admin:judge_contest_change', args=(id,)))
 
     @method_decorator(require_POST)
     def rejudge_view(self, request, contest_id, problem_id):

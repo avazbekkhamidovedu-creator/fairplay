@@ -1,4 +1,5 @@
 import json
+import os
 from operator import attrgetter, itemgetter
 
 import pyotp
@@ -7,19 +8,22 @@ from django import forms
 from django.conf import settings
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import RegexValidator
 from django.db.models import Q
-from django.forms import BooleanField, CharField, ChoiceField, Form, ModelForm, MultipleChoiceField
+from django.forms import BooleanField, CharField, ChoiceField, Form, ModelForm, ModelMultipleChoiceField, \
+    MultipleChoiceField
 from django.urls import reverse_lazy
+from django.utils import timezone
 from django.utils.text import format_lazy
 from django.utils.translation import gettext_lazy as _, ngettext_lazy
 
-from judge.models import Contest, Language, Organization, Problem, ProblemPointsVote, Profile, Submission, \
+from judge.models import Class, Contest, Language, Organization, Problem, ProblemPointsVote, Profile, Submission, \
     WebAuthnCredential
 from judge.utils.mail import validate_email_domain
 from judge.utils.subscription import newsletter_id
-from judge.widgets import AceWidget, MartorWidget, Select2MultipleWidget, Select2Widget
+from judge.utils.user_search import apply_profile_choice_labels
+from judge.widgets import AceWidget, HeavySelect2MultipleWidget, MartorWidget, Select2MultipleWidget, Select2Widget
 
 TOTP_CODE_LENGTH = 6
 
@@ -163,12 +167,426 @@ class ProblemSubmitForm(ModelForm):
         fields = ['language']
 
 
-class EditOrganizationForm(ModelForm):
+class MCQSubmitForm(Form):
+    """Student-facing multiple-choice answer form.
+
+    Choices are presented in this student's order (see ``ordered_options_for``) and posted back
+    as stable option ids, so per-student shuffling never affects answer identity. Only id/text
+    reach the template — never ``is_correct``.
+    """
+
+    def __init__(self, *args, problem=None, profile=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from judge.question_types.mcq import ordered_options_for
+
+        try:
+            config = problem.mcq_config
+        except ObjectDoesNotExist:
+            config = None
+        self.multiple = bool(config and config.multiple_select)
+
+        choices = [(str(o['id']), o['text']) for o in ordered_options_for(problem, profile)]
+        if self.multiple:
+            self.fields['options'] = MultipleChoiceField(
+                choices=choices, widget=forms.CheckboxSelectMultiple, label='', required=True)
+        else:
+            self.fields['options'] = ChoiceField(
+                choices=choices, widget=forms.RadioSelect, label='', required=True)
+
+    def clean(self):
+        cleaned = super().clean()
+        value = cleaned.get('options')
+        if self.multiple:
+            cleaned['selected'] = [int(v) for v in (value or [])]
+        elif value:
+            cleaned['selected'] = [int(value)]
+        else:
+            cleaned['selected'] = []
+        return cleaned
+
+
+class NoAutoCompleteCharField(forms.CharField):
+    def widget_attrs(self, widget):
+        attrs = super(NoAutoCompleteCharField, self).widget_attrs(widget)
+        attrs['autocomplete'] = 'off'
+        return attrs
+
+
+class FillBlankSubmitForm(Form):
+    """Student-facing fill-in-the-blank answer form.
+
+    One text field per blank, named ``fb_<order>`` and labelled by the blank's label (or
+    ``Blank N``). ``clean`` collects the answers in blank order into ``cleaned['answers']``. The
+    accepted answers are never exposed to the template.
+    """
+
+    def __init__(self, *args, problem=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.blanks = list(problem.blanks.all())
+        for index, blank in enumerate(self.blanks):
+            # Distinct name prefix avoids browsers matching prior ``blank_N`` autofill history.
+            field = NoAutoCompleteCharField(
+                label=blank.label or (_('Blank %d') % (index + 1)),
+                max_length=1000, required=True, strip=False,
+            )
+            # Extra browser hints: Chrome often ignores autocomplete=off alone.
+            field.widget.attrs.update({
+                'autocomplete': 'new-password',
+                'autocapitalize': 'off',
+                'autocorrect': 'off',
+                'spellcheck': 'false',
+                'data-lpignore': 'true',
+                'data-1p-ignore': 'true',
+                'readonly': 'readonly',
+                'onfocus': "this.removeAttribute('readonly');",
+            })
+            self.fields['fb_%d' % blank.order] = field
+
+    def clean(self):
+        cleaned = super().clean()
+        cleaned['answers'] = [cleaned.get('fb_%d' % blank.order, '') or '' for blank in self.blanks]
+        return cleaned
+
+
+class FileSubmitForm(Form):
+    """Student-facing file-upload answer form.
+
+    A single file field, validated server-side (extension + size) against the problem's
+    ``ProblemFileConfig`` so an invalid upload never reaches storage. ``profile`` is accepted for
+    a uniform ``build_form`` signature but unused here.
+    """
+    file = forms.FileField(label=_('Your file'), required=True)
+
+    def __init__(self, *args, problem=None, profile=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.problem = problem
+
+    def clean_file(self):
+        upload = self.cleaned_data['file']
+        try:
+            config = self.problem.file_config
+        except ObjectDoesNotExist:
+            config = None
+        if config is not None:
+            allowed = config.allowed_extension_list()
+            if allowed:
+                ext = os.path.splitext(upload.name)[1].lower().lstrip('.')
+                if ext not in allowed:
+                    raise ValidationError(
+                        _('File type "%(ext)s" is not allowed. Allowed types: %(allowed)s.'),
+                        params={'ext': ext or _('(none)'), 'allowed': ', '.join(allowed)})
+            if config.max_file_size and upload.size > config.max_file_size:
+                raise ValidationError(
+                    _('File is too large (%(size)d bytes); the limit is %(max)d bytes.'),
+                    params={'size': upload.size, 'max': config.max_file_size})
+        return upload
+
+
+class ShortAnswerSubmitForm(Form):
+    """Student-facing short-answer form: a single free-text response."""
+    answer = NoAutoCompleteCharField(
+        label='', required=True, strip=True,
+        widget=forms.Textarea(attrs={'rows': 6, 'class': 'short-answer-input'}),
+    )
+
+    def __init__(self, *args, problem=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
+class OrganizationSiteForm(ModelForm):
+    """Front-end create/edit course form: no slug field (auto-generated), RichEditor description."""
+
     class Meta:
         model = Organization
-        fields = ['about', 'logo_override_image', 'admins']
-        widgets = {'admins': Select2MultipleWidget(attrs={'style': 'width: 200px'})}
-        widgets['about'] = MartorWidget(attrs={'data-markdownfy-url': reverse_lazy('organization_preview')})
+        fields = ['short_name', 'name', 'about', 'is_open', 'class_required', 'slots',
+                  'admins', 'instructors', 'logo_override_image']
+        labels = {
+            'short_name': _('Course code'),
+            'name': _('Course name'),
+            'about': _('Course description'),
+            'is_open': _('Is open organization?'),
+            'class_required': _('Class membership required'),
+            'slots': _('Maximum size'),
+            'admins': _('Course administrators'),
+            'instructors': _('Course instructors'),
+            'logo_override_image': _('Logo override image'),
+        }
+        help_texts = {
+            'is_open': _('If checked, students can join without approval. Cannot combine with class required.'),
+            'class_required': _('If checked, students must select a class when requesting membership. '
+                                'Site teachers can request the course without picking a class.'),
+            'slots': _('Optional. Maximum members for private courses.'),
+            'admins': _('People who can edit this course and review join requests. '
+                        'The creator is included by default and can add co-administrators.'),
+            'instructors': _(
+                'Teachers on this course. Defaults to the creator; site teachers are added '
+                'automatically when their course join request is approved.',
+            ),
+        }
+        widgets = {
+            'about': forms.Textarea(attrs={
+                'rows': 4,
+                'class': 'rich-editor-source',
+                'data-rich-editor': 'course-about',
+            }),
+            'slots': forms.NumberInput(attrs={'min': 1, 'placeholder': _('Optional')}),
+            'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
+            'instructors': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
+        if 'slots' in self.fields:
+            self.fields['slots'].required = False
+        if 'logo_override_image' in self.fields:
+            self.fields['logo_override_image'].required = False
+        if 'admins' in self.fields:
+            self.fields['admins'].required = False
+        if 'instructors' in self.fields:
+            self.fields['instructors'].required = False
+        # RichEditor mounts a visual editor; the Django textarea stays hidden.
+        # HTML5 "required" on that hidden control blocks submit before JS can
+        # copy markdown back — validate emptiness in clean_about instead.
+        if 'about' in self.fields:
+            self.fields['about'].required = False
+
+    def clean_about(self):
+        about = (self.cleaned_data.get('about') or '').strip()
+        if not about:
+            raise ValidationError(_('This field is required.'))
+        return about
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get('class_required') and cleaned.get('is_open'):
+            raise ValidationError(_('Class membership cannot be enforced when the course has open enrollment.'))
+        return cleaned
+
+
+class EditOrganizationForm(OrganizationSiteForm):
+    """Edit course uses the same fields as create (admins + instructors)."""
+    pass
+
+
+def suggested_class_name(academic_year='', term_session='', instructor_names=''):
+    """Build a class name from year, session, and instructor (e.g. 2027-2028 Fall Session Prof. Huang)."""
+    parts = []
+    year = (academic_year or '').strip()
+    term = (term_session or '').strip()
+    instructors = (instructor_names or '').strip()
+    if year:
+        parts.append(year)
+    if term:
+        parts.append(term)
+    if instructors:
+        parts.append(instructors)
+    return ' '.join(parts)
+
+
+def suggested_class_name_legacy(organization, academic_year='', term_session=''):
+    """Previous auto name: course code + year + session (no instructor)."""
+    parts = []
+    if organization is not None:
+        code = (getattr(organization, 'short_name', None) or getattr(organization, 'name', '') or '').strip()
+        if code:
+            parts.append(code)
+    year = (academic_year or '').strip()
+    term = (term_session or '').strip()
+    if year:
+        parts.append(year)
+    if term:
+        parts.append(term)
+    return ' '.join(parts)
+
+
+def uniquify_class_name(name, instance=None):
+    """Append 2, 3, … when *name* is already taken."""
+    candidate = name
+    suffix = 2
+    while True:
+        qs = Class.objects.filter(name=candidate)
+        if instance is not None and instance.pk:
+            qs = qs.exclude(pk=instance.pk)
+        if not qs.exists():
+            return candidate
+        candidate = '%s %d' % (name, suffix)
+        suffix += 1
+
+
+class ClassSiteForm(ModelForm):
+    """Front-end create/edit class form aligned with the class-form demo modules."""
+
+    TERM_SESSION_CHOICES = (
+        ('', _('Select…')),
+        ('Fall - Session 1', _('Fall - Session 1')),
+        ('Fall - Session 2', _('Fall - Session 2')),
+        ('Spring - Session 1', _('Spring - Session 1')),
+        ('Spring - Session 2', _('Spring - Session 2')),
+    )
+
+    member_csv = forms.FileField(
+        required=False,
+        label=_('Import members CSV'),
+        help_text=_('Optional on create: Canvas roster CSV is imported when you save. '
+                    'On edit, use Import CSV to import immediately.'),
+    )
+
+    class Meta:
+        model = Class
+        fields = [
+            'name', 'description',
+            'academic_year', 'term_session', 'credits', 'location', 'start_date', 'end_date',
+            'instructor_names', 'ta_names', 'admins', 'members', 'access_code', 'is_active',
+        ]
+        labels = {
+            'name': _('Name'),
+            'description': _('Description'),
+            'academic_year': _('Academic year'),
+            'term_session': _('Term and session'),
+            'credits': _('Credits'),
+            'location': _('Location or Canvas link'),
+            'start_date': _('Class start'),
+            'end_date': _('Class end'),
+            'instructor_names': _('Instructors'),
+            'ta_names': _('Teaching assistants'),
+            'admins': _('Class administrators'),
+            'members': _('Members'),
+            'access_code': _('Class access code'),
+            'is_active': _('Class is active'),
+        }
+        help_texts = {
+            'name': _('Filled in from the academic year, session, and instructor. You can still edit it.'),
+            'instructor_names': _('Required. Comma-separated names shown on the class page and course class cards.'),
+            'ta_names': _('Comma-separated TA names shown on the class page.'),
+            'admins': _('Optional. The creator is always added as a class administrator.'),
+            'members': _('Search course members or users. Use Import CSV to bulk-add usernames.'),
+            'access_code': _('Optional.'),
+            'location': _('Room, building, or a Canvas / meeting URL.'),
+        }
+        widgets = {
+            'description': forms.Textarea(attrs={
+                'rows': 4,
+                'class': 'rich-editor-source',
+                'data-rich-editor': 'class-description',
+            }),
+            'academic_year': forms.Select(attrs={'class': 'oj-select'}),
+            'term_session': forms.Select(attrs={'class': 'oj-select'}),
+            'credits': forms.NumberInput(attrs={'class': 'oj-input', 'min': '0', 'step': '0.5'}),
+            'location': forms.TextInput(attrs={'class': 'oj-input', 'placeholder': 'IB 204'}),
+            'start_date': forms.DateInput(attrs={'class': 'oj-input', 'type': 'date'}),
+            'end_date': forms.DateInput(attrs={'class': 'oj-input', 'type': 'date'}),
+            'instructor_names': forms.TextInput(attrs={
+                'class': 'oj-input',
+                'placeholder': _('e.g. Alice Smith'),
+            }),
+            'ta_names': forms.TextInput(attrs={
+                'class': 'oj-input',
+                'placeholder': _('e.g. Carol Chen, Dan Wu'),
+            }),
+            'access_code': forms.TextInput(attrs={'class': 'oj-input', 'maxlength': '7'}),
+            'name': forms.TextInput(attrs={
+                'class': 'oj-input',
+                'placeholder': _('Generated from year, session, and instructor'),
+                'autocomplete': 'off',
+            }),
+            'admins': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
+            'members': HeavySelect2MultipleWidget(data_view='profile_select2', attrs={'style': 'width: 100%'}),
+        }
+
+    def __init__(self, *args, organization=None, **kwargs):
+        self.organization = organization
+        super().__init__(*args, **kwargs)
+        apply_profile_choice_labels(self)
+        year = timezone.now().year
+        year_choices = [('', _('Select…'))]
+        for start in range(year + 1, year - 4, -1):
+            label = '%d-%d' % (start, start + 1)
+            year_choices.append((label, label))
+        self.fields['academic_year'].widget.choices = year_choices
+        self.fields['term_session'].widget.choices = list(self.TERM_SESSION_CHOICES)
+        self.fields['name'].required = False
+        self.fields['instructor_names'].required = True
+        for name in (
+            'admins', 'members', 'access_code', 'description', 'academic_year', 'term_session',
+            'credits', 'location', 'start_date', 'end_date', 'ta_names',
+        ):
+            if name in self.fields:
+                self.fields[name].required = False
+
+    def clean_instructor_names(self):
+        value = (self.cleaned_data.get('instructor_names') or '').strip()
+        if not value:
+            raise ValidationError(_('This field is required.'))
+        return value
+
+    def clean_ta_names(self):
+        return (self.cleaned_data.get('ta_names') or '').strip()
+
+    def clean_name(self):
+        return (self.cleaned_data.get('name') or '').strip()
+
+    def clean(self):
+        cleaned = super().clean()
+        start = cleaned.get('start_date')
+        end = cleaned.get('end_date')
+        if start and end and end < start:
+            self.add_error('end_date', _('The end date must be after the start date.'))
+
+        name = (cleaned.get('name') or '').strip()
+        year = cleaned.get('academic_year')
+        term = cleaned.get('term_session')
+        instructors = cleaned.get('instructor_names')
+        suggested = suggested_class_name(year, term, instructors)
+        legacy = suggested_class_name_legacy(self.organization, year, term)
+        generated = not name or name in {
+            suggested,
+            suggested_class_name(year, term, ''),
+            legacy,
+        }
+        if generated:
+            name = suggested
+        if not name:
+            self.add_error(
+                'name',
+                _('Select an academic year, session, and instructor, or enter a class name.'),
+            )
+            return cleaned
+        if generated:
+            name = uniquify_class_name(name, self.instance)
+        else:
+            qs = Class.objects.filter(name=name)
+            if self.instance and self.instance.pk:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                self.add_error('name', _(
+                    'A class with this name already exists. Class names must be unique across the site.',
+                ))
+                return cleaned
+        cleaned['name'] = name
+        return cleaned
+
+
+class ClassAssignmentsForm(Form):
+    """Link existing contests to a class as Assignments (no Django-admin dependency)."""
+
+    contests = ModelMultipleChoiceField(
+        queryset=Contest.objects.none(),
+        required=False,
+        label=_('Assignments'),
+        help_text=_('Choose contests to show under this class’s Assignments tab. '
+                    'Create or edit contest content from Contests; this only links them here.'),
+        widget=HeavySelect2MultipleWidget(data_view='contest_select2', attrs={'style': 'width: 100%'}),
+    )
+
+    def __init__(self, *args, class_obj=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.class_obj = class_obj
+        self.fields['contests'].queryset = Contest.objects.order_by('-start_time')
+        if class_obj is not None and class_obj.pk:
+            self.fields['contests'].initial = list(
+                Contest.objects.filter(classes=class_obj).values_list('id', flat=True),
+            )
 
 
 class CustomAuthenticationForm(AuthenticationForm):
@@ -184,13 +602,6 @@ class CustomAuthenticationForm(AuthenticationForm):
     def _has_social_auth(self, key):
         return (getattr(settings, 'SOCIAL_AUTH_%s_KEY' % key, None) and
                 getattr(settings, 'SOCIAL_AUTH_%s_SECRET' % key, None))
-
-
-class NoAutoCompleteCharField(forms.CharField):
-    def widget_attrs(self, widget):
-        attrs = super(NoAutoCompleteCharField, self).widget_attrs(widget)
-        attrs['autocomplete'] = 'off'
-        return attrs
 
 
 class TOTPForm(Form):

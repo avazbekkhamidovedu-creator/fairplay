@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends layout|default("base.html", true) %}
 
 {% block js_media %}
     <script type="text/javascript" src="{{ static('libs/jquery-sortable.js') }}"></script>
@@ -196,6 +196,22 @@
                 $total.val(parseInt($total.val()) + 1);
                 $table.trigger('add-row', [$tr]);
                 window.scrollBy(0, $tr.height());
+                return false;
+            });
+
+            // Distribute the problem's total points evenly across the normal (type C) cases.
+            var PROBLEM_POINTS = {{ problem_points|default(0, true) }};
+            $('a#distribute-points').click(function () {
+                var $rows = $table.find('tbody:first tr').filter(function () {
+                    return $(this).attr('data-type') === 'C';
+                });
+                var n = $rows.length;
+                if (!n) return false;
+                var total = Math.max(0, Math.round(PROBLEM_POINTS));
+                var base = Math.floor(total / n), rem = total - base * n;
+                $rows.each(function (i) {
+                    $(this).find('input[id$=points]').val(base + (i < rem ? 1 : 0));
+                });
                 return false;
             });
 
@@ -505,6 +521,10 @@
             </tbody>
         </table>
         <a id="add-case-row" href="#"><i class="fa fa-plus"></i> {{ _('Add new case') }}</a>
+        &nbsp;&middot;&nbsp;
+        <a id="distribute-points" href="#" title="{{ _('Set each normal case to total points divided by the number of cases') }}">
+            <i class="fa fa-balance-scale"></i> {{ _('Distribute points evenly') }}
+        </a>
 
         <hr style="margin: 2em 0;">
 

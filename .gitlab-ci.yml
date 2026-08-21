@@ -13,6 +13,7 @@ stages:
   - build
   - backup
   - deploy
+  - review
 
 variables:
   GIT_SUBMODULE_STRATEGY: recursive          # pulls resources/libs (site-assets)
@@ -99,7 +100,16 @@ test:
     # the test database.
     - for i in $(seq 1 60); do (echo > /dev/tcp/mysql/3306) 2>/dev/null && break; sleep 1; done
     - cp .ci.settings.py dmoj/local_settings.py
+    # Views that render base.html call inlinei18n(), which reads the compiled jsi18n catalog from
+    # STATIC_ROOT. Without this the template raises FileNotFoundError and every page-rendering test
+    # errors out before its assertion.
+    - python manage.py compilejsi18n
   script:
+    # Fail fast on a split migration graph. Two branches numbering off the same parent leave
+    # judge/migrations with two leaves, and then every `migrate` — including the one in
+    # docker/entrypoint.sh on deploy — aborts before applying anything. Reads the graph off
+    # disk only, so it costs seconds and needs no database.
+    - python manage.py check_migration_graph judge
     # XMLTestRunner (configured in .ci.settings.py) writes test-reports/TEST-*.xml.
     - coverage run --source=. manage.py test judge
     - coverage xml
@@ -241,3 +251,39 @@ deploy:prod:
       ssh prod "cd '$DATA_DIR' &&
       DKUOJ_IMAGE='$IMG' WSEVENT_IMAGE='$WSIMG' docker compose --env-file '$DATA_DIR/.env' pull &&
       DKUOJ_IMAGE='$IMG' WSEVENT_IMAGE='$WSIMG' docker compose --env-file '$DATA_DIR/.env' up -d --remove-orphans"
+
+# ---------------------------------------------------------------------------
+# review — AI merge-request review (pr-agent -> school OpenAI-compatible model)
+# Runs only on MR events, on the OIT shared runners, and never blocks the MR.
+# The model is reached via litellm's `openai/` route ($LLM_API_BASE/chat/completions).
+# Secrets come from masked (NOT protected) CI/CD variables — protected vars are not
+# injected into the unprotected feature-branch pipelines that MR events run on.
+# ---------------------------------------------------------------------------
+pr_agent:
+  stage: review
+  image:
+    name: pragent/pr-agent:latest            # pin to a released tag once a version is chosen
+    entrypoint: [""]
+  needs: []                                   # start immediately; don't wait on lint/test
+  variables:
+    GIT_STRATEGY: none                        # pr-agent fetches the diff via the API; no clone
+    GIT_SUBMODULE_STRATEGY: none
+  rules:
+    # Skip the develop -> main release-promotion MR (already reviewed into develop).
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "develop" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  allow_failure: true                         # a model/API hiccup must never block merging
+  script:
+    - export config__git_provider="gitlab"
+    - export gitlab__url="$CI_SERVER_PROTOCOL://$CI_SERVER_FQDN"   # -> https://gitlab.oit.duke.edu
+    - export gitlab__personal_access_token="$GITLAB_PERSONAL_ACCESS_TOKEN"
+    # --- school OpenAI-compatible model (litellm 'openai/' route) ---
+    - export openai__api_base="$LLM_API_BASE"
+    - export openai__key="$LLM_API_KEY"
+    - export config__model="$LLM_MODEL"                 # e.g. openai/qwen3.5-27B-FP8
+    - export config__fallback_models="[\"$LLM_MODEL\"]" # MUST override (default = unreachable gpt-4*)
+    - export config__custom_model_max_tokens="8000"     # model not in litellm's registry
+    - export MR_URL="$CI_MERGE_REQUEST_PROJECT_URL/-/merge_requests/$CI_MERGE_REQUEST_IID"
+    - cd /app
+    - python -m pr_agent.cli --pr_url="$MR_URL" review

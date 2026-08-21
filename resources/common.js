@@ -38,18 +38,29 @@ $(function () {
             = window.onfocus = window.onblur = onchange;
 
     function onchange(evt) {
-        var v = 'window-visible', h = 'window-hidden', evtMap = {
-            focus: v, focusin: v, pageshow: v, blur: h, focusout: h, pagehide: h
-        };
+        var v = 'window-visible',
+            h = 'window-hidden',
+            evtMap = {
+                focus: v, focusin: v, pageshow: v, blur: h, focusout: h, pagehide: h
+            },
+            state;
 
         evt = evt || window.event;
         if (evt.type in evtMap)
-            document.body.className = evtMap[evt.type];
+            state = evtMap[evt.type];
         else
-            document.body.className = this[hidden] ? 'window-hidden' : 'window-visible';
+            state = this[hidden] ? h : v;
+
+        // Keep page-specific classes such as problem-import-preview. Replacing
+        // className here previously disabled every style scoped to those classes.
+        document.body.className = document.body.className
+            .replace(/(^|\s)window-(?:visible|hidden)(?=\s|$)/g, ' ')
+            .replace(/\s+/g, ' ')
+            .replace(/^\s+|\s+$/g, '');
+        document.body.className += (document.body.className ? ' ' : '') + state;
 
         if ('$' in window)
-            $(window).trigger('dmoj:' + document.body.className);
+            $(window).trigger('dmoj:' + state);
     }
 
     // set the initial state (but only if browser supports the Page Visibility API)
@@ -169,7 +180,7 @@ if (!Date.now) {
     };
 }
 
-function count_down(label) {
+function count_down(label, redirect_url) {
     var initial = parseInt(label.attr('data-secs'));
     var start = Date.now();
 
@@ -183,7 +194,10 @@ function count_down(label) {
         if (time <= 0) {
             clearInterval(timer);
             setTimeout(function() {
-                window.location.reload();
+                if (redirect_url)
+                    window.location.href = redirect_url;
+                else
+                    window.location.reload();
             }, 2000);
         }
         var d = Math.floor(time / 86400);
@@ -259,7 +273,11 @@ $(function () {
         // current page is not navigated away, so leaving buttons disabled here
         // would strand the user with an unusable button until they refresh.
         if ($(this).attr('target') === '_blank') return;
-        $("button[type=submit], input[type=submit]").prop('disabled', true);
+        // Only disable the submit button(s) of the form being submitted. The
+        // original global selector also disabled unrelated forms' submit buttons
+        // (e.g. clicking a card's "Virtual" button greyed out the filter panel's
+        // "Search" button on the contest list page).
+        $(this).find("button[type=submit], input[type=submit]").prop('disabled', true);
     });
 });
 
@@ -348,3 +366,191 @@ $(function () {
         $closer.parent().fadeOut(200);
     });
 });
+
+window.dkuojInitSelect = function (select) {
+    if (!select || select.dataset.ojSelectReady || select.multiple || select.hidden ||
+        select.classList.contains('select2-hidden-accessible')) return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'oj-single-select multi-select';
+    wrap.dataset.selectId = select.id || '';
+    if (select.style.maxWidth) wrap.style.maxWidth = select.style.maxWidth;
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'multi-select-trigger oj-single-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+
+    var label = document.createElement('span');
+    label.className = 'multi-select-text';
+    var caret = document.createElement('span');
+    caret.className = 'multi-select-caret';
+    caret.textContent = '\u25BE';
+    trigger.appendChild(label);
+    trigger.appendChild(caret);
+
+    var menu = document.createElement('div');
+    menu.className = 'multi-select-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.id = 'oj-select-menu-' + (select.id || Math.random().toString(36).slice(2));
+    menu.hidden = true;
+    trigger.setAttribute('aria-controls', menu.id);
+
+    select.parentNode.insertBefore(wrap, select);
+    select.classList.add('oj-single-select-native');
+    select.setAttribute('tabindex', '-1');
+    select.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(trigger);
+    wrap.appendChild(menu);
+    wrap.appendChild(select);
+
+    function refresh() {
+        var option = select.options[select.selectedIndex];
+        label.textContent = option ? option.text : '';
+        label.title = label.textContent;
+        trigger.disabled = select.disabled;
+    }
+
+    function buildOptions() {
+        menu.innerHTML = '';
+        Array.prototype.forEach.call(select.options, function (option) {
+            var item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'multi-select-option oj-single-select-option';
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', option.selected ? 'true' : 'false');
+            item.textContent = option.text;
+            item.disabled = option.disabled;
+            item.addEventListener('click', function (event) {
+                event.stopPropagation();
+                select.value = option.value;
+                select.dispatchEvent(new Event('change', {bubbles: true}));
+                refresh();
+                close();
+            });
+            menu.appendChild(item);
+        });
+    }
+
+    function close() {
+        wrap.classList.remove('open');
+        menu.hidden = true;
+        trigger.setAttribute('aria-expanded', 'false');
+    }
+
+    function open() {
+        document.querySelectorAll('.multi-select.open').forEach(function (el) {
+            if (el !== wrap) {
+                el.classList.remove('open');
+                var m = el.querySelector('.multi-select-menu');
+                if (m) m.hidden = true;
+            }
+        });
+        wrap.classList.add('open');
+        menu.hidden = false;
+        trigger.setAttribute('aria-expanded', 'true');
+    }
+
+    trigger.addEventListener('click', function (event) {
+        event.stopPropagation();
+        if (menu.hidden) open();
+        else close();
+    });
+    trigger.addEventListener('keydown', function (event) {
+        var options = Array.prototype.slice.call(menu.querySelectorAll('.oj-single-select-option:not([disabled])'));
+        var currentIndex = options.findIndex(function (item) {
+            return item.getAttribute('aria-selected') === 'true';
+        });
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (menu.hidden) open();
+            var nextIndex = event.key === 'ArrowDown' ? currentIndex + 1 : currentIndex - 1;
+            nextIndex = Math.max(0, Math.min(options.length - 1, nextIndex));
+            if (options[nextIndex]) options[nextIndex].focus();
+        } else if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            if (menu.hidden) open();
+            else close();
+        }
+    });
+    document.addEventListener('click', function (event) {
+        if (!wrap.contains(event.target)) close();
+    });
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') close();
+    });
+    select.addEventListener('change', function () {
+        buildOptions();
+        refresh();
+    });
+
+    if (window.MutationObserver) {
+        new MutationObserver(function () {
+            buildOptions();
+            refresh();
+        }).observe(select, {childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'selected']});
+    }
+
+    wrap.dkuojBuildOptions = buildOptions;
+    wrap.dkuojRefresh = refresh;
+    refresh();
+    buildOptions();
+    select.dataset.ojSelectReady = '1';
+};
+
+window.dkuojRefreshSelects = function () {
+    document.querySelectorAll('.oj-single-select').forEach(function (wrap) {
+        var select = wrap.querySelector('select.oj-single-select-native');
+        if (select && select.dataset.ojSelectReady && wrap.dkuojBuildOptions) {
+            wrap.dkuojBuildOptions();
+            wrap.dkuojRefresh();
+        }
+    });
+};
+
+(function () {
+    function initAll() {
+        document.querySelectorAll('select[data-oj-select]').forEach(window.dkuojInitSelect);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initAll);
+    } else {
+        initAll();
+    }
+
+    if (window.MutationObserver) {
+        var observer = new MutationObserver(initAll);
+        observer.observe(document.documentElement, {childList: true, subtree: true});
+    }
+})();
+
+// ── Reusable auto-dismissing toast ──────────────────────────────────────
+// window.showToast('Grade saved', 'success') / ('...', 'error') / ('...', 'info')
+// Shows a top-right toast with a ✓ / ✗ / i icon that fades out after ~3s.
+window.showToast = function (message, type) {
+    type = type || 'info';
+    var container = document.getElementById('dku-toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'dku-toast-container';
+        container.className = 'dku-toast-container';
+        document.body.appendChild(container);
+    }
+    var toast = document.createElement('div');
+    toast.className = 'dku-toast dku-toast-' + type;
+    var icon = document.createElement('span');
+    icon.className = 'dku-toast-icon';
+    icon.textContent = type === 'success' ? '✓' : (type === 'error' ? '✗' : 'i');
+    var msg = document.createElement('span');
+    msg.className = 'dku-toast-msg';
+    msg.textContent = message;
+    toast.appendChild(icon);
+    toast.appendChild(msg);
+    container.appendChild(toast);
+    setTimeout(function () {
+        toast.classList.add('dku-toast-leave');
+        setTimeout(function () { toast.remove(); }, 200);
+    }, 3000);
+};

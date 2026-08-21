@@ -4,23 +4,24 @@ from operator import attrgetter
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import CASCADE, Exists, F, FilteredRelation, OuterRef, Q, SET_NULL
 from django.db.models.functions import Coalesce
 from django.urls import reverse
-from django.utils import timezone
+from django.utils import timezone, translation
 from django.utils.functional import cached_property
-from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext, gettext_lazy as _
 
 from judge.fulltext import SearchQuerySet
 from judge.models.profile import Class, Organization, Profile
 from judge.models.runtime import Language
 from judge.user_translations import gettext as user_gettext
 
-__all__ = ['ProblemGroup', 'ProblemType', 'Problem', 'ProblemTranslation', 'ProblemClarification', 'License',
-           'Solution', 'SubmissionSourceAccess', 'TranslatedProblemQuerySet', 'ProblemTemplate']
+__all__ = ['ProblemGroup', 'ProblemType', 'Problem', 'ProblemSubmissionType', 'ProblemTranslation',
+           'ProblemClarification', 'License', 'Solution', 'SubmissionSourceAccess', 'TranslatedProblemQuerySet',
+           'ProblemTemplate']
 
 
 def disallowed_characters_validator(text):
@@ -28,6 +29,27 @@ def disallowed_characters_validator(text):
     if common_disallowed_characters:
         raise ValidationError(_('Disallowed characters: %(value)s'),
                               params={'value': ''.join(common_disallowed_characters)})
+
+
+class ProblemSubmissionType:
+    """Discriminator for how a problem is answered and graded.
+
+    CODE submissions route to the judge bridge (today's behavior). All other types are graded
+    internally (auto or manual) without the judge server. Default is CODE for backward-compat.
+    """
+    CODE = 'C'
+    MCQ = 'M'
+    FILL_BLANK = 'B'
+    SHORT_ANSWER = 'S'
+    FILE = 'F'
+
+    CHOICES = (
+        (CODE, _('Programming')),
+        (MCQ, _('Multiple choice')),
+        (FILL_BLANK, _('Fill in the blank')),
+        (SHORT_ANSWER, _('Short answer')),
+        (FILE, _('File upload')),
+    )
 
 
 class ProblemType(models.Model):
@@ -155,6 +177,10 @@ class Problem(models.Model):
     is_public = models.BooleanField(verbose_name=_('publicly visible'), db_index=True, default=False)
     is_manually_managed = models.BooleanField(verbose_name=_('manually managed'), db_index=True, default=False,
                                               help_text=_('Whether judges should be allowed to manage data or not.'))
+    submission_type = models.CharField(verbose_name=_('submission type'), max_length=1, db_index=True,
+                                       default=ProblemSubmissionType.CODE, choices=ProblemSubmissionType.CHOICES,
+                                       help_text=_('How this problem is answered and graded. Programming problems '
+                                                   'route to the judge; other types are graded internally.'))
     date = models.DateTimeField(verbose_name=_('date of publishing'), null=True, blank=True, db_index=True,
                                 help_text=_(
                                     "Doesn't have the magic ability to auto-publish due to backward compatibility."))
@@ -196,9 +222,224 @@ class Problem(models.Model):
         self._i18n_name = None
         self.__original_code = self.code
 
+    # Problem types whose name marks the answer format. With multi-type, the answer format is
+    # carried by the authoritative submission_type discriminator, not a ProblemType tag; these
+    # names (legacy + import/AI aliases, EN/ZH) are kept out of the Tags / knowledge filter.
+    FORMAT_TYPE_NAMES = frozenset({
+        'code', 'programming',
+        'fill_in_blank', 'fill-in-blank',
+        'multiple_choices', 'multiple-choice',
+        'single-choice', 'true-false', 'short-answer',
+        '编程题', '填空题', '多选题', '单选题', '判断题', '简答题',
+    })
+
+    # Problem types whose name marks the difficulty level, ordered from easiest to hardest.
+    # These are surfaced as a dedicated difficulty column/filter rather than as tags.
+    DIFFICULTY_TYPE_NAMES = ('easy', 'medium', 'hard')
+    # Admin / older seeds often store the category ID as "Easy" rather than "easy".
+    # MySQL unique lookups are case-insensitive, so get_or_create(name='easy') reuses
+    # that row, but Python `name in DIFFICULTY_TYPE_NAMES` would miss it.
+    DIFFICULTY_NAME_ALIASES = {
+        'easy': 'easy',
+        'medium': 'medium',
+        'hard': 'hard',
+        'difficult': 'hard',  # Excel import header used difficult:2
+        '简单': 'easy',
+        '中等': 'medium',
+        '困难': 'hard',
+    }
+
+    @classmethod
+    def canonical_difficulty_name(cls, value):
+        """Map a ProblemType name/full_name to easy/medium/hard, or None."""
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        return cls.DIFFICULTY_NAME_ALIASES.get(text.casefold()) or cls.DIFFICULTY_NAME_ALIASES.get(text)
+
+    @classmethod
+    def is_difficulty_problem_type(cls, problem_type):
+        return (
+            cls.canonical_difficulty_name(problem_type.name) is not None
+            or cls.canonical_difficulty_name(problem_type.full_name) is not None
+        )
+
+    @classmethod
+    def difficulty_type_q(cls):
+        """ORM filter that matches canonical, capitalized, and alias difficulty IDs."""
+        query = Q()
+        for alias in cls.DIFFICULTY_NAME_ALIASES:
+            query |= Q(name__iexact=alias)
+        return query
+
+    @classmethod
+    def is_knowledge_type_name(cls, name):
+        """True if this ProblemType name is a real tag (not format / difficulty)."""
+        if not name:
+            return False
+        if name in cls.FORMAT_TYPE_NAMES or name in cls.DIFFICULTY_TYPE_NAMES:
+            return False
+        # Normalize EN aliases: programming_problem, Multiple-Choice, etc.
+        norm = name.strip().lower().replace(' ', '-').replace('_', '-')
+        format_norm = {n.lower().replace('_', '-') for n in cls.FORMAT_TYPE_NAMES if n.isascii()}
+        if norm in format_norm or norm in cls.DIFFICULTY_TYPE_NAMES:
+            return False
+        return True
+    # Display labels use django gettext msgids (not dmoj-user / DB full_name), so list/create
+    # UIs stay aligned with the existing Easy / Medium / Hard translations.
+    DIFFICULTY_LABELS = {
+        'easy': _('Easy'),
+        'medium': _('Medium'),
+        'hard': _('Hard'),
+    }
+    # Auto chips / legacy format rows that must never appear in the Tags column. Includes
+    # common slugified ``ProblemType.name`` values create_v2 used to persist for those chips.
+    AUTO_TYPE_LABEL_MSGIDS = (
+        'Programming',
+        'Code',
+        'Single choice',
+        'Multiple choice',
+        'Fill-in-blank',
+        'Fill in the blank',
+        'Fill in Blank',
+        'True/False',
+        'Short answer',
+        'Composite',
+        'Other',
+        'Easy',
+        'Medium',
+        'Hard',
+    )
+    AUTO_TYPE_NAME_SLUGS = frozenset({
+        'programming', 'code', 'single-choice', 'multiple-choice', 'multiple-choices',
+        'fill-in-blank', 'fill_in_blank', 'true-false', 'short-answer', 'composite', 'other',
+        'easy', 'medium', 'hard',
+    })
+    # Explicit aliases so create_v2 / Tags filtering still works when locale .mo files are
+    # not compiled (e.g. CI) or when clients post translated chip labels directly.
+    AUTO_TYPE_LABEL_ALIASES = (
+        '编程题', '填空题', '单选题', '多选题', '判断题', '简答题', '复合题', '其他',
+        '简单', '中等', '困难',
+    )
+
+    @classmethod
+    def difficulty_display(cls, name):
+        label = cls.DIFFICULTY_LABELS.get(name)
+        return str(label) if label is not None else None
+
+    @classmethod
+    def reserved_auto_type_labels(cls):
+        """Casefolded display labels for format/difficulty chips (EN + configured languages)."""
+        labels = set(cls.AUTO_TYPE_LABEL_MSGIDS)
+        labels.update(cls.AUTO_TYPE_LABEL_ALIASES)
+        lang_codes = {code for code, _name in getattr(settings, 'LANGUAGES', ())}
+        lang_codes.add(translation.get_language() or 'en')
+        for lang in lang_codes:
+            with translation.override(lang):
+                for msgid in cls.AUTO_TYPE_LABEL_MSGIDS:
+                    labels.add(gettext(msgid))
+        return {label.casefold() for label in labels if label}
+
+    @classmethod
+    def is_knowledge_problem_type(cls, problem_type, reserved_labels=None):
+        """True if this ProblemType should appear in the Tags / knowledge column."""
+        if problem_type.name in cls.FORMAT_TYPE_NAMES or cls.is_difficulty_problem_type(problem_type):
+            return False
+        if problem_type.name.casefold() in cls.AUTO_TYPE_NAME_SLUGS:
+            return False
+        if reserved_labels is None:
+            reserved_labels = cls.reserved_auto_type_labels()
+        display = user_gettext(problem_type.full_name)
+        if display and display.casefold() in reserved_labels:
+            return False
+        if problem_type.full_name and problem_type.full_name.casefold() in reserved_labels:
+            return False
+        return True
+
     @cached_property
     def types_list(self):
         return list(map(user_gettext, map(attrgetter('full_name'), self.types.all())))
+
+    @cached_property
+    def format_types_list(self):
+        # The answer format is the authoritative submission_type, not a ProblemType tag.
+        # True/false is stored as an MCQ, so surface it distinctly when the config flags it.
+        if self.submission_type == ProblemSubmissionType.MCQ:
+            try:
+                config = self.mcq_config
+            except ObjectDoesNotExist:
+                config = None
+            if config is not None:
+                if config.is_true_false:
+                    return [_('True/False')]
+                return [_('Multiple choice') if config.multiple_select else _('Single choice')]
+        label = dict(ProblemSubmissionType.CHOICES).get(self.submission_type)
+        return [label] if label else []
+
+    @cached_property
+    def format_filter_code(self):
+        """Value for list/workspace format filters; MCQ expands to single/multiple/truefalse."""
+        if self.submission_type == ProblemSubmissionType.MCQ:
+            try:
+                config = self.mcq_config
+            except ObjectDoesNotExist:
+                return self.submission_type
+            if config.is_true_false:
+                return 'truefalse'
+            if config.multiple_select:
+                return 'multiple'
+            return 'single'
+        return self.submission_type
+
+    @cached_property
+    def knowledge_types_list(self):
+        # Tags column: knowledge points only — drop difficulty, answer-format, and leftover
+        # auto chips; dedupe by displayed label so the list stays clean for older rows.
+        reserved = self.reserved_auto_type_labels()
+        seen = set()
+        out = []
+        for problem_type in self.types.all():
+            if not self.is_knowledge_problem_type(problem_type, reserved_labels=reserved):
+                continue
+            label = user_gettext(problem_type.full_name)
+            key = label.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(label)
+        return out
+
+    @cached_property
+    def knowledge_type_ids(self):
+        reserved = self.reserved_auto_type_labels()
+        return [
+            problem_type.id
+            for problem_type in self.types.all()
+            if self.is_knowledge_problem_type(problem_type, reserved_labels=reserved)
+        ]
+
+    @cached_property
+    def difficulty(self):
+        # Canonical easy/medium/hard attached to this problem, or None.
+        # Match name and full_name case-insensitively so Admin-seeded "Easy" rows still display.
+        names = set()
+        for problem_type in self.types.all():
+            canon = (
+                self.canonical_difficulty_name(problem_type.name)
+                or self.canonical_difficulty_name(problem_type.full_name)
+            )
+            if canon:
+                names.add(canon)
+        for name in Problem.DIFFICULTY_TYPE_NAMES:
+            if name in names:
+                return name
+        return None
+
+    @cached_property
+    def difficulty_label(self):
+        return self.difficulty_display(self.difficulty)
 
     def languages_list(self):
         return self.allowed_languages.values_list('common_name', flat=True).distinct().order_by('common_name')
@@ -487,6 +728,7 @@ class Problem(models.Model):
                 pass
             else:
                 problem_data._update_code(self.__original_code, self.code)
+            self.__original_code = self.code
 
     save.alters_data = True
 

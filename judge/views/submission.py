@@ -1,5 +1,6 @@
 import json
 from collections import namedtuple
+from datetime import timedelta
 from itertools import groupby
 from operator import attrgetter
 
@@ -24,6 +25,7 @@ from judge.comments import SubmissionCommentMixin
 from judge.highlight_code import highlight_code
 from judge.models import Contest, Language, Problem, ProblemTranslation, Profile, Submission
 from judge.models.problem import SubmissionSourceAccess
+from judge.utils.contest_grade import attach_student_display_score, grade_desk_url
 from judge.utils.infinite_paginator import InfinitePaginationMixin
 from judge.utils.lazy import memo_lazy
 from judge.utils.problems import get_result_data, user_completed_ids, user_editable_ids, user_tester_ids
@@ -35,10 +37,12 @@ from judge.views.ide import IDE_PROBLEM_CODE
 def submission_related(queryset):
     return queryset.select_related('user__user', 'problem', 'language') \
         .only('id', 'user__user__username', 'user__display_rank', 'user__rating', 'problem__name',
-              'problem__code', 'problem__is_public', 'language__short_name', 'language__key', 'date', 'time', 'memory',
+              'problem__code', 'problem__is_public', 'problem__submission_type', 'problem__points',
+              'language__short_name', 'language__key', 'date', 'time', 'memory',
               'points', 'result', 'status', 'case_points', 'case_total', 'current_testcase', 'contest_object',
               'locked_after', 'problem__submission_source_visibility_mode', 'user__username_display_override') \
-        .prefetch_related('contest_object__authors', 'contest_object__curators')
+        .prefetch_related('contest_object__authors', 'contest_object__curators',
+                          'manual_grade', 'contest__problem')
 
 
 class SubmissionPermissionDenied(PermissionDenied):
@@ -53,6 +57,10 @@ class SubmissionMixin(object):
 
 
 class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, DetailView):
+    def get_queryset(self):
+        return super().get_queryset().select_related('problem', 'contest__problem') \
+            .prefetch_related('manual_grade')
+
     def get_object(self, queryset=None):
         submission = super(SubmissionDetailBase, self).get_object(queryset)
         if not submission.can_see_detail(self.request.user):
@@ -156,6 +164,10 @@ def group_test_cases(cases):
     max_execution_time = 0.0
     last = None
     for case in cases:
+        # Supplementary AI rubric rows (batch=-1, see question_types.code.AI_GRADE_BATCH) are
+        # teacher-only feedback; exclude them from the student-facing status aggregation.
+        if case.batch == -1:
+            continue
         if case.time:
             max_execution_time = max(max_execution_time, case.time)
         if case.batch != last and buf:
@@ -172,11 +184,17 @@ def group_test_cases(cases):
 
 class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
     template_name = 'submission/status.html'
+    # If a submission stays Queued this long with no judge pickup, finalize as Aborted
+    # so the student sees a terminal result and can resubmit. No background requeue —
+    # page GETs must not spawn judge threads (race / duplicate grading).
+    QU_TIMEOUT_SECONDS = 40
 
     def get_context_data(self, **kwargs):
         context = super(SubmissionStatus, self).get_context_data(**kwargs)
         submission = self.object
         context['last_msg'] = event.last()
+
+        self._finalize_queued_timeout(submission)
 
         context['batches'], statuses, context['max_execution_time'] = group_test_cases(submission.test_cases.all())
         context['statuses'] = combine_statuses(statuses, submission)
@@ -191,13 +209,20 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
 
         # Get the first failed test case ID for download button
         context['first_failed_case_id'] = None
-        first_failed = submission.test_cases.exclude(status='AC').exclude(status='SC').order_by('case').first()
+        first_failed = (
+            submission.test_cases
+            .exclude(batch=-1)
+            .exclude(status='AC')
+            .exclude(status='SC')
+            .order_by('case')
+            .first()
+        )
         if first_failed:
             context['first_failed_case_id'] = first_failed.case
 
-        # AI hints context
+        # AI hints context: problem flag OR the assignment this submission belongs to.
         context['ai_hints_possible'] = (
-            submission.problem.ai_hints_enabled
+            ai_hints.hints_enabled_for(submission.problem, submission.contest_object)
             and ai_hints.is_configured()
         )
         context['ai_hints_enabled'] = (
@@ -209,9 +234,30 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
             context['ai_hints_remaining'] = ai_hints.get_remaining(self.request.profile.id)
         else:
             context['ai_hints_remaining'] = 0
+
+        from judge.question_types.code import AI_GRADE_BATCH
+        from judge.utils.contest_ai import (
+            AI_BATCH_PENDING, ai_grade_context, contest_awaits_student_ai, student_can_see_code_ai,
+        )
+        context['ai_batch_pending'] = (submission.error or '') == AI_BATCH_PENDING
+        show_code_ai = student_can_see_code_ai(self.request.user, submission)
+        context['ai_rubric_cases'] = list(
+            submission.test_cases.filter(batch=AI_GRADE_BATCH).order_by('case'),
+        ) if show_code_ai else []
+        context.update(ai_grade_context(self.request.user, submission))
+        context['can_trigger_ai_grade'] = context['can_trigger']
+        context['ai_awaiting_manual'] = (
+            contest_awaits_student_ai(submission)
+            and submission.result == 'IR'
+            and context['can_trigger_ai_grade']
+        )
+
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         if settings.DMOJ_ENABLE_COMMENTS:
             context.update(self.get_comment_context())
+
+        attach_student_display_score(submission)
+        context['grade_desk_url'] = grade_desk_url(submission, self.request.user)
 
         return context
 
@@ -228,6 +274,34 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
         context = self.get_context_data(object=self.object)
         context['comment_form'] = form
         return self.render_to_response(context)
+
+    def _finalize_queued_timeout(self, submission):
+        """If still Queued past QU_TIMEOUT_SECONDS, mark Aborted (timeout judgment).
+
+        Uses a conditional UPDATE so concurrent status-page loads only win once;
+        no daemon threads / force_judge from the request path.
+        """
+        if submission.status != 'QU' or submission.judged_date is not None:
+            return
+        cutoff = timezone.now() - timedelta(seconds=self.QU_TIMEOUT_SECONDS)
+        if submission.date > cutoff:
+            return
+        updated = Submission.objects.filter(
+            id=submission.id,
+            status='QU',
+            judged_date__isnull=True,
+            date__lte=cutoff,
+        ).update(status='AB', result='AB', points=0)
+        if not updated:
+            return
+        submission.refresh_from_db(fields=['status', 'result', 'points'])
+        submission.update_contest()
+        event.post('sub_%s' % submission.id_secret, {
+            'type': 'grading-end',
+            'result': 'AB',
+            'points': 0,
+            'total': float(submission.problem.points or 0),
+        })
 
 
 class SubmissionTestCaseQuery(SubmissionStatus):
@@ -246,8 +320,9 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
     def post(self, request, *args, **kwargs):
         submission = self.get_object()
 
-        # Gate 1: feature enabled on this problem
-        if not submission.problem.ai_hints_enabled:
+        # Gate 1: feature enabled on this problem, or on the assignment this
+        # submission was made in (does not mutate Problem.ai_hints_enabled).
+        if not ai_hints.hints_enabled_for(submission.problem, submission.contest_object):
             return JsonResponse({'error': 'AI hints are not enabled for this problem.'}, status=403)
 
         # Gate 2: backend configured
@@ -258,9 +333,8 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
         if submission.user_id != request.profile.id and not request.user.has_perm('judge.change_submission'):
             return JsonResponse({'error': 'You may only get hints for your own submissions.'}, status=403)
 
-        # Gate 4: quota
-        remaining = ai_hints.get_remaining(request.profile.id)
-        if remaining <= 0:
+        # Gate 4: quota — atomically reserve a slot up front; refunded if the call fails
+        if not ai_hints.try_reserve(request.profile.id):
             return JsonResponse({'error': 'You have used all your AI hints for today. Try again tomorrow.'}, status=429)
 
         from judge.models.ai_hints import AIHintLog
@@ -282,14 +356,87 @@ class SubmissionAIHint(LoginRequiredMixin, SubmissionMixin, DetailView):
             log.model_name = result.model_name
             log.response_time_ms = result.response_time_ms
         except Exception as e:
+            ai_hints.refund(request.profile.id)
             log.success = False
             log.error_message = str(e)[:2000]
             log.save()
-            return JsonResponse({'error': f'AI hint unavailable: {e}'}, status=503)
+            # Never leak backend internals (exception types, endpoints) to the student — log the
+            # detail server-side and return a stable, friendly message instead.
+            import logging
+            logging.getLogger(__name__).warning('AI hint failed for submission %d: %s', submission.id, e)
+            return JsonResponse(
+                {'error': 'Could not reach the AI service. Please try again later.'}, status=503)
 
         log.save()
-        ai_hints._increment(request.profile.id)
         return JsonResponse({'hint': result.hint_text, 'remaining': ai_hints.get_remaining(request.profile.id)})
+
+
+class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
+    """POST /submission/<id>/ai-grade — student/teacher trigger, latest submit only."""
+
+    def post(self, request, *args, **kwargs):
+        from django.utils.translation import gettext as _
+
+        from judge import llm
+        from judge.ai_grading_quota import (
+            is_teacher_viewer,
+            rate_limit_remaining_seconds,
+            rate_window_seconds,
+            try_reserve,
+        )
+        from judge.utils.contest_ai import ai_grade_context, run_ai_for_submission
+
+        submission = self.get_object()
+        ctx = ai_grade_context(request.user, submission)
+        if not ctx['can_trigger']:
+            if ctx.get('quota_disabled'):
+                return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
+            if ctx.get('rate_limited'):
+                return JsonResponse({
+                    'error': _('Too many AI grading requests for this problem. Try again in %(seconds)s seconds.') % {
+                        'seconds': ctx.get('rate_limit_seconds', rate_window_seconds()),
+                    },
+                }, status=429)
+            return JsonResponse(
+                {'error': _('You can only request AI grading on your latest submission.')},
+                status=403,
+            )
+        if not llm.is_configured():
+            return JsonResponse({'error': _('AI grading is not configured on this server.')}, status=503)
+
+        reserved = True
+        if not is_teacher_viewer(request.user, submission):
+            reserved, err = try_reserve(submission.user_id, submission.problem_id)
+            if not reserved:
+                if err and err.startswith('rate_limited'):
+                    return JsonResponse({
+                        'error': _('Please try again later. Try again in %(seconds)s seconds.') % {
+                            'seconds': rate_limit_remaining_seconds(submission.user_id, submission.problem_id),
+                        },
+                    }, status=429)
+                if err == 'quota_disabled':
+                    return JsonResponse({'error': _('AI grading is not available for students yet.')}, status=403)
+                return JsonResponse({'error': _('AI grading quota exhausted.')}, status=429)
+
+        try:
+            status = run_ai_for_submission(submission, manual_trigger=True)
+        except Exception:
+            import logging
+            from judge.ai_grading_quota import refund
+            if not is_teacher_viewer(request.user, submission):
+                refund(submission.user_id)
+            logging.getLogger(__name__).exception(
+                'Manual AI grade failed for submission %d', submission.id,
+            )
+            return JsonResponse(
+                {'error': _('Could not reach the AI service. Please try again later.')},
+                status=503,
+            )
+        rate_remaining = None
+        if not is_teacher_viewer(request.user, submission):
+            from judge.ai_grading_quota import rate_limit_remaining_count
+            rate_remaining = rate_limit_remaining_count(submission.user_id, submission.problem_id)
+        return JsonResponse({'ok': True, 'status': status, 'rate_remaining': rate_remaining})
 
 
 class SubmissionSourceRaw(SubmissionSource):
@@ -329,6 +476,9 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
     template_name = 'submission/list.html'
     context_object_name = 'submissions'
     first_page_href = None
+    filter_problems = ()
+    filter_users = ()
+    filter_contests = ()
 
     def get_result_data(self):
         result = self._get_result_data()
@@ -397,6 +547,20 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
         if self.selected_statuses:
             queryset = queryset.filter(result__in=self.selected_statuses)
 
+        if self.filter_problems:
+            queryset = queryset.filter(problem__code__in=self.filter_problems)
+        if self.filter_users:
+            queryset = queryset.filter(user__user__username__in=self.filter_users)
+        if self.filter_contests:
+            include_practice = '__none__' in self.filter_contests
+            contest_keys = [key for key in self.filter_contests if key != '__none__']
+            contest_q = Q()
+            if include_practice:
+                contest_q |= Q(contest_object__isnull=True)
+            if contest_keys:
+                contest_q |= Q(contest_object__key__in=contest_keys)
+            queryset = queryset.filter(contest_q)
+
         # Filter out IDE practice submissions except when viewing the idepractice problem page
         if not (hasattr(self, 'problem') and self.problem.code == IDE_PROBLEM_CODE):
             queryset = queryset.exclude(problem__code=IDE_PROBLEM_CODE)
@@ -422,6 +586,30 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
             hidden_codes += ['IE']
         return [(key, value) for key, value in Submission.RESULT if key not in hidden_codes]
 
+    def _filter_problem_options(self):
+        if not self.filter_problems:
+            return []
+        problems = {
+            p.code: '%s — %s' % (p.code, p.name)
+            for p in Problem.objects.filter(code__in=self.filter_problems).only('code', 'name')
+        }
+        return [(code, problems.get(code, code)) for code in self.filter_problems]
+
+    def _filter_contest_options(self):
+        if not self.filter_contests:
+            return []
+        contests = {
+            c.key: '%s — %s' % (c.key, c.name)
+            for c in Contest.objects.filter(key__in=self.filter_contests).only('key', 'name')
+        }
+        options = []
+        for key in self.filter_contests:
+            if key == '__none__':
+                options.append((key, _('Practice only (no contest)')))
+            else:
+                options.append((key, contests.get(key, key)))
+        return options
+
     def get_context_data(self, **kwargs):
         context = super(SubmissionsListBase, self).get_context_data(**kwargs)
         authenticated = self.request.user.is_authenticated
@@ -440,6 +628,17 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
         context['all_statuses'] = self.get_searchable_status_codes()
         context['selected_statuses'] = self.selected_statuses
 
+        context['filter_problems'] = self.filter_problems
+        context['filter_users'] = self.filter_users
+        context['filter_contests'] = self.filter_contests
+        context['filter_problem_options'] = self._filter_problem_options()
+        context['filter_contest_options'] = self._filter_contest_options()
+        # Hide filters already implied by the URL scope (per-problem / per-user / in-contest).
+        context['show_problem_filter'] = self.show_problem
+        context['show_user_filter'] = not hasattr(self, 'profile')
+        context['show_contest_filter'] = not self.in_contest
+        context['scope_contest'] = self.contest if self.in_contest else None
+
         context['results_json'] = mark_safe(json.dumps(self.get_result_data()))
         context['results_colors_json'] = mark_safe(json.dumps(settings.DMOJ_STATS_SUBMISSION_RESULT_COLORS))
 
@@ -448,6 +647,10 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
         context['my_submissions_link'] = self.get_my_submissions_page()
         context['all_submissions_link'] = self.get_all_submissions_page()
         context['tab'] = self.tab
+        submissions = context.get('submissions')
+        if submissions is not None:
+            for submission in submissions:
+                attach_student_display_score(submission)
         return context
 
     def get(self, request, *args, **kwargs):
@@ -457,6 +660,9 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
 
         self.selected_languages = set(request.GET.getlist('language'))
         self.selected_statuses = set(request.GET.getlist('status'))
+        self.filter_problems = tuple(p for p in request.GET.getlist('problem') if p.strip())
+        self.filter_users = tuple(u for u in request.GET.getlist('user') if u.strip())
+        self.filter_contests = tuple(c for c in request.GET.getlist('contest') if c.strip())
 
         if 'results' in request.GET:
             return JsonResponse(self.get_result_data())
@@ -630,6 +836,7 @@ def single_submission(request):
     if not submission.problem.is_accessible_by(request.user):
         raise Http404()
 
+    attach_student_display_score(submission)
     return render(request, 'submission/row.html', {
         'submission': submission,
         'completed_problem_ids': user_completed_ids(request.profile) if authenticated else [],
@@ -660,7 +867,8 @@ class AllSubmissions(InfinitePaginationMixin, SubmissionsListBase):
         return context
 
     def _get_result_data(self, queryset=None):
-        if queryset is not None or self.in_contest or self.selected_languages or self.selected_statuses:
+        if (queryset is not None or self.in_contest or self.selected_languages or self.selected_statuses or
+                self.filter_problems or self.filter_users or self.filter_contests):
             return super(AllSubmissions, self)._get_result_data(queryset)
 
         key = 'global_submission_result_data'
