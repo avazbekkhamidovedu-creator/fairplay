@@ -42,9 +42,20 @@ def student_quota_limit() -> int:
 
 
 def is_teacher_viewer(user, submission) -> bool:
+    """Whether ``user`` counts as a teacher for AI grading purposes.
+
+    Permission-based only — never bare ``is_staff`` and never group/roster
+    membership. A user is a teacher when they hold an explicit grading or
+    course-editing permission (rejudge, edit all contests, or create course),
+    or when they are an editor (author/curator) of the contest the submission
+    belongs to (``is_editable_by`` is itself permission-first and falls back to
+    contest membership for course instructors).
+    """
     if user is None or not user.is_authenticated:
         return False
-    if user.is_staff or user.has_perm('judge.rejudge_submission'):
+    if user.has_perm('judge.rejudge_submission') or \
+            user.has_perm('judge.edit_all_contest') or \
+            user.has_perm('judge.add_organization'):
         return True
     try:
         contest = submission.contest_object

@@ -305,17 +305,33 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         sub = _sub(self.student, problem)
         self.assertFalse(is_teacher_viewer(self.student, sub))
 
-    def test_is_teacher_viewer_true_for_staff(self):
+    def test_is_teacher_viewer_false_for_bare_staff(self):
+        # Staff flag alone is NOT teacher status — explicit permissions are
+        # required (never group/roster membership).
         staff = create_user(username='ai_quota_staff', is_staff=True)
         problem = create_problem(code='ai_quota_staff_problem', is_public=True)
         sub = _sub(self.student, problem)
-        self.assertTrue(is_teacher_viewer(staff, sub))
+        self.assertFalse(is_teacher_viewer(staff, sub))
 
     def test_is_teacher_viewer_true_with_rejudge_permission(self):
         grader = create_user(username='ai_quota_grader', user_permissions=('rejudge_submission',))
         problem = create_problem(code='ai_quota_grader_problem', is_public=True)
         sub = _sub(self.student, problem)
         self.assertTrue(is_teacher_viewer(grader, sub))
+
+    def test_is_teacher_viewer_true_with_edit_all_contest_permission(self):
+        editor = create_user(username='ai_quota_editor', user_permissions=('edit_all_contest',))
+        problem = create_problem(code='ai_quota_editor_problem', is_public=True)
+        sub = _sub(self.student, problem)
+        self.assertTrue(is_teacher_viewer(editor, sub))
+
+    def test_is_teacher_viewer_true_with_create_course_permission(self):
+        # judge.add_organization is the site-teacher grant (same as
+        # profile_is_site_teacher's permission branch — no group lookup).
+        teacher = create_user(username='ai_quota_site_teacher', user_permissions=('add_organization',))
+        problem = create_problem(code='ai_quota_site_teacher_problem', is_public=True)
+        sub = _sub(self.student, problem)
+        self.assertTrue(is_teacher_viewer(teacher, sub))
 
     def test_is_teacher_viewer_true_for_contest_editor(self):
         # The author has no special permissions; only their contest
