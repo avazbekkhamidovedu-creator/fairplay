@@ -2,10 +2,11 @@
 
 Three attack surfaces are locked in here:
 
-* **Concurrent editing** — two teachers race on the same contest. The
-  "only extend, never shorten" guards must reject the stale (losing) form
-  *atomically*: no half-applied rename, no shrunk window, no pulled-in
-  deadline.
+* **Concurrent editing** — two teachers race on the same contest. Contest
+  times are last-write-wins (the "only extend, never shorten" guards that
+  used to reject a stale form were removed so a wrong deadline stays
+  fixable), so what these pin down is that each save lands *atomically*:
+  whichever payload wins is applied whole, never half.
 * **Malicious payloads** — hostile JSON (floats that overflow to infinity,
   astronomically large ints, nested objects in text fields, SQLi strings,
   unknown fields) must produce a clean 4xx or a benign no-op, never a 500
@@ -17,7 +18,7 @@ Three attack surfaces are locked in here:
 """
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
@@ -30,11 +31,12 @@ from judge.models.tests.util import CommonDataMixin, create_contest, create_prob
 class ContestConcurrentEditTestCase(CommonDataMixin, TestCase):
     """Two teachers racing on the same contest (read-modify-write hazard).
 
-    Each save carries a full-form payload, so the loser's stale form would
-    normally clobber the winner's changes. The extend-only guards are the
-    server-side backstop: a stale form that shrinks what the other teacher
-    just extended must be rejected outright, with the whole payload rolled
-    back (transactional), not partially applied.
+    Each save carries a full-form payload, so the loser's stale form clobbers
+    the winner's changes. The extend-only guards used to reject that as a side
+    effect; they were removed so a teacher can fix a mis-typed deadline, which
+    makes contest times plain last-write-wins. These tests pin that down — it
+    is the accepted trade-off, not an oversight — and check that whatever does
+    land is applied atomically.
     """
 
     @classmethod
@@ -50,7 +52,8 @@ class ContestConcurrentEditTestCase(CommonDataMixin, TestCase):
             authors=('superuser',),
             time_limit=timedelta(hours=2),
         )
-        # Students have joined → the extend-only guards are active.
+        # Students have joined — no longer a gate on shortening, but it keeps
+        # the participation-shifting code path in play for these saves.
         ContestParticipation.objects.create(
             contest=cls.contest,
             user=create_user(username='race_student').profile,
@@ -73,7 +76,7 @@ class ContestConcurrentEditTestCase(CommonDataMixin, TestCase):
         payload.update(overrides)
         return payload
 
-    def test_stale_form_cannot_shrink_duration_or_rename(self):
+    def test_stale_form_overwrites_an_earlier_extension(self):
         # Teacher A extends 2h → 3h...
         a = self.client.post(
             reverse('contest_edit', args=['racecontest']),
@@ -81,20 +84,20 @@ class ContestConcurrentEditTestCase(CommonDataMixin, TestCase):
         )
         self.assertEqual(a.status_code, 200, a.content)
         # ...then teacher B, who loaded the page BEFORE A's save, submits their
-        # stale form (original 2h + a rename). The guard must reject it and
-        # roll back ALL of B's edits — no shrink, no half-applied rename.
+        # stale form (original 2h + a rename). Nothing rejects it any more:
+        # last write wins, and B's whole payload lands together.
         self.client.force_login(self.teacher_b)
         b = self.client.post(
             reverse('contest_edit', args=['racecontest']),
             data=json.dumps(self._payload(duration_hours=2, name='Stale Rename')),
             content_type='application/json',
         )
-        self.assertEqual(b.status_code, 400, b.content)
+        self.assertEqual(b.status_code, 200, b.content)
         self.contest.refresh_from_db()
-        self.assertEqual(self.contest.time_limit, timedelta(hours=3))  # A's extension survived
-        self.assertEqual(self.contest.name, 'Race')  # B's rename rolled back
+        self.assertEqual(self.contest.time_limit, timedelta(hours=2))  # A's extension lost
+        self.assertEqual(self.contest.name, 'Stale Rename')
 
-    def test_stale_form_cannot_pull_end_time_earlier(self):
+    def test_stale_form_pulls_the_end_time_back_in(self):
         # Teacher A pushes the deadline out to +10 days...
         now = timezone.now()
         later = now + timedelta(days=10)
@@ -103,24 +106,25 @@ class ContestConcurrentEditTestCase(CommonDataMixin, TestCase):
             data=json.dumps(self._payload(end_time=later.isoformat())), content_type='application/json',
         )
         self.assertEqual(a.status_code, 200, a.content)
-        # ...teacher B's stale form still carries the original +5d deadline.
-        # Even though B's duration (2h) is unchanged, the end_time guard alone
-        # must reject the request atomically.
+        # ...teacher B's stale form still carries the original +5d deadline and
+        # now wins. Same trade-off as above: the check that used to catch this
+        # also blocked legitimately correcting a wrong deadline.
         self.client.force_login(self.teacher_b)
+        stale = self._payload()
         b = self.client.post(
             reverse('contest_edit', args=['racecontest']),
-            data=json.dumps(self._payload()), content_type='application/json',
+            data=json.dumps(stale), content_type='application/json',
         )
-        self.assertEqual(b.status_code, 400, b.content)
+        self.assertEqual(b.status_code, 200, b.content)
         self.contest.refresh_from_db()
-        self.assertEqual(self.contest.end_time, later)
+        self.assertEqual(self.contest.end_time, datetime.fromisoformat(stale['end_time']))
 
     def test_same_base_extension_by_both_teachers_is_allowed(self):
-        # Both loaded the 2h form. A saves 3h; B's form — with the frontend's
-        # recalculated end (max(saved end, now) + increase, mirroring the
-        # stored base + B's own 1h bump) — saves 4h. Since each request only
-        # ever GROWS the stored window relative to what is in the DB, both
-        # succeed and the later write wins: no data loss, no lock needed.
+        # Both loaded the 2h form. A saves 3h; B's form — with the editor's
+        # recalculated end (max(saved end, now) + increase, i.e. the stored
+        # base plus B's own 1h bump) — saves 4h. Nothing conflicts here: B's
+        # values are strictly larger, so the later write wins with no data
+        # loss and no lock needed.
         now = timezone.now()
         a = self.client.post(
             reverse('contest_edit', args=['racecontest']),
