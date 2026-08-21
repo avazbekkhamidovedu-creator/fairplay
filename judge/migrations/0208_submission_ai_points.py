@@ -6,27 +6,27 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("judge", "0207_merge_manual_grade_and_ai_grading"),
+        ('judge', '0207_merge_manual_grade_and_ai_grading'),
     ]
 
     operations = [
         migrations.AddField(
-            model_name="submission",
-            name="ai_points",
+            model_name='submission',
+            name='ai_points',
             field=models.FloatField(
                 blank=True,
-                help_text="Supplementary AI rubric score, on the problem points scale, after the test-case ratio clamp. Null until AI grading has run.",
+                help_text='Supplementary AI rubric score, on the problem points scale, after the test-case ratio clamp. Null until AI grading has run.',
                 null=True,
-                verbose_name="AI rubric points",
+                verbose_name='AI rubric points',
             ),
         ),
         migrations.AlterField(
-            model_name="contest",
-            name="allow_virtual_participation",
+            model_name='contest',
+            name='allow_virtual_participation',
             field=models.BooleanField(
                 default=True,
-                help_text="Allow users to join virtually after the assignment ends.",
-                verbose_name="allow virtual join",
+                help_text='Allow users to join virtually after the assignment ends.',
+                verbose_name='allow virtual join',
             ),
         ),
     ]

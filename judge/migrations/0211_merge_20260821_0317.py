@@ -6,8 +6,8 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("judge", "0208_submission_ai_points"),
-        ("judge", "0210_merge_drop_requires_manual_review_and_auto_grade_delay"),
+        ('judge', '0208_submission_ai_points'),
+        ('judge', '0210_merge_drop_requires_manual_review_and_auto_grade_delay'),
     ]
 
     operations = []
