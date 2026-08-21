@@ -12,7 +12,7 @@ from judge.models import Contest, ContestMoss, ContestParticipation, ContestSubm
 from judge.utils.celery import Progress
 
 __all__ = ('rescore_contest', 'finalize_contest_results', 'unfinalize_contest_results',
-           'run_moss', 'batch_ai_grade', 'auto_grade_contest')
+           'run_moss', 'batch_ai_grade', 'auto_grade_contest', 'ai_rejudge_submission')
 
 
 @shared_task(bind=True)
@@ -176,8 +176,9 @@ def batch_ai_grade(self, contest_key, auto=False):
             except Exception:
                 logger = __import__('logging').getLogger(__name__)
                 logger.exception('Batch AI grading failed for submission %s', submission.id)
-            graded += 1
-            p.done = graded
+            else:
+                graded += 1
+            p.did(1)
 
     contest.ai_grading_batch_finished_at = timezone.now()
     contest.save(update_fields=['ai_grading_batch_finished_at'])
@@ -187,7 +188,7 @@ def batch_ai_grade(self, contest_key, auto=False):
 
 
 @shared_task(bind=True)
-def auto_grade_contest(self, contest_key, auto=False):
+def auto_grade_contest(self, contest_key):
     """Re-grade latest objective submissions (no LLM).
 
     Scheduled after ``end_time`` + ``ai_grading_auto_delay_minutes``. Multiple
@@ -208,9 +209,39 @@ def auto_grade_contest(self, contest_key, auto=False):
             except Exception:
                 logger = __import__('logging').getLogger(__name__)
                 logger.exception('Objective auto-grade failed for submission %s', submission.id)
-            graded += 1
-            p.done = graded
-
+            else:
+                graded += 1
+            p.did(1)
     for participation in contest.users.iterator():
         participation.recompute_results()
     return graded
+
+
+@shared_task
+def ai_rejudge_submission(submission_id, user_id=None):
+    """Run LLM grading for one short-answer / AI fill-blank submission off the web worker.
+
+    Queued by :func:`judge.views.widgets.rejudge_submission` so gunicorn does not
+    block on the model call. ``user_id`` is the rejudge requester (for revisions).
+    """
+    from django.contrib.auth.models import User
+
+    from judge.utils.contest_ai import run_ai_for_submission
+
+    try:
+        submission = Submission.objects.select_related('problem', 'user').get(id=submission_id)
+    except Submission.DoesNotExist:
+        return 'missing'
+
+    rejudge_user = None
+    if user_id is not None:
+        rejudge_user = User.objects.filter(id=user_id).first()
+
+    try:
+        return run_ai_for_submission(
+            submission, manual_trigger=True, rejudge_user=rejudge_user,
+        )
+    except Exception:
+        logger = __import__('logging').getLogger(__name__)
+        logger.exception('AI rejudge failed for submission %s', submission_id)
+        return 'error'

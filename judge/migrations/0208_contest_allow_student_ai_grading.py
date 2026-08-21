@@ -27,21 +27,7 @@ class Migration(migrations.Migration):
                     'page (subject to quota). Teachers can always run AI grading from '
                     'the Grade page or submission page.'
                 ),
-                verbose_name='allow student AI grading',
-            ),
-        ),
-        migrations.AlterField(
-            model_name='contest',
-            name='ai_grading_auto_delay_minutes',
-            field=models.PositiveIntegerField(
-                default=30,
-                help_text=(
-                    'Automatically re-grade each student’s latest objective submissions '
-                    '(multiple choice, true/false, exact fill-blank) this many minutes '
-                    'after the contest ends. Does not call the LLM. 0 disables auto-run '
-                    '(teachers still use “Run AI grading” on the Grade page for AI).'
-                ),
-                verbose_name='auto-grade delay after end (minutes)',
+                verbose_name='allow student use AI grading',
             ),
         ),
         migrations.AlterField(

@@ -123,7 +123,7 @@ class ContestGradeRejudgeEndpointTestCase(GradeTestBase):
         self.assertEqual(response['Location'], '/problem/grade-perm-prob')
 
     def test_short_answer_rejudge_runs_ai_not_ir_placeholder(self):
-        """Teachers clicking Rejudge on ANS must invoke the LLM path (manual_trigger),
+        """Teachers clicking Rejudge on ANS must queue the LLM path (Celery),
         not plain grade_internally which would stamp IR when AI mode is off."""
         from judge.models import ContestProblem, ContestSubmission, Language, SubmissionSource
         from judge.models.tests.util import create_contest_participation
@@ -140,13 +140,15 @@ class ContestGradeRejudgeEndpointTestCase(GradeTestBase):
         SubmissionSource.objects.create(submission=sub, source='{"text":"bad to computer"}')
         ContestSubmission.objects.create(submission=sub, problem=cp, participation=part, points=0)
 
-        with mock.patch('judge.utils.contest_ai.run_ai_for_submission', return_value='internal-ai') as run, \
+        with mock.patch('judge.tasks.contest.ai_rejudge_submission.delay') as delay, \
                 mock.patch.object(Submission, 'judge') as judge:
             response = self._rejudge(self.superuser, {'id': str(sub.id)})
         self.assertEqual(response.status_code, 200)
-        run.assert_called_once()
-        self.assertTrue(run.call_args.kwargs.get('manual_trigger'))
+        delay.assert_called_once_with(sub.id, self.superuser.id)
         judge.assert_not_called()
+        sub.refresh_from_db()
+        self.assertEqual(sub.status, 'QU')
+        self.assertIsNotNone(sub.rejudged_date)
 
 
 class ContestGradeCanRejudgeFlagTestCase(GradeTestBase):

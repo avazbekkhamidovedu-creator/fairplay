@@ -46,14 +46,25 @@ def rejudge_submission(request):
 
     # Short-answer / AI fill-blank: plain rejudge only writes IR placeholders
     # ("AI grading is off…") because should_run_ai_now is false. Teachers
-    # clicking Rejudge expect a fresh LLM pass — same as "View AI grading".
-    from judge.models import ProblemSubmissionType
-    from judge.utils.contest_ai import problem_has_ai_grading, run_ai_for_submission
+    # clicking Rejudge expect a fresh LLM pass — queue it on Celery so the
+    # gunicorn worker is not blocked on the model call.
+    from django.utils import timezone
+
+    from judge.models import ProblemSubmissionType, SubmissionTestCase
+    from judge.utils.contest_ai import problem_has_ai_grading
 
     st = submission.problem.submission_type
     if (st in (ProblemSubmissionType.SHORT_ANSWER, ProblemSubmissionType.FILL_BLANK) and
             problem_has_ai_grading(submission.problem)):
-        run_ai_for_submission(submission, manual_trigger=True, rejudge_user=request.user)
+        # Mirror judge_submission's requeue so Grade-page polling sees
+        # is_graded=False until the Celery task finishes.
+        Submission.objects.filter(id=submission.id).update(
+            status='QU', result=None, rejudged_date=timezone.now(),
+            time=None, memory=None, points=None, case_points=0, error=None,
+        )
+        SubmissionTestCase.objects.filter(submission_id=submission.id).delete()
+        from judge.tasks.contest import ai_rejudge_submission
+        ai_rejudge_submission.delay(submission.id, request.user.id)
     else:
         submission.judge(rejudge=True, rejudge_user=request.user)
 
@@ -73,6 +84,7 @@ def rejudge_submission(request):
             'result': submission.result,
             'is_graded': submission.is_graded,
             'was_rejudged': submission.rejudged_date is not None,
+            'queued': True,
         })
     return HttpResponse('success', content_type='text/plain')
 

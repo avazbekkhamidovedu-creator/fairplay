@@ -19,6 +19,8 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # Delay semantics move here only (not also in 0208): signed int so −1 = Off,
+        # 0 = at end time, default 120 minutes.
         migrations.AlterField(
             model_name='contest',
             name='ai_grading_auto_delay_minutes',
@@ -43,19 +45,6 @@ class Migration(migrations.Migration):
                     "problem. Each problem's own AI Hint setting is unchanged outside this assignment."
                 ),
                 verbose_name='allow student use AI hints',
-            ),
-        ),
-        migrations.AlterField(
-            model_name='contest',
-            name='allow_student_ai_grading',
-            field=models.BooleanField(
-                default=False,
-                help_text=(
-                    'When enabled, students can request AI grading on the submission '
-                    'page (subject to quota). Teachers can always run AI grading from '
-                    'the Grade page or submission page.'
-                ),
-                verbose_name='allow student use AI grading',
             ),
         ),
         migrations.RunPython(forwards_zero_to_off, backwards_off_to_zero),
