@@ -25,6 +25,7 @@ from judge.comments import SubmissionCommentMixin
 from judge.highlight_code import highlight_code
 from judge.models import Contest, Language, Problem, ProblemTranslation, Profile, Submission
 from judge.models.problem import SubmissionSourceAccess
+from judge.utils.contest_grade import attach_student_display_score, grade_desk_url
 from judge.utils.infinite_paginator import InfinitePaginationMixin
 from judge.utils.lazy import memo_lazy
 from judge.utils.problems import get_result_data, user_completed_ids, user_editable_ids, user_tester_ids
@@ -36,11 +37,12 @@ from judge.views.ide import IDE_PROBLEM_CODE
 def submission_related(queryset):
     return queryset.select_related('user__user', 'problem', 'language') \
         .only('id', 'user__user__username', 'user__display_rank', 'user__rating', 'problem__name',
-              'problem__code', 'problem__is_public', 'problem__submission_type',
+              'problem__code', 'problem__is_public', 'problem__submission_type', 'problem__points',
               'language__short_name', 'language__key', 'date', 'time', 'memory',
               'points', 'result', 'status', 'case_points', 'case_total', 'current_testcase', 'contest_object',
               'locked_after', 'problem__submission_source_visibility_mode', 'user__username_display_override') \
-        .prefetch_related('contest_object__authors', 'contest_object__curators')
+        .prefetch_related('contest_object__authors', 'contest_object__curators',
+                          'manual_grade', 'contest__problem')
 
 
 class SubmissionPermissionDenied(PermissionDenied):
@@ -55,6 +57,10 @@ class SubmissionMixin(object):
 
 
 class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, DetailView):
+    def get_queryset(self):
+        return super().get_queryset().select_related('problem', 'contest__problem') \
+            .prefetch_related('manual_grade')
+
     def get_object(self, queryset=None):
         submission = super(SubmissionDetailBase, self).get_object(queryset)
         if not submission.can_see_detail(self.request.user):
@@ -249,6 +255,9 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         if settings.DMOJ_ENABLE_COMMENTS:
             context.update(self.get_comment_context())
+
+        attach_student_display_score(submission)
+        context['grade_desk_url'] = grade_desk_url(submission, self.request.user)
 
         return context
 
@@ -630,6 +639,10 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
         context['my_submissions_link'] = self.get_my_submissions_page()
         context['all_submissions_link'] = self.get_all_submissions_page()
         context['tab'] = self.tab
+        submissions = context.get('submissions')
+        if submissions is not None:
+            for submission in submissions:
+                attach_student_display_score(submission)
         return context
 
     def get(self, request, *args, **kwargs):
@@ -815,6 +828,7 @@ def single_submission(request):
     if not submission.problem.is_accessible_by(request.user):
         raise Http404()
 
+    attach_student_display_score(submission)
     return render(request, 'submission/row.html', {
         'submission': submission,
         'completed_problem_ids': user_completed_ids(request.profile) if authenticated else [],

@@ -1,7 +1,6 @@
 from functools import cached_property
 
 from django.core.exceptions import ValidationError
-from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.translation import gettext as _, gettext_lazy
 
@@ -38,6 +37,9 @@ class ExamContestFormat(DefaultContestFormat):
             if contest_problem.score_uses_latest:
                 latest.add(contest_problem.id)
         return hidden, latest
+
+    def scoring_uses_latest(self, contest_problem):
+        return contest_problem.score_uses_latest
 
     def update_participation(self, participation):
         hidden_ids, latest_ids = self._problem_policy
@@ -77,18 +79,22 @@ class ExamContestFormat(DefaultContestFormat):
         participation.format_data = format_data
         participation.save()
 
-    def display_user_problem(self, participation, contest_problem):
+    def display_user_problem(self, participation, contest_problem, cell_url=None):
         format_data = (participation.format_data or {}).get(str(contest_problem.id))
         if format_data and format_data.get('hidden'):
+            url = self.problem_cell_url(participation, contest_problem, cell_url)
+            if url:
+                return format_html(
+                    '<td class="submitted-hidden"><a href="{url}" title="{title}">'
+                    '<i class="fa fa-check"></i></a></td>',
+                    url=url,
+                    title=_('Submitted'),
+                )
             return format_html(
-                '<td class="submitted-hidden"><a href="{url}" title="{title}">'
-                '<i class="fa fa-check"></i></a></td>',
-                url=reverse('contest_user_submissions',
-                            args=[self.contest.key, participation.user.user.username,
-                                  contest_problem.problem.code]),
+                '<td class="submitted-hidden" title="{title}"><i class="fa fa-check"></i></td>',
                 title=_('Submitted'),
             )
-        return super().display_user_problem(participation, contest_problem)
+        return super().display_user_problem(participation, contest_problem, cell_url=cell_url)
 
     def get_short_form_display(self):
         yield _('The latest submission is used for hidden (e.g. multiple-choice) problems; '

@@ -17,9 +17,10 @@ Covers four contracts that were broken or unguarded:
    fill-blank / short-answer submissions now ship an ``answer_display`` list
    (same rows as the student workspace) instead of raw JSON source.
 4. **Pending queue semantics.** ``is_pending`` means "awaiting teacher review":
-   manual types with no score, or AI-graded fill-blank/short-answer problems
-   flagged "require teacher review after AI scoring" (now persisted through the
-   problem editor). A code submission still in the judge queue is NOT pending.
+   a manually-graded type (file upload) with no score yet. The old
+   "require teacher review after AI scoring" per-problem flag is retired — the
+   Grade desk replaced that queue — so an AI-scored answer is not pending, and
+   neither is a code submission still sitting in the judge queue.
 """
 
 import json
@@ -84,14 +85,13 @@ class ContestEditPreservesSubmissionsTestCase(GradeTestBase):
         )
 
     def _make_contest_submission(self, contest_problem=None, points=50.0):
-        """Attach a ContestSubmission row + keep the grade fixture's Submission."""
-        cp = contest_problem or ContestProblem.objects.get(contest=self.contest, problem=self.problem)
-        participation = ContestParticipation.objects.create(
-            contest=self.contest, user=self.student.profile, real_start=timezone.now(),
-        )
-        return ContestSubmission.objects.create(
-            submission=self.submission, problem=cp, participation=participation, points=points,
-        )
+        """Reuse the live ContestSubmission from GradeTestBase."""
+        cs = self.contest_submission
+        if contest_problem is not None and cs.problem_id != contest_problem.id:
+            cs.problem = contest_problem
+        cs.points = points
+        cs.save()
+        return cs
 
     def test_edit_preserves_contest_submission_links(self):
         """A re-save with the same problem list keeps ContestSubmission rows."""
@@ -165,15 +165,9 @@ class ContestGradeTotalUsesAssignmentPointsTestCase(GradeTestBase):
         # Re-weight the assignment: the problem is worth 100 pts on its own
         # scale, but this assignment gives it only 25.
         ContestProblem.objects.filter(contest=cls.contest, problem=cls.problem).update(points=25)
-        # Student-visible score after a 50% machine score on a 25-pt problem.
-        cls.participation = ContestParticipation.objects.create(
-            contest=cls.contest, user=cls.student.profile, real_start=timezone.now(),
-        )
-        ContestSubmission.objects.create(
-            submission=cls.submission, problem=ContestProblem.objects.get(
-                contest=cls.contest, problem=cls.problem),
-            participation=cls.participation, points=12.5,
-        )
+        cls.contest_problem.refresh_from_db()
+        cls.contest_submission.points = 12.5
+        cls.contest_submission.save(update_fields=['points'])
 
     def _grade_payload(self):
         response = self._client(self.curator).get(self.grade_url)
@@ -187,17 +181,17 @@ class ContestGradeTotalUsesAssignmentPointsTestCase(GradeTestBase):
         self.assertEqual(row['total'], 25)      # ContestProblem.points, not 100
         self.assertEqual(row['points'], 12.5)   # ContestSubmission.points, not 50
 
-    def test_standalone_submission_falls_back_to_problem_scale(self):
-        """A submission with no ContestSubmission row keeps the old behavior."""
+    def test_standalone_submission_uses_problem_points_not_case_total(self):
+        """No ContestSubmission: Grade total is problem.points, never case_total."""
         lone = Submission.objects.create(
             user=self.student.profile, problem=self.problem,
             language=Language.objects.get(key='PY3'), result='AC', status='D',
-            contest_object=self.contest, points=80.0, case_total=100,
+            contest_object=self.contest, points=1.0, case_total=100,
         )
         payload = self._grade_payload()
         row = next(s for s in payload if s['id'] == lone.id)
-        self.assertEqual(row['total'], 100)
-        self.assertEqual(row['points'], 80.0)
+        self.assertEqual(row['total'], self.problem.points)  # 1, not case_total 100
+        self.assertEqual(row['points'], 1.0)
 
     def test_save_endpoint_clamps_to_assignment_total(self):
         response = self._client(self.curator).post(
@@ -281,28 +275,13 @@ class ContestGradePendingSemanticsTestCase(GradeTestBase):
         self.assertEqual(row['points'], 50.0)
         self.assertFalse(row['is_pending'])
 
-    def test_fill_blank_with_manual_review_flag_is_pending(self):
+    def test_ai_graded_fill_blank_with_a_score_is_not_pending(self):
+        """``requires_manual_review`` is retired: an AI-scored answer resolves itself."""
         from judge.models import ProblemBlank
         fb = create_problem('grade-pending-fb', submission_type='B')
         ProblemBlank.objects.create(problem=fb, order=0, answers='x', points=1)
         ContestProblem.objects.create(contest=self.contest, problem=fb, points=5, order=4)
-        ProblemFillBlankConfig.objects.create(
-            problem=fb, grading_mode='ai', requires_manual_review=True)
-        sub = Submission.objects.create(
-            user=self.student.profile, problem=fb,
-            language=Language.objects.get(key='PY3'), result='AC', status='D',
-            contest_object=self.contest, points=5.0, case_total=1,
-        )
-        SubmissionSource.objects.create(submission=sub, source=json.dumps({'answers': ['x']}))
-        self.assertTrue(self._payload_row(sub)['is_pending'])
-
-    def test_fill_blank_without_review_flag_is_not_pending(self):
-        from judge.models import ProblemBlank
-        fb = create_problem('grade-pending-fb2', submission_type='B')
-        ProblemBlank.objects.create(problem=fb, order=0, answers='x', points=1)
-        ContestProblem.objects.create(contest=self.contest, problem=fb, points=5, order=5)
-        ProblemFillBlankConfig.objects.create(
-            problem=fb, grading_mode='ai', requires_manual_review=False)
+        ProblemFillBlankConfig.objects.create(problem=fb, grading_mode='ai')
         sub = Submission.objects.create(
             user=self.student.profile, problem=fb,
             language=Language.objects.get(key='PY3'), result='AC', status='D',
@@ -311,21 +290,13 @@ class ContestGradePendingSemanticsTestCase(GradeTestBase):
         SubmissionSource.objects.create(submission=sub, source=json.dumps({'answers': ['x']}))
         self.assertFalse(self._payload_row(sub)['is_pending'])
 
-    def test_reviewed_pending_submission_leaves_pending(self):
-        from judge.models import ProblemBlank
-        fb = create_problem('grade-pending-fb3', submission_type='B')
-        ProblemBlank.objects.create(problem=fb, order=0, answers='x', points=1)
-        ContestProblem.objects.create(contest=self.contest, problem=fb, points=5, order=6)
-        ProblemFillBlankConfig.objects.create(
-            problem=fb, grading_mode='ai', requires_manual_review=True)
-        sub = Submission.objects.create(
-            user=self.student.profile, problem=fb,
-            language=Language.objects.get(key='PY3'), result='AC', status='D',
-            contest_object=self.contest, points=5.0, case_total=1,
-            reviewed_by=self.curator.profile, reviewed_at=timezone.now(),
-        )
-        SubmissionSource.objects.create(submission=sub, source=json.dumps({'answers': ['x']}))
-        self.assertFalse(self._payload_row(sub)['is_pending'])
+    def test_requires_manual_review_field_is_gone(self):
+        self.assertNotIn(
+            'requires_manual_review',
+            [f.name for f in ProblemFillBlankConfig._meta.get_fields()])
+        self.assertNotIn(
+            'requires_manual_review',
+            [f.name for f in ProblemShortAnswerConfig._meta.get_fields()])
 
     def test_queued_code_submission_is_not_pending(self):
         """A code submission waiting on the judge resolves itself — not pending."""
@@ -355,10 +326,10 @@ class ContestGradePendingSemanticsTestCase(GradeTestBase):
         self.assertTrue(self._payload_row(sub)['virtual'])
 
 
-class RequireManualReviewRoundTripTestCase(GradeTestBase):
-    """The problem editor persists + prefills the review-required flag."""
+class RequireManualReviewRetiredTestCase(GradeTestBase):
+    """The review-required flag is retired: the editor neither writes nor prefills it."""
 
-    def test_requires_manual_review_round_trip(self):
+    def test_create_page_ignores_ai_review_payload(self):
         from judge.models import Problem
         from judge.views.problem_create_v2 import ProblemCreateV2View
 
@@ -374,14 +345,10 @@ class RequireManualReviewRoundTripTestCase(GradeTestBase):
                                content_type='application/json')
         self.assertEqual(response.status_code, 200)
         problem = Problem.objects.get(code=response.json()['code'])
-        config = ProblemFillBlankConfig.objects.get(problem=problem)
-        self.assertTrue(config.requires_manual_review)
+        self.assertTrue(ProblemFillBlankConfig.objects.filter(problem=problem).exists())
+        self.assertNotIn('aiReview', ProblemCreateV2View()._build_edit_data(problem))
 
-        # Edit prefill must round-trip the flag.
-        data = ProblemCreateV2View()._build_edit_data(problem)
-        self.assertTrue(data['aiReview'])
-
-    def test_short_answer_requires_manual_review_round_trip(self):
+    def test_short_answer_create_ignores_ai_review_payload(self):
         from judge.models import Problem
         from judge.views.problem_create_v2 import ProblemCreateV2View
 
@@ -396,24 +363,8 @@ class RequireManualReviewRoundTripTestCase(GradeTestBase):
                                content_type='application/json')
         self.assertEqual(response.status_code, 200)
         problem = Problem.objects.get(code=response.json()['code'])
-        config = ProblemShortAnswerConfig.objects.get(problem=problem)
-        self.assertTrue(config.requires_manual_review)
-        self.assertTrue(ProblemCreateV2View()._build_edit_data(problem)['aiReview'])
-
-    def test_requires_manual_review_defaults_false(self):
-        from judge.models import Problem
-        editor = create_user(username='pmr_editor3', user_permissions=('create_private_problem',))
-        client = Client()
-        client.force_login(editor)
-        payload = {
-            'type': 'blank', 'name': 'No review', 'description': 'Q {{blank}}',
-            'points': 2, 'blanks': ['ans'], 'ai': True,
-        }
-        response = client.post(reverse('problem_create_v2'), data=json.dumps(payload),
-                               content_type='application/json')
-        self.assertEqual(response.status_code, 200)
-        problem = Problem.objects.get(code=response.json()['code'])
-        self.assertFalse(ProblemFillBlankConfig.objects.get(problem=problem).requires_manual_review)
+        self.assertTrue(ProblemShortAnswerConfig.objects.filter(problem=problem).exists())
+        self.assertNotIn('aiReview', ProblemCreateV2View()._build_edit_data(problem))
 
 
 class GradePageFilterDefaultsTestCase(GradeTestBase):
@@ -440,14 +391,7 @@ class ManualGradePriorityTestCase(GradeTestBase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.participation = ContestParticipation.objects.create(
-            contest=cls.contest, user=cls.student.profile, real_start=timezone.now(),
-        )
-        cls.cp = ContestProblem.objects.get(contest=cls.contest, problem=cls.problem)
-        cls.contest_submission = ContestSubmission.objects.create(
-            submission=cls.submission, problem=cls.cp,
-            participation=cls.participation, points=50.0,
-        )
+        cls.cp = cls.contest_problem
 
     def test_save_keeps_machine_points_and_stores_manual_grade(self):
         response = self._client(self.curator).post(
@@ -475,15 +419,245 @@ class ManualGradePriorityTestCase(GradeTestBase):
 
     def test_workspace_shows_machine_until_released(self):
         from judge.views.problem import workspace_display_points
-        request = type('Req', (), {'in_contest': True})()
         self._client(self.curator).post(
             self.save_url, {'submission': self.submission.id, 'score': '88'})
 
         sub = Submission.objects.get(id=self.submission.id)
-        # Not released: the student still sees the machine score (50).
-        self.assertEqual(workspace_display_points(sub, request), 50.0)
+        # Not released: the student still sees the machine score (50), even
+        # when they are no longer in the contest (no request.in_contest).
+        self.assertEqual(workspace_display_points(sub), 50.0)
 
         SubmissionManualGrade.objects.filter(submission=sub).update(released=True)
         sub = Submission.objects.get(id=self.submission.id)
         # Released: the student now sees the manual override (88).
-        self.assertEqual(workspace_display_points(sub, request), 88.0)
+        self.assertEqual(workspace_display_points(sub), 88.0)
+
+    def test_workspace_display_ignores_in_contest_flag(self):
+        """Student-visible score follows ContestSubmission, not request.in_contest."""
+        from judge.views.problem import workspace_display_points, workspace_display_points_total
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '88'})
+        sub = Submission.objects.get(id=self.submission.id)
+        self.assertEqual(workspace_display_points(sub), 50.0)
+        self.assertEqual(workspace_display_points_total(sub), 100)
+
+
+def _row_html(content, submission_id):
+    marker = ('id="%d"' % submission_id).encode()
+    start = content.find(marker)
+    if start < 0:
+        return b''
+    end = content.find(b'class="submission-row"', start + 1)
+    return content[start:end if end != -1 else None]
+
+
+def _score_html(content, submission_id):
+    row = _row_html(content, submission_id)
+    start = row.find(b'class="score"')
+    if start < 0:
+        return b''
+    start = row.find(b'>', start) + 1
+    end = row.find(b'</div>', start)
+    return row[start:end].strip()
+
+
+class StudentVisibleScoreTestCase(GradeTestBase):
+    """Unified student-visible score: list, status, workspace; Release gate; assignment scale."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.problem.is_public = True
+        cls.problem.points = 100
+        cls.problem.save(update_fields=['is_public', 'points'])
+        cls.contest.is_visible = True
+        cls.contest.save(update_fields=['is_visible'])
+        cls.submission.case_points = 50
+        cls.submission.case_total = 100
+        cls.submission.points = 50
+        cls.submission.time = 0.1
+        cls.submission.memory = 1024
+        cls.submission.save(update_fields=['case_points', 'case_total', 'points', 'time', 'memory'])
+
+        cls.practice_problem = create_problem(
+            'grade-prac-score', is_public=True, points=100,
+        )
+        lang = Language.objects.get(key='PY3')
+        cls.practice_sub = Submission.objects.create(
+            user=cls.student.profile, problem=cls.practice_problem,
+            language=lang, result='AC', status='D', points=50.0,
+            case_points=50, case_total=100, time=0.1, memory=1024,
+        )
+        SubmissionSource.objects.create(submission=cls.practice_sub, source='print(1)')
+        cls.practice_mcq_sub = Submission.objects.create(
+            user=cls.student.profile, problem=cls.practice_problem,
+            language=lang, result='AC', status='D', points=100.0,
+            case_points=1, case_total=1, time=0, memory=0,
+        )
+        SubmissionSource.objects.create(submission=cls.practice_mcq_sub, source='print(2)')
+        cls.practice_grade_url = reverse('practice_grade')
+        cls.practice_save_url = reverse('practice_grade_save')
+        cls.practice_release_url = reverse('practice_grade_release')
+        cls.practice_status_url = reverse('practice_grade_status')
+
+    def _list_as(self, user, submission):
+        response = self._client(user).get(
+            reverse('all_user_submissions', kwargs={'user': self.student.username}))
+        self.assertEqual(response.status_code, 200)
+        return _score_html(response.content, submission.id)
+
+    def _status_as(self, user, submission):
+        return self._client(user).get(reverse('submission_status', args=[submission.id]))
+
+    def _workspace_as(self, user, submission):
+        return self._client(user).get(
+            reverse('problem_detail', args=[submission.problem.code])
+            + '?submission=%d' % submission.id,
+        )
+
+    def _practice_grade_payload(self):
+        response = self._client(self.superuser).get(self.practice_grade_url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode('utf-8')
+        return json.loads(html.split('var submissions = ')[1].split(';\n')[0])
+
+    def test_practice_grade_payload_uses_problem_points_not_case_total(self):
+        row = next(s for s in self._practice_grade_payload()
+                   if s['id'] == self.practice_mcq_sub.id)
+        self.assertEqual(row['total'], 100)
+        self.assertNotEqual(row['total'], self.practice_mcq_sub.case_total)
+
+    def test_practice_save_does_not_clamp_to_case_total(self):
+        save = self._client(self.superuser).post(
+            self.practice_save_url, {'submission': self.practice_mcq_sub.id, 'score': '88'})
+        self.assertEqual(save.status_code, 200, save.content)
+        body = save.json()
+        self.assertEqual(body['score'], 88.0)
+        self.assertEqual(body['total'], 100)
+        self.assertEqual(
+            SubmissionManualGrade.objects.get(submission=self.practice_mcq_sub).points, 88.0)
+
+    def test_practice_grade_status_uses_problem_points(self):
+        response = self._client(self.superuser).get(
+            self.practice_status_url, {'submission': self.practice_mcq_sub.id})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['total'], 100)
+
+    def test_practice_list_uses_problem_points_not_case_total(self):
+        score = self._list_as(self.student, self.practice_mcq_sub)
+        self.assertIn(b'100 / 100', score)
+        self.assertNotIn(b'1 / 1', score)
+
+    def test_practice_save_without_release_keeps_machine_on_list_and_workspace(self):
+        save = self._client(self.superuser).post(
+            self.practice_save_url, {'submission': self.practice_sub.id, 'score': '88'})
+        self.assertEqual(save.status_code, 200, save.content)
+        score = self._list_as(self.student, self.practice_sub)
+        self.assertIn(b'50 / 100', score)
+        self.assertNotIn(b'88 / 100', score)
+
+        workspace = self._workspace_as(self.student, self.practice_sub)
+        self.assertEqual(workspace.status_code, 200)
+        self.assertEqual(workspace.context['workspace_submission']['points'], 50.0)
+        self.assertEqual(workspace.context['workspace_submission']['points_total'], 100)
+        self.assertFalse(workspace.context['workspace_submission']['released'])
+        row = next(s for s in workspace.context['workspace_submissions']
+                   if s.id == self.practice_sub.id)
+        self.assertEqual(row.display_points, 50.0)
+        self.assertEqual(row.display_points_total, 100)
+        self.assertFalse(row.display_released)
+
+    def test_practice_release_shows_manual_on_workspace_and_list(self):
+        self._client(self.superuser).post(
+            self.practice_save_url, {'submission': self.practice_sub.id, 'score': '88'})
+        release = self._client(self.superuser).post(self.practice_release_url)
+        self.assertEqual(release.status_code, 200, release.content)
+
+        score = self._list_as(self.student, self.practice_sub)
+        self.assertIn(b'88 / 100', score)
+
+        workspace = self._workspace_as(self.student, self.practice_sub)
+        self.assertEqual(workspace.context['workspace_submission']['points'], 88.0)
+        self.assertEqual(workspace.context['workspace_submission']['points_total'], 100)
+        self.assertTrue(workspace.context['workspace_submission']['released'])
+        row = next(s for s in workspace.context['workspace_submissions']
+                   if s.id == self.practice_sub.id)
+        self.assertEqual(row.display_points, 88.0)
+        self.assertTrue(row.display_released)
+        self.assertContains(workspace, 'ws-released-mini')
+
+    def test_left_assignment_still_uses_assignment_scale_and_release_gate(self):
+        """Not in_contest / already left: still ContestProblem.points + Release."""
+        from judge.views.problem import workspace_display_points, workspace_display_points_total
+        self.student.profile.current_contest = None
+        self.student.profile.save()
+
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '88'})
+        sub = Submission.objects.get(id=self.submission.id)
+        self.assertEqual(workspace_display_points(sub), 50.0)
+        self.assertEqual(workspace_display_points_total(sub), 100)
+
+        workspace = self._workspace_as(self.student, self.submission)
+        self.assertEqual(workspace.status_code, 200)
+        self.assertEqual(workspace.context['workspace_submission']['points'], 50.0)
+        self.assertEqual(workspace.context['workspace_submission']['points_total'], 100)
+
+        SubmissionManualGrade.objects.filter(submission=sub).update(released=True)
+        sub = Submission.objects.get(id=self.submission.id)
+        self.assertEqual(workspace_display_points(sub), 88.0)
+
+    def test_save_without_release_status_and_list_hide_manual(self):
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '88'})
+
+        score = self._list_as(self.student, self.submission)
+        self.assertIn(b'50 / 100', score)
+        self.assertNotIn(b'88 / 100', score)
+
+        status = self._status_as(self.student, self.submission)
+        self.assertEqual(status.status_code, 200)
+        self.assertContains(status, '50/100')
+        self.assertNotContains(status, '88/100')
+        # Parenthetical must not leak ranking ContestSubmission.points (88).
+        self.assertNotContains(status, '88/100 points')
+
+    def test_list_reweighted_assignment_uses_contest_problem_not_case_points(self):
+        """100-point cases reweighted to 25 on the assignment → 12.5/25, not 50/100."""
+        ContestProblem.objects.filter(pk=self.contest_problem.pk).update(points=25)
+        self.contest_problem.refresh_from_db()
+        # Stale ranking cell (unscaled 50) must not become the student-visible score.
+        self.contest_submission.points = 50
+        self.contest_submission.save(update_fields=['points'])
+
+        from judge.views.problem import workspace_display_points, workspace_display_points_total
+        sub = Submission.objects.get(id=self.submission.id)
+        self.assertEqual(workspace_display_points(sub), 12.5)
+        self.assertEqual(workspace_display_points_total(sub), 25)
+
+        score = self._list_as(self.student, self.submission)
+        self.assertIn(b'12.5 / 25', score)
+        self.assertNotIn(b'50 / 100', score)
+
+        status = self._status_as(self.student, self.submission)
+        self.assertContains(status, '12.5/25')
+        self.assertNotContains(status, '50/100')
+
+    def test_reweighted_save_without_release_keeps_machine_scale(self):
+        ContestProblem.objects.filter(pk=self.contest_problem.pk).update(points=25)
+        self.contest_problem.refresh_from_db()
+        self.contest_submission.points = 12.5
+        self.contest_submission.save(update_fields=['points'])
+
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '20'})
+        self.contest_submission.refresh_from_db()
+        self.assertEqual(self.contest_submission.points, 20.0)
+
+        score = self._list_as(self.student, self.submission)
+        self.assertIn(b'12.5 / 25', score)
+        self.assertNotIn(b'20 / 25', score)
+
+        status = self._status_as(self.student, self.submission)
+        self.assertContains(status, '12.5/25')
+        self.assertNotContains(status, '20/25')

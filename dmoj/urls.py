@@ -13,7 +13,7 @@ from django.views.generic import RedirectView
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
 from judge.views import (
-    TitledTemplateView, api, blog, comment, contest_analytics, contests, file_upload, fill_blank, ide, language,
+    TitledTemplateView, api, blog, comment, contest_analytics, contests, file_upload, fill_blank, grade, ide, language,
     license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission,
     register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
@@ -198,6 +198,10 @@ urlpatterns = [
     ])),
 
     path('submissions/', paged_list_view(submission.AllSubmissions, 'all_submissions')),
+    path('submissions/grade', grade.PracticeGrade.as_view(), name='practice_grade'),
+    path('submissions/grade/save', grade.PracticeGradeSave.as_view(), name='practice_grade_save'),
+    path('submissions/grade/status', grade.PracticeGradeStatus.as_view(), name='practice_grade_status'),
+    path('submissions/grade/release', grade.PracticeGradeRelease.as_view(), name='practice_grade_release'),
     path('submissions/user/<str:user>/', paged_list_view(submission.AllUserSubmissions, 'all_user_submissions')),
 
     path('src/<int:submission>', submission.SubmissionSource.as_view(), name='submission_source'),

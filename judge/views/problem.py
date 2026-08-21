@@ -116,37 +116,20 @@ def workspace_ai_grade_fields(request, submission):
     return fields
 
 
-def workspace_display_points(submission, request):
-    """Score shown in Workspace: assignment uses ContestSubmission.points, else problem scale.
+def workspace_display_points(submission):
+    """Score shown to students in Workspace, the submission list, and status.
 
-    A teacher's manual override (SubmissionManualGrade) only takes over the
-    student-visible score once it is ``released``; until then the student keeps
-    seeing the machine score (the ``machine_points`` snapshot captured at
-    grading time).
+    Gated on ``ContestSubmission`` + Release, not ``request.in_contest``. See
+    ``judge.utils.contest_grade.student_display_points``.
     """
-    if getattr(request, 'in_contest', False):
-        contest_sub = submission.contest_or_none
-        if contest_sub is not None:
-            manual_grade = submission.manual_grade_override
-            if manual_grade is not None:
-                if manual_grade.points is not None and manual_grade.released:
-                    return manual_grade.points
-                if manual_grade.machine_points is not None:
-                    return manual_grade.machine_points
-            return contest_sub.points
-    return submission.points
+    from judge.utils.contest_grade import student_display_points
+    return student_display_points(submission)
 
 
-def workspace_display_points_total(submission, request):
-    """Max score shown next to Workspace Result: assignment problem points, else problem.points."""
-    if getattr(request, 'in_contest', False):
-        contest_sub = submission.contest_or_none
-        if contest_sub is not None:
-            return contest_sub.problem.points
-        contest_problem = get_contest_problem(submission.problem, getattr(request, 'profile', None))
-        if contest_problem is not None:
-            return contest_problem.points
-    return submission.problem.points
+def workspace_display_points_total(submission):
+    """Max score shown next to the student-visible numerator."""
+    from judge.utils.contest_grade import student_display_points_total
+    return student_display_points_total(submission)
 
 
 def workspace_review_note_html(submission):
@@ -166,8 +149,8 @@ def workspace_review_note_html(submission):
 
 def workspace_manual_released(submission):
     """Whether this submission's manual override has been released to the student."""
-    manual_grade = submission.manual_grade_override
-    return manual_grade is not None and manual_grade.released
+    from judge.utils.contest_grade import student_display_released
+    return student_display_released(submission)
 
 
 def course_filter_organizations(user):
@@ -622,7 +605,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         if authed and selected_submission_id and selected_submission_id.isdigit():
             selected_qs = Submission.objects.select_related(
                 'source', 'upload', 'problem', 'contest_object', 'contest__problem',
-            ).prefetch_related('problem__mcq_options', 'problem__blanks').filter(
+            ).prefetch_related('problem__mcq_options', 'problem__blanks', 'manual_grade').filter(
                 id=int(selected_submission_id), problem=self.object,
             )
             # Assignment/exam: only allow loading submissions from the active contest.
@@ -637,7 +620,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                     except ObjectDoesNotExist:
                         pass
                 results_hidden = not selected_submission.results_visible_to(user)
-                display_points = workspace_display_points(selected_submission, self.request)
+                display_points = workspace_display_points(selected_submission)
                 context['workspace_submission'] = {
                     'id': selected_submission.id,
                     'result': None if results_hidden else selected_submission.result,
@@ -645,7 +628,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                     'result_class': None if results_hidden else selected_submission.result_class,
                     'long_status': None if results_hidden else selected_submission.long_status,
                     'points': None if results_hidden else display_points,
-                    'points_total': workspace_display_points_total(selected_submission, self.request),
+                    'points_total': workspace_display_points_total(selected_submission),
                     'time': None if results_hidden else selected_submission.time,
                     'memory': None if results_hidden else selected_submission.memory,
                     'source': selected_source,
@@ -696,9 +679,9 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                 .prefetch_related('manual_grade')
                 .order_by('-date')[:20],
             )
+            from judge.utils.contest_grade import attach_student_display_score
             for submission in workspace_subs:
-                submission.display_points = workspace_display_points(submission, self.request)
-                submission.display_points_total = workspace_display_points_total(submission, self.request)
+                attach_student_display_score(submission)
             context['workspace_submissions'] = workspace_subs
         else:
             context['workspace_submissions'] = []
@@ -1788,8 +1771,8 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 'result': None if hidden else submission.result,
                 'results_hidden': hidden,
                 'is_graded': submission.is_graded,
-                'points': None if hidden else workspace_display_points(submission, self.request),
-                'points_total': workspace_display_points_total(submission, self.request),
+                'points': None if hidden else workspace_display_points(submission),
+                'points_total': workspace_display_points_total(submission),
                 'source': source,
                 'answer_display': get_workspace_answer_display(submission) if source is not None else [],
                 'file_upload': get_workspace_file_upload(submission),
@@ -2436,8 +2419,8 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
             'status': submission.status,
             'result': None if hidden else submission.result,
             'result_class': None if hidden else submission.result_class,
-            'points': None if hidden else workspace_display_points(submission, request),
-            'points_total': workspace_display_points_total(submission, request),
+            'points': None if hidden else workspace_display_points(submission),
+            'points_total': workspace_display_points_total(submission),
             'time': None if hidden else submission.time,
             'memory': None if hidden else submission.memory,
             'results_hidden': hidden,
@@ -2524,9 +2507,8 @@ class ProblemWorkspaceSubmissionsList(LoginRequiredMixin, ProblemMixin, SingleOb
             # The row template renders the gated score (machine until the manual
             # override is released), so attach the same display points the initial
             # page load computes for its workspace submissions.
-            submission.display_points = workspace_display_points(submission, request)
-            submission.display_points_total = workspace_display_points_total(submission, request)
-            submission.display_released = workspace_manual_released(submission)
+            from judge.utils.contest_grade import attach_student_display_score
+            attach_student_display_score(submission)
             html = render_to_string(
                 'problem/workspace-submission-row.html',
                 {

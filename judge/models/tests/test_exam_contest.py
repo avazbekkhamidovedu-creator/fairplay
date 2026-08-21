@@ -58,6 +58,15 @@ class ResultsHiddenResolutionTest(ExamContestTestMixin, TestCase):
         self.assertTrue(self.mcq_cp.score_uses_latest)
         self.assertFalse(self.code_cp.score_uses_latest)
 
+    def test_format_scoring_uses_latest_matches_standings(self):
+        exam = self.contest.format
+        self.assertTrue(exam.scoring_uses_latest(self.mcq_cp))
+        self.assertFalse(exam.scoring_uses_latest(self.code_cp))
+        default_contest = create_contest(key='exam-default-fmt', authors=('exam_editor',))
+        default_fmt = default_contest.format
+        self.assertFalse(default_fmt.scoring_uses_latest(self.mcq_cp))
+        self.assertFalse(default_fmt.scoring_uses_latest(self.code_cp))
+
     def test_override_forces_show_and_hide(self):
         self.mcq_cp.hide_results = False
         self.code_cp.hide_results = True
@@ -207,6 +216,20 @@ class FinalizeContestResultsTest(ExamContestTestMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertTrue(self.contest.results_finalized)
         self.assertFalse(self.contest.run_pretests_only)
+
+    def test_skips_teacher_reviewed_submission(self):
+        latest_code = self._add_contest_submission(self.code_cp, points=100, minutes=2)
+        latest_mcq = self._add_contest_submission(self.mcq_cp, points=40, minutes=2)
+        latest_code.reviewed_by = self.editor.profile
+        latest_code.save(update_fields=['reviewed_by'])
+
+        with mock.patch('judge.tasks.contest.Progress', _NoProgress), \
+                mock.patch.object(Submission, 'judge', autospec=True) as mock_judge:
+            finalize_contest_results(self.contest.key)
+
+        rejudged_ids = {call.args[0].id for call in mock_judge.call_args_list}
+        self.assertEqual(rejudged_ids, {latest_mcq.id})
+        self.assertNotIn(latest_code.id, rejudged_ids)
 
 
 class UnfinalizeContestResultsTest(ExamContestTestMixin, TestCase):

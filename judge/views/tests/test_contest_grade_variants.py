@@ -30,13 +30,14 @@ import unittest
 from datetime import timedelta
 from unittest import mock
 
-from django.test import Client
+from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 from judge.models import ContestParticipation, ContestProblem, ContestSubmission, Language, Submission, \
     SubmissionManualGrade
-from judge.models.tests.util import create_contest, create_problem, create_user
+from judge.models.tests.util import create_contest, create_contest_participation, create_contest_problem, \
+    create_problem, create_user
 from judge.views.tests.test_contest_grade import GradeTestBase
 
 
@@ -245,15 +246,6 @@ class ContestGradeScorePropagationTestCase(GradeTestBase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.participation = ContestParticipation.objects.create(
-            contest=cls.contest, user=cls.student.profile,
-            real_start=timezone.now() - timedelta(hours=1),
-        )
-        cls.contest_submission = ContestSubmission.objects.create(
-            submission=cls.submission,
-            problem=ContestProblem.objects.get(contest=cls.contest),
-            participation=cls.participation, points=50.0,
-        )
         cls.participation.recompute_results()
 
     def test_manual_grade_preserves_base_submission_points(self):
@@ -304,15 +296,6 @@ class ContestGradeRejudgeInteractionTestCase(GradeTestBase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.participation = ContestParticipation.objects.create(
-            contest=cls.contest, user=cls.student.profile,
-            real_start=timezone.now() - timedelta(hours=1),
-        )
-        cls.contest_submission = ContestSubmission.objects.create(
-            submission=cls.submission,
-            problem=ContestProblem.objects.get(contest=cls.contest),
-            participation=cls.participation, points=50.0,
-        )
 
     def test_rejudge_machine_score_does_not_wipe_manual_grade(self):
         # Teacher overrides the score to 90...
@@ -419,6 +402,10 @@ class ContestGradePayloadVariantTestCase(GradeTestBase):
             contest_object=self.contest, points=20.0, case_total=100,
         )
         Submission.objects.filter(id=older.id).update(date=now - timedelta(hours=2))
+        ContestSubmission.objects.create(
+            submission=older, problem=self.contest_problem,
+            participation=self.participation, points=20.0,
+        )
         payload = self._grade_payload()
         by_id = {s['id']: s for s in payload}
         self.assertTrue(by_id[self.submission.id]['is_latest'])
@@ -427,7 +414,24 @@ class ContestGradePayloadVariantTestCase(GradeTestBase):
         ids_in_order = [s['id'] for s in payload]
         self.assertLess(ids_in_order.index(self.submission.id), ids_in_order.index(older.id))
 
-    def test_virtual_submission_is_flagged(self):
+    def test_default_format_final_is_best_not_newest(self):
+        now = timezone.now()
+        Submission.objects.filter(id=self.submission.id).update(date=now - timedelta(hours=2))
+        newer_worse = Submission.objects.create(
+            user=self.student.profile, problem=self.problem,
+            language=Language.objects.get(key='PY3'), result='WA', status='D',
+            contest_object=self.contest, points=10.0, case_total=100,
+        )
+        Submission.objects.filter(id=newer_worse.id).update(date=now - timedelta(hours=1))
+        ContestSubmission.objects.create(
+            submission=newer_worse, problem=self.contest_problem,
+            participation=self.participation, points=10.0,
+        )
+        by_id = {s['id']: s for s in self._grade_payload()}
+        self.assertTrue(by_id[self.submission.id]['is_latest'])
+        self.assertFalse(by_id[newer_worse.id]['is_latest'])
+
+    def test_virtual_is_never_final(self):
         virtual_part = ContestParticipation.objects.create(
             contest=self.contest, user=self.student.profile, virtual=1,
             real_start=timezone.now(),
@@ -445,6 +449,9 @@ class ContestGradePayloadVariantTestCase(GradeTestBase):
         by_id = {s['id']: s for s in payload}
         self.assertTrue(by_id[sub.id]['virtual'])
         self.assertFalse(by_id[self.submission.id]['virtual'])
+        # Higher-scoring / newer virtual must never become the live final version.
+        self.assertTrue(by_id[self.submission.id]['is_latest'])
+        self.assertFalse(by_id[sub.id]['is_latest'])
 
     def test_empty_contest_payload_is_empty_list(self):
         empty = create_contest(
@@ -543,3 +550,53 @@ class ContestGradeStatusTestCase(GradeTestBase):
         # Restore for other tests in the class.
         self.submission.status = 'D'
         self.submission.save(update_fields=['status'])
+
+
+class ContestGradeExamFinalTestCase(TestCase):
+    """Exam format: final version is the latest live MCQ even if it scores worse."""
+
+    fixtures = ['language_all.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.editor = create_user(username='grade_exam_editor', user_permissions=('edit_own_contest',))
+        cls.student = create_user(username='grade_exam_student')
+        cls.contest = create_contest(
+            key='gradeexamfv', format_name='exam',
+            authors=('grade_exam_editor',),
+            start_time=timezone.now() - timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=1),
+        )
+        cls.mcq = create_problem('gradeexam-mcq', submission_type='M', points=100)
+        cls.cp = create_contest_problem(contest=cls.contest, problem=cls.mcq, points=100, order=1)
+        cls.part = create_contest_participation(contest=cls.contest, user=cls.student.profile)
+        lang = Language.get_answer_language()
+        now = timezone.now()
+        cls.older = Submission.objects.create(
+            user=cls.student.profile, problem=cls.mcq, language=lang,
+            result='AC', status='D', contest_object=cls.contest, points=100, case_total=100,
+        )
+        Submission.objects.filter(id=cls.older.id).update(date=now - timedelta(hours=2))
+        ContestSubmission.objects.create(
+            submission=cls.older, problem=cls.cp, participation=cls.part, points=100,
+        )
+        cls.newer = Submission.objects.create(
+            user=cls.student.profile, problem=cls.mcq, language=lang,
+            result='WA', status='D', contest_object=cls.contest, points=0, case_total=100,
+        )
+        Submission.objects.filter(id=cls.newer.id).update(date=now - timedelta(hours=1))
+        ContestSubmission.objects.create(
+            submission=cls.newer, problem=cls.cp, participation=cls.part, points=0,
+        )
+        cls.grade_url = reverse('contest_grade', args=[cls.contest.key])
+
+    def _payload(self):
+        client = Client()
+        client.force_login(self.editor)
+        html = client.get(self.grade_url).content.decode('utf-8')
+        return json.loads(html.split('var submissions = ')[1].split(';\n')[0])
+
+    def test_exam_mcq_final_is_latest_even_if_worse(self):
+        by_id = {s['id']: s for s in self._payload()}
+        self.assertTrue(by_id[self.newer.id]['is_latest'])
+        self.assertFalse(by_id[self.older.id]['is_latest'])
