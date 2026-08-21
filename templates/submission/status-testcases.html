@@ -252,18 +252,9 @@
                 {% else %}
                     <b>{{ _('Final score:') }}</b>
                 {% endif %}
-                {{ submission.case_points|floatformat(0) }}/{{ submission.case_total|floatformat(0) }}
-                {% if request.in_contest and submission.contest_or_none %}
-                    {% with contest=submission.contest_or_none %}
-                        {% set points=contest.points|roundfloat(3) %}
-                        {% set total=contest.problem.points|floatformat(-1) %}
-                        ({{ _('%(points)s/%(total)s points', points=points, total=total) }})
-                    {% endwith %}
-                {% else %}
-                    {% with points=submission.points|roundfloat(3), total=submission.problem.points|floatformat(-1) %}
-                        ({{ _('%(points)s/%(total)s points', points=points, total=total) }})
-                    {% endwith %}
-                {% endif %}
+                {% with points=submission.display_points|floatformat(-1), total=submission.display_points_total|floatformat(-1) %}
+                    {{ _('%(points)s/%(total)s points', points=points, total=total) }}
+                {% endwith %}
                 {% if is_pretest and submission.result == "AC" %}
                     <br>
                     <i>{{ _('Passing pretests does not guarantee a full score on system tests.') }}</i>

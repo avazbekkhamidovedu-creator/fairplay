@@ -57,13 +57,16 @@ class BaseContestFormat(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def display_user_problem(self, participation, contest_problem):
+    def display_user_problem(self, participation, contest_problem, cell_url=None):
         """
         Returns the HTML fragment to show a user's performance on an individual problem. This is expected to use
         information from the format_data field instead of computing it from scratch.
 
         :param participation: The ContestParticipation object linking the user to the contest.
         :param contest_problem: The ContestProblem object representing the problem in question.
+        :param cell_url: Optional href override (editors land on the Grade page).
+            ``None`` uses the per-user contest submission list; ``''`` renders the
+            cell with no href.
         :return: An HTML fragment, marked as safe for Jinja2.
         """
         raise NotImplementedError()
@@ -108,6 +111,16 @@ class BaseContestFormat(metaclass=ABCMeta):
         :return: A generator, where each item is an individual line.
         """
         raise NotImplementedError()
+
+    def scoring_uses_latest(self, contest_problem):
+        """Whether this format scores the latest live submission for ``contest_problem``.
+
+        Default (and ICPC / AtCoder / IOI) use the highest-scoring submission. Exam
+        format follows the question type (``ContestProblem.score_uses_latest``); ECOO
+        always uses the latest. Grade-page "final version" and batch AI grading share
+        this rule so they mark/score the same row the standings would.
+        """
+        return False
 
     @classmethod
     def best_solution_state(cls, points, total):

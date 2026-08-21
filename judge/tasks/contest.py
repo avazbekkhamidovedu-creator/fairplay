@@ -37,7 +37,9 @@ def finalize_contest_results(self, contest_key):
     Clears ``run_pretests_only`` and sets ``results_finalized`` (revealing hidden results and folding
     them into the scoreboard), then rejudges **only the latest** submission per (participation, problem)
     on the final config — code on full testcases via the bridge, internally-graded types (e.g. MCQ)
-    immediately, picking up any answer-key correction — and recomputes the standings. Re-runnable.
+    immediately, picking up any answer-key correction — and recomputes the standings. Submissions a
+    teacher already scored on the Grade page (``reviewed_by`` set) are left untouched so the override
+    is not wiped. Re-runnable.
     """
     contest = Contest.objects.get(key=contest_key)
     contest.run_pretests_only = False
@@ -55,6 +57,10 @@ def finalize_contest_results(self, contest_key):
     rejudged = 0
     with Progress(self, len(latest), stage=_('Rejudging latest submissions')) as p:
         for submission in latest.values():
+            # A teacher override on the Grade page must survive finalize: rejudge
+            # would recompute Submission.points from test cases and wipe it.
+            if submission.reviewed_by_id:
+                continue
             submission.judge(rejudge=True, force_judge=True)
             rejudged += 1
             if rejudged % 10 == 0:

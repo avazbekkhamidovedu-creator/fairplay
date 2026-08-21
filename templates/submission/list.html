@@ -452,6 +452,18 @@
                 {% if filter_problems or filter_users or filter_contests or selected_statuses or selected_languages %}
                     <a class="btn btn-outline btn-sm" href="{{ first_page_href }}">{{ _('Clear') }}</a>
                 {% endif %}
+                {% if request.user.is_authenticated and perms.judge.rejudge_submission and perms.judge.edit_own_problem %}
+                    <label class="sub-select-all">
+                        <input type="checkbox" id="sub-check-all">
+                        {{ _('Select all on this page') }}
+                    </label>
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-rejudge">
+                        <i class="fa fa-refresh"></i> {{ _('Rejudge selected') }}
+                    </button>
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-rescore">
+                        <i class="fa fa-calculator"></i> {{ _('Rescore selected') }}
+                    </button>
+                {% endif %}
             </div>
         </form>
 
@@ -466,21 +478,6 @@
                 <div class="ws-closed">
                     <a href="javascript:void(0)">{{ _('You were disconnected. Refresh to show latest updates.') }}</a>
                 </div>
-
-                {% if request.user.is_authenticated and perms.judge.rejudge_submission and perms.judge.edit_own_problem %}
-                    <div class="sub-staff-bar">
-                        <label class="sub-select-all">
-                            <input type="checkbox" id="sub-check-all">
-                            {{ _('Select all on this page') }}
-                        </label>
-                        <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-rejudge">
-                            <i class="fa fa-refresh"></i> {{ _('Rejudge selected') }}
-                        </button>
-                        <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-rescore">
-                            <i class="fa fa-calculator"></i> {{ _('Rescore selected') }}
-                        </button>
-                    </div>
-                {% endif %}
 
                 <div id="submissions-table">
                     {% set profile_id = request.profile.id if request.user.is_authenticated else 0 %}

@@ -441,9 +441,6 @@
                 </div>
                 <div style="font-weight:600;font-size:12px;margin-bottom:0.35rem;">{{ _('Rubric (sent to the model; never shown to students)') }}</div>
                 <textarea id="f-rubric" rows="3" placeholder="{{ _('e.g. Correctly identifying the time complexity gives 60%%, proving stability gives 40%%...') }}" style="width:100%;font-family:inherit;"></textarea>
-                <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.4rem;white-space:nowrap;">
-                  <input type="checkbox" id="f-ai-review" checked> {{ _('Require teacher review after AI scoring') }}
-                </label>
               </div>
             </div>
           </div>
@@ -2438,7 +2435,6 @@
           || !!(document.getElementById('f-partial') && document.getElementById('f-partial').checked)
           || !!(document.getElementById('f-partial-code') && document.getElementById('f-partial-code').checked),
         ai: document.getElementById('f-ai').checked,
-        aiReview: !!(document.getElementById('f-ai-review') && document.getElementById('f-ai-review').checked),
         rubric: (document.getElementById('f-rubric') || {}).value || '',
         gradingTable: collectGradingTable(),
         difficulty: currentDifficulty,
@@ -2789,8 +2785,6 @@
       const pub = document.getElementById('f-public'); if (pub && !pub.disabled) pub.checked = !!d.is_public;
       setPartialChecked(!!d.partial);
       const aiCb = document.getElementById('f-ai'); if (aiCb) aiCb.checked = !!d.ai;
-      const aiReviewCb = document.getElementById('f-ai-review');
-      if (aiReviewCb) aiReviewCb.checked = !!d.aiReview;
       const rub = document.getElementById('f-rubric'); if (rub) rub.value = d.rubric || '';
       if (d.gradingTable && d.gradingTable.length) restoreGradingTable(d.gradingTable);
       else renderScoreConf(); // triggers grading table init if AI is on
