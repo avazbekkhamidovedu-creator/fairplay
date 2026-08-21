@@ -151,9 +151,18 @@ def mark_awaiting_batch_ai(submission):
 
 
 def persist_code_ai_rows(submission, rows):
-    """Write supplementary AI rubric rows (batch=-1) for a code submission."""
+    """Write supplementary AI rubric rows (batch=-1) and recompute the combined score.
+
+    The final submission score becomes ``test-case*(1-w) + clamped-AI*w`` (see
+    ``judge.question_types.code.combine_code_score``), stored on
+    ``submission.points`` with the AI component on ``submission.ai_points``.
+    The contest standing is refreshed so rankings use the combined score too,
+    and a ``grading-end`` event notifies the status page of the update.
+    Returns the number of rows written.
+    """
     from judge.models import SubmissionTestCase
-    from judge.question_types.code import AI_GRADE_BATCH
+    from judge.question_types.code import AI_GRADE_BATCH, combine_code_score
+    from judge.submission_grading import finalize_ai_combined
 
     if not rows:
         return 0
@@ -167,6 +176,15 @@ def persist_code_ai_rows(submission, rows):
         )
         for r in rows
     ])
+    ai_raw = sum(r.get('points') or 0 for r in rows)
+    ai_raw_total = sum(r.get('total') or 0 for r in rows)
+    ai_score, final = combine_code_score(
+        submission.case_points, submission.case_total,
+        submission.problem.points or 0, ai_raw, ai_raw_total,
+        partial=submission.problem.partial,
+    )
+    finalize_ai_combined(submission, ai_score=ai_score, final_points=final)
+    _notify_status(submission)
     return len(rows)
 
 
@@ -198,7 +216,6 @@ def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False)
         if not rows:
             return 'no-rows'
         persist_code_ai_rows(submission, rows)
-        _notify_status(submission)
         return 'code-ai'
     submission._ai_batch_pass = True
     submission.judge(rejudge=True, force_judge=True)

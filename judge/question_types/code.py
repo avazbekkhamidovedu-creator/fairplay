@@ -37,6 +37,51 @@ def _config(problem):
         return None
 
 
+def _ai_weight() -> float:
+    """Weight of the supplementary AI score in the final grade (0..1).
+
+    Global setting ``DMOJ_AI_GRADING_WEIGHT`` (default 0.3): a 0.3 weight means
+    the final score is 70% test-case points and 30% AI rubric points.
+    """
+    from django.conf import settings
+    try:
+        return max(0.0, min(1.0, float(getattr(settings, 'DMOJ_AI_GRADING_WEIGHT', 0.3))))
+    except (TypeError, ValueError):
+        return 0.3
+
+
+def combine_code_score(tc_points, tc_total, problem_points, ai_raw_points, ai_raw_total,
+                       *, partial=False, weight=None):
+    """Combine the test-case score and the AI rubric score into one final score.
+
+    Both components live on the *problem_points* scale:
+
+    * ``tc_score`` = tc_points / tc_total * problem_points  (machine ratio)
+    * ``ai_norm``  = ai_raw_points / ai_raw_total * problem_points  (model ratio)
+    * ``ai_score`` = max(ai_norm, tc_score)  — the AI score ratio must never
+      fall below the test-case score ratio (a submission that already earned
+      N% from the tests cannot be scored lower by the model).
+    * ``final``    = min(tc_score * (1 - w) + ai_score * w, problem_points)
+
+    When ``partial`` is False the whole combined score is all-or-nothing (a
+    non-perfect combined score collapses to 0). Returns ``(ai_score, final)``
+    in problem-points scale, rounded to 3 decimals like ``finalize_submission``.
+    Safe for zero totals (falls back to 0).
+    """
+    if problem_points <= 0:
+        return 0.0, 0.0
+
+    w = _ai_weight() if weight is None else max(0.0, min(1.0, float(weight)))
+    tc_score = round(tc_points / tc_total * problem_points, 3) if tc_total > 0 else 0.0
+    ai_norm = round(ai_raw_points / ai_raw_total * problem_points, 3) if ai_raw_total > 0 else 0.0
+    ai_score = max(ai_norm, tc_score)
+    final = round(tc_score * (1 - w) + ai_score * w, 3)
+    final = min(final, problem_points)
+    if not partial and final != problem_points:
+        final = 0.0
+    return ai_score, final
+
+
 def _sub_questions(config, problem_points):
     """Resolve the grading-table (or a single "Overall" row) for the code rubric."""
     table = config.grading_table if config else None

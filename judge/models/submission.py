@@ -81,6 +81,10 @@ class Submission(models.Model):
     batch = models.BooleanField(verbose_name=_('batched cases'), default=False)
     case_points = models.FloatField(verbose_name=_('test case points'), default=0)
     case_total = models.FloatField(verbose_name=_('test case total points'), default=0)
+    ai_points = models.FloatField(
+        verbose_name=_('AI rubric points'), null=True, blank=True,
+        help_text=_('Supplementary AI rubric score, on the problem points scale, after the '
+                    'test-case ratio clamp. Null until AI grading has run.'))
     judged_on = models.ForeignKey('Judge', verbose_name=_('judged on'), null=True, blank=True,
                                   on_delete=models.SET_NULL)
     judged_date = models.DateTimeField(verbose_name=_('submission judge time'), default=None, null=True)

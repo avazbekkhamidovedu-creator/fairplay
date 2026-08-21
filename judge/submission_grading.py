@@ -96,3 +96,58 @@ def grade_internally(submission):
         submission, case_points=outcome.case_points, case_total=outcome.case_total,
         result=outcome.result, status='D', error='',
     )
+
+
+def finalize_ai_combined(submission, *, ai_score, final_points):
+    """Apply the supplementary AI score to an already-finalized code submission.
+
+    Called once AI grading completes (after test-case finalization): persists
+    ``ai_points`` / ``points`` and re-runs the downstream effects (user points,
+    problem stats, contest standing, cache invalidation) with the combined
+    score. The websocket event is posted by the caller
+    (``judge.utils.contest_ai.persist_code_ai_rows``), which owns both paths.
+    """
+    from judge.models import Submission as SubmissionModel
+
+    SubmissionModel.objects.filter(pk=submission.pk).update(ai_points=ai_score, points=final_points)
+    submission.ai_points = ai_score
+    submission.points = final_points
+
+    problem = submission.problem
+    if problem.is_public and not problem.is_organization_private:
+        submission.user._updating_stats_only = True
+        submission.user.calculate_points()
+
+    problem._updating_stats_only = True
+    problem.update_stats()
+    submission.update_contest()
+    _refresh_contest_score(submission)
+
+    finished_submission(submission)
+
+
+def _refresh_contest_score(submission):
+    """Recompute the contest score from the *combined* score ratio.
+
+    Mirrors ``Submission.update_contest`` but maps the combined
+    (test-case + AI) submission score onto the contest problem's scale, so
+    rankings and exports use the AI-inclusive score. A teacher's manual
+    override still wins over the machine score.
+    """
+    try:
+        contest = submission.contest
+    except AttributeError:
+        return
+
+    contest_problem = contest.problem
+    problem = submission.problem
+    contest.points = round(
+        submission.points / problem.points * contest_problem.points, 3,
+    ) if problem.points > 0 else 0.0
+    if not contest_problem.partial and contest.points != contest_problem.points:
+        contest.points = 0
+    manual_grade = submission.manual_grade_override
+    if manual_grade is not None and manual_grade.points is not None:
+        contest.points = manual_grade.points
+    contest.save()
+    contest.participation.recompute_results()

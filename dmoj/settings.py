@@ -683,6 +683,11 @@ DMOJ_AI_GRADING_STUDENT_QUOTA = 0
 DMOJ_AI_GRADING_RATE_LIMIT = 5
 DMOJ_AI_GRADING_RATE_WINDOW_SECONDS = 300
 DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS = 300
+# Weight of the supplementary AI rubric score in the final programming grade
+# (0..1).  final = testcase_score * (1 - weight) + ai_score * weight, where
+# ai_score is clamped so the AI score ratio never drops below the test-case
+# score ratio.  AI failures degrade to the pure test-case score.
+DMOJ_AI_GRADING_WEIGHT = 0.3
 
 LITELLM_PROFILES = {
     # The importer deliberately uses a named profile so an installation can route

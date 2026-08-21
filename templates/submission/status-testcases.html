@@ -278,6 +278,13 @@
 {% endif %}
 
 {% if ai_rubric_cases %}
+    {% if submission.ai_points is not none %}
+    <p class="ai-score-summary" style="font-size:13px;color:var(--oj-text-muted);">
+        <b>{{ _('AI score:') }}</b>
+        {{ submission.ai_points|floatformat(1) }}/{{ submission.problem.points|floatformat(-1) }}
+        ({{ _('weighted into the final score above') }})
+    </p>
+    {% endif %}
     <h3>{{ _('AI rubric') }}</h3>
     <p class="muted" style="font-size:12px;color:var(--oj-text-muted);">{{ _('Based on this submission. If you submit again, only the latest version is graded.') }}</p>
     <table class="ai-grading-result">
