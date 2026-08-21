@@ -61,14 +61,14 @@
                     {{ _('Launch in SEB') }}
                 </a>
             {% endif %}
+            <a class="btn btn-secondary" href="{{ seb_launch.install_url }}" target="_blank" rel="noopener">
+                {{ _('Get Safe Exam Browser') }}
+            </a>
             {% if seb_launch.download_url %}
                 <a class="btn btn-secondary" href="{{ seb_launch.download_url }}">
                     {{ _('Download config file') }}
                 </a>
             {% endif %}
-            <a class="btn btn-secondary" href="{{ seb_launch.install_url }}" target="_blank" rel="noopener">
-                {{ _('Get Safe Exam Browser') }}
-            </a>
         </div>
 
         <div class="seb-help">

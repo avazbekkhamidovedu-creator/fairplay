@@ -356,7 +356,8 @@
                     {{ _('Includes contest description and problem details') }}
                 </p>
             </div> -->
-            <div class="contest-extracting-dropdown">
+            
+            <!-- <div class="contest-extracting-dropdown">
                 <div class="dropdown">
                     <button type="button" class="btn dropdown-toggle" id="exportDropdownBtn" aria-haspopup="true" aria-expanded="false">
                         <i class="fa fa-download"></i> {{ _('Extract the contest') }}
@@ -377,15 +378,15 @@
                 </div>
                 <p style="color: var(--oj-text-muted); font-size: 14px; margin-top: 8px;">
                     {{ _('Including Contest Description and Problem Details') }}
-                </p>
+                </p> -->
                 <!-- 用于生成 PDF/Word 的表单容器 -->
-                <form id="export-pdf-form" action="{{ url('contest_export_pdf', contest.key) }}" method="post" style="display: none;">
+                <!-- <form id="export-pdf-form" action="{{ url('contest_export_pdf', contest.key) }}" method="post" style="display: none;">
                     {% csrf_token %}
                 </form>
                 <form id="export-word-form" action="{{ url('contest_export_word', contest.key) }}" method="post" style="display: none;">
                     {% csrf_token %}
                 </form>
-            </div>
+            </div> -->
 
             <style>
                 .contest-extracting-dropdown {
