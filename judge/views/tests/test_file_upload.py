@@ -246,13 +246,14 @@ class FileUploadGradeDownloadTestCase(FileUploadBase):
         self.assertNotEqual(self.sub.result, 'IE')
 
     def test_status_page_shows_download_not_grade_form(self):
-        # Result page: download + awaiting grading. Teacher grading UI is not here.
+        # Result page: download + awaiting grading. The old per-submission
+        # file-grade form is not here; teachers open the grading desk instead.
         self.client.force_login(self.users['creator'])
         response = self.client.get(reverse('submission_status', args=[self.sub.id]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, reverse('submission_file_download', args=[self.sub.id]))
         self.assertContains(response, 'Awaiting grading')
-        self.assertNotContains(response, 'Grade this submission')
+        self.assertContains(response, reverse('practice_grade'))
         self.assertNotContains(response, reverse('submission_file_grade', args=[self.sub.id]))
         self.assertNotContains(response, 'waiting for a suitable judge')
         self.assertNotContains(response, 'Abort')

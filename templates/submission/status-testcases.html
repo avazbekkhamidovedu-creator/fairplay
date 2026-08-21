@@ -88,10 +88,10 @@
                     title="{% if tc.extended_feedback %}{{ _('Click to see detailed feedback') }}{% endif %}"
                     {% if tc.id %}id="{{ tc.id }}"{% endif %}>
                   <td>
-                    {% if tc.extended_feedback %}
+                    {% if tc.extended_feedback or (tc.status == 'IR' and tc.feedback) %}
                       <i class="fa fa-chevron-right fa-fw ai-chevron"></i>
                     {% endif %}
-                    <span class="ai-sq-name">{{ tc.feedback or _('Sub-question') }}</span>
+                    <span class="ai-sq-name">{% if tc.status == 'IR' and not tc.extended_feedback and tc.feedback %}{{ _('Sub-question') }}{% else %}{{ tc.feedback or _('Sub-question') }}{% endif %}</span>
                   </td>
                   <td class="ai-sq-score ac">
                     <span class="case-{{ tc.status }}">{{ tc.points|floatformat(1) }}</span> / {{ tc.total|floatformat(1) }}
@@ -104,15 +104,17 @@
                     </span>
                   </td>
                   <td class="ai-sq-feedback">
-                    {{ (tc.extended_feedback or '')[:120] }}{% if tc.extended_feedback and tc.extended_feedback|length > 120 %}&hellip;{% endif %}
+                    {% set fb = tc.extended_feedback or (tc.feedback if tc.status == 'IR' else '') %}
+                    {{ (fb or '')[:120] }}{% if fb and fb|length > 120 %}&hellip;{% endif %}
                   </td>
                 </tr>
-                {% if tc.extended_feedback %}
+                {% set fb_full = tc.extended_feedback or (tc.feedback if tc.status == 'IR' else '') %}
+                {% if fb_full %}
                 <tr style="display:none" class="ai-grading-feedback toggled">
                   <td colspan="4">
                     <div class="ai-feedback-box">
                       <strong>{{ _('Detailed Feedback') }}</strong>
-                      <p class="math-feedback">{{ tc.extended_feedback|linebreaksbr }}</p>
+                      <p class="math-feedback">{{ fb_full|linebreaksbr }}</p>
                     </div>
                   </td>
                 </tr>
@@ -250,18 +252,9 @@
                 {% else %}
                     <b>{{ _('Final score:') }}</b>
                 {% endif %}
-                {{ submission.case_points|floatformat(0) }}/{{ submission.case_total|floatformat(0) }}
-                {% if request.in_contest and submission.contest_or_none %}
-                    {% with contest=submission.contest_or_none %}
-                        {% set points=contest.points|roundfloat(3) %}
-                        {% set total=contest.problem.points|floatformat(-1) %}
-                        ({{ _('%(points)s/%(total)s points', points=points, total=total) }})
-                    {% endwith %}
-                {% else %}
-                    {% with points=submission.points|roundfloat(3), total=submission.problem.points|floatformat(-1) %}
-                        ({{ _('%(points)s/%(total)s points', points=points, total=total) }})
-                    {% endwith %}
-                {% endif %}
+                {% with points=submission.display_points|floatformat(-1), total=submission.display_points_total|floatformat(-1) %}
+                    {{ _('%(points)s/%(total)s points', points=points, total=total) }}
+                {% endwith %}
                 {% if is_pretest and submission.result == "AC" %}
                     <br>
                     <i>{{ _('Passing pretests does not guarantee a full score on system tests.') }}</i>

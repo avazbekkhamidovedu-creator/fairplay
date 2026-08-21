@@ -98,11 +98,15 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
         self.assertIn(b'submission-list-redesign', content)
         self.assertIn(b'sub-result', content)
         self.assertIn(b'filter-problem', content)
-        self.assertIn(b'sub-staff-bar', content)
+        self.assertIn(b'sub-filters', content)
+        self.assertNotIn(b'sub-staff-bar', content)
         self.assertIn(b'sub-row-check', content)
         self.assertIn(b'sub-grade-link', content)
         self.assertIn(b'btn-bulk-rejudge', content)
         self.assertIn(b'btn-bulk-rescore', content)
+        # Bulk actions sit in the filter toolbar, not a separate title row.
+        self.assertLess(content.find(b'id="filter-form"'), content.find(b'id="btn-bulk-rejudge"'))
+        self.assertLess(content.find(b'id="btn-bulk-rejudge"'), content.find(b'id="submissions-table"'))
 
     def test_filter_by_problem_code(self):
         content = self._get('?problem=alpha').content
@@ -156,6 +160,8 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
         self.assertNotIn(b'sub-row-check', content)
         self.assertNotIn(b'sub-grade-link', content)
         self.assertNotIn(b'Practice Grade', content)
+        self.assertNotIn(b'btn-bulk-rejudge', content)
+        self.assertNotIn(b'btn-bulk-rescore', content)
 
     def test_staff_bar_hidden_without_edit_own_problem(self):
         """rejudge_submission alone is not enough for bulk UI (matches bulk_rejudge)."""

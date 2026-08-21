@@ -1,16 +1,11 @@
-"""Contest-level AI grading: realtime vs batch, latest-submission only.
+"""Contest-level AI grading and post-end objective auto-grade.
 
-Teachers pick a mode when creating an assignment/exam:
+Teachers always may run AI (submission button or Grade-page “Run AI grading”).
+Students may request AI only when ``allow_student_ai_grading`` is on (subject to
+quota). Submit never auto-invokes the LLM.
 
-* ``realtime`` — students (and teachers) request AI grading via a button on the
-  submission page; nothing is sent to the LLM until they click it.
-* ``batch`` — do not call the LLM during the contest; a teacher button (and an
-  optional timer after ``end_time``) grades **only the latest** submission per
-  (participation, problem).
-* ``off`` — contest submissions never invoke AI grading, even if the problem
-  has AI enabled.
-
-Practice submissions (no contest) keep the problem-level behaviour.
+``ai_grading_auto_delay_minutes`` schedules objective machine grading after
+``end_time`` (MCQ / true-false / exact fill-blank) — not the LLM.
 """
 from __future__ import annotations
 
@@ -46,10 +41,32 @@ def problem_has_ai_grading(problem):
     return False
 
 
+def problem_is_objective_machine_graded(problem):
+    """MCQ / true-false / exact fill-blank — machine score, no LLM."""
+    from judge.models import ProblemSubmissionType
+
+    st = problem.submission_type
+    if st == ProblemSubmissionType.MCQ:
+        return True
+    if st == ProblemSubmissionType.FILL_BLANK:
+        return not problem_has_ai_grading(problem)
+    return False
+
+
 def contest_ai_mode(contest):
     if contest is None:
         return None
     return getattr(contest, 'ai_grading_mode', None) or 'off'
+
+
+def student_allowed_ai_grading(contest):
+    """Whether students may request on-demand AI for this contest."""
+    if contest is None:
+        return True
+    if hasattr(contest, 'allow_student_ai_grading'):
+        return bool(contest.allow_student_ai_grading)
+    # Pre-migration / legacy rows: realtime mode meant students could request.
+    return contest_ai_mode(contest) == 'realtime'
 
 
 def should_run_ai_now(submission, *, batch_pass=False, manual_trigger=False):
@@ -68,16 +85,15 @@ def should_run_ai_now(submission, *, batch_pass=False, manual_trigger=False):
 
 
 def contest_awaits_student_ai(submission):
-    """Submit stores the answer; the LLM runs only when the student presses the button."""
+    """Submit stores the answer; the LLM runs only on an explicit request."""
     if not problem_has_ai_grading(submission.problem):
         return False
-    contest = getattr(submission, 'contest_object', None)
-    if contest is None:
-        return True
-    return contest_ai_mode(contest) == 'realtime'
+    # Practice and every contest: never auto-call the LLM on submit.
+    return True
 
 
 def contest_defers_ai(submission):
+    """Legacy batch-mode placeholder; new contests never defer to auto AI."""
     contest = getattr(submission, 'contest_object', None)
     return contest_ai_mode(contest) == 'batch' and problem_has_ai_grading(submission.problem)
 
@@ -98,17 +114,15 @@ def is_latest_submission(submission):
 def supersede_older_in_flight(new_submission):
     """Abort older queued/grading attempts so only the newest submit is judged.
 
-    Used for realtime AI (homework): if the previous code/answer is still in
-    the queue, drop it and grade the new one.
+    Used when students may request AI (or practice): if the previous attempt is
+    still in the queue, drop it and grade the new one.
     """
     from judge.models import ProblemSubmissionType, Submission
 
     contest = getattr(new_submission, 'contest_object', None)
-    mode = contest_ai_mode(contest)
-    # Practice + realtime contests: cancel in-flight older attempts.
     if not problem_has_ai_grading(new_submission.problem):
         return 0
-    if contest is not None and mode != 'realtime':
+    if contest is not None and not student_allowed_ai_grading(contest):
         return 0
 
     qs = Submission.objects.filter(
@@ -188,7 +202,7 @@ def persist_code_ai_rows(submission, rows):
     return len(rows)
 
 
-def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False):
+def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False, rejudge_user=None):
     """Grade one submission with AI (code rubric or internal LLM types).
 
     Returns a short status string. Skips (and does not error) when this is no
@@ -218,7 +232,7 @@ def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False)
         persist_code_ai_rows(submission, rows)
         return 'code-ai'
     submission._ai_batch_pass = True
-    submission.judge(rejudge=True, force_judge=True)
+    submission.judge(rejudge=True, force_judge=True, rejudge_user=rejudge_user)
     return 'internal-ai'
 
 
@@ -268,17 +282,16 @@ def student_can_see_code_ai(user, submission):
     if not is_owner:
         return False
     contest = getattr(submission, 'contest_object', None)
-    mode = contest_ai_mode(contest)
-    if contest is None or mode == 'realtime':
+    if contest is None or student_allowed_ai_grading(contest):
         return True
-    if mode == 'batch':
-        return bool(getattr(contest, 'ai_grading_batch_finished_at', None))
+    if bool(getattr(contest, 'ai_grading_batch_finished_at', None)):
+        return True
     return False
 
 
 def student_can_trigger_ai(user, submission):
-    """Show the on-demand AI grading button (teachers always; students when quota allows)."""
-    from judge.ai_grading_quota import get_remaining, is_rate_limited, is_teacher_viewer
+    """Show the on-demand AI grading button (teachers always; students when allowed)."""
+    from judge.ai_grading_quota import get_remaining, is_teacher_viewer
 
     if user is None or not user.is_authenticated:
         return False
@@ -297,26 +310,22 @@ def student_can_trigger_ai(user, submission):
         return False
 
     contest = getattr(submission, 'contest_object', None)
-    mode = contest_ai_mode(contest)
-    if contest is not None and mode == 'off':
-        return False
-    if contest is not None and mode == 'batch' and not teacher:
-        return False
+    # Teachers may always force an LLM pass (Grade desk / Rejudge parity).
     if teacher:
         return True
-    if contest is None or mode == 'realtime':
-        if student_quota_disabled():
-            return False
-        try:
-            profile_id = submission.user_id
-        except Exception:
-            return False
-        if get_remaining(profile_id) <= 0:
-            return False
-        if is_rate_limited(profile_id, submission.problem_id):
-            return False
-        return True
-    return False
+    if contest is not None and not student_allowed_ai_grading(contest):
+        return False
+    if student_quota_disabled():
+        return False
+    try:
+        profile_id = submission.user_id
+    except Exception:
+        return False
+    if get_remaining(profile_id) <= 0:
+        return False
+    # Rate limit is enforced on POST (soft “try again later”); keep the
+    # button visible so students get that message instead of a ban.
+    return True
 
 
 def student_quota_disabled():
@@ -351,7 +360,7 @@ def ai_grade_context(user, submission):
 
 
 def schedule_batch_ai_grade(contest_id):
-    """(Re)schedule the post-end auto batch, or clear it when mode is not batch."""
+    """(Re)schedule post-end objective auto-grade, or clear when delay is 0."""
     from django.conf import settings
 
     from judge.models import Contest
@@ -365,15 +374,15 @@ def schedule_batch_ai_grade(contest_id):
             from celery.result import AsyncResult
             AsyncResult(old_tid).revoke()
         except Exception:
-            logger.exception('Could not revoke previous batch-AI task %s', old_tid)
+            logger.exception('Could not revoke previous auto-grade task %s', old_tid)
         contest.ai_grading_scheduled_task_id = ''
 
-    delay = int(contest.ai_grading_auto_delay_minutes or 0)
-    if contest.ai_grading_mode != Contest.AI_GRADING_BATCH or delay <= 0:
+    delay = int(contest.ai_grading_auto_delay_minutes)
+    # −1 (or any negative) = Off: do not schedule auto-grade after end.
+    if delay < 0:
         contest.save(update_fields=['ai_grading_scheduled_task_id'])
         return
     if contest.end_time is None:
-        # No deadline to anchor the auto-run to; the teacher can still use the button.
         contest.save(update_fields=['ai_grading_scheduled_task_id'])
         return
 
@@ -383,22 +392,23 @@ def schedule_batch_ai_grade(contest_id):
             contest.save(update_fields=['ai_grading_scheduled_task_id'])
             return
         if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
-            # Tests / eager workers would fire immediately; teacher still has the button.
+            # Tests / eager workers would fire immediately; teacher still has buttons.
             contest.save(update_fields=['ai_grading_scheduled_task_id'])
             return
-        from judge.tasks.contest import batch_ai_grade
-        result = batch_ai_grade.apply_async(args=[contest.key], kwargs={'auto': True}, eta=eta)
+        from judge.tasks.contest import auto_grade_contest
+        result = auto_grade_contest.apply_async(args=[contest.key], eta=eta)
         contest.ai_grading_scheduled_task_id = result.id or ''
     except Exception:
-        logger.exception('Could not schedule batch AI grade for contest %s', contest.key)
+        logger.exception('Could not schedule auto-grade for contest %s', contest.key)
         contest.ai_grading_scheduled_task_id = ''
     contest.save(update_fields=['ai_grading_scheduled_task_id'])
 
 
 def ai_mode_help_text():
     return _(
-        'AI grading always uses each student’s latest submission per problem. '
-        'On demand shows a button after submit; AI runs only when requested. '
-        'Batch waits until you press the button on the Grade page, or until '
-        'the delay after the contest ends.',
+        'Teachers can always run AI grading from the Grade page. '
+        'Enable “Allow Student Use AI Grading” so students can request AI on the '
+        'submission page (latest submission only). Auto grade after end re-grades '
+        'objective questions only and does not call the LLM; set it to Off (−1) '
+        'to cancel a scheduled auto-run after you grade manually.',
     )

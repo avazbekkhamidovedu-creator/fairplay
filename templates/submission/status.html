@@ -101,6 +101,12 @@
     {% if request.user == submission.user.user or perms.judge.resubmit_other %}
         <div><a href="{{ url('problem_submit', submission.problem.code, submission.id) }}">{{ _('Resubmit') }}</a></div>
     {% endif %}
+    {% if grade_desk_url %}
+        <div>
+            <a href="{{ grade_desk_url }}" class="sub-grade-link"
+               title="{{ _('Grade this submission in the grading desk') }}">{{ _('Grade') }}</a>
+        </div>
+    {% endif %}
     {% if submission.problem.submission_type != 'F' and perms.judge.rejudge_submission and not submission.is_locked %}
             {% compress js %}
                 <script type="text/javascript">

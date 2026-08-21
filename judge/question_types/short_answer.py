@@ -71,31 +71,44 @@ class ShortAnswerQuestionType(QuestionType):
 
         case_total = self._case_total(problem, config)
 
-        from judge.utils.contest_ai import contest_awaits_student_ai, contest_defers_ai, should_run_ai_now
+        from judge.utils.contest_ai import (
+            contest_awaits_student_ai, contest_defers_ai, should_run_ai_now,
+            student_allowed_ai_grading,
+        )
         if not should_run_ai_now(submission):
             if contest_defers_ai(submission):
                 cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
-                          'feedback': _('Awaiting batch AI grading.')}]
+                          'feedback': '',
+                          'extended_feedback': _('Awaiting batch AI grading.')}]
                 return GradingResult(case_points=0, case_total=case_total, result='IE', cases=cases)
             if contest_awaits_student_ai(submission):
+                contest = getattr(submission, 'contest_object', None)
+                if contest is None or student_allowed_ai_grading(contest):
+                    msg = _('Request AI grading to score this submission.')
+                else:
+                    msg = _('Awaiting teacher AI grading.')
                 cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
-                          'feedback': _('Request AI grading to score this submission.')}]
+                          'feedback': '',
+                          'extended_feedback': msg}]
                 return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
             cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
-                      'feedback': _('AI grading is off for this assignment.')}]
+                      'feedback': '',
+                      'extended_feedback': _('AI grading is off for this assignment.')}]
             return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
 
         scored = self._grade_ai(problem, config, answer)
         if scored is None:
             # AI unavailable/failed is an infrastructure issue, not a wrong student answer (WA).
             cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
-                      'feedback': _('Awaiting manual grading (AI grader unavailable).')}]
+                      'feedback': '',
+                      'extended_feedback': _('Awaiting manual grading (AI grader unavailable).')}]
             return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
 
         sub_scores, total = scored
         if not sub_scores:
             cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
-                      'feedback': _('Grading error — please contact staff.')}]
+                      'feedback': '',
+                      'extended_feedback': _('Grading error — please contact staff.')}]
             return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
 
         case_total = sum(item['max_points'] for item in sub_scores)

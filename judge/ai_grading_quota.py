@@ -1,4 +1,13 @@
-"""Student AI grading quota and per-problem rate limiting."""
+"""Student AI grading quota and per-problem rate limiting.
+
+Students get a global request quota (for usage monitoring) plus a sliding
+per-problem rate limit: at most ``rate_limit_count()`` calls in
+``rate_window_seconds()``. Hitting the limit returns "try again later";
+there is no separate cooldown / ban — the window keeps counting.
+
+Both the window length and the per-window count are configurable via
+``DMOJ_AI_GRADING_RATE_WINDOW_SECONDS`` / ``DMOJ_AI_GRADING_RATE_LIMIT``.
+"""
 from __future__ import annotations
 
 import logging
@@ -20,21 +29,12 @@ def rate_limit_count() -> int:
     return int(getattr(settings, 'DMOJ_AI_GRADING_RATE_LIMIT', 5))
 
 
-def rate_cooldown_seconds() -> int:
-    """Pause after the window limit is hit before the student may try again."""
-    return int(getattr(settings, 'DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS', 300))
-
-
 def _quota_key(user_id: int) -> str:
     return f'ai_grade_quota:{user_id}'
 
 
 def _rate_key(user_id: int, problem_id: int) -> str:
     return f'ai_grade_rate:{user_id}:{problem_id}'
-
-
-def _cooldown_key(user_id: int, problem_id: int) -> str:
-    return f'ai_grade_cooldown:{user_id}:{problem_id}'
 
 
 def student_quota_limit() -> int:
@@ -55,18 +55,24 @@ def is_teacher_viewer(user, submission) -> bool:
     return False
 
 
+def _recent_timestamps(user_id: int, problem_id: int) -> list[float]:
+    now = time.time()
+    timestamps = list(cache.get(_rate_key(user_id, problem_id)) or [])
+    return [t for t in timestamps if now - t < rate_window_seconds()]
+
+
 def is_rate_limited(user_id: int, problem_id: int) -> bool:
-    return bool(cache.get(_cooldown_key(user_id, problem_id)))
+    """True when this user already hit the window limit for this problem."""
+    return len(_recent_timestamps(user_id, problem_id)) >= rate_limit_count()
 
 
 def rate_limit_remaining_seconds(user_id: int, problem_id: int) -> int:
-    until = cache.get(_cooldown_key(user_id, problem_id))
-    if not until:
+    """Seconds until the oldest call in the window ages out (0 if not limited)."""
+    recent = _recent_timestamps(user_id, problem_id)
+    if len(recent) < rate_limit_count():
         return 0
-    try:
-        return max(0, int(float(until) - time.time()))
-    except (TypeError, ValueError):
-        return rate_cooldown_seconds()
+    oldest = min(recent)
+    return max(0, int(rate_window_seconds() - (time.time() - oldest)) + 1)
 
 
 def get_remaining(user_id: int) -> int:
@@ -80,7 +86,8 @@ def get_remaining(user_id: int) -> int:
 
 def try_reserve(user_id: int, problem_id: int) -> tuple[bool, str | None]:
     """Claim one AI grading slot; returns (ok, error_message)."""
-    if is_rate_limited(user_id, problem_id):
+    recent = _recent_timestamps(user_id, problem_id)
+    if len(recent) >= rate_limit_count():
         secs = rate_limit_remaining_seconds(user_id, problem_id)
         return False, f'rate_limited:{secs}'
 
@@ -98,20 +105,9 @@ def try_reserve(user_id: int, problem_id: int) -> tuple[bool, str | None]:
         refund(user_id)
         return False, 'quota_exhausted'
 
-    window = rate_window_seconds()
-    max_count = rate_limit_count()
-    cooldown = rate_cooldown_seconds()
-    timestamps = list(cache.get(_rate_key(user_id, problem_id)) or [])
     now = time.time()
-    recent = [t for t in timestamps if now - t < window]
-    if len(recent) >= max_count:
-        cache.set(_cooldown_key(user_id, problem_id), time.time() + cooldown, cooldown)
-        refund(user_id)
-        return False, f'rate_limited:{cooldown}'
     recent.append(now)
-    cache.set(_rate_key(user_id, problem_id), recent, window)
-    if len(recent) >= max_count:
-        cache.set(_cooldown_key(user_id, problem_id), time.time() + cooldown, cooldown)
+    cache.set(_rate_key(user_id, problem_id), recent, rate_window_seconds())
     return True, None
 
 

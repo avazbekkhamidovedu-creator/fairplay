@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ _('Grade') }} — {{ contest.name }}{% endblock %}
+{% block title %}{{ _('Grade') }} — {{ grade_home_label }}{% endblock %}
 {% block html_class %}workspace-page{% endblock %}
 {% block body_class %}workspace-page{% endblock %}
 {% block title_row %}{% endblock %}
@@ -248,6 +248,14 @@
             font-size: 11.5px;
             color: var(--oj-text-muted, #666);
         }
+        .grade-list-note {
+            padding: .4rem .75rem;
+            font-size: 11.5px;
+            line-height: 1.4;
+            color: var(--oj-text-muted, #666);
+            background: var(--oj-surface-alt, #f6f6f6);
+            border-bottom: 1px solid var(--oj-border, #ccc);
+        }
         .grade-list-head {
             display: flex;
             align-items: center;
@@ -320,6 +328,29 @@
         .badge-released { background: #e8f5e9; color: #2e7d32; }
         .badge-manual { background: #eee; color: #666; }
         .badge-hidden { background: #eee; color: #666; }
+        .badge-rejudge { background: #e3f2fd; color: #1565c0; }
+
+        .gd-rejudge-banner {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.45rem 0.7rem;
+            margin-bottom: 0.75rem;
+            border-radius: 6px;
+            font-size: 12.5px;
+            font-weight: 600;
+            line-height: 1.35;
+        }
+        .gd-rejudge-banner.is-pending {
+            background: #fff8e1;
+            color: #e65100;
+            border: 1px solid #ffe082;
+        }
+        .gd-rejudge-banner.is-done {
+            background: #e3f2fd;
+            color: #1565c0;
+            border: 1px solid #90caf9;
+        }
 
         .grade-empty {
             color: var(--oj-text-muted, #888);
@@ -463,6 +494,57 @@
         }
         .gd-testcases th { color: var(--oj-text-muted, #666); font-weight: 600; }
         .gd-testcases tr:last-child td { border-bottom: none; }
+        /* AI short-answer / fill-blank — same columns as submission status. */
+        .gd-ai-grading { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 0.25rem; }
+        .gd-ai-grading th, .gd-ai-grading td {
+            border-bottom: 1px solid var(--oj-border, #ccc);
+            padding: 0.4rem 0.5rem;
+            vertical-align: top;
+            text-align: left;
+        }
+        .gd-ai-grading th { color: var(--oj-text-muted, #666); font-weight: 600; background: var(--oj-bg, #f5f7fa); }
+        .gd-ai-grading .ac { text-align: center; white-space: nowrap; }
+        .gd-ai-grading tr.gd-ai-row.has-detail { cursor: pointer; }
+        .gd-ai-grading tr.gd-ai-row.has-detail:hover { background: var(--oj-bg, #f5f7fa); }
+        .gd-ai-grading .gd-ai-chevron { margin-right: 0.3rem; color: var(--oj-text-muted, #888); }
+        .gd-ai-detail td { background: var(--oj-info-soft, #eef5ff); }
+        .gd-ai-detail .gd-ai-feedback-box {
+            padding: 0.5rem 0.65rem;
+            border-left: 3px solid var(--oj-info, #1958c1);
+        }
+        .gd-ai-detail .gd-ai-feedback-box strong {
+            display: block;
+            font-size: 11px;
+            color: var(--oj-info, #1958c1);
+            margin-bottom: 0.2rem;
+        }
+        .gd-ai-detail .gd-ai-feedback-box p { margin: 0; white-space: pre-wrap; line-height: 1.45; }
+        .gd-ai-review-box {
+            margin: 0 0 0.75rem;
+            padding: 0.65rem 0.75rem;
+            border: 1px solid var(--oj-border, #dde3ea);
+            border-radius: 6px;
+            background: var(--oj-bg, #f7f9fc);
+            font-size: 12px;
+        }
+        .gd-ai-review-box strong {
+            display: block;
+            margin-bottom: 0.35rem;
+            color: var(--oj-text-muted, #666);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+        .gd-ai-review-box .gd-ai-review-item + .gd-ai-review-item {
+            margin-top: 0.55rem;
+            padding-top: 0.55rem;
+            border-top: 1px dashed var(--oj-border, #dde3ea);
+        }
+        .gd-ai-review-box .gd-ai-review-name {
+            font-weight: 600;
+            margin-bottom: 0.2rem;
+        }
+        .gd-ai-review-box p { margin: 0; white-space: pre-wrap; line-height: 1.45; }
 
         .grade-v-splitter {
             height: 5px;
@@ -566,15 +648,15 @@
             // source can never break out of this <script> block (stored XSS).
             var submissions = {{ grade_submissions_json|tojson }};
             var problems = {{ grade_problems_json|tojson }};
-            var saveUrl = {{ url('contest_grade_save', contest.key)|tojson }};
-            var releaseUrl = {{ url('contest_grade_release', contest.key)|tojson }};
+            var saveUrl = {{ grade_save_url|tojson }};
+            var releaseUrl = {{ grade_release_url|tojson }};
             var rejudgeUrl = {{ url('submission_rejudge')|tojson }};
-            var statusUrl = {{ url('contest_grade_status', contest.key)|tojson }};
+            var statusUrl = {{ grade_status_url|tojson }};
             // Release is now per-submission (manual grade override). These counts
             // drive the "Release All" button hint only.
             var unreleasedCount = {{ grade_unreleased_count|tojson }};
             var releasedCount = {{ grade_released_count|tojson }};
-            var aiBatchUrl = {{ url('contest_grade_ai', contest.key)|tojson }};
+            var aiBatchUrl = {{ grade_ai_url|tojson }};
             var aiBatchMode = {{ 'true' if grade_ai_batch else 'false' }};
             var aiBatchDone = {{ 'true' if grade_ai_batch_done else 'false' }};
             // Rejudge additionally needs staff + the rejudge_submission perm
@@ -582,15 +664,17 @@
             var canRejudge = {{ 'true' if request.user.is_staff and request.user.has_perm('judge.rejudge_submission') else 'false' }};
             var selectedId = null;
             var filteredRows = [];
-            // Deep-link: ?submission=<id> (from the submission list's "grade" link)
-            // pre-selects that submission; renderList() falls back to the first
-            // row if the id is absent or filtered out. Show all submissions so
-            // a deep-linked non-final attempt is still visible.
+            // Deep-link: ?submission=<id> (from ranking cells / the submission
+            // list's "grade" link) pre-selects that submission; renderList()
+            // falls back to the first row if the id is absent or filtered out.
+            // Show all submissions and participations so a deep-linked non-final
+            // or virtual attempt is still visible and stays selected.
             try {
                 var urlSub = new URLSearchParams(window.location.search).get('submission');
                 if (urlSub) {
                     selectedId = parseInt(urlSub, 10);
                     $('#f-queue').val('all');
+                    if ($('#f-part').length) $('#f-part').val('all');
                 }
             } catch (e) { /* ignore — deep-link is best-effort */ }
 
@@ -625,6 +709,30 @@
                 return (s.points != null ? s.points : '—') + ' / ' + (s.total != null ? s.total : '—');
             }
 
+            // Machine cases sometimes use a raw scale (e.g. MCQ 1/4) while the
+            // grade desk shows assignment points (25/100). Rescale so the case
+            // table matches POINTS above.
+            function formatScaledCasePoints(tc, s) {
+                var rawPts = tc.points != null ? Number(tc.points) : null;
+                var rawTot = tc.total != null ? Number(tc.total) : null;
+                if (rawPts == null) return '—';
+                var assignTotal = s.total != null ? Number(s.total) : null;
+                var caseSum = 0;
+                (s.test_cases || []).forEach(function (c) {
+                    if (c.total != null) caseSum += Number(c.total);
+                });
+                if (assignTotal != null && assignTotal > 0 && caseSum > 0 &&
+                        Math.abs(caseSum - assignTotal) > 1e-6) {
+                    var scaledPts = rawPts / caseSum * assignTotal;
+                    var scaledTot = rawTot != null ? rawTot / caseSum * assignTotal : assignTotal;
+                    function fmt(n) {
+                        return (Math.round(n * 10) / 10).toString();
+                    }
+                    return fmt(scaledPts) + ' / ' + fmt(scaledTot);
+                }
+                return rawPts + (rawTot != null ? ' / ' + rawTot : '');
+            }
+
             function refreshReleaseButton() {
                 $('#btn-release').html(
                     '<i class="fa fa-flag-checkered"></i> {{ _('Release All') }}' +
@@ -637,7 +745,8 @@
             // ── Filtering (queue / participation / problem / type / user / attempts) ─
             function filtered() {
                 var q = $('#f-queue').val();
-                var part = $('#f-part').val();
+                var $part = $('#f-part');
+                var part = $part.length ? $part.val() : 'all';
                 var problem = $('#f-problem').val();
                 var type = $('#f-type').val();
                 var user = $('#f-user').val().trim().toLowerCase();
@@ -856,30 +965,133 @@
                 $('#btn-rejudge').prop('disabled', !canRejudge);
                 hint.textContent = (s.result || '—') + ' · ' + (s.lang || '—');
 
-                var html = '<div class="gd-result-summary">' +
+                // Result / Points apply to every problem type. Language / Time / Memory
+                // are judge-bridge metrics — only meaningful for programming (code) problems.
+                var isCode = s.problem_type === 'C';
+                var html = '';
+                if (s.rejudging) {
+                    html += '<div class="gd-rejudge-banner is-pending"><i class="fa fa-refresh fa-spin"></i> ' +
+                        '{{ _('Rejudging… refreshing result') }}</div>';
+                } else if (s.just_rejudged) {
+                    html += '<div class="gd-rejudge-banner is-done"><i class="fa fa-check-circle"></i> ' +
+                        '{{ _('Rejudged — showing the latest judge result') }}</div>';
+                }
+                html += '<div class="gd-result-summary">' +
                     '<div><div class="rs-label">{{ _('Result') }}</div><div class="rs-value">' + esc(s.result || '—') + '</div></div>' +
-                    '<div><div class="rs-label">{{ _('Points') }}</div><div class="rs-value">' + esc(scoreText(s)) + '</div></div>' +
-                    '<div><div class="rs-label">{{ _('Language') }}</div><div class="rs-value">' + esc(s.lang || '—') + '</div></div>' +
-                    '<div><div class="rs-label">{{ _('Time') }}</div><div class="rs-value">' + (s.time != null ? Number(s.time).toFixed(2) + 's' : '—') + '</div></div>' +
-                    '<div><div class="rs-label">{{ _('Memory') }}</div><div class="rs-value">' + esc(s.memory != null ? s.memory : '—') + '</div></div>' +
-                    '</div>';
+                    '<div><div class="rs-label">{{ _('Points') }}</div><div class="rs-value">' + esc(scoreText(s)) + '</div></div>';
+                if (isCode) {
+                    html +=
+                        '<div><div class="rs-label">{{ _('Language') }}</div><div class="rs-value">' + esc(s.lang || '—') + '</div></div>' +
+                        '<div><div class="rs-label">{{ _('Time') }}</div><div class="rs-value">' + (s.time != null ? Number(s.time).toFixed(2) + 's' : '—') + '</div></div>' +
+                        '<div><div class="rs-label">{{ _('Memory') }}</div><div class="rs-value">' + esc(s.memory != null ? s.memory : '—') + '</div></div>';
+                }
+                html += '</div>';
 
                 if (s.test_cases && s.test_cases.length) {
-                    html += '<table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Time') }}</th><th>{{ _('Memory') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
-                        s.test_cases.map(function (tc) {
-                            // batch -1 marks supplementary AI rubric rows (teacher-only); show
-                            // their sub-question name instead of a bare case number.
-                            var label = (tc.batch === -1 && tc.feedback)
-                                ? '<span title="' + esc(tc.extended_feedback || '') + '">' + esc(tc.feedback) + '</span>'
-                                : tc.case;
-                            return '<tr><td>' + label + '</td><td>' + esc(tc.status) + '</td><td>' +
-                                (tc.time != null ? Number(tc.time).toFixed(2) + 's' : '—') + '</td><td>' +
-                                (tc.memory != null ? esc(tc.memory) : '—') + '</td><td>' +
-                                (tc.points != null ? tc.points : '—') + '</td></tr>';
-                        }).join('') +
-                        '</tbody></table>';
+                    var isAiAnswer = (s.problem_type === 'S' || s.problem_type === 'B');
+                    if (isAiAnswer) {
+                        // Same columns as templates/submission/status-testcases.html
+                        // so teachers can verify AI scores against detailed feedback.
+                        html += '<table class="gd-ai-grading"><thead><tr>' +
+                            '<th>{{ _('Sub-question') }}</th>' +
+                            '<th class="ac">{{ _('Score') }}</th>' +
+                            '<th class="ac">{{ _('Status') }}</th>' +
+                            '<th>{{ _('Feedback') }}</th>' +
+                            '</tr></thead><tbody>';
+                        s.test_cases.forEach(function (tc, idx) {
+                            // Scored AI rows: feedback = sub-question name, extended = detail.
+                            // IR placeholders historically put the status message in feedback only —
+                            // surface that in the Feedback column so the cell is not blank.
+                            var name = tc.feedback || ('{{ _('Sub-question') }} ' + (idx + 1));
+                            var detail = tc.extended_feedback || '';
+                            if (!detail && tc.status === 'IR' && tc.feedback) {
+                                detail = tc.feedback;
+                                name = '{{ _('Sub-question') }} ' + (idx + 1);
+                            }
+                            var preview = detail.length > 120 ? detail.slice(0, 120) + '…' : detail;
+                            var statusLabel = tc.status === 'AC' ? '{{ _('Correct') }}'
+                                : (tc.status === 'IR' ? '{{ _('Awaiting AI') }}' : '{{ _('Partial') }}');
+                            var rowClass = 'gd-ai-row' + (detail ? ' has-detail' : '');
+                            html += '<tr class="' + rowClass + '" data-ai-idx="' + idx + '">' +
+                                '<td>' + (detail ? '<i class="fa fa-chevron-right fa-fw gd-ai-chevron"></i>' : '') +
+                                esc(name) + '</td>' +
+                                '<td class="ac">' +
+                                (tc.points != null ? Number(tc.points).toFixed(1) : '—') +
+                                ' / ' + (tc.total != null ? Number(tc.total).toFixed(1) : '—') +
+                                '</td>' +
+                                '<td class="ac">' + esc(statusLabel) + '</td>' +
+                                '<td>' + esc(preview) + '</td></tr>';
+                            if (detail) {
+                                html += '<tr class="gd-ai-detail" data-ai-detail="' + idx + '" style="display:none">' +
+                                    '<td colspan="4"><div class="gd-ai-feedback-box">' +
+                                    '<strong>{{ _('Detailed Feedback') }}</strong>' +
+                                    '<p>' + esc(detail) + '</p></div></td></tr>';
+                            }
+                        });
+                        // Total row — same layout as the submission Result tab.
+                        var sumPts = 0, sumTot = 0, hasPts = false, hasTot = false, allAc = true, anyIr = false;
+                        s.test_cases.forEach(function (tc) {
+                            if (tc.points != null) { sumPts += Number(tc.points); hasPts = true; }
+                            if (tc.total != null) { sumTot += Number(tc.total); hasTot = true; }
+                            if (tc.status !== 'AC') allAc = false;
+                            if (tc.status === 'IR') anyIr = true;
+                        });
+                        if (!hasTot && s.case_total != null) sumTot = Number(s.case_total);
+                        else if (!hasTot && s.total != null) sumTot = Number(s.total);
+                        if (!hasPts && s.case_points != null) sumPts = Number(s.case_points);
+                        var totalStatus = allAc ? '{{ _('All correct') }}'
+                            : (anyIr ? '{{ _('Awaiting AI') }}' : '{{ _('Partial credit') }}');
+                        html += '</tbody><tfoot><tr class="gd-ai-total">' +
+                            '<td><strong>{{ _('Total') }}</strong></td>' +
+                            '<td class="ac"><strong>' + sumPts.toFixed(1) + ' / ' + sumTot.toFixed(1) + '</strong></td>' +
+                            '<td class="ac">' + esc(totalStatus) + '</td><td></td></tr></tfoot></table>';
+                    } else if (isCode) {
+                        html += '<table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Time') }}</th><th>{{ _('Memory') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
+                            s.test_cases.map(function (tc) {
+                                // batch -1 marks supplementary AI rubric rows (teacher-only); show
+                                // their sub-question name instead of a bare case number.
+                                var label = (tc.batch === -1 && tc.feedback)
+                                    ? '<span title="' + esc(tc.extended_feedback || '') + '">' + esc(tc.feedback) + '</span>'
+                                    : tc.case;
+                                // For code AI rubric rows, also show extended feedback under the name.
+                                var pts = (tc.points != null ? tc.points : '—');
+                                if (tc.batch === -1 && tc.extended_feedback) {
+                                    pts = pts + '<div class="muted" style="font-weight:400;margin-top:0.2rem">' +
+                                        esc(tc.extended_feedback) + '</div>';
+                                }
+                                return '<tr><td>' + label + '</td><td>' + esc(tc.status) + '</td><td>' +
+                                    (tc.time != null ? Number(tc.time).toFixed(2) + 's' : '—') + '</td><td>' +
+                                    (tc.memory != null ? esc(tc.memory) : '—') + '</td><td>' +
+                                    pts + '</td></tr>';
+                            }).join('') +
+                            '</tbody></table>';
+                    } else {
+                        // MCQ / file / etc.: no wall-time or memory from the judge bridge.
+                        // Show points on the assignment scale (same as POINTS above).
+                        html += '<table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
+                            s.test_cases.map(function (tc) {
+                                return '<tr><td>' + tc.case + '</td><td>' + esc(tc.status) + '</td><td>' +
+                                    formatScaledCasePoints(tc, s) +
+                                    '</td></tr>';
+                            }).join('') +
+                            '</tbody></table>';
+                    }
                 }
                 resultBody.innerHTML = html;
+                if (s.test_cases && s.test_cases.length && (s.problem_type === 'S' || s.problem_type === 'B')) {
+                    $(resultBody).find('tr.gd-ai-row.has-detail').on('click', function () {
+                        var idx = this.getAttribute('data-ai-idx');
+                        var detail = resultBody.querySelector('tr.gd-ai-detail[data-ai-detail="' + idx + '"]');
+                        if (!detail) return;
+                        var open = detail.style.display !== 'none';
+                        detail.style.display = open ? 'none' : 'table-row';
+                        var chev = this.querySelector('.gd-ai-chevron');
+                        if (chev) {
+                            chev.classList.toggle('fa-chevron-right', open);
+                            chev.classList.toggle('fa-chevron-down', !open);
+                        }
+                    });
+                }
 
                 reviewBody.innerHTML =
                     '<div class="score-row">' +
@@ -1113,7 +1325,7 @@
                 var $btn = $('#btn-ai-grade');
                 $btn.html('<i class="fa fa-magic"></i> ' + (aiBatchDone
                     ? '{{ _('Re-run AI grading') }}'
-                    : '{{ _('Run AI grading') }}'));
+                    : '{{ _('Batch grading') }}'));
             }
 
             $('#btn-ai-grade').on('click', function () {
@@ -1130,12 +1342,13 @@
                 }).always(function () { $btn.prop('disabled', false); });
             });
 
-            // Queueing only schedules the judge — the verdict lands asynchronously.
-            // Poll the per-submission status endpoint until the judge finishes,
-            // then patch the in-memory row and re-render.
+            // Queueing only schedules the judge — the verdict lands asynchronously
+            // (or synchronously for internal AI types). Refresh the result pane
+            // in place and mark the row as a rejudge result — no blocking alert.
             var rejudgePollTimer = null;
 
-            function applySubmissionUpdate(res) {
+            function applySubmissionUpdate(res, opts) {
+                opts = opts || {};
                 for (var i = 0; i < submissions.length; i++) {
                     if (submissions[i].id === res.id) {
                         submissions[i].status = res.status;
@@ -1147,6 +1360,15 @@
                         submissions[i].test_cases = res.test_cases || [];
                         submissions[i].review_note = res.review_note || '';
                         submissions[i].reviewed_by = res.reviewed_by;
+                        if (opts.rejudging) {
+                            submissions[i].rejudging = true;
+                            submissions[i].just_rejudged = false;
+                        } else if (opts.fromRejudge) {
+                            submissions[i].rejudging = false;
+                            submissions[i].just_rejudged = true;
+                        } else {
+                            submissions[i].rejudging = false;
+                        }
                         break;
                     }
                 }
@@ -1155,42 +1377,89 @@
                 renderRight();
             }
 
+            function beginRejudgeUi(id) {
+                var s = getSubmission(id);
+                if (!s) return;
+                s.rejudging = true;
+                s.just_rejudged = false;
+                s.status = 'QU';
+                s.result = null;
+                s.test_cases = [];
+                renderList();
+                renderLeft();
+                renderRight();
+            }
+
             function pollRejudgeResult(id) {
                 var tries = 0;
-                if (rejudgePollTimer) clearInterval(rejudgePollTimer);
-                rejudgePollTimer = setInterval(function () {
+                var sawPending = false;
+                if (rejudgePollTimer) {
+                    clearTimeout(rejudgePollTimer);
+                    rejudgePollTimer = null;
+                }
+
+                function finish(res, timedOut) {
+                    rejudgePollTimer = null;
+                    $('#btn-rejudge').prop('disabled', !canRejudge);
+                    if (res) applySubmissionUpdate(res, {fromRejudge: !timedOut});
+                    if (timedOut) {
+                        window.showToast('{{ _('Rejudge is taking unusually long — refresh the page to see the result.') }}', 'error');
+                    } else {
+                        window.showToast('{{ _('Rejudge finished — result updated') }}', 'success');
+                    }
+                }
+
+                function tick() {
                     tries++;
                     $.get(statusUrl, {submission: id}).done(function (res) {
-                        if (!res.ok || res.id !== id) return;  // keep polling
-                        if (res.is_graded || tries >= 30) {     // ~60s cap
-                            clearInterval(rejudgePollTimer);
-                            rejudgePollTimer = null;
-                            $('#btn-rejudge').prop('disabled', !canRejudge);
-                            applySubmissionUpdate(res);
-                            if (res.is_graded) {
-                                $('#left-summary').append(' · <span class="badge badge-done">{{ _('Rejudge finished') }}: ' +
-                                    esc(res.result || '?') + ' · ' +
-                                    (res.points != null ? esc(res.points) + ' / ' + (res.total || '—') : '—') + '</span>');
-                            } else {
-                                alert('{{ _('Rejudge is taking unusually long — refresh the page to see the result.') }}');
-                            }
+                        if (!res.ok || res.id !== id) {
+                            rejudgePollTimer = setTimeout(tick, 1500);
+                            return;
                         }
+                        if (!res.is_graded) {
+                            sawPending = true;
+                            applySubmissionUpdate(res, {rejudging: true});
+                            if (tries >= 40) { // ~60s with backoff
+                                finish(res, true);
+                                return;
+                            }
+                            rejudgePollTimer = setTimeout(tick, tries < 4 ? 800 : 1500);
+                            return;
+                        }
+                        // Already graded: if we never saw QU/P/G, the POST may
+                        // have finished an internal (sync) rejudge — accept after
+                        // one quick confirm poll so we do not flash stale IR.
+                        if (!sawPending && tries < 2) {
+                            applySubmissionUpdate(res, {rejudging: true});
+                            rejudgePollTimer = setTimeout(tick, 400);
+                            return;
+                        }
+                        finish(res, false);
                     }).fail(function () {
-                        clearInterval(rejudgePollTimer);
                         rejudgePollTimer = null;
                         $('#btn-rejudge').prop('disabled', !canRejudge);
+                        var s = getSubmission(id);
+                        if (s) { s.rejudging = false; renderRight(); }
+                        window.showToast('{{ _('Failed to refresh rejudge status') }}', 'error');
                     });
-                }, 2000);
+                }
+                tick();
             }
 
             $('#btn-rejudge').on('click', function () {
                 if (!selectedId) return;
+                if (!confirm({{ _('Rejudge this submission? The answer result will refresh when judging finishes.')|htmltojs }})) {
+                    return;
+                }
+                var id = selectedId;
                 var $btn = $(this).prop('disabled', true);
-                $.post(rejudgeUrl, {id: selectedId}).done(function () {
-                    alert('{{ _('Rejudge queued') }}');
-                    pollRejudgeResult(selectedId);
+                beginRejudgeUi(id);
+                $.post(rejudgeUrl, {id: id}).done(function () {
+                    pollRejudgeResult(id);
                 }).fail(function (xhr) {
-                    alert('{{ _('Rejudge failed') }} (' + xhr.status + ')');
+                    var s = getSubmission(id);
+                    if (s) { s.rejudging = false; renderList(); renderLeft(); renderRight(); }
+                    window.showToast('{{ _('Rejudge failed') }} (' + xhr.status + ')', 'error');
                     $btn.prop('disabled', !canRejudge);
                 });
             });
@@ -1212,7 +1481,7 @@
         <div class="ws-toolbar has-leave">
             <div class="ws-toolbar-left">
                 <button type="button" class="tool-btn icon-only" id="btn-overview" title="{{ _('Submission list') }}" aria-label="{{ _('Submission list') }}"><i class="fa fa-bars"></i></button>
-                <a class="ctx-label" id="ctx-home" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+                <a class="ctx-label" id="ctx-home" href="{{ grade_home_url }}">{{ grade_home_label }}</a>
                 <span class="nav-arrows">
                     <button type="button" class="tool-btn icon-only" id="btn-prev" title="{{ _('Previous submission') }}" aria-label="{{ _('Previous submission') }}"><i class="fa fa-chevron-left"></i></button>
                     <button type="button" class="tool-btn icon-only" id="btn-next" title="{{ _('Next submission') }}" aria-label="{{ _('Next submission') }}"><i class="fa fa-chevron-right"></i></button>
@@ -1226,7 +1495,7 @@
             </div>
             <div class="grade-actions">
                 {% if grade_ai_batch %}
-                <button type="button" class="tool-btn" id="btn-ai-grade" title="{{ _('Grade each student’s latest submission per problem with AI') }}"><i class="fa fa-magic"></i> {{ _('Run AI grading') }}</button>
+                <button type="button" class="tool-btn" id="btn-ai-grade" title="{{ _('Grade each student’s latest submission per problem with AI') }}"><i class="fa fa-magic"></i> {{ _('Batch grading') }}</button>
                 {% endif %}
                 <button type="button" class="tool-btn" id="btn-rejudge" disabled title="{{ _('Requires staff + rejudge permission') }}"><i class="fa fa-refresh"></i> {{ _('Rejudge') }}</button>
                 <button type="button" class="tool-btn submit-btn" id="btn-save-current" disabled><i class="fa fa-check"></i> {{ _('Save grading') }}</button>
@@ -1251,6 +1520,7 @@
                                 <option value="graded">{{ _('Graded') }}</option>
                             </select>
                         </div>
+                        {% if grade_show_participation %}
                         <div>
                             <label for="f-part">{{ _('Participation') }}</label>
                             <select id="f-part">
@@ -1259,6 +1529,7 @@
                                 <option value="virtual">{{ _('Virtual') }}</option>
                             </select>
                         </div>
+                        {% endif %}
                         <div>
                             <label for="f-problem">{{ _('Problem') }}</label>
                             <select id="f-problem">
@@ -1296,6 +1567,12 @@
                 </div>
                 <div class="ws-drawer-body">
                     <div class="grade-list-head"><i class="fa fa-list"></i> {{ _('Submissions') }}</div>
+                    {% if grade_truncated %}
+                        <div class="grade-list-note">
+                            <i class="fa fa-info-circle"></i>
+                            {{ _('Showing the %(count)s most recent submissions. Filter or open a submission directly to reach older ones.', count=grade_truncated_count) }}
+                        </div>
+                    {% endif %}
                     <div class="submission-list" id="submission-list"></div>
                 </div>
             </aside>

@@ -96,10 +96,36 @@
     .filter-actions {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 0.5rem;
         flex: 0 0 auto;
         min-height: var(--oj-control-height);
         padding-bottom: 0;
+
+        .sub-select-all {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin: 0;
+            font-size: var(--oj-font-size-sm);
+            font-weight: normal;
+            color: var(--text);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        #btn-bulk-rejudge,
+        #btn-bulk-rescore {
+            font-weight: 600;
+            min-height: var(--oj-control-height);
+            padding: 0.35rem 0.85rem;
+            box-shadow: var(--oj-shadow-sm);
+        }
+
+        #btn-bulk-rejudge .fa,
+        #btn-bulk-rescore .fa {
+            margin-right: 0.3rem;
+        }
     }
 
     .sub-scope-note {
@@ -126,48 +152,6 @@
 
     #submissions-table {
         background: var(--surface);
-    }
-
-    .sub-staff-bar {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.55rem 0.65rem;
-        align-items: center;
-        padding: 0.65rem 0.85rem;
-        /* Match classic OJ sidebox / table header strip (.sidebox h3, .table th). */
-        background: var(--oj-heading);
-        border-bottom: 1px solid var(--oj-heading);
-        font-size: var(--oj-font-size-sm);
-        color: var(--oj-heading-text);
-
-        .sub-select-all {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            margin: 0 0.35rem 0 0;
-            font-weight: normal;
-            color: var(--oj-heading-text);
-            cursor: pointer;
-        }
-
-        #btn-bulk-rejudge,
-        #btn-bulk-rescore {
-            font-weight: 600;
-            min-height: 32px;
-            padding: 0.35rem 0.85rem;
-            box-shadow: var(--oj-shadow-sm);
-        }
-
-        #btn-bulk-rejudge .fa,
-        #btn-bulk-rescore .fa {
-            margin-right: 0.3rem;
-        }
-
-        .btn[disabled] {
-            opacity: 0.55;
-            cursor: not-allowed;
-            box-shadow: none;
-        }
     }
 
     .submission-row {

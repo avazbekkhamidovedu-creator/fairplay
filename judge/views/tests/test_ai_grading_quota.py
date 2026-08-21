@@ -3,16 +3,11 @@
 Covers the public API of ``judge.ai_grading_quota``:
 
 * the global per-user quota (``DMOJ_AI_GRADING_STUDENT_QUOTA``),
-* the per-(user, problem) rate limit — window length, max requests per
-  window, and cooldown after the limit — which is driven by the settings
-  ``DMOJ_AI_GRADING_RATE_WINDOW_SECONDS`` / ``DMOJ_AI_GRADING_RATE_LIMIT`` /
-  ``DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS``,
+* the per-(user, problem) sliding rate limit — window length and max requests
+  per window — driven by the settings ``DMOJ_AI_GRADING_RATE_WINDOW_SECONDS`` /
+  ``DMOJ_AI_GRADING_RATE_LIMIT``,
 * teacher exemption (``is_teacher_viewer``),
-* the on-demand AI grading endpoint reporting the configured cooldown.
-
-The quota itself is a plain in-memory counter, so tests exercise behaviour
-rather than exact cache keys (except ``_cooldown_key``, which is deleted to
-simulate the cooldown elapsing).
+* the on-demand AI grading endpoint reporting the remaining window.
 """
 import re
 from unittest import mock
@@ -22,11 +17,9 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from judge.ai_grading_quota import (
-    _cooldown_key,
     get_remaining,
     is_rate_limited,
     is_teacher_viewer,
-    rate_cooldown_seconds,
     rate_limit_count,
     rate_limit_remaining_seconds,
     rate_window_seconds,
@@ -85,24 +78,21 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
     # ------------------------------------------------------------------
 
     def test_settings_defaults(self):
-        # Values shipped in dmoj/settings.py: students disabled by default,
-        # rate limit 5 requests per 300s window with a 300s cooldown.
-        self.assertEqual(student_quota_limit(), 0)
+        # Values shipped in dmoj/settings.py: students get a 100-request global
+        # quota, rate limit 5 requests per 300s sliding window.
+        self.assertEqual(student_quota_limit(), 100)
         self.assertEqual(rate_window_seconds(), 300)
         self.assertEqual(rate_limit_count(), 5)
-        self.assertEqual(rate_cooldown_seconds(), 300)
 
     @override_settings(
         DMOJ_AI_GRADING_STUDENT_QUOTA=20,
         DMOJ_AI_GRADING_RATE_LIMIT=3,
         DMOJ_AI_GRADING_RATE_WINDOW_SECONDS=60,
-        DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS=10,
     )
     def test_settings_accessors_reflect_overrides(self):
         self.assertEqual(student_quota_limit(), 20)
         self.assertEqual(rate_window_seconds(), 60)
         self.assertEqual(rate_limit_count(), 3)
-        self.assertEqual(rate_cooldown_seconds(), 10)
 
     # ------------------------------------------------------------------
     # Global per-user quota
@@ -229,12 +219,15 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         ok, err = try_reserve(uid, pid)
         self.assertFalse(ok)
         self.assertTrue(err.startswith('rate_limited'))
+        # Soft limit: another attempt still counts as rate_limited (no ban key).
+        ok2, err2 = try_reserve(uid, pid)
+        self.assertFalse(ok2)
+        self.assertTrue(err2.startswith('rate_limited'))
 
     @override_settings(
         DMOJ_AI_GRADING_STUDENT_QUOTA=10,
         DMOJ_AI_GRADING_RATE_LIMIT=2,
         DMOJ_AI_GRADING_RATE_WINDOW_SECONDS=300,
-        DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS=300,
     )
     def test_window_prunes_stale_timestamps(self):
         """Old requests fall out of the window, so the student can try again."""
@@ -247,11 +240,9 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
             ok, err = try_reserve(uid, pid)
             self.assertTrue(ok, err)
             self.assertTrue(is_rate_limited(uid, pid))
-            # The cooldown elapses (the cache key expires).
-            cache.delete(_cooldown_key(uid, pid))
-            self.assertFalse(is_rate_limited(uid, pid))
             # Enough time passes that both reservations are outside the window.
             clock.advance(600)
+            self.assertFalse(is_rate_limited(uid, pid))
             ok, err = try_reserve(uid, pid)
             self.assertTrue(ok, err)
             self.assertFalse(is_rate_limited(uid, pid))
@@ -263,30 +254,31 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
     def test_rate_limit_remaining_seconds(self):
         pid = 7
         uid = self.student.profile.id
-        # No cooldown armed yet: 0 remaining seconds.
+        # Window not filled yet: 0 remaining seconds.
         self.assertEqual(rate_limit_remaining_seconds(uid, pid), 0)
         try_reserve(uid, pid)
         self.assertTrue(is_rate_limited(uid, pid))
         secs = rate_limit_remaining_seconds(uid, pid)
         self.assertGreater(secs, 0)
-        self.assertLessEqual(secs, 300)
+        # The oldest reservation ages out after the configured window.
+        self.assertLessEqual(secs, rate_window_seconds() + 1)
 
     @override_settings(
         DMOJ_AI_GRADING_STUDENT_QUOTA=10,
         DMOJ_AI_GRADING_RATE_LIMIT=1,
-        DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS=42,
+        DMOJ_AI_GRADING_RATE_WINDOW_SECONDS=42,
     )
-    def test_rate_cooldown_is_configurable(self):
+    def test_remaining_seconds_respects_configured_window(self):
         pid = 7
         uid = self.student.profile.id
         ok, err = try_reserve(uid, pid)
         self.assertTrue(ok, err)
-        # Hitting the window limit arms the cooldown; the remaining seconds
-        # reported to the student come from the configured setting.
+        # Hitting the window limit reports a wait bounded by the configured
+        # window length.
         self.assertTrue(is_rate_limited(uid, pid))
         secs = rate_limit_remaining_seconds(uid, pid)
         self.assertGreater(secs, 0)
-        self.assertLessEqual(secs, 42)
+        self.assertLessEqual(secs, 43)
 
     # ------------------------------------------------------------------
     # Teacher exemption
@@ -329,11 +321,10 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
     @override_settings(
         DMOJ_AI_GRADING_STUDENT_QUOTA=10,
         DMOJ_AI_GRADING_RATE_LIMIT=2,
-        DMOJ_AI_GRADING_RATE_WINDOW_SECONDS=300,
-        DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS=42,
+        DMOJ_AI_GRADING_RATE_WINDOW_SECONDS=42,
     )
-    def test_ai_grade_view_reports_configured_cooldown(self):
-        """The 429 response tells the student to wait the configured cooldown."""
+    def test_ai_grade_view_reports_configured_window(self):
+        """The 429 response tells the student to wait within the configured window."""
         problem = create_problem(code='ai_quota_sa', submission_type='S', points=20, is_public=True)
         sub = _sub(self.student, problem)
         # Exhaust the per-problem budget without going through the view.
@@ -349,8 +340,8 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         self.assertEqual(resp.status_code, 429, resp.content)
         match = re.search(rb'Try again in (\d+) seconds', resp.content)
         self.assertIsNotNone(match, resp.content)
-        # The reported wait comes from the configured 42s cooldown, not from
+        # The reported wait comes from the configured 42s window, not from
         # any hardcoded default (which used to be 300s).
         secs = int(match.group(1))
         self.assertGreater(secs, 0)
-        self.assertLessEqual(secs, 42)
+        self.assertLessEqual(secs, 43)

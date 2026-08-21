@@ -38,7 +38,8 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import ContestProblem, Language, Submission, SubmissionManualGrade, SubmissionSource
+from judge.models import ContestParticipation, ContestProblem, ContestSubmission, Language, Submission, \
+    SubmissionManualGrade, SubmissionSource
 from judge.models.tests.util import create_contest, create_problem, create_user
 
 XSS_SOURCE = '</script><script>alert(document.cookie)</script>'
@@ -95,7 +96,12 @@ class GradeTestBase(TestCase):
             testers=('grade_tester',),
             spectators=('grade_spectator',),
         )
-        ContestProblem.objects.create(contest=cls.contest, problem=cls.problem, points=100, order=1)
+        cls.contest_problem = ContestProblem.objects.create(
+            contest=cls.contest, problem=cls.problem, points=100, order=1)
+        cls.participation = ContestParticipation.objects.create(
+            contest=cls.contest, user=cls.student.profile,
+            real_start=timezone.now() - timedelta(hours=1),
+        )
         # case_total=100 makes the manual-score ceiling a deterministic 100.
         cls.submission = Submission.objects.create(
             user=cls.student.profile, problem=cls.problem,
@@ -104,6 +110,10 @@ class GradeTestBase(TestCase):
             points=50.0, case_total=100,
         )
         SubmissionSource.objects.create(submission=cls.submission, source='print(1)')
+        cls.contest_submission = ContestSubmission.objects.create(
+            submission=cls.submission, problem=cls.contest_problem,
+            participation=cls.participation, points=50.0,
+        )
 
         cls.grade_url = reverse('contest_grade', args=[cls.contest.key])
         cls.save_url = reverse('contest_grade_save', args=[cls.contest.key])
@@ -763,3 +773,11 @@ class ContestGradeWorkspaceLayoutTestCase(GradeTestBase):
         self.assertIn('<script type="text/javascript">', html)
         self.assertIsNotNone(re.search(r'var submissions = (\[.*?\]);', html, re.S))
         self.assertIsNotNone(re.search(r'var problems = (\[.*?\]);', html, re.S))
+
+    def test_ai_feedback_table_contract_in_script(self):
+        """Grade desk JS must render the same Detailed Feedback columns as the
+        submission status page for short-answer / fill-blank."""
+        html = self._page_html()
+        self.assertIn('gd-ai-grading', html)
+        self.assertIn('Detailed Feedback', html)
+        self.assertIn("problem_type === 'S'", html)

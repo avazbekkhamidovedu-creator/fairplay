@@ -675,14 +675,14 @@ AZURE_PROFILES = {}
 # AI-hint rate limit: WINDOW_LIMIT hints per WINDOW_SECONDS per student.
 DMOJ_AI_HINT_WINDOW_LIMIT = 5
 DMOJ_AI_HINT_WINDOW_SECONDS = 300
-# Student on-demand AI grading quota (0 = disabled for students; teachers are unlimited).
-DMOJ_AI_GRADING_STUDENT_QUOTA = 0
+# Student on-demand AI grading: global request budget (0 = disabled for students;
+# teachers are unlimited). Per-problem rate limit is separate (sliding window).
+DMOJ_AI_GRADING_STUDENT_QUOTA = 100
 # On-demand AI grading rate limit: at most RATE_LIMIT requests per
-# RATE_WINDOW_SECONDS per (student, problem); exceeding it triggers a
-# RATE_COOLDOWN_SECONDS pause before the student may try again.
+# RATE_WINDOW_SECONDS per (student, problem) — a sliding window with no
+# separate ban; the window keeps counting.
 DMOJ_AI_GRADING_RATE_LIMIT = 5
 DMOJ_AI_GRADING_RATE_WINDOW_SECONDS = 300
-DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS = 300
 # Weight of the supplementary AI rubric score in the final programming grade
 # (0..1).  final = testcase_score * (1 - weight) + ai_score * weight, where
 # ai_score is clamped so the AI score ratio never drops below the test-case

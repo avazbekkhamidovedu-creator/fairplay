@@ -44,11 +44,49 @@ def rejudge_submission(request):
     if not submission.problem.is_subs_manageable_by(request.user):
         return HttpResponseForbidden()
 
-    submission.judge(rejudge=True, rejudge_user=request.user)
+    # Short-answer / AI fill-blank: plain rejudge only writes IR placeholders
+    # ("AI grading is off…") because should_run_ai_now is false. Teachers
+    # clicking Rejudge expect a fresh LLM pass — queue it on Celery so the
+    # gunicorn worker is not blocked on the model call.
+    from django.utils import timezone
+
+    from judge.models import ProblemSubmissionType, SubmissionTestCase
+    from judge.utils.contest_ai import problem_has_ai_grading
+
+    st = submission.problem.submission_type
+    if (st in (ProblemSubmissionType.SHORT_ANSWER, ProblemSubmissionType.FILL_BLANK) and
+            problem_has_ai_grading(submission.problem)):
+        # Mirror judge_submission's requeue so Grade-page polling sees
+        # is_graded=False until the Celery task finishes.
+        Submission.objects.filter(id=submission.id).update(
+            status='QU', result=None, rejudged_date=timezone.now(),
+            time=None, memory=None, points=None, case_points=0, error=None,
+        )
+        SubmissionTestCase.objects.filter(submission_id=submission.id).delete()
+        from judge.tasks.contest import ai_rejudge_submission
+        ai_rejudge_submission.delay(submission.id, request.user.id)
+    else:
+        submission.judge(rejudge=True, rejudge_user=request.user)
 
     redirect = request.POST.get('path', None)
+    if redirect:
+        return HttpResponseRedirect(redirect)
 
-    return HttpResponseRedirect(redirect) if redirect else HttpResponse('success', content_type='text/plain')
+    # Grade-page / AJAX callers refresh status themselves; return JSON so the
+    # UI can update without a blocking alert(responseText).
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest' or \
+            'application/json' in (request.headers.get('accept') or ''):
+        submission.refresh_from_db()
+        return JsonResponse({
+            'ok': True,
+            'id': submission.id,
+            'status': submission.status,
+            'result': submission.result,
+            'is_graded': submission.is_graded,
+            'was_rejudged': submission.rejudged_date is not None,
+            'queued': True,
+        })
+    return HttpResponse('success', content_type='text/plain')
 
 
 @login_required

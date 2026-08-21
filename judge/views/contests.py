@@ -44,8 +44,8 @@ from judge import contest_format
 from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
-from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestTag, \
-    Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade
+from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestSubmission, \
+    ContestTag, Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade
 from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
@@ -327,9 +327,11 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
     def _solved_data(self, contests):
         """Map contest id -> (solved problems, total problems) for the current user.
 
-        "Solved" counts the contest's problems the user has accepted anywhere
-        (in-contest submissions or plain problem submissions), so submitting to
-        a problem's normal page also counts toward the assignment.
+        "Solved" is this user's live participation on *that contest's* problems:
+        a ContestSubmission with result AC and contest-scaled full points
+        (same criterion as ``contest_completed_ids``). Practice / problem-bank
+        ACs and virtual participations do not count. Never-joined contests stay
+        at 0. Editors see their own live progress, not all students'.
         """
         profile = self.request.profile
         contest_ids = [c.id for c in contests if c is not None]
@@ -338,22 +340,24 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         contest_problems = list(
             ContestProblem.objects.filter(contest_id__in=contest_ids).values_list('contest_id', 'problem_id'),
         )
-        problems_by_contest = {}
-        problem_ids = set()
+        problems_by_contest = defaultdict(list)
         for cid, pid in contest_problems:
-            problems_by_contest.setdefault(cid, []).append(pid)
-            problem_ids.add(pid)
-        if not problem_ids:
-            return {cid: (0, 0) for cid in contest_ids}
-        solved_ids = set(
-            Submission.objects.filter(user=profile, problem_id__in=problem_ids, result='AC',
-                                      points__gte=F('problem__points'))
-            .values_list('problem_id', flat=True)
-            .distinct(),
-        )
+            problems_by_contest[cid].append(pid)
+        solved_by_contest = defaultdict(set)
+        for cid, pid in (
+            ContestSubmission.objects.filter(
+                participation__user=profile,
+                participation__virtual=ContestParticipation.LIVE,
+                participation__contest_id__in=contest_ids,
+                submission__result='AC',
+                points__gte=F('problem__points'),
+            )
+            .values_list('participation__contest_id', 'problem__problem_id')
+            .distinct()
+        ):
+            solved_by_contest[cid].add(pid)
         return {
-            cid: (sum(1 for pid in problems_by_contest.get(cid, []) if pid in solved_ids),
-                  len(problems_by_contest.get(cid, [])))
+            cid: (len(solved_by_contest[cid]), len(problems_by_contest[cid]))
             for cid in contest_ids
         }
 
@@ -410,6 +414,7 @@ class ContestCreate(LoginRequiredMixin, View):
         'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
         'show_short_display', 'is_private', 'is_organization_private',
         'limit_join_organizations', 'seb_required', 'allow_ai_hints',
+        'allow_student_ai_grading',
     )
     _text_fields = (
         'name', 'description', 'access_code', 'problem_label_script',
@@ -729,15 +734,26 @@ class ContestCreate(LoginRequiredMixin, View):
         # Duration: the frontend edits hours+minutes, the model stores a timedelta.
         contest.time_limit = self._parse_duration(payload)
 
-        mode = payload.get('ai_grading_mode') or Contest.AI_GRADING_OFF
-        if mode not in dict(Contest.AI_GRADING_MODE_CHOICES):
-            raise ValidationError(_('Invalid AI grading mode.'))
-        contest.ai_grading_mode = mode
+        # Student AI grading checkbox (teachers always have AI via Grade page).
+        # Keep legacy ai_grading_mode in sync for older code paths / admin.
+        if 'allow_student_ai_grading' in payload:
+            allow_student = bool(payload.get('allow_student_ai_grading'))
+        else:
+            # Backward-compatible JSON clients that still post ai_grading_mode.
+            mode = payload.get('ai_grading_mode') or Contest.AI_GRADING_OFF
+            if mode not in dict(Contest.AI_GRADING_MODE_CHOICES):
+                raise ValidationError(_('Invalid AI grading mode.'))
+            allow_student = mode == Contest.AI_GRADING_REALTIME
+        contest.allow_student_ai_grading = allow_student
+        contest.ai_grading_mode = (
+            Contest.AI_GRADING_REALTIME if allow_student else Contest.AI_GRADING_OFF
+        )
         try:
-            delay = int(payload.get('ai_grading_auto_delay_minutes', 30))
+            delay = int(payload.get('ai_grading_auto_delay_minutes', 120))
         except (TypeError, ValueError):
-            delay = 30
-        contest.ai_grading_auto_delay_minutes = max(0, min(delay, 24 * 60))
+            delay = 120
+        # −1 = Off; 0 = at end time; positive = minutes after end.
+        contest.ai_grading_auto_delay_minutes = max(-1, min(delay, 24 * 60))
 
         # ── Deadline follows a duration increase ────────────────────────────
         # Editing an existing contest: when the per-student duration grows, the
@@ -1268,10 +1284,11 @@ class ContestCreate(LoginRequiredMixin, View):
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
             'allow_ai_hints': False,
+            'allow_student_ai_grading': False,
             'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
             'problems': [],
             'target_score': 100,
-            'ai_grading_mode': 'off', 'ai_grading_auto_delay_minutes': 30,
+            'ai_grading_mode': 'off', 'ai_grading_auto_delay_minutes': 120,
         }
         for field in self._m2m_fields:
             prefill[field] = []
@@ -1303,6 +1320,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 'format_name': contest.format_name,
                 'ai_grading_mode': contest.ai_grading_mode,
                 'ai_grading_auto_delay_minutes': contest.ai_grading_auto_delay_minutes,
+                'allow_student_ai_grading': contest.allow_student_ai_grading,
                 'scoreboard_visibility': contest.scoreboard_visibility,
                 'points_precision': contest.points_precision,
                 'rating_floor': contest.rating_floor if contest.rating_floor is not None else '',
@@ -2254,14 +2272,10 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         contest = self.object
-        submissions = (
-            Submission.objects.filter(contest_object=contest)
-            .select_related('user__user', 'problem', 'language',
-                            'reviewed_by__user', 'contest__participation')
-            .prefetch_related('test_cases', 'problem__fill_blank_config',
-                              'problem__short_answer_config', 'manual_grade')
-            .order_by('-date')
+        from judge.utils.contest_grade import (
+            build_grade_payload, contest_grade_queryset, final_submission_ids_for_contest,
         )
+        submissions = contest_grade_queryset(contest)
         context['grade_submissions'] = submissions
         # Problem library for the grade page: code → display name + statement,
         # so the detail pane can render the problem description ("题面").
@@ -2291,143 +2305,24 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
         manual_grades = SubmissionManualGrade.objects.filter(submission__contest_object=contest)
         context['grade_released_count'] = manual_grades.filter(released=True).count()
         context['grade_unreleased_count'] = manual_grades.filter(released=False).count()
-        # Batch AI grading toolbar (independent of per-submission manual release).
-        context['grade_ai_batch'] = contest.ai_grading_mode == Contest.AI_GRADING_BATCH
+        # Teachers can always run AI grading when the contest has AI-enabled problems.
+        from judge.utils.contest_ai import problem_has_ai_grading
+        context['grade_ai_batch'] = any(
+            problem_has_ai_grading(cp.problem)
+            for cp in contest.contest_problems.select_related(
+                'problem', 'problem__code_config', 'problem__fill_blank_config',
+            )
+        )
         context['grade_ai_batch_done'] = bool(contest.ai_grading_batch_finished_at)
+        context['grade_save_url'] = reverse('contest_grade_save', args=[contest.key])
+        context['grade_release_url'] = reverse('contest_grade_release', args=[contest.key])
+        context['grade_status_url'] = reverse('contest_grade_status', args=[contest.key])
+        context['grade_ai_url'] = reverse('contest_grade_ai', args=[contest.key])
+        context['grade_home_url'] = reverse('contest_view', args=[contest.key])
+        context['grade_home_label'] = contest.name
+        context['grade_show_participation'] = True
 
-        payload = []
-        latest_seen = set()
-        # Reuse the workspace's human-readable answer rows for non-code types.
-        from judge.views.problem import get_workspace_answer_display
-        from judge.question_types import get_grader
-        for sub in submissions:
-            # "Latest version" marker: the first row seen per (user, problem)
-            # because the queryset is ordered newest-first.
-            user_problem = (sub.user_id, sub.problem_id)
-            is_latest = user_problem not in latest_seen
-            latest_seen.add(user_problem)
-            try:
-                source = sub.source.source
-            except Submission.source.RelatedObjectDoesNotExist:
-                source = ''
-            # File-upload submissions carry no source; expose the uploaded file
-            # (name/size/download URL) so the grade page can render a download link.
-            upload_info = None
-            if sub.problem.submission_type == ProblemSubmissionType.FILE:
-                try:
-                    upload = sub.upload
-                    upload_info = {
-                        'original_name': upload.original_name,
-                        'size': upload.size,
-                        'download_url': reverse('submission_file_download', args=(sub.id,)),
-                    }
-                except Exception:
-                    upload_info = None
-            # `sub.contest` is the per-participation ContestSubmission row; a
-            # None means this submission was not part of a live/virtual run.
-            contest_submission = sub.contest_or_none
-            # Score display must mirror what students see (workspace_display_points /
-            # workspace_display_points_total): when the submission belongs to a
-            # contest, the denominator is the ASSIGNMENT-specified points
-            # (ContestProblem.points), not the problem's own scale — a teacher
-            # may weight a 100-pt problem as 20 pts in an assignment, and the
-            # numerator is the contest-scaled ContestSubmission.points. Falling
-            # back to case_total/problem.points only for standalone submissions.
-            if contest_submission is not None:
-                display_points = contest_submission.points
-                display_total = contest_submission.problem.points
-            else:
-                display_points = sub.points
-                display_total = sub.case_total or sub.problem.points
-            # Manual override state (see SubmissionManualGrade): the *actual*
-            # score always prefers the manual grade; the *student-visible* score
-            # only switches to it once ``released``. ``machine_points`` is the
-            # machine score in the same scale, so the UI can show what the
-            # student still sees while the override is unreleased.
-            manual_grade = sub.manual_grade_override
-            if manual_grade is not None and manual_grade.points is not None:
-                manual_points = manual_grade.points
-                machine_points = manual_grade.machine_points
-                released = manual_grade.released
-                # For standalone submissions the manual score is not folded into a
-                # ContestSubmission row, so surface it directly as the actual score.
-                if contest_submission is None:
-                    display_points = manual_points
-            else:
-                manual_points = None
-                machine_points = display_points
-                released = False
-            # Non-code answers (MCQ / fill-blank / short-answer) are stored as a
-            # JSON payload in SubmissionSource; surface the human-readable rows
-            # exactly like the student workspace does, so the teacher sees the
-            # answer (not raw JSON) in the "Submitted source" pane.
-            answer_display = get_workspace_answer_display(sub) if source else []
-            # "Pending" queue semantics: a submission awaits teacher review when
-            #   * it belongs to a manually-graded type (file upload) and has no
-            #     manual grade yet, or
-            #   * its problem is AI-graded with "require teacher review after AI
-            #     scoring" checked in the problem editor — the AI score is stored
-            #     but the submission stays in the pending queue until a teacher
-            #     reviews it on the grade page.
-            # Everything else with points == null (e.g. a code submission still
-            # in the judge queue) is NOT pending — it resolves automatically.
-            if manual_grade is not None:
-                is_pending = False
-            elif sub.points is None:
-                is_pending = get_grader(sub.problem.submission_type).is_manual
-            elif sub.reviewed_by is not None:
-                is_pending = False
-            else:
-                # Only fill-blank / short-answer problems carry the flag today
-                # (the problem editor's AI section). No import needed: both
-                # configs are reverse OneToOne accessors that return None when
-                # the problem is not of that type.
-                config = getattr(sub.problem, 'fill_blank_config', None) or \
-                    getattr(sub.problem, 'short_answer_config', None)
-                is_pending = bool(config and config.requires_manual_review)
-            payload.append({
-                'id': sub.id,
-                'user': sub.user.user.username,
-                'problem': sub.problem.code,
-                'problem_type': sub.problem.submission_type,
-                'lang': sub.language.short_name or sub.language.key,
-                'date': sub.date.strftime('%Y-%m-%d %H:%M'),
-                'result': sub.short_status,
-                'points': display_points,
-                'total': display_total,
-                'time': sub.time,
-                'memory': sub.memory,
-                'source': source,
-                'answer_display': answer_display,
-                'is_pending': is_pending,
-                'upload': upload_info,
-                'test_cases': [
-                    {
-                        'case': tc.case,
-                        'status': tc.status,
-                        'time': tc.time,
-                        'memory': tc.memory,
-                        'points': tc.points,
-                        # batch=-1 marks supplementary AI rubric rows (teacher-only feedback).
-                        'batch': tc.batch,
-                        'feedback': tc.feedback or '',
-                        'extended_feedback': tc.extended_feedback or '',
-                    } for tc in sub.test_cases.all()
-                ],
-                # Manual-grading metadata (评分与评语 state).
-                'review_note': sub.review_note or '',
-                'reviewed_by': sub.reviewed_by.user.username if sub.reviewed_by else None,
-                'reviewed_at': sub.reviewed_at.strftime('%Y-%m-%d %H:%M') if sub.reviewed_at else None,
-                # Manual override + release state (drives the per-submission
-                # "released" badge and the student-visible score hint).
-                'manual_points': manual_points,
-                'machine_points': machine_points,
-                'released': released,
-                # Participation kind: virtual runs are marked with a "V" badge.
-                'virtual': bool(contest_submission and contest_submission.participation_id
-                                and contest_submission.participation.virtual),
-                'is_latest': is_latest,
-            })
+        payload = build_grade_payload(submissions, final_submission_ids_for_contest(contest))
         # Pass Python objects; the template serializes with |tojson (htmlsafe JSON,
         # escapes `<`/`>`/`&`/`'`) so student-controlled source can never break out
         # of the <script> block via `</script>`.
@@ -2468,53 +2363,10 @@ class ContestGradeSave(ContestMixin, DetailView):
         except Submission.DoesNotExist:
             return JsonResponse({'error': _('Submission not found.')}, status=404)
 
-        # Clamp the manual score to [0, max] so a typo (−50 or 10⁹) can never
-        # produce a nonsensical grade. The ceiling mirrors what the student sees
-        # (assignment-specified ContestProblem.points when this submission is part
-        # of a contest, else the problem's own scale) — see ContestGrade.
-        contest_submission = submission.contest_or_none
-        if contest_submission is not None:
-            total = contest_submission.problem.points
-            machine_points = contest_submission.points
-        else:
-            total = submission.case_total or submission.problem.points
-            machine_points = submission.points
-        score = min(max(score, 0), total)
-
-        # The manual override lives in its own table and NEVER overwrites the
-        # machine score (``Submission.points`` / ``ContestSubmission.points``).
-        # ``machine_points`` snapshots the machine score (in the grade page's
-        # display scale) the first time the teacher grades, so the student-facing
-        # workspace can keep showing the machine score until ``released``.
-        existing = SubmissionManualGrade.objects.filter(submission=submission).first()
-        if existing is not None:
-            if existing.machine_points is None:
-                existing.machine_points = machine_points
-            existing.points = score
-            existing.save(update_fields=['points', 'machine_points'])
-            grade = existing
-        else:
-            grade = SubmissionManualGrade.objects.create(
-                submission=submission, points=score, machine_points=machine_points,
-            )
-
-        # Audit fields (评语 + who/when) stay on the submission, unchanged.
+        from judge.utils.contest_grade import apply_manual_grade
         note = request.POST.get('note')
-        if note is not None:
-            submission.review_note = note
-        submission.reviewed_by = request.profile
-        submission.reviewed_at = timezone.now()
-        submission.save(update_fields=['review_note', 'reviewed_by', 'reviewed_at'])
-
-        # Fold the manual override into the contest's *actual* score: the contest
-        # formats compute each problem's points from ContestSubmission.points (via
-        # participation.recompute_results), so ranking / standings / exports pick
-        # up the override immediately — "actual score always prefers the manual
-        # grade". The student's own workspace display gates this behind `released`.
-        if contest_submission is not None:
-            contest_submission.points = score
-            contest_submission.save(update_fields=['points'])
-            contest_submission.participation.recompute_results()
+        grade, score, total = apply_manual_grade(
+            self.request.profile, submission, score, note=note)
 
         return JsonResponse({
             'ok': True,
@@ -2559,8 +2411,8 @@ class ContestGradeStatus(ContestMixin, DetailView):
         except Submission.DoesNotExist:
             return JsonResponse({'error': _('Submission not found.')}, status=404)
         contest_submission = submission.contest_or_none
-        total = contest_submission.problem.points if contest_submission is not None \
-            else (submission.case_total or submission.problem.points)
+        from judge.utils.contest_grade import grade_points_total
+        total = grade_points_total(submission)
         # Mirror the grade payload's point scale (contest-scaled when part of
         # the assignment) so a polled rejudge result agrees with the row shown.
         # A manual override always wins (actual score), including for standalone
@@ -2582,6 +2434,9 @@ class ContestGradeStatus(ContestMixin, DetailView):
             'time': submission.time,
             'memory': submission.memory,
             'is_graded': submission.is_graded,
+            'was_rejudged': submission.rejudged_date is not None,
+            'rejudged_date': submission.rejudged_date.isoformat() if submission.rejudged_date else None,
+            'judged_date': submission.judged_date.isoformat() if submission.judged_date else None,
             'review_note': submission.review_note or '',
             'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
             'released': bool(manual_grade and manual_grade.released),
@@ -2592,6 +2447,10 @@ class ContestGradeStatus(ContestMixin, DetailView):
                     'time': tc.time,
                     'memory': tc.memory,
                     'points': tc.points,
+                    'total': tc.total,
+                    'batch': tc.batch,
+                    'feedback': tc.feedback or '',
+                    'extended_feedback': tc.extended_feedback or '',
                 } for tc in submission.test_cases.all()
             ],
         })
@@ -2652,19 +2511,24 @@ class ContestBatchAIGrade(View):
 
     def post(self, request, *args, **kwargs):
         contest = self.object
-        if contest.ai_grading_mode != Contest.AI_GRADING_BATCH:
-            return JsonResponse({'error': _('This assignment is not in batch AI grading mode.')}, status=400)
         from judge.tasks.contest import batch_ai_grade
         transaction.on_commit(lambda key=contest.key: batch_ai_grade.delay(key, auto=False))
         return JsonResponse({'ok': True, 'queued': True})
 
 
-def make_contest_ranking_profile(contest, participation, contest_problems):
+def make_contest_ranking_profile(contest, participation, contest_problems, scoring_map=None):
     def display_user_problem(contest_problem):
         # When the contest format is changed, `format_data` might be invalid.
         # This will cause `display_user_problem` to error, so we display '???' instead.
+        cell_url = None
+        if scoring_map is not None:
+            sub = scoring_map.get((participation.id, contest_problem.id))
+            if sub is not None:
+                cell_url = '%s?submission=%d' % (
+                    reverse('contest_grade', args=[contest.key]), sub.id)
         try:
-            return contest.format.display_user_problem(participation, contest_problem)
+            return contest.format.display_user_problem(
+                participation, contest_problem, cell_url=cell_url)
         except (KeyError, TypeError, ValueError):
             return mark_safe('<td>???</td>')
 
@@ -2686,23 +2550,41 @@ def make_contest_ranking_profile(contest, participation, contest_problems):
     )
 
 
-def base_contest_ranking_list(contest, problems, queryset):
-    return [make_contest_ranking_profile(contest, participation, problems) for participation in
-            queryset.select_related('user__user', 'rating').defer('user__about', 'user__organizations__about')]
+def base_contest_ranking_list(contest, problems, queryset, scoring_map_factory=None):
+    # Materialize first so the Grade deep-link map can be scoped to exactly the
+    # participations this page renders (see `scoring_submissions_for_contest`);
+    # a per-user page must not scan every submission in the contest.
+    participations = list(
+        queryset.select_related('user__user', 'rating').defer('user__about', 'user__organizations__about'))
+    scoring_map = scoring_map_factory([p.id for p in participations]) if scoring_map_factory is not None else None
+    return [make_contest_ranking_profile(contest, participation, problems, scoring_map=scoring_map)
+            for participation in participations]
 
 
-def contest_ranking_list(contest, problems):
+def contest_ranking_list(contest, problems, scoring_map_factory=None):
     return base_contest_ranking_list(contest, problems, contest.users.filter(virtual=0)
                                      .prefetch_related('user__organizations')
                                      .annotate(submission_cnt=Count('submission'))
-                                     .order_by('is_disqualified', '-score', 'cumtime', 'tiebreaker', '-submission_cnt'))
+                                     .order_by('is_disqualified', '-score', 'cumtime', 'tiebreaker', '-submission_cnt'),
+                                     scoring_map_factory=scoring_map_factory)
 
 
 def get_contest_ranking_list(request, contest, participation=None, ranking_list=contest_ranking_list,
                              show_current_virtual=True, ranker=ranker):
     problems = list(contest.contest_problems.select_related('problem').defer('problem__description').order_by('order'))
 
-    users = ranker(ranking_list(contest, problems), key=attrgetter('points', 'cumtime', 'tiebreaker'))
+    scoring_map_factory = None
+    if (request is not None and getattr(request, 'user', None) is not None
+            and request.user.is_authenticated and contest.is_editable_by(request.user)):
+        from judge.utils.contest_grade import scoring_submissions_for_contest
+
+        def make_scoring_map(participation_ids):
+            return scoring_submissions_for_contest(contest, participation_ids=participation_ids)
+
+        scoring_map_factory = make_scoring_map
+
+    users = ranker(ranking_list(contest, problems, scoring_map_factory=scoring_map_factory),
+                   key=attrgetter('points', 'cumtime', 'tiebreaker'))
 
     if show_current_virtual:
         if participation is None and request.user.is_authenticated:
@@ -2710,7 +2592,9 @@ def get_contest_ranking_list(request, contest, participation=None, ranking_list=
             if participation is None or participation.contest_id != contest.id:
                 participation = None
         if participation is not None and participation.virtual:
-            users = chain([('-', make_contest_ranking_profile(contest, participation, problems))], users)
+            virtual_map = scoring_map_factory([participation.id]) if scoring_map_factory is not None else None
+            users = chain([('-', make_contest_ranking_profile(
+                contest, participation, problems, scoring_map=virtual_map))], users)
     return users, problems
 
 

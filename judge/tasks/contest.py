@@ -12,7 +12,7 @@ from judge.models import Contest, ContestMoss, ContestParticipation, ContestSubm
 from judge.utils.celery import Progress
 
 __all__ = ('rescore_contest', 'finalize_contest_results', 'unfinalize_contest_results',
-           'run_moss', 'batch_ai_grade')
+           'run_moss', 'batch_ai_grade', 'auto_grade_contest', 'ai_rejudge_submission')
 
 
 @shared_task(bind=True)
@@ -37,7 +37,9 @@ def finalize_contest_results(self, contest_key):
     Clears ``run_pretests_only`` and sets ``results_finalized`` (revealing hidden results and folding
     them into the scoreboard), then rejudges **only the latest** submission per (participation, problem)
     on the final config — code on full testcases via the bridge, internally-graded types (e.g. MCQ)
-    immediately, picking up any answer-key correction — and recomputes the standings. Re-runnable.
+    immediately, picking up any answer-key correction — and recomputes the standings. Submissions a
+    teacher already scored on the Grade page (``reviewed_by`` set) are left untouched so the override
+    is not wiped. Re-runnable.
     """
     contest = Contest.objects.get(key=contest_key)
     contest.run_pretests_only = False
@@ -55,6 +57,10 @@ def finalize_contest_results(self, contest_key):
     rejudged = 0
     with Progress(self, len(latest), stage=_('Rejudging latest submissions')) as p:
         for submission in latest.values():
+            # A teacher override on the Grade page must survive finalize: rejudge
+            # would recompute Submission.points from test cases and wipe it.
+            if submission.reviewed_by_id:
+                continue
             submission.judge(rejudge=True, force_judge=True)
             rejudged += 1
             if rejudged % 10 == 0:
@@ -142,8 +148,9 @@ def run_moss(self, contest_key):
 def batch_ai_grade(self, contest_key, auto=False):
     """Grade the latest submission per (participation, problem) with AI.
 
-    Used for exam-style batch mode: teacher button, or the delayed auto-run
-    after ``end_time``. Idempotent if ``auto`` and a batch already finished.
+    Triggered by the Grade-page “Run AI grading” button. ``auto`` is retained for
+    older scheduled jobs; new auto-runs use :func:`auto_grade_contest` instead.
+    Idempotent if ``auto`` and a batch already finished.
     """
     from judge.utils.contest_ai import (
         latest_submissions_for_contest, problem_has_ai_grading, run_ai_for_submission,
@@ -151,8 +158,6 @@ def batch_ai_grade(self, contest_key, auto=False):
 
     with transaction.atomic():
         contest = Contest.objects.select_for_update().get(key=contest_key)
-        if contest.ai_grading_mode != Contest.AI_GRADING_BATCH:
-            return 0
         if auto and contest.ai_grading_batch_finished_at is not None:
             return 0
         # Serialize concurrent runs (double-clicked button, or auto vs manual):
@@ -177,11 +182,72 @@ def batch_ai_grade(self, contest_key, auto=False):
             except Exception:
                 logger = __import__('logging').getLogger(__name__)
                 logger.exception('Batch AI grading failed for submission %s', submission.id)
-            graded += 1
-            p.done = graded
+            else:
+                graded += 1
+            p.did(1)
 
     contest.ai_grading_batch_finished_at = timezone.now()
     contest.save(update_fields=['ai_grading_batch_finished_at'])
     for participation in contest.users.iterator():
         participation.recompute_results()
     return graded
+
+
+@shared_task(bind=True)
+def auto_grade_contest(self, contest_key):
+    """Re-grade latest objective submissions (no LLM).
+
+    Scheduled after ``end_time`` + ``ai_grading_auto_delay_minutes``. Multiple
+    choice, true/false, and exact fill-blank are rejudged; AI types are skipped.
+    """
+    from judge.utils.contest_ai import (
+        latest_submissions_for_contest, problem_is_objective_machine_graded,
+    )
+
+    contest = Contest.objects.get(key=contest_key)
+    latest = latest_submissions_for_contest(contest)
+    targets = [sub for sub in latest.values() if problem_is_objective_machine_graded(sub.problem)]
+    graded = 0
+    with Progress(self, max(len(targets), 1), stage=_('Auto-grading objective submissions')) as p:
+        for submission in targets:
+            try:
+                submission.judge(rejudge=True, force_judge=True)
+            except Exception:
+                logger = __import__('logging').getLogger(__name__)
+                logger.exception('Objective auto-grade failed for submission %s', submission.id)
+            else:
+                graded += 1
+            p.did(1)
+    for participation in contest.users.iterator():
+        participation.recompute_results()
+    return graded
+
+
+@shared_task
+def ai_rejudge_submission(submission_id, user_id=None):
+    """Run LLM grading for one short-answer / AI fill-blank submission off the web worker.
+
+    Queued by :func:`judge.views.widgets.rejudge_submission` so gunicorn does not
+    block on the model call. ``user_id`` is the rejudge requester (for revisions).
+    """
+    from django.contrib.auth.models import User
+
+    from judge.utils.contest_ai import run_ai_for_submission
+
+    try:
+        submission = Submission.objects.select_related('problem', 'user').get(id=submission_id)
+    except Submission.DoesNotExist:
+        return 'missing'
+
+    rejudge_user = None
+    if user_id is not None:
+        rejudge_user = User.objects.filter(id=user_id).first()
+
+    try:
+        return run_ai_for_submission(
+            submission, manual_trigger=True, rejudge_user=rejudge_user,
+        )
+    except Exception:
+        logger = __import__('logging').getLogger(__name__)
+        logger.exception('AI rejudge failed for submission %s', submission_id)
+        return 'error'

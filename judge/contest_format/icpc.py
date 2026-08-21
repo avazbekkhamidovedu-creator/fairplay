@@ -3,7 +3,6 @@ from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.template.defaultfilters import floatformat
-from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext as _, gettext_lazy, ngettext
@@ -97,21 +96,21 @@ class ICPCContestFormat(DefaultContestFormat):
         participation.format_data = format_data
         participation.save()
 
-    def display_user_problem(self, participation, contest_problem):
+    def display_user_problem(self, participation, contest_problem, cell_url=None):
         format_data = (participation.format_data or {}).get(str(contest_problem.id))
         if format_data:
             penalty = format_html('<small style="color:red"> ({penalty})</small>',
                                   penalty=floatformat(format_data['penalty'])) if format_data['penalty'] else ''
-            return format_html(
-                '<td class="{state}"><a href="{url}">{points}{penalty}<div class="solving-time">{time}</div></a></td>',
-                state=(('pretest-' if self.contest.run_pretests_only and contest_problem.is_pretested else '') +
-                       self.best_solution_state(format_data['points'], contest_problem.points)),
-                url=reverse('contest_user_submissions',
-                            args=[self.contest.key, participation.user.user.username, contest_problem.problem.code]),
+            inner = format_html(
+                '{points}{penalty}<div class="solving-time">{time}</div>',
                 points=floatformat(format_data['points']),
                 penalty=penalty,
                 time=nice_repr(timedelta(seconds=format_data['time']), 'noday'),
             )
+            state = (('pretest-' if self.contest.run_pretests_only and contest_problem.is_pretested else '') +
+                     self.best_solution_state(format_data['points'], contest_problem.points))
+            return self.wrap_problem_cell(
+                state, inner, self.problem_cell_url(participation, contest_problem, cell_url))
         else:
             return mark_safe('<td></td>')
 
