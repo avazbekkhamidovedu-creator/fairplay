@@ -677,6 +677,12 @@ DMOJ_AI_HINT_WINDOW_LIMIT = 5
 DMOJ_AI_HINT_WINDOW_SECONDS = 300
 # Student on-demand AI grading quota (0 = disabled for students; teachers are unlimited).
 DMOJ_AI_GRADING_STUDENT_QUOTA = 0
+# On-demand AI grading rate limit: at most RATE_LIMIT requests per
+# RATE_WINDOW_SECONDS per (student, problem); exceeding it triggers a
+# RATE_COOLDOWN_SECONDS pause before the student may try again.
+DMOJ_AI_GRADING_RATE_LIMIT = 5
+DMOJ_AI_GRADING_RATE_WINDOW_SECONDS = 300
+DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS = 300
 
 LITELLM_PROFILES = {
     # The importer deliberately uses a named profile so an installation can route

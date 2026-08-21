@@ -9,9 +9,20 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-_RATE_WINDOW_SECONDS = 300
-_RATE_LIMIT_COUNT = 5
-_COOLDOWN_SECONDS = 300
+
+def rate_window_seconds() -> int:
+    """Length of one rate-limit window in seconds (5 minutes by default)."""
+    return int(getattr(settings, 'DMOJ_AI_GRADING_RATE_WINDOW_SECONDS', 300))
+
+
+def rate_limit_count() -> int:
+    """Max on-demand AI grading requests a student may make within one window."""
+    return int(getattr(settings, 'DMOJ_AI_GRADING_RATE_LIMIT', 5))
+
+
+def rate_cooldown_seconds() -> int:
+    """Pause after the window limit is hit before the student may try again."""
+    return int(getattr(settings, 'DMOJ_AI_GRADING_RATE_COOLDOWN_SECONDS', 300))
 
 
 def _quota_key(user_id: int) -> str:
@@ -55,7 +66,7 @@ def rate_limit_remaining_seconds(user_id: int, problem_id: int) -> int:
     try:
         return max(0, int(float(until) - time.time()))
     except (TypeError, ValueError):
-        return _COOLDOWN_SECONDS
+        return rate_cooldown_seconds()
 
 
 def get_remaining(user_id: int) -> int:
@@ -87,17 +98,20 @@ def try_reserve(user_id: int, problem_id: int) -> tuple[bool, str | None]:
         refund(user_id)
         return False, 'quota_exhausted'
 
+    window = rate_window_seconds()
+    max_count = rate_limit_count()
+    cooldown = rate_cooldown_seconds()
     timestamps = list(cache.get(_rate_key(user_id, problem_id)) or [])
     now = time.time()
-    recent = [t for t in timestamps if now - t < _RATE_WINDOW_SECONDS]
-    if len(recent) >= _RATE_LIMIT_COUNT:
-        cache.set(_cooldown_key(user_id, problem_id), time.time() + _COOLDOWN_SECONDS, _COOLDOWN_SECONDS)
+    recent = [t for t in timestamps if now - t < window]
+    if len(recent) >= max_count:
+        cache.set(_cooldown_key(user_id, problem_id), time.time() + cooldown, cooldown)
         refund(user_id)
-        return False, f'rate_limited:{_COOLDOWN_SECONDS}'
+        return False, f'rate_limited:{cooldown}'
     recent.append(now)
-    cache.set(_rate_key(user_id, problem_id), recent, _RATE_WINDOW_SECONDS)
-    if len(recent) >= _RATE_LIMIT_COUNT:
-        cache.set(_cooldown_key(user_id, problem_id), time.time() + _COOLDOWN_SECONDS, _COOLDOWN_SECONDS)
+    cache.set(_rate_key(user_id, problem_id), recent, window)
+    if len(recent) >= max_count:
+        cache.set(_cooldown_key(user_id, problem_id), time.time() + cooldown, cooldown)
     return True, None
 
 

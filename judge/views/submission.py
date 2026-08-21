@@ -369,7 +369,7 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
         from django.utils.translation import gettext as _
 
         from judge import llm
-        from judge.ai_grading_quota import is_teacher_viewer, try_reserve
+        from judge.ai_grading_quota import is_teacher_viewer, rate_cooldown_seconds, try_reserve
         from judge.utils.contest_ai import ai_grade_context, run_ai_for_submission
 
         submission = self.get_object()
@@ -380,7 +380,7 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
             if ctx.get('rate_limited'):
                 return JsonResponse({
                     'error': _('Too many AI grading requests for this problem. Try again in %(seconds)s seconds.') % {
-                        'seconds': ctx.get('rate_limit_seconds', 300),
+                        'seconds': ctx.get('rate_limit_seconds', rate_cooldown_seconds()),
                     },
                 }, status=429)
             return JsonResponse(
