@@ -18,8 +18,9 @@ Covers four contracts that were broken or unguarded:
    (same rows as the student workspace) instead of raw JSON source.
 4. **Pending queue semantics.** ``is_pending`` means "awaiting teacher review":
    manual types with no score, or AI-graded fill-blank/short-answer problems
-   flagged "require teacher review after AI scoring" (now persisted through the
-   problem editor). A code submission still in the judge queue is NOT pending.
+   flagged "require teacher review after AI scoring" on the config. The
+   create page no longer exposes that checkbox. A code submission still in the
+   judge queue is NOT pending.
 """
 
 import json
@@ -349,9 +350,9 @@ class ContestGradePendingSemanticsTestCase(GradeTestBase):
 
 
 class RequireManualReviewRoundTripTestCase(GradeTestBase):
-    """The problem editor persists + prefills the review-required flag."""
+    """The problem editor no longer persists the review-required flag."""
 
-    def test_requires_manual_review_round_trip(self):
+    def test_create_page_ignores_ai_review_payload(self):
         from judge.models import Problem
         from judge.views.problem_create_v2 import ProblemCreateV2View
 
@@ -368,13 +369,10 @@ class RequireManualReviewRoundTripTestCase(GradeTestBase):
         self.assertEqual(response.status_code, 200)
         problem = Problem.objects.get(code=response.json()['code'])
         config = ProblemFillBlankConfig.objects.get(problem=problem)
-        self.assertTrue(config.requires_manual_review)
+        self.assertFalse(config.requires_manual_review)
+        self.assertNotIn('aiReview', ProblemCreateV2View()._build_edit_data(problem))
 
-        # Edit prefill must round-trip the flag.
-        data = ProblemCreateV2View()._build_edit_data(problem)
-        self.assertTrue(data['aiReview'])
-
-    def test_short_answer_requires_manual_review_round_trip(self):
+    def test_short_answer_create_ignores_ai_review_payload(self):
         from judge.models import Problem
         from judge.views.problem_create_v2 import ProblemCreateV2View
 
@@ -390,8 +388,8 @@ class RequireManualReviewRoundTripTestCase(GradeTestBase):
         self.assertEqual(response.status_code, 200)
         problem = Problem.objects.get(code=response.json()['code'])
         config = ProblemShortAnswerConfig.objects.get(problem=problem)
-        self.assertTrue(config.requires_manual_review)
-        self.assertTrue(ProblemCreateV2View()._build_edit_data(problem)['aiReview'])
+        self.assertFalse(config.requires_manual_review)
+        self.assertNotIn('aiReview', ProblemCreateV2View()._build_edit_data(problem))
 
     def test_requires_manual_review_defaults_false(self):
         from judge.models import Problem
