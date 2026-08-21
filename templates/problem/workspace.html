@@ -443,7 +443,7 @@
             <div id="ai-hint-section" class="ai-hint-section"{% if not hint_ready %} hidden{% endif %}>
               <button type="button" class="tool-btn" id="ai-hint-btn"{% if ai_hints_remaining == 0 %} disabled{% endif %}>
                 {{ _('Get AI Hint') }}
-                <span id="ai-hint-quota">({{ ai_hints_remaining }} {{ _('uses remaining today') }})</span>
+                <span id="ai-hint-quota">({{ ai_hints_remaining }} {{ _('uses remaining this window') }})</span>
               </button>
               <div id="ai-hint-result" class="ai-hint-result" hidden></div>
             </div>

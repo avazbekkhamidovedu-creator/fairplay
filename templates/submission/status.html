@@ -178,7 +178,7 @@
                 {% if ai_hints_remaining == 0 %}disabled{% endif %}>
             {{ _('Get AI Hint') }}
             <span id="ai-hint-quota">
-                ({{ ai_hints_remaining }} {{ _('use') }}{{ 's' if ai_hints_remaining != 1 else '' }} {{ _('remaining today') }})
+                ({{ ai_hints_remaining }} {{ _('use') }}{{ 's' if ai_hints_remaining != 1 else '' }} {{ _('remaining this window') }})
             </span>
         </button>
         <div id="ai-hint-result" style="display:none; margin-top: 0.75em; padding: 0.75em;

@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
@@ -31,52 +31,65 @@ class HintResult:
     response_time_ms: int | None = None
 
 
+def _window_seconds() -> int:
+    """Length of one rate-limit window in seconds (5 minutes by default)."""
+    return int(getattr(settings, 'DMOJ_AI_HINT_WINDOW_SECONDS', 300))
+
+
+def _window_limit() -> int:
+    """Max AI hints a user may request within a single window."""
+    return int(getattr(settings, 'DMOJ_AI_HINT_WINDOW_LIMIT', 5))
+
+
 def _cache_key(user_id: int) -> str:
-    today = timezone.localdate().isoformat()
-    return f'ai_hint_daily:{user_id}:{today}'
+    """Per-user, per-window cache key (a fixed time bucket, not a calendar day)."""
+    window = int(timezone.now().timestamp() // _window_seconds())
+    return f'ai_hint_window:{user_id}:{window}'
 
 
-def _ttl_to_midnight() -> int:
-    """Seconds until the next local midnight."""
-    tomorrow = timezone.localdate() + timedelta(days=1)
-    midnight_dt = timezone.make_aware(datetime.combine(tomorrow, time.min))
-    return max(60, int((midnight_dt - timezone.now()).total_seconds()))
+def _ttl_to_window_end() -> int:
+    """Seconds until the current window rolls over and the quota resets."""
+    seconds = _window_seconds()
+    elapsed = int(timezone.now().timestamp()) % seconds
+    return max(1, seconds - elapsed)
 
 
 def _seed_used_count(user_id: int) -> None:
-    """Ensure the daily counter exists, seeding it from the DB on cold cache."""
+    """Ensure the current window's counter exists, seeding it from the DB on cold cache."""
     key = _cache_key(user_id)
-    if cache.add(key, 0, _ttl_to_midnight()):
+    if cache.add(key, 0, _ttl_to_window_end()):
         from judge.models.ai_hints import AIHintLog
-        today = timezone.localdate()
-        used = AIHintLog.objects.filter(user_id=user_id, requested_at__date=today, success=True).count()
+        since = timezone.now() - timedelta(seconds=_window_seconds())
+        used = AIHintLog.objects.filter(
+            user_id=user_id, requested_at__gte=since, success=True,
+        ).count()
         if used:
             try:
                 cache.incr(key, used)
             except ValueError:
-                cache.set(key, used, _ttl_to_midnight())
+                cache.set(key, used, _ttl_to_window_end())
 
 
 def get_remaining(user_id: int) -> int:
-    limit = getattr(settings, 'DMOJ_AI_HINT_DAILY_LIMIT', 5)
+    limit = _window_limit()
     _seed_used_count(user_id)
     used = cache.get(_cache_key(user_id)) or 0
     return max(0, limit - used)
 
 
 def try_reserve(user_id: int) -> bool:
-    """Atomically claim one of today's hint slots; the caller must refund() on failure.
+    """Atomically claim one hint slot for the current window; the caller must refund() on failure.
 
     Incrementing before the API call (instead of after) closes the race where
     concurrent requests all pass a quota check and then each spend a slot.
     """
-    limit = getattr(settings, 'DMOJ_AI_HINT_DAILY_LIMIT', 5)
+    limit = _window_limit()
     key = _cache_key(user_id)
     _seed_used_count(user_id)
     try:
         used = cache.incr(key)
     except ValueError:
-        cache.set(key, 1, _ttl_to_midnight())
+        cache.set(key, 1, _ttl_to_window_end())
         used = 1
     if used > limit:
         refund(user_id)

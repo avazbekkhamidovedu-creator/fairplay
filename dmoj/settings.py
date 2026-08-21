@@ -672,7 +672,9 @@ LITELLM_TIMEOUT = 120              # seconds
 # The optional 'default' key serves as a base inherited by all profiles.
 AZURE_PROFILES = {}
 
-DMOJ_AI_HINT_DAILY_LIMIT = 5
+# AI-hint rate limit: WINDOW_LIMIT hints per WINDOW_SECONDS per student.
+DMOJ_AI_HINT_WINDOW_LIMIT = 5
+DMOJ_AI_HINT_WINDOW_SECONDS = 300
 # Student on-demand AI grading quota (0 = disabled for students; teachers are unlimited).
 DMOJ_AI_GRADING_STUDENT_QUOTA = 0
 
