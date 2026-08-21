@@ -75,6 +75,12 @@ def rate_limit_remaining_seconds(user_id: int, problem_id: int) -> int:
     return max(0, int(rate_window_seconds() - (time.time() - oldest)) + 1)
 
 
+def rate_limit_remaining_count(user_id: int, problem_id: int) -> int:
+    """How many more on-demand AI grading calls the user may make this window."""
+    recent = _recent_timestamps(user_id, problem_id)
+    return max(0, rate_limit_count() - len(recent))
+
+
 def get_remaining(user_id: int) -> int:
     """How many AI grading requests this student still has (global quota)."""
     limit = student_quota_limit()

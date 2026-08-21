@@ -345,7 +345,8 @@ def student_quota_disabled():
 def ai_grade_context(user, submission):
     """Template/API context for the on-demand AI grading button."""
     from judge.ai_grading_quota import (
-        get_remaining, is_rate_limited, is_teacher_viewer, rate_limit_remaining_seconds,
+        get_remaining, is_rate_limited, is_teacher_viewer, rate_limit_count,
+        rate_limit_remaining_count, rate_limit_remaining_seconds, rate_window_seconds,
     )
 
     ctx = {
@@ -355,6 +356,11 @@ def ai_grade_context(user, submission):
         'rate_limited': False,
         'rate_limit_seconds': 0,
         'quota_disabled': student_quota_disabled() and not is_teacher_viewer(user, submission),
+        # Sliding-window rule, surfaced to the student as "(N uses remaining
+        # this window)" plus a tooltip with the exact limits.
+        'rate_remaining': 0,
+        'rate_limit': rate_limit_count(),
+        'rate_window_minutes': max(1, rate_window_seconds() // 60),
     }
     if not ctx['is_teacher'] and user is not None and user.is_authenticated:
         try:
@@ -363,6 +369,7 @@ def ai_grade_context(user, submission):
             profile_id = None
         if profile_id is not None:
             ctx['remaining'] = get_remaining(profile_id)
+            ctx['rate_remaining'] = rate_limit_remaining_count(profile_id, submission.problem_id)
             ctx['rate_limited'] = is_rate_limited(profile_id, submission.problem_id)
             ctx['rate_limit_seconds'] = rate_limit_remaining_seconds(profile_id, submission.problem_id)
     return ctx

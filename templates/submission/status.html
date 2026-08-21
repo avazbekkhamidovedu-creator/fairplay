@@ -133,15 +133,23 @@
 
     {% if can_trigger_ai_grade %}
     <div id="ai-grade-section" class="ai-hint-section" style="margin: 1em 0;">
-        <button id="ai-grade-btn" class="btn btn-info" type="button">{{ _('View AI grading') }}</button>
+        <button id="ai-grade-btn" class="btn btn-info" type="button">
+            {{ _('View AI grading') }}
+            {% if not is_teacher %}
+            <span id="ai-grade-quota">
+                ({{ rate_remaining }} {{ _('use') }}{{ 's' if rate_remaining != 1 else '' }} {{ _('remaining this window') }})
+            </span>
+            {% endif %}
+        </button>
+        {% if not is_teacher %}
+        <i class="fa fa-question-circle" aria-hidden="true" style="cursor:help;color:var(--oj-text-muted);"
+           title="{{ _('AI grading is limited to %(limit)s runs per %(minutes)s-minute window per problem. You have %(left)s left in this window. Your overall quota is %(quota)s runs.', limit=rate_limit, minutes=rate_window_minutes, left=rate_remaining, quota=remaining) }}"></i>
+        {% endif %}
         <p style="font-size:12px;color:var(--oj-text-muted);margin:0.4em 0 0;">
             {% if is_teacher %}
                 {{ _('Run AI grading on this submission (teachers are not quota-limited).') }}
             {% else %}
                 {{ _('AI grading uses your latest submission for this problem. Press the button to score this version.') }}
-                {% if remaining is defined and remaining > 0 %}
-                    ({{ remaining }} {{ _('use') }}{{ 's' if remaining != 1 else '' }} {{ _('remaining') }})
-                {% endif %}
             {% endif %}
         </p>
         <div id="ai-grade-result" style="display:none; margin-top: 0.75em; padding: 0.75em;
@@ -161,6 +169,12 @@
             var box = document.getElementById('ai-grade-result');
             box.style.display = 'block';
             if (res.ok && res.data.ok) {
+                var quota = document.getElementById('ai-grade-quota');
+                if (quota && typeof res.data.rate_remaining === 'number') {
+                    quota.textContent = '(' + res.data.rate_remaining + ' use' +
+                        (res.data.rate_remaining === 1 ? '' : 's') +
+                        ' {{ _('remaining this window') }})';
+                }
                 box.textContent = '{{ _('AI grading finished. Reloading…') }}';
                 location.reload();
             } else {

@@ -423,7 +423,11 @@ class SubmissionAIGrade(LoginRequiredMixin, SubmissionMixin, DetailView):
                 {'error': _('Could not reach the AI service. Please try again later.')},
                 status=503,
             )
-        return JsonResponse({'ok': True, 'status': status})
+        rate_remaining = None
+        if not is_teacher_viewer(request.user, submission):
+            from judge.ai_grading_quota import rate_limit_remaining_count
+            rate_remaining = rate_limit_remaining_count(submission.user_id, submission.problem_id)
+        return JsonResponse({'ok': True, 'status': status, 'rate_remaining': rate_remaining})
 
 
 class SubmissionSourceRaw(SubmissionSource):

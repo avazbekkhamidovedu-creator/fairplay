@@ -21,6 +21,7 @@ from judge.ai_grading_quota import (
     is_rate_limited,
     is_teacher_viewer,
     rate_limit_count,
+    rate_limit_remaining_count,
     rate_limit_remaining_seconds,
     rate_window_seconds,
     refund,
@@ -262,6 +263,18 @@ class AIGradingQuotaTestCase(CommonDataMixin, TestCase):
         self.assertGreater(secs, 0)
         # The oldest reservation ages out after the configured window.
         self.assertLessEqual(secs, rate_window_seconds() + 1)
+
+    @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=10)
+    def test_rate_limit_remaining_count(self):
+        pid = 11
+        uid = self.student.profile.id
+        # The whole window is available before any call.
+        self.assertEqual(rate_limit_remaining_count(uid, pid), rate_limit_count())
+        try_reserve(uid, pid)
+        self.assertEqual(rate_limit_remaining_count(uid, pid), rate_limit_count() - 1)
+        for _ in range(rate_limit_count() - 1):
+            try_reserve(uid, pid)
+        self.assertEqual(rate_limit_remaining_count(uid, pid), 0)
 
     @override_settings(
         DMOJ_AI_GRADING_STUDENT_QUOTA=10,
