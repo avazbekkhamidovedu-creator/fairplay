@@ -461,3 +461,97 @@ class CodeConfigRoundTripTestCase(CommonDataMixin, TestCase):
         html = response.content.decode()
         self.assertIn('"ai": true', html)
         self.assertIn('Rubric text', html)
+
+
+class CodeAIRejudgeTestCase(CommonDataMixin, TestCase):
+    """A teacher-triggered rejudge must restore the code AI rubric pass.
+
+    ``on_grading_begin`` wipes every test-case row — including the AI rubric
+    rows (batch=-1) — and clears ``ai_points``; ``_maybe_run_code_ai_grade``
+    reruns the LLM for rejudged submissions (``rejudged_date`` set) so the AI
+    feedback and the combined score come back instead of being lost. A fresh
+    submit never auto-runs AI (the student must press the button).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.student = create_user(username='ai_rejudge_student')
+        cls.problem = create_problem('ai-rejudge-prob', points=10, partial=True,
+                                     submission_type='C', is_public=True)
+        cls.problem.allowed_languages.add(Language.objects.get(key='PY3'))
+        ProblemCodeConfig.objects.create(problem=cls.problem, ai_enabled=True, ai_rubric='Style')
+        cls.submission = Submission.objects.create(
+            user=cls.student.profile, problem=cls.problem,
+            language=Language.objects.get(key='PY3'),
+            result='AC', status='D', points=10.0, case_points=10, case_total=10,
+        )
+        SubmissionSource.objects.create(submission=cls.submission, source='print(1)')
+
+    def _call_maybe_run(self, ai_rows=None):
+        """Invoke _maybe_run_code_ai_grade with threads executed synchronously."""
+        from judge.bridge.judge_handler import JudgeHandler
+
+        class _SyncThread:
+            def __init__(self, target, **kwargs):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        with mock.patch('threading.Thread', _SyncThread), \
+                mock.patch('judge.question_types.code.supplementary_ai_grade') as sup, \
+                mock.patch('judge.utils.contest_ai.persist_code_ai_rows') as persist:
+            sup.return_value = ai_rows
+            JudgeHandler._maybe_run_code_ai_grade(self.submission)
+        return sup, persist
+
+    def test_rejudge_reruns_code_ai(self):
+        from django.utils import timezone
+
+        self.submission.rejudged_date = timezone.now()
+        self.submission.save(update_fields=['rejudged_date'])
+        rows = [{
+            'case': 1, 'status': 'WA', 'points': 5, 'total': 10, 'batch': -1,
+            'feedback': '[AI] Overall', 'extended_feedback': '',
+        }]
+        sup, persist = self._call_maybe_run(ai_rows=rows)
+        # The thread ran synchronously; the AI pass must have executed.
+        sup.assert_called_once_with(self.submission)
+        persist.assert_called_once()
+
+    def test_fresh_submit_does_not_auto_run_ai(self):
+        # rejudged_date is None: on-demand AI stays manual-only.
+        sup, persist = self._call_maybe_run()
+        sup.assert_not_called()
+        persist.assert_not_called()
+
+    def test_review_note_survives_rejudge_requeue(self):
+        """The teacher's review note is not wiped by the rejudge requeue."""
+        from judge.models import SubmissionTestCase
+
+        self.submission.review_note = 'teacher comment'
+        self.submission.save(update_fields=['review_note'])
+        # Mirror widgets.rejudge_submission's requeue: status/points reset and
+        # every test-case row (including AI rubric rows) is deleted.
+        Submission.objects.filter(id=self.submission.id).update(
+            status='QU', result=None, points=None, case_points=0)
+        SubmissionTestCase.objects.filter(submission_id=self.submission.id).delete()
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.review_note, 'teacher comment')
+
+    def test_on_grading_begin_clears_ai_points(self):
+        """A rejudge start clears the stale AI score before the fresh pass."""
+        from judge.bridge.judge_handler import JudgeHandler
+
+        self.submission.ai_points = 5.0
+        self.submission.save(update_fields=['ai_points'])
+        handler = JudgeHandler.__new__(JudgeHandler)
+        handler.name = 'test-judge'
+        handler.batch_id = None
+        handler._post_update_submission = mock.Mock()
+        with mock.patch('judge.bridge.judge_handler.event.post'), \
+                mock.patch('judge.bridge.judge_handler.json_log'):
+            handler.on_grading_begin({'submission-id': self.submission.id, 'pretested': False})
+        self.submission.refresh_from_db()
+        self.assertIsNone(self.submission.ai_points)
