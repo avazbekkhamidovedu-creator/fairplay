@@ -280,7 +280,7 @@ def _editor_data_for_item(item):
         'points': 10,
         'is_public': True,
         'partial': False,
-        'ai': True,
+        'ai': False,
         'ai_hints_enabled': True,
         'organizations': [],
         'group_id': '',
@@ -321,7 +321,7 @@ def _editor_data_for_item(item):
             'blanks': ['\n'.join(answers) for _label, answers in _preview_blanks(item)],
             'rubric': item.rubric,
             'gradingTable': _grading_table_value(item.grading_table),
-            'ai': bool(item.rubric or item.grading_table),
+            'ai': False,
             'trimWhitespace': True,
             'caseSensitive': False,
         })
@@ -331,7 +331,7 @@ def _editor_data_for_item(item):
             'shortAnswer': item.answer,
             'rubric': item.rubric,
             'gradingTable': _grading_table_value(item.grading_table),
-            'ai': True,
+            'ai': False,
         })
     # Upload parsing may prefill only organizations; preserve the complete editor shape.
     data.update(item.editor_data or {})
