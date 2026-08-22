@@ -165,6 +165,8 @@ class CustomNetidLoginView(LoginView):
         if all([token]):
             return self.handle_netid_login(request, token)
 
+        from django.contrib import messages
+        messages.error(request, _('Invalid login attempt. Token expired or missing.'))
         return redirect('/')
 
     def handle_netid_login(self, request, token):
@@ -212,6 +214,8 @@ class CustomNetidLoginView(LoginView):
 
         result = verify()
         if not isinstance(result, tuple) or len(result) != 4:
+            from django.contrib import messages
+            messages.error(request, _('Login failed: verify token failed.'))
             return redirect('/')
 
         (uid, eppn, gn, sn) = result
@@ -231,6 +235,8 @@ class CustomNetidLoginView(LoginView):
             user.save()
 
         if user.is_superuser:
+            from django.contrib import messages
+            messages.error(request, _('Superuser accounts cannot log in through Duke NetID.'))
             return redirect('/')
 
         if not hasattr(user, 'profile'):
@@ -241,6 +247,8 @@ class CustomNetidLoginView(LoginView):
 
         login(request, user, backend='django.contrib.auth.backends.ModelBackend')
 
+        from django.contrib import messages
+        messages.success(request, _('Login successful.'))
         return redirect('/')
 
 
