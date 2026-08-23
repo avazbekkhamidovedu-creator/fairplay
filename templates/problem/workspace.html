@@ -684,5 +684,5 @@
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
-  <script src="{{ static('workspace.js') }}?v=ws-problem-template-1{% if DMOJ_STATIC_VERSION %}&amp;rel={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+  <script src="{{ static('workspace.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}
