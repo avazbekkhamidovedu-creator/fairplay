@@ -66,6 +66,7 @@ from judge.models import (
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
+from judge.utils.problem_create import generate_problem_code
 from judge.utils.problems import (
     contest_attempted_ids,
     contest_completed_ids,
@@ -75,7 +76,6 @@ from judge.utils.problems import (
     user_editable_ids,
     user_tester_ids,
 )
-from judge.utils.problem_create import generate_problem_code
 from judge.utils.strings import safe_float_or_none, safe_int_or_none
 from judge.utils.tickets import own_ticket_filter
 from judge.utils.views import QueryStringSortMixin, SingleObjectFormView, TitleMixin, add_file_response, generic_message
