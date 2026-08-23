@@ -261,13 +261,36 @@ class ContestCloneResetsFinalizeTest(ExamContestTestMixin, TestCase):
         Contest.objects.filter(id=self.contest.id).update(results_finalized=True)
         self.client.force_login(self.users['superuser'])
         resp = self.client.post(reverse('contest_clone', args=[self.contest.key]), {'key': 'examclone'})
-        self.assertEqual(resp.status_code, 302)
+        self.assertRedirects(resp, reverse('contest_edit', args=['examclone']))
 
         clone = Contest.objects.get(key='examclone')
         self.assertFalse(clone.results_finalized)
         # The source contest is untouched.
         self.contest.refresh_from_db()
         self.assertTrue(self.contest.results_finalized)
+
+
+class ContestCloneInstructorAccessTest(ExamContestTestMixin, TestCase):
+    def test_author_with_create_private_contest_can_clone(self):
+        instructor = create_user(
+            username='contest_instructor',
+            user_permissions=('create_private_contest',),
+        )
+        self.contest.authors.add(instructor.profile)
+        self.client.force_login(instructor)
+
+        resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 200)
+
+        resp = self.client.post(reverse('contest_clone', args=[self.contest.key]), {'key': 'instructorclone'})
+        self.assertRedirects(resp, reverse('contest_edit', args=['instructorclone']))
+        clone = Contest.objects.get(key='instructorclone')
+        self.assertIn(instructor.profile, clone.authors.all())
+
+    def test_non_editor_denied_clone(self):
+        self.client.force_login(self.users['normal'])
+        resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 403)
 
 
 class FileUploadExamContestMixin(ExamContestTestMixin):
