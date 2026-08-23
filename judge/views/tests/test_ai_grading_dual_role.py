@@ -74,6 +74,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
                     p = create_problem(code=code, submission_type='S', points=20, is_public=True)
                     ProblemShortAnswerConfig.objects.create(
                         problem=p, reference_answer='42', ai_rubric='full credit if 42',
+                        ai_enabled=True,
                     )
                 elif kind == 'fbai':
                     p = create_problem(code=code, submission_type='B', points=10, is_public=True)
@@ -527,7 +528,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
     def test_practice_short_answer_defers_to_ai_button(self):
         """No contest → submit stores the answer; LLM runs only on button."""
         p = create_problem(code='practiceai', submission_type='S', points=10, is_public=True)
-        ProblemShortAnswerConfig.objects.create(problem=p, reference_answer='x')
+        ProblemShortAnswerConfig.objects.create(problem=p, reference_answer='x', ai_enabled=True)
         self.student_client.post(
             reverse('problem_submit', args=[p.code]),
             {'answer': 'maybe x'},
@@ -586,7 +587,7 @@ class CodeAIJudgeIRTestCase(CommonDataMixin, TestCase):
         cls.codeno.allowed_languages.add(cls.py)
         ProblemCodeConfig.objects.create(problem=cls.codeno, ai_enabled=False)
         cls.sa = create_problem(code='codeir-sa', submission_type='S', points=10, is_public=True)
-        ProblemShortAnswerConfig.objects.create(problem=cls.sa, reference_answer='42')
+        ProblemShortAnswerConfig.objects.create(problem=cls.sa, reference_answer='42', ai_enabled=True)
 
     def setUp(self):
         cache.clear()

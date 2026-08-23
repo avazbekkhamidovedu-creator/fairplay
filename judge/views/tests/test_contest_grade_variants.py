@@ -126,10 +126,13 @@ class ContestGradeRejudgeEndpointTestCase(GradeTestBase):
     def test_short_answer_rejudge_runs_ai_not_ir_placeholder(self):
         """Teachers clicking Rejudge on ANS must queue the LLM path (Celery),
         not plain grade_internally which would stamp IR when AI mode is off."""
-        from judge.models import ContestProblem, ContestSubmission, Language, SubmissionSource
+        from judge.models import ContestProblem, ContestSubmission, Language, ProblemShortAnswerConfig, SubmissionSource
         from judge.models.tests.util import create_contest_participation
 
         sa = create_problem(code='grade-var-sa', submission_type='S', points=100)
+        ProblemShortAnswerConfig.objects.create(
+            problem=sa, reference_answer='ok', ai_enabled=True,
+        )
         cp = ContestProblem.objects.create(contest=self.contest, problem=sa, points=100, order=9)
         part = create_contest_participation(contest=self.contest, user=self.student.profile)
         sub = Submission.objects.create(
