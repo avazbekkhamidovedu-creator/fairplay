@@ -1819,13 +1819,25 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
     form_class = ContestCloneForm
     permission_required = 'judge.clone_contest'
 
+    def dispatch(self, request, *args, **kwargs):
+        # PermissionRequiredMixin checks has_permission() before View.setup(), so
+        # bind URL kwargs early for contest-scoped permission checks below.
+        self.kwargs = kwargs
+        return super().dispatch(request, *args, **kwargs)
+
     def has_permission(self):
         if super().has_permission():
             return True
         if not self.request.user.is_authenticated:
             return False
-        contest = self.get_object()
-        return contest.is_viewable_by_org_admin(self.request.user)
+        contest_key = self.kwargs.get(self.slug_url_kwarg)
+        if not contest_key:
+            return False
+        try:
+            contest = Contest.objects.get(key=contest_key)
+        except Contest.DoesNotExist:
+            return False
+        return contest.is_editable_by(self.request.user) or contest.is_viewable_by_org_admin(self.request.user)
 
     def form_valid(self, form):
         contest = self.object
@@ -1861,7 +1873,7 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_user(self.request.user)
             revisions.set_comment(_('Cloned contest from %s') % old_key)
 
-        return HttpResponseRedirect(reverse('admin:judge_contest_change', args=(contest.id,)))
+        return HttpResponseRedirect(reverse('contest_edit', args=(contest.key,)))
 
 
 class ContestAccessDenied(Exception):

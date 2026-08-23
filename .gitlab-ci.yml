@@ -1,7 +1,7 @@
 # DKUOJ (site) CI/CD — GitLab CI port + modernization.
 # Replaces the former GitHub Actions in .github/workflows/.
 #
-# Pipeline:  lint -> test -> build (image) -> deploy
+# Pipeline:  lint -> test -> build (image) -> backup (manual) -> deploy
 #   * lint/styles/test run on OIT shared Docker runners.
 #   * build-image pushes the site image to the GitLab Container Registry.
 #   * deploy:* run on the dedicated, project-locked runner on the DEV server
@@ -11,6 +11,7 @@ stages:
   - lint
   - test
   - build
+  - backup
   - deploy
   - review
 
@@ -188,6 +189,50 @@ deploy:dev:
     - export WSEVENT_IMAGE="$CI_REGISTRY_IMAGE/wsevent:$CI_COMMIT_SHORT_SHA"
     - docker compose --env-file "$DATA_DIR/.env" -f docker-compose.yml pull
     - docker compose --env-file "$DATA_DIR/.env" -f docker-compose.yml up -d --remove-orphans
+
+backup:prod:
+  extends: .deploy
+  stage: backup
+  environment:
+    name: production
+    url: https://oj.dukekunshan.edu.cn
+    action: prepare
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+  allow_failure: true                    # optional; deploy remains independently runnable
+  script:
+    # S3 settings are protected, production-scoped CI/CD variables. Build a
+    # short-lived env file locally, stream it over SSH, and delete both copies
+    # on every exit. Variable values never appear in the SSH command line.
+    - |
+      set +x
+      : "${BACKUP_S3_ENDPOINT_URL:?missing BACKUP_S3_ENDPOINT_URL}"
+      : "${BACKUP_S3_REGION:?missing BACKUP_S3_REGION}"
+      : "${BACKUP_S3_BUCKET:?missing BACKUP_S3_BUCKET}"
+      : "${BACKUP_S3_ACCESS_KEY_ID:?missing BACKUP_S3_ACCESS_KEY_ID}"
+      : "${BACKUP_S3_SECRET_ACCESS_KEY:?missing BACKUP_S3_SECRET_ACCESS_KEY}"
+      s3_env="$(mktemp)"
+      remote_script="/tmp/dkuoj-backup-${CI_PIPELINE_ID}.sh"
+      cleanup() { rm -f "$s3_env"; }
+      trap cleanup EXIT HUP INT TERM
+      umask 077
+      {
+        printf 'BACKUP_S3_ENDPOINT_URL=%s\n' "$BACKUP_S3_ENDPOINT_URL"
+        printf 'BACKUP_S3_REGION=%s\n' "$BACKUP_S3_REGION"
+        printf 'BACKUP_S3_BUCKET=%s\n' "$BACKUP_S3_BUCKET"
+        printf 'BACKUP_S3_PREFIX=%s\n' "${BACKUP_S3_PREFIX:-dkuoj-production}"
+        printf 'BACKUP_S3_ACCESS_KEY_ID=%s\n' "$BACKUP_S3_ACCESS_KEY_ID"
+        printf 'BACKUP_S3_SECRET_ACCESS_KEY=%s\n' "$BACKUP_S3_SECRET_ACCESS_KEY"
+      } > "$s3_env"
+      scp docker/backup-production.sh "prod:$remote_script"
+      ssh prod "umask 077
+        secret=\$(mktemp /tmp/dkuoj-s3.XXXXXX)
+        cleanup() { rm -f \"\$secret\" '$remote_script'; }
+        trap cleanup EXIT HUP INT TERM
+        cat > \"\$secret\"
+        chmod 700 '$remote_script'
+        BACKUP_S3_ENV=\"\$secret\" DKUOJ_IMAGE='$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA' CI_COMMIT_SHORT_SHA='$CI_COMMIT_SHORT_SHA' DATA_DIR='$DATA_DIR' '$remote_script'" < "$s3_env"
 
 deploy:prod:
   extends: .deploy
