@@ -1502,7 +1502,20 @@ class ProblemBulkDelete(LoginRequiredMixin, View):
         ):
             redirect_to = reverse('problem_list')
         codes = [c for c in request.POST.getlist('codes') if c]
+        accept = request.headers.get('Accept') or ''
+        wants_json = (
+            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            or ('application/json' in accept and 'text/html' not in accept)
+        )
         if not codes:
+            if wants_json:
+                return JsonResponse({
+                    'ok': False,
+                    'deleted': 0,
+                    'denied': 0,
+                    'list_url': reverse('problem_list'),
+                    'error': _('No problems selected.'),
+                }, status=400)
             messages.error(request, _('No problems selected.'))
             return HttpResponseRedirect(redirect_to)
 
@@ -1514,6 +1527,19 @@ class ProblemBulkDelete(LoginRequiredMixin, View):
                     deleted += 1
                 else:
                     denied += 1
+
+        if wants_json:
+            if denied and not deleted:
+                error = _('Skipped %(count)d problem(s) you are not allowed to delete.') % {'count': denied}
+            else:
+                error = ''
+            return JsonResponse({
+                'ok': bool(deleted),
+                'deleted': deleted,
+                'denied': denied,
+                'list_url': reverse('problem_list'),
+                'error': error,
+            }, status=200 if deleted else 403)
 
         if deleted:
             messages.success(request, _('Deleted %(count)d problem(s).') % {'count': deleted})

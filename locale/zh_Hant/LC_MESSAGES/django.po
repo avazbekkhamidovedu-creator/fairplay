@@ -6627,3 +6627,7 @@ msgstr "輸出前綴"
 msgid "Number of output characters shown to students after judging — 0 means none, so only the verdict is visible."
 msgstr "評測後向學生展示的輸出字元數。0 表示不展示輸出，僅可見判定結果。"
 
+#: templates/problem/workspace.html
+msgid "Voting available after solving"
+msgstr "解題後可投票"
+
