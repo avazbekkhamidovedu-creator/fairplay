@@ -481,7 +481,7 @@
                     </p>
                   {% elif not workspace_is_code and workspace_submission.result == 'IR' and not workspace_submission.problem_has_ai_grading %}
                     <h3>{{ _('Answer saved') }}</h3>
-                    <p>{{ _('Your answer has been saved. This problem is not using AI grading.') }}</p>
+                    <p>{{ _('Your answer has been saved.') }}</p>
                   {% else %}
                     <h3>{% if workspace_is_code %}{{ _('Execution results') }}{% else %}{{ _('Judging results') }}{% endif %}</h3>
                     <p>

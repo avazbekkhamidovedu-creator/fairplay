@@ -75,7 +75,7 @@ class ShortAnswerQuestionType(QuestionType):
             cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
                       'feedback': '',
                       'extended_feedback': _(
-                          'Your answer has been saved. This problem is not using AI grading.')}]
+                          'Your answer has been saved.')}]
             return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
 
         from judge.utils.contest_ai import (
@@ -93,14 +93,14 @@ class ShortAnswerQuestionType(QuestionType):
                 if contest is None or student_allowed_ai_grading(contest):
                     msg = _('Request AI grading to score this submission.')
                 else:
-                    msg = _('Awaiting teacher AI grading.')
+                    msg = _('Awaiting teacher review.')
                 cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
                           'feedback': '',
                           'extended_feedback': msg}]
                 return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
             cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
                       'feedback': '',
-                      'extended_feedback': _('AI grading is off for this assignment.')}]
+                      'extended_feedback': _('Your answer has been saved.')}]
             return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
 
         scored = self._grade_ai(problem, config, answer)

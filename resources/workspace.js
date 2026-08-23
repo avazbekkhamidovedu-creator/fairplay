@@ -598,7 +598,7 @@
       offHeading.textContent = gettext('Answer saved');
       var offMsg = document.createElement('p');
       offMsg.textContent = gettext(
-        'Your answer has been saved. This problem is not using AI grading.'
+        'Your answer has been saved.'
       );
       wrap.appendChild(offHeading);
       wrap.appendChild(offMsg);

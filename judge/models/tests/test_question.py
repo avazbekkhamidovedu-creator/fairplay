@@ -282,7 +282,8 @@ class ShortAnswerGradingTestCase(CommonDataMixin, TestCase):
         self.assertEqual(sub.points, 0)
         self.assertFalse(problem_has_ai_grading(problem))
         case = SubmissionTestCase.objects.get(submission=sub)
-        self.assertIn('not using AI grading', case.extended_feedback)
+        self.assertIn('has been saved', case.extended_feedback)
+        self.assertNotIn('AI grading', case.extended_feedback)
 
 
 class MCQContestPartialTestCase(CommonDataMixin, TestCase):
