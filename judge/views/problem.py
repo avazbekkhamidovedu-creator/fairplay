@@ -75,6 +75,7 @@ from judge.utils.problems import (
     user_editable_ids,
     user_tester_ids,
 )
+from judge.utils.problem_create import generate_problem_code
 from judge.utils.strings import safe_float_or_none, safe_int_or_none
 from judge.utils.tickets import own_ticket_filter
 from judge.utils.views import QueryStringSortMixin, SingleObjectFormView, TitleMixin, add_file_response, generic_message
@@ -1557,6 +1558,10 @@ class ProblemCodeCheckView(LoginRequiredMixin, View):
         ):
             return JsonResponse({'error': _('Forbidden')}, status=403)
 
+        if request.GET.get('suggest'):
+            code = generate_problem_code()
+            return JsonResponse({'code': code, 'exists': False})
+
         code = request.GET.get('code', '').strip()
         if not code:
             return JsonResponse({'error': _('Missing code')}, status=400)
@@ -1979,6 +1984,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             return False
         problem = self.get_object()
         return problem.is_viewable_by_org_admin(self.request.user)
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial['code'] = generate_problem_code()
+        return initial
 
     def form_valid(self, form):
         problem = self.object
