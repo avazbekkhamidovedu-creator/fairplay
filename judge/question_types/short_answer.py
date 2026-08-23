@@ -71,6 +71,13 @@ class ShortAnswerQuestionType(QuestionType):
 
         case_total = self._case_total(problem, config)
 
+        if config is None or not config.ai_enabled:
+            cases = [{'case': 1, 'status': 'IR', 'points': 0, 'total': case_total,
+                      'feedback': '',
+                      'extended_feedback': _(
+                          'Your answer has been saved. This problem is not using AI grading.')}]
+            return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
+
         from judge.utils.contest_ai import (
             contest_awaits_student_ai, contest_defers_ai, should_run_ai_now,
             student_allowed_ai_grading,

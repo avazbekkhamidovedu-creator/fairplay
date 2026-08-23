@@ -593,6 +593,21 @@
       updateAiGradeSection(status);
       return;
     }
+    if (problemAiGradingDisabled(status)) {
+      var offHeading = document.createElement('h3');
+      offHeading.textContent = gettext('Answer saved');
+      var offMsg = document.createElement('p');
+      offMsg.textContent = gettext(
+        'Your answer has been saved. This problem is not using AI grading.'
+      );
+      wrap.appendChild(offHeading);
+      wrap.appendChild(offMsg);
+      main.appendChild(wrap);
+      updateSubmittedSource(status.source, status.answer_display);
+      updateFileUploadResult(status.file_upload);
+      updateAiGradeSection(status);
+      return;
+    }
     var heading = document.createElement('h3');
     heading.textContent = isCodeProblem() ? gettext('Execution results') : gettext('Judging results');
     var line = document.createElement('p');
@@ -945,6 +960,10 @@
     // Code problems are judged by the bridge; a judge IR (Invalid Return) is a real
     // verdict, never the "awaiting AI" placeholder used by internal AI types.
     return !!(status && !isCodeProblem() && status.can_trigger_ai_grade && status.result === 'IR');
+  }
+  function problemAiGradingDisabled(status) {
+    return !!(status && !isCodeProblem() && status.result === 'IR' &&
+      status.problem_has_ai_grading === false);
   }
   function applyStatusPayload(status, button) {
     if (!status) return;

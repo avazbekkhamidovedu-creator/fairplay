@@ -539,6 +539,24 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         page = self._status(self.student_client, sub)
         self.assertContains(page, 'View AI grading')
 
+    def test_practice_short_answer_ai_disabled_hides_button(self):
+        p = create_problem(code='practiceoff', submission_type='S', points=10, is_public=True)
+        ProblemShortAnswerConfig.objects.create(problem=p, reference_answer='x', ai_enabled=False)
+        self.student_client.post(
+            reverse('problem_submit', args=[p.code]),
+            {'answer': 'maybe x'},
+        )
+        sub = Submission.objects.filter(user=self.student.profile, problem=p).latest('id')
+        self.assertFalse(problem_has_ai_grading(p))
+        self.assertFalse(should_run_ai_now(sub, manual_trigger=True))
+        self.assertEqual(sub.result, 'IR')
+        page = self._status(self.student_client, sub)
+        self.assertContains(page, 'Answer saved')
+        self.assertContains(page, 'This problem is not using AI grading.')
+        self.assertNotContains(page, 'View AI grading')
+        self.assertFalse(student_can_trigger_ai(self.student, sub))
+        self.assertFalse(student_can_trigger_ai(self.teacher, sub))
+
 
 class CodeAIJudgeIRTestCase(CommonDataMixin, TestCase):
     """A judge ``IR`` (Invalid Return) on a code+AI problem is a real verdict.

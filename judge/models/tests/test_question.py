@@ -10,6 +10,7 @@ from judge.models.tests.util import CommonDataMixin, create_contest, create_cont
 from judge.question_types import get_grader
 from judge.question_types.mcq import ordered_options_for
 from judge.submission_grading import finalize_submission, grade_internally
+from judge.utils.contest_ai import problem_has_ai_grading
 
 
 class FinalizeSubmissionTestCase(CommonDataMixin, TestCase):
@@ -263,6 +264,25 @@ class ShortAnswerGradingTestCase(CommonDataMixin, TestCase):
         self.assertEqual(sub.points, 0)
         case = SubmissionTestCase.objects.get(submission=sub)
         self.assertEqual(case.status, 'IR')
+
+    def test_ai_disabled_saves_answer_without_calling_llm(self):
+        problem = create_problem(code='saoff', submission_type='S', points=10, is_public=True)
+        ProblemShortAnswerConfig.objects.create(
+            problem=problem, reference_answer='handshake', ai_enabled=False)
+        sub = Submission.objects.create(
+            user=self.users['normal'].profile, problem=problem,
+            language=Language.get_answer_language(),
+        )
+        SubmissionSource.objects.create(submission=sub, source=json.dumps({'text': 'SYN SYN-ACK ACK'}))
+        with mock.patch('judge.question_types.short_answer.call_llm') as mocked_llm:
+            grade_internally(sub)
+            mocked_llm.assert_not_called()
+        sub.refresh_from_db()
+        self.assertEqual(sub.result, 'IR')
+        self.assertEqual(sub.points, 0)
+        self.assertFalse(problem_has_ai_grading(problem))
+        case = SubmissionTestCase.objects.get(submission=sub)
+        self.assertIn('not using AI grading', case.extended_feedback)
 
 
 class MCQContestPartialTestCase(CommonDataMixin, TestCase):

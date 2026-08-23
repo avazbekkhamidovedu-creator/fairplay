@@ -27,7 +27,10 @@ def problem_has_ai_grading(problem):
 
     st = problem.submission_type
     if st == ProblemSubmissionType.SHORT_ANSWER:
-        return True
+        try:
+            return bool(problem.short_answer_config.ai_enabled)
+        except Exception:
+            return False
     if st == ProblemSubmissionType.FILL_BLANK:
         try:
             return problem.fill_blank_config.grading_mode == GRADE_AI

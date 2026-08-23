@@ -14,6 +14,9 @@
 {% elif ai_awaiting_manual %}
     <h3>{{ _('Answer saved') }}</h3>
     <p>{{ _('Your answer has been saved. Press "View AI grading" to score this submission.') }}</p>
+{% elif submission.problem.submission_type == 'S' and not problem_has_ai_grading %}
+    <h3>{{ _('Answer saved') }}</h3>
+    <p>{{ _('Your answer has been saved. This problem is not using AI grading.') }}</p>
 {% elif submission.problem.submission_type in ('F', 'M') %}
     {# File uploads wait for a human grader. MCQ uses the summary (Result + Score), not fake test cases. #}
 {% elif submission.status != 'IE' %}
