@@ -7748,3 +7748,7 @@ msgstr "评价"
 #: templates/problem/workspace.html
 msgid "Voting available after solving"
 msgstr "解题后可投票"
+
+#: templates/problem/workspace.html
+msgid "AI Hints"
+msgstr "AI 提示"

@@ -654,6 +654,8 @@ class ProblemWorkspaceActionsTestCase(TestCase):
         self.assertNotContains(response, 'data-can-delete="1"')
         self.assertContains(response, 'data-can-delete="0"')
         self.assertContains(response, 'Voting available after solving')
+        self.assertContains(response, 'Voting')
+        self.assertNotContains(response, 'Manage problem')
         self.assertContains(response, 'ws-action-hint')
 
     def test_author_without_edit_perm_does_not_see_delete(self):
@@ -671,6 +673,9 @@ class ProblemWorkspaceActionsTestCase(TestCase):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertContains(response, 'data-action-group="manage"')
         self.assertContains(response, 'data-action-group="tickets"')
+        self.assertContains(response, 'Manage problem')
+        self.assertContains(response, 'Tickets')
+        self.assertContains(response, 'Voting')
         self.assertContains(response, reverse('problem_edit_v2', args=[self.problem.code]))
         self.assertContains(response, 'data-problem-action="edit"')
         self.assertContains(response, 'data-action="delete-problem"')

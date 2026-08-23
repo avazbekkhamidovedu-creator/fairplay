@@ -270,7 +270,7 @@
 
     <section class="ws-pane ws-pane-left" id="pane-left">
       <div class="ws-tabs" role="tablist">
-        <button class="active" data-tab="desc" type="button">{{ _('Description') }}</button><button data-tab="ai" type="button">AI Hints</button>
+        <button class="active" data-tab="desc" type="button">{{ _('Description') }}</button><button data-tab="ai" type="button">{{ _('AI Hints') }}</button>
         <button data-tab="result" id="tab-result" type="button">{{ _('Result') }} <span class="tab-dot"></span></button>
         <button data-tab="editorial" type="button"{% if workspace_in_contest %} class="tab-hidden"{% endif %}>{{ _('Editorial') }}</button><button data-tab="subs" type="button">{{ _('Submissions') }}</button>
       </div>
@@ -737,5 +737,5 @@
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
-  <script src="{{ static('workspace.js') }}?v=ws-actions-delete-2{% if DMOJ_STATIC_VERSION %}&amp;rel={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+  <script src="{{ static('workspace.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}
