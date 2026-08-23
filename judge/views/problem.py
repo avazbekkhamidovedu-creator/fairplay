@@ -719,9 +719,16 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                 # Otherwise use the first allowed language
                 usable_languages = form.fields['language'].queryset
                 if self.request.profile.language and self.request.profile.language in usable_languages:
-                    form.fields['source'].widget.mode = self.request.profile.language.ace
-                elif usable_languages.exists():
-                    form.fields['source'].widget.mode = usable_languages.first().ace
+                    selected_language = self.request.profile.language
+                else:
+                    selected_language = usable_languages.first()
+                if selected_language:
+                    form.fields['source'].widget.mode = selected_language.ace
+                    form.initial['language'] = selected_language
+                templates = ProblemTemplate.starter_map(self.object, usable_languages)
+                context['workspace_language_templates'] = templates
+                if selected_language:
+                    form.initial['source'] = templates.get(str(selected_language.id), '')
                 context['form'] = form
                 context['ACE_URL'] = settings.ACE_URL
             else:
@@ -1532,18 +1539,8 @@ class LanguageTemplateAjax(View):
         except ValueError:
             raise Http404()
 
-        problem_id = request.GET.get('problem_id')
-        if problem_id:
-            try:
-                template = ProblemTemplate.objects.get(problem_id=problem_id, language=language).code
-                resp = HttpResponse(template, content_type='text/plain')
-                resp['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-                resp['Pragma'] = 'no-cache'
-                return resp
-            except (ProblemTemplate.DoesNotExist, ValueError):
-                pass
-
-        resp = HttpResponse(language.template, content_type='text/plain')
+        template = ProblemTemplate.starter_code(language, request.GET.get('problem_id'))
+        resp = HttpResponse(template, content_type='text/plain')
         resp['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         resp['Pragma'] = 'no-cache'
         return resp
