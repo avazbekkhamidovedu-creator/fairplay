@@ -1661,3 +1661,102 @@ class ProblemCreateV2CapitalizedDifficultyTestCase(CommonDataMixin, TestCase):
         list_resp = self.client.get(reverse('problem_list'))
         self.assertEqual(list_resp.status_code, 200)
         self.assertContains(list_resp, 'diff-hard', html=False)
+
+
+class ProblemCreateV2SaveRedirectTestCase(CommonDataMixin, TestCase):
+    """Save stays on the same tab: JSON redirect to the solving page, then Edit is a normal link."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.group = default_problem_group()
+        cls.users.update({
+            'creator': create_user(
+                username='save_redirect_creator',
+                user_permissions=('create_private_problem', 'edit_own_problem'),
+            ),
+        })
+
+    def _create_payload(self, name='Save redirect problem'):
+        return {
+            'type': 'single',
+            'name': name,
+            'description': 'After save, Edit must still work.',
+            'points': 5,
+            'group_id': self.group.id,
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+
+    def test_create_page_uses_same_tab_redirect(self):
+        self.client.force_login(self.users['creator'])
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'location.href = next')
+        self.assertNotContains(response, 'problem_window.js')
+        self.assertNotContains(response, 'DKUOJProblemWindow')
+        self.assertNotContains(response, 'openPreviewPlaceholder')
+        self.assertNotContains(response, 'dkuoj-problem-preview')
+
+    def test_save_redirects_to_detail_and_edit_is_ordinary_link(self):
+        self.client.force_login(self.users['creator'])
+        created = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(self._create_payload()),
+            content_type='application/json',
+        )
+        self.assertEqual(created.status_code, 200, created.content)
+        body = created.json()
+        code = body['code']
+        detail_url = reverse('problem_detail', args=[code])
+        edit_url = reverse('problem_edit_v2', args=[code])
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['redirect'], detail_url)
+        self.assertNotIn('detail_url', body)
+        self.assertNotIn('edit_url', body)
+        self.assertNotIn('list_url', body)
+
+        problem = Problem.objects.get(code=code)
+        self.assertTrue(problem.is_editable_by(self.users['creator']))
+        self.assertTrue(problem.is_accessible_by(self.users['creator']))
+
+        detail = self.client.get(detail_url)
+        self.assertEqual(detail.status_code, 200)
+        self.assertContains(detail, 'data-problem-actions')
+        self.assertContains(detail, 'data-problem-action="edit"')
+        self.assertContains(detail, edit_url)
+        self.assertNotContains(detail, 'problem_window.js')
+        self.assertNotContains(detail, 'No such problem')
+
+        edit = self.client.get(edit_url)
+        self.assertEqual(edit.status_code, 200)
+        self.assertEqual(edit.context['edit_code'], code)
+        self.assertContains(edit, 'location.href = next')
+        self.assertNotContains(edit, 'problem_window.js')
+
+    def test_student_does_not_see_edit_or_delete(self):
+        self.client.force_login(self.users['creator'])
+        created = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(self._create_payload('Public for student')),
+            content_type='application/json',
+        )
+        self.assertEqual(created.status_code, 200, created.content)
+        code = created.json()['code']
+        problem = Problem.objects.get(code=code)
+        problem.is_public = True
+        problem.is_organization_private = False
+        problem.save()
+
+        student = create_user(username='save_redirect_student')
+        self.client.force_login(student)
+        detail = self.client.get(reverse('problem_detail', args=[code]))
+        self.assertEqual(detail.status_code, 200)
+        self.assertNotContains(detail, 'data-problem-action="edit"')
+        self.assertNotContains(detail, 'data-can-delete="1"')
+        self.assertNotContains(detail, reverse('problem_edit_v2', args=[code]))
+
+        edit = self.client.get(reverse('problem_edit_v2', args=[code]))
+        self.assertEqual(edit.status_code, 404)

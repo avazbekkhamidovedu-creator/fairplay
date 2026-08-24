@@ -5,6 +5,7 @@
 {% block title_row %}{% endblock %}
 {% block title_ruler %}{% endblock %}
 {% block media %}
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <style>
     .ws-toolbar-progress {
       display: inline-flex;
@@ -269,7 +270,7 @@
 
     <section class="ws-pane ws-pane-left" id="pane-left">
       <div class="ws-tabs" role="tablist">
-        <button class="active" data-tab="desc" type="button">{{ _('Description') }}</button><button data-tab="ai" type="button">AI Hints</button>
+        <button class="active" data-tab="desc" type="button">{{ _('Description') }}</button><button data-tab="ai" type="button">{{ _('AI Hints') }}</button>
         <button data-tab="result" id="tab-result" type="button">{{ _('Result') }} <span class="tab-dot"></span></button>
         <button data-tab="editorial" type="button"{% if workspace_in_contest %} class="tab-hidden"{% endif %}>{{ _('Editorial') }}</button><button data-tab="subs" type="button">{{ _('Submissions') }}</button>
       </div>
@@ -317,28 +318,58 @@
                 {% endif %}
               {% endmacro %}
               {% macro ws_meta_actions() %}
-                <div class="mi span-2">
-                  <i class="fa fa-link fa-fw" aria-hidden="true"></i>
-                  <span class="k">{{ _('Actions:') }}</span>
-                  <span class="v meta-actions">
-                    {% if can_edit_problem %}
-                      <a href="{{ url('problem_edit_v2', problem.code) }}">{{ _('Edit') }}</a>
-                      <a href="{{ url('problem_ticket_list', problem.code) }}">{{ _('Manage tickets') }}{% if num_open_tickets %} <span class="badge">{{ num_open_tickets }}</span>{% endif %}</a>
-                    {% elif request.user.is_authenticated and has_tickets %}
-                      <a href="{{ url('problem_ticket_list', problem.code) }}">{{ _('My tickets') }}{% if num_open_tickets %} <span class="badge">{{ num_open_tickets }}</span>{% endif %}</a>
-                    {% endif %}
-                    {% if vote_perm.can_view() %}
-                      {% if vote_perm.can_vote() %}
-                        <a href="#" data-featherlight="{{ url('problem_vote', problem.code) }}">
-                          {%- if vote is none -%}{{ _('Vote on problem points') }}{%- else -%}{{ _('Edit points vote (%(points)d)', points=vote.points) }}{%- endif -%}
-                        </a>
-                      {% else %}
-                        <span class="ws-info-muted">{{ _('Voting available after solving (classic OJ: requires AC)') }}</span>
+                {% set show_manage = can_edit_problem %}
+                {% set show_tickets = can_edit_problem or (request.user.is_authenticated and has_tickets) %}
+                {% set show_voting = vote_perm.can_view() %}
+                {% if show_manage or show_tickets or show_voting %}
+                  <div class="mi span-2 ws-actions-row">
+                    <i class="fa fa-link fa-fw" aria-hidden="true"></i>
+                    <span class="k">{{ _('Actions:') }}</span>
+                    <div class="v ws-action-groups"
+                         data-problem-actions
+                         data-problem-code="{{ problem.code }}"
+                         data-list-url="{{ url('problem_list') }}"
+                         {% if can_edit_problem %}data-edit-url="{{ url('problem_edit_v2', problem.code) }}" data-delete-url="{{ url('problem_bulk_delete') }}" data-can-edit="1" data-can-delete="1"{% else %}data-can-edit="0" data-can-delete="0"{% endif %}>
+                      {% if show_manage %}
+                        <div class="ws-action-group" data-action-group="manage">
+                          <span class="ws-action-label">{{ _('Manage problem') }}</span>
+                          <span class="ws-action-items">
+                            <a href="{{ url('problem_edit_v2', problem.code) }}" class="problem-action-edit" data-problem-action="edit">{{ _('Edit') }}</a>
+                            <button type="button" class="ws-action-danger" data-action="delete-problem" data-problem-action="delete"
+                                    data-problem-code="{{ problem.code }}"
+                                    aria-haspopup="dialog" aria-controls="ws-delete-modal">{{ _('Delete') }}</button>
+                          </span>
+                        </div>
                       {% endif %}
-                      <a href="#" data-featherlight="{{ url('problem_vote_stats', problem.code) }}">{{ _('Voting statistics') }}</a>
-                    {% endif %}
-                  </span>
-                </div>
+                      {% if show_tickets %}
+                        <div class="ws-action-group" data-action-group="tickets">
+                          <span class="ws-action-label">{{ _('Tickets') }}</span>
+                          <span class="ws-action-items">
+                            <a href="{{ url('problem_ticket_list', problem.code) }}">
+                              {%- if can_edit_problem -%}{{ _('Manage tickets') }}{%- else -%}{{ _('My tickets') }}{%- endif -%}
+                              {%- if num_open_tickets %} <span class="badge">{{ num_open_tickets }}</span>{% endif -%}
+                            </a>
+                          </span>
+                        </div>
+                      {% endif %}
+                      {% if show_voting %}
+                        <div class="ws-action-group" data-action-group="voting">
+                          <span class="ws-action-label">{{ _('Voting') }}</span>
+                          <span class="ws-action-items">
+                            {% if vote_perm.can_vote() %}
+                              <a href="#" data-featherlight="{{ url('problem_vote', problem.code) }}">
+                                {%- if vote is none -%}{{ _('Vote on problem points') }}{%- else -%}{{ _('Edit points vote (%(points)d)', points=vote.points) }}{%- endif -%}
+                              </a>
+                            {% else %}
+                              <span class="ws-action-hint" role="note">{{ _('Voting available after solving') }}</span>
+                            {% endif %}
+                            <a href="#" data-featherlight="{{ url('problem_vote_stats', problem.code) }}">{{ _('Voting statistics') }}</a>
+                          </span>
+                        </div>
+                      {% endif %}
+                    </div>
+                  </div>
+                {% endif %}
               {% endmacro %}
               {# Knowledge tags only — same filter as problem list (exclude FORMAT_TYPE_NAMES + difficulty). #}
               {% macro ws_meta_problem_types() %}
@@ -675,6 +706,29 @@
     </section>
   </div>
 </div>
+{% if can_edit_problem %}
+  <form id="ws-problem-delete-form" method="post" action="{{ url('problem_bulk_delete') }}" hidden
+        data-action="delete-problem"
+        data-problem-code="{{ problem.code }}" data-list-url="{{ url('problem_list') }}">
+    {% csrf_token %}
+    <input type="hidden" name="codes" value="{{ problem.code }}">
+    <input type="hidden" name="next" value="{{ url('problem_list') }}">
+  </form>
+  <div class="ws-modal-overlay" id="ws-delete-modal" hidden>
+    <div class="ws-modal-box" role="dialog" aria-modal="true" aria-labelledby="ws-delete-modal-title">
+      <h3 class="ws-modal-title" id="ws-delete-modal-title">{{ _('Delete problem(s)?') }}</h3>
+      <p class="ws-modal-desc">{{ _('This permanently deletes the following problem(s) and all related data (submissions, test data). This cannot be undone.') }}</p>
+      <ul class="ws-modal-list">
+        <li>{{ problem.code }}{% if problem.name %}  ·  {{ problem.name }}{% endif %}</li>
+      </ul>
+      <p class="ws-modal-error" id="ws-delete-modal-error" hidden></p>
+      <div class="ws-modal-actions">
+        <button type="button" class="ws-modal-btn" data-action="cancel-delete-problem">{{ _('Cancel') }}</button>
+        <button type="button" class="ws-modal-btn ws-modal-btn-danger" data-action="confirm-delete-problem">{{ _('Delete') }}</button>
+      </div>
+    </div>
+  </div>
+{% endif %}
 {% endblock %}
 {% block bodyend %}
   {% if REQUIRE_JAX %}{% include "mathjax-load.html" %}{% endif %}
@@ -686,5 +740,5 @@
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
-  <script src="{{ static('workspace.js') }}?v=ws-ai-grade-2{% if DMOJ_STATIC_VERSION %}&amp;rel={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+  <script src="{{ static('workspace.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}
