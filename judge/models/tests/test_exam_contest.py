@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestParticipation, ContestSubmission, Language, Submission
+from judge.models import Contest, ContestParticipation, ContestSubmission, Language, Organization, Submission
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
 from judge.tasks import finalize_contest_results, unfinalize_contest_results
@@ -291,6 +291,26 @@ class ContestCloneInstructorAccessTest(ExamContestTestMixin, TestCase):
         self.client.force_login(self.users['normal'])
         resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
         self.assertEqual(resp.status_code, 403)
+
+
+class ContestCloneCourseInstructorAccessTest(ExamContestTestMixin, TestCase):
+    def test_course_instructor_can_clone_without_being_author(self):
+        org = self.organizations['open']
+        course_teacher = create_user(username='course_teacher')
+        org.instructors.add(course_teacher.profile)
+        self.contest.organizations.set([org])
+        Contest.objects.filter(id=self.contest.id).update(is_organization_private=True)
+        self.contest.refresh_from_db()
+        self.assertNotIn(course_teacher.profile, self.contest.authors.all())
+
+        self.client.force_login(course_teacher)
+        resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 200)
+
+        resp = self.client.post(reverse('contest_clone', args=[self.contest.key]), {'key': 'courseclone'})
+        self.assertRedirects(resp, reverse('contest_edit', args=['courseclone']))
+        clone = Contest.objects.get(key='courseclone')
+        self.assertIn(course_teacher.profile, clone.authors.all())
 
 
 class FileUploadExamContestMixin(ExamContestTestMixin):

@@ -628,6 +628,27 @@ class Contest(models.Model):
             return False
         return self.organizations.filter(admins=user.profile).exists()
 
+    def linked_organization_ids(self):
+        org_ids = set(self.organizations.values_list('id', flat=True))
+        org_ids.update(self.classes.values_list('organization_id', flat=True))
+        return org_ids
+
+    def is_editable_by_course_instructor(self, user):
+        """Course instructors may manage assignments scoped to their course."""
+        if not user.is_authenticated:
+            return False
+        org_ids = self.linked_organization_ids()
+        if not org_ids:
+            return False
+        return Organization.objects.filter(id__in=org_ids, instructors=user.profile).exists()
+
+    def is_cloneable_by(self, user):
+        if not user.is_authenticated:
+            return False
+        if self.is_editable_by(user) or self.is_viewable_by_org_admin(user):
+            return True
+        return self.is_editable_by_course_instructor(user)
+
     _parse_seb_keys = staticmethod(parse_seb_keys)
 
     # Every SEB accessor below resolves this contest's own value first and falls
