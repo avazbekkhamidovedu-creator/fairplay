@@ -74,6 +74,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
                     p = create_problem(code=code, submission_type='S', points=20, is_public=True)
                     ProblemShortAnswerConfig.objects.create(
                         problem=p, reference_answer='42', ai_rubric='full credit if 42',
+                        ai_enabled=True,
                     )
                 elif kind == 'fbai':
                     p = create_problem(code=code, submission_type='B', points=10, is_public=True)
@@ -527,7 +528,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
     def test_practice_short_answer_defers_to_ai_button(self):
         """No contest → submit stores the answer; LLM runs only on button."""
         p = create_problem(code='practiceai', submission_type='S', points=10, is_public=True)
-        ProblemShortAnswerConfig.objects.create(problem=p, reference_answer='x')
+        ProblemShortAnswerConfig.objects.create(problem=p, reference_answer='x', ai_enabled=True)
         self.student_client.post(
             reverse('problem_submit', args=[p.code]),
             {'answer': 'maybe x'},
@@ -538,6 +539,25 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertEqual(sub.result, 'IR')
         page = self._status(self.student_client, sub)
         self.assertContains(page, 'View AI grading')
+
+    def test_practice_short_answer_ai_disabled_hides_button(self):
+        p = create_problem(code='practiceoff', submission_type='S', points=10, is_public=True)
+        ProblemShortAnswerConfig.objects.create(problem=p, reference_answer='x', ai_enabled=False)
+        self.student_client.post(
+            reverse('problem_submit', args=[p.code]),
+            {'answer': 'maybe x'},
+        )
+        sub = Submission.objects.filter(user=self.student.profile, problem=p).latest('id')
+        self.assertFalse(problem_has_ai_grading(p))
+        self.assertFalse(should_run_ai_now(sub, manual_trigger=True))
+        self.assertEqual(sub.result, 'IR')
+        page = self._status(self.student_client, sub)
+        self.assertContains(page, 'Answer saved')
+        self.assertContains(page, 'Your answer has been saved.')
+        self.assertNotContains(page, 'AI grading')
+        self.assertNotContains(page, 'View AI grading')
+        self.assertFalse(student_can_trigger_ai(self.student, sub))
+        self.assertFalse(student_can_trigger_ai(self.teacher, sub))
 
 
 class CodeAIJudgeIRTestCase(CommonDataMixin, TestCase):
@@ -567,7 +587,7 @@ class CodeAIJudgeIRTestCase(CommonDataMixin, TestCase):
         cls.codeno.allowed_languages.add(cls.py)
         ProblemCodeConfig.objects.create(problem=cls.codeno, ai_enabled=False)
         cls.sa = create_problem(code='codeir-sa', submission_type='S', points=10, is_public=True)
-        ProblemShortAnswerConfig.objects.create(problem=cls.sa, reference_answer='42')
+        ProblemShortAnswerConfig.objects.create(problem=cls.sa, reference_answer='42', ai_enabled=True)
 
     def setUp(self):
         cache.clear()

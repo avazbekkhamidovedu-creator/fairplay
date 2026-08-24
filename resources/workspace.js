@@ -608,6 +608,21 @@
       updateAiGradeSection(status);
       return;
     }
+    if (problemAiGradingDisabled(status)) {
+      var offHeading = document.createElement('h3');
+      offHeading.textContent = gettext('Answer saved');
+      var offMsg = document.createElement('p');
+      offMsg.textContent = gettext(
+        'Your answer has been saved.'
+      );
+      wrap.appendChild(offHeading);
+      wrap.appendChild(offMsg);
+      main.appendChild(wrap);
+      updateSubmittedSource(status.source, status.answer_display);
+      updateFileUploadResult(status.file_upload);
+      updateAiGradeSection(status);
+      return;
+    }
     var heading = document.createElement('h3');
     heading.textContent = isCodeProblem() ? gettext('Execution results') : gettext('Judging results');
     var line = document.createElement('p');
@@ -960,6 +975,10 @@
     // Code problems are judged by the bridge; a judge IR (Invalid Return) is a real
     // verdict, never the "awaiting AI" placeholder used by internal AI types.
     return !!(status && !isCodeProblem() && status.can_trigger_ai_grade && status.result === 'IR');
+  }
+  function problemAiGradingDisabled(status) {
+    return !!(status && !isCodeProblem() && status.result === 'IR' &&
+      status.problem_has_ai_grading === false);
   }
   function applyStatusPayload(status, button) {
     if (!status) return;
@@ -1393,6 +1412,87 @@
       var collapsed = !meta.classList.contains('collapsed');
       apply(collapsed);
       try { localStorage.setItem(storageKey, collapsed ? '1' : '0'); } catch (err) { /* ignore */ }
+    });
+  })();
+
+  (function initProblemDelete() {
+    var form = document.getElementById('ws-problem-delete-form');
+    var modal = document.getElementById('ws-delete-modal');
+    var openBtn = document.querySelector('button[data-action="delete-problem"]');
+    if (!form || !modal || !openBtn) return;
+    var cancelBtn = modal.querySelector('[data-action="cancel-delete-problem"]');
+    var confirmBtn = modal.querySelector('[data-action="confirm-delete-problem"]');
+    var errorEl = document.getElementById('ws-delete-modal-error');
+    var submitting = false;
+
+    function setError(message) {
+      if (!errorEl) return;
+      if (message) {
+        errorEl.textContent = message;
+        errorEl.hidden = false;
+      } else {
+        errorEl.textContent = '';
+        errorEl.hidden = true;
+      }
+    }
+    function openModal() {
+      setError('');
+      modal.hidden = false;
+      if (confirmBtn) confirmBtn.focus();
+    }
+    function closeModal() {
+      if (submitting) return;
+      modal.hidden = true;
+      openBtn.focus();
+    }
+    openBtn.addEventListener('click', function (event) {
+      event.preventDefault();
+      openModal();
+    });
+    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', function (event) {
+      if (event.target === modal) closeModal();
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && !modal.hidden) closeModal();
+    });
+    function goToList(listUrl) {
+      window.location.assign(listUrl || form.getAttribute('data-list-url') || '/problems/');
+    }
+    function submitDelete() {
+      if (submitting) return;
+      submitting = true;
+      if (confirmBtn) confirmBtn.disabled = true;
+      setError('');
+      fetch(form.action, {
+        method: 'POST',
+        body: new FormData(form),
+        credentials: 'same-origin',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'application/json',
+        },
+      }).then(function (response) {
+        return response.text().then(function (txt) {
+          var data = null;
+          try { data = JSON.parse(txt); } catch (err) { data = null; }
+          if (!response.ok || !data || !data.ok || !data.deleted) {
+            throw new Error((data && (data.error || data.message)) || gettext('Could not delete this problem.'));
+          }
+          goToList(data.list_url);
+          return data;
+        });
+      }).catch(function (error) {
+        submitting = false;
+        if (confirmBtn) confirmBtn.disabled = false;
+        setError(error.message || gettext('Could not delete this problem.'));
+      });
+    }
+    if (confirmBtn) confirmBtn.addEventListener('click', submitDelete);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      if (modal.hidden) openModal();
+      else submitDelete();
     });
   })();
 

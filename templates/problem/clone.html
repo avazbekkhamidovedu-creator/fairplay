@@ -112,6 +112,7 @@
         const resetSuggestionSpan = document.getElementById('reset-suggestion');
         const currentUserId = "{{ request.user.id }}";
         const currentUsername = "{{ request.user.username|escapejs }}";
+        const CHECK_CODE_URL = "{{ url('problem_check_code') }}";
 
         function autoFillCreator() {
             const creatorInput =
@@ -137,7 +138,7 @@
             }
 
             try {
-                const response = await fetch(`/api/v2/problem/check-code/?code=${encodeURIComponent(code)}`, {
+                const response = await fetch(`${CHECK_CODE_URL}?code=${encodeURIComponent(code)}`, {
                     method: 'GET',
                     cache: 'no-cache',
                     headers: {
@@ -157,21 +158,24 @@
             }
         }
 
-        
         async function generateUniqueCloneCode() {
-            const max = 1000000;
-
-            for (let i = 0; i < max; i++) {
-                const code = `p${i.toString().padStart(6, '0')}`;
-                const exists = await checkProblemCode(code);
-
-                if (exists === false) {
-                    return code;
+            const response = await fetch(`${CHECK_CODE_URL}?suggest=1`, {
+                method: 'GET',
+                cache: 'no-cache',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
                 }
+            });
+
+            if (!response.ok) {
+                throw new Error('suggest failed');
             }
 
-            const timestamp = Date.now().toString().slice(-6);
-            return `clone${timestamp}`;
+            const data = await response.json();
+            if (!data.code) {
+                throw new Error('suggest failed');
+            }
+            return data.code;
         }
 
         function updateStatus(exists, isChecking = false, customMessage = null) {
@@ -262,11 +266,16 @@
             try {
                 autoFillCreator();
 
-                updateStatus(null, true, '🔄 {{ _("Generating unique code...") }}');
+                let uniqueCode = codeInput.value.trim();
+                if (!uniqueCode) {
+                    updateStatus(null, true, '🔄 {{ _("Generating unique code...") }}');
+                    uniqueCode = await generateUniqueCloneCode();
+                    codeInput.value = uniqueCode;
+                } else {
+                    updateStatus(null, true);
+                }
 
-                const uniqueCode = await generateUniqueCloneCode();
                 currentSuggestedCode = uniqueCode;
-                codeInput.value = uniqueCode;
                 userModified = false;
                 resetSuggestionSpan.style.display = 'none';
 

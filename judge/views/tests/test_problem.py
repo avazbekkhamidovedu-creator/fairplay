@@ -793,6 +793,40 @@ class ProblemBulkDeleteRedirectTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.url, '/problems/?category=1')
         self.assertFalse(Problem.objects.filter(code='bulk-del-keep').exists())
 
+    def test_ajax_returns_json_and_list_url(self):
+        target = create_problem(code='bulk-del-json', is_public=True, authors=('bulk_del_editor',))
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('problem_bulk_delete'),
+            {'codes': [target.code]},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+            HTTP_ACCEPT='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['deleted'], 1)
+        self.assertEqual(body['denied'], 0)
+        self.assertEqual(body['list_url'], reverse('problem_list'))
+        self.assertFalse(Problem.objects.filter(code='bulk-del-json').exists())
+
+    def test_ajax_denies_without_edit_permission(self):
+        stranger = create_user(username='bulk_del_stranger')
+        target = create_problem(code='bulk-del-deny', is_public=True, authors=('bulk_del_editor',))
+        self.client.force_login(stranger)
+        response = self.client.post(
+            reverse('problem_bulk_delete'),
+            {'codes': [target.code]},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+            HTTP_ACCEPT='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertEqual(body['deleted'], 0)
+        self.assertEqual(body['denied'], 1)
+        self.assertTrue(Problem.objects.filter(code='bulk-del-deny').exists())
+
 
 class ProblemSubmitGuardTestCase(CommonDataMixin, TestCase):
     """A non-public problem attached to an assignment is only reachable after

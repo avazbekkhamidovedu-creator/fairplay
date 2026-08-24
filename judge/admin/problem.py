@@ -25,6 +25,7 @@ from judge.models import Class, Language, LanguageLimit, Organization, Problem, 
     SubmissionSourceAccess
 from judge.utils import simple_xlsx
 from judge.utils.language_matching import matching_languages
+from judge.utils.problem_create import generate_problem_code as next_problem_code
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 from judge.utils.user_search import apply_profile_choice_labels, profile_choice_label
 from judge.utils.views import NoBatchDeleteMixin
@@ -543,12 +544,7 @@ class ProblemAdmin(NoBatchDeleteMixin, VersionAdmin):
         return max(100, settings.DMOJ_PROBLEM_MIN_PROBLEM_POINTS)
 
     def generate_problem_code(self, name=''):
-        max_codes = 1000000
-        for index in range(max_codes):
-            code = 'p{:06d}'.format(index)
-            if not Problem.objects.filter(code=code).exists():
-                return code
-        return 'clone{}'.format(str(int(timezone.now().timestamp()))[-6:])
+        return next_problem_code()
 
     def get_simple_preset_defaults(self, request):
         default_group = self.get_default_group()

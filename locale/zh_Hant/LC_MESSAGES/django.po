@@ -4970,16 +4970,16 @@ msgstr "最佳提交"
 
 #: templates/problem/problem.html:140
 msgid "Vote on problem points"
-msgstr ""
+msgstr "對題目評分"
 
 #: templates/problem/problem.html:142
 #, python-format
 msgid "Edit points vote (%(points)d)"
-msgstr ""
+msgstr "修改評分 (%(points)d)"
 
 #: templates/problem/problem.html:146 templates/problem/vote-stats-ajax.html:3
 msgid "Voting statistics"
-msgstr ""
+msgstr "評分統計"
 
 #: templates/problem/problem.html:151
 msgid "Read editorial"
@@ -4987,7 +4987,7 @@ msgstr "閱讀題解"
 
 #: templates/problem/problem.html:156
 msgid "Manage tickets"
-msgstr ""
+msgstr "管理工單"
 
 #: templates/problem/problem.html:160
 msgid "Edit problem"
@@ -4999,7 +4999,7 @@ msgstr "編輯測試資料"
 
 #: templates/problem/problem.html:167
 msgid "My tickets"
-msgstr ""
+msgstr "我的工單"
 
 #: templates/problem/problem.html:175
 msgid "Manage submissions"
@@ -6626,4 +6626,42 @@ msgstr "輸出前綴"
 #: templates/contest/create.html
 msgid "Number of output characters shown to students after judging — 0 means none, so only the verdict is visible."
 msgstr "評測後向學生展示的輸出字元數。0 表示不展示輸出，僅可見判定結果。"
+
+#: templates/problem/workspace.html
+msgid "Voting available after solving"
+msgstr "解題後可投票"
+
+# --- workspace problem actions i18n ---
+
+#: templates/problem/workspace.html
+msgid "Actions:"
+msgstr "操作："
+
+#: templates/problem/workspace.html
+msgid "Manage problem"
+msgstr "題目管理"
+
+#: templates/problem/workspace.html
+msgid "Tickets"
+msgstr "工單"
+
+#: templates/problem/workspace.html
+msgid "Voting"
+msgstr "評價"
+
+#: templates/problem/workspace.html
+msgid "AI Hints"
+msgstr "AI 提示"
+
+#: templates/problem/workspace.html
+msgid "Cancel"
+msgstr "取消"
+
+#: templates/problem/list.html templates/problem/workspace.html
+msgid "Delete problem(s)?"
+msgstr "刪除題目？"
+
+#: templates/problem/list.html templates/problem/workspace.html
+msgid "This permanently deletes the following problem(s) and all related data (submissions, test data). This cannot be undone."
+msgstr "將永久刪除下列題目及其全部相關資料（提交、測試資料）。此操作無法復原。"
 

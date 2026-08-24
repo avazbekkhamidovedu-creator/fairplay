@@ -272,6 +272,10 @@ class ProblemShortAnswerConfig(models.Model):
     """Per-problem short-answer settings. Graded by the LLM against a reference answer + rubric."""
     problem = models.OneToOneField(Problem, verbose_name=_('problem'), related_name='short_answer_config',
                                    on_delete=CASCADE)
+    ai_enabled = models.BooleanField(
+        verbose_name=_('enable AI grading'), default=False,
+        help_text=_('Ask the configured model to score the answer against the rubric. '
+                    'When off, the submission is saved for manual grading and the LLM is not called.'))
     reference_answer = models.TextField(
         verbose_name=_('reference answer'), blank=True,
         help_text=_('Model answer the response is compared against (never shown to students).'))

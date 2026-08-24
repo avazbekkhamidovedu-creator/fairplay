@@ -66,6 +66,7 @@ from judge.models import (
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
+from judge.utils.problem_create import generate_problem_code
 from judge.utils.problems import (
     contest_attempted_ids,
     contest_completed_ids,
@@ -104,12 +105,13 @@ def get_contest_submission_count(problem, profile, virtual):
 
 def workspace_ai_grade_fields(request, submission):
     """On-demand AI grading button state for the Workspace / submit JSON."""
-    from judge.utils.contest_ai import ai_grade_context
+    from judge.utils.contest_ai import ai_grade_context, problem_has_ai_grading
 
     ctx = ai_grade_context(request.user, submission)
     fields = {
         'can_trigger_ai_grade': bool(ctx.get('can_trigger')),
         'ai_grade_remaining': ctx.get('remaining', 0),
+        'problem_has_ai_grading': problem_has_ai_grading(submission.problem),
     }
     if fields['can_trigger_ai_grade']:
         fields['ai_grade_url'] = reverse('submission_ai_grade', args=[submission.id])
@@ -1509,7 +1511,20 @@ class ProblemBulkDelete(LoginRequiredMixin, View):
         ):
             redirect_to = reverse('problem_list')
         codes = [c for c in request.POST.getlist('codes') if c]
+        accept = request.headers.get('Accept') or ''
+        wants_json = (
+            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            or ('application/json' in accept and 'text/html' not in accept)
+        )
         if not codes:
+            if wants_json:
+                return JsonResponse({
+                    'ok': False,
+                    'deleted': 0,
+                    'denied': 0,
+                    'list_url': reverse('problem_list'),
+                    'error': _('No problems selected.'),
+                }, status=400)
             messages.error(request, _('No problems selected.'))
             return HttpResponseRedirect(redirect_to)
 
@@ -1521,6 +1536,19 @@ class ProblemBulkDelete(LoginRequiredMixin, View):
                     deleted += 1
                 else:
                     denied += 1
+
+        if wants_json:
+            if denied and not deleted:
+                error = _('Skipped %(count)d problem(s) you are not allowed to delete.') % {'count': denied}
+            else:
+                error = ''
+            return JsonResponse({
+                'ok': bool(deleted),
+                'deleted': deleted,
+                'denied': denied,
+                'list_url': reverse('problem_list'),
+                'error': error,
+            }, status=200 if deleted else 403)
 
         if deleted:
             messages.success(request, _('Deleted %(count)d problem(s).') % {'count': deleted})
@@ -1553,6 +1581,10 @@ class ProblemCodeCheckView(LoginRequiredMixin, View):
             or request.user.is_superuser
         ):
             return JsonResponse({'error': _('Forbidden')}, status=403)
+
+        if request.GET.get('suggest'):
+            code = generate_problem_code()
+            return JsonResponse({'code': code, 'exists': False})
 
         code = request.GET.get('code', '').strip()
         if not code:
@@ -1977,6 +2009,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         problem = self.get_object()
         return problem.is_viewable_by_org_admin(self.request.user)
 
+    def get_initial(self):
+        initial = super().get_initial()
+        initial['code'] = generate_problem_code()
+        return initial
+
     def form_valid(self, form):
         problem = self.object
 
@@ -2282,6 +2319,7 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             ProblemShortAnswerConfig.objects.create(
                 problem=new_problem,
                 reference_answer=short_answer_config.reference_answer,
+                ai_enabled=short_answer_config.ai_enabled,
                 ai_rubric=short_answer_config.ai_rubric,
                 grading_table=short_answer_config.grading_table,
             )

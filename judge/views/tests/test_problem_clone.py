@@ -1,5 +1,5 @@
 """Tests for problem clone deep-copy behaviour (judge.views.problem.ProblemClone)."""
-from django.test import Client, TestCase
+from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
 
 from judge.models import (
@@ -16,6 +16,7 @@ from judge.models import (
     ProblemSubmissionType,
 )
 from judge.models.tests.util import CommonDataMixin, create_organization, create_problem, create_problem_type
+from judge.views.problem import ProblemClone
 
 
 class ProblemCloneTestCase(CommonDataMixin, TestCase):
@@ -126,12 +127,39 @@ class ProblemCloneTestCase(CommonDataMixin, TestCase):
             problem=problem,
             reference_answer='42',
             ai_rubric='mention the answer',
+            ai_enabled=False,
         )
 
         clone = self._clone(problem, 'clonesa2')
         self.assertEqual(clone.short_answer_config.reference_answer, '42')
         self.assertEqual(clone.short_answer_config.ai_rubric, 'mention the answer')
+        self.assertFalse(clone.short_answer_config.ai_enabled)
         self.assertEqual(problem.short_answer_config.reference_answer, '42')
+        self.assertFalse(problem.short_answer_config.ai_enabled)
+
+    def test_clone_form_prefills_next_problem_code(self):
+        create_problem(code='p000000', name='Taken series', is_public=True, authors=('superuser',))
+        problem = create_problem(
+            code='clone-src', name='Clone Source', is_public=True, authors=('superuser',),
+        )
+
+        request = RequestFactory().get(reverse('problem_clone', args=(problem.code,)))
+        request.user = self.users['superuser']
+        view = ProblemClone()
+        view.setup(request, problem=problem.code)
+        view.object = problem
+        form = view.get_form()
+
+        self.assertEqual(form.initial.get('code'), 'p000001')
+        self.assertEqual(form['code'].value(), 'p000001')
+
+    def test_check_code_suggests_next_unused(self):
+        create_problem(code='p000000', name='Taken series', is_public=True, authors=('superuser',))
+
+        response = self.client.get(reverse('problem_check_code'), {'suggest': '1'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'code': 'p000001', 'exists': False})
 
     def test_clone_file_upload_config(self):
         problem = create_problem(
