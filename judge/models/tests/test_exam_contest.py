@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestParticipation, ContestSubmission, Language, Organization, Submission
+from judge.models import Class, Contest, ContestParticipation, ContestSubmission, Language, Organization, Submission
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
 from judge.tasks import finalize_contest_results, unfinalize_contest_results
@@ -311,6 +311,93 @@ class ContestCloneCourseInstructorAccessTest(ExamContestTestMixin, TestCase):
         self.assertRedirects(resp, reverse('contest_edit', args=['courseclone']))
         clone = Contest.objects.get(key='courseclone')
         self.assertIn(course_teacher.profile, clone.authors.all())
+
+
+class CourseTeacherClassScopedContestAccessTest(ExamContestTestMixin, TestCase):
+    def test_course_instructor_sees_class_scoped_contest(self):
+        org = self.organizations['open']
+        klass = Class.objects.create(
+            organization=org, name='Scoped Class', slug='scoped-class', is_active=True,
+        )
+        course_teacher = create_user(username='scoped_course_teacher')
+        org.instructors.add(course_teacher.profile)
+
+        self.contest.organizations.clear()
+        self.contest.classes.set([klass])
+        Contest.objects.filter(id=self.contest.id).update(is_organization_private=True)
+        self.contest.refresh_from_db()
+
+        self.assertTrue(self.contest.is_accessible_by(course_teacher))
+        self.assertIn(
+            self.contest.key,
+            Contest.get_visible_contests(course_teacher).values_list('key', flat=True),
+        )
+
+    def test_class_instructor_sees_sibling_class_contest(self):
+        org = self.organizations['open']
+        own_class = Class.objects.create(
+            organization=org, name='Own Class', slug='own-class', is_active=True,
+        )
+        other_class = Class.objects.create(
+            organization=org, name='Other Class', slug='other-class', is_active=True,
+        )
+        class_teacher = create_user(username='class_teacher')
+        own_class.admins.add(class_teacher.profile)
+
+        self.contest.organizations.clear()
+        self.contest.classes.set([other_class])
+        Contest.objects.filter(id=self.contest.id).update(is_organization_private=True)
+        self.contest.refresh_from_db()
+
+        self.assertTrue(self.contest.is_accessible_by(class_teacher))
+        self.assertIn(
+            self.contest.key,
+            Contest.get_visible_contests(class_teacher).values_list('key', flat=True),
+        )
+
+        self.client.force_login(class_teacher)
+        resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 200)
+
+
+class ContestCloneGeneralCourseAccessTest(ExamContestTestMixin, TestCase):
+    def test_site_teacher_can_clone_general_course_assignment(self):
+        from judge.models.notification import ensure_instructors_group
+        from judge.views.organization import grant_site_teacher_role
+
+        ensure_instructors_group()
+        site_teacher = create_user(username='general_course_teacher')
+        grant_site_teacher_role(site_teacher.profile)
+
+        self.contest.organizations.clear()
+        self.contest.classes.clear()
+        Contest.objects.filter(id=self.contest.id).update(
+            is_visible=True, is_private=False, is_organization_private=False,
+        )
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.is_general_course_assignment())
+        self.assertNotIn(site_teacher.profile, self.contest.authors.all())
+
+        self.client.force_login(site_teacher)
+        resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 200)
+
+        resp = self.client.post(reverse('contest_clone', args=[self.contest.key]), {'key': 'generalclone'})
+        self.assertRedirects(resp, reverse('contest_edit', args=['generalclone']))
+        clone = Contest.objects.get(key='generalclone')
+        self.assertIn(site_teacher.profile, clone.authors.all())
+
+    def test_student_cannot_clone_general_course_assignment(self):
+        self.contest.organizations.clear()
+        self.contest.classes.clear()
+        Contest.objects.filter(id=self.contest.id).update(
+            is_visible=True, is_private=False, is_organization_private=False,
+        )
+        self.contest.refresh_from_db()
+
+        self.client.force_login(self.users['normal'])
+        resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 403)
 
 
 class FileUploadExamContestMixin(ExamContestTestMixin):

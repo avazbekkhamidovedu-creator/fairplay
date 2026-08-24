@@ -118,6 +118,16 @@ class Organization(models.Model):
     def can_review_class_requests(self, profile):
         return self.classes.filter(admins__id=profile.id).exists()
 
+    def profile_teaches_course(self, profile):
+        """Course admin, course instructor, or class instructor in this course."""
+        if profile is None:
+            return False
+        if self.instructors.filter(id=profile.id).exists():
+            return True
+        if self.admins.filter(id=profile.id).exists():
+            return True
+        return self.classes.filter(admins=profile).exists()
+
     class Meta:
         ordering = ['name']
         permissions = (

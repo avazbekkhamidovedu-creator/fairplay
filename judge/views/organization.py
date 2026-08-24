@@ -180,6 +180,12 @@ def profile_can_view_course(profile, org, user=None):
     return Class.objects.filter(organization=org, admins=profile).exists()
 
 
+def profile_is_course_teacher(profile, org):
+    if profile is None or org is None:
+        return False
+    return org.profile_teaches_course(profile)
+
+
 def profile_can_create_class(profile, org, user=None):
     """Course admins, or site teachers who are already course members."""
     if profile_manages_organization(profile, org, user):
@@ -215,8 +221,8 @@ def profile_can_access_class(profile, class_obj, user=None, *, allow_pending=Tru
     """Who may open the class detail page (not necessarily edit).
 
     - Class/course managers and class members (students) as before.
-    - Site teachers who are course members may open every class in that course
-      (read-only unless they are also class instructors).
+    - Course teachers may open every class in that course (read-only unless they
+      are also class instructors).
     """
     if profile_manages_class(profile, class_obj, user):
         return True
@@ -225,7 +231,7 @@ def profile_can_access_class(profile, class_obj, user=None, *, allow_pending=Tru
     if class_obj.members.filter(id=profile.id).exists():
         return True
     org = class_obj.organization
-    if profile_is_site_teacher(profile, user) and profile_is_org_member(profile, org):
+    if profile_is_course_teacher(profile, org):
         return True
     if allow_pending and profile_has_pending_class_request(profile, class_obj):
         return True
@@ -245,7 +251,7 @@ def profile_can_view_class_content(profile, class_obj, user=None):
     if class_obj.members.filter(id=profile.id).exists():
         return True
     org = class_obj.organization
-    return profile_is_site_teacher(profile, user) and profile_is_org_member(profile, org)
+    return profile_is_course_teacher(profile, org)
 
 
 def pending_requests_for_reviewer(profile, user=None, organization=None):
@@ -670,6 +676,28 @@ def parse_class_description_meta(description):
     return meta
 
 
+def class_session_sort_key(cls, session_label=None):
+    """Build a descending-friendly sort key (newest session first)."""
+    year = 0
+    if cls.academic_year:
+        match = re.search(r'(\d{4})', cls.academic_year)
+        if match:
+            year = int(match.group(1))
+    term = (cls.term_session or session_label or '').lower()
+    session_num = 0
+    sm = re.search(r'session\s*(\d+)', term)
+    if sm:
+        session_num = int(sm.group(1))
+    if 'spring' in term:
+        term_rank = 2
+    elif 'fall' in term:
+        term_rank = 1
+    else:
+        term_rank = 0
+    start = cls.start_date.toordinal() if cls.start_date else 0
+    return '%04d%d%02d%08d' % (year, term_rank, session_num, start)
+
+
 def contest_assignment_status(contest):
     """Return (status_key, status_label, timing_label) for class assignment rows."""
     if not contest.started:
@@ -904,7 +932,7 @@ class OrganizationHome(OrganizationDetailView):
             pending_class_ids = set()
         class_list = list(classes)
         instructors = {}
-        sessions = set()
+        session_options = {}
         for cls in class_list:
             cls.user_pending = cls.id in pending_class_ids and not cls.joined
             instructor_names = cls.instructor_name_list
@@ -962,6 +990,7 @@ class OrganizationHome(OrganizationDetailView):
                 cls.session_label = '%s · %s' % (cls.academic_year, session_label)
             else:
                 cls.session_label = session_label or cls.academic_year
+            cls.session_sort_key = class_session_sort_key(cls, session_label)
             cls.section_label = section_label
             cls.session_key = session_label or cls.academic_year or 'none'
             cls.location_line = location_line
@@ -994,7 +1023,7 @@ class OrganizationHome(OrganizationDetailView):
             cls.user_can_open = bool(cls.user_can_edit or cls.joined or teacher_viewer)
             cls.review_pending_count = 0
             if cls.session_label:
-                sessions.add(cls.session_label)
+                session_options[cls.session_label] = cls.session_sort_key
         context['instructor_apply_org_id'] = self.object.id
         if context['can_review_requests']:
             class_pending_map = {}
@@ -1008,7 +1037,9 @@ class OrganizationHome(OrganizationDetailView):
         context['class_instructors'] = [
             {'id': str(tid), 'username': uname} for tid, uname in sorted(instructors.items(), key=lambda x: x[1])
         ]
-        context['class_sessions'] = sorted(sessions)
+        context['class_sessions'] = [
+            label for label, _ in sorted(session_options.items(), key=lambda item: item[1], reverse=True)
+        ]
         return context
 
 
