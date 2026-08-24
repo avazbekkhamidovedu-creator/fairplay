@@ -104,12 +104,13 @@ def get_contest_submission_count(problem, profile, virtual):
 
 def workspace_ai_grade_fields(request, submission):
     """On-demand AI grading button state for the Workspace / submit JSON."""
-    from judge.utils.contest_ai import ai_grade_context
+    from judge.utils.contest_ai import ai_grade_context, problem_has_ai_grading
 
     ctx = ai_grade_context(request.user, submission)
     fields = {
         'can_trigger_ai_grade': bool(ctx.get('can_trigger')),
         'ai_grade_remaining': ctx.get('remaining', 0),
+        'problem_has_ai_grading': problem_has_ai_grading(submission.problem),
     }
     if fields['can_trigger_ai_grade']:
         fields['ai_grade_url'] = reverse('submission_ai_grade', args=[submission.id])
@@ -2285,6 +2286,7 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             ProblemShortAnswerConfig.objects.create(
                 problem=new_problem,
                 reference_answer=short_answer_config.reference_answer,
+                ai_enabled=short_answer_config.ai_enabled,
                 ai_rubric=short_answer_config.ai_rubric,
                 grading_table=short_answer_config.grading_table,
             )

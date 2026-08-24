@@ -237,7 +237,8 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
 
         from judge.question_types.code import AI_GRADE_BATCH
         from judge.utils.contest_ai import (
-            AI_BATCH_PENDING, ai_grade_context, contest_awaits_student_ai, student_can_see_code_ai,
+            AI_BATCH_PENDING, ai_grade_context, contest_awaits_student_ai, problem_has_ai_grading,
+            student_can_see_code_ai,
         )
         context['ai_batch_pending'] = (submission.error or '') == AI_BATCH_PENDING
         show_code_ai = student_can_see_code_ai(self.request.user, submission)
@@ -246,6 +247,7 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
         ) if show_code_ai else []
         context.update(ai_grade_context(self.request.user, submission))
         context['can_trigger_ai_grade'] = context['can_trigger']
+        context['problem_has_ai_grading'] = problem_has_ai_grading(submission.problem)
         context['ai_awaiting_manual'] = (
             contest_awaits_student_ai(submission)
             and submission.result == 'IR'

@@ -797,6 +797,23 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         config = ProblemShortAnswerConfig.objects.get(problem=problem)
         self.assertEqual(config.reference_answer, 'SYN, SYN-ACK, ACK')
         self.assertEqual(config.ai_rubric, 'mention 3 steps')
+        self.assertFalse(config.ai_enabled)
+
+    def test_create_short_answer_can_enable_ai_grading(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'short', 'name': 'Explain TCP', 'description': 'Explain TCP handshake.',
+            'points': 5, 'group_id': self.group.id, 'shortAnswer': 'SYN, SYN-ACK, ACK',
+            'ai': True, 'rubric': 'mention 3 steps',
+        }
+        response = self.client.post(reverse('problem_create_v2'), data=json.dumps(payload),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        problem = Problem.objects.get(code=response.json()['code'])
+        config = ProblemShortAnswerConfig.objects.get(problem=problem)
+        self.assertTrue(config.ai_enabled)
+        data = ProblemCreateV2View()._build_edit_data(problem)
+        self.assertTrue(data['ai'])
 
     def test_create_file_upload(self):
         self.client.force_login(self.users['creator'])

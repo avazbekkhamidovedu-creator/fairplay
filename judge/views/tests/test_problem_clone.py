@@ -126,12 +126,15 @@ class ProblemCloneTestCase(CommonDataMixin, TestCase):
             problem=problem,
             reference_answer='42',
             ai_rubric='mention the answer',
+            ai_enabled=False,
         )
 
         clone = self._clone(problem, 'clonesa2')
         self.assertEqual(clone.short_answer_config.reference_answer, '42')
         self.assertEqual(clone.short_answer_config.ai_rubric, 'mention the answer')
+        self.assertFalse(clone.short_answer_config.ai_enabled)
         self.assertEqual(problem.short_answer_config.reference_answer, '42')
+        self.assertFalse(problem.short_answer_config.ai_enabled)
 
     def test_clone_file_upload_config(self):
         problem = create_problem(
