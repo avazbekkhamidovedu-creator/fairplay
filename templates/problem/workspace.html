@@ -628,6 +628,7 @@
           <div class="ide-stack">
             <div class="ide-editor-wrap">
               <textarea id="workspace-source" name="source" spellcheck="false">{{ form.source.value()|default('', true) }}</textarea>
+              <script type="application/json" id="workspace-language-templates">{{ (workspace_language_templates or {})|tojson }}</script>
               <div id="monaco-editor" hidden></div>
               <span class="workspace-fallback" id="editor-fallback" hidden>{{ _('The code editor is unavailable. You can still edit and submit this source.') }}</span>
               <div class="ide-status"><span id="draft-status">{{ _('Local draft') }}</span><span id="cursor-status">Ln 1, Col 1</span></div>

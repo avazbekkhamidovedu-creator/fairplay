@@ -12,6 +12,7 @@ from judge.models import (
     Problem,
     ProblemMCQConfig,
     ProblemMCQOption,
+    ProblemTemplate,
     Submission,
     SubmissionSource,
 )
@@ -616,6 +617,48 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, '0/10')
         self.assertContains(response, 'attempted-problem-color')
         self.assertNotContains(response, 'solved-problem-color')
+
+    def test_workspace_prefills_problem_template_for_selected_language(self):
+        starter = 'def solve():\n    # problem-template-marker\n    pass\n'
+        ProblemTemplate.objects.create(problem=self.problem, language=self.language, code=starter)
+        self.user.profile.language = self.language
+        self.user.profile.save()
+
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'problem-template-marker')
+        self.assertContains(response, 'id="workspace-language-templates"')
+        templates = response.context['workspace_language_templates']
+        self.assertEqual(templates[str(self.language.id)], starter)
+        self.assertEqual(response.context['form'].initial.get('source'), starter)
+        html = response.content.decode()
+        start = html.find('id="workspace-language-templates">')
+        self.assertNotEqual(start, -1)
+        start = html.find('>', start) + 1
+        payload = json.loads(html[start:html.find('</script>', start)])
+        self.assertEqual(payload[str(self.language.id)], starter)
+
+    def test_language_template_ajax_prefers_problem_template(self):
+        self.language.template = 'print("language-default")\n'
+        self.language.save()
+        ProblemTemplate.objects.create(
+            problem=self.problem, language=self.language, code='print("problem-starter")\n',
+        )
+        response = self.client.get(reverse('language_template_ajax'), {
+            'id': self.language.id,
+            'problem_id': self.problem.id,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode(), 'print("problem-starter")\n')
+
+    def test_language_template_ajax_falls_back_to_language_template(self):
+        self.language.template = 'print("language-default")\n'
+        self.language.save()
+        response = self.client.get(reverse('language_template_ajax'), {
+            'id': self.language.id,
+            'problem_id': self.problem.id,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode(), 'print("language-default")\n')
 
 
 class ProblemWorkspaceActionsTestCase(TestCase):

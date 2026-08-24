@@ -40,6 +40,21 @@
   function sourceValue() { return editor ? editor.getValue() : source.value; }
   function setSource(value) { if (editor) editor.setValue(value); else source.value = value; }
   function languageSelect() { return $('#id_language'); }
+  function parseLanguageTemplates() {
+    var el = $('#workspace-language-templates');
+    if (!el) return {};
+    try { return JSON.parse(el.textContent || '{}') || {}; } catch (err) { return {}; }
+  }
+  var languageTemplates = parseLanguageTemplates();
+  function templateForLanguage(langId) {
+    if (langId == null || langId === '') return '';
+    var code = languageTemplates[String(langId)];
+    return code == null ? '' : code;
+  }
+  function applyLanguageTemplate() {
+    var select = languageSelect();
+    setSource(templateForLanguage(select && select.value));
+  }
   // Drafts only for assignment/exam (join → leave). Practice keeps no answer drafts.
   function draftsEnabled() {
     var mode = app.dataset.mode || 'practice';
@@ -1486,7 +1501,10 @@
   if (draftsEnabled()) {
     var saved = null;
     try { saved = localStorage.getItem(draftKey()); } catch (err) { saved = null; }
-    if (saved && !source.value) source.value = saved;
+    if (saved !== null) source.value = saved;
+    else if (!source.value) applyLanguageTemplate();
+  } else if (!source.value) {
+    applyLanguageTemplate();
   }
   source.addEventListener('input', saveDraft);
   var languageEl = languageSelect();
@@ -1495,8 +1513,13 @@
       if (draftsEnabled()) {
         var languageDraft = null;
         try { languageDraft = localStorage.getItem(draftKey()); } catch (err) { languageDraft = null; }
-        if (languageDraft !== null) setSource(languageDraft);
+        if (languageDraft !== null) {
+          setSource(languageDraft);
+          setEditorLanguage();
+          return;
+        }
       }
+      setSource(templateForLanguage(languageEl.value));
       setEditorLanguage();
     });
   }
