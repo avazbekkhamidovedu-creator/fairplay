@@ -66,6 +66,7 @@ from judge.models import (
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
+from judge.utils.problem_create import generate_problem_code
 from judge.utils.problems import (
     contest_attempted_ids,
     contest_completed_ids,
@@ -1558,6 +1559,10 @@ class ProblemCodeCheckView(LoginRequiredMixin, View):
         ):
             return JsonResponse({'error': _('Forbidden')}, status=403)
 
+        if request.GET.get('suggest'):
+            code = generate_problem_code()
+            return JsonResponse({'code': code, 'exists': False})
+
         code = request.GET.get('code', '').strip()
         if not code:
             return JsonResponse({'error': _('Missing code')}, status=400)
@@ -1980,6 +1985,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             return False
         problem = self.get_object()
         return problem.is_viewable_by_org_admin(self.request.user)
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial['code'] = generate_problem_code()
+        return initial
 
     def form_valid(self, form):
         problem = self.object
