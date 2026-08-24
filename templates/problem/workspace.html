@@ -45,6 +45,26 @@
     }
     .ai-grade-btn:hover:not(:disabled) { filter: brightness(1.05); }
     .ai-grade-btn:disabled { opacity: .65; }
+    .ws-title-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      flex: 0 0 auto;
+    }
+    .ws-title-actions .row-action {
+      display: inline-block;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: none;
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+      color: var(--oj-link) !important;
+      text-decoration: none;
+    }
+    .ws-title-actions .row-action:hover { opacity: 0.75; }
+    .ws-title-actions .row-action.row-action-danger { color: var(--oj-danger) !important; }
   </style>
   {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
@@ -278,6 +298,24 @@
         <div class="ws-tab-panel active" id="panel-desc">
           <header class="ws-problem-head">
             <h2>{{ title }}</h2>
+            {% if can_edit_problem or can_clone_problem %}
+              <span class="ws-title-actions">
+                {% if can_edit_problem %}
+                  <a class="row-action" href="{{ url('problem_edit_v2', problem.code) }}"
+                     data-problem-action="edit"
+                     title="{{ _('Edit') }}" aria-label="{{ _('Edit') }}"><i class="fa fa-pencil"></i></a>
+                  <button type="button" class="row-action row-action-danger" data-action="delete-problem"
+                          data-problem-action="delete" data-problem-code="{{ problem.code }}"
+                          title="{{ _('Delete') }}" aria-label="{{ _('Delete') }}"
+                          aria-haspopup="dialog" aria-controls="ws-delete-modal"><i class="fa fa-trash"></i></button>
+                {% endif %}
+                {% if can_clone_problem %}
+                  <a class="row-action" href="{{ url('problem_clone', problem.code) }}"
+                     data-problem-action="clone"
+                     title="{{ _('Clone') }}" aria-label="{{ _('Clone') }}"><i class="fa fa-copy"></i></a>
+                {% endif %}
+              </span>
+            {% endif %}
             <div class="ws-badges">
               {% if problem.difficulty %}<span class="ws-badge difficulty-badge diff-{{ problem.difficulty }}">{{ problem.difficulty_label }}</span>{% endif %}
               <span class="ws-badge">{{ workspace_submission_type_label }}</span>
@@ -318,10 +356,9 @@
                 {% endif %}
               {% endmacro %}
               {% macro ws_meta_actions() %}
-                {% set show_manage = can_edit_problem %}
                 {% set show_tickets = can_edit_problem or (request.user.is_authenticated and has_tickets) %}
                 {% set show_voting = vote_perm.can_view() %}
-                {% if show_manage or show_tickets or show_voting %}
+                {% if show_tickets or show_voting %}
                   <div class="mi span-2 ws-actions-row">
                     <i class="fa fa-link fa-fw" aria-hidden="true"></i>
                     <span class="k">{{ _('Actions:') }}</span>
@@ -330,17 +367,6 @@
                          data-problem-code="{{ problem.code }}"
                          data-list-url="{{ url('problem_list') }}"
                          {% if can_edit_problem %}data-edit-url="{{ url('problem_edit_v2', problem.code) }}" data-delete-url="{{ url('problem_bulk_delete') }}" data-can-edit="1" data-can-delete="1"{% else %}data-can-edit="0" data-can-delete="0"{% endif %}>
-                      {% if show_manage %}
-                        <div class="ws-action-group" data-action-group="manage">
-                          <span class="ws-action-label">{{ _('Manage problem') }}</span>
-                          <span class="ws-action-items">
-                            <a href="{{ url('problem_edit_v2', problem.code) }}" class="problem-action-edit" data-problem-action="edit">{{ _('Edit') }}</a>
-                            <button type="button" class="ws-action-danger" data-action="delete-problem" data-problem-action="delete"
-                                    data-problem-code="{{ problem.code }}"
-                                    aria-haspopup="dialog" aria-controls="ws-delete-modal">{{ _('Delete') }}</button>
-                          </span>
-                        </div>
-                      {% endif %}
                       {% if show_tickets %}
                         <div class="ws-action-group" data-action-group="tickets">
                           <span class="ws-action-label">{{ _('Tickets') }}</span>

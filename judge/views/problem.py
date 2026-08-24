@@ -460,6 +460,13 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
 
         can_edit = self.object.is_editable_by(user)
         context['can_edit_problem'] = can_edit
+        context['can_clone_problem'] = (
+            user.is_authenticated
+            and (
+                user.has_perm('judge.clone_problem')
+                or self.object.is_viewable_by_org_admin(user)
+            )
+        )
         if user.is_authenticated:
             tickets = self.object.tickets
             if not can_edit:

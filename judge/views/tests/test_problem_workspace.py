@@ -662,7 +662,7 @@ class ProblemWorkspaceTestCase(TestCase):
 
 
 class ProblemWorkspaceActionsTestCase(TestCase):
-    """Problem info Actions groups and the editor-only delete entry."""
+    """Title-row edit/delete/clone icons and remaining Problem info Actions."""
 
     fixtures = ['language_all.json']
 
@@ -672,7 +672,11 @@ class ProblemWorkspaceActionsTestCase(TestCase):
         cls.author_no_perm = create_user(username='ws-actions-author-noperm')
         cls.editor = create_user(
             username='ws-actions-editor',
-            user_permissions=('edit_own_problem',),
+            user_permissions=('edit_own_problem', 'clone_problem'),
+        )
+        cls.cloner = create_user(
+            username='ws-actions-cloner',
+            user_permissions=('clone_problem',),
         )
         cls.language = Language.objects.get(key='PY3')
         cls.problem = create_problem(
@@ -685,15 +689,18 @@ class ProblemWorkspaceActionsTestCase(TestCase):
     def setUp(self):
         self.client = Client()
 
-    def test_student_sees_voting_group_but_not_edit_or_delete(self):
+    def test_student_sees_voting_group_but_not_edit_delete_or_clone(self):
         self.client.force_login(self.student)
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertContains(response, 'ws-action-groups')
         self.assertContains(response, 'data-action-group="voting"')
         self.assertContains(response, 'data-problem-actions')
         self.assertNotContains(response, 'data-action-group="manage"')
+        self.assertNotContains(response, 'class="ws-title-actions"')
         self.assertNotContains(response, 'data-action="delete-problem"')
         self.assertNotContains(response, 'data-problem-action="edit"')
+        self.assertNotContains(response, 'data-problem-action="clone"')
+        self.assertNotContains(response, reverse('problem_clone', args=[self.problem.code]))
         self.assertNotContains(response, 'data-can-delete="1"')
         self.assertContains(response, 'data-can-delete="0"')
         self.assertContains(response, 'Voting available after solving')
@@ -708,36 +715,53 @@ class ProblemWorkspaceActionsTestCase(TestCase):
         self.assertNotContains(response, 'data-action="delete-problem"')
         self.assertNotContains(response, 'data-action-group="manage"')
         self.assertNotContains(response, 'data-problem-action="edit"')
+        self.assertNotContains(response, 'data-problem-action="clone"')
         self.assertNotContains(response, 'data-can-delete="1"')
 
-    def test_editor_sees_grouped_edit_and_delete_wired_to_bulk_delete(self):
+    def test_editor_sees_title_icons_and_delete_wired_to_bulk_delete(self):
         self.client.force_login(self.editor)
         self.assertTrue(self.problem.is_editable_by(self.editor))
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
-        self.assertContains(response, 'data-action-group="manage"')
+        self.assertContains(response, 'class="ws-title-actions"')
+        self.assertNotContains(response, 'data-action-group="manage"')
+        self.assertNotContains(response, 'Manage problem')
         self.assertContains(response, 'data-action-group="tickets"')
-        self.assertContains(response, 'Manage problem')
         self.assertContains(response, 'Tickets')
         self.assertContains(response, 'Voting')
         self.assertContains(response, reverse('problem_edit_v2', args=[self.problem.code]))
+        self.assertContains(response, reverse('problem_clone', args=[self.problem.code]))
         self.assertContains(response, 'data-problem-action="edit"')
         self.assertContains(response, 'data-action="delete-problem"')
         self.assertContains(response, 'data-problem-action="delete"')
+        self.assertContains(response, 'data-problem-action="clone"')
         self.assertContains(response, 'data-can-delete="1"')
         self.assertContains(response, 'id="ws-problem-delete-form"')
         self.assertContains(response, reverse('problem_bulk_delete'))
         self.assertContains(response, 'id="ws-delete-modal"')
         self.assertNotContains(response, 'problem_window.js')
         html = response.content.decode()
-        manage = html.split('data-action-group="manage"', 1)[1].split('data-action-group', 1)[0]
-        self.assertIn('Edit', manage)
-        self.assertIn('data-action="delete-problem"', manage)
-        self.assertIn('Delete', manage)
+        title_actions = html.split('class="ws-title-actions"', 1)[1].split('</span>', 1)[0]
+        self.assertIn('data-problem-action="edit"', title_actions)
+        self.assertIn('data-action="delete-problem"', title_actions)
+        self.assertIn('data-problem-action="clone"', title_actions)
+        self.assertIn('fa-pencil', title_actions)
+        self.assertIn('fa-trash', title_actions)
+        self.assertIn('fa-copy', title_actions)
         form_html = html[html.find('id="ws-problem-delete-form"'):html.find('id="ws-delete-modal"')]
         self.assertIn('name="codes"', form_html)
         self.assertIn(self.problem.code, form_html)
         self.assertIn('name="next"', form_html)
         self.assertIn(reverse('problem_list'), form_html)
+
+    def test_clone_perm_shows_clone_icon_without_edit_or_delete(self):
+        self.client.force_login(self.cloner)
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'class="ws-title-actions"')
+        self.assertContains(response, 'data-problem-action="clone"')
+        self.assertContains(response, reverse('problem_clone', args=[self.problem.code]))
+        self.assertNotContains(response, 'data-problem-action="edit"')
+        self.assertNotContains(response, 'data-action="delete-problem"')
+        self.assertNotContains(response, reverse('problem_edit_v2', args=[self.problem.code]))
 
     def test_student_cannot_delete_via_existing_endpoint(self):
         self.client.force_login(self.student)
