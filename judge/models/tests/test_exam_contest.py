@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Class, Contest, ContestParticipation, ContestSubmission, Language, Organization, Submission
+from judge.models import Class, Contest, ContestParticipation, ContestSubmission, Language, Submission
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
 from judge.tasks import finalize_contest_results, unfinalize_contest_results
