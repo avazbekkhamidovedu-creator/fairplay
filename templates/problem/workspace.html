@@ -479,6 +479,9 @@
                     <p style="margin-top:0.75rem;">
                       <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI grading') }}</button>
                     </p>
+                  {% elif not workspace_is_code and workspace_submission.result == 'IR' and not workspace_submission.problem_has_ai_grading %}
+                    <h3>{{ _('Answer saved') }}</h3>
+                    <p>{{ _('Your answer has been saved.') }}</p>
                   {% else %}
                     <h3>{% if workspace_is_code %}{{ _('Execution results') }}{% else %}{{ _('Judging results') }}{% endif %}</h3>
                     <p>

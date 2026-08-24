@@ -132,7 +132,7 @@ class FillBlankQuestionType(QuestionType):
                 if contest is None or student_allowed_ai_grading(contest):
                     msg = _('Request AI grading to score this submission.')
                 else:
-                    msg = _('Awaiting teacher AI grading.')
+                    msg = _('Awaiting teacher review.')
                 weights = _blank_weights(blanks)
                 case_total = sum(weights)
                 cases = [{

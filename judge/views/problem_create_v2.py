@@ -493,7 +493,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             config = getattr(problem, 'short_answer_config', None)
             data['shortAnswer'] = (config.reference_answer if config else '') or ''
             data['rubric'] = (config.ai_rubric if config else '') or ''
-            data['ai'] = True  # short answer always uses AI grading
+            data['ai'] = bool(config and config.ai_enabled)
             data['gradingTable'] = config.grading_table if config else None
         elif st == ProblemSubmissionType.FILE:
             data['type'] = 'file'
@@ -1542,6 +1542,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ProblemShortAnswerConfig.objects.create(
                 problem=problem,
                 reference_answer=(payload.get('shortAnswer') or '').strip(),
+                ai_enabled=bool(payload.get('ai')),
                 ai_rubric=(payload.get('rubric') or '').strip(),
                 grading_table=payload.get('gradingTable') or None,
             )
@@ -1623,7 +1624,7 @@ class ProblemCreateV2AIDifficultyView(LoginRequiredMixin, View):
             return JsonResponse({'error': _('Please enter problem content first.')}, status=400)
 
         try:
-            level = self._classify(description)
+            level = classify_problem_difficulty(description)
         except Exception:
             import logging
             logging.getLogger(__name__).exception('AI difficulty classification failed')
@@ -1631,31 +1632,37 @@ class ProblemCreateV2AIDifficultyView(LoginRequiredMixin, View):
                                             'Please check your connection and try again.')}, status=503)
         return JsonResponse({'level': level, 'label': {'easy': 'Easy', 'medium': 'Medium', 'hard': 'Hard'}[level]})
 
-    def _classify(self, description):
-        from judge import llm
 
-        # Only call the LLM when it is configured; a configured-but-unreachable model is an error
-        # (surfaced to the user as 503) rather than a silent fallback that pretends the AI worked.
-        if llm.is_configured():
-            messages = [
-                {'role': 'system', 'content': (
-                    'You classify educational/problem difficulty. Reply with exactly one word: '
-                    'easy, medium, or hard. No other text.'
-                )},
-                {'role': 'user', 'content': description[:4000]},
-            ]
-            text = llm.chat(messages, max_tokens=16).text.strip().lower()
-            for level in ('easy', 'medium', 'hard'):
-                if level in text:
-                    return level
+def classify_problem_difficulty(description):
+    """Return ``easy`` / ``medium`` / ``hard`` from problem text.
 
-        # Heuristic fallback (no LLM configured, or the model returned no usable label).
-        compact = description.replace(' ', '')
-        if len(compact) < 80:
-            return 'easy'
-        if len(compact) < 240:
-            return 'medium'
-        return 'hard'
+    Uses the configured LLM when available (same prompt as the add-problem 🤖 AI
+    button). A configured-but-unreachable model raises; callers that want a
+    silent fallback should catch that. When no LLM is configured, a length
+    heuristic is used.
+    """
+    from judge import llm
+
+    description = (description or '').strip()
+    if llm.is_configured():
+        messages = [
+            {'role': 'system', 'content': (
+                'You classify educational/problem difficulty. Reply with exactly one word: '
+                'easy, medium, or hard. No other text.'
+            )},
+            {'role': 'user', 'content': description[:4000]},
+        ]
+        text = llm.chat(messages, max_tokens=16).text.strip().lower()
+        for level in ('easy', 'medium', 'hard'):
+            if level in text:
+                return level
+
+    compact = description.replace(' ', '')
+    if len(compact) < 80:
+        return 'easy'
+    if len(compact) < 240:
+        return 'medium'
+    return 'hard'
 
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')

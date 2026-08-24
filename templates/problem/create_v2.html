@@ -411,7 +411,7 @@
             <label>{{ _('AI Grading') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
-                <input type="checkbox" id="f-ai" checked onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
+                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
               </label>
               <div class="help" id="ai-help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. In an assignment/exam, the teacher chooses realtime (each submit) or batch (latest submit after the contest). Always uses the latest submission. Requires LITELLM_API_BASE.') }}</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
@@ -2565,6 +2565,7 @@
       document.getElementById('blank-answers').innerHTML = '';
       { const t = document.getElementById('f-blank-trim'); if (t) t.checked = true;
         const c = document.getElementById('f-blank-case'); if (c) c.checked = false; }
+      { const ai = document.getElementById('f-ai'); if (ai) ai.checked = false; }
       { const tb = document.getElementById('tc-body'); if (tb) tb.innerHTML = ''; }
       pendingZipFile = null;
       zipFiles = [];
