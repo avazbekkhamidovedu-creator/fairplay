@@ -1649,6 +1649,10 @@ class ContestMixin(object):
     def can_edit(self):
         return self.object.is_editable_by(self.request.user)
 
+    @cached_property
+    def can_clone(self):
+        return self.object.is_cloneable_by(self.request.user)
+
     def get_context_data(self, **kwargs):
         context = super(ContestMixin, self).get_context_data(**kwargs)
         if self.request.user.is_authenticated:
@@ -1673,6 +1677,7 @@ class ContestMixin(object):
         context['is_tester'] = self.is_tester
         context['is_spectator'] = self.is_spectator
         context['can_edit'] = self.can_edit
+        context['can_clone'] = self.can_clone
         context['is_org_admin'] = self.object.is_viewable_by_org_admin(self.request.user)
 
         if self.object.seb_required:
@@ -1837,7 +1842,7 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             contest = Contest.objects.get(key=contest_key)
         except Contest.DoesNotExist:
             return False
-        return contest.is_editable_by(self.request.user) or contest.is_viewable_by_org_admin(self.request.user)
+        return contest.is_cloneable_by(self.request.user)
 
     def form_valid(self, form):
         contest = self.object

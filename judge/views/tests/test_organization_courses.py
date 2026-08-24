@@ -467,13 +467,15 @@ class ScopedInstructorVerificationTest(CommonDataMixin, TestCase):
     def test_site_teacher_joining_class_becomes_instructor(self):
         from judge.models.notification import ensure_instructors_group
         from judge.views.organization import (
-            grant_site_teacher_role, profile_can_access_class, profile_manages_class,
+            grant_site_teacher_role, maybe_add_course_instructor, profile_can_access_class,
+            profile_manages_class,
             profile_can_view_class_content,
         )
 
         ensure_instructors_group()
         grant_site_teacher_role(self.applicant.profile)
         self.org.members.add(self.applicant.profile)
+        maybe_add_course_instructor(self.applicant.profile, self.org)
         # Course teacher may open/view every class read-only, but not edit.
         self.assertTrue(profile_can_access_class(self.applicant.profile, self.klass, self.applicant))
         self.assertTrue(profile_can_access_class(self.applicant.profile, self.other, self.applicant))

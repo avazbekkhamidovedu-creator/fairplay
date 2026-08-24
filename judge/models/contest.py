@@ -513,6 +513,10 @@ class Contest(models.Model):
         if self.is_viewable_by_org_admin(user):
             return
 
+        # Course teachers can view org-private assignments in their course
+        if self.is_organization_private and self.is_viewable_by_course_teacher(user):
+            return
+
         # Contest is not publicly visible
         if not self.is_visible:
             raise self.Inaccessible()
@@ -628,6 +632,48 @@ class Contest(models.Model):
             return False
         return self.organizations.filter(admins=user.profile).exists()
 
+    def linked_organization_ids(self):
+        org_ids = set(self.organizations.values_list('id', flat=True))
+        org_ids.update(self.classes.values_list('organization_id', flat=True))
+        return org_ids
+
+    def is_viewable_by_course_teacher(self, user):
+        """Course admins, instructors, and class instructors for linked courses."""
+        if not user.is_authenticated:
+            return False
+        org_ids = self.linked_organization_ids()
+        if not org_ids:
+            return False
+        profile = user.profile
+        if Organization.objects.filter(id__in=org_ids, instructors=profile).exists():
+            return True
+        if Organization.objects.filter(id__in=org_ids, admins=profile).exists():
+            return True
+        return Class.objects.filter(organization_id__in=org_ids, admins=profile).exists()
+
+    def is_general_course_assignment(self):
+        """Public assignment with no course/class scope (Assignments list "General course")."""
+        if not self.is_visible or self.is_private or self.is_organization_private:
+            return False
+        return not self.linked_organization_ids()
+
+    def is_cloneable_by_site_teacher(self, user):
+        if not user.is_authenticated or not self.is_general_course_assignment():
+            return False
+        if user.has_perm('judge.add_organization'):
+            return True
+        from judge.models.notification import user_in_instructors_group
+        return user_in_instructors_group(user)
+
+    def is_cloneable_by(self, user):
+        if not user.is_authenticated:
+            return False
+        if self.is_editable_by(user) or self.is_viewable_by_org_admin(user):
+            return True
+        if self.is_viewable_by_course_teacher(user):
+            return True
+        return self.is_cloneable_by_site_teacher(user)
+
     _parse_seb_keys = staticmethod(parse_seb_keys)
 
     # Every SEB accessor below resolves this contest's own value first and falls
@@ -693,6 +739,11 @@ class Contest(models.Model):
             q |= Q(spectators=user.profile)
             # Org admins can see org-private contests
             q |= Q(is_organization_private=True, organizations__admins=user.profile)
+            teaching_orgs = Organization.objects.filter(
+                Q(instructors=user.profile) | Q(admins=user.profile) | Q(class__admins=user.profile),
+            ).distinct()
+            q |= Q(is_organization_private=True, organizations__in=teaching_orgs)
+            q |= Q(is_organization_private=True, classes__organization__in=teaching_orgs)
             queryset = queryset.filter(q)
         return queryset.distinct()
 
