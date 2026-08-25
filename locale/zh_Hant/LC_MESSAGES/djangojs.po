@@ -75,3 +75,7 @@ msgid "%(cnt)d submission on %(date)s"
 msgid_plural "%(cnt)d submissions on %(date)s"
 msgstr[0] "%(date)s 有 %(cnt)d 份提交紀錄"
 
+#: resources/workspace.js
+msgid "Could not delete this problem."
+msgstr "無法刪除該題目。"
+

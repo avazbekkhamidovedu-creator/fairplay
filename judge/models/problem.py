@@ -824,6 +824,27 @@ class ProblemTemplate(models.Model):
         verbose_name = _('problem template')
         verbose_name_plural = _('problem templates')
 
+    @classmethod
+    def starter_code(cls, language, problem_id=None):
+        """Problem-specific starter, else the language-wide default template."""
+        if problem_id:
+            try:
+                return cls.objects.get(problem_id=problem_id, language=language).code
+            except (cls.DoesNotExist, ValueError, TypeError):
+                pass
+        return language.template or ''
+
+    @classmethod
+    def starter_map(cls, problem, languages):
+        """Map language id (str) → starter code for the submit editor."""
+        langs = list(languages)
+        mapping = {str(lang.id): lang.template or '' for lang in langs}
+        if not langs:
+            return mapping
+        for tmpl in cls.objects.filter(problem=problem, language_id__in=[lang.id for lang in langs]):
+            mapping[str(tmpl.language_id)] = tmpl.code
+        return mapping
+
 
 class Solution(models.Model):
     problem = models.OneToOneField(Problem, on_delete=CASCADE, verbose_name=_('associated problem'),

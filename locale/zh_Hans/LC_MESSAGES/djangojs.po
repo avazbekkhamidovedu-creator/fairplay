@@ -629,3 +629,7 @@ msgstr "加载提交失败。"
 msgid "Failed to load submissions."
 msgstr "加载提交列表失败。"
 
+#: resources/workspace.js
+msgid "Could not delete this problem."
+msgstr "无法删除该题目。"
+

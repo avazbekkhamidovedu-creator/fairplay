@@ -66,6 +66,7 @@ from judge.models import (
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
+from judge.utils.problem_create import generate_problem_code
 from judge.utils.problems import (
     contest_attempted_ids,
     contest_completed_ids,
@@ -459,6 +460,13 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
 
         can_edit = self.object.is_editable_by(user)
         context['can_edit_problem'] = can_edit
+        context['can_clone_problem'] = (
+            user.is_authenticated
+            and (
+                user.has_perm('judge.clone_problem')
+                or self.object.is_viewable_by_org_admin(user)
+            )
+        )
         if user.is_authenticated:
             tickets = self.object.tickets
             if not can_edit:
@@ -720,9 +728,16 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                 # Otherwise use the first allowed language
                 usable_languages = form.fields['language'].queryset
                 if self.request.profile.language and self.request.profile.language in usable_languages:
-                    form.fields['source'].widget.mode = self.request.profile.language.ace
-                elif usable_languages.exists():
-                    form.fields['source'].widget.mode = usable_languages.first().ace
+                    selected_language = self.request.profile.language
+                else:
+                    selected_language = usable_languages.first()
+                if selected_language:
+                    form.fields['source'].widget.mode = selected_language.ace
+                    form.initial['language'] = selected_language
+                templates = ProblemTemplate.starter_map(self.object, usable_languages)
+                context['workspace_language_templates'] = templates
+                if selected_language:
+                    form.initial['source'] = templates.get(str(selected_language.id), '')
                 context['form'] = form
                 context['ACE_URL'] = settings.ACE_URL
             else:
@@ -1503,7 +1518,20 @@ class ProblemBulkDelete(LoginRequiredMixin, View):
         ):
             redirect_to = reverse('problem_list')
         codes = [c for c in request.POST.getlist('codes') if c]
+        accept = request.headers.get('Accept') or ''
+        wants_json = (
+            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            or ('application/json' in accept and 'text/html' not in accept)
+        )
         if not codes:
+            if wants_json:
+                return JsonResponse({
+                    'ok': False,
+                    'deleted': 0,
+                    'denied': 0,
+                    'list_url': reverse('problem_list'),
+                    'error': _('No problems selected.'),
+                }, status=400)
             messages.error(request, _('No problems selected.'))
             return HttpResponseRedirect(redirect_to)
 
@@ -1515,6 +1543,19 @@ class ProblemBulkDelete(LoginRequiredMixin, View):
                     deleted += 1
                 else:
                     denied += 1
+
+        if wants_json:
+            if denied and not deleted:
+                error = _('Skipped %(count)d problem(s) you are not allowed to delete.') % {'count': denied}
+            else:
+                error = ''
+            return JsonResponse({
+                'ok': bool(deleted),
+                'deleted': deleted,
+                'denied': denied,
+                'list_url': reverse('problem_list'),
+                'error': error,
+            }, status=200 if deleted else 403)
 
         if deleted:
             messages.success(request, _('Deleted %(count)d problem(s).') % {'count': deleted})
@@ -1533,18 +1574,8 @@ class LanguageTemplateAjax(View):
         except ValueError:
             raise Http404()
 
-        problem_id = request.GET.get('problem_id')
-        if problem_id:
-            try:
-                template = ProblemTemplate.objects.get(problem_id=problem_id, language=language).code
-                resp = HttpResponse(template, content_type='text/plain')
-                resp['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-                resp['Pragma'] = 'no-cache'
-                return resp
-            except (ProblemTemplate.DoesNotExist, ValueError):
-                pass
-
-        resp = HttpResponse(language.template, content_type='text/plain')
+        template = ProblemTemplate.starter_code(language, request.GET.get('problem_id'))
+        resp = HttpResponse(template, content_type='text/plain')
         resp['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         resp['Pragma'] = 'no-cache'
         return resp
@@ -1557,6 +1588,10 @@ class ProblemCodeCheckView(LoginRequiredMixin, View):
             or request.user.is_superuser
         ):
             return JsonResponse({'error': _('Forbidden')}, status=403)
+
+        if request.GET.get('suggest'):
+            code = generate_problem_code()
+            return JsonResponse({'code': code, 'exists': False})
 
         code = request.GET.get('code', '').strip()
         if not code:
@@ -1980,6 +2015,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             return False
         problem = self.get_object()
         return problem.is_viewable_by_org_admin(self.request.user)
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial['code'] = generate_problem_code()
+        return initial
 
     def form_valid(self, form):
         problem = self.object

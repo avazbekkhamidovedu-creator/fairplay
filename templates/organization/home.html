@@ -32,6 +32,7 @@ $(function () {
                 instructor: el.getAttribute('data-instructor') || '',
                 session: el.getAttribute('data-session') || '',
                 year: el.getAttribute('data-year') || '',
+                sessionSort: el.getAttribute('data-session-sort') || '',
                 instructorLabel: el.getAttribute('data-instructor-label') || '',
                 sessionLabel: el.getAttribute('data-session-label') || ''
             };
@@ -50,7 +51,11 @@ $(function () {
         items.sort(function (a, b) {
             if (sort === 'instructor') return a.instructorLabel.localeCompare(b.instructorLabel) || a.name.localeCompare(b.name);
             if (sort === 'year') return b.year.localeCompare(a.year) || a.instructorLabel.localeCompare(b.instructorLabel);
-            if (sort === 'session') return b.sessionLabel.localeCompare(a.sessionLabel) || a.name.localeCompare(b.name);
+            if (sort === 'session') {
+                return b.sessionSort.localeCompare(a.sessionSort) ||
+                    b.sessionLabel.localeCompare(a.sessionLabel) ||
+                    a.name.localeCompare(b.name);
+            }
             return a.name.localeCompare(b.name);
         });
 
@@ -78,7 +83,16 @@ $(function () {
                 if (!groups[k]) groups[k] = [];
                 groups[k].push(it);
             });
-            Object.keys(groups).sort().forEach(function (k) {
+            var groupKeys = Object.keys(groups);
+            if (group === 'session') {
+                groupKeys.sort(function (a, b) {
+                    var av = groups[a][0].sessionSort, bv = groups[b][0].sessionSort;
+                    return bv.localeCompare(av) || b.localeCompare(a);
+                });
+            } else {
+                groupKeys.sort();
+            }
+            groupKeys.forEach(function (k) {
                 var $block = $('<div class="group-block"/>');
                 $block.append(
                     $('<div class="group-title"/>').append(
@@ -250,6 +264,7 @@ $(function () {
                              data-instructor-label="{{ class.instructor_name }}"
                              data-session="{{ class.session_key }}"
                              data-session-label="{{ class.session_label or '' }}"
+                             data-session-sort="{{ class.session_sort_key or '' }}"
                              data-year="{{ class.academic_year or '' }}">
                             {% if class.review_pending_count %}
                                 <a class="class-pending"

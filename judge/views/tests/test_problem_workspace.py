@@ -9,8 +9,10 @@ from judge.models import (
     ContestSubmission,
     Judge,
     Language,
+    Problem,
     ProblemMCQConfig,
     ProblemMCQOption,
+    ProblemTemplate,
     Submission,
     SubmissionSource,
 )
@@ -615,3 +617,157 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, '0/10')
         self.assertContains(response, 'attempted-problem-color')
         self.assertNotContains(response, 'solved-problem-color')
+
+    def test_workspace_prefills_problem_template_for_selected_language(self):
+        starter = 'def solve():\n    # problem-template-marker\n    pass\n'
+        ProblemTemplate.objects.create(problem=self.problem, language=self.language, code=starter)
+        self.user.profile.language = self.language
+        self.user.profile.save()
+
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'problem-template-marker')
+        self.assertContains(response, 'id="workspace-language-templates"')
+        templates = response.context['workspace_language_templates']
+        self.assertEqual(templates[str(self.language.id)], starter)
+        self.assertEqual(response.context['form'].initial.get('source'), starter)
+        html = response.content.decode()
+        start = html.find('id="workspace-language-templates">')
+        self.assertNotEqual(start, -1)
+        start = html.find('>', start) + 1
+        payload = json.loads(html[start:html.find('</script>', start)])
+        self.assertEqual(payload[str(self.language.id)], starter)
+
+    def test_language_template_ajax_prefers_problem_template(self):
+        self.language.template = 'print("language-default")\n'
+        self.language.save()
+        ProblemTemplate.objects.create(
+            problem=self.problem, language=self.language, code='print("problem-starter")\n',
+        )
+        response = self.client.get(reverse('language_template_ajax'), {
+            'id': self.language.id,
+            'problem_id': self.problem.id,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode(), 'print("problem-starter")\n')
+
+    def test_language_template_ajax_falls_back_to_language_template(self):
+        self.language.template = 'print("language-default")\n'
+        self.language.save()
+        response = self.client.get(reverse('language_template_ajax'), {
+            'id': self.language.id,
+            'problem_id': self.problem.id,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode(), 'print("language-default")\n')
+
+
+class ProblemWorkspaceActionsTestCase(TestCase):
+    """Title-row edit/delete/clone icons and remaining Problem info Actions."""
+
+    fixtures = ['language_all.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.student = create_user(username='ws-actions-student')
+        cls.author_no_perm = create_user(username='ws-actions-author-noperm')
+        cls.editor = create_user(
+            username='ws-actions-editor',
+            user_permissions=('edit_own_problem', 'clone_problem'),
+        )
+        cls.cloner = create_user(
+            username='ws-actions-cloner',
+            user_permissions=('clone_problem',),
+        )
+        cls.language = Language.objects.get(key='PY3')
+        cls.problem = create_problem(
+            code='wsactown',
+            is_public=True,
+            authors=('ws-actions-editor', 'ws-actions-author-noperm'),
+        )
+        cls.problem.allowed_languages.add(cls.language)
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_student_sees_voting_group_but_not_edit_delete_or_clone(self):
+        self.client.force_login(self.student)
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'ws-action-groups')
+        self.assertContains(response, 'data-action-group="voting"')
+        self.assertContains(response, 'data-problem-actions')
+        self.assertNotContains(response, 'data-action-group="manage"')
+        self.assertNotContains(response, 'class="ws-title-actions"')
+        self.assertNotContains(response, 'data-action="delete-problem"')
+        self.assertNotContains(response, 'data-problem-action="edit"')
+        self.assertNotContains(response, 'data-problem-action="clone"')
+        self.assertNotContains(response, reverse('problem_clone', args=[self.problem.code]))
+        self.assertNotContains(response, 'data-can-delete="1"')
+        self.assertContains(response, 'data-can-delete="0"')
+        self.assertContains(response, 'Voting available after solving')
+        self.assertContains(response, 'Voting')
+        self.assertNotContains(response, 'Manage problem')
+        self.assertContains(response, 'ws-action-hint')
+
+    def test_author_without_edit_perm_does_not_see_delete(self):
+        self.client.force_login(self.author_no_perm)
+        self.assertFalse(self.problem.is_editable_by(self.author_no_perm))
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertNotContains(response, 'data-action="delete-problem"')
+        self.assertNotContains(response, 'data-action-group="manage"')
+        self.assertNotContains(response, 'data-problem-action="edit"')
+        self.assertNotContains(response, 'data-problem-action="clone"')
+        self.assertNotContains(response, 'data-can-delete="1"')
+
+    def test_editor_sees_title_icons_and_delete_wired_to_bulk_delete(self):
+        self.client.force_login(self.editor)
+        self.assertTrue(self.problem.is_editable_by(self.editor))
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'class="ws-title-actions"')
+        self.assertNotContains(response, 'data-action-group="manage"')
+        self.assertNotContains(response, 'Manage problem')
+        self.assertContains(response, 'data-action-group="tickets"')
+        self.assertContains(response, 'Tickets')
+        self.assertContains(response, 'Voting')
+        self.assertContains(response, reverse('problem_edit_v2', args=[self.problem.code]))
+        self.assertContains(response, reverse('problem_clone', args=[self.problem.code]))
+        self.assertContains(response, 'data-problem-action="edit"')
+        self.assertContains(response, 'data-action="delete-problem"')
+        self.assertContains(response, 'data-problem-action="delete"')
+        self.assertContains(response, 'data-problem-action="clone"')
+        self.assertContains(response, 'data-can-delete="1"')
+        self.assertContains(response, 'id="ws-problem-delete-form"')
+        self.assertContains(response, reverse('problem_bulk_delete'))
+        self.assertContains(response, 'id="ws-delete-modal"')
+        self.assertNotContains(response, 'problem_window.js')
+        html = response.content.decode()
+        title_actions = html.split('class="ws-title-actions"', 1)[1].split('</span>', 1)[0]
+        self.assertIn('data-problem-action="edit"', title_actions)
+        self.assertIn('data-action="delete-problem"', title_actions)
+        self.assertIn('data-problem-action="clone"', title_actions)
+        self.assertIn('fa-pencil', title_actions)
+        self.assertIn('fa-trash', title_actions)
+        self.assertIn('fa-copy', title_actions)
+        form_html = html[html.find('id="ws-problem-delete-form"'):html.find('id="ws-delete-modal"')]
+        self.assertIn('name="codes"', form_html)
+        self.assertIn(self.problem.code, form_html)
+        self.assertIn('name="next"', form_html)
+        self.assertIn(reverse('problem_list'), form_html)
+
+    def test_clone_perm_shows_clone_icon_without_edit_or_delete(self):
+        self.client.force_login(self.cloner)
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'class="ws-title-actions"')
+        self.assertContains(response, 'data-problem-action="clone"')
+        self.assertContains(response, reverse('problem_clone', args=[self.problem.code]))
+        self.assertNotContains(response, 'data-problem-action="edit"')
+        self.assertNotContains(response, 'data-action="delete-problem"')
+        self.assertNotContains(response, reverse('problem_edit_v2', args=[self.problem.code]))
+
+    def test_student_cannot_delete_via_existing_endpoint(self):
+        self.client.force_login(self.student)
+        response = self.client.post(reverse('problem_bulk_delete'), {
+            'codes': [self.problem.code],
+            'next': reverse('problem_list'),
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Problem.objects.filter(code=self.problem.code).exists())

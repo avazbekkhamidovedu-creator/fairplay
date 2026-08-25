@@ -7726,3 +7726,29 @@ msgstr "输出前缀"
 #: templates/contest/create.html
 msgid "Number of output characters shown to students after judging — 0 means none, so only the verdict is visible."
 msgstr "评测后向学生展示的输出字符数。0 表示不展示输出，仅可见判定结果。"
+
+# --- workspace problem actions i18n ---
+
+#: templates/problem/workspace.html
+msgid "Actions:"
+msgstr "操作："
+
+#: templates/problem/workspace.html
+msgid "Manage problem"
+msgstr "题目管理"
+
+#: templates/problem/workspace.html
+msgid "Tickets"
+msgstr "工单"
+
+#: templates/problem/workspace.html
+msgid "Voting"
+msgstr "评价"
+
+#: templates/problem/workspace.html
+msgid "Voting available after solving"
+msgstr "解题后可投票"
+
+#: templates/problem/workspace.html
+msgid "AI Hints"
+msgstr "AI 提示"
