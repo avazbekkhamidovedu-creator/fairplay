@@ -1,6 +1,7 @@
 
 import csv
 import io
+import re
 import zipfile
 from typing import Dict, Optional, Tuple
 
@@ -17,12 +18,25 @@ from judge.models import (
 # netid@duke.edu as a second email column); prefer Email when both are present.
 # Accounts are NetID/SSO logins: no local password is set on create.
 CSV_FIELD_ALIASES = {
-    'username': ('username', 'netid'),
+    'username': ('username', 'netid', 'sis login id', 'login id'),
     'first_name': ('first_name', 'first name', 'firstname'),
-    'last_name': ('last_name', 'last name', 'lastname'),
+    'last_name': ('last_name', 'last name', 'lastname', 'surname'),
     'email': ('email', 'e-mail', 'netid@duke.edu'),
 }
+SCORE_FIELD_ALIASES = {
+    'score': (
+        'score',
+        'final grade',
+        'grade',
+        'points',
+        'total score',
+        'current grade',
+        'current score',
+        'final score',
+    )
+}
 REQUIRED_CSV_FIELDS = ('username', 'first_name', 'last_name', 'email')
+_SCORE_VALUE_RE = re.compile(r'^(-?\d+(?:\.\d+)?)(?:\s*%|\s*/\s*\d+(?:\.\d+)?)?$')
 
 
 class UserImportResult:
@@ -60,6 +74,26 @@ def resolve_csv_headers(fieldnames) -> Dict[str, str]:
     return resolved
 
 
+def resolve_csv_score_headers(fieldnames) -> list[str]:
+    """Return every plausible score column, preserving CSV column order."""
+    candidates = []
+    for header in fieldnames or []:
+        if header is None:
+            continue
+        key = _header_key(header)
+        if not key:
+            continue
+        if key in SCORE_FIELD_ALIASES['score'] or 'grade' in key or 'score' in key:
+            candidates.append(header)
+    return candidates
+
+
+def resolve_csv_score_header(fieldnames) -> Optional[str]:
+    """Return the score column only when the CSV has one unambiguous candidate."""
+    candidates = resolve_csv_score_headers(fieldnames)
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def csv_row_to_user_fields(raw_row: dict, header_map: Dict[str, str]) -> dict:
     """Pull username / names / email from a raw CSV row via aliases."""
     def get(canon: str) -> str:
@@ -74,6 +108,212 @@ def csv_row_to_user_fields(raw_row: dict, header_map: Dict[str, str]) -> dict:
         'last_name': get('last_name'),
         'email': get('email'),
     }
+
+
+def _normalize_participant_name(value: str) -> str:
+    """Normalize names for stable, case-insensitive matching."""
+    return ' '.join((value or '').replace(',', ' ').lower().split())
+
+
+def _build_name_key(first_name: str, last_name: str) -> str:
+    first_normalized = _normalize_participant_name(first_name)
+    last_normalized = _normalize_participant_name(last_name)
+    if not first_normalized or not last_normalized:
+        return ''
+    return ' '.join(part for part in (first_normalized, last_normalized) if part)
+
+
+class ContestScoreImportResult:
+    def __init__(self):
+        self.updated = 0
+        self.skipped = 0
+        self.errors = []
+        self.applied = False
+
+
+def _parse_score_value(raw_value) -> Optional[float]:
+    """Parse a loose score format from Canvas or contest-grade CSV rows."""
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    match = _SCORE_VALUE_RE.fullmatch(value.replace(',', ''))
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def import_contest_scores_from_csv(contest: Contest, csv_file,
+                                   score_column: Optional[str] = None) -> ContestScoreImportResult:
+    """Apply scores from a Canvas/exported CSV to live, non-disqualified participants."""
+    result = ContestScoreImportResult()
+
+    try:
+        decoded_file = csv_file.read().decode('utf-8-sig').splitlines()
+    except UnicodeDecodeError:
+        result.errors.append(_('File is not a valid UTF-8 CSV.'))
+        return result
+
+    reader = csv.DictReader(decoded_file)
+    if not reader.fieldnames:
+        result.errors.append(_('CSV file is empty or missing headers.'))
+        return result
+
+    header_map = resolve_csv_headers(reader.fieldnames)
+    score_candidates = resolve_csv_score_headers(reader.fieldnames)
+    can_match_by_name = 'first_name' in header_map and 'last_name' in header_map
+    if 'username' not in header_map and not can_match_by_name:
+        result.errors.append(_('Missing identifier columns. Provide username/NetID or both first and last name.'))
+        return result
+    score_columns_by_key = {_header_key(column): column for column in score_candidates}
+    if score_column:
+        score_field = score_columns_by_key.get(_header_key(score_column))
+        if score_field is None:
+            result.errors.append(_('The selected score column does not exist in this CSV.'))
+            return result
+    elif len(score_candidates) == 1:
+        score_field = score_candidates[0]
+    elif not score_candidates:
+        result.errors.append(_('Missing score column.'))
+        return result
+    else:
+        result.errors.append(
+            _('Multiple score columns were found (%(columns)s). Choose one before importing.') % {
+                'columns': ', '.join(score_candidates),
+            })
+        return result
+
+    participations = ContestParticipation.objects.filter(
+        contest=contest,
+        virtual=ContestParticipation.LIVE,
+        is_disqualified=False,
+    ).select_related('user__user')
+    participations = participations.order_by('id')
+    by_username = {
+        (p.user.user.username or '').lower(): p
+        for p in participations
+    }
+    by_name = {}
+    for participation in participations:
+        first_name = participation.user.user.first_name or ''
+        last_name = participation.user.user.last_name or ''
+        key = _build_name_key(first_name, last_name)
+        if not key:
+            continue
+        by_name.setdefault(key, []).append(participation)
+
+    seen_source_identifiers = set()
+    seen_participation_ids = set()
+    updates = []
+    for row_idx, raw in enumerate(reader, start=2):
+        row = csv_row_to_user_fields(raw, header_map)
+        username = row['username']
+        first_name = row['first_name']
+        last_name = row['last_name']
+        name_key = _build_name_key(first_name, last_name)
+        username_lower = username.lower()
+
+        if username:
+            seen_key = f'u:{username_lower}'
+            row_label = username
+        elif name_key:
+            seen_key = f'n:{name_key}'
+            row_label = f'{first_name} {last_name}'
+        else:
+            result.skipped += 1
+            result.errors.append(
+                _('Row %(row)d: row is missing identifier information.') % {
+                    'row': row_idx,
+                })
+            continue
+
+        if seen_key in seen_source_identifiers:
+            result.skipped += 1
+            result.errors.append(
+                _('Row %(row)d: duplicate participant (%(participant)s), row ignored.') % {
+                    'row': row_idx,
+                    'participant': row_label,
+                })
+            continue
+        seen_source_identifiers.add(seen_key)
+
+        score_value = _parse_score_value(raw.get(score_field))
+        if score_value is None:
+            result.skipped += 1
+            result.errors.append(
+                _('Row %(row)d: unable to parse score for %(identifier)s.') % {
+                    'row': row_idx,
+                    'identifier': row_label,
+                })
+            continue
+
+        participation = None
+        if username:
+            participation = by_username.get(username_lower)
+        elif name_key:
+            matches = by_name.get(name_key, [])
+            if len(matches) > 1:
+                result.skipped += 1
+                result.errors.append(
+                    _(
+                        'Row %(row)d: "%(participant)s" matches more than one participant; '
+                        'please resolve in import file.'
+                    ) % {
+                        'row': row_idx,
+                        'participant': row_label,
+                    })
+                continue
+            if matches:
+                participation = matches[0]
+
+        if participation is None:
+            result.skipped += 1
+            result.errors.append(
+                _('Row %(row)d: %(identifier)s is not currently a participant of this assignment.') % {
+                    'row': row_idx,
+                    'identifier': row_label,
+                })
+            continue
+
+        if participation.id in seen_participation_ids:
+            result.skipped += 1
+            result.errors.append(
+                _('Row %(row)d: %(identifier)s duplicates a participant from an earlier row.') % {
+                    'row': row_idx,
+                    'identifier': row_label,
+                })
+            continue
+        seen_participation_ids.add(participation.id)
+        updates.append((participation.id, max(0, score_value)))
+
+    if result.errors:
+        result.errors.insert(0, _('No scores were updated because the CSV has errors.'))
+        return result
+
+    with transaction.atomic():
+        locked_participations = ContestParticipation.objects.select_for_update().filter(
+            id__in=[participation_id for participation_id, _ in updates],
+            contest=contest,
+            virtual=ContestParticipation.LIVE,
+            is_disqualified=False,
+        )
+        locked_by_id = {participation.id: participation for participation in locked_participations}
+        if len(locked_by_id) != len(updates):
+            result.errors.append(_('Participants changed while importing; no scores were updated.'))
+            return result
+        for participation_id, score_value in updates:
+            participation = locked_by_id[participation_id]
+            participation.score = round(float(score_value), contest.points_precision)
+            participation.save(update_fields=['score'])
+            result.updated += 1
+
+    result.applied = True
+
+    return result
 
 
 def process_user_csv(csv_file, organization: Organization = None, target_class: Class = None,

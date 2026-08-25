@@ -4,9 +4,13 @@ import io
 from django.contrib.auth.models import User
 from django.test import TestCase
 
-from judge.models import Profile
-from judge.models.tests.util import create_user
-from judge.utils.import_export import process_user_csv
+from judge.models import ContestParticipation, Profile
+from judge.models.tests.util import (
+    create_contest,
+    create_contest_participation,
+    create_user,
+)
+from judge.utils.import_export import import_contest_scores_from_csv, process_user_csv
 
 
 class UserImportTestCase(TestCase):
@@ -104,3 +108,123 @@ class UserImportTestCase(TestCase):
         result = process_user_csv(io.BytesIO(content))
         self.assertEqual(result.created, 1)
         self.assertEqual(User.objects.get(username='gh200').email, 'gh200@duke.edu')
+
+
+class ContestScoreImportTestCase(TestCase):
+    def _import(self, contest, rows, header='netid,first_name,last_name,score', score_column=None):
+        content = (header + '\n' + '\n'.join(rows)).encode('utf-8')
+        return import_contest_scores_from_csv(contest, io.BytesIO(content), score_column=score_column)
+
+    def test_import_by_name_without_username(self):
+        contest = create_contest(key='import-names')
+        alice = create_user(username='alice', first_name='Alice', last_name='Qiu')
+        bob = create_user(username='bob', first_name='Bob', last_name='Lin')
+        create_contest_participation(contest=contest, user=alice.profile)
+        create_contest_participation(contest=contest, user=bob.profile)
+
+        result = self._import(
+            contest,
+            [
+                'Alice,Qiu,95',
+                'Bob,Lin,88/100',
+            ],
+            header='first name,last name,score',
+        )
+
+        self.assertEqual(result.updated, 2)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(
+            ContestParticipation.objects.get(contest=contest, user=alice.profile).score,
+            95.0,
+        )
+        self.assertEqual(
+            ContestParticipation.objects.get(contest=contest, user=bob.profile).score,
+            88.0,
+        )
+
+    def test_import_matches_name_fails_for_ambiguous_participants(self):
+        contest = create_contest(key='import-ambig')
+        first = create_user(username='sam-one', first_name='Sam', last_name='Lee')
+        second = create_user(username='sam-two', first_name='Sam', last_name='Lee')
+        create_contest_participation(contest=contest, user=first.profile)
+        create_contest_participation(contest=contest, user=second.profile)
+
+        result = self._import(
+            contest,
+            [
+                'Sam,Lee,100',
+            ],
+            header='first name,last name,score',
+        )
+
+        self.assertEqual(result.updated, 0)
+        self.assertEqual(result.skipped, 1)
+        self.assertIn('Sam Lee', result.errors[1])
+
+    def test_import_fails_when_identifier_is_missing(self):
+        contest = create_contest(key='import-miss-id')
+        create_user(username='alice', first_name='Alice', last_name='Wang')
+        create_contest_participation(contest=contest, user=User.objects.get(username='alice').profile)
+
+        result = self._import(
+            contest,
+            [
+                'Alice,,98',
+            ],
+            header='first name,last name,score',
+        )
+
+        self.assertEqual(result.updated, 0)
+        self.assertEqual(result.skipped, 1)
+        self.assertIn('row is missing identifier information', result.errors[1])
+
+    def test_multiple_score_columns_require_explicit_selection(self):
+        contest = create_contest(key='import-score-column')
+        alice = create_user(username='alice', first_name='Alice', last_name='Qiu')
+        participation = create_contest_participation(contest=contest, user=alice.profile)
+        header = 'SIS Login ID,first name,last name,Current Score,Final Score'
+        rows = ['alice,Alice,Qiu,75,90']
+
+        result = self._import(contest, rows, header=header)
+
+        self.assertFalse(result.applied)
+        self.assertEqual(result.updated, 0)
+        self.assertIn('Multiple score columns', result.errors[0])
+        participation.refresh_from_db()
+        self.assertEqual(participation.score, 0)
+
+        result = self._import(contest, rows, header=header, score_column='Final Score')
+
+        self.assertTrue(result.applied)
+        self.assertEqual(result.updated, 1)
+        participation.refresh_from_db()
+        self.assertEqual(participation.score, 90)
+
+    def test_import_is_not_applied_when_same_participant_appears_twice(self):
+        contest = create_contest(key='import-duplicate-participant')
+        alice = create_user(username='alice', first_name='Alice', last_name='Qiu')
+        participation = create_contest_participation(contest=contest, user=alice.profile)
+
+        result = self._import(contest, [
+            'alice,Alice,Qiu,80',
+            ',Alice,Qiu,90',
+        ])
+
+        self.assertFalse(result.applied)
+        self.assertEqual(result.updated, 0)
+        self.assertIn('duplicates a participant', result.errors[-1])
+        participation.refresh_from_db()
+        self.assertEqual(participation.score, 0)
+
+    def test_import_rejects_malformed_scores_without_partial_updates(self):
+        contest = create_contest(key='import-invalid-score')
+        alice = create_user(username='alice', first_name='Alice', last_name='Qiu')
+        participation = create_contest_participation(contest=contest, user=alice.profile)
+
+        result = self._import(contest, ['alice,Alice,Qiu,score: 95'])
+
+        self.assertFalse(result.applied)
+        self.assertEqual(result.updated, 0)
+        self.assertIn('unable to parse score', result.errors[-1])
+        participation.refresh_from_db()
+        self.assertEqual(participation.score, 0)
