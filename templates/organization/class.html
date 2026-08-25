@@ -233,6 +233,7 @@ $(function () {
             {% if not can_view_content %}
                 <div class="empty">{{ _('Join this class to view assignments.') }}</div>
             {% else %}
+            <div class="assignments-head">
             <div class="class-filters">
                 <div>
                     <label for="f-assign-q">{{ _('Search assignment') }}</label>
@@ -264,6 +265,14 @@ $(function () {
                         <option value="type">{{ _('Type') }}</option>
                     </select>
                 </div>
+            </div>
+            {% if can_edit and add_assignment_url and assignments %}
+                <div class="assignments-head-actions">
+                    <a class="oj-btn oj-btn-primary oj-btn-sm" href="{{ add_assignment_url }}">
+                        <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
+                    </a>
+                </div>
+            {% endif %}
             </div>
 
             <div id="assign-list" class="assign-list">

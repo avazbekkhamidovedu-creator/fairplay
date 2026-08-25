@@ -1143,6 +1143,25 @@
             background: var(--oj-bg);
         }
 
+        .assignments-head {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+            align-items: flex-end;
+            justify-content: space-between;
+            margin-bottom: 0.9rem;
+        }
+
+        .assignments-head .class-filters {
+            flex: 1 1 20rem;
+            margin-bottom: 0;
+        }
+
+        .assignments-head-actions {
+            flex: 0 0 auto;
+            padding: 0 0.15rem 0.85rem;
+        }
+
         .class-filters-single { grid-template-columns: 1fr; }
 
         .class-filters label {
