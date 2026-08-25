@@ -293,8 +293,8 @@ $(function () {
                     </a>
                 {% endfor %}
             </div>
-            <div id="assign-empty" class="empty" {% if assignments %}hidden{% endif %}>
-                {{ _('No assignments match your filters.') }}
+            <div id="assign-empty" class="empty assign-empty" {% if assignments %}hidden{% endif %}>
+                <p class="assign-empty-msg">{{ _('No assignments match your filters.') }}</p>
                 {% if can_edit and add_assignment_url %}
                     <a class="oj-btn oj-btn-primary" href="{{ add_assignment_url }}">
                         <i class="fa fa-plus"></i> {{ _('Add Assignment') }}

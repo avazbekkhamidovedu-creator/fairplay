@@ -1167,6 +1167,29 @@
 
         .assign-list { display: flex; flex-direction: column; }
 
+        .assign-empty {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.85rem;
+            min-height: 11rem;
+            padding: 2.5rem 1.25rem;
+            text-align: center;
+        }
+
+        .assign-empty-msg {
+            margin: 0;
+            color: var(--oj-text-muted);
+            font-size: 0.98rem;
+            line-height: 1.45;
+            max-width: 28rem;
+        }
+
+        .assign-empty .oj-btn-primary {
+            margin-top: 0;
+        }
+
         .assign-row {
             display: flex;
             gap: 1rem;
