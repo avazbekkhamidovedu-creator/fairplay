@@ -33,7 +33,7 @@ SCORE_FIELD_ALIASES = {
         'current grade',
         'current score',
         'final score',
-    )
+    ),
 }
 REQUIRED_CSV_FIELDS = ('username', 'first_name', 'last_name', 'email')
 _SCORE_VALUE_RE = re.compile(r'^(-?\d+(?:\.\d+)?)(?:\s*%|\s*/\s*\d+(?:\.\d+)?)?$')
@@ -261,7 +261,7 @@ def import_contest_scores_from_csv(contest: Contest, csv_file,
                 result.errors.append(
                     _(
                         'Row %(row)d: "%(participant)s" matches more than one participant; '
-                        'please resolve in import file.'
+                        'please resolve in import file.',
                     ) % {
                         'row': row_idx,
                         'participant': row_label,
