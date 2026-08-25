@@ -1143,23 +1143,29 @@
             background: var(--oj-bg);
         }
 
-        .assignments-head {
+        .assignments-toolbar {
             display: flex;
             flex-wrap: wrap;
-            gap: 0.65rem;
+            gap: 0.75rem;
             align-items: flex-end;
             justify-content: space-between;
             margin-bottom: 0.9rem;
+            padding: 0.85rem;
+            border: 1px solid var(--oj-border);
+            border-radius: var(--oj-radius);
+            background: var(--oj-bg);
         }
 
-        .assignments-head .class-filters {
+        .assignments-toolbar-filters {
             flex: 1 1 20rem;
             margin-bottom: 0;
+            padding: 0;
+            border: 0;
+            background: transparent;
         }
 
-        .assignments-head-actions {
+        .assignments-toolbar-actions {
             flex: 0 0 auto;
-            padding: 0 0.15rem 0.85rem;
         }
 
         .class-filters-single { grid-template-columns: 1fr; }

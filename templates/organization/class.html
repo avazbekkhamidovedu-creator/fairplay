@@ -233,46 +233,46 @@ $(function () {
             {% if not can_view_content %}
                 <div class="empty">{{ _('Join this class to view assignments.') }}</div>
             {% else %}
-            <div class="assignments-head">
-            <div class="class-filters">
-                <div>
-                    <label for="f-assign-q">{{ _('Search assignment') }}</label>
-                    <input id="f-assign-q" type="text" placeholder="{{ _('Homework / Quiz / Midterm') }}" autocomplete="off">
+            <div class="assignments-toolbar">
+                <div class="class-filters assignments-toolbar-filters">
+                    <div>
+                        <label for="f-assign-q">{{ _('Search assignment') }}</label>
+                        <input id="f-assign-q" type="text" placeholder="{{ _('Homework / Quiz / Midterm') }}" autocomplete="off">
+                    </div>
+                    <div>
+                        <label for="f-assign-tag">{{ _('Tags') }}</label>
+                        <select id="f-assign-tag" class="oj-select">
+                            <option value="">{{ _('All tags') }}</option>
+                            {% for t in assignment_tags %}
+                                <option value="{{ t }}">{{ t }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="f-assign-status">{{ _('Status') }}</label>
+                        <select id="f-assign-status" class="oj-select">
+                            <option value="">{{ _('All statuses') }}</option>
+                            <option value="open">{{ _('Open') }}</option>
+                            <option value="released">{{ _('Released') }}</option>
+                            <option value="scheduled">{{ _('Scheduled') }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="f-assign-sort">{{ _('Sort') }}</label>
+                        <select id="f-assign-sort" class="oj-select">
+                            <option value="due">{{ _('Due date') }}</option>
+                            <option value="name">{{ _('Title') }}</option>
+                            <option value="type">{{ _('Type') }}</option>
+                        </select>
+                    </div>
                 </div>
-                <div>
-                    <label for="f-assign-tag">{{ _('Tags') }}</label>
-                    <select id="f-assign-tag" class="oj-select">
-                        <option value="">{{ _('All tags') }}</option>
-                        {% for t in assignment_tags %}
-                            <option value="{{ t }}">{{ t }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div>
-                    <label for="f-assign-status">{{ _('Status') }}</label>
-                    <select id="f-assign-status" class="oj-select">
-                        <option value="">{{ _('All statuses') }}</option>
-                        <option value="open">{{ _('Open') }}</option>
-                        <option value="released">{{ _('Released') }}</option>
-                        <option value="scheduled">{{ _('Scheduled') }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="f-assign-sort">{{ _('Sort') }}</label>
-                    <select id="f-assign-sort" class="oj-select">
-                        <option value="due">{{ _('Due date') }}</option>
-                        <option value="name">{{ _('Title') }}</option>
-                        <option value="type">{{ _('Type') }}</option>
-                    </select>
-                </div>
-            </div>
-            {% if can_edit and add_assignment_url and assignments %}
-                <div class="assignments-head-actions">
-                    <a class="oj-btn oj-btn-primary oj-btn-sm" href="{{ add_assignment_url }}">
-                        <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
-                    </a>
-                </div>
-            {% endif %}
+                {% if can_edit and add_assignment_url %}
+                    <div class="assignments-toolbar-actions">
+                        <a class="oj-btn oj-btn-primary oj-btn-sm" href="{{ add_assignment_url }}">
+                            <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
+                        </a>
+                    </div>
+                {% endif %}
             </div>
 
             <div id="assign-list" class="assign-list">
@@ -304,11 +304,6 @@ $(function () {
             </div>
             <div id="assign-empty" class="empty" {% if assignments %}hidden{% endif %}>
                 {{ _('No assignments match your filters.') }}
-                {% if can_edit and add_assignment_url %}
-                    <a class="oj-btn oj-btn-primary oj-btn-sm" href="{{ add_assignment_url }}">
-                        <i class="fa fa-plus"></i> {{ _('Add Assignment') }}
-                    </a>
-                {% endif %}
             </div>
             {% endif %}
         </div>
