@@ -142,7 +142,7 @@ def _parse_score_value(raw_value) -> Optional[float]:
     if not match:
         return None
     try:
-        return float(match.group(0))
+        return float(match.group(1))
     except ValueError:
         return None
 

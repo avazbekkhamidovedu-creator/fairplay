@@ -201,7 +201,7 @@ class ContestScoreImportTestCase(TestCase):
         self.assertEqual(participation.score, 90)
 
     def test_import_is_not_applied_when_same_participant_appears_twice(self):
-        contest = create_contest(key='import-duplicate-participant')
+        contest = create_contest(key='import-duplicate')
         alice = create_user(username='alice', first_name='Alice', last_name='Qiu')
         participation = create_contest_participation(contest=contest, user=alice.profile)
 
