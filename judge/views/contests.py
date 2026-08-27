@@ -52,7 +52,7 @@ from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
-from judge.utils.problems import _get_result_data, user_completed_ids
+from judge.utils.problems import _get_result_data, assignment_problem_stats, user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.seb import request_matches_seb, seb_launch_context
 from judge.utils.stats import get_bar_chart, get_pie_chart
@@ -1752,14 +1752,22 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
 
     def get_context_data(self, **kwargs):
         context = super(ContestDetail, self).get_context_data(**kwargs)
-        context['contest_problems'] = Problem.objects.filter(contests__contest=self.object) \
-            .order_by('contests__order').defer('description') \
+        problems = list(
+            Problem.objects.filter(contests__contest=self.object)
+            .order_by('contests__order').defer('description')
             .annotate(has_public_editorial=Case(
                 When(solution__is_public=True, solution__publish_on__lte=timezone.now(), then=True),
                 default=False,
                 output_field=BooleanField(),
-            ), contest_points=F('contests__points'), contest_partial=F('contests__partial')) \
-            .add_i18n_name(self.request.LANGUAGE_CODE)
+            ), contest_points=F('contests__points'), contest_partial=F('contests__partial'))
+            .add_i18n_name(self.request.LANGUAGE_CODE),
+        )
+        stats = assignment_problem_stats(self.object)
+        for problem in problems:
+            problem_stats = stats.get(problem.id, {'user_count': 0, 'ac_rate': 0.0})
+            problem.user_count = problem_stats['user_count']
+            problem.ac_rate = problem_stats['ac_rate']
+        context['contest_problems'] = problems
         context['metadata'] = {
             'has_public_editorials': any(
                 problem.is_public and problem.has_public_editorial for problem in context['contest_problems']

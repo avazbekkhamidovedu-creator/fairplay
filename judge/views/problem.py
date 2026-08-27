@@ -68,6 +68,7 @@ from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
 from judge.utils.problem_create import generate_problem_code
 from judge.utils.problems import (
+    assignment_problem_stats,
     contest_attempted_ids,
     contest_completed_ids,
     hot_problems,
@@ -1012,36 +1013,10 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             return self.contest.name
         return super().get_content_title()
 
-    @staticmethod
-    def _assignment_problem_stats(contest):
-        """Per-problem Users / AC rate from this assignment's live submissions.
-
-        Users = distinct students who submitted the problem in this assignment.
-        AC rate = AC submissions / all submissions in this assignment.
-        Practice / global submissions are ignored (``contest_object`` filter).
-        """
-        rows = (
-            Submission.objects.filter(contest_object=contest)
-            .values('problem_id')
-            .annotate(
-                user_count=Count('user', distinct=True),
-                submission_total=Count('id'),
-                submission_ac=Count('id', filter=Q(result='AC')),
-            )
-        )
-        stats = {}
-        for row in rows:
-            total = row['submission_total']
-            stats[row['problem_id']] = {
-                'user_count': row['user_count'],
-                'ac_rate': (100.0 * row['submission_ac'] / total) if total else 0.0,
-            }
-        return stats
-
     def get_contest_queryset(self):
         participation = self.profile.current_contest
         contest = participation.contest
-        stats = self._assignment_problem_stats(contest)
+        stats = assignment_problem_stats(contest)
 
         queryset = (
             contest.contest_problems.select_related('problem')
