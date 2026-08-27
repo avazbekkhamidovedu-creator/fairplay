@@ -1,10 +1,15 @@
 import hashlib
+import time
+from types import SimpleNamespace
+from unittest import mock
 
-from django.test import RequestFactory, SimpleTestCase
+from django.core import signing
+from django.test import RequestFactory, SimpleTestCase, override_settings
 from django.urls import reverse
 
 from judge.models import Contest
-from judge.utils.seb import SEB_INSTALL_URL, request_matches_seb, seb_launch_context
+from judge.utils.seb import SEB_INSTALL_URL, read_seb_launch_token, request_matches_seb, \
+    seb_launch_context, sign_seb_launch_token
 
 BEK = hashlib.sha256(b'browser exam key').hexdigest()
 CFG = hashlib.sha256(b'config key').hexdigest()
@@ -88,31 +93,85 @@ class RequestMatchesSEBTestCase(SimpleTestCase):
         self.assertFalse(request_matches_seb(request, [BEK], []))
 
 
+class SEBLaunchTokenTestCase(SimpleTestCase):
+    def test_round_trip(self):
+        contest = Contest(key='demo', id=7)
+        token = sign_seb_launch_token(contest, SimpleNamespace(id=13))
+        self.assertEqual(read_seb_launch_token(token), {'c': 7, 'u': 13})
+
+    def test_tampered_token_rejected(self):
+        contest = Contest(key='demo', id=7)
+        token = sign_seb_launch_token(contest, SimpleNamespace(id=13))
+        # Flip a character in the middle of the payload, not the padding.
+        tampered = token[:10] + ('A' if token[10] != 'A' else 'B') + token[11:]
+        with self.assertRaises(signing.BadSignature):
+            read_seb_launch_token(tampered)
+
+    def test_garbage_token_rejected(self):
+        with self.assertRaises(signing.BadSignature):
+            read_seb_launch_token('not a token!!')
+
+    @override_settings(DMOJ_SEB_LAUNCH_TOKEN_EXPIRY_MINUTES=30)
+    def test_expired_token_rejected(self):
+        contest = Contest(key='demo', id=7)
+        # Sign it in the past rather than sleeping out the TTL.
+        with mock.patch('django.core.signing.time.time', return_value=time.time() - 31 * 60):
+            token = sign_seb_launch_token(contest, SimpleNamespace(id=13))
+        with self.assertRaises(signing.SignatureExpired):
+            read_seb_launch_token(token)
+
+
 class SEBLaunchContextTestCase(SimpleTestCase):
     def setUp(self):
         self.factory = RequestFactory()
 
+    def _request(self, path='/page', secure=False, profile=SimpleNamespace(id=13)):
+        # DMOJLoginMiddleware sets request.profile; RequestFactory does not.
+        request = self.factory.get(path, secure=secure)
+        request.profile = profile
+        return request
+
     def test_without_config_file(self):
-        contest = Contest(key='demo')
-        context = seb_launch_context(self.factory.get('/page'), contest)
+        contest = Contest(key='demo', id=7)
+        context = seb_launch_context(self._request(), contest)
         self.assertIsNone(context['download_url'])
         self.assertIsNone(context['sebs_url'])
+        self.assertIsNone(context['token_url'])
         self.assertEqual(context['quit_url'], '')
         self.assertEqual(context['install_url'], SEB_INSTALL_URL)
 
-    def test_with_config_file_http(self):
-        contest = Contest(key='demo', seb_quit_url='https://example.com/quit')
+    def test_anonymous_gets_no_launch_link(self):
+        # No profile means no token to mint, so only the (login-gated) download
+        # button is offered.
+        contest = Contest(key='demo', id=7)
         contest.seb_config_file.name = 'seb_configs/demo.seb'
-        context = seb_launch_context(self.factory.get('/page'), contest)
-        config_path = reverse('contest_seb_config', args=('demo',))
-        self.assertEqual(context['download_url'], 'http://testserver' + config_path)
-        self.assertEqual(context['sebs_url'], 'seb://testserver' + config_path)
+        context = seb_launch_context(self._request(profile=None), contest)
+        self.assertEqual(context['download_url'], 'http://testserver' + reverse('contest_seb_config', args=('demo',)))
+        self.assertIsNone(context['sebs_url'])
+        self.assertIsNone(context['token_url'])
+
+    def test_with_config_file_http(self):
+        contest = Contest(key='demo', id=7, seb_quit_url='https://example.com/quit')
+        contest.seb_config_file.name = 'seb_configs/demo.seb'
+        context = seb_launch_context(self._request(), contest)
+        self.assertEqual(context['download_url'],
+                         'http://testserver' + reverse('contest_seb_config', args=('demo',)))
+        self.assertTrue(context['sebs_url'].startswith('seb://testserver/seb/launch/'))
         self.assertEqual(context['quit_url'], 'https://example.com/quit')
 
     def test_with_config_file_https(self):
-        contest = Contest(key='demo')
+        contest = Contest(key='demo', id=7)
         contest.seb_config_file.name = 'seb_configs/demo.seb'
-        context = seb_launch_context(self.factory.get('/page', secure=True), contest)
-        config_path = reverse('contest_seb_config', args=('demo',))
-        self.assertEqual(context['download_url'], 'https://testserver' + config_path)
-        self.assertEqual(context['sebs_url'], 'sebs://testserver' + config_path)
+        context = seb_launch_context(self._request(secure=True), contest)
+        self.assertEqual(context['download_url'],
+                         'https://testserver' + reverse('contest_seb_config', args=('demo',)))
+        self.assertTrue(context['sebs_url'].startswith('sebs://testserver/seb/launch/'))
+        self.assertEqual(context['token_url'],
+                         'https://testserver' + reverse('seb_launch_token', args=('demo',)))
+
+    def test_launch_url_carries_a_usable_token(self):
+        contest = Contest(key='demo', id=7)
+        contest.seb_config_file.name = 'seb_configs/demo.seb'
+        context = seb_launch_context(self._request(secure=True), contest)
+        token = context['sebs_url'].rstrip('/').rsplit('/', 1)[-1]
+        self.assertEqual(read_seb_launch_token(token), {'c': 7, 'u': 13})

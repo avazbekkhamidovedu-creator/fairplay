@@ -1,14 +1,18 @@
 import hashlib
 import shutil
 import tempfile
+import time
+from unittest import mock
 
 from django.core.files.base import ContentFile
 from django.test import Client, TestCase, override_settings
-from django.urls import reverse
+from django.urls import reverse, set_script_prefix
 from django.utils import timezone
 
+from judge.middleware import _seb_block_exempt, _seb_launch_prefix
 from judge.models import ContestParticipation, SEBConfigPreset
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, create_user
+from judge.utils.seb import sign_seb_launch_token
 
 BEK = hashlib.sha256(b'browser exam key').hexdigest()
 CFG = hashlib.sha256(b'config key').hexdigest()
@@ -72,6 +76,17 @@ class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
             key='plain',
             is_visible=True,
         )
+
+        self.seb_contest_private = create_contest(
+            key='sebprivate',
+            is_visible=True,
+            is_private=True,
+            seb_required=True,
+            seb_browser_exam_keys=BEK,
+            seb_config_keys=CFG,
+            private_contestants=('seb_joiner',),
+        )
+        self.seb_contest_private.seb_config_file.save('priv.seb', ContentFile(SEB_CONFIG_BYTES), save=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -290,6 +305,106 @@ class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
         self.client.force_login(self.users['seb_joiner'])
         response = self.client.get(reverse('contest_seb_config', args=('plain',)))
         self.assertContains(response, 'No such contest')
+
+    # ------------------------------------------------------------------ #
+    # Token-authorized launch (what the SEB client itself fetches)         #
+    # ------------------------------------------------------------------ #
+
+    def launch_url(self, contest):
+        return reverse('seb_launch_config',
+                       args=(sign_seb_launch_token(contest, self.users['seb_joiner'].profile),))
+
+    def test_launch_config_served_without_authentication(self):
+        # The whole point: SEB fetches this with no session, and must get bytes
+        # rather than a redirect to the login page.
+        response = self.client.get(self.launch_url(self.seb_contest))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/seb')
+        self.assertEqual(response['Cache-Control'], 'no-store')
+        self.assertIn('sebexam.seb', response['Content-Disposition'])
+        self.assertEqual(b''.join(response.streaming_content), SEB_CONFIG_BYTES)
+
+    def test_launch_config_never_redirects(self):
+        # A redirect is what puts SEB into its unconfigured fallback window, so
+        # no failure mode of this view may 302.
+        for label, url in (
+            ('valid', self.launch_url(self.seb_contest)),
+            ('tampered', reverse('seb_launch_config', args=('bogus-token',))),
+        ):
+            with self.subTest(label):
+                self.assertNotEqual(self.client.get(url).status_code, 302)
+
+    def test_launch_config_private_contest_served(self):
+        # ContestMixin.access_check would 403 an anonymous visitor here; the
+        # token is the authorization instead.
+        response = self.client.get(self.launch_url(self.seb_contest_private))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/seb')
+
+    def test_launch_config_tampered_token(self):
+        response = self.client.get(reverse('seb_launch_config', args=('not-a-real-token',)))
+        self.assertContains(response, 'Launch link expired', status_code=400)
+
+    @override_settings(DMOJ_SEB_LAUNCH_TOKEN_EXPIRY_MINUTES=30)
+    def test_launch_config_expired_token(self):
+        with mock.patch('django.core.signing.time.time', return_value=time.time() - 31 * 60):
+            url = self.launch_url(self.seb_contest)
+        self.assertContains(self.client.get(url), 'Launch link expired', status_code=400)
+
+    def test_launch_config_missing_file(self):
+        response = self.client.get(self.launch_url(self.seb_contest_no_file))
+        self.assertEqual(response.status_code, 404)
+
+    def test_launch_config_when_seb_not_required(self):
+        response = self.client.get(self.launch_url(self.plain_contest))
+        self.assertEqual(response.status_code, 404)
+
+    def test_launch_config_reachable_while_blocked(self):
+        # Exempted by prefix, so a student already parked on the block page can
+        # still hand SEB its configuration.
+        contest = self.seb_contest
+        url = self.launch_url(contest)
+        self.enter_contest('seb_participant', contest)
+        self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_launch_token_endpoint_mints_a_working_url(self):
+        self.client.force_login(self.users['seb_joiner'])
+        response = self.client.get(reverse('seb_launch_token', args=('sebexam',)))
+        self.assertEqual(response.status_code, 200)
+        url = response.json()['url']
+        self.assertTrue(url.startswith('seb://testserver/seb/launch/'))
+        # Follow the freshly minted link the way SEB would.
+        self.client.logout()
+        fetched = self.client.get(url.replace('seb://testserver', '', 1))
+        self.assertEqual(fetched.status_code, 200)
+        self.assertEqual(fetched['Content-Type'], 'application/seb')
+
+    def test_launch_token_endpoint_requires_login(self):
+        self.assertEqual(self.client.get(reverse('seb_launch_token', args=('sebexam',))).status_code, 302)
+
+    def test_exempt_prefix_does_not_widen_under_a_mounted_script_prefix(self):
+        """The launch route's prefix must stay the launch route's prefix.
+
+        Deriving it by slicing the first path segment off a SEB route yields the
+        mount root under FORCE_SCRIPT_NAME / a reverse-proxy subpath, which
+        prefix-matches every URL and turns the lockdown off entirely.
+        """
+        set_script_prefix('/judge/')
+        try:
+            self.assertEqual(_seb_launch_prefix(), '/judge/seb/launch/')
+            for path in ('/judge/contest/sebexam/join', '/judge/problem/x', '/judge/', '/judge/user/y'):
+                with self.subTest(path=path):
+                    self.assertFalse(_seb_block_exempt(path, self.seb_contest))
+            self.assertTrue(_seb_block_exempt('/judge/seb/launch/sometoken/', self.seb_contest))
+        finally:
+            set_script_prefix('/')
+
+    def test_exempt_prefix_covers_only_the_launch_route(self):
+        self.assertEqual(_seb_launch_prefix(), '/seb/launch/')
+        self.assertTrue(_seb_block_exempt('/seb/launch/sometoken/', self.seb_contest))
+        # Sibling /seb/ routes are staff-only and were never prefix-exempt.
+        self.assertFalse(_seb_block_exempt('/seb/presets/1/config/', self.seb_contest))
+        self.assertFalse(_seb_block_exempt('/contest/sebexam/join', self.seb_contest))
 
     # ------------------------------------------------------------------ #
     # Quit landing page                                                   #

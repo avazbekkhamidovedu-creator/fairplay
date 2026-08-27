@@ -82,19 +82,41 @@ class DMOJImpersonationMiddleware(object):
         return self.get_response(request)
 
 
+# Reversed into the launch route to locate where its variable token begins. Must
+# not be a substring of the surrounding path, so it is deliberately unlovely.
+_SEB_LAUNCH_SENTINEL = 'seb-launch-token-sentinel-c7f1'
+
+
+def _seb_launch_prefix():
+    """The fixed leading part of the token-authorized ``.seb`` fetch URL.
+
+    That route is the one exempt path that cannot be matched exactly, since its
+    final segment is a per-click signed token. Reversing it with a sentinel and
+    cutting at the sentinel yields the literal prefix, which stays correct under
+    a mounted script prefix (FORCE_SCRIPT_NAME, a reverse-proxy subpath).
+
+    Do not compute this by slicing the first path segment off some other SEB
+    route: under a mount at ``/judge/`` that yields ``/judge/``, which matches
+    every URL on the site and switches the lockdown off entirely.
+    """
+    launch = reverse('seb_launch_config', args=(_SEB_LAUNCH_SENTINEL,))
+    return launch[:launch.index(_SEB_LAUNCH_SENTINEL)]
+
+
 def _seb_block_exempt(path, contest):
     # Whitelist paths that must remain reachable for the SEB block page to function
     # (logout, the .seb download itself, the quit landing, and static/media assets).
     # A root-ish prefix (e.g. MEDIA_URL = '/') would exempt every path and
     # disable the lockdown entirely, so only honor real sub-path prefixes.
-    for prefix in (settings.STATIC_URL, getattr(settings, 'MEDIA_URL', '')):
-        if prefix and prefix != '/' and path.startswith(prefix):
-            return True
     try:
+        launch_prefix = _seb_launch_prefix()
         exempt_paths = (reverse('auth_logout'), reverse('seb_quit'),
                         reverse('contest_seb_config', args=(contest.key,)))
     except Exception:
         return False
+    for prefix in (settings.STATIC_URL, getattr(settings, 'MEDIA_URL', ''), launch_prefix):
+        if prefix and prefix != '/' and path.startswith(prefix):
+            return True
     return path in exempt_paths
 
 

@@ -17,6 +17,7 @@ from django.contrib.admin.models import ADDITION, CHANGE, LogEntry
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.contrib.auth.views import redirect_to_login
 from django.contrib.contenttypes.models import ContentType
+from django.core import signing
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Case, Count, F, FloatField, IntegerField, Max, Min, Q, Sum, Value, When
@@ -54,7 +55,7 @@ from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, user_completed_ids
 from judge.utils.ranker import ranker
-from judge.utils.seb import request_matches_seb, seb_launch_context
+from judge.utils.seb import read_seb_launch_token, request_matches_seb, seb_launch_context, seb_launch_url
 from judge.utils.stats import get_bar_chart, get_pie_chart
 from judge.utils.user_search import profile_choice_label
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
@@ -69,7 +70,8 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
            'ContestImportScores',
            'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease',
-           'ContestBatchAIGrade', 'ContestSEBConfig', 'SEBQuit', 'ContestTagCreateView', 'ContestSEBFileView',
+           'ContestBatchAIGrade', 'ContestSEBConfig', 'SEBLaunchConfig', 'SEBLaunchToken', 'SEBQuit',
+           'ContestTagCreateView', 'ContestSEBFileView',
            'ContestFinalizeView', 'ContestUnfinalizeView']
 
 
@@ -4058,24 +4060,90 @@ class ContestExportSubmissions(ContestMixin, PermissionRequiredMixin, BaseDetail
 
 
 class ContestSEBConfig(LoginRequiredMixin, ContestMixin, BaseDetailView):
+    """The "Download config file" button: same bytes, but for a real browser.
+
+    SEB itself cannot use this URL — see :class:`SEBLaunchConfig`.
+    """
+
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
-        # The file may be the contest's own upload or the one inherited from its
-        # preset; either way it is served under the contest's own name.
-        config_file = self.object.seb_effective_config_file
-        if not self.object.seb_required or not config_file:
-            raise Http404()
+        return _stream_seb_config(self.object)
+
+
+def _stream_seb_config(contest):
+    """Stream ``contest``'s effective ``.seb`` file, or 404/503."""
+    # The file may be the contest's own upload or the one inherited from its
+    # preset; either way it is served under the contest's own name.
+    config_file = contest.seb_effective_config_file
+    if not contest.seb_required or not config_file:
+        raise Http404()
+    try:
+        fh = config_file.open('rb')
+    except StorageUnavailableError:
+        return HttpResponse(_('The file store is temporarily unavailable. Please try again later.'),
+                            status=503, content_type='text/plain')
+    return FileResponse(
+        fh,
+        as_attachment=True,
+        filename=f'{contest.key}.seb',
+        content_type='application/seb',
+    )
+
+
+class SEBLaunchConfig(View):
+    """Serve a contest's ``.seb`` to the SEB client itself, authorized by a token.
+
+    Deliberately has neither ``LoginRequiredMixin`` nor ``ContestMixin``. SEB
+    requests this URL before it has a browser session, so any redirect to the
+    login page would come back as HTML; SEB then abandons the configuration,
+    opens the page in a temporary window still running its *local* settings, and
+    never enters lockdown — the small, quittable window students reported.
+    ``ContestMixin`` is skipped for the same reason: its ``access_check`` renders
+    a 403 page for an anonymous visitor to a private contest.
+
+    The signed token minted by :func:`sign_seb_launch_token` is the
+    authorization. Nothing is weakened by serving the file here: entering the
+    exam still requires a SEB client whose per-URL key hash matches, which
+    ``ContestMiddleware`` and ``ContestJoin`` both check.
+    """
+
+    def get(self, request, *args, **kwargs):
         try:
-            fh = config_file.open('rb')
-        except StorageUnavailableError:
-            return HttpResponse(_('The file store is temporarily unavailable. Please try again later.'),
-                                status=503, content_type='text/plain')
-        return FileResponse(
-            fh,
-            as_attachment=True,
-            filename=f'{self.object.key}.seb',
-            content_type='application/seb',
-        )
+            data = read_seb_launch_token(kwargs['token'])
+        except signing.SignatureExpired:
+            return self.stale(request, _('This launch link has expired.'))
+        except signing.BadSignature:
+            return self.stale(request, _('This launch link is not valid.'))
+        contest = get_object_or_404(Contest, pk=data.get('c'))
+        response = _stream_seb_config(contest)
+        # A cached .seb would let a stale configuration start a later exam.
+        response['Cache-Control'] = 'no-store'
+        return response
+
+    def stale(self, request, reason):
+        # Must render, never redirect: a redirect puts SEB back on the
+        # "configuration resource needs authentication" path this view exists to
+        # avoid, leaving it parked in an unconfigured window.
+        return render(request, 'contest/seb_launch_expired.html', {
+            'reason': reason,
+            'title': _('Launch link expired'),
+        }, status=400)
+
+
+class SEBLaunchToken(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
+    """Mint a fresh ``sebs://`` launch URL for the "Launch in SEB" button.
+
+    The token embedded at page render expires; a student who opened the exam
+    page well before the start time would otherwise click a dead link. The
+    button re-mints here on click and falls back to the rendered href if this
+    request fails.
+    """
+
+    def get(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        if not self.object.seb_required or not self.object.seb_effective_config_file:
+            raise Http404()
+        return JsonResponse({'url': seb_launch_url(request, self.object, request.profile)})
 
 
 class SEBPresetConfig(LoginRequiredMixin, View):

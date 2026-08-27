@@ -254,6 +254,10 @@ urlpatterns = [
 
     path('seb/quit/', contests.SEBQuit.as_view(), name='seb_quit'),
     path('seb/presets/<int:pk>/config/', contests.SEBPresetConfig.as_view(), name='seb_preset_config'),
+    # Must stay under the /seb/ prefix: ContestMiddleware exempts that prefix so
+    # the SEB client can fetch its configuration without being handed the
+    # "Safe Exam Browser required" block page.
+    path('seb/launch/<str:token>/', contests.SEBLaunchConfig.as_view(), name='seb_launch_config'),
 
     path('contests/', paged_list_view(contests.ContestListV2, 'contest_list')),
     path('contests/legacy/', paged_list_view(contests.ContestList, 'contest_list_legacy')),
@@ -281,6 +285,7 @@ urlpatterns = [
         path('/join', contests.ContestJoin.as_view(), name='contest_join'),
         path('/leave', contests.ContestLeave.as_view(), name='contest_leave'),
         path('/seb-config', contests.ContestSEBConfig.as_view(), name='contest_seb_config'),
+        path('/seb-launch-token', contests.SEBLaunchToken.as_view(), name='seb_launch_token'),
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
         path('/analytics', contest_analytics.ContestAnalytics.as_view(), name='contest_analytics'),
         path('/grade', contests.ContestGrade.as_view(), name='contest_grade'),
