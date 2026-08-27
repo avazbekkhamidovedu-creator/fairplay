@@ -2,6 +2,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import logging
 import re
 from urllib.parse import urlparse, urlunparse
 
@@ -14,6 +15,8 @@ BEK_HEADER = 'HTTP_X_SAFEEXAMBROWSER_REQUESTHASH'
 CFG_HEADER = 'HTTP_X_SAFEEXAMBROWSER_CONFIGKEYHASH'
 
 SEB_INSTALL_URL = 'https://safeexambrowser.org/download_en.html'
+
+logger = logging.getLogger('judge.seb')
 
 # Both Browser Exam Keys and Config Keys are SHA-256 hashes in lowercase hex.
 SEB_KEY_RE = re.compile('[0-9a-f]{64}')
@@ -48,13 +51,58 @@ def _sha256_hex(absolute_url, key):
     return hashlib.sha256((absolute_url + key).encode('utf-8')).hexdigest()
 
 
+def _abbrev(digest):
+    """First 12 chars: enough to compare two hashes by eye, useless for replay."""
+    return (digest or '')[:12]
+
+
+def _candidate_urls(request):
+    """URLs SEB might have requested that differ from what Django reconstructed.
+
+    A mismatch has two very different causes with one symptom: the key hashes on
+    the contest are stale, or the server rebuilt the wrong URL to hash (TLS
+    terminated at a proxy, a rewritten Host, an explicit port). Re-running the
+    comparison against these variants separates the two.
+    """
+    actual = request.build_absolute_uri()
+    parsed = urlparse(actual)
+    hosts = {parsed.netloc}
+    forwarded_host = request.META.get('HTTP_X_FORWARDED_HOST')
+    if forwarded_host:
+        hosts.add(forwarded_host.split(',')[0].strip())
+    # A proxy that forwards to a non-default port leaves it in HTTP_HOST while
+    # the client never saw it.
+    if ':' in parsed.netloc:
+        hosts.add(parsed.netloc.rsplit(':', 1)[0])
+    candidates = []
+    for scheme in ('http', 'https'):
+        for host in hosts:
+            candidate = urlunparse((scheme, host, parsed.path, parsed.params, parsed.query, ''))
+            if candidate != actual and candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
+def _diagnose_url_mismatch(request, received, keys):
+    """The URL, if any, whose hash matches what SEB sent. ``None`` if no variant does."""
+    for candidate in _candidate_urls(request):
+        for k in keys:
+            if hmac.compare_digest(received, _sha256_hex(candidate, k)):
+                return candidate
+    return None
+
+
 def request_matches_seb(request, allowed_bek, allowed_cfg):
     if not allowed_bek and not allowed_cfg:
+        logger.warning('SEB check failed for %s: the contest has no Browser Exam Key and no Config Key '
+                       'configured, so no client can ever match.', request.path)
         return False
     # SEB hashes the absolute URL including the query string; only the fragment
     # is stripped, and fragments never reach the server anyway.
     url = request.build_absolute_uri()
-    for hdr, keys in ((BEK_HEADER, allowed_bek), (CFG_HEADER, allowed_cfg)):
+    seen = []
+    for hdr, keys, label in ((BEK_HEADER, allowed_bek, 'Browser Exam Key'),
+                             (CFG_HEADER, allowed_cfg, 'Config Key')):
         received = request.META.get(hdr)
         if not received:
             continue
@@ -62,6 +110,37 @@ def request_matches_seb(request, allowed_bek, allowed_cfg):
         for k in keys:
             if hmac.compare_digest(received, _sha256_hex(url, k)):
                 return True
+        seen.append((label, received, keys))
+
+    # Every rejection below blocks a student mid-exam, and the difference between
+    # its causes is invisible from the block page. Say which one it was.
+    if not seen:
+        logger.warning(
+            'SEB check failed for %s: the request carried neither the %s nor the %s header. Either it did '
+            'not come from Safe Exam Browser, or the .seb has "Use Browser Exam Key and Config Key" '
+            'switched off, or a proxy is stripping X-SafeExamBrowser-* headers.',
+            request.path, BEK_HEADER, CFG_HEADER)
+        return False
+
+    for label, received, keys in seen:
+        matching_url = _diagnose_url_mismatch(request, received, keys)
+        if matching_url is not None:
+            logger.warning(
+                'SEB check failed for %s: %s hash mismatch, but the keys are CORRECT — SEB hashed the URL '
+                '%r while this server hashed %r. Django is reconstructing the wrong URL, so fix the proxy '
+                'configuration rather than the keys: set SECURE_PROXY_SSL_HEADER for a scheme difference '
+                '(and make the proxy send X-Forwarded-Proto), USE_X_FORWARDED_HOST for a host difference, '
+                'and make sure the proxy passes the original Host header.',
+                request.path, label, matching_url, url)
+            continue
+        logger.warning(
+            'SEB check failed for %s: %s hash mismatch, and no plausible URL variant matches either, so '
+            'the configured key hashes do not belong to the .seb the student launched. Re-copy the %s from '
+            'the SEB Configuration Tool for the exact .seb in use and paste it into the contest (or its '
+            'preset). Rebuilding a .seb — even to add one URL-filter rule — changes both keys. SEB sent '
+            '%s…; this server hashed the URL %r and expected one of %s.',
+            request.path, label, label, _abbrev(received), url,
+            ', '.join('%s… (from key %s…)' % (_abbrev(_sha256_hex(url, k)), _abbrev(k)) for k in keys))
     return False
 
 
