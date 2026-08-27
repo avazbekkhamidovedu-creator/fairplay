@@ -1331,7 +1331,9 @@ class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='prob_editor', user_permissions=('add_contest', 'edit_own_contest', 'edit_all_contest',))
+        cls.editor = create_user(username='prob_editor', user_permissions=(
+            'add_contest', 'edit_own_contest', 'edit_all_contest',
+        ))
         cls.problem = create_problem('prob-edit-test')
         cls.contest = create_contest(
             key='probeditcontest', name='Prob Edit',
@@ -1682,7 +1684,9 @@ class ContestEditorActionFieldTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='action_editor', user_permissions=('add_contest', 'edit_own_contest', 'edit_all_contest',))
+        cls.editor = create_user(username='action_editor', user_permissions=(
+            'add_contest', 'edit_own_contest', 'edit_all_contest',
+        ))
 
     def setUp(self):
         self.client = Client()
@@ -1737,7 +1741,9 @@ class ContestEditorProblemOptionsTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='probopts_editor', user_permissions=('add_contest', 'edit_own_contest', 'edit_all_contest',))
+        cls.editor = create_user(username='probopts_editor', user_permissions=(
+            'add_contest', 'edit_own_contest', 'edit_all_contest',
+        ))
         cls.problem = create_problem('probopts-test', is_public=True)
         cls.contest = create_contest(
             key='proboptscontest', name='Prob Opts',
@@ -1916,7 +1922,9 @@ class ContestDurationGuardTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='guard_editor', user_permissions=('add_contest', 'edit_own_contest', 'edit_all_contest',))
+        cls.editor = create_user(username='guard_editor', user_permissions=(
+            'add_contest', 'edit_own_contest', 'edit_all_contest',
+        ))
         _now = timezone.now()
         cls.contest = create_contest(
             key='guardcontest', name='Guard',
@@ -2155,7 +2163,9 @@ class ContestTimeoutLogicTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='timeout_editor', user_permissions=('add_contest', 'edit_own_contest', 'edit_all_contest',))
+        cls.editor = create_user(username='timeout_editor', user_permissions=(
+            'add_contest', 'edit_own_contest', 'edit_all_contest',
+        ))
 
     def _mk_contest(self, time_limit=None, end_delta_days=5):
         _now = timezone.now()
@@ -2272,7 +2282,9 @@ class ContestExtensionReadmissionTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='readmit_editor', user_permissions=('add_contest', 'edit_own_contest', 'edit_all_contest',))
+        cls.editor = create_user(username='readmit_editor', user_permissions=(
+            'add_contest', 'edit_own_contest', 'edit_all_contest',
+        ))
         _now = timezone.now()
         cls.contest = create_contest(
             key='readmitcontest', name='Readmit',
