@@ -21,6 +21,12 @@
             button.html('<i class="fa fa-spinner fa-spin"></i> {{ _("Generating...") }}');
             button.prop('disabled', true);
         });
+
+        $(document).on('submit', '.js-contest-document-export', function () {
+            var $button = $(this).find('button[type="submit"]');
+            $button.html('<i class="fa fa-spinner fa-spin"></i> {{ _("Generating...") }}');
+            $button.prop('disabled', true);
+        });
     </script>
     {% include "contest/media-js.html" %}
     {% include "comments/media-js.html" %}
@@ -552,13 +558,24 @@
 
         {% if can_edit %}
             <div class="contest-export-bar">
-                <button type="button" class="button" id="btn-open-grade-import" style="display: inline-block; width: auto;"><i class="fa fa-upload"></i> {{ _('Import / Update Scores') }}</button>
+                <button type="button" class="button" id="btn-open-grade-import"
+                        onclick="document.getElementById('contest-grade-import-modal').removeAttribute('hidden');"
+                        style="display: inline-block; width: auto;"><i class="fa fa-upload"></i> {{ _('Import / Update Scores') }}</button>
                 <a href="{{ url('contest_export_scores', contest.key) }}" class="button" style="display: inline-block; width: auto;"><i class="fa fa-download"></i> {{ _('Download Current Scores') }}</a>
+                <form action="{{ url('contest_export_pdf', contest.key) }}" method="post" class="js-contest-document-export" style="margin: 0;">
+                    {% csrf_token %}
+                    <button type="submit" class="button" style="display: inline-block; width: auto;"><i class="fa fa-file-pdf-o"></i> {{ _('Export to PDF') }}</button>
+                </form>
+                <form action="{{ url('contest_export_word', contest.key) }}" method="post" class="js-contest-document-export" style="margin: 0;">
+                    {% csrf_token %}
+                    <button type="submit" class="button" style="display: inline-block; width: auto;"><i class="fa fa-file-word-o"></i> {{ _('Export to Word') }}</button>
+                </form>
                 <a href="{{ url('contest_export_submissions', contest.key) }}" class="button" style="display: inline-block; width: auto;"><i class="fa fa-file-archive-o"></i> {{ _('Export Submissions') }}</a>
             </div>
 
-                    <div id="contest-grade-import-modal" class="course-modal" hidden>
-                <div class="course-modal-backdrop js-close-score-import"></div>
+            <div id="contest-grade-import-modal" class="course-modal" hidden>
+                <div class="course-modal-backdrop js-close-score-import"
+                     onclick="document.getElementById('contest-grade-import-modal').setAttribute('hidden', 'hidden');"></div>
                 <div class="course-modal-dialog" role="dialog" aria-labelledby="contest-grade-import-title">
                         <h2 id="contest-grade-import-title">{{ _('Import Canvas Scores') }}</h2>
                         <p class="helptext">
@@ -581,7 +598,8 @@
                         </select>
                         <p style="margin-top: 0.85rem;">
                             <button type="submit" class="button"><i class="fa fa-upload"></i> {{ _('Upload and join grades') }}</button>
-                            <button type="button" class="button js-close-score-import">{{ _('Cancel') }}</button>
+                            <button type="button" class="button js-close-score-import"
+                                    onclick="document.getElementById('contest-grade-import-modal').setAttribute('hidden', 'hidden');">{{ _('Cancel') }}</button>
                         </p>
                     </form>
                 </div>
