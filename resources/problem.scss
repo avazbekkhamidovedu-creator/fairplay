@@ -668,6 +668,10 @@ ul.problem-list {
         font-size: var(--oj-font-size);
         text-align: left;
         line-height: 1.4;
+
+        &[hidden] {
+            display: none;
+        }
     }
 
     .chip {
@@ -798,6 +802,8 @@ ul.problem-list {
             min-height: calc(var(--oj-control-height) - 2px);
             padding: 2px 8px;
             text-align: left;
+            overflow: hidden;
+            white-space: normal;
         }
 
         .select2-selection__choice,
@@ -824,6 +830,7 @@ ul.problem-list {
             height: auto;
             line-height: 1.4;
             text-align: left;
+            min-width: 8em;
         }
 
         .select2-search__field::placeholder {

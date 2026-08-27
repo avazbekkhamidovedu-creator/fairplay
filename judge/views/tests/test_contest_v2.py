@@ -88,6 +88,24 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('contest_list') + '?search=past')
         self.assertEqual(response.status_code, 200)
 
+    def test_search_box_preserves_full_query(self):
+        """Committed keywords are listed in JS state, not stuffed into the live input."""
+        response = self.client.get(reverse('contest_list') + '?search=question')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "keywords: ['question']", html=False)
+        self.assertContains(response, 'dkuojBindKeywordEnter', html=False)
+        self.assertContains(response, 'Type a keyword, then press Enter')
+
+    def test_selected_row_rebuilds_filter_chips_in_js(self):
+        response = self.client.get(reverse('contest_list'))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn('id="active-filters"', html)
+        self.assertIn('No filters applied', html)
+        self.assertIn('renderActiveFilters', html)
+        self.assertIn('placeholder.hidden', html)
+        self.assertNotIn('placeholder.style.display', html)
+
     def test_sort(self):
         response = self.client.get(reverse('contest_list') + '?sort=name')
         self.assertEqual(response.status_code, 200)

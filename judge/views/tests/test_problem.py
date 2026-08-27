@@ -354,6 +354,27 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         ))
         self.assertEqual(codes, {'filter-alpha'})
 
+    def test_multiple_keyword_terms_require_all_matches(self):
+        both = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'search': ['Alpha', 'Problem'], 'filtered': '1'},
+        ))
+        self.assertEqual(both, {'filter-alpha'})
+        none = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'search': ['Alpha', 'Beta'], 'filtered': '1'},
+        ))
+        self.assertEqual(none, set())
+
+    def test_keyword_search_box_uses_chips_for_committed_terms(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_list'), {'search': 'question', 'filtered': '1'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="search"', html=False)
+        self.assertContains(response, 'value="question"', html=False)
+        self.assertContains(response, 'dkuojBindKeywordEnter', html=False)
+        self.assertContains(response, 'Type a keyword, then press Enter')
+
     def test_keyword_search_searches_description_by_default(self):
         codes = self._filter_group_codes(self._filtered_codes(
             self.users['normal'],
