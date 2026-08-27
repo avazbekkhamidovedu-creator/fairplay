@@ -1091,9 +1091,8 @@
   font-size: inherit;
   line-height: 1.55;
 
-  > :first-child { margin-top: 0 !important; }
-  > :last-child { margin-bottom: 0 !important; }
-  p { margin: 0.2em 0 !important; }
+  > :first-child { margin-top: 0; }
+  > :last-child { margin-bottom: 0; }
 
   pre {
     margin: 0.45em 0;
