@@ -181,6 +181,9 @@
                     if (emptyEl) emptyEl.hidden = true;
                     var q2 = currentParams().toString();
                     history.replaceState(null, '', location.pathname + (q2 ? '?' + q2 : ''));
+                    if (typeof window.refreshAssignmentBulk === 'function') {
+                        window.refreshAssignmentBulk();
+                    }
                     return;
                 }
 
@@ -196,6 +199,9 @@
 
                 var q = currentParams().toString();
                 history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
+                if (typeof window.refreshAssignmentBulk === 'function') {
+                    window.refreshAssignmentBulk();
+                }
             };
 
             // ── Keyword search filters live (debounced) ──
@@ -284,6 +290,109 @@
 
             // ── Apply the filters from the URL on first load ──
             applyClientFilter();
+
+            // Assignment delete: per-row + bulk, confirmation modal, then POST.
+            var delForm = document.getElementById('assignment-delete-form');
+            var delKeys = document.getElementById('assignment-delete-keys');
+            var delModal = document.getElementById('assignment-delete-modal');
+            var delList = document.getElementById('assignment-delete-list');
+            var delCount = document.getElementById('assignment-delete-n');
+            var pendingDelete = [];
+            function closeAssignmentDeleteModal() {
+                if (delModal) delModal.hidden = true;
+                pendingDelete = [];
+            }
+            function openAssignmentDeleteModal(items) {
+                if (!delModal || !delForm || !items.length) return;
+                pendingDelete = items;
+                if (delCount) delCount.textContent = String(items.length);
+                if (delList) {
+                    delList.innerHTML = '';
+                    items.forEach(function(it) {
+                        var li = document.createElement('li');
+                        var label = it.name || it.key || '';
+                        if (it.name && it.key) label = it.name + '  ·  ' + it.key;
+                        li.textContent = label;
+                        delList.appendChild(li);
+                    });
+                }
+                delModal.hidden = false;
+            }
+            function visibleSelects() {
+                return Array.from(document.querySelectorAll('.assignment-select')).filter(function(cb) {
+                    var row = cb.closest('.cl-row');
+                    return row && row.style.display !== 'none';
+                });
+            }
+            function refreshBulk() {
+                var boxes = visibleSelects();
+                var n = boxes.filter(function(cb) { return cb.checked; }).length;
+                var countEl = document.getElementById('bulk-count');
+                var btn = document.getElementById('bulk-delete-btn');
+                var all = document.getElementById('select-all-assignments');
+                if (countEl) countEl.textContent = n;
+                if (btn) btn.disabled = n === 0;
+                if (all) all.checked = boxes.length > 0 && n === boxes.length;
+            }
+            window.refreshAssignmentBulk = refreshBulk;
+            document.querySelectorAll('.js-del-assignment').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    openAssignmentDeleteModal([{
+                        key: btn.getAttribute('data-key') || '',
+                        name: btn.getAttribute('data-name') || '',
+                    }]);
+                });
+            });
+            document.querySelectorAll('.assignment-select').forEach(function(cb) {
+                cb.addEventListener('change', refreshBulk);
+            });
+            var selectAll = document.getElementById('select-all-assignments');
+            if (selectAll) {
+                selectAll.addEventListener('change', function() {
+                    var checked = selectAll.checked;
+                    visibleSelects().forEach(function(cb) { cb.checked = checked; });
+                    refreshBulk();
+                });
+            }
+            var bulkBtn = document.getElementById('bulk-delete-btn');
+            if (bulkBtn) {
+                bulkBtn.addEventListener('click', function() {
+                    openAssignmentDeleteModal(visibleSelects().filter(function(cb) {
+                        return cb.checked;
+                    }).map(function(cb) {
+                        return {
+                            key: cb.getAttribute('data-key') || '',
+                            name: cb.getAttribute('data-name') || '',
+                        };
+                    }));
+                });
+            }
+            var delCancel = document.getElementById('assignment-delete-cancel');
+            if (delCancel) delCancel.addEventListener('click', closeAssignmentDeleteModal);
+            if (delModal) {
+                delModal.addEventListener('click', function(e) {
+                    if (e.target === delModal) closeAssignmentDeleteModal();
+                });
+            }
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && delModal && !delModal.hidden) closeAssignmentDeleteModal();
+            });
+            var delConfirm = document.getElementById('assignment-delete-confirm');
+            if (delConfirm) {
+                delConfirm.addEventListener('click', function() {
+                    if (!pendingDelete.length || !delForm || !delKeys) return closeAssignmentDeleteModal();
+                    delKeys.innerHTML = '';
+                    pendingDelete.forEach(function(it) {
+                        var input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = 'keys';
+                        input.value = it.key;
+                        delKeys.appendChild(input);
+                    });
+                    delForm.submit();
+                });
+            }
+            refreshBulk();
         });
     </script>
 {% endblock %}
@@ -296,6 +405,7 @@
 {% endblock %}
 
 {% block body %}
+    {% include "messages.html" %}
     {% set current_sort_label = {
         '-start_time': _('Start time') ~ ' ↓',
         'start_time': _('Start time') ~ ' ↑',
@@ -320,6 +430,15 @@
         <article class="cl-row" data-key="{{ contest.key }}" data-status="{{ status }}"
                  data-orgs="{{ org_names }}" data-classes="{{ class_names }}" data-tags="{{ tag_names }}"
                  data-search="{{ contest.name }} {{ contest.key }}">
+            {% if perms.judge.delete_contest %}
+            <div class="cl-select">
+                {% if contest.is_deletable_by(request.user) %}
+                    <input type="checkbox" class="assignment-select"
+                           data-key="{{ contest.key }}" data-name="{{ contest.name }}"
+                           title="{{ _('Select') }}" aria-label="{{ _('Select %(name)s', name=contest.name) }}">
+                {% endif %}
+            </div>
+            {% endif %}
             <div>
                 <div class="cl-primary-line">
                     <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
@@ -393,48 +512,63 @@
                 {% endif %}
             </div>
             <div class="cl-actions">
-                {# Frontend editor entry — shown to anyone who may edit this
-                   particular assignment (edit_all_contest, or authors/curators
-                   with edit_own_contest). #}
-                {% if contest.is_editable_by(request.user) %}
-                    <a class="button" href="{{ url('contest_edit', contest.key) }}"><i class="fa fa-edit"></i> {{ _('Edit') }}</a>
-                {% endif %}
-                {% if status == 'active' %}
-                    <a class="button primary" href="{{ url('contest_view', contest.key) }}">{{ _('Enter') }}</a>
-                    {% if contest.can_see_own_scoreboard(request.user) %}
-                        <a class="button" href="{{ url('contest_ranking', contest.key) }}">{{ _('Rankings') }}</a>
+                {# Manage slot first (Delete → Edit → Clone → Grade), then Join.
+                   Both wrappers always render so row heights/columns stay aligned. #}
+                <div class="cl-manage-actions">
+                    {% if contest.is_deletable_by(request.user) %}
+                        <button type="button" class="row-action row-action-danger js-del-assignment"
+                                data-key="{{ contest.key }}"
+                                data-name="{{ contest.name }}"
+                                title="{{ _('Delete') }}" aria-label="{{ _('Delete') }}"><i class="fa fa-trash"></i></button>
                     {% endif %}
-                {% elif status == 'ongoing' %}
-                    {% if not request.user.is_authenticated %}
-                        {# Anonymous: still surface a Join entry so the card is not
-                           empty — clicking it sends the user through login first. #}
-                        <a class="button" href="{{ url('auth_login') }}?next={{ url('contest_view', contest.key) }}">{{ _('Join') }}</a>
-                    {% elif contest.is_live_joinable_by(request.user) %}
-                        <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
-                            {% csrf_token %}
-                            <button type="submit" class="button primary">{{ _('Join') }}</button>
-                        </form>
-                    {% elif contest.is_spectatable_by(request.user) %}
-                        <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
-                            {% csrf_token %}
-                            <button type="submit" class="button">{{ _('Spectate') }}</button>
-                        </form>
+                    {% if contest.is_changeable_by(request.user) %}
+                        <a class="row-action" href="{{ url('contest_edit', contest.key) }}"
+                           title="{{ _('Edit') }}" aria-label="{{ _('Edit') }}"><i class="fa fa-pencil"></i></a>
                     {% endif %}
-                {% elif status == 'upcoming' %}
-                    <button type="button" class="button ghost" disabled>{{ _('Remind') }}</button>
-                {% else %}
-                    {% if not request.in_contest %}
-                        {% if contest.allow_virtual_participation %}
-                            <form action="{{ url('contest_join', contest.key) }}" method="post" style="display:inline;">
+                    {% if contest.is_cloneable_by(request.user) %}
+                        <a class="row-action" href="{{ url('contest_clone', contest.key) }}"
+                           title="{{ _('Clone') }}" aria-label="{{ _('Clone') }}"><i class="fa fa-copy"></i></a>
+                    {% endif %}
+                    {% if contest.is_editable_by(request.user) %}
+                        <a class="row-action" href="{{ url('contest_grade', contest.key) }}"
+                           title="{{ _('Grade') }}" aria-label="{{ _('Grade') }}"><i class="fa fa-check-square-o"></i></a>
+                    {% endif %}
+                </div>
+                <div class="cl-join-actions">
+                    {% if status == 'active' %}
+                        <a class="button primary" href="{{ url('contest_view', contest.key) }}">{{ _('Enter') }}</a>
+                        {% if contest.can_see_own_scoreboard(request.user) %}
+                            <a class="button" href="{{ url('contest_ranking', contest.key) }}">{{ _('Rankings') }}</a>
+                        {% endif %}
+                    {% elif status == 'ongoing' %}
+                        {% if not request.user.is_authenticated %}
+                            {# Anonymous: still surface a Join entry so the card is not
+                               empty — clicking it sends the user through login first. #}
+                            <a class="button" href="{{ url('auth_login') }}?next={{ url('contest_view', contest.key) }}">{{ _('Join') }}</a>
+                        {% elif contest.is_live_joinable_by(request.user) %}
+                            <form action="{{ url('contest_join', contest.key) }}" method="post">
                                 {% csrf_token %}
-                                <button type="submit" class="button ghost">{{ _('Virtual') }}</button>
+                                <button type="submit" class="button primary">{{ _('Join') }}</button>
+                            </form>
+                        {% elif contest.is_spectatable_by(request.user) %}
+                            <form action="{{ url('contest_join', contest.key) }}" method="post">
+                                {% csrf_token %}
+                                <button type="submit" class="button">{{ _('Spectate') }}</button>
                             </form>
                         {% endif %}
+                    {% elif status == 'upcoming' %}
+                        <button type="button" class="button ghost" disabled>{{ _('Remind') }}</button>
+                    {% else %}
+                        {% if not request.in_contest %}
+                            {% if contest.allow_virtual_participation %}
+                                <form action="{{ url('contest_join', contest.key) }}" method="post">
+                                    {% csrf_token %}
+                                    <button type="submit" class="button ghost">{{ _('Virtual') }}</button>
+                                </form>
+                            {% endif %}
+                        {% endif %}
                     {% endif %}
-                {% endif %}
-                {% if contest.is_editable_by(request.user) %}
-                    <a class="button" href="{{ url('contest_grade', contest.key) }}">{{ _('Grade') }}</a>
-                {% endif %}
+                </div>
             </div>
         </article>
     {% endmacro %}
@@ -578,6 +712,15 @@
                     <button type="button" class="group-switch-btn{% if group == 'course' %} active{% endif %}" data-group="course" title="{{ _('Group assignments by course') }}">{{ _('By course') }}</button>
                     <button type="button" class="group-switch-btn{% if group == 'status' %} active{% endif %}" data-group="status" title="{{ _('Group assignments by status') }}">{{ _('By status') }}</button>
                 </div>
+                {% if perms.judge.delete_contest %}
+                    <label class="bulk-select-all" title="{{ _('Select all') }}">
+                        <input type="checkbox" id="select-all-assignments" aria-label="{{ _('Select all') }}">
+                    </label>
+                    <button type="button" class="sort-btn bulk-delete-btn" id="bulk-delete-btn" disabled>
+                        <i class="fa fa-trash"></i> {{ _('Delete selected') }} (<span id="bulk-count">0</span>)
+                    </button>
+                {% endif %}
+            </div>
             <div class="toolbar-right">
                 <span class="progress-label">{{ total_count }} {{ _('assignments') }}</span>
             </div>
@@ -585,7 +728,7 @@
     </form>
 
     {# ── Contest List ── #}
-    <div class="cl-list" id="contest-list">
+    <div class="cl-list{% if perms.judge.delete_contest %} cl-list--selectable{% endif %}" id="contest-list">
         {% if group == 'course' %}
             {% if course_groups %}
                 {% for course_name, contests in course_groups.items() %}
@@ -704,4 +847,24 @@
         {# Client-side empty state (status filter hides everything). #}
         <div class="cl-empty" id="cl-empty-client" hidden>{{ _('There are no assignments.') }}</div>
     </div>
+
+    {% if perms.judge.delete_contest %}
+    <form id="assignment-delete-form" method="post" action="{{ url('contest_bulk_delete') }}" hidden>
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path() }}">
+        <span id="assignment-delete-keys"></span>
+    </form>
+    <div class="modal-overlay" id="assignment-delete-modal" hidden>
+        <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="assignment-delete-title">
+            <h3 class="modal-title" id="assignment-delete-title">{{ _('Delete assignment(s)?') }}</h3>
+            <p class="modal-desc">{{ _('This permanently deletes the following assignment(s) and related participation data. This cannot be undone.') }}</p>
+            <p class="modal-count">{{ _('Selected:') }} <span id="assignment-delete-n">0</span></p>
+            <ul class="modal-list" id="assignment-delete-list"></ul>
+            <div class="modal-actions">
+                <button type="button" class="btn" id="assignment-delete-cancel">{{ _('Cancel') }}</button>
+                <button type="button" class="btn" id="assignment-delete-confirm">{{ _('Delete') }}</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 {% endblock %}

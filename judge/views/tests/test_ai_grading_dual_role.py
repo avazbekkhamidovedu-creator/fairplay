@@ -405,7 +405,8 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         editor = create_user(
             username='aie2e_editor',
             user_permissions=(
-                'edit_all_contest', 'create_private_contest', 'change_contest_visibility',
+                'add_contest', 'edit_own_contest', 'edit_all_contest',
+                'create_private_contest', 'change_contest_visibility',
             ),
         )
         client = Client()

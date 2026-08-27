@@ -605,24 +605,36 @@ class Contest(models.Model):
             return True
 
     def is_editable_by(self, user):
-        # If the user can edit all contests
+        # Grade / analytics / in-contest staff tools: edit_all_contest, or being
+        # listed as author/curator. This is *not* Django admin's change
+        # permission — Teachers often have no ``edit_own_contest``, and the
+        # grade page still admits them via membership. Add / Edit / Clone /
+        # Delete on the frontend use the admin-aligned helpers below.
         if user.has_perm('judge.edit_all_contest'):
             return True
 
-        # If the user is a contest organizer or curator. Being listed as an
-        # author/curator IS the grant: the curator list is only editable by
-        # people who can already edit, so membership itself is sufficient.
-        # (Sensitive fields inside the editor are still gated by their own
-        # permissions via ContestCreate._restricted_fields.)
-        # NOTE (merge): origin/develop's relaxed semantics are kept on purpose
-        # — the Teachers group carries no `edit_own_contest`, so course
-        # workflow teachers rely on author/curator membership alone to edit
-        # assignments (see ContestTagCreateView._can_create). The grade page
-        # permission tests encode this exact contract.
+        # Being listed as an author/curator IS the grant for grading. Sensitive
+        # fields inside the assignment editor are still gated by their own
+        # permissions via ContestCreate._restricted_fields.
         if user.is_authenticated and user.profile.id in self.editor_ids:
             return True
 
         return False
+
+    @classmethod
+    def can_be_added_by(cls, user):
+        """Match ContestAdmin.has_add_permission (Django default: ``add_contest``)."""
+        return bool(user.is_authenticated and user.has_perm('judge.add_contest'))
+
+    def is_changeable_by(self, user):
+        """Match ContestAdmin.has_change_permission for this contest.
+
+        Admin requires ``edit_own_contest`` first, then ``is_editable_by``
+        (``edit_all_contest`` or author/curator).
+        """
+        if not user.is_authenticated or not user.has_perm('judge.edit_own_contest'):
+            return False
+        return self.is_editable_by(user)
 
     def is_viewable_by_org_admin(self, user):
         """Check if user is org admin of any organization this contest belongs to."""
@@ -666,13 +678,26 @@ class Contest(models.Model):
         return user_in_instructors_group(user)
 
     def is_cloneable_by(self, user):
-        if not user.is_authenticated:
+        """Match the Django ``clone_contest`` permission.
+
+        ContestAdmin has no Clone action; this is the permission that appears
+        on the Contest model's auth list and that original DMOJ's clone view
+        required. Source-contest access is still enforced by ContestMixin.
+        """
+        return bool(user.is_authenticated and user.has_perm('judge.clone_contest'))
+
+    def is_deletable_by(self, user):
+        """Match Django admin contest delete.
+
+        ``has_delete_permission`` is ``delete_contest``; opening the object in
+        admin also requires change permission (``edit_own_contest`` plus
+        ``is_editable_by``). Admin still disables *batch* delete via
+        ``NoBatchDeleteMixin``; the frontend list may bulk-delete but each
+        row is re-checked here.
+        """
+        if not user.is_authenticated or not user.has_perm('judge.delete_contest'):
             return False
-        if self.is_editable_by(user) or self.is_viewable_by_org_admin(user):
-            return True
-        if self.is_viewable_by_course_teacher(user):
-            return True
-        return self.is_cloneable_by_site_teacher(user)
+        return self.is_changeable_by(user)
 
     _parse_seb_keys = staticmethod(parse_seb_keys)
 

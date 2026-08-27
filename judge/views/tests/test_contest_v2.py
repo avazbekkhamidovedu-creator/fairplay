@@ -230,20 +230,24 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
                 username='staff_contest_edit_all',
                 is_staff=True,
                 user_permissions=(
-                    'edit_own_contest', 'edit_all_contest', 'contest_rating',
+                    'add_contest', 'edit_own_contest', 'edit_all_contest', 'contest_rating',
                     'lock_contest', 'contest_access_code', 'contest_seb_requirement',
                     'create_private_contest', 'change_contest_visibility',
                     'contest_problem_label', 'override_performance_ceiling',
                 ),
             ),
             'normal_user': create_user(username='normal_user'),
-            # Holds only create_private_contest (no edit_all_contest): the "Add
-            # assignment" entry must be granted by this permission alone.
+            # Holds only create_private_contest: Admin add is add_contest, so
+            # this user must NOT get the creator entry.
             'contest_creator': create_user(
                 username='contest_creator',
                 user_permissions=('create_private_contest',),
             ),
-            # edit_own_contest but NOT create_private_contest: must NOT see the create entry.
+            'add_contest_only': create_user(
+                username='add_contest_only',
+                user_permissions=('add_contest',),
+            ),
+            # edit_own_contest but NOT add_contest: must NOT see the create entry.
             'edit_own_only': create_user(
                 username='edit_own_only',
                 user_permissions=('edit_own_contest',),
@@ -271,23 +275,27 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('contest_create'))
         self.assertEqual(response.status_code, 403)
 
-    def test_create_private_contest_grants_access(self):
-        """A user holding only ``create_private_contest`` (no ``edit_all_contest``)
-        may open the contest creator — the "Add assignment" entry follows this permission."""
+    def test_create_private_contest_does_not_grant_add(self):
+        """``create_private_contest`` alone matches Admin field access, not Add."""
         self.client.force_login(self.users['contest_creator'])
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_contest_grants_access(self):
+        """Frontend Add matches ContestAdmin.has_add_permission (``add_contest``)."""
+        self.client.force_login(self.users['add_contest_only'])
         response = self.client.get(reverse('contest_create'))
         self.assertEqual(response.status_code, 200)
 
-    def test_edit_own_contest_without_create_is_denied(self):
+    def test_edit_own_contest_without_add_is_denied(self):
         """``edit_own_contest`` alone must NOT grant the creator entry."""
         self.client.force_login(self.users['edit_own_only'])
         response = self.client.get(reverse('contest_create'))
         self.assertEqual(response.status_code, 403)
 
-    def test_add_assignment_tab_gated_on_create_private_contest(self):
-        """The 'Add Assignment' tab renders for create_private_contest holders and is absent
-        otherwise (list page uses contest-list-tabs.html)."""
-        self.client.force_login(self.users['contest_creator'])
+    def test_add_assignment_tab_gated_on_add_contest(self):
+        """The 'Add Assignment' tab renders for add_contest holders and is absent otherwise."""
+        self.client.force_login(self.users['add_contest_only'])
         html = self.client.get(reverse('contest_list')).content.decode()
         self.assertIn('/contests/create/', html)
         self.assertIn('Add Assignment', html)
@@ -296,8 +304,12 @@ class ContestCreateViewTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_list')).content.decode()
         self.assertNotIn('/contests/create/', html)
 
+        self.client.force_login(self.users['contest_creator'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertNotIn('/contests/create/', html)
+
     def test_instructors_group_can_create_assignment(self):
-        """Verified teachers (Instructors group) get Add Assignment."""
+        """Instructors include add_contest, matching Admin add and live Instructor."""
         from django.contrib.auth.models import Group
         from judge.models.notification import INSTRUCTORS_GROUP, ensure_instructors_group
 
@@ -653,6 +665,344 @@ class ContestDetailExamHiddenResultsTestCase(TestCase):
         response = self._get_detail()
         self.assertEqual(response.status_code, 200)
         self.assertIn(self.problem.id, response.context['contest_solved_problem_ids'])
+
+
+def _assignment_row_html(html, key):
+    marker = 'data-key="%s"' % key
+    start = html.index(marker)
+    article_start = html.rfind('<article', 0, start)
+    article_end = html.index('</article>', start) + len('</article>')
+    return html[article_start:article_end]
+
+
+class ContestListV2ActionsTestCase(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.users.update({
+            'staff_contest_edit_all': create_user(
+                username='list_actions_editor',
+                is_staff=True,
+                user_permissions=('edit_own_contest', 'edit_all_contest', 'clone_contest'),
+            ),
+            'staff_can_delete': create_user(
+                username='list_actions_deleter',
+                is_staff=True,
+                user_permissions=('edit_own_contest', 'edit_all_contest', 'delete_contest', 'clone_contest'),
+            ),
+            'normal_user': create_user(username='list_actions_student'),
+        })
+        _now = timezone.now()
+        cls.ongoing = create_contest(
+            key='actions_ongoing',
+            name='Actions Ongoing',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=1),
+            is_visible=True,
+            authors=('superuser',),
+        )
+        cls.upcoming = create_contest(
+            key='actions_upcoming',
+            name='Actions Upcoming',
+            start_time=_now + timedelta(days=5),
+            end_time=_now + timedelta(days=10),
+            is_visible=True,
+            authors=('superuser',),
+        )
+        cls.past = create_contest(
+            key='actions_past',
+            name='Actions Past',
+            start_time=_now - timedelta(days=10),
+            end_time=_now - timedelta(days=5),
+            is_visible=True,
+            authors=('superuser',),
+            allow_virtual_participation=True,
+        )
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_join_actions_wrappers_always_rendered(self):
+        self.client.force_login(self.users['normal_user'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.ongoing.key)
+        self.assertIn('class="cl-join-actions"', row)
+        self.assertIn('class="cl-manage-actions"', row)
+
+    def test_student_sees_join_not_manage_actions(self):
+        self.client.force_login(self.users['normal_user'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.ongoing.key)
+        self.assertIn('>Join</button>', row)
+        self.assertNotIn('fa-pencil', row)
+        self.assertNotIn('fa-copy', row)
+        self.assertNotIn('js-del-assignment"', row)
+        self.assertNotIn('fa-check-square-o', row)
+        self.assertNotIn('>Grade<', row)
+        self.assertNotIn('class="assignment-select"', row)
+        self.assertNotIn(reverse('contest_edit', args=[self.ongoing.key]), row)
+        self.assertNotIn('id="bulk-delete-btn"', html)
+        self.assertNotIn('cl-list--selectable', html)
+
+    def test_manage_comes_before_join_actions(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.ongoing.key)
+        self.assertLess(row.index('class="cl-manage-actions"'), row.index('class="cl-join-actions"'))
+        join_idx = row.find('>Join</button>')
+        if join_idx < 0:
+            join_idx = row.find('Spectate')
+        self.assertGreater(join_idx, -1)
+        self.assertLess(row.index('fa-pencil'), join_idx)
+
+    def test_editor_sees_icon_only_edit_clone_and_grade(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.ongoing.key)
+        self.assertIn('fa-pencil', row)
+        self.assertIn(reverse('contest_edit', args=[self.ongoing.key]), row)
+        self.assertNotIn('fa-edit', row)
+        self.assertIn('title="Edit"', row)
+        self.assertIn('fa-copy', row)
+        self.assertIn(reverse('contest_clone', args=[self.ongoing.key]), row)
+        self.assertNotIn('/admin/judge/contest/', row)
+        self.assertNotIn('js-del-assignment', row)
+        self.assertNotIn('>Grade<', row)
+        self.assertIn('fa-check-square-o', row)
+        self.assertIn('title="Grade"', row)
+        self.assertIn('aria-label="Grade"', row)
+        self.assertIn(reverse('contest_grade', args=[self.ongoing.key]), row)
+        manage = row[row.index('class="cl-manage-actions"'):row.index('class="cl-join-actions"')]
+        self.assertLess(manage.index('fa-pencil'), manage.index('fa-copy'))
+        self.assertLess(manage.index('fa-copy'), manage.index('fa-check-square-o'))
+
+    def test_author_without_edit_own_contest_sees_grade_not_edit(self):
+        """Grade follows is_editable_by; Edit matches Admin (needs edit_own_contest)."""
+        author = create_user(username='list_author_no_edit_own')
+        self.ongoing.authors.add(author.profile)
+        self.client.force_login(author)
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.ongoing.key)
+        self.assertIn('fa-check-square-o', row)
+        self.assertIn(reverse('contest_grade', args=[self.ongoing.key]), row)
+        self.assertNotIn('fa-pencil', row)
+        self.assertNotIn(reverse('contest_edit', args=[self.ongoing.key]), row)
+        self.assertNotIn('fa-copy', row)
+        self.assertNotIn('js-del-assignment', row)
+
+    def test_delete_icon_requires_delete_contest(self):
+        self.client.force_login(self.users['staff_can_delete'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.ongoing.key)
+        self.assertIn('js-del-assignment', row)
+        self.assertIn('assignment-select', row)
+        self.assertIn('fa-trash', row)
+        self.assertIn('bulk-delete-btn', html)
+        self.assertIn(reverse('contest_bulk_delete'), html)
+        manage = row[row.index('class="cl-manage-actions"'):row.index('class="cl-join-actions"')]
+        self.assertLess(manage.index('fa-trash'), manage.index('fa-pencil'))
+        self.assertLess(manage.index('fa-pencil'), manage.index('fa-copy'))
+        self.assertLess(manage.index('fa-copy'), manage.index('fa-check-square-o'))
+
+    def test_upcoming_shows_remind_in_join_slot(self):
+        self.client.force_login(self.users['normal_user'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.upcoming.key)
+        self.assertIn('>Remind<', row)
+
+    def test_past_virtual_join_stays_in_join_slot(self):
+        self.client.force_login(self.users['normal_user'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.past.key)
+        self.assertIn('>Virtual<', row)
+        self.assertLess(row.index('class="cl-join-actions"'), row.index('Virtual'))
+        self.assertLess(row.index('class="cl-manage-actions"'), row.index('class="cl-join-actions"'))
+
+    def test_clone_post_redirects_to_frontend_edit_not_admin(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        resp = self.client.post(reverse('contest_clone', args=[self.ongoing.key]), {'key': 'clonedactions'})
+        self.assertRedirects(resp, reverse('contest_edit', args=['clonedactions']))
+        self.assertFalse(resp.url.startswith('/admin/'))
+
+
+class ContestDeleteViewTestCase(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.deleter = create_user(
+            username='contest_deleter',
+            is_staff=True,
+            user_permissions=('edit_own_contest', 'edit_all_contest', 'delete_contest'),
+        )
+        cls.editor = create_user(
+            username='contest_editor_no_delete',
+            is_staff=True,
+            user_permissions=('edit_own_contest', 'edit_all_contest'),
+        )
+        cls.student = create_user(username='contest_delete_student')
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='delete_me',
+            name='Delete Me',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=1),
+            is_visible=True,
+            authors=('contest_deleter',),
+        )
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_get_not_allowed(self):
+        self.client.force_login(self.deleter)
+        resp = self.client.get(reverse('contest_delete', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 405)
+
+    def test_delete_succeeds_for_admin_equivalent_permission(self):
+        self.client.force_login(self.deleter)
+        resp = self.client.post(reverse('contest_delete', args=[self.contest.key]), {
+            'next': reverse('contest_list'),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('contest_list'))
+        self.assertFalse(Contest.objects.filter(key='delete_me').exists())
+
+    def test_delete_denied_without_delete_contest(self):
+        keep = create_contest(
+            key='keep_me', name='Keep Me',
+            is_visible=True, authors=('contest_editor_no_delete',),
+        )
+        self.client.force_login(self.editor)
+        resp = self.client.post(reverse('contest_delete', args=[keep.key]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(Contest.objects.filter(key='keep_me').exists())
+
+    def test_delete_denied_for_student(self):
+        self.client.force_login(self.student)
+        resp = self.client.post(reverse('contest_delete', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(Contest.objects.filter(key='delete_me').exists())
+
+    def test_rejects_external_next_redirect(self):
+        target = create_contest(
+            key='delete_redirect', name='Delete Redirect',
+            is_visible=True, authors=('contest_deleter',),
+        )
+        self.client.force_login(self.deleter)
+        resp = self.client.post(reverse('contest_delete', args=[target.key]), {
+            'next': 'https://evil.example/phish',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('contest_list'))
+        self.assertFalse(Contest.objects.filter(key='delete_redirect').exists())
+
+
+class ContestBulkDeleteViewTestCase(CommonDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.deleter = create_user(
+            username='bulk_contest_deleter',
+            is_staff=True,
+            user_permissions=('edit_own_contest', 'delete_contest'),
+        )
+        cls.editor = create_user(
+            username='bulk_contest_editor',
+            is_staff=True,
+            user_permissions=('edit_own_contest', 'edit_all_contest'),
+        )
+        cls.student = create_user(username='bulk_contest_student')
+        _now = timezone.now()
+        cls.own_a = create_contest(
+            key='bulk_own_a', name='Bulk Own A',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=1),
+            is_visible=True, authors=('bulk_contest_deleter',),
+        )
+        cls.own_b = create_contest(
+            key='bulk_own_b', name='Bulk Own B',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=1),
+            is_visible=True, authors=('bulk_contest_deleter',),
+        )
+        cls.other = create_contest(
+            key='bulk_other', name='Bulk Other',
+            start_time=_now - timedelta(days=1),
+            end_time=_now + timedelta(days=1),
+            is_visible=True, authors=('bulk_contest_editor',),
+        )
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_get_not_allowed(self):
+        self.client.force_login(self.deleter)
+        resp = self.client.get(reverse('contest_bulk_delete'))
+        self.assertEqual(resp.status_code, 405)
+
+    def test_bulk_delete_succeeds_for_owned_contests(self):
+        self.client.force_login(self.deleter)
+        resp = self.client.post(reverse('contest_bulk_delete'), {
+            'keys': [self.own_a.key, self.own_b.key],
+            'next': reverse('contest_list'),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('contest_list'))
+        self.assertFalse(Contest.objects.filter(key='bulk_own_a').exists())
+        self.assertFalse(Contest.objects.filter(key='bulk_own_b').exists())
+
+    def test_bulk_delete_skips_contests_user_cannot_delete(self):
+        self.client.force_login(self.deleter)
+        resp = self.client.post(reverse('contest_bulk_delete'), {
+            'keys': [self.own_a.key, self.other.key],
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(Contest.objects.filter(key='bulk_own_a').exists())
+        self.assertTrue(Contest.objects.filter(key='bulk_other').exists())
+
+    def test_bulk_delete_denied_for_student(self):
+        self.client.force_login(self.student)
+        resp = self.client.post(reverse('contest_bulk_delete'), {
+            'keys': [self.own_a.key, self.own_b.key],
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(Contest.objects.filter(key='bulk_own_a').exists())
+        self.assertTrue(Contest.objects.filter(key='bulk_own_b').exists())
+
+    def test_bulk_delete_denied_without_delete_contest(self):
+        self.client.force_login(self.editor)
+        resp = self.client.post(reverse('contest_bulk_delete'), {
+            'keys': [self.other.key],
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(Contest.objects.filter(key='bulk_other').exists())
+
+    def test_student_list_hides_delete_controls(self):
+        self.client.force_login(self.student)
+        html = self.client.get(reverse('contest_list')).content.decode()
+        self.assertNotIn('js-del-assignment"', html)
+        self.assertNotIn('class="assignment-select"', html)
+        self.assertNotIn('id="bulk-delete-btn"', html)
+        self.assertNotIn('cl-list--selectable', html)
+
+    def test_rejects_external_next_redirect(self):
+        self.client.force_login(self.deleter)
+        resp = self.client.post(reverse('contest_bulk_delete'), {
+            'keys': [self.own_b.key],
+            'next': 'https://evil.example/phish',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('contest_list'))
+        self.assertFalse(Contest.objects.filter(key='bulk_own_b').exists())
+
+    def test_empty_selection_redirects_without_deleting(self):
+        self.client.force_login(self.deleter)
+        resp = self.client.post(reverse('contest_bulk_delete'), {
+            'next': reverse('contest_list'),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('contest_list'))
+        self.assertTrue(Contest.objects.filter(key='bulk_own_a').exists())
 
 
 class ContestDetailAssignmentStatsTestCase(TestCase):
