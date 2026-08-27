@@ -57,7 +57,8 @@
 
         <div class="seb-launch-buttons">
             {% if seb_launch.sebs_url %}
-                <a class="btn btn-primary" href="{{ seb_launch.sebs_url }}">
+                <a class="btn btn-primary" href="{{ seb_launch.sebs_url }}"
+                   data-seb-token-url="{{ seb_launch.token_url }}">
                     {{ _('Launch in SEB') }}
                 </a>
             {% endif %}
@@ -91,4 +92,5 @@
             </p>
         </div>
     </div>
+    {% include "contest/seb-launch-js.html" %}
 {% endblock %}

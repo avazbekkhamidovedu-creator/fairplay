@@ -39,12 +39,14 @@
             {% if seb_block_join %}
                 <div class="contest-join-pseudotab unselectable" style="display:flex; gap:8px; align-items:center;">
                     {% if seb_launch.sebs_url %}
-                        <a class="button" href="{{ seb_launch.sebs_url }}">{{ _('Launch in SEB') }}</a>
+                        <a class="button" href="{{ seb_launch.sebs_url }}"
+                           data-seb-token-url="{{ seb_launch.token_url }}">{{ _('Launch in SEB') }}</a>
                     {% endif %}
                     {% if seb_launch.download_url %}
                         <a class="button" href="{{ seb_launch.download_url }}">{{ _('Download config file') }}</a>
                     {% endif %}
                 </div>
+                {% include "contest/seb-launch-js.html" %}
             {% elif contest.ended %}
                 {# Allow users to leave the virtual contest #}
                 {% if in_contest %}
