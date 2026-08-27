@@ -305,7 +305,19 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'id="fp-ac-min"', html=False)
         self.assertContains(response, 'id="fp-diff"', html=False)
         self.assertNotContains(response, 'id="fp-group"', html=False)
+        self.assertNotContains(response, 'id="fp-author"', html=False)
+        self.assertNotContains(response, 'data-author-ids', html=False)
         self.assertIn('workspace_organizations', response.context)
+
+    def test_practice_drawer_author_filter_for_teachers(self):
+        teacher = create_user(username='ws-author-teacher', user_permissions=('edit_own_problem',))
+        self.problem.authors.add(teacher.profile)
+        self.client.force_login(teacher)
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertTrue(response.context['can_see_problem_authors'])
+        self.assertContains(response, 'id="fp-author"', html=False)
+        self.assertContains(response, 'data-author-ids', html=False)
+        self.assertContains(response, str(teacher.profile.id), html=False)
 
     def test_workspace_toolbar_has_progress_not_in_drawer(self):
         practice = self.client.get(reverse('problem_detail', args=[self.problem.code]))

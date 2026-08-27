@@ -2092,6 +2092,7 @@
                         formats: selectedValues('lib-filter-format'),
                         diffs: selectedValues('lib-filter-difficulty'),
                         courses: selectedValues('lib-filter-course'),
+                        authors: selectedValues('lib-filter-author'),
                         tags: selectedValues('lib-filter-knowledge'),
                         status: statusEl ? (statusEl.value || '') : '',
                         acMin: acMin,
@@ -2115,6 +2116,11 @@
                             return orgIds.indexOf(v) !== -1;
                         });
                         if (!courseOk) return false;
+                    }
+                    if (f.authors.length) {
+                        var authorIds = (row.dataset.authorIds || '').split(/[\s,]+/).filter(Boolean);
+                        var authorOk = f.authors.some(function (v) { return authorIds.indexOf(v) !== -1; });
+                        if (!authorOk) return false;
                     }
                     if (f.tags.length) {
                         var kids = (row.dataset.knowledge || '').split(/[;,]/).filter(Boolean);
@@ -2213,6 +2219,25 @@
                             placeholder: el.getAttribute('data-placeholder') || '',
                         })).on('change', function () { libPage = 0; renderLib(); });
                     });
+                    var authorEl = document.getElementById('lib-filter-author');
+                    if (authorEl) {
+                        var authorOpts = jQuery.extend({}, multiOpts, {
+                            placeholder: authorEl.getAttribute('data-placeholder') || '',
+                        });
+                        var ajaxUrl = authorEl.getAttribute('data-ajax-url');
+                        if (ajaxUrl) {
+                            authorOpts.ajax = {
+                                url: ajaxUrl,
+                                dataType: 'json',
+                                delay: 250,
+                                data: function (params) { return { term: params.term || '' }; },
+                                processResults: function (data) {
+                                    return { results: data.results || [], pagination: { more: !!data.more } };
+                                },
+                            };
+                        }
+                        jQuery(authorEl).select2(authorOpts).on('change', function () { libPage = 0; renderLib(); });
+                    }
                     var statusEl = document.getElementById('lib-filter-status');
                     if (statusEl) {
                         jQuery(statusEl).select2({
@@ -2224,7 +2249,7 @@
                     }
                 }
                 ['lib-search', 'lib-filter-format', 'lib-filter-difficulty', 'lib-filter-course',
-                 'lib-filter-knowledge', 'lib-filter-status', 'lib-ac-min', 'lib-ac-max'].forEach(function (id) {
+                 'lib-filter-author', 'lib-filter-knowledge', 'lib-filter-status', 'lib-ac-min', 'lib-ac-max'].forEach(function (id) {
                     var el = document.getElementById(id);
                     if (el) el.addEventListener('change', function () { libPage = 0; renderLib(); });
                 });
@@ -3601,6 +3626,13 @@
                                     {% endfor %}
                                 </select>
                             </div>
+                            {% if can_see_problem_authors %}
+                            <div class="filter-block">
+                                <label class="filter-label" for="lib-filter-author">{{ _('Authors') }}</label>
+                                <select id="lib-filter-author" multiple data-placeholder="{{ _('All authors') }}"
+                                        data-ajax-url="{{ url('author_filter_select2') }}"></select>
+                            </div>
+                            {% endif %}
                             <div class="filter-block">
                                 <label class="filter-label" for="lib-filter-status">{{ _('Status') }}</label>
                                 <select id="lib-filter-status">
@@ -3645,6 +3677,7 @@
                             {% for problem in problems %}
                             <tr data-pid="{{ problem.id }}" data-code="{{ problem.code }}" data-name="{{ problem.name }}"
                                 data-org-ids="{% for o in problem.organizations.all() %}{{ o.id }}{% if not loop.last %},{% endif %}{% endfor %}"
+                                {% if can_see_problem_authors %}data-author-ids="{% for a in problem.authors.all() %}{{ a.id }}{% if not loop.last %},{% endif %}{% endfor %}"{% endif %}
                                 data-format="{{ problem.format_filter_code }}"
                                 data-stype="{{ problem.submission_type }}"
                                 data-knowledge="{{ problem.knowledge_type_ids|join(';') }}"
