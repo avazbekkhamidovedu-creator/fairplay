@@ -665,6 +665,7 @@ class ContestDetailAssignmentStatsTestCase(TestCase):
         cls.student = create_user(username='detail-student')
         cls.classmate = create_user(username='detail-classmate')
         cls.outsider = create_user(username='detail-outsider')
+        cls.virtual_user = create_user(username='detail-virtual')
         cls.language = Language.objects.get(key='PY3')
         cls.problem = create_problem(
             code='detail-p1', name='Hello World', is_public=True, ac_rate=99.0, user_count=151,
@@ -704,6 +705,16 @@ class ContestDetailAssignmentStatsTestCase(TestCase):
             user=cls.outsider.profile, problem=cls.problem, language=cls.language,
             result='AC', status='D', points=100, contest_object=None,
         )
+        virtual_part = create_contest_participation(
+            contest=cls.contest, user=cls.virtual_user.profile, virtual=1,
+        )
+        virtual_ac = Submission.objects.create(
+            user=cls.virtual_user.profile, problem=cls.problem, language=cls.language,
+            result='AC', status='D', points=100, contest_object=cls.contest,
+        )
+        ContestSubmission.objects.create(
+            submission=virtual_ac, problem=cls.contest_problem, participation=virtual_part, points=100,
+        )
 
     def setUp(self):
         self.client = Client()
@@ -716,6 +727,7 @@ class ContestDetailAssignmentStatsTestCase(TestCase):
         problems = {p.code: p for p in response.context['contest_problems']}
 
         attempted = problems['detail-p1']
+        # Live 1 AC + 1 WA; practice and virtual AC must not count.
         self.assertEqual(attempted.user_count, 2)
         self.assertEqual(attempted.ac_rate, 50.0)
 

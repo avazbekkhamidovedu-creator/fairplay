@@ -7,7 +7,7 @@ from django.db.models.fields import FloatField
 from django.utils import timezone
 from django.utils.translation import gettext_noop
 
-from judge.models import Problem, Submission
+from judge.models import ContestParticipation, Problem, Submission
 
 __all__ = [
     'assignment_problem_stats', 'contest_completed_ids', 'get_result_data',
@@ -20,10 +20,13 @@ def assignment_problem_stats(contest):
 
     Users = distinct students who submitted the problem in this assignment.
     AC rate = AC submissions / all submissions in this assignment.
-    Practice / global submissions are ignored (``contest_object`` filter).
+    Practice / global submissions and virtual/spectate joins are ignored.
     """
     rows = (
-        Submission.objects.filter(contest_object=contest)
+        Submission.objects.filter(
+            contest_object=contest,
+            contest__participation__virtual=ContestParticipation.LIVE,
+        )
         .values('problem_id')
         .annotate(
             user_count=Count('user', distinct=True),
