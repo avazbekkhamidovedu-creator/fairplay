@@ -11,7 +11,7 @@ from django.views.generic.list import BaseListView
 
 from judge.models import (
     Contest, ContestParticipation, ContestTag, Judge, Language, Organization, Problem, ProblemType, Profile, Rating,
-    Submission,
+    Submission, contest_problem_display_name,
 )
 from judge.utils.infinite_paginator import InfinitePaginationMixin
 from judge.utils.raw_sql import join_sql_subquery, use_straight_join
@@ -313,7 +313,7 @@ class APIContestDetail(APIDetailView):
                     'is_pretested': problem.is_pretested and contest.run_pretests_only,
                     'max_submissions': problem.max_submissions or None,
                     'label': contest.get_label_for_problem(index),
-                    'name': problem.problem.name,
+                    'name': contest_problem_display_name(problem),
                     'code': problem.problem.code,
                 } for index, problem in enumerate(problems)
             ] if can_see_problems else [],

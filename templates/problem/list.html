@@ -496,7 +496,7 @@
                                 {{ problem.user_problem_cell }}
                             {% endif %}
                             <td class="problem">
-                                <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>
+                                <a href="{{ url('problem_detail', problem.code) }}">{{ problem.effective_name or problem.i18n_name or problem.name }}</a>
                             </td>
                             <td class="p">{{ problem.points|floatformat }}{% if problem.partial %}p{% endif %}</td>
                             <td class="users">

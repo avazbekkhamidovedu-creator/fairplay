@@ -307,6 +307,34 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, 'id="fp-group"', html=False)
         self.assertIn('workspace_organizations', response.context)
 
+    def test_assignment_editor_preview_drawer_matches_participation_filters(self):
+        from urllib.parse import urlencode
+
+        names = json.dumps({
+            self.problem.code: 'Renamed One',
+            self.ide_problem.code: 'Renamed Two',
+        })
+        query = urlencode({
+            'assignment_preview': '1',
+            'preview_codes': '%s,%s' % (self.problem.code, self.ide_problem.code),
+            'preview_names': names,
+        })
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]) + '?' + query)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['workspace_mode'], 'assignment')
+        self.assertTrue(response.context['workspace_assignment_preview'])
+        self.assertFalse(response.context['workspace_in_contest'])
+        codes = [item.code for item in response.context['workspace_problems']]
+        self.assertEqual(codes, [self.problem.code, self.ide_problem.code])
+        self.assertEqual(response.context['workspace_problems'][0].effective_name, 'Renamed One')
+        self.assertEqual(response.context['title'], 'Renamed One')
+        html = response.content.decode()
+        self.assertIn('id="drawer-filter-status"', html)
+        self.assertNotIn('id="fp-type"', html)
+        self.assertIn('Renamed One', html)
+        self.assertIn('Renamed Two', html)
+        self.assertIn('assignment_preview=1', html)
+
     def test_workspace_toolbar_has_progress_not_in_drawer(self):
         practice = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertContains(practice, 'ws-toolbar-progress')

@@ -48,7 +48,8 @@ from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
 from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestSubmission, \
-    ContestTag, Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade
+    ContestTag, Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade, \
+    contest_problem_display_name
 from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
@@ -717,7 +718,7 @@ class ContestCreate(LoginRequiredMixin, View):
         elif format_config is not None:
             contest.format_config = None
 
-        scoreboard = payload.get('scoreboard_visibility', Contest.SCOREBOARD_VISIBLE)
+        scoreboard = payload.get('scoreboard_visibility', Contest.SCOREBOARD_HIDDEN)
         valid_scoreboards = {choice[0] for choice in Contest.SCOREBOARD_VISIBILITY}
         if scoreboard not in valid_scoreboards:
             raise ValidationError(_('Invalid scoreboard visibility.'))
@@ -898,13 +899,13 @@ class ContestCreate(LoginRequiredMixin, View):
         """Replace the contest's problem list with the submitted selection.
 
         Accepts either a list of ``{id, points, partial, is_pretested,
-        max_submissions, output_prefix, hide_results}`` dicts (what the
-        frontend sends) or a plain list of ids (points default to 100, partial
-        on, not pretested, unlimited submissions). Called on create (initial
-        add) and on edit (full replace, mirroring the frontend's problem
-        library). A missing/absent ``problems`` key is a no-op, so existing
-        problems are preserved unless explicitly edited; an explicit empty
-        list clears them.
+        max_submissions, output_prefix, hide_results, display_name}`` dicts
+        (what the frontend sends) or a plain list of ids (points default to
+        100, partial on, not pretested, unlimited submissions, no display-name
+        override). Called on create (initial add) and on edit (full replace,
+        mirroring the frontend's problem library). A missing/absent
+        ``problems`` key is a no-op, so existing problems are preserved unless
+        explicitly edited; an explicit empty list clears them.
 
         Rows are **upserted, never deleted-and-recreated**: ContestSubmission
         rows point at ContestProblem with ``on_delete=CASCADE``, so the old
@@ -953,12 +954,16 @@ class ContestCreate(LoginRequiredMixin, View):
                 raw_max_subs = item.get('max_submissions')
                 raw_out_prefix = item.get('output_prefix')
                 raw_hide_results = item.get('hide_results')
+                raw_display_name = item['display_name'] if 'display_name' in item else None
+                display_name_provided = 'display_name' in item
             else:
                 pid = item
                 raw_points = 100
                 raw_partial = raw_pretested = None
                 raw_max_subs = None
                 raw_out_prefix = raw_hide_results = None
+                raw_display_name = None
+                display_name_provided = False
             try:
                 problem = Problem.objects.get(pk=int(pid))
             except (TypeError, ValueError, Problem.DoesNotExist):
@@ -994,8 +999,14 @@ class ContestCreate(LoginRequiredMixin, View):
                 hide_results = False
             else:
                 hide_results = None
+            if display_name_provided:
+                display_name = str(raw_display_name or '').strip()
+                if len(display_name) > 100:
+                    raise ValidationError(_('Problem display name must be at most 100 characters.'))
+            else:
+                display_name = None
             parsed.append((problem, points, partial, is_pretested,
-                           max_submissions, output_prefix, hide_results))
+                           max_submissions, output_prefix, hide_results, display_name))
 
         # Upsert (never delete-and-recreate). ContestSubmission.problem points
         # at ContestProblem with on_delete=CASCADE, so wiping the rows here
@@ -1009,7 +1020,7 @@ class ContestCreate(LoginRequiredMixin, View):
         submitted_ids = {problem.id for problem, *_ in parsed}
         ContestProblem.objects.filter(contest=contest).exclude(problem_id__in=submitted_ids).delete()
         for order, (problem, points, partial, is_pretested,
-                    max_submissions, output_prefix, hide_results) in enumerate(parsed, 1):
+                    max_submissions, output_prefix, hide_results, display_name) in enumerate(parsed, 1):
             cp = existing.get(problem.id)
             if cp is None:
                 cp = ContestProblem(contest=contest, problem=problem)
@@ -1019,6 +1030,8 @@ class ContestCreate(LoginRequiredMixin, View):
             cp.max_submissions = max_submissions
             cp.output_prefix_override = output_prefix
             cp.hide_results = hide_results
+            if display_name is not None:
+                cp.display_name = display_name
             cp.order = order
             cp.save()
 
@@ -1243,7 +1256,7 @@ class ContestCreate(LoginRequiredMixin, View):
         prefill = {
             'name': '', 'key': '', 'description': '', 'summary': '', 'og_image': '',
             'logo_override_image': '', 'access_code': '', 'problem_label_script': '',
-            'format_config': '', 'format_name': 'exam', 'scoreboard_visibility': 'V',
+            'format_config': '', 'format_name': 'exam', 'scoreboard_visibility': Contest.SCOREBOARD_HIDDEN,
             'points_precision': 3, 'rating_floor': '', 'rating_ceiling': '',
             'performance_ceiling_override': '', 'start_time': '', 'end_time': '',
             'locked_after': '', 'duration_hours': 0, 'duration_minutes': 0,
@@ -1336,6 +1349,7 @@ class ContestCreate(LoginRequiredMixin, View):
                     'id': cp.problem_id,
                     'code': cp.problem.code,
                     'name': cp.problem.name,
+                    'display_name': cp.display_name or '',
                     'points': cp.points,
                     'letter': str(idx + 1),
                     'partial': cp.partial,
@@ -1771,11 +1785,25 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
             .add_i18n_name(self.request.LANGUAGE_CODE),
         )
         stats = assignment_problem_stats(self.object)
+        cp_by_pid = {
+            cp.problem_id: cp
+            for cp in self.object.contest_problems.select_related('problem')
+        }
+        lang = self.request.LANGUAGE_CODE
         for problem in problems:
             problem_stats = stats.get(problem.id, {'user_count': 0, 'ac_rate': 0.0})
             problem.user_count = problem_stats['user_count']
             problem.ac_rate = problem_stats['ac_rate']
+            cp = cp_by_pid.get(problem.id)
+            if cp is not None:
+                override = (getattr(cp, 'display_name', None) or '').strip()
+                problem.effective_name = override or contest_problem_display_name(cp, lang)
+            else:
+                problem.effective_name = problem.i18n_name or problem.name
         context['contest_problems'] = problems
+        context['contest_problem_titles'] = {
+            problem.id: problem.effective_name for problem in problems
+        }
         context['metadata'] = {
             'has_public_editorials': any(
                 problem.is_public and problem.has_public_editorial for problem in context['contest_problems']
@@ -2262,9 +2290,16 @@ class ContestStats(TitleMixin, ContestMixin, DetailView):
                     .values_list('problem__code', 'result', 'count'),
         )
         labels, codes = [], []
-        contest_problems = self.object.contest_problems.order_by('order').values_list('problem__name', 'problem__code')
+        contest_problems = list(
+            self.object.contest_problems.order_by('order').select_related('problem'),
+        )
+        lang = self.request.LANGUAGE_CODE
+        order_to_name = {
+            cp.order: contest_problem_display_name(cp, lang) for cp in contest_problems
+        }
         if contest_problems:
-            labels, codes = zip(*contest_problems)
+            labels = [contest_problem_display_name(cp, lang) for cp in contest_problems]
+            codes = [cp.problem.code for cp in contest_problems]
         num_problems = len(labels)
         status_counts = [[] for i in range(num_problems)]
         for problem_code, result, count in status_count_queryset:
@@ -2289,8 +2324,13 @@ class ContestStats(TitleMixin, ContestMixin, DetailView):
                 ],
             },
             'problem_ac_rate': get_bar_chart(
-                queryset.values('contest__problem__order', 'problem__name').annotate(ac_rate=ac_rate)
-                        .order_by('contest__problem__order').values_list('problem__name', 'ac_rate'),
+                [
+                    (order_to_name.get(order, ''), rate)
+                    for order, rate in queryset.values('contest__problem__order')
+                    .annotate(ac_rate=ac_rate)
+                    .order_by('contest__problem__order')
+                    .values_list('contest__problem__order', 'ac_rate')
+                ],
             ),
             'language_count': get_pie_chart(
                 queryset.values('language__name').annotate(count=Count('language__name'))
@@ -2359,7 +2399,7 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
         context['grade_problems'] = [
             {
                 'code': cp.problem.code,
-                'name': cp.problem.name,
+                'name': contest_problem_display_name(cp, self.request.LANGUAGE_CODE),
                 'letter': chr(65 + idx) if len(problems) <= 26 else '',
                 'points': cp.points,
                 'description': cp.problem.description or '',
@@ -2810,8 +2850,12 @@ class ContestMossView(ContestMossMixin, TitleMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        problems = list(map(attrgetter('problem'), self.object.contest_problems.order_by('order')
-                                                              .select_related('problem')))
+        moss_problems = []
+        lang = self.request.LANGUAGE_CODE
+        for cp in self.object.contest_problems.order_by('order').select_related('problem'):
+            problem = cp.problem
+            problem.effective_name = contest_problem_display_name(cp, lang)
+            moss_problems.append(problem)
         languages = list(map(itemgetter(0), ContestMoss.LANG_MAPPING))
 
         results = ContestMoss.objects.filter(contest=self.object)
@@ -2824,7 +2868,7 @@ class ContestMossView(ContestMossMixin, TitleMixin, DetailView):
 
         context['languages'] = languages
         context['has_results'] = results.exists()
-        context['moss_results'] = [(problem, moss_results[problem]) for problem in problems]
+        context['moss_results'] = [(problem, moss_results[problem]) for problem in moss_problems]
 
         return context
 
@@ -3331,7 +3375,7 @@ class ContestExportPDF(ContestMixin, View):
                     <!-- 题目内容 -->
                     <div class="problem-content">
                         <div class="problem-title">
-                            Problem {page_num}: {problem.name}
+                            Problem {page_num}: {contest_problem_display_name(cp)}
                         </div>
                         <div class="problem-description">
                             {description_html}
@@ -3936,7 +3980,7 @@ class ContestExportWord(ContestMixin, View):
                     <!-- 题目内容 -->
                     <div class="problem-content">
                         <div class="problem-title">
-                            Problem {page_num}: {problem.name}
+                            Problem {page_num}: {contest_problem_display_name(cp)}
                         </div>
                         <div class="problem-description">
                             {description_html}

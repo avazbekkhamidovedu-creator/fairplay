@@ -630,9 +630,9 @@
                     <tr>
                         <td>
                             {% if problem.is_public or request.user.is_superuser or is_editor or (has_joined and not contest.ended) %}
-                                <a href="{{ url('problem_detail', problem.code) }}">{{ problem.i18n_name or problem.name }}</a>
+                                <a href="{{ url('problem_detail', problem.code) }}">{{ problem.effective_name or problem.i18n_name or problem.name }}</a>
                             {% else %}
-                                {{ problem.i18n_name or problem.name }}
+                                {{ problem.effective_name or problem.i18n_name or problem.name }}
                             {% endif %}
                         </td>
                         <td>{{ problem.contest_points|floatformat }}{% if problem.contest_partial %}p{% endif %}</td>

@@ -19,7 +19,10 @@ from judge.ratings import rate_contest
 from judge.storage import generate_seb_config_key, submission_storage
 from judge.utils.seb import first_invalid_seb_key, parse_seb_keys
 
-__all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating']
+__all__ = [
+    'Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating',
+    'contest_problem_display_name',
+]
 
 
 class MinValueOrNoneValidator(MinValueValidator):
@@ -917,6 +920,8 @@ class ContestProblem(models.Model):
                                                    'question type (hidden for multiple-choice, shown for code). Only '
                                                    'applies to exam-style contests.'),
                                        default=None, null=True, blank=True)
+    display_name = models.CharField(max_length=100, blank=True, default='',
+                                    verbose_name=_('display name'))
 
     @property
     def results_hidden(self):
@@ -937,6 +942,19 @@ class ContestProblem(models.Model):
         verbose_name = _('contest problem')
         verbose_name_plural = _('contest problems')
         ordering = ('order',)
+
+
+def contest_problem_display_name(cp, language_code=None) -> str:
+    """Assignment-local title for a contest problem.
+
+    A non-empty ``display_name`` wins over the Problem's i18n translation and
+    canonical name. Empty string means "use the original Problem name".
+    """
+    if cp.display_name:
+        return cp.display_name
+    if language_code:
+        return cp.problem.translated_name(language_code)
+    return cp.problem.name
 
 
 class ContestSubmission(models.Model):
