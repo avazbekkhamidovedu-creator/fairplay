@@ -673,6 +673,9 @@ class ContestDetailAssignmentStatsTestCase(TestCase):
         cls.untouched = create_problem(
             code='detail-p2', name='A+B Problem', is_public=True, ac_rate=58.0, user_count=87,
         )
+        cls.private = create_problem(
+            code='detail-p3', name='Secret Quiz', is_public=False, ac_rate=10.0, user_count=9,
+        )
         cls.contest = create_contest(
             key='detailstats', name='Class Homework',
             start_time=timezone.now() - timedelta(hours=1),
@@ -683,6 +686,7 @@ class ContestDetailAssignmentStatsTestCase(TestCase):
             contest=cls.contest, problem=cls.problem, points=100, order=1,
         )
         create_contest_problem(contest=cls.contest, problem=cls.untouched, points=100, order=2)
+        create_contest_problem(contest=cls.contest, problem=cls.private, points=100, order=3)
 
         student_part = create_contest_participation(contest=cls.contest, user=cls.student.profile)
         classmate_part = create_contest_participation(contest=cls.contest, user=cls.classmate.profile)
@@ -744,3 +748,16 @@ class ContestDetailAssignmentStatsTestCase(TestCase):
         ranked = reverse('contest_ranked_submissions', args=[self.contest.key, self.problem.code])
         self.assertContains(response, ranked)
         self.assertNotContains(response, reverse('ranked_submissions', args=[self.problem.code]))
+
+    @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+    def test_users_link_hides_private_problem_code_from_strangers(self):
+        ranked_private = reverse(
+            'contest_ranked_submissions', args=[self.contest.key, self.private.code],
+        )
+        self.assertContains(self.client.get(reverse('contest_view', args=[self.contest.key])), ranked_private)
+
+        stranger = Client()
+        stranger.force_login(self.outsider)
+        response = stranger.get(reverse('contest_view', args=[self.contest.key]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, ranked_private)
