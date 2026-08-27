@@ -7,7 +7,7 @@ from django.db.models.fields import FloatField
 from django.utils import timezone
 from django.utils.translation import gettext_noop
 
-from judge.models import ContestParticipation, Problem, Submission
+from judge.models import ContestParticipation, ContestSubmission, Problem, Submission
 
 __all__ = [
     'assignment_problem_stats', 'contest_completed_ids', 'get_result_data',
@@ -21,23 +21,26 @@ def assignment_problem_stats(contest):
     Users = distinct students who submitted the problem in this assignment.
     AC rate = AC submissions / all submissions in this assignment.
     Practice / global submissions and virtual/spectate joins are ignored.
+
+    Counted from each submission's own ContestSubmission → participation,
+    not from all participations on the contest.
     """
     rows = (
-        Submission.objects.filter(
-            contest_object=contest,
-            contest__participation__virtual=ContestParticipation.LIVE,
+        ContestSubmission.objects.filter(
+            participation__contest=contest,
+            participation__virtual=ContestParticipation.LIVE,
         )
-        .values('problem_id')
+        .values('problem__problem_id')
         .annotate(
-            user_count=Count('user', distinct=True),
+            user_count=Count('participation__user', distinct=True),
             submission_total=Count('id'),
-            submission_ac=Count('id', filter=Q(result='AC')),
+            submission_ac=Count('id', filter=Q(submission__result='AC')),
         )
     )
     stats = {}
     for row in rows:
         total = row['submission_total']
-        stats[row['problem_id']] = {
+        stats[row['problem__problem_id']] = {
             'user_count': row['user_count'],
             'ac_rate': (100.0 * row['submission_ac'] / total) if total else 0.0,
         }
