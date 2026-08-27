@@ -147,6 +147,11 @@ DMOJ_EMAIL_CHANGE_LIMIT_COUNT = 10
 # Number of minutes before an email change request activation key expires
 DMOJ_EMAIL_CHANGE_EXPIRY_MINUTES = 60
 
+# Number of minutes before a Safe Exam Browser launch token expires. The token
+# only authorizes fetching a contest's .seb configuration, which is an artifact
+# every student in the exam receives anyway, so this can be generous.
+DMOJ_SEB_LAUNCH_TOKEN_EXPIRY_MINUTES = 30
+
 # At the bare minimum, dark and light theme CSS file locations must be declared
 DMOJ_THEME_CSS = {
     'light': 'style.css',
@@ -784,6 +789,7 @@ assert DMOJ_PROBLEM_MIN_USER_POINTS_VOTE >= DMOJ_PROBLEM_MIN_PROBLEM_POINTS
 
 # <= 1 minute expiry is unusable UX
 assert DMOJ_EMAIL_CHANGE_EXPIRY_MINUTES > 1
+assert DMOJ_SEB_LAUNCH_TOKEN_EXPIRY_MINUTES > 1
 
 if DMOJ_PDF_PDFOID_URL:
     # If a cache is configured, it must already exist and be a directory

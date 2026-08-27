@@ -82,19 +82,32 @@ class DMOJImpersonationMiddleware(object):
         return self.get_response(request)
 
 
+def _seb_public_prefix():
+    """The ``/seb/`` mount, derived from a route that lives under it.
+
+    Everything under it (the quit landing, the token-authorized config fetch) has
+    to stay reachable from inside a blocked session, and the config fetch carries
+    a token rather than a contest key so it cannot be matched by exact path.
+    """
+    quit_path = reverse('seb_quit')
+    prefix = quit_path[:quit_path.find('/', 1) + 1]
+    return prefix if len(prefix) > 1 else ''
+
+
 def _seb_block_exempt(path, contest):
     # Whitelist paths that must remain reachable for the SEB block page to function
     # (logout, the .seb download itself, the quit landing, and static/media assets).
     # A root-ish prefix (e.g. MEDIA_URL = '/') would exempt every path and
     # disable the lockdown entirely, so only honor real sub-path prefixes.
-    for prefix in (settings.STATIC_URL, getattr(settings, 'MEDIA_URL', '')):
-        if prefix and prefix != '/' and path.startswith(prefix):
-            return True
     try:
+        seb_prefix = _seb_public_prefix()
         exempt_paths = (reverse('auth_logout'), reverse('seb_quit'),
                         reverse('contest_seb_config', args=(contest.key,)))
     except Exception:
         return False
+    for prefix in (settings.STATIC_URL, getattr(settings, 'MEDIA_URL', ''), seb_prefix):
+        if prefix and prefix != '/' and path.startswith(prefix):
+            return True
     return path in exempt_paths
 
 
