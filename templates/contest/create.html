@@ -888,7 +888,6 @@
                     var maxSubs = r.querySelector('input.cp-max-subs');
                     var results = r.querySelector('select.cp-results');
                     var outPrefix = r.querySelector('input.cp-out-prefix');
-                    var currentName = cpRowDisplayName(r);
                     problems.push({
                         id: r.dataset.pid,
                         points: pts ? pts.value : 100,
@@ -897,7 +896,7 @@
                         max_submissions: maxSubs && maxSubs.value ? maxSubs.value : null,
                         hide_results: results ? (results.value === '' ? null : results.value) : null,
                         output_prefix: outPrefix && outPrefix.value !== '' ? outPrefix.value : null,
-                        display_name: currentName ? currentName.slice(0, 100) : '',
+                        display_name: cpRowOverrideName(r),
                     });
                 });
                 data.problems = problems;
@@ -1175,6 +1174,13 @@
                     return (pname.value || '').trim();
                 }
                 return (pname.textContent || '').trim();
+            }
+            // Empty or identical to the library title means "no override".
+            function cpRowOverrideName(row) {
+                var current = cpRowDisplayName(row);
+                var original = (row.dataset.name || '').trim();
+                if (!current || current === original) return '';
+                return current.slice(0, 100);
             }
 
             // Solving-page links from this editor carry the in-progress problem
@@ -1997,7 +2003,7 @@
                 return '<span class="cp-drag" title="' + {{ _('Drag to reorder')|htmltojs }} + '">⠿</span>' +
                     '<span class="label-letter">' + letter + '</span>' +
                     '<input type="text" class="pname cp-display-name" maxlength="100" value="' +
-                    escapeHtml(row.dataset.name || 'Problem ' + row.dataset.pid) +
+                    escapeHtml(row.dataset.displayName || '') +
                     '" placeholder="' + escapeHtml(row.dataset.name || '') +
                     '" title="' + {{ _('Click to rename for this assignment')|htmltojs }} +
                     '" aria-label="' + {{ _('Assignment display name')|htmltojs }} + '">' +
@@ -2068,7 +2074,7 @@
                 if (pv.style.display === 'none') {
                     if (!pv.dataset.loaded) {
                         var code = row.dataset.code || '';
-                        var nameText = cpRowDisplayName(row);
+                        var nameText = cpRowDisplayName(row) || row.dataset.name || '';
                         var pts = row.querySelector('input.cp-points');
                         pv.innerHTML = '<b>' + escapeHtml(nameText) + '</b>' +
                             (code ? ' <span class="pcode">[' + code + ']</span>' : '') +
@@ -3128,7 +3134,7 @@
                                     <span class="cp-drag" title="{{ _('Drag to reorder') }}">⠿</span>
                                     <span class="label-letter">{{ p.letter }}</span>
                                     <input type="text" class="pname cp-display-name" maxlength="100"
-                                           value="{{ p.display_name or p.name }}"
+                                           value="{{ p.display_name }}"
                                            placeholder="{{ p.name }}"
                                            title="{{ _('Click to rename for this assignment') }}"
                                            aria-label="{{ _('Assignment display name') }}">

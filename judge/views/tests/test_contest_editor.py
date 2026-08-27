@@ -737,7 +737,10 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_create')).content.decode()
         self.assertIn('function syncPreviewProblems()', html)
         self.assertIn('function cpRowDisplayName(row)', html)
+        self.assertIn('function cpRowOverrideName(row)', html)
         self.assertIn('input.cp-display-name', html)
+        self.assertIn("escapeHtml(row.dataset.displayName || '')", html)
+        self.assertNotIn("escapeHtml(row.dataset.name || 'Problem ' + row.dataset.pid)", html)
         self.assertIn('function assignmentProblemHref(code)', html)
         self.assertIn('assignment_preview=1', html)
         self.assertIn('preview_codes=', html)
@@ -1394,6 +1397,17 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(cp.display_name, '')
         self.assertEqual(cp.problem.name, 'Original')
 
+    def test_create_library_title_as_display_name_is_not_an_override(self):
+        """Saving the library name as display_name must not freeze the title."""
+        problem = create_problem('display-name-same', is_public=True, name='Library Title')
+        response = self._post(
+            name='Same As Library', key='dispsame',
+            problems=[{'id': problem.id, 'points': 100, 'display_name': 'Library Title'}],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        cp = Contest.objects.get(key='dispsame').contest_problems.get()
+        self.assertEqual(cp.display_name, '')
+
 
 class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
     """Edit mode: problems are pre-filled and synced on save."""
@@ -1450,6 +1464,16 @@ class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problems[0]['letter'], '1')
         self.assertEqual(problems[0]['display_name'], '')
         self.assertEqual(problems[0]['name'], self.problem.name)
+        html = response.content.decode()
+        marker = 'data-pid="%s"' % self.problem.id
+        start = html.find(marker)
+        self.assertNotEqual(start, -1)
+        open_div = html.rfind('<div class="cp-row"', 0, start)
+        nxt = html.find('<div class="cp-row"', start + 1)
+        row = html[open_div:nxt]
+        self.assertIn('placeholder="%s"' % self.problem.name, row)
+        self.assertRegex(row, r'class="pname cp-display-name"[^>]*value=""')
+        self.assertNotIn('value="%s"' % self.problem.name, row)
 
     def test_get_prefills_display_name_override(self):
         from judge.models import ContestProblem

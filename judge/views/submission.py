@@ -116,6 +116,9 @@ class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, Deta
             return self.no_permission(e.submission)
 
     def no_permission(self, submission):
+        # get_object() raises before assigning self.object, so use the
+        # submission passed from the except handler — not self.object.
+        self.object = submission
         problem = submission.problem
         if problem.is_accessible_by(self.request.user) and \
                 problem.submission_source_visibility == SubmissionSourceAccess.SOLVED:
@@ -123,7 +126,7 @@ class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, Deta
             message = escape(_('Permission denied. Solve %(problem)s in order to view it.')) % {
                 'problem': format_html('<a href="{0}">{1}</a>',
                                        reverse('problem_detail', args=[problem.code]),
-                                       _submission_contest_problem_name(self.object, self.request.LANGUAGE_CODE)),
+                                       _submission_contest_problem_name(submission, self.request.LANGUAGE_CODE)),
             }
             return generic_message(self.request, _("Can't access submission"), mark_safe(message), status=403)
         else:

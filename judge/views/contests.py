@@ -1003,6 +1003,10 @@ class ContestCreate(LoginRequiredMixin, View):
                 display_name = str(raw_display_name or '').strip()
                 if len(display_name) > 100:
                     raise ValidationError(_('Problem display name must be at most 100 characters.'))
+                # Same text as the library title is not an override: keep
+                # display_name empty so later library/translation edits show up.
+                if display_name == problem.name:
+                    display_name = ''
             else:
                 display_name = None
             parsed.append((problem, points, partial, is_pretested,
