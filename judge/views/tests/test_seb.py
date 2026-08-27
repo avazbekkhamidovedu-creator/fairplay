@@ -6,9 +6,10 @@ from unittest import mock
 
 from django.core.files.base import ContentFile
 from django.test import Client, TestCase, override_settings
-from django.urls import reverse
+from django.urls import reverse, set_script_prefix
 from django.utils import timezone
 
+from judge.middleware import _seb_block_exempt, _seb_launch_prefix
 from judge.models import ContestParticipation, SEBConfigPreset
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, create_user
 from judge.utils.seb import sign_seb_launch_token
@@ -380,6 +381,30 @@ class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
 
     def test_launch_token_endpoint_requires_login(self):
         self.assertEqual(self.client.get(reverse('seb_launch_token', args=('sebexam',))).status_code, 302)
+
+    def test_exempt_prefix_does_not_widen_under_a_mounted_script_prefix(self):
+        """The launch route's prefix must stay the launch route's prefix.
+
+        Deriving it by slicing the first path segment off a SEB route yields the
+        mount root under FORCE_SCRIPT_NAME / a reverse-proxy subpath, which
+        prefix-matches every URL and turns the lockdown off entirely.
+        """
+        set_script_prefix('/judge/')
+        try:
+            self.assertEqual(_seb_launch_prefix(), '/judge/seb/launch/')
+            for path in ('/judge/contest/sebexam/join', '/judge/problem/x', '/judge/', '/judge/user/y'):
+                with self.subTest(path=path):
+                    self.assertFalse(_seb_block_exempt(path, self.seb_contest))
+            self.assertTrue(_seb_block_exempt('/judge/seb/launch/sometoken/', self.seb_contest))
+        finally:
+            set_script_prefix('/')
+
+    def test_exempt_prefix_covers_only_the_launch_route(self):
+        self.assertEqual(_seb_launch_prefix(), '/seb/launch/')
+        self.assertTrue(_seb_block_exempt('/seb/launch/sometoken/', self.seb_contest))
+        # Sibling /seb/ routes are staff-only and were never prefix-exempt.
+        self.assertFalse(_seb_block_exempt('/seb/presets/1/config/', self.seb_contest))
+        self.assertFalse(_seb_block_exempt('/contest/sebexam/join', self.seb_contest))
 
     # ------------------------------------------------------------------ #
     # Quit landing page                                                   #
