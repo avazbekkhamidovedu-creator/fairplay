@@ -6,6 +6,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from judge.forms import MCQSubmitForm
 from judge.models import (
     Class, Language, Organization, Problem, ProblemMCQConfig, ProblemMCQOption,
     Submission, SubmissionSource,
@@ -430,6 +431,50 @@ class MCQSubmitViewTestCase(CommonDataMixin, TestCase):
         # No Ace code editor on an MCQ problem page; the choices are shown instead.
         self.assertNotIn(b'id_source', response.content)
         self.assertIn(b'name="options"', response.content)
+
+    def test_option_fenced_code_renders_as_code_block(self):
+        problem = create_problem(code='quizmd', submission_type='M', points=10, is_public=True)
+        ProblemMCQConfig.objects.create(problem=problem, multiple_select=False)
+        ProblemMCQOption.objects.create(
+            problem=problem, order=0,
+            text='```java\nint i = 0;\nSystem.out.print(i);\n```',
+            is_correct=False,
+        )
+        ProblemMCQOption.objects.create(problem=problem, order=1, text='A plain choice', is_correct=True)
+
+        form = MCQSubmitForm(problem=problem, profile=self.users['normal'].profile)
+        html = str(form['options'])
+        self.assertIn('code-block', html)
+        self.assertIn('code-block-lang', html)
+        self.assertIn('mcq-option-body', html)
+        self.assertIn('System', html)
+        self.assertNotIn('```java', html)
+        self.assertIn('A plain choice', html)
+
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_detail', args=['quizmd']))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'code-block')
+        self.assertContains(response, 'System')
+        self.assertNotContains(response, '```java')
+        self.assertNotContains(response, 'is_correct')
+
+    def test_multiple_select_option_fenced_code_renders(self):
+        problem = create_problem(code='quizmdmulti', submission_type='M', points=10, is_public=True)
+        ProblemMCQConfig.objects.create(problem=problem, multiple_select=True)
+        ProblemMCQOption.objects.create(
+            problem=problem, order=0,
+            text='```\nfor (int i = 1; i <= 5; i++) {}\n```',
+            is_correct=True,
+        )
+        ProblemMCQOption.objects.create(problem=problem, order=1, text='Other', is_correct=False)
+
+        form = MCQSubmitForm(problem=problem, profile=self.users['normal'].profile)
+        html = str(form['options'])
+        self.assertIn('type="checkbox"', html)
+        self.assertIn('<pre', html)
+        self.assertIn('for (int i = 1; i &lt;= 5; i++)', html)
+        self.assertNotIn('```', html)
 
     def test_rejudge_does_not_hit_bridge(self):
         sub = Submission.objects.create(

@@ -23,7 +23,10 @@ from judge.models import Class, Contest, Language, Organization, Problem, Proble
 from judge.utils.mail import validate_email_domain
 from judge.utils.subscription import newsletter_id
 from judge.utils.user_search import apply_profile_choice_labels
-from judge.widgets import AceWidget, HeavySelect2MultipleWidget, MartorWidget, Select2MultipleWidget, Select2Widget
+from judge.widgets import (
+    AceWidget, HeavySelect2MultipleWidget, MarkdownCheckboxSelectMultiple, MarkdownRadioSelect,
+    MartorWidget, Select2MultipleWidget, Select2Widget, math_engine_for_profile,
+)
 
 TOTP_CODE_LENGTH = 6
 
@@ -186,12 +189,18 @@ class MCQSubmitForm(Form):
         self.multiple = bool(config and config.multiple_select)
 
         choices = [(str(o['id']), o['text']) for o in ordered_options_for(problem, profile)]
+        widget_kwargs = {
+            'markdown_style': problem.markdown_style,
+            'math_engine': math_engine_for_profile(profile),
+        }
         if self.multiple:
             self.fields['options'] = MultipleChoiceField(
-                choices=choices, widget=forms.CheckboxSelectMultiple, label='', required=True)
+                choices=choices, widget=MarkdownCheckboxSelectMultiple(**widget_kwargs),
+                label='', required=True)
         else:
             self.fields['options'] = ChoiceField(
-                choices=choices, widget=forms.RadioSelect, label='', required=True)
+                choices=choices, widget=MarkdownRadioSelect(**widget_kwargs),
+                label='', required=True)
 
     def clean(self):
         cleaned = super().clean()

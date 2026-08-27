@@ -720,6 +720,11 @@
                     </p>
                   {% endif %}
                 </div>
+              {% elif problem.submission_type == 'M' %}
+                <div id="mcq-options" class="mcq-options">
+                  {{ form.options.errors }}
+                  {{ form.options }}
+                </div>
               {% else %}
                 {{ form.as_p() }}
               {% endif %}
