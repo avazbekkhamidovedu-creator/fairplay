@@ -20,15 +20,13 @@
             {{ make_tab('ranking', 'fa-bar-chart', None, _('Hidden Rankings')) }}
         {% endif %}
     {% endif %}
-    {% if can_edit %}
+    {% if can_change %}
         {% if perms.judge.moss_contest and has_moss_api_key %}
             {{ make_tab('moss', 'fa-gavel', url('contest_moss', contest.key), _('MOSS')) }}
         {% endif %}
         {{ make_tab('edit', 'fa-edit', url('contest_edit', contest.key), _('Edit')) }}
-        {{ make_tab('clone', 'fa-copy', url('contest_clone', contest.key), _('Clone')) }}
-    {% elif can_clone %}
-        {{ make_tab('clone', 'fa-copy', url('contest_clone', contest.key), _('Clone')) }}
-    {% elif perms.judge.clone_contest %}
+    {% endif %}
+    {% if can_clone %}
         {{ make_tab('clone', 'fa-copy', url('contest_clone', contest.key), _('Clone')) }}
     {% endif %}
 

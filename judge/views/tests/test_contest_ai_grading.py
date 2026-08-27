@@ -23,7 +23,8 @@ class ContestAIGradingCreateTestCase(CommonDataMixin, TestCase):
         cls.editor = create_user(
             username='ai_grade_editor',
             user_permissions=(
-                'edit_all_contest', 'contest_rating', 'lock_contest', 'contest_access_code',
+                'add_contest', 'edit_own_contest', 'edit_all_contest', 'contest_rating',
+                'lock_contest', 'contest_access_code',
                 'contest_seb_requirement', 'create_private_contest', 'change_contest_visibility',
                 'contest_problem_label', 'override_performance_ceiling',
             ),

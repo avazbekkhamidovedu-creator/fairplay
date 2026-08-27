@@ -214,7 +214,7 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
     def test_assignment_actions_live_on_assignments_tab(self):
         from django.contrib.auth.models import Permission
 
-        perm = Permission.objects.get(codename='create_private_contest', content_type__app_label='judge')
+        perm = Permission.objects.get(codename='add_contest', content_type__app_label='judge')
         self.admin.user_permissions.add(perm)
         self.client.force_login(self.admin)
         html = self.client.get(self._class_url()).content.decode()
@@ -232,7 +232,7 @@ class ClassAccessAndMaterialsTest(CommonDataMixin, TestCase):
 
         ensure_instructors_group()
         teacher = create_user(username='class_admin_creator', is_staff=True)
-        perm = Permission.objects.get(codename='create_private_contest', content_type__app_label='judge')
+        perm = Permission.objects.get(codename='add_contest', content_type__app_label='judge')
         teacher.user_permissions.add(perm)
         self.klass.admins.add(teacher.profile)
         self.client.force_login(teacher)

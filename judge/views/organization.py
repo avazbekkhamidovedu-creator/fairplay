@@ -1943,7 +1943,7 @@ class ClassHome(QueryStringSortMixin, ClassMixin, DetailView):
         )
 
         context.update(course_inbox_chrome_context(self.request))
-        if can_edit and self.request.user.has_perm('judge.create_private_contest'):
+        if can_edit and self.request.user.has_perm('judge.add_contest'):
             context['add_assignment_url'] = reverse('contest_create')
         else:
             context['add_assignment_url'] = ''

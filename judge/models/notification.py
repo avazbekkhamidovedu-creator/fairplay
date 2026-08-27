@@ -15,8 +15,12 @@ INSTRUCTOR_GROUP_ALIASES = ('Instructor', 'Teachers', 'Teacher')
 INSTRUCTOR_GROUP_NAMES = (INSTRUCTORS_GROUP,) + INSTRUCTOR_GROUP_ALIASES
 
 # Django permissions attached to Instructors (course/class management + private
-# problems + private assignments). Intentionally excludes edit_all_organization
+# problems + creating assignments). Intentionally excludes edit_all_organization
 # / delete_organization / edit_all_contest (site-admin scope).
+# Frontend Add Assignment matches ContestAdmin.has_add_permission (``add_contest``);
+# create_private_contest still unlocks org/private fields. Live ``Instructor``
+# groups often also hold edit_own_contest / clone_contest / delete_contest —
+# those stay admin-granted extras and are not reset here.
 INSTRUCTOR_PERMISSION_CODENAMES = (
     'add_organization',
     'change_organization',
@@ -26,8 +30,9 @@ INSTRUCTOR_PERMISSION_CODENAMES = (
     'delete_class',
     'create_private_problem',
     'edit_own_problem',
-    # Opens /contests/create/ and the "Add Assignment" tab. Authors can later
-    # edit via curator membership without edit_own_contest.
+    # Same gate as Django admin "Can add contest".
+    'add_contest',
+    # Org/private field access on assignments the user can already change.
     'create_private_contest',
     # Lets instructors arm Safe Exam Browser on their own assignments. Without
     # it the entire SEB card is hidden from them (ContestCreate._restricted_fields),

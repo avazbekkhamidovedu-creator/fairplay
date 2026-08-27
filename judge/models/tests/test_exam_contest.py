@@ -271,7 +271,7 @@ class ContestCloneResetsFinalizeTest(ExamContestTestMixin, TestCase):
 
 
 class ContestCloneInstructorAccessTest(ExamContestTestMixin, TestCase):
-    def test_author_with_create_private_contest_can_clone(self):
+    def test_author_without_clone_contest_cannot_clone(self):
         instructor = create_user(
             username='contest_instructor',
             user_permissions=('create_private_contest',),
@@ -280,12 +280,20 @@ class ContestCloneInstructorAccessTest(ExamContestTestMixin, TestCase):
         self.client.force_login(instructor)
 
         resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 403)
 
+    def test_clone_contest_permission_can_clone(self):
+        cloner = create_user(
+            username='contest_cloner',
+            user_permissions=('clone_contest', 'edit_own_contest', 'edit_all_contest'),
+        )
+        self.client.force_login(cloner)
+        resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
+        self.assertEqual(resp.status_code, 200)
         resp = self.client.post(reverse('contest_clone', args=[self.contest.key]), {'key': 'instructorclone'})
         self.assertRedirects(resp, reverse('contest_edit', args=['instructorclone']))
         clone = Contest.objects.get(key='instructorclone')
-        self.assertIn(instructor.profile, clone.authors.all())
+        self.assertIn(cloner.profile, clone.authors.all())
 
     def test_non_editor_denied_clone(self):
         self.client.force_login(self.users['normal'])
@@ -294,7 +302,7 @@ class ContestCloneInstructorAccessTest(ExamContestTestMixin, TestCase):
 
 
 class ContestCloneCourseInstructorAccessTest(ExamContestTestMixin, TestCase):
-    def test_course_instructor_can_clone_without_being_author(self):
+    def test_course_instructor_cannot_clone_without_clone_contest(self):
         org = self.organizations['open']
         course_teacher = create_user(username='course_teacher')
         org.instructors.add(course_teacher.profile)
@@ -305,12 +313,7 @@ class ContestCloneCourseInstructorAccessTest(ExamContestTestMixin, TestCase):
 
         self.client.force_login(course_teacher)
         resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
-        self.assertEqual(resp.status_code, 200)
-
-        resp = self.client.post(reverse('contest_clone', args=[self.contest.key]), {'key': 'courseclone'})
-        self.assertRedirects(resp, reverse('contest_edit', args=['courseclone']))
-        clone = Contest.objects.get(key='courseclone')
-        self.assertIn(course_teacher.profile, clone.authors.all())
+        self.assertEqual(resp.status_code, 403)
 
 
 class CourseTeacherClassScopedContestAccessTest(ExamContestTestMixin, TestCase):

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import markdown
 from django import forms
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.admin.models import ADDITION, CHANGE, LogEntry
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.contrib.auth.views import redirect_to_login
@@ -28,6 +29,7 @@ from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.utils.functional import cached_property
 from django.utils.html import format_html
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.utils.text import slugify
 from django.utils.timezone import make_aware
@@ -62,7 +64,8 @@ from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleOb
 logger = logging.getLogger(__name__)
 
 __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'ContestRanking', 'ContestJoin',
-           'ContestLeave', 'ContestCalendar', 'ContestClone', 'ContestStats', 'ContestMossView',
+           'ContestLeave', 'ContestCalendar', 'ContestClone', 'ContestDelete', 'ContestBulkDelete',
+           'ContestStats', 'ContestMossView',
            'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
@@ -485,23 +488,22 @@ class ContestCreate(LoginRequiredMixin, View):
     def dispatch(self, request, *args, **kwargs):
         """Route to create or edit mode and enforce the matching permission.
 
-        - Create mode (no ``contest`` kwarg) requires ``judge.create_private_contest``
-          (``edit_all_contest`` remains a superset for full editors).
-        - Edit mode (``contest`` kwarg) requires ``is_editable_by``, which also
-          admits ``edit_own_contest`` holders who are curators of the contest.
+        Aligns with ContestAdmin:
+        - Create (no ``contest`` kwarg) requires ``judge.add_contest``.
+        - Edit requires ``is_changeable_by`` (``edit_own_contest`` plus
+          ``is_editable_by``). Grade still uses ``is_editable_by`` alone.
         """
         self.contest = None
         if 'contest' in kwargs:
             self.contest = get_object_or_404(Contest, key=kwargs['contest'])
             if not request.user.is_authenticated:
                 return redirect_to_login(request.get_full_path())
-            if not self.contest.is_editable_by(request.user):
+            if not self.contest.is_changeable_by(request.user):
                 raise PermissionDenied
         else:
             if not request.user.is_authenticated:
                 return redirect_to_login(request.get_full_path())
-            if not (request.user.has_perm('judge.create_private_contest')
-                    or request.user.has_perm('judge.edit_all_contest')):
+            if not Contest.can_be_added_by(request.user):
                 raise PermissionDenied
         return super().dispatch(request, *args, **kwargs)
 
@@ -1650,6 +1652,10 @@ class ContestMixin(object):
         return self.object.is_editable_by(self.request.user)
 
     @cached_property
+    def can_change(self):
+        return self.object.is_changeable_by(self.request.user)
+
+    @cached_property
     def can_clone(self):
         return self.object.is_cloneable_by(self.request.user)
 
@@ -1677,6 +1683,7 @@ class ContestMixin(object):
         context['is_tester'] = self.is_tester
         context['is_spectator'] = self.is_spectator
         context['can_edit'] = self.can_edit
+        context['can_change'] = self.can_change
         context['can_clone'] = self.can_clone
         context['is_org_admin'] = self.object.is_viewable_by_org_admin(self.request.user)
 
@@ -1831,18 +1838,7 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         return super().dispatch(request, *args, **kwargs)
 
     def has_permission(self):
-        if super().has_permission():
-            return True
-        if not self.request.user.is_authenticated:
-            return False
-        contest_key = self.kwargs.get(self.slug_url_kwarg)
-        if not contest_key:
-            return False
-        try:
-            contest = Contest.objects.get(key=contest_key)
-        except Contest.DoesNotExist:
-            return False
-        return contest.is_cloneable_by(self.request.user)
+        return super().has_permission()
 
     def form_valid(self, form):
         contest = self.object
@@ -1879,6 +1875,84 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_comment(_('Cloned contest from %s') % old_key)
 
         return HttpResponseRedirect(reverse('contest_edit', args=(contest.key,)))
+
+
+class ContestDelete(LoginRequiredMixin, View):
+    """POST-only frontend delete for one assignment.
+
+    Matches Django admin contest deletion: the user must hold
+    ``judge.delete_contest``, and the contest must be one they could edit
+    (``edit_all_contest``, or author/curator). Admin also disables batch
+    delete (``NoBatchDeleteMixin``), so this endpoint deletes a single key.
+    """
+
+    def post(self, request, *args, **kwargs):
+        contest = get_object_or_404(Contest, key=kwargs.get('contest'))
+        redirect_to = request.POST.get('next') or reverse('contest_list')
+        if not url_has_allowed_host_and_scheme(
+            url=redirect_to,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            redirect_to = reverse('contest_list')
+
+        if not contest.is_deletable_by(request.user):
+            messages.error(request, _('You are not allowed to delete this assignment.'))
+            return HttpResponseRedirect(redirect_to)
+
+        name = contest.name
+        key = contest.key
+        contest.delete()
+        messages.success(
+            request,
+            _('Deleted assignment "%(name)s" (%(key)s).') % {'name': name, 'key': key},
+        )
+        return HttpResponseRedirect(redirect_to)
+
+
+class ContestBulkDelete(LoginRequiredMixin, View):
+    """POST-only frontend bulk delete for the assignment list.
+
+    Django admin ContestAdmin still uses ``NoBatchDeleteMixin``. This endpoint
+    is the list-page counterpart of ``ProblemBulkDelete``: it accepts one or
+    more keys, and re-checks ``is_deletable_by`` on every contest rather than
+    trusting the form.
+    """
+
+    def post(self, request, *args, **kwargs):
+        redirect_to = request.POST.get('next') or reverse('contest_list')
+        if not url_has_allowed_host_and_scheme(
+            url=redirect_to,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            redirect_to = reverse('contest_list')
+
+        keys = [k for k in request.POST.getlist('keys') if k]
+        if not keys:
+            messages.error(request, _('No assignments selected.'))
+            return HttpResponseRedirect(redirect_to)
+
+        deleted = denied = 0
+        with transaction.atomic():
+            for contest in Contest.objects.filter(key__in=keys):
+                if contest.is_deletable_by(request.user):
+                    contest.delete()
+                    deleted += 1
+                else:
+                    denied += 1
+
+        if deleted:
+            messages.success(
+                request,
+                _('Deleted %(count)d assignment(s).') % {'count': deleted},
+            )
+        if denied:
+            messages.error(
+                request,
+                _('Skipped %(count)d assignment(s) you are not allowed to delete.') % {'count': denied},
+            )
+        return HttpResponseRedirect(redirect_to)
 
 
 class ContestAccessDenied(Exception):
