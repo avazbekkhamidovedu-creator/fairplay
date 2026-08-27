@@ -5,8 +5,15 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Contest, ContestTag, Organization, Submission
-from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
+from judge.models import Contest, ContestSubmission, ContestTag, Language, Organization, Submission
+from judge.models.tests.util import (
+    CommonDataMixin,
+    create_contest,
+    create_contest_participation,
+    create_contest_problem,
+    create_problem,
+    create_user,
+)
 
 
 class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
@@ -646,3 +653,82 @@ class ContestDetailExamHiddenResultsTestCase(TestCase):
         response = self._get_detail()
         self.assertEqual(response.status_code, 200)
         self.assertIn(self.problem.id, response.context['contest_solved_problem_ids'])
+
+
+class ContestDetailAssignmentStatsTestCase(TestCase):
+    """Assignment detail Users / AC Rate must use this assignment's submissions."""
+
+    fixtures = ['language_all.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.student = create_user(username='detail-student')
+        cls.classmate = create_user(username='detail-classmate')
+        cls.outsider = create_user(username='detail-outsider')
+        cls.language = Language.objects.get(key='PY3')
+        cls.problem = create_problem(
+            code='detail-p1', name='Hello World', is_public=True, ac_rate=99.0, user_count=151,
+        )
+        cls.untouched = create_problem(
+            code='detail-p2', name='A+B Problem', is_public=True, ac_rate=58.0, user_count=87,
+        )
+        cls.contest = create_contest(
+            key='detailstats', name='Class Homework',
+            start_time=timezone.now() - timedelta(hours=1),
+            end_time=timezone.now() + timedelta(hours=2),
+            is_visible=True,
+        )
+        cls.contest_problem = create_contest_problem(
+            contest=cls.contest, problem=cls.problem, points=100, order=1,
+        )
+        create_contest_problem(contest=cls.contest, problem=cls.untouched, points=100, order=2)
+
+        student_part = create_contest_participation(contest=cls.contest, user=cls.student.profile)
+        classmate_part = create_contest_participation(contest=cls.contest, user=cls.classmate.profile)
+
+        ac = Submission.objects.create(
+            user=cls.student.profile, problem=cls.problem, language=cls.language,
+            result='AC', status='D', points=100, contest_object=cls.contest,
+        )
+        ContestSubmission.objects.create(
+            submission=ac, problem=cls.contest_problem, participation=student_part, points=100,
+        )
+        wa = Submission.objects.create(
+            user=cls.classmate.profile, problem=cls.problem, language=cls.language,
+            result='WA', status='D', points=0, contest_object=cls.contest,
+        )
+        ContestSubmission.objects.create(
+            submission=wa, problem=cls.contest_problem, participation=classmate_part, points=0,
+        )
+        Submission.objects.create(
+            user=cls.outsider.profile, problem=cls.problem, language=cls.language,
+            result='AC', status='D', points=100, contest_object=None,
+        )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.student)
+
+    @override_settings(DMOJ_ENABLE_SOCIAL=False, DMOJ_ENABLE_COMMENTS=False)
+    def test_users_and_ac_rate_use_live_assignment_submissions(self):
+        response = self.client.get(reverse('contest_view', args=[self.contest.key]))
+        self.assertEqual(response.status_code, 200)
+        problems = {p.code: p for p in response.context['contest_problems']}
+
+        attempted = problems['detail-p1']
+        self.assertEqual(attempted.user_count, 2)
+        self.assertEqual(attempted.ac_rate, 50.0)
+
+        untouched = problems['detail-p2']
+        self.assertEqual(untouched.user_count, 0)
+        self.assertEqual(untouched.ac_rate, 0.0)
+
+        self.assertContains(response, '50.0%')
+        self.assertNotContains(response, '99.0%')
+        self.assertNotContains(response, '58.0%')
+        self.assertNotContains(response, '>151<')
+        self.assertNotContains(response, '>87<')
+
+        ranked = reverse('contest_ranked_submissions', args=[self.contest.key, self.problem.code])
+        self.assertContains(response, ranked)
+        self.assertNotContains(response, reverse('ranked_submissions', args=[self.problem.code]))

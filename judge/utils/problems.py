@@ -2,14 +2,43 @@ from collections import defaultdict
 from math import e
 
 from django.core.cache import cache
-from django.db.models import Case, Count, ExpressionWrapper, F, When
+from django.db.models import Case, Count, ExpressionWrapper, F, Q, When
 from django.db.models.fields import FloatField
 from django.utils import timezone
 from django.utils.translation import gettext_noop
 
 from judge.models import Problem, Submission
 
-__all__ = ['contest_completed_ids', 'get_result_data', 'user_completed_ids', 'user_editable_ids', 'user_tester_ids']
+__all__ = [
+    'assignment_problem_stats', 'contest_completed_ids', 'get_result_data',
+    'user_completed_ids', 'user_editable_ids', 'user_tester_ids',
+]
+
+
+def assignment_problem_stats(contest):
+    """Per-problem Users / AC rate from this assignment's live submissions.
+
+    Users = distinct students who submitted the problem in this assignment.
+    AC rate = AC submissions / all submissions in this assignment.
+    Practice / global submissions are ignored (``contest_object`` filter).
+    """
+    rows = (
+        Submission.objects.filter(contest_object=contest)
+        .values('problem_id')
+        .annotate(
+            user_count=Count('user', distinct=True),
+            submission_total=Count('id'),
+            submission_ac=Count('id', filter=Q(result='AC')),
+        )
+    )
+    stats = {}
+    for row in rows:
+        total = row['submission_total']
+        stats[row['problem_id']] = {
+            'user_count': row['user_count'],
+            'ac_rate': (100.0 * row['submission_ac'] / total) if total else 0.0,
+        }
+    return stats
 
 
 def user_tester_ids(profile):
