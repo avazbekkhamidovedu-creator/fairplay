@@ -359,12 +359,13 @@ class CourseTeacherClassScopedContestAccessTest(ExamContestTestMixin, TestCase):
         )
 
         self.client.force_login(class_teacher)
+        # Visibility is not clone: clone still requires ``clone_contest``.
         resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 403)
 
 
 class ContestCloneGeneralCourseAccessTest(ExamContestTestMixin, TestCase):
-    def test_site_teacher_can_clone_general_course_assignment(self):
+    def test_site_teacher_cannot_clone_without_clone_contest(self):
         from judge.models.notification import ensure_instructors_group
         from judge.views.organization import grant_site_teacher_role
 
@@ -383,12 +384,7 @@ class ContestCloneGeneralCourseAccessTest(ExamContestTestMixin, TestCase):
 
         self.client.force_login(site_teacher)
         resp = self.client.get(reverse('contest_clone', args=[self.contest.key]))
-        self.assertEqual(resp.status_code, 200)
-
-        resp = self.client.post(reverse('contest_clone', args=[self.contest.key]), {'key': 'generalclone'})
-        self.assertRedirects(resp, reverse('contest_edit', args=['generalclone']))
-        clone = Contest.objects.get(key='generalclone')
-        self.assertIn(site_teacher.profile, clone.authors.all())
+        self.assertEqual(resp.status_code, 403)
 
     def test_student_cannot_clone_general_course_assignment(self):
         self.contest.organizations.clear()

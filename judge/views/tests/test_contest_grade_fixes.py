@@ -56,7 +56,10 @@ class ContestEditPreservesSubmissionsTestCase(GradeTestBase):
 
     def _edit(self, **overrides):
         """POST a full edit payload (with the problem list) to the editor."""
-        editor = create_user(username='sync_editor', user_permissions=('edit_all_contest',))
+        editor = create_user(
+            username='sync_editor',
+            user_permissions=('edit_own_contest', 'edit_all_contest'),
+        )
         self.contest.authors.add(editor.profile)
         now = timezone.now()
         payload = {

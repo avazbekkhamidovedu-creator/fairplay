@@ -42,8 +42,14 @@ class ContestConcurrentEditTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.teacher_a = create_user(username='race_teacher_a', user_permissions=('edit_all_contest',))
-        cls.teacher_b = create_user(username='race_teacher_b', user_permissions=('edit_all_contest',))
+        cls.teacher_a = create_user(
+            username='race_teacher_a',
+            user_permissions=('edit_own_contest', 'edit_all_contest'),
+        )
+        cls.teacher_b = create_user(
+            username='race_teacher_b',
+            user_permissions=('edit_own_contest', 'edit_all_contest'),
+        )
         _now = timezone.now()
         cls.contest = create_contest(
             key='racecontest', name='Race',
@@ -158,7 +164,10 @@ class ContestMaliciousPayloadTestCase(CommonDataMixin, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.editor = create_user(username='secure_editor', user_permissions=('edit_all_contest',))
+        cls.editor = create_user(
+            username='secure_editor',
+            user_permissions=('edit_own_contest', 'edit_all_contest'),
+        )
         _now = timezone.now()
         cls.contest = create_contest(
             key='securecontest', name='Secure',
