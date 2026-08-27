@@ -45,6 +45,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         default-libmysqlclient-dev mariadb-client libxml2-dev libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pandoc \
+    texlive-luatex \
+    texlive-latex-recommended \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt ./
 RUN pip install -r requirements.txt "gunicorn[gevent]" mysqlclient "awscli<2"
 

@@ -53,7 +53,7 @@ from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
-from judge.utils.problems import _get_result_data, user_completed_ids
+from judge.utils.problems import _get_result_data, assignment_problem_stats, user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.seb import request_matches_seb, seb_launch_context
 from judge.utils.stats import get_bar_chart, get_pie_chart
@@ -69,6 +69,7 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
+           'ContestImportScores',
            'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease',
            'ContestBatchAIGrade', 'ContestSEBConfig', 'SEBQuit', 'ContestTagCreateView', 'ContestSEBFileView',
            'ContestFinalizeView', 'ContestUnfinalizeView']
@@ -1757,14 +1758,22 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
 
     def get_context_data(self, **kwargs):
         context = super(ContestDetail, self).get_context_data(**kwargs)
-        context['contest_problems'] = Problem.objects.filter(contests__contest=self.object) \
-            .order_by('contests__order').defer('description') \
+        problems = list(
+            Problem.objects.filter(contests__contest=self.object)
+            .order_by('contests__order').defer('description')
             .annotate(has_public_editorial=Case(
                 When(solution__is_public=True, solution__publish_on__lte=timezone.now(), then=True),
                 default=False,
                 output_field=BooleanField(),
-            ), contest_points=F('contests__points'), contest_partial=F('contests__partial')) \
-            .add_i18n_name(self.request.LANGUAGE_CODE)
+            ), contest_points=F('contests__points'), contest_partial=F('contests__partial'))
+            .add_i18n_name(self.request.LANGUAGE_CODE),
+        )
+        stats = assignment_problem_stats(self.object)
+        for problem in problems:
+            problem_stats = stats.get(problem.id, {'user_count': 0, 'ac_rate': 0.0})
+            problem.user_count = problem_stats['user_count']
+            problem.ac_rate = problem_stats['ac_rate']
+        context['contest_problems'] = problems
         context['metadata'] = {
             'has_public_editorials': any(
                 problem.is_public and problem.has_public_editorial for problem in context['contest_problems']
@@ -4061,6 +4070,45 @@ class ContestExportScores(ContestMixin, PermissionRequiredMixin, BaseDetailView)
         filename = f'{self.object.key}-scores.csv'
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+
+class ContestImportScores(ContestMixin, PermissionRequiredMixin, View):
+    permission_required = 'judge.edit_own_contest'
+    http_method_names = ['post']
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        if not self.object.is_editable_by(request.user):
+            return self.handle_no_permission()
+
+        csv_file = request.FILES.get('grade_csv')
+        if not csv_file:
+            messages.error(request, _('Choose a CSV file to upload.'))
+            return HttpResponseRedirect(reverse('contest_view', args=[self.object.key]))
+
+        from judge.utils.import_export import import_contest_scores_from_csv
+        result = import_contest_scores_from_csv(
+            self.object,
+            csv_file,
+            score_column=request.POST.get('score_column'),
+        )
+
+        if result.applied:
+            messages.success(
+                request,
+                _('Contest score import finished: %(updated)d score(s) updated.') % {
+                    'updated': result.updated,
+                },
+            )
+        else:
+            messages.error(
+                request,
+                _('Contest score import was not applied. Fix the listed CSV errors and try again.'),
+            )
+        for error in result.errors:
+            messages.error(request, error)
+
+        return HttpResponseRedirect(reverse('contest_view', args=[self.object.key]))
 
 
 class ContestExportSubmissions(ContestMixin, PermissionRequiredMixin, BaseDetailView):
