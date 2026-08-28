@@ -255,6 +255,11 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         queryset = self._get_queryset().order_by(self.order, 'key').filter(end_time__lt=self._now)
         return queryset
 
+    def _can_see_assignment_authors(self):
+        """Teachers may filter assignments by contest author; students may not."""
+        from judge.views.problem import user_can_see_problem_author_metadata
+        return bool(user_can_see_problem_author_metadata(self.request.user))
+
     def get_context_data(self, **kwargs):
         context = super(ContestListV2, self).get_context_data(**kwargs)
         tf = self.time_filter
@@ -310,8 +315,24 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         # (the contest rows themselves are gated by get_visible_contests).
         visible_contests = self._get_queryset()
         context['organizations'] = Organization.objects.filter(contest__in=visible_contests).distinct()
-        context['classes'] = Class.objects.filter(contest__in=visible_contests).distinct()
+        context['classes'] = (
+            Class.objects.filter(contest__in=visible_contests)
+            .select_related('organization')
+            .distinct()
+            .order_by('organization__name', 'name')
+        )
         context['tags'] = ContestTag.objects.filter(contests__in=visible_contests).distinct()
+        can_see_authors = self._can_see_assignment_authors()
+        context['can_see_problem_authors'] = can_see_authors
+        if can_see_authors:
+            context['contest_authors'] = (
+                Profile.objects.filter(authored_contests__in=visible_contests)
+                .select_related('user')
+                .distinct()
+                .order_by('user__username')
+            )
+        else:
+            context['contest_authors'] = Profile.objects.none()
         context['total_count'] = self._total_count(active, present, future)
         context['sort_by'] = self.order
         context['group'] = self.group
@@ -1202,6 +1223,8 @@ class ContestCreate(LoginRequiredMixin, View):
             problem_type for problem_type in ProblemType.objects.order_by('full_name')
             if Problem.is_knowledge_problem_type(problem_type, reserved_labels=reserved_labels)
         ]
+        from judge.views.problem import user_can_see_problem_author_metadata
+
         profile = getattr(self.request, 'profile', None)
         return {
             'lib_format_types': format_types,
@@ -1212,6 +1235,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 ('hard', str(_('Hard'))),
             ],
             'lib_completed_ids': user_completed_ids(profile) if profile is not None else set(),
+            'can_see_problem_authors': user_can_see_problem_author_metadata(self.request.user),
         }
 
     def get_context_data(self):
@@ -1386,7 +1410,8 @@ class ContestCreate(LoginRequiredMixin, View):
             # select_related/prefetch_related feed the library columns (types /
             # difficulty / orgs / MCQ format) without N+1 queries on a large bank.
             'problems': (self._visible_problems_for(self.request.user)
-                         .select_related('mcq_config').prefetch_related('types', 'organizations')
+                         .select_related('mcq_config')
+                         .prefetch_related('types', 'organizations', 'authors__user')
                          .order_by('-date')),
             'contest': contest,
             'user_timezone': user_tz_name,

@@ -6,6 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from judge.models import Contest, ContestSubmission, ContestTag, Language, Organization, Submission
+from judge.models.profile import Class
 from judge.models.tests.util import (
     CommonDataMixin,
     create_contest,
@@ -232,6 +233,47 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_list')).content.decode()
         self.assertIn('Solved 0/1', html)
         self.assertNotIn('Solved 1/1', html)
+
+    def test_class_checkbox_includes_data_org(self):
+        """Class filter options carry data-org so the course cascade can hide them."""
+        org = self.organizations['open']
+        klass = Class.objects.create(organization=org, name='Open Class', slug='open-class')
+        contest = create_contest(
+            key='class_org_contest', name='Class Org Contest',
+            organizations=('open',), is_visible=True,
+        )
+        contest.classes.add(klass)
+        self.client.force_login(self.users['normal_user'])
+        response = self.client.get(reverse('contest_list'))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn('data-org="open"', html)
+        self.assertIn('value="Open Class"', html)
+        classes = list(response.context['classes'])
+        self.assertTrue(any(c.pk == klass.pk and c.organization_id == org.id for c in classes))
+
+    def test_teacher_sees_assignment_author_filter(self):
+        """Teachers get an author filter built from visible contest authors."""
+        self.client.force_login(self.users['staff_problem_edit_own'])
+        response = self.client.get(reverse('contest_list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['can_see_problem_authors'])
+        authors = list(response.context['contest_authors'])
+        self.assertTrue(any(a.user.username == 'superuser' for a in authors))
+        html = response.content.decode()
+        self.assertIn('id="author-multi-select"', html)
+        self.assertIn('data-authors="%s"' % self.users['superuser'].profile.id, html)
+
+    def test_student_hides_assignment_author_filter(self):
+        """Students do not see the author filter; a URL author param is ignored."""
+        self.client.force_login(self.users['normal_user'])
+        response = self.client.get(reverse('contest_list') + '?author=1')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['can_see_problem_authors'])
+        self.assertEqual(list(response.context['contest_authors']), [])
+        html = response.content.decode()
+        self.assertNotIn('id="author-multi-select"', html)
+        self.assertNotIn('data-authors=', html)
 
 
 class ContestCreateViewTestCase(CommonDataMixin, TestCase):

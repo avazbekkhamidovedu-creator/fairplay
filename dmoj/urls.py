@@ -27,9 +27,9 @@ from judge.views.problem_create_v2 import (
 from judge.views.problem_data import ProblemDataView, ProblemSubmissionDiff, \
     download_test_case, download_tester, problem_data_file, problem_init_view
 from judge.views.register import ActivationView, RegistrationView
-from judge.views.select2 import AssigneeSelect2View, ClassSelect2View, CommentSelect2View, ContestFilterSelect2View, \
-    ContestSelect2View, ContestUserSearchSelect2View, OrganizationSelect2View, ProblemFilterSelect2View, \
-    ProblemSelect2View, TicketUserSelect2View, UserSearchSelect2View, UserSelect2View
+from judge.views.select2 import AssigneeSelect2View, AuthorFilterSelect2View, ClassSelect2View, CommentSelect2View, \
+    ContestFilterSelect2View, ContestSelect2View, ContestUserSearchSelect2View, OrganizationSelect2View, \
+    ProblemFilterSelect2View, ProblemSelect2View, TicketUserSelect2View, UserSearchSelect2View, UserSelect2View
 from judge.views.widgets import martor_image_uploader
 from martor.views import markdown_search_user
 
@@ -493,6 +493,7 @@ urlpatterns = [
 
     path('judge-select2/', include([
         path('profile/', UserSelect2View.as_view(), name='profile_select2'),
+        path('author-filter/', AuthorFilterSelect2View.as_view(), name='author_filter_select2'),
         path('organization/', OrganizationSelect2View.as_view(), name='organization_select2'),
         path('class/', ClassSelect2View.as_view(), name='class_select2'),
         path('problem/', ProblemSelect2View.as_view(), name='problem_select2'),

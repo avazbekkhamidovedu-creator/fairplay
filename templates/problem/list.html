@@ -49,7 +49,7 @@
         }
         /* Hide native <select>s until Select2 replaces them. Without this, a
            filter submit flashes every option stacked in the filter row. */
-        #filter-format, #filter-difficulty, #filter-course, #filter-knowledge, #status-filter {
+        #filter-format, #filter-difficulty, #filter-course, #filter-author, #filter-knowledge, #status-filter {
             visibility: hidden;
             height: 34px;
             max-height: 34px;
@@ -60,6 +60,7 @@
         #filter-format { width: 140px; }
         #filter-difficulty { width: 120px; }
         #filter-course { width: 150px; }
+        #filter-author { width: 180px; }
         #filter-knowledge { width: clamp(280px, 48%, 560px); max-width: 100%; }
         #status-filter { width: 100px; }
     </style>
@@ -175,7 +176,7 @@
                     width: '140px',
                     matcher: idAndTextMatcher,
                 };
-                var $filterSelects = $('#filter-format, #filter-difficulty, #filter-course, #filter-knowledge');
+                var $filterSelects = $('#filter-format, #filter-difficulty, #filter-course, #filter-author, #filter-knowledge');
                 $('#filter-format').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All types')|htmltojs }},
                 })).css({visibility: 'visible'});
@@ -187,6 +188,23 @@
                     placeholder: {{ _('All courses')|htmltojs }},
                     width: '150px',
                 })).css({visibility: 'visible'});
+                {% if can_see_problem_authors %}
+                $('#filter-author').select2($.extend({}, select2Opts, {
+                    placeholder: {{ _('All authors')|htmltojs }},
+                    width: '180px',
+                    ajax: {
+                        url: '{{ url('author_filter_select2') }}',
+                        dataType: 'json',
+                        delay: 250,
+                        data: function (params) {
+                            return { term: params.term || '' };
+                        },
+                        processResults: function (data) {
+                            return { results: data.results || [], pagination: { more: !!data.more } };
+                        },
+                    },
+                })).css({visibility: 'visible'});
+                {% endif %}
                 $('#filter-knowledge').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All tags')|htmltojs }},
                 })).css({visibility: 'visible'});
@@ -282,6 +300,7 @@
                         removeSelectValue($('#filter-knowledge'), value);
                     } else if (field === 'format') removeSelectValue($('#filter-format'), value);
                     else if (field === 'course' || field === 'organization') removeSelectValue($('#filter-course'), value);
+                    else if (field === 'author') removeSelectValue($('#filter-author'), value);
                     else if (field === 'status') { $('#status-filter').val('').trigger('change'); return; }
                     else if (field === 'ac') { $('input[name=ac_min]').val(''); $('input[name=ac_max]').val(''); go(); }
                     else if (field === 'search') {
@@ -581,6 +600,17 @@
                             </select>
                         </div>
 
+                        {% if can_see_problem_authors %}
+                            <div class="filter-group">
+                                <span class="filter-group-label">{{ _('Authors') }}</span>
+                                <select id="filter-author" name="author" multiple>
+                                    {% for profile in selected_author_profiles %}
+                                        <option value="{{ profile.id }}" selected>{{ profile.display_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        {% endif %}
+
                         {% if request.user.is_authenticated %}
                             <div class="filter-group">
                                 <span class="filter-group-label">{{ _('Status') }}</span>
@@ -659,7 +689,7 @@
                 <div class="filter-row selected-row">
                     <span class="filter-label">{{ _('Selected') }}</span>
                     <div class="chip-list" id="active-chips">
-                        {% set has_chip = selected_types or selected_formats or selected_organizations or problem_status or (ac_min != '') or (ac_max != '') or search_terms or full_text %}
+                        {% set has_chip = selected_types or selected_formats or selected_organizations or selected_authors or problem_status or (ac_min != '') or (ac_max != '') or search_terms or full_text %}
                         {% for f in format_types %}{% if f.code in selected_formats %}
                             <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
@@ -669,6 +699,9 @@
                         {% for org in organizations %}{% if org.id in selected_organizations %}
                             <span class="chip">{{ org.name }}<button type="button" data-field="course" data-value="{{ org.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
+                        {% for profile in selected_author_profiles %}
+                            <span class="chip">{{ profile.display_name }}<button type="button" data-field="author" data-value="{{ profile.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
+                        {% endfor %}
                         {% for type in knowledge_types %}{% if type.id in selected_knowledge_types %}
                             <span class="chip">{{ user_trans(type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
@@ -747,6 +780,9 @@
                             {% endif %}
                             <th class="col-name">{{ sortth(_('Problem'), sort_links.name, sort_order.name) }}</th>
                             <th class="col-type">{{ sortth(_('Problem type'), sort_links.type, sort_order.type) }}</th>
+                            {% if can_see_problem_authors %}
+                                <th class="col-author">{{ _('Author') }}</th>
+                            {% endif %}
                             <th class="col-tags">
                                 <button type="button" class="btn-text btn-sm" id="toggle-tags">{{ _('Hide tags') }}</button>
                             </th>
@@ -816,6 +852,15 @@
                                         <span class="tag-placeholder">&mdash;</span>
                                     {% endfor %}
                                 </td>
+                                {% if can_see_problem_authors %}
+                                    <td class="col-author">
+                                        {% if problem.authors.all() %}
+                                            {{ link_users(problem.authors.all()) }}
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                    </td>
+                                {% endif %}
                                 <td class="col-tags">
                                     {% for type in problem.knowledge_types_list %}
                                         <span class="tag-badge">{{ type }}</span>

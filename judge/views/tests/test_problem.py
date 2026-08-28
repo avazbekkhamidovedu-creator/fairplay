@@ -18,7 +18,7 @@ from judge.models.tests.util import (
     create_user,
 )
 from judge.question_types import all_types
-from judge.views.problem import ProblemList
+from judge.views.problem import ProblemList, user_can_see_problem_author_metadata
 
 
 class ProblemListTestBase(CommonDataMixin, TestCase):
@@ -589,6 +589,92 @@ class ProblemListFilterTestCase(ProblemListTestBase):
         response = self.client.post('{}?hide_solved=1'.format(reverse('problem_list')))
         self.assertEqual(response.status_code, 302)
         self.assertTrue(self.client.session.get('hide_solved'))
+
+
+class ProblemListAuthorFilterTestCase(ProblemListTestBase):
+    def _assign_authors(self):
+        own = self.users['staff_problem_edit_own']
+        all_ed = self.users['staff_problem_edit_all']
+        self.problem_easy.authors.add(own.profile)
+        self.problem_hard.authors.add(all_ed.profile)
+        self.problem_alpha.authors.add(own.profile, all_ed.profile)
+
+    def test_permission_helper_does_not_use_is_staff(self):
+        self.assertTrue(user_can_see_problem_author_metadata(self.users['staff_problem_edit_own_no_staff']))
+        self.assertTrue(user_can_see_problem_author_metadata(self.users['staff_problem_see_all']))
+        self.assertFalse(user_can_see_problem_author_metadata(self.users['normal']))
+        self.assertFalse(user_can_see_problem_author_metadata(self.users['anonymous']))
+        self.assertFalse(user_can_see_problem_author_metadata(self.users['staff_problem_see_organization']))
+
+    def test_student_author_query_is_ignored(self):
+        self._assign_authors()
+        author_id = self.users['staff_problem_edit_own'].profile.id
+        with_filter = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'author': [str(author_id)], 'filtered': '1'},
+        ))
+        without = self._filter_group_codes(self._filtered_codes(
+            self.users['normal'],
+            {'filtered': '1'},
+        ))
+        self.assertEqual(with_filter, without)
+        self.assertIn('filter-hard', with_filter)
+        self.assertIn('filter-easy', with_filter)
+
+    def test_student_html_hides_author_ui(self):
+        self._assign_authors()
+        self.client.force_login(self.users['normal'])
+        response = self.client.get(reverse('problem_list'), {
+            'author': str(self.users['staff_problem_edit_own'].profile.id),
+            'filtered': '1',
+        })
+        html = response.content.decode()
+        self.assertFalse(response.context['can_see_problem_authors'])
+        self.assertNotIn('id="filter-author"', html)
+        self.assertNotIn('col-author', html)
+        self.assertContains(response, 'Hard Filter Problem')
+
+    def test_instructor_author_filter_or_semantics(self):
+        self._assign_authors()
+        own_id = self.users['staff_problem_edit_own'].profile.id
+        all_id = self.users['staff_problem_edit_all'].profile.id
+        instructor = self.users['staff_problem_edit_own']
+        single = self._filter_group_codes(self._filtered_codes(
+            instructor, {'author': [str(own_id)], 'filtered': '1'},
+        ))
+        self.assertEqual(single, {'filter-easy', 'filter-alpha'})
+        both = self._filter_group_codes(self._filtered_codes(
+            instructor, {'author': [str(own_id), str(all_id)], 'filtered': '1'},
+        ))
+        self.assertEqual(both, {'filter-easy', 'filter-hard', 'filter-alpha'})
+
+    def test_instructor_selected_authors_prefill(self):
+        self._assign_authors()
+        own = self.users['staff_problem_edit_own']
+        ctx = self._context(own, {'author': [str(own.profile.id)], 'filtered': '1'})
+        self.assertTrue(ctx['can_see_problem_authors'])
+        self.assertEqual(ctx['selected_authors'], [own.profile.id])
+        self.assertEqual([profile.id for profile in ctx['selected_author_profiles']], [own.profile.id])
+
+    def test_instructor_html_shows_author_column_and_empty_dash(self):
+        self._assign_authors()
+        self.client.force_login(self.users['staff_problem_edit_own'])
+        response = self.client.get(reverse('problem_list'))
+        html = response.content.decode()
+        self.assertTrue(response.context['can_see_problem_authors'])
+        self.assertIn('id="filter-author"', html)
+        self.assertIn('col-author', html)
+        self.assertContains(response, 'staff_problem_edit_own')
+        self.assertRegex(html, r'class="col-author">\s*—\s*</td>')
+
+    def test_see_private_problem_perm_can_filter(self):
+        self._assign_authors()
+        own_id = self.users['staff_problem_edit_own'].profile.id
+        codes = self._filter_group_codes(self._filtered_codes(
+            self.users['staff_problem_see_all'],
+            {'author': [str(own_id)], 'filtered': '1'},
+        ))
+        self.assertEqual(codes, {'filter-easy', 'filter-alpha'})
 
 
 class ProblemListSortTestCase(ProblemListTestBase):
