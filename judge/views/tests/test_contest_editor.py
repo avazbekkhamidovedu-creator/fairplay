@@ -1166,6 +1166,52 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             data=json.dumps(data), content_type='application/json',
         )
 
+    def test_adopting_the_default_clears_the_contests_own_config(self):
+        """Ticking "use the default" must actually hand control to the preset.
+
+        Every SEB accessor prefers the contest's own value, and the editor hides
+        those fields once the box is ticked — so leaving them kept serving the
+        old upload with no visible reason why.
+        """
+        _create_preset()
+        self._post(name='SEB Own', key='sebown', seb_required=True,
+                   seb_browser_exam_keys='a' * 64, seb_config_keys='b' * 64,
+                   seb_quit_url='https://example.com/quit')
+        contest = Contest.objects.get(key='sebown')
+        contest.seb_config_file.save('own.seb', ContentFile(b'OLD UPLOAD'), save=True)
+        self.assertEqual(contest.seb_effective_config_file.read(), b'OLD UPLOAD')
+
+        response = self._edit_seb(contest, seb_use_default=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        contest.refresh_from_db()
+
+        self.assertFalse(contest.seb_config_file)
+        self.assertEqual(contest.seb_browser_exam_keys, '')
+        self.assertEqual(contest.seb_config_keys, '')
+        self.assertEqual(contest.seb_quit_url, '')
+        # The preset now supplies the file AND the hashes that authenticate it.
+        self.assertEqual(contest.seb_effective_config_file.read(), b'SEB config')
+        self.assertEqual(contest.seb_allowed_bek(), contest.seb_preset.allowed_bek())
+        self.assertEqual(contest.seb_allowed_config_keys(), contest.seb_preset.allowed_config_keys())
+
+    def test_adopting_the_default_refuses_during_a_live_exam(self):
+        # Clearing the overrides re-keys the contest; doing that mid-exam would
+        # 403 every student already inside SEB.
+        _create_preset()
+        self._post(name='SEB Live', key='seblive', seb_required=True,
+                   seb_browser_exam_keys='a' * 64, seb_config_keys='b' * 64)
+        contest = Contest.objects.get(key='seblive')
+        now = timezone.now()
+        Contest.objects.filter(pk=contest.pk).update(
+            start_time=now - timedelta(hours=1), end_time=now + timedelta(hours=1))
+        contest.refresh_from_db()
+
+        response = self._edit_seb(contest, seb_use_default=True)
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn('in progress', response.content.decode())
+        contest.refresh_from_db()
+        self.assertEqual(contest.seb_browser_exam_keys, 'a' * 64)
+
     def test_resave_keeps_existing_preset_when_default_changes(self):
         # Publishing a newer default must not silently re-point an existing
         # assignment: that changes its Config Key and 403s every student

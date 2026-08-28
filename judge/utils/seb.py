@@ -56,31 +56,50 @@ def _abbrev(digest):
     return (digest or '')[:12]
 
 
-def _candidate_urls(request):
-    """URLs SEB might have requested that differ from what Django reconstructed.
+def seb_url_variants(url, extra_hosts=()):
+    """URLs a client might have hashed that differ from ``url``.
 
-    A mismatch has two very different causes with one symptom: the key hashes on
-    the contest are stale, or the server rebuilt the wrong URL to hash (TLS
-    terminated at a proxy, a rewritten Host, an explicit port). Re-running the
-    comparison against these variants separates the two.
+    A mismatch has two very different causes with one symptom: the configured key
+    hashes are stale, or the URL being hashed is not the URL the client
+    requested. Re-running the comparison across these variants separates them.
+
+    Varies scheme (TLS terminated at a proxy), host and port (a rewritten Host
+    header), and path — a trailing slash matters because a client that hashes
+    before following a redirect signs the pre-redirect URL.
     """
-    actual = request.build_absolute_uri()
-    parsed = urlparse(actual)
+    parsed = urlparse(url)
     hosts = {parsed.netloc}
-    forwarded_host = request.META.get('HTTP_X_FORWARDED_HOST')
-    if forwarded_host:
-        hosts.add(forwarded_host.split(',')[0].strip())
-    # A proxy that forwards to a non-default port leaves it in HTTP_HOST while
-    # the client never saw it.
+    hosts.update(h for h in extra_hosts if h)
+    # A proxy forwarding to a non-default port leaves it in HTTP_HOST while the
+    # client never saw it.
     if ':' in parsed.netloc:
         hosts.add(parsed.netloc.rsplit(':', 1)[0])
-    candidates = []
+
+    paths = {parsed.path}
+    if parsed.path.endswith('/'):
+        paths.add(parsed.path.rstrip('/') or '/')
+    else:
+        paths.add(parsed.path + '/')
+
+    # Some builds hash the path only; try dropping the query as well as keeping it.
+    queries = {parsed.query, ''} if parsed.query else {''}
+
+    variants = []
     for scheme in ('http', 'https'):
-        for host in hosts:
-            candidate = urlunparse((scheme, host, parsed.path, parsed.params, parsed.query, ''))
-            if candidate != actual and candidate not in candidates:
-                candidates.append(candidate)
-    return candidates
+        for host in sorted(hosts):
+            for path in sorted(paths):
+                for query in sorted(queries):
+                    candidate = urlunparse((scheme, host, path, parsed.params, query, ''))
+                    if candidate != url and candidate not in variants:
+                        variants.append(candidate)
+    return variants
+
+
+def _candidate_urls(request):
+    """:func:`seb_url_variants` for the URL this request reconstructed."""
+    forwarded_host = request.META.get('HTTP_X_FORWARDED_HOST')
+    extra = [forwarded_host.split(',')[0].strip()] if forwarded_host else []
+    return seb_url_variants(request.build_absolute_uri(), extra)
 
 
 def _diagnose_url_mismatch(request, received, keys):
