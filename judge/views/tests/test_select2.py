@@ -121,3 +121,25 @@ class UserSelect2NameSearchTest(CommonDataMixin, TestCase):
         """Teacher form pickers keep the original profile_select2 scope."""
         rows = self._results('profile_select2', 'Hidden')
         self.assertTrue(any(row['id'] == self.unlisted.profile.id for row in rows))
+
+
+class AuthorFilterSelect2Test(CommonDataMixin, TestCase):
+    """Students cannot enumerate users via the problem-author filter endpoint."""
+
+    def _ids(self, user, term=''):
+        if user == 'anonymous':
+            self.client.logout()
+        else:
+            self.client.force_login(self.users[user])
+        results = self.client.get(reverse('author_filter_select2'), {'term': term}).json()['results']
+        return {row['id'] for row in results}
+
+    def test_student_gets_empty_results(self):
+        self.assertEqual(self._ids('normal', 'superuser'), set())
+
+    def test_anonymous_gets_empty_results(self):
+        self.assertEqual(self._ids('anonymous', 'superuser'), set())
+
+    def test_instructor_can_search_profiles(self):
+        ids = self._ids('staff_problem_edit_own', 'superuser')
+        self.assertIn(self.users['superuser'].profile.id, ids)

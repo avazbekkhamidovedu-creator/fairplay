@@ -262,6 +262,7 @@
     var formats = multiValues('fp-type');
     var diffs = multiValues('fp-diff');
     var courses = multiValues('fp-course');
+    var authors = multiValues('fp-author');
     var tags = multiValues('fp-tags');
     var status = ($('#fp-status') || $('#drawer-filter-status') || {}).value || '';
     var min = Number(($('#fp-ac-min') || {}).value || 0);
@@ -274,6 +275,7 @@
         && matchesFormat(item, formats)
         && (!diffs.length || diffs.indexOf(item.dataset.diff || '') !== -1)
         && matchesCourse(item, courses)
+        && tokenHit(item.dataset.authorIds, authors)
         && tokenHit(item.dataset.kp, tags)
         && (!status
           || item.dataset.status === status
@@ -328,7 +330,7 @@
       renderingDrawer = false;
     }
   }
-  ['drawer-q', 'fp-type', 'fp-diff', 'fp-course', 'fp-tags', 'fp-status', 'drawer-filter-status', 'fp-ac-min', 'fp-ac-max'].forEach(function (id) {
+  ['drawer-q', 'fp-type', 'fp-diff', 'fp-course', 'fp-author', 'fp-tags', 'fp-status', 'drawer-filter-status', 'fp-ac-min', 'fp-ac-max'].forEach(function (id) {
     var element = document.getElementById(id);
     if (!element) return;
     element.addEventListener('input', function () { page = 0; renderDrawer(); });
@@ -346,6 +348,25 @@
         placeholder: el.getAttribute('data-placeholder') || '',
       })).on('change', function () { page = 0; renderDrawer(); });
     });
+    var authorEl = document.getElementById('fp-author');
+    if (authorEl) {
+      var authorOpts = $jq.extend({}, multiOpts, {
+        placeholder: authorEl.getAttribute('data-placeholder') || '',
+      });
+      var ajaxUrl = authorEl.getAttribute('data-ajax-url');
+      if (ajaxUrl) {
+        authorOpts.ajax = {
+          url: ajaxUrl,
+          dataType: 'json',
+          delay: 250,
+          data: function (params) { return { term: params.term || '' }; },
+          processResults: function (data) {
+            return { results: data.results || [], pagination: { more: !!data.more } };
+          },
+        };
+      }
+      $jq(authorEl).select2(authorOpts).on('change', function () { page = 0; renderDrawer(); });
+    }
     var statusEl = document.getElementById('fp-status');
     if (statusEl) {
       $jq(statusEl).select2({

@@ -57,6 +57,22 @@ class UserSelect2View(Select2View):
         return profile_choice_label(obj)
 
 
+class AuthorFilterSelect2View(UserSelect2View):
+    """Profile picker for problem-author filters. Students get no users."""
+
+    def get(self, request, *args, **kwargs):
+        from judge.views.problem import user_can_see_problem_author_metadata
+        if not user_can_see_problem_author_metadata(request.user):
+            return JsonResponse({'results': [], 'more': False})
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        from judge.views.problem import user_can_see_problem_author_metadata
+        if not user_can_see_problem_author_metadata(self.request.user):
+            return Profile.objects.none()
+        return super().get_queryset()
+
+
 class OrganizationSelect2View(Select2View):
     def get_queryset(self):
         queryset = Organization.objects.filter(name__icontains=self.term)

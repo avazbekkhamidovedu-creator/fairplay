@@ -993,6 +993,24 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('id="cp-from-library"', html)
         self.assertIn('id="id_allow_ai_hints"', html)
 
+    def test_library_author_filter_hidden_without_problem_perm(self):
+        html = self.client.get(reverse('contest_create')).content.decode()
+        _, library = html.split('id="problem-library"', 1)
+        self.assertNotIn('id="lib-filter-author"', library)
+        self.assertNotIn('data-author-ids', library)
+
+    def test_library_author_filter_visible_for_problem_editor(self):
+        teacher = create_user(username='lib_author_teacher', user_permissions=(
+            'add_contest', 'create_private_contest', 'edit_own_problem',
+        ))
+        create_problem('libauthp', name='Lib Auth P', is_public=True, authors=('lib_author_teacher',))
+        self.client.force_login(teacher)
+        html = self.client.get(reverse('contest_create')).content.decode()
+        _, library = html.split('id="problem-library"', 1)
+        self.assertIn('id="lib-filter-author"', library)
+        self.assertIn('data-author-ids', library)
+        self.assertIn(str(teacher.profile.id), library)
+
     def test_course_selects_omit_public_sentinel(self):
         public_problem = create_problem(
             'libpubshown', name='Library Public Shown', is_public=True,

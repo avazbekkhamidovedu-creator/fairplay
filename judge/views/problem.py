@@ -58,6 +58,7 @@ from judge.models import (
     ProblemTestCase,
     ProblemTranslation,
     ProblemType,
+    Profile,
     RuntimeVersion,
     Solution,
     Submission,
@@ -103,6 +104,17 @@ def get_contest_submission_count(problem, profile, virtual):
         profile.current_contest.submissions.exclude(submission__status__in=['IE'])
         .filter(problem__problem=problem, participation__virtual=virtual)
         .count()
+    )
+
+
+def user_can_see_problem_author_metadata(user):
+    """Teachers/editors may see problem-author filters and columns; students may not."""
+    if not user.is_authenticated:
+        return False
+    return (
+        user.has_perm('judge.edit_own_problem')
+        or user.has_perm('judge.see_private_problem')
+        or user.has_perm('judge.edit_all_problem')
     )
 
 
@@ -479,6 +491,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         context = super(ProblemDetail, self).get_context_data(**kwargs)
         user = self.request.user
         authed = user.is_authenticated
+        can_see_authors = user_can_see_problem_author_metadata(user)
+        context['can_see_problem_authors'] = can_see_authors
         context['has_submissions'] = (
             authed and Submission.objects.filter(user=user.profile, problem=self.object).exists()
         )
@@ -503,10 +517,13 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             else:
                 context['workspace_mode'] = 'assignment'
             context['workspace_context_id'] = contest.key
+            contest_prefetch = ['problem__types', 'problem__organizations']
+            if can_see_authors:
+                contest_prefetch.append('problem__authors__user')
             context['workspace_problems'] = list(ContestProblem.objects.filter(
                 contest=contest,
             ).select_related('problem', 'problem__mcq_config').prefetch_related(
-                'problem__types', 'problem__organizations',
+                *contest_prefetch,
             ).order_by('order'))
             lang = self.request.LANGUAGE_CODE
             for cp in context['workspace_problems']:
@@ -517,10 +534,13 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         else:
             context['workspace_mode'] = 'practice'
             context['workspace_context_id'] = ''
+            practice_prefetch = ['types', 'organizations']
+            if can_see_authors:
+                practice_prefetch.append('authors__user')
             context['workspace_problems'] = (
                 Problem.get_visible_problems(user)
                 .select_related('mcq_config')
-                .prefetch_related('types', 'organizations')
+                .prefetch_related(*practice_prefetch)
                 .order_by('code')[:250]
             )
             context['workspace_context_name'] = _('Problem list')
@@ -1342,7 +1362,12 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             queryset = queryset.filter(ac_rate__gte=self.ac_min)
         if self.ac_max is not None:
             queryset = queryset.filter(ac_rate__lte=self.ac_max)
-        return queryset.distinct()
+        if self.selected_authors:
+            queryset = queryset.filter(authors__in=self.selected_authors)
+        queryset = queryset.distinct()
+        if user_can_see_problem_author_metadata(self.request.user):
+            queryset = queryset.prefetch_related('authors__user')
+        return queryset
 
     def get_queryset(self):
         if self.in_contest:
@@ -1360,6 +1385,19 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         context['categories'] = ProblemGroup.objects.all()
         context['organizations'] = self.get_course_filter_organizations()
         context['selected_organizations'] = self.selected_organizations
+        can_see_authors = user_can_see_problem_author_metadata(self.request.user)
+        context['can_see_problem_authors'] = can_see_authors
+        context['selected_authors'] = self.selected_authors if can_see_authors else []
+        if can_see_authors and self.selected_authors:
+            author_map = {
+                profile.id: profile
+                for profile in Profile.objects.filter(pk__in=self.selected_authors).select_related('user')
+            }
+            context['selected_author_profiles'] = [
+                author_map[pk] for pk in self.selected_authors if pk in author_map
+            ]
+        else:
+            context['selected_author_profiles'] = []
         if self.show_types:
             # Tags (knowledge points) come from the ProblemType taxonomy.
             all_problem_types = list(ProblemType.objects.all())
@@ -1532,6 +1570,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         self.selected_types = []
         self.selected_formats = []
         self.selected_organizations = []
+        self.selected_authors = []
 
         # This actually copies into the instance dictionary...
         self.all_sorts = set(self.all_sorts)
@@ -1555,6 +1594,12 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             for raw in raw_courses:
                 try:
                     self.selected_organizations.append(int(raw))
+                except (TypeError, ValueError):
+                    pass
+        if user_can_see_problem_author_metadata(request.user) and 'author' in request.GET:
+            for raw in request.GET.getlist('author'):
+                try:
+                    self.selected_authors.append(int(raw))
                 except (TypeError, ValueError):
                     pass
 
