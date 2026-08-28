@@ -1607,3 +1607,16 @@ ul.problem-list {
         }
     }
 }
+
+/* Author column: teachers-only on the problem list. */
+.problem-list-redesign {
+    .problem-table {
+        .col-author {
+            width: 140px;
+        }
+
+        td.col-author {
+            text-align: left;
+        }
+    }
+}

@@ -77,6 +77,50 @@
             window.refreshOrgLabel = function() { refreshMultiLabel('org-multi-select', 'org-multi-label'); };
             window.refreshClassLabel = function() { refreshMultiLabel('class-multi-select', 'class-multi-label'); };
             window.refreshTagLabel = function() { refreshMultiLabel('tag-multi-select', 'tag-multi-label'); };
+            window.refreshAuthorLabel = function() {
+                if (!document.getElementById('author-multi-label')) return;
+                refreshMultiLabel('author-multi-select', 'author-multi-label');
+            };
+
+            // Course → Class cascade: selected courses show the union of their
+            // classes; with no course selected, every class stays listed.
+            var classCatalog = Array.from(document.querySelectorAll('#class-multi-select .multi-select-option')).map(function(label) {
+                var input = label.querySelector('input');
+                var spans = label.querySelectorAll('span');
+                return {
+                    value: input ? input.value : '',
+                    org: input ? (input.getAttribute('data-org') || '') : '',
+                    name: spans.length ? spans[spans.length - 1].textContent.trim() : (input ? input.value : ''),
+                };
+            });
+            window.rebuildClassOptions = function() {
+                var menu = document.querySelector('#class-multi-select .multi-select-menu');
+                if (!menu) return;
+                var orgs = checkedValues('#org-multi-select');
+                var keep = {};
+                checkedValues('#class-multi-select').forEach(function(v) { keep[v] = true; });
+                while (menu.firstChild) menu.removeChild(menu.firstChild);
+                classCatalog.forEach(function(item) {
+                    if (orgs.length && orgs.indexOf(item.org) === -1) return;
+                    var label = document.createElement('label');
+                    label.className = 'multi-select-option';
+                    var input = document.createElement('input');
+                    input.type = 'checkbox';
+                    input.value = item.value;
+                    input.setAttribute('data-org', item.org);
+                    if (keep[item.value]) input.checked = true;
+                    input.addEventListener('change', function() {
+                        refreshClassLabel();
+                        applyClientFilter();
+                    });
+                    var span = document.createElement('span');
+                    span.textContent = item.name;
+                    label.appendChild(input);
+                    label.appendChild(span);
+                    menu.appendChild(label);
+                });
+                refreshClassLabel();
+            };
 
             // ── Status single-select label (radio, native single-select) ──
             window.refreshStatusLabel = function() {
@@ -105,6 +149,7 @@
                     orgs: checkedValues('#org-multi-select'),
                     classes: checkedValues('#class-multi-select'),
                     tags: checkedValues('#tag-multi-select'),
+                    authors: document.getElementById('author-multi-select') ? checkedValues('#author-multi-select') : [],
                     q: (document.getElementById('f-q').value || '').trim().toLowerCase(),
                     time: timeRadio ? timeRadio.value : ''
                 };
@@ -117,6 +162,7 @@
                 if (st.orgs.length) params.set('org', st.orgs.join(','));
                 if (st.classes.length) params.set('class', st.classes.join(','));
                 if (st.tags.length) params.set('tag', st.tags.join(','));
+                if (st.authors && st.authors.length) params.set('author', st.authors.join(','));
                 if (st.q) params.set('search', st.q);
                 if (st.time) params.set('time', st.time);
                 if (state.order !== '-start_time') params.set('order', state.order);
@@ -144,7 +190,8 @@
 
             window.applyClientFilter = function() {
                 var st = clientState();
-                var filtering = st.orgs.length || st.classes.length || st.tags.length || st.q || st.time !== '';
+                var filtering = st.orgs.length || st.classes.length || st.tags.length ||
+                    (st.authors && st.authors.length) || st.q || st.time !== '';
 
                 var visible = 0;
                 document.querySelectorAll('.cl-row').forEach(function(row) {
@@ -161,6 +208,10 @@
                     if (show && st.tags.length) {
                         var rowTags = (row.dataset.tags || '').split(',');
                         if (!st.tags.every(function(t) { return rowTags.indexOf(t) !== -1; })) show = false;
+                    }
+                    if (show && st.authors && st.authors.length) {
+                        var rowAuthors = (row.dataset.authors || '').split(',');
+                        if (!st.authors.some(function(a) { return rowAuthors.indexOf(a) !== -1; })) show = false;
                     }
                     if (show && st.q) {
                         var hay = (row.dataset.search || '').toLowerCase();
@@ -221,9 +272,11 @@
                 });
                 refreshStatusLabel();
                 document.getElementById('f-q').value = '';
+                rebuildClassOptions();
                 refreshOrgLabel();
                 refreshClassLabel();
                 refreshTagLabel();
+                refreshAuthorLabel();
                 state = { org: [], cls: [], tags: [], q: '', order: state.order, group: state.group };
                 applyClientFilter();
             };
@@ -253,6 +306,8 @@
             });
 
             // ── Initialize labels from URL params ──
+            // Restore courses first, then rebuild class options so the class
+            // checkboxes exist before the class query is applied.
             {% if request.GET.org %}
                 var orgVals = '{{ request.GET.org|escapejs }}'.split(',');
                 orgVals.forEach(function(v) {
@@ -261,6 +316,7 @@
                 });
                 refreshOrgLabel();
             {% endif %}
+            rebuildClassOptions();
             {% if request.GET.class %}
                 var classVals = '{{ request.GET.class|escapejs }}'.split(',');
                 classVals.forEach(function(v) {
@@ -276,6 +332,14 @@
                     if (cb) cb.checked = true;
                 });
                 refreshTagLabel();
+            {% endif %}
+            {% if can_see_problem_authors and request.GET.author %}
+                var authorVals = '{{ request.GET.author|escapejs }}'.split(',');
+                authorVals.forEach(function(v) {
+                    var cb = document.querySelector('#author-multi-select input[value="' + v + '"]');
+                    if (cb) cb.checked = true;
+                });
+                refreshAuthorLabel();
             {% endif %}
 
             // ── Pagination preserves filter params ──
@@ -429,6 +493,7 @@
         {% set tag_names = contest.tags.all()|map(attribute='name')|join(',') %}
         <article class="cl-row" data-key="{{ contest.key }}" data-status="{{ status }}"
                  data-orgs="{{ org_names }}" data-classes="{{ class_names }}" data-tags="{{ tag_names }}"
+                 {% if can_see_problem_authors %}data-authors="{{ contest.authors.all()|map(attribute='id')|join(',') }}" {% endif %}
                  data-search="{{ contest.name }} {{ contest.key }}">
             {% if perms.judge.delete_contest %}
             <div class="cl-select">
@@ -590,7 +655,7 @@
                             <div class="multi-select-menu" hidden>
                                 {% for org in organizations %}
                                     <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ org.name }}" onchange="refreshOrgLabel(); applyClientFilter();">
+                                        <input type="checkbox" value="{{ org.name }}" onchange="refreshOrgLabel(); rebuildClassOptions(); applyClientFilter();">
                                         <span>{{ org.name }}</span>
                                     </label>
                                 {% endfor %}
@@ -609,7 +674,7 @@
                             <div class="multi-select-menu" hidden>
                                 {% for cls in classes %}
                                     <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ cls.name }}" onchange="refreshClassLabel(); applyClientFilter();">
+                                        <input type="checkbox" value="{{ cls.name }}" data-org="{{ cls.organization.name }}" onchange="refreshClassLabel(); applyClientFilter();">
                                         <span>{{ cls.name }}</span>
                                     </label>
                                 {% endfor %}
@@ -669,6 +734,26 @@
                             </div>
                         </div>
                     </div>
+
+                    {% if can_see_problem_authors %}
+                    <div class="filter-group">
+                        <span class="filter-group-label">{{ _('Author') }}</span>
+                        <div class="multi-select" id="author-multi-select">
+                            <button type="button" class="multi-select-trigger" onclick="toggleMenu('author-multi-select')">
+                                <span id="author-multi-label" class="multi-select-text multi-select-label-empty" data-empty-label="{{ _('All authors') }}">{{ _('All authors') }}</span>
+                                <span class="multi-select-caret">▾</span>
+                            </button>
+                            <div class="multi-select-menu" hidden>
+                                {% for author in contest_authors %}
+                                    <label class="multi-select-option">
+                                        <input type="checkbox" value="{{ author.id }}" onchange="refreshAuthorLabel(); applyClientFilter();">
+                                        <span>{{ author.username }}</span>
+                                    </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
 

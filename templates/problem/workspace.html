@@ -182,6 +182,13 @@
                 {% for org in workspace_organizations %}<option value="{{ org.id }}">{{ org.name }}</option>{% endfor %}
               </select>
             </div>
+            {% if can_see_problem_authors %}
+            <div class="filter-block">
+              <label class="filter-label" for="fp-author">{{ _('Authors') }}</label>
+              <select id="fp-author" multiple data-placeholder="{{ _('All authors') }}"
+                      data-ajax-url="{{ url('author_filter_select2') }}"></select>
+            </div>
+            {% endif %}
             <div class="filter-block">
               <label class="filter-label" for="fp-status">{{ _('Status') }}</label>
               <select id="fp-status">
@@ -235,6 +242,7 @@
              data-type="{{ item_problem.submission_type }}"
              data-format="{{ item_problem.format_filter_code }}"
              data-orgs="{% for org in item_problem.organizations.all() %}{{ org.id }} {% endfor %}"
+             {% if can_see_problem_authors %}data-author-ids="{% for author in item_problem.authors.all() %}{{ author.id }} {% endfor %}"{% endif %}
              data-public="{{ '1' if item_problem.is_public and not item_problem.is_organization_private else '0' }}"
              data-ac="{{ item_problem.ac_rate }}"
              data-diff="{{ row_diff or '' }}"
