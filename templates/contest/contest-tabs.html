@@ -64,16 +64,22 @@
             {% else %}
                 {# Allow users to leave the contest #}
                 {% if in_contest %}
+                    {% set _progress = participation_submit_progress(request.participation) %}
                     <form action="{{ url('contest_leave', contest.key) }}" method="post"
-                          class="contest-join-pseudotab unselectable button">
+                          class="contest-join-pseudotab unselectable button"
+                          data-submitted="{{ _progress.submitted }}"
+                          data-total="{{ _progress.total }}"
+                          data-unsubmitted="{{ _progress.unsubmitted }}"
+                          {% if request.participation.spectate %}data-spectate="1"{% endif %}
+                          {% if contest.seb_required and not request.participation.spectate %}data-seb-exit="1"{% endif %}>
                         {% csrf_token %}
                         <input type="submit"
-                               {% if contest.seb_required and not request.participation.spectate %}class="seb-submit-exit"{% endif %}
+                               {% if contest.seb_required and not request.participation.spectate %}class="seb-exit"{% endif %}
                                value="
                             {%- if request.participation.spectate %}
                                 {{- _('Stop spectating') -}}
                             {% elif contest.seb_required %}
-                                {{- _('Submit & Exit SEB') -}}
+                                {{- _('Exit SEB') -}}
                             {% else %}
                                 {{- _('Leave contest') -}}
                             {% endif %}">

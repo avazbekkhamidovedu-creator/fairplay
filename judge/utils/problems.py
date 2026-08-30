@@ -11,7 +11,8 @@ from judge.models import ContestParticipation, ContestSubmission, Problem, Submi
 
 __all__ = [
     'assignment_problem_stats', 'contest_completed_ids', 'get_result_data',
-    'user_completed_ids', 'user_editable_ids', 'user_tester_ids',
+    'participation_submit_progress', 'user_completed_ids', 'user_editable_ids',
+    'user_tester_ids',
 ]
 
 
@@ -53,6 +54,24 @@ def user_tester_ids(profile):
 
 def user_editable_ids(profile):
     return set(Problem.get_editable_problems(profile.user).values_list('id', flat=True))
+
+
+def participation_submit_progress(participation):
+    """How many assignment problems this participation has already submitted.
+
+    Leave / Exit SEB does not create submissions; this is the count the
+    confirmation dialog shows so students know unsubmitted work is dropped.
+    """
+    if participation is None:
+        return {'total': 0, 'submitted': 0, 'unsubmitted': 0}
+    total = participation.contest.contest_problems.count()
+    submitted = participation.submissions.values_list('problem_id', flat=True).distinct().count()
+    submitted = min(submitted, total)
+    return {
+        'total': total,
+        'submitted': submitted,
+        'unsubmitted': max(total - submitted, 0),
+    }
 
 
 def contest_completed_ids(participation):

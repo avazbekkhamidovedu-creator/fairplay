@@ -227,6 +227,16 @@ class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
         self.assertRedirects(response, reverse('contest_view', args=('plain',)),
                              fetch_redirect_response=False)
 
+    def test_seb_leave_button_says_exit_seb_not_submit(self):
+        self.enter_contest('seb_participant', self.seb_contest)
+        path = reverse('contest_view', args=('sebexam',))
+        response = self.client.get(path, **bek_header(path))
+        self.assertContains(response, 'Exit SEB')
+        self.assertContains(response, 'data-seb-exit="1"')
+        self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
+        self.assertNotContains(response, 'Submit &amp; Exit SEB')
+        self.assertNotContains(response, 'Submit your work and exit Safe Exam Browser')
+
     # ------------------------------------------------------------------ #
     # Natural contest end                                                  #
     # ------------------------------------------------------------------ #

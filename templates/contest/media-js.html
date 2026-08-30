@@ -1,3 +1,81 @@
+<style>
+    .leave-confirm-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 2100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        background: rgba(0, 0, 0, 0.45);
+    }
+    .leave-confirm-overlay[hidden] { display: none; }
+    .leave-confirm-box {
+        width: 460px;
+        max-width: 100%;
+        padding: 1.25rem 1.5rem;
+        border: 1px solid var(--oj-border, #ccc);
+        border-radius: var(--oj-radius-lg, 8px);
+        background: var(--oj-surface, #fff);
+        box-shadow: var(--oj-shadow-modal, 0 8px 24px rgba(0, 0, 0, 0.18));
+    }
+    .leave-confirm-title { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--oj-text); }
+    .leave-confirm-stats {
+        margin: 0 0 0.85rem;
+        padding: 0.65rem 0.85rem;
+        list-style: none;
+        border-radius: var(--oj-radius, 4px);
+        background: var(--oj-bg, #f6f6f6);
+        color: var(--oj-text);
+        font-size: 13px;
+    }
+    .leave-confirm-stats li { margin: 0.2rem 0; }
+    .leave-confirm-warn {
+        margin: 0 0 0.4rem;
+        color: var(--oj-danger, #c0392b);
+        font-size: 13px;
+        font-weight: 600;
+    }
+    .leave-confirm-note {
+        margin: 0 0 1rem;
+        color: var(--oj-text-muted, #555);
+        font-size: 13px;
+    }
+    .leave-confirm-note[hidden] { display: none; }
+    .leave-confirm-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+    .leave-confirm-btn {
+        padding: 6px 12px;
+        border: 1px solid var(--oj-border, #ccc);
+        border-radius: var(--oj-radius, 4px);
+        background: var(--oj-surface, #fff);
+        color: var(--oj-text);
+        cursor: pointer;
+    }
+    .leave-confirm-btn-danger {
+        color: var(--oj-btn-text, #fff);
+        background: var(--oj-danger, #c0392b);
+        border-color: var(--oj-danger, #c0392b);
+    }
+    .leave-confirm-btn-danger:hover {
+        background: var(--oj-danger-hover, #a93226);
+        border-color: var(--oj-danger-hover, #a93226);
+    }
+</style>
+<div class="leave-confirm-overlay" id="leave-confirm-overlay" hidden>
+    <div class="leave-confirm-box" role="dialog" aria-modal="true" aria-labelledby="leave-confirm-title">
+        <h3 class="leave-confirm-title" id="leave-confirm-title"></h3>
+        <ul class="leave-confirm-stats">
+            <li id="leave-confirm-submitted"></li>
+            <li id="leave-confirm-unsubmitted"></li>
+        </ul>
+        <p class="leave-confirm-warn" id="leave-confirm-warn"></p>
+        <p class="leave-confirm-note" id="leave-confirm-note"></p>
+        <div class="leave-confirm-actions">
+            <button type="button" class="leave-confirm-btn" id="leave-confirm-cancel">{{ _('Cancel') }}</button>
+            <button type="button" class="leave-confirm-btn leave-confirm-btn-danger" id="leave-confirm-ok"></button>
+        </div>
+    </div>
+</div>
 <script type="text/javascript">
     function dkuojClearAssignmentDrafts(contestKey) {
         if (!contestKey || !window.localStorage) return;
@@ -20,15 +98,63 @@
         toRemove.forEach(function (key) { localStorage.removeItem(key); });
     }
 
+    function dkuojShowLeaveConfirm(form) {
+        var overlay = document.getElementById('leave-confirm-overlay');
+        if (!overlay) return true;
+        var submitted = parseInt(form.getAttribute('data-submitted') || '0', 10) || 0;
+        var total = parseInt(form.getAttribute('data-total') || '0', 10) || 0;
+        var unsubmitted = parseInt(form.getAttribute('data-unsubmitted') || '0', 10);
+        if (isNaN(unsubmitted)) unsubmitted = Math.max(total - submitted, 0);
+        var isSeb = form.getAttribute('data-seb-exit') === '1';
+        var title = isSeb ? {{ _('Exit SEB?')|htmltojs }} : {{ _('Leave?')|htmltojs }};
+        var okLabel = isSeb ? {{ _('Exit SEB')|htmltojs }} : {{ _('Leave')|htmltojs }};
+        document.getElementById('leave-confirm-title').textContent = title;
+        document.getElementById('leave-confirm-submitted').textContent =
+            {{ _('Submitted:')|htmltojs }} + ' ' + submitted + ' / ' + total;
+        document.getElementById('leave-confirm-unsubmitted').textContent =
+            {{ _('Not submitted:')|htmltojs }} + ' ' + unsubmitted;
+        document.getElementById('leave-confirm-warn').textContent =
+            {{ _('Leaving will not submit any unsubmitted problems.')|htmltojs }};
+        var note = {{ _('Only answers you have already submitted will be kept.')|htmltojs }};
+        if (isSeb) {
+            note += ' ' + {{ _('You might not be able to re-enter this assignment.')|htmltojs }};
+        }
+        document.getElementById('leave-confirm-note').textContent = note;
+        document.getElementById('leave-confirm-ok').textContent = okLabel;
+        overlay.hidden = false;
+        document.getElementById('leave-confirm-ok').focus();
+
+        function close() {
+            overlay.hidden = true;
+            overlay.removeEventListener('click', onOverlay);
+            document.removeEventListener('keydown', onKey);
+            document.getElementById('leave-confirm-cancel').removeEventListener('click', onCancel);
+            document.getElementById('leave-confirm-ok').removeEventListener('click', onOk);
+        }
+        function onCancel() { close(); }
+        function onOk() {
+            close();
+            form.dataset.leaveConfirmed = '1';
+            if (typeof form.requestSubmit === 'function') form.requestSubmit();
+            else form.submit();
+        }
+        function onOverlay(event) {
+            if (event.target === overlay) close();
+        }
+        function onKey(event) {
+            if (event.key === 'Escape') close();
+        }
+        document.getElementById('leave-confirm-cancel').addEventListener('click', onCancel);
+        document.getElementById('leave-confirm-ok').addEventListener('click', onOk);
+        overlay.addEventListener('click', onOverlay);
+        document.addEventListener('keydown', onKey);
+        return false;
+    }
+
     $(function () {
         $('.leaving-forever').click(function () {
             return confirm({{ _('Are you sure you want to leave?')|htmltojs }} + '\n' +
                 {{ _('You cannot come back to a virtual participation. You will have to start a new one.')|htmltojs }});
-        });
-
-        $('.seb-submit-exit').click(function () {
-            return confirm({{ _('Submit your work and exit Safe Exam Browser?')|htmltojs }} + '\n' +
-                {{ _('You might not be able to re-enter this contest.')|htmltojs }});
         });
 
         $('.first-join').click(function () {
@@ -46,17 +172,35 @@
             });
         {% endif %}
 
-        $('form[action$="/leave"]').on('submit', function () {
-            var match = (this.getAttribute('action') || '').match(/\/contest\/([^\/]+)\/leave\/?$/);
-            if (match) dkuojClearAssignmentDrafts(match[1]);
-        });
-
-        $('form.assignment-leave-form').on('submit', function () {
-            var $btn = $(this).find('button, input[type=submit]');
-            if ($btn.hasClass('leaving-forever') || $btn.hasClass('seb-submit-exit')) {
+        $('form[action$="/leave"]').on('submit', function (event) {
+            var form = this;
+            var $btn = $(form).find('button, input[type=submit]');
+            if (form.dataset.leaveConfirmed === '1') {
+                var done = (form.getAttribute('action') || '').match(/\/contest\/([^\/]+)\/leave\/?$/);
+                if (done) dkuojClearAssignmentDrafts(done[1]);
                 return;
             }
-            return confirm({{ _('Are you sure you want to leave?')|htmltojs }});
+            if ($btn.hasClass('leaving-forever')) {
+                var forever = (form.getAttribute('action') || '').match(/\/contest\/([^\/]+)\/leave\/?$/);
+                if (forever) dkuojClearAssignmentDrafts(forever[1]);
+                return;
+            }
+            if (form.getAttribute('data-spectate') === '1') {
+                if (!confirm({{ _('Are you sure you want to leave?')|htmltojs }})) {
+                    event.preventDefault();
+                    return false;
+                }
+                var spec = (form.getAttribute('action') || '').match(/\/contest\/([^\/]+)\/leave\/?$/);
+                if (spec) dkuojClearAssignmentDrafts(spec[1]);
+                return;
+            }
+            if ($(form).hasClass('assignment-leave-form') || form.getAttribute('data-seb-exit') === '1') {
+                event.preventDefault();
+                dkuojShowLeaveConfirm(form);
+                return false;
+            }
+            var match = (form.getAttribute('action') || '').match(/\/contest\/([^\/]+)\/leave\/?$/);
+            if (match) dkuojClearAssignmentDrafts(match[1]);
         });
     });
 </script>

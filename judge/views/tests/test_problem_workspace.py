@@ -428,6 +428,51 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, reverse('contest_leave', args=[self.contest.key]))
         self.assertContains(response, 'assignment-leave-form')
         self.assertContains(response, 'Leave')
+        self.assertContains(response, 'data-submitted="0"')
+        self.assertContains(response, 'data-total="1"')
+        self.assertContains(response, 'data-unsubmitted="1"')
+        self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
+        self.assertNotContains(response, 'Submit &amp; Exit SEB')
+        self.assertNotContains(response, 'Submit your work and exit Safe Exam Browser')
+
+    def test_assignment_leave_progress_counts_submitted_problems(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=self.problem, language=self.language,
+            result='AC', status='D', points=100, contest_object=self.contest,
+            time=0.01, memory=1024,
+        )
+        ContestSubmission.objects.create(
+            submission=submission, problem=self.contest_problem, participation=participation,
+        )
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'data-submitted="1"')
+        self.assertContains(response, 'data-total="1"')
+        self.assertContains(response, 'data-unsubmitted="0"')
+
+    def test_seb_assignment_leave_says_exit_seb(self):
+        seb_contest = create_contest(
+            key='wsseb', name='SEB Workspace',
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            is_visible=True,
+            seb_required=True,
+            seb_browser_exam_keys='a' * 64,
+            authors=('workspace-author',),
+        )
+        create_contest_problem(contest=seb_contest, problem=self.problem, points=100, order=1)
+        self.client.force_login(self.author)
+        participation = create_contest_participation(contest=seb_contest, user=self.author.profile)
+        self.author.profile.current_contest = participation
+        self.author.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'Exit SEB')
+        self.assertContains(response, 'data-seb-exit="1"')
+        self.assertContains(response, 'seb-exit')
+        self.assertNotContains(response, 'Submit &amp; Exit SEB')
+        self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
 
     def test_practice_workspace_has_no_leave_button(self):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
