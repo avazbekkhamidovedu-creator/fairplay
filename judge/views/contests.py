@@ -738,6 +738,12 @@ class ContestCreate(LoginRequiredMixin, View):
         elif format_config is not None:
             contest.format_config = None
 
+        # Exam / Default reject any non-empty config. Switching from ICPC (etc.)
+        # leaves leftover JSON in Advanced or in the DB when the frontend omits
+        # the key — drop it so full_clean() does not 400 the save.
+        if contest.format_name in self._FORMATS_WITHOUT_CONFIG and contest.format_config:
+            contest.format_config = None
+
         scoreboard = payload.get('scoreboard_visibility', Contest.SCOREBOARD_VISIBLE)
         valid_scoreboards = {choice[0] for choice in Contest.SCOREBOARD_VISIBILITY}
         if scoreboard not in valid_scoreboards:
@@ -1043,6 +1049,29 @@ class ContestCreate(LoginRequiredMixin, View):
             cp.order = order
             cp.save()
 
+    # Formats whose validate() rejects any non-empty config dict. Keep in sync
+    # with DefaultContestFormat / ExamContestFormat.
+    _FORMATS_WITHOUT_CONFIG = frozenset(('default', 'exam'))
+
+    @staticmethod
+    def _scoring_snapshot(contest):
+        """Inputs that change how existing submissions are scored / ranked."""
+        problems = list(
+            contest.contest_problems.order_by('order').values_list(
+                'problem_id', 'points', 'partial', 'is_pretested', 'order',
+            )
+        )
+        config = contest.format_config
+        if isinstance(config, dict):
+            config = json.dumps(config, sort_keys=True)
+        return (contest.format_name, config, problems)
+
+    @staticmethod
+    def _queue_rescore(contest_key):
+        """Recalculate standings after commit — same path as Django admin."""
+        from judge.tasks import rescore_contest
+        transaction.on_commit(rescore_contest.s(contest_key).delay)
+
     # ── create / update ─────────────────────────────────────────────────────
 
     @staticmethod
@@ -1110,6 +1139,7 @@ class ContestCreate(LoginRequiredMixin, View):
                         return JsonResponse({'error': _('An assignment with this key already exists.')}, status=400)
                     contest.key = new_key
 
+                before_score = self._scoring_snapshot(contest)
                 self._apply_payload(contest, payload)
                 # Same model-level validation as create: an invalid edit must
                 # 400 with a readable message, not brick the contest.
@@ -1128,6 +1158,8 @@ class ContestCreate(LoginRequiredMixin, View):
                 self._sync_problems(contest, payload)
                 contest_id = contest.pk
                 contest_key = contest.key
+                if self._scoring_snapshot(contest) != before_score:
+                    self._queue_rescore(contest_key)
                 self._log_assignment(request, contest, added=False)
             from judge.utils.contest_ai import schedule_batch_ai_grade
             transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))

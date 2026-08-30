@@ -930,7 +930,7 @@ class ContestTestCase(CommonDataMixin, TestCase):
         with self.assertRaisesRegex(ValidationError, 'ended before it starts'):
             contest.full_clean()
         contest.end_time = _now + timezone.timedelta(days=1)
-        with self.assertRaisesRegex(ValidationError, 'default contest expects'):
+        with self.assertRaisesRegex(ValidationError, 'does not use extra configuration'):
             contest.full_clean()
         contest.format_config = {}
         with self.assertRaisesRegex(ValidationError, 'Contest problem label script'):

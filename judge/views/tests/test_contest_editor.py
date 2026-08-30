@@ -9,6 +9,7 @@ rather than password authentication.
 
 import json
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from django.contrib.admin.models import ADDITION, CHANGE, LogEntry
 from django.contrib.contenttypes.models import ContentType
@@ -83,6 +84,11 @@ class ContestEditorHelperTestCase(TestCase):
         self.assertNotIn('secret', json.loads(response.content)['error'])
         self.assertIn('assignment', json.loads(response.content)['error'].lower())
         self.assertNotIn('contest', json.loads(response.content)['error'].lower())
+
+    def test_queue_rescore_uses_contest_task(self):
+        with patch('judge.tasks.rescore_contest') as mock_task:
+            ContestCreate._queue_rescore('somekey')
+        mock_task.s.assert_called_once_with('somekey')
 
 
 class ContestEditViewTestCase(CommonDataMixin, TestCase):
@@ -599,6 +605,78 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.contest.refresh_from_db()
         self.assertTrue(self.contest.contest_problems.filter(problem=hidden).exists())
+
+    def test_switch_icpc_to_exam_clears_leftover_config(self):
+        """Exam rejects non-empty config; leftover ICPC JSON must not 400 Save."""
+        self.contest.format_name = 'icpc'
+        self.contest.format_config = {'penalty': 20}
+        self.contest.save()
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(self._full_payload(format_name='exam', format_config='{"penalty": 20}')),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.format_name, 'exam')
+        self.assertIsNone(self.contest.format_config)
+
+    def test_switch_icpc_to_exam_omitted_config_still_clears(self):
+        """Frontend used to drop a blank format_config key; leftover DB JSON
+        must still be cleared when switching to exam."""
+        self.contest.format_name = 'icpc'
+        self.contest.format_config = {'penalty': 20}
+        self.contest.save()
+        self.client.force_login(self.editor)
+        payload = self._full_payload(format_name='exam')
+        del payload['format_config']
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.format_name, 'exam')
+        self.assertIsNone(self.contest.format_config)
+
+    def test_format_change_queues_rescore(self):
+        self.client.force_login(self.editor)
+        with patch.object(ContestCreate, '_queue_rescore') as mock_rescore:
+            response = self.client.post(
+                reverse('contest_edit', args=['editablecontest']),
+                data=json.dumps(self._full_payload(format_name='exam')),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        mock_rescore.assert_called_once_with('editablecontest')
+
+    def test_problem_points_change_queues_rescore(self):
+        from judge.models import ContestProblem
+        problem = create_problem('rescore-pts', is_public=True)
+        ContestProblem.objects.create(contest=self.contest, problem=problem, points=100, order=1)
+        self.client.force_login(self.editor)
+        with patch.object(ContestCreate, '_queue_rescore') as mock_rescore:
+            response = self.client.post(
+                reverse('contest_edit', args=['editablecontest']),
+                data=json.dumps(self._full_payload(
+                    problems=[{'id': problem.id, 'points': 50}],
+                )),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        mock_rescore.assert_called_once_with('editablecontest')
+
+    def test_name_only_change_does_not_queue_rescore(self):
+        self.client.force_login(self.editor)
+        with patch.object(ContestCreate, '_queue_rescore') as mock_rescore:
+            response = self.client.post(
+                reverse('contest_edit', args=['editablecontest']),
+                data=json.dumps(self._full_payload(name='Still no rescore')),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        mock_rescore.assert_not_called()
 
 
 class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
@@ -1252,6 +1330,30 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         contest = Contest.objects.get(key='fctest')
         self.assertEqual(contest.format_name, 'icpc')
         self.assertEqual(contest.format_config, {'penalty': 20})
+
+    def test_create_exam_with_icpc_config_clears_config(self):
+        """Create-with-exam must not 400 on leftover ICPC-shaped JSON."""
+        response = self._post(name='Exam leftover', key='examleftover',
+                              format_name='exam', format_config='{"penalty": 20}')
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='examleftover')
+        self.assertEqual(contest.format_name, 'exam')
+        self.assertIsNone(contest.format_config)
+
+    def test_invalid_icpc_config_still_returns_400(self):
+        """Auto-clear is exam/default only — ICPC still validates its keys."""
+        response = self._post(name='ICPC Bad', key='icpcbad', format_name='icpc',
+                              format_config='{"unknown": 1}')
+        self.assertEqual(response.status_code, 400)
+
+    def test_format_switch_js_clears_config_and_sends_empty(self):
+        """Switching to exam/default clears the textarea; blank config is sent."""
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('formatNeedsNoConfig', html)
+        self.assertIn('syncFormatConfigForFormat', html)
+        self.assertIn("data.format_config = ''", html)
+        self.assertIn('recalculate scores for existing submissions', html)
+        self.assertNotIn('will rescore existing submissions', html)
 
     def test_format_config_invalid_json_returns_400(self):
         response = self._post(name='FC Bad', key='fcbad', format_config='{not json')
