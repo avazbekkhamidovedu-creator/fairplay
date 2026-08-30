@@ -1059,7 +1059,7 @@ class ContestCreate(LoginRequiredMixin, View):
         problems = list(
             contest.contest_problems.order_by('order').values_list(
                 'problem_id', 'points', 'partial', 'is_pretested', 'order',
-            )
+            ),
         )
         config = contest.format_config
         if isinstance(config, dict):
