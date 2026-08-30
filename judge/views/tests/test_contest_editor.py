@@ -739,7 +739,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('function cpRowDisplayName(row)', html)
         self.assertIn('function cpRowOverrideName(row)', html)
         self.assertIn('input.cp-display-name', html)
-        self.assertIn("escapeHtml(row.dataset.displayName || '')", html)
+        self.assertIn('maxlength="100" value="" placeholder="', html)
         self.assertNotIn("escapeHtml(row.dataset.name || 'Problem ' + row.dataset.pid)", html)
         self.assertIn('function assignmentProblemHref(code)', html)
         self.assertIn('assignment_preview=1', html)

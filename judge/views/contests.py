@@ -739,6 +739,8 @@ class ContestCreate(LoginRequiredMixin, View):
         elif format_config is not None:
             contest.format_config = None
 
+        # Homework create/edit: omitted visibility means hidden. Django admin
+        # and the model field stay SCOREBOARD_VISIBLE (see Contest.scoreboard_visibility).
         scoreboard = payload.get('scoreboard_visibility', Contest.SCOREBOARD_HIDDEN)
         valid_scoreboards = {choice[0] for choice in Contest.SCOREBOARD_VISIBILITY}
         if scoreboard not in valid_scoreboards:
@@ -1025,7 +1027,9 @@ class ContestCreate(LoginRequiredMixin, View):
                 if len(display_name) > 100:
                     raise ValidationError(_('Problem display name must be at most 100 characters.'))
                 # Same text as the library title is not an override: keep
-                # display_name empty so later library/translation edits show up.
+                # display_name empty so later library edits show up. Only the
+                # canonical problem.name is compared; a translated name is stored
+                # as an override (intentional: the teacher typed that title).
                 if display_name == problem.name:
                     display_name = ''
             else:
@@ -1284,7 +1288,9 @@ class ContestCreate(LoginRequiredMixin, View):
         prefill = {
             'name': '', 'key': '', 'description': '', 'summary': '', 'og_image': '',
             'logo_override_image': '', 'access_code': '', 'problem_label_script': '',
-            'format_config': '', 'format_name': 'exam', 'scoreboard_visibility': Contest.SCOREBOARD_HIDDEN,
+            'format_config': '', 'format_name': 'exam',
+            # New assignment form; admin create still defaults to visible.
+            'scoreboard_visibility': Contest.SCOREBOARD_HIDDEN,
             'points_precision': 3, 'rating_floor': '', 'rating_ceiling': '',
             'performance_ceiling_override': '', 'start_time': '', 'end_time': '',
             'locked_after': '', 'duration_hours': 0, 'duration_minutes': 0,
@@ -1825,8 +1831,7 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
             problem.ac_rate = problem_stats['ac_rate']
             cp = cp_by_pid.get(problem.id)
             if cp is not None:
-                override = (getattr(cp, 'display_name', None) or '').strip()
-                problem.effective_name = override or contest_problem_display_name(cp, lang)
+                problem.effective_name = contest_problem_display_name(cp, lang)
             else:
                 problem.effective_name = problem.i18n_name or problem.name
         context['contest_problems'] = problems
@@ -2327,7 +2332,7 @@ class ContestStats(TitleMixin, ContestMixin, DetailView):
             cp.order: contest_problem_display_name(cp, lang) for cp in contest_problems
         }
         if contest_problems:
-            labels = [contest_problem_display_name(cp, lang) for cp in contest_problems]
+            labels = [order_to_name[cp.order] for cp in contest_problems]
             codes = [cp.problem.code for cp in contest_problems]
         num_problems = len(labels)
         status_counts = [[] for i in range(num_problems)]

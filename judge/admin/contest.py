@@ -217,6 +217,7 @@ class SimpleContestCreationForm(ContestForm):
         cleaned_data['show_short_display'] = False
         cleaned_data['run_pretests_only'] = False
         cleaned_data['locked_after'] = None
+        # Admin / traditional contest default. Assignment editor uses hidden.
         cleaned_data['scoreboard_visibility'] = Contest.SCOREBOARD_VISIBLE
         cleaned_data['points_precision'] = Contest._meta.get_field('points_precision').default
         cleaned_data['allow_virtual_participation'] = True
@@ -354,6 +355,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                 'show_short_display': False,
                 'run_pretests_only': False,
                 'locked_after': '',
+                # Admin / traditional contest default. Assignment editor uses hidden.
                 'scoreboard_visibility': Contest.SCOREBOARD_VISIBLE,
                 'points_precision': str(Contest._meta.get_field('points_precision').default),
                 'allow_virtual_participation': True,
@@ -401,6 +403,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         obj.show_short_display = False
         obj.run_pretests_only = False
         obj.locked_after = None
+        # Admin / traditional contest default. Assignment editor uses hidden.
         obj.scoreboard_visibility = Contest.SCOREBOARD_VISIBLE
         obj.points_precision = Contest._meta.get_field('points_precision').default
         obj.allow_virtual_participation = True

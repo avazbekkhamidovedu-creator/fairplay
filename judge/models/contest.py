@@ -115,6 +115,8 @@ class Contest(models.Model):
                                                       blank=True, related_name='view_contest_submissions',
                                                       help_text=_('These users will be able '
                                                                   'to see in-contest submissions.'))
+    # Model / Django admin default is visible (traditional contests). The
+    # assignment editor defaults new homework to SCOREBOARD_HIDDEN instead.
     scoreboard_visibility = models.CharField(verbose_name=_('scoreboard visibility'), default=SCOREBOARD_VISIBLE,
                                              help_text=_('Scoreboard visibility through the duration of the contest.'),
                                              max_length=1, choices=SCOREBOARD_VISIBILITY)

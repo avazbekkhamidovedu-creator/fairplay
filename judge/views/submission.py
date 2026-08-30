@@ -35,16 +35,30 @@ from judge.utils.views import DiggPaginatorMixin, TitleMixin, generic_message
 from judge.views.ide import IDE_PROBLEM_CODE
 
 
+def _problem_display_name(problem, language_code):
+    """Translated problem title; reuse list-page prefetch when present.
+
+    Matches ``Problem.translated_name`` so list and detail stay consistent,
+    but avoids an extra query when ``_trans`` / ``_i18n_name`` was prefetched.
+    """
+    if getattr(problem, '_i18n_name', None) is not None:
+        return problem.i18n_name
+    trans = getattr(problem, '_trans', None)
+    if trans is not None:
+        return trans[0].name if trans else problem.name
+    return problem.translated_name(language_code)
+
+
 def _submission_contest_problem_name(submission, language_code):
     """Assignment-local title when the submission belongs to a contest."""
     if not getattr(submission, 'contest_object_id', None):
-        return submission.problem.translated_name(language_code)
+        return _problem_display_name(submission.problem, language_code)
     try:
         cp = ContestProblem.objects.select_related('problem').get(
             contest_id=submission.contest_object_id, problem_id=submission.problem_id,
         )
     except ContestProblem.DoesNotExist:
-        return submission.problem.translated_name(language_code)
+        return _problem_display_name(submission.problem, language_code)
     return contest_problem_display_name(cp, language_code)
 
 
@@ -68,11 +82,7 @@ def attach_contest_problem_display_names(submissions, language_code):
         if submission.contest_object_id and key in name_map:
             submission.effective_problem_name = name_map[key]
         else:
-            problem = submission.problem
-            if getattr(problem, '_trans', None) or getattr(problem, '_i18n_name', None) is not None:
-                submission.effective_problem_name = problem.i18n_name
-            else:
-                submission.effective_problem_name = problem.name
+            submission.effective_problem_name = _problem_display_name(submission.problem, language_code)
     return submissions
 
 

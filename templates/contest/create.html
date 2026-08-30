@@ -478,30 +478,6 @@
             user-select: none;
             font-size: 12px;
         }
-        .cp-row input.cp-display-name {
-            font-weight: 600;
-            font-size: inherit;
-            font-family: inherit;
-            color: inherit;
-            width: 100%;
-            min-width: 0;
-            border: 1px solid transparent;
-            background: transparent;
-            padding: 0.15rem 0.3rem;
-            margin: 0;
-            border-radius: var(--oj-radius, 4px);
-            cursor: text;
-            box-sizing: border-box;
-        }
-        .cp-row input.cp-display-name:hover {
-            border-color: var(--oj-border);
-            background: var(--oj-surface-muted);
-        }
-        .cp-row input.cp-display-name:focus {
-            outline: none;
-            border-color: var(--oj-accent);
-            background: var(--card-bg);
-        }
         .cp-row.dragging {
             opacity: 0.4;
         }
@@ -2002,9 +1978,8 @@
                     : '';
                 return '<span class="cp-drag" title="' + {{ _('Drag to reorder')|htmltojs }} + '">⠿</span>' +
                     '<span class="label-letter">' + letter + '</span>' +
-                    '<input type="text" class="pname cp-display-name" maxlength="100" value="' +
-                    escapeHtml(row.dataset.displayName || '') +
-                    '" placeholder="' + escapeHtml(row.dataset.name || '') +
+                    '<input type="text" class="pname cp-display-name" maxlength="100" value="" placeholder="' +
+                    escapeHtml(row.dataset.name || '') +
                     '" title="' + {{ _('Click to rename for this assignment')|htmltojs }} +
                     '" aria-label="' + {{ _('Assignment display name')|htmltojs }} + '">' +
                     '<span><input type="number" class="cp-points" value="100" style="width:48px"></span>' +
