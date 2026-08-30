@@ -70,6 +70,8 @@
                           data-submitted="{{ _progress.submitted }}"
                           data-total="{{ _progress.total }}"
                           data-unsubmitted="{{ _progress.unsubmitted }}"
+                          data-submitted-names="{{ _progress.submitted_names|json }}"
+                          data-unsubmitted-names="{{ _progress.unsubmitted_names|json }}"
                           {% if request.participation.spectate %}data-spectate="1"{% endif %}
                           {% if contest.seb_required and not request.participation.spectate %}data-seb-exit="1"{% endif %}>
                         {% csrf_token %}

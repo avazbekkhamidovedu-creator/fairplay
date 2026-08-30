@@ -73,6 +73,7 @@ from judge.utils.problems import (
     contest_attempted_ids,
     contest_completed_ids,
     hot_problems,
+    participation_submit_progress,
     user_attempted_ids,
     user_completed_ids,
     user_editable_ids,
@@ -1821,7 +1822,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 source = submission.source.source
             except ObjectDoesNotExist:
                 source = None
-            return JsonResponse({
+            payload = {
                 'submission_id': submission.id,
                 'status': submission.status,
                 'result': None if hidden else submission.result,
@@ -1833,8 +1834,15 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 'answer_display': get_workspace_answer_display(submission) if source is not None else [],
                 'file_upload': get_workspace_file_upload(submission),
                 'status_url': reverse('problem_workspace_submission_status', args=(self.object.code, submission.id)),
-                **({} if hidden else workspace_ai_grade_fields(self.request, submission)),
-            })
+            }
+            if not hidden:
+                payload.update(workspace_ai_grade_fields(self.request, submission))
+            participation = getattr(self.request, 'participation', None)
+            if participation is None and self.request.user.is_authenticated:
+                participation = self.request.profile.current_contest
+            if participation is not None:
+                payload['leave_progress'] = participation_submit_progress(participation)
+            return JsonResponse(payload)
         return super().form_valid(form)
 
     def _in_flight_code_submissions(self):

@@ -11,8 +11,10 @@
     }
     .leave-confirm-overlay[hidden] { display: none; }
     .leave-confirm-box {
-        width: 460px;
+        width: 520px;
         max-width: 100%;
+        max-height: calc(100vh - 2rem);
+        overflow: auto;
         padding: 1.25rem 1.5rem;
         border: 1px solid var(--oj-border, #ccc);
         border-radius: var(--oj-radius-lg, 8px);
@@ -23,13 +25,27 @@
     .leave-confirm-stats {
         margin: 0 0 0.85rem;
         padding: 0.65rem 0.85rem;
-        list-style: none;
         border-radius: var(--oj-radius, 4px);
         background: var(--oj-bg, #f6f6f6);
         color: var(--oj-text);
         font-size: 13px;
     }
-    .leave-confirm-stats li { margin: 0.2rem 0; }
+    .leave-confirm-stat + .leave-confirm-stat { margin-top: 0.7rem; }
+    .leave-confirm-stat-head { font-weight: 600; margin: 0 0 0.3rem; }
+    .leave-confirm-names {
+        margin: 0.15rem 0 0;
+        padding-left: 1.15rem;
+        max-height: 160px;
+        overflow: auto;
+    }
+    .leave-confirm-names li { margin: 0.15rem 0; }
+    .leave-confirm-empty { margin: 0.15rem 0 0; color: var(--oj-text-muted, #555); }
+    .leave-confirm-stats details { margin-top: 0.15rem; }
+    .leave-confirm-stats summary {
+        cursor: pointer;
+        color: var(--oj-link, #247);
+        user-select: none;
+    }
     .leave-confirm-warn {
         margin: 0 0 0.4rem;
         color: var(--oj-danger, #c0392b);
@@ -64,10 +80,16 @@
 <div class="leave-confirm-overlay" id="leave-confirm-overlay" hidden>
     <div class="leave-confirm-box" role="dialog" aria-modal="true" aria-labelledby="leave-confirm-title">
         <h3 class="leave-confirm-title" id="leave-confirm-title"></h3>
-        <ul class="leave-confirm-stats">
-            <li id="leave-confirm-submitted"></li>
-            <li id="leave-confirm-unsubmitted"></li>
-        </ul>
+        <div class="leave-confirm-stats">
+            <section class="leave-confirm-stat">
+                <div class="leave-confirm-stat-head" id="leave-confirm-submitted-head"></div>
+                <div id="leave-confirm-submitted-body"></div>
+            </section>
+            <section class="leave-confirm-stat">
+                <div class="leave-confirm-stat-head" id="leave-confirm-unsubmitted-head"></div>
+                <div id="leave-confirm-unsubmitted-body"></div>
+            </section>
+        </div>
         <p class="leave-confirm-warn" id="leave-confirm-warn"></p>
         <p class="leave-confirm-note" id="leave-confirm-note"></p>
         <div class="leave-confirm-actions">
@@ -98,21 +120,70 @@
         toRemove.forEach(function (key) { localStorage.removeItem(key); });
     }
 
+    function dkuojParseLeaveNames(form, attr) {
+        try {
+            var parsed = JSON.parse(form.getAttribute(attr) || '[]');
+            return Array.isArray(parsed) ? parsed.map(String) : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function dkuojFillLeaveNames(container, names, startOpen) {
+        container.textContent = '';
+        if (!names.length) {
+            var empty = document.createElement('p');
+            empty.className = 'leave-confirm-empty';
+            empty.textContent = {{ _('None')|htmltojs }};
+            container.appendChild(empty);
+            return;
+        }
+        var list = document.createElement('ul');
+        list.className = 'leave-confirm-names';
+        names.forEach(function (name) {
+            var item = document.createElement('li');
+            item.textContent = name;
+            list.appendChild(item);
+        });
+        if (names.length > 4) {
+            var details = document.createElement('details');
+            if (startOpen) details.open = true;
+            var summary = document.createElement('summary');
+            summary.textContent = names.length + ' ' + {{ _('problems')|htmltojs }};
+            details.appendChild(summary);
+            details.appendChild(list);
+            container.appendChild(details);
+        } else {
+            container.appendChild(list);
+        }
+    }
+
+    function dkuojEnableLeaveButtons(form) {
+        // common.js disables submit buttons on any form submit to prevent
+        // double posts. Leave opens a confirm dialog instead of navigating,
+        // so cancel/Escape must turn the button back on.
+        if (!form) return;
+        $(form).find('button[type=submit], input[type=submit]').prop('disabled', false);
+    }
+
     function dkuojShowLeaveConfirm(form) {
         var overlay = document.getElementById('leave-confirm-overlay');
         if (!overlay) return true;
-        var submitted = parseInt(form.getAttribute('data-submitted') || '0', 10) || 0;
-        var total = parseInt(form.getAttribute('data-total') || '0', 10) || 0;
-        var unsubmitted = parseInt(form.getAttribute('data-unsubmitted') || '0', 10);
-        if (isNaN(unsubmitted)) unsubmitted = Math.max(total - submitted, 0);
+        var submittedNames = dkuojParseLeaveNames(form, 'data-submitted-names');
+        var unsubmittedNames = dkuojParseLeaveNames(form, 'data-unsubmitted-names');
+        var submitted = submittedNames.length || parseInt(form.getAttribute('data-submitted') || '0', 10) || 0;
+        var unsubmitted = unsubmittedNames.length || parseInt(form.getAttribute('data-unsubmitted') || '0', 10) || 0;
+        var total = parseInt(form.getAttribute('data-total') || '0', 10) || (submitted + unsubmitted);
         var isSeb = form.getAttribute('data-seb-exit') === '1';
         var title = isSeb ? {{ _('Exit SEB?')|htmltojs }} : {{ _('Leave?')|htmltojs }};
         var okLabel = isSeb ? {{ _('Exit SEB')|htmltojs }} : {{ _('Leave')|htmltojs }};
         document.getElementById('leave-confirm-title').textContent = title;
-        document.getElementById('leave-confirm-submitted').textContent =
+        document.getElementById('leave-confirm-submitted-head').textContent =
             {{ _('Submitted:')|htmltojs }} + ' ' + submitted + ' / ' + total;
-        document.getElementById('leave-confirm-unsubmitted').textContent =
+        document.getElementById('leave-confirm-unsubmitted-head').textContent =
             {{ _('Not submitted:')|htmltojs }} + ' ' + unsubmitted;
+        dkuojFillLeaveNames(document.getElementById('leave-confirm-submitted-body'), submittedNames, false);
+        dkuojFillLeaveNames(document.getElementById('leave-confirm-unsubmitted-body'), unsubmittedNames, true);
         document.getElementById('leave-confirm-warn').textContent =
             {{ _('Leaving will not submit any unsubmitted problems.')|htmltojs }};
         var note = {{ _('Only answers you have already submitted will be kept.')|htmltojs }};
@@ -124,16 +195,17 @@
         overlay.hidden = false;
         document.getElementById('leave-confirm-ok').focus();
 
-        function close() {
+        function close(keepDisabled) {
             overlay.hidden = true;
             overlay.removeEventListener('click', onOverlay);
             document.removeEventListener('keydown', onKey);
             document.getElementById('leave-confirm-cancel').removeEventListener('click', onCancel);
             document.getElementById('leave-confirm-ok').removeEventListener('click', onOk);
+            if (!keepDisabled) dkuojEnableLeaveButtons(form);
         }
-        function onCancel() { close(); }
+        function onCancel() { close(false); }
         function onOk() {
-            close();
+            close(true);
             form.dataset.leaveConfirmed = '1';
             if (typeof form.requestSubmit === 'function') form.requestSubmit();
             else form.submit();
@@ -188,6 +260,7 @@
             if (form.getAttribute('data-spectate') === '1') {
                 if (!confirm({{ _('Are you sure you want to leave?')|htmltojs }})) {
                     event.preventDefault();
+                    dkuojEnableLeaveButtons(form);
                     return false;
                 }
                 var spec = (form.getAttribute('action') || '').match(/\/contest\/([^\/]+)\/leave\/?$/);

@@ -166,6 +166,24 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertIn('source', body)
         self.assertEqual(body['source'], 'print(1)')
 
+    def test_assignment_workspace_submit_includes_updated_leave_progress(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        with mock.patch.object(Submission, 'judge'):
+            response = self.client.post(
+                reverse('problem_submit', args=[self.problem.code]),
+                {'workspace': '1', 'source': 'print(1)', 'language': self.language.id, 'judge': ''},
+                HTTP_X_WORKSPACE_SUBMIT='1',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        progress = response.json()['leave_progress']
+        self.assertEqual(progress['submitted'], 1)
+        self.assertEqual(progress['unsubmitted'], 0)
+        self.assertEqual(progress['total'], 1)
+        self.assertTrue(any('workspace-code' in name for name in progress['submitted_names']))
+        self.assertEqual(progress['unsubmitted_names'], [])
+
     def test_assignment_my_submissions_filters_by_contest_object(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
         self.user.profile.current_contest = participation
@@ -431,6 +449,8 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-submitted="0"')
         self.assertContains(response, 'data-total="1"')
         self.assertContains(response, 'data-unsubmitted="1"')
+        self.assertContains(response, 'data-unsubmitted-names')
+        self.assertContains(response, '1. workspace-code')
         self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
         self.assertNotContains(response, 'Submit your work and exit Safe Exam Browser')
@@ -451,6 +471,7 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-submitted="1"')
         self.assertContains(response, 'data-total="1"')
         self.assertContains(response, 'data-unsubmitted="0"')
+        self.assertContains(response, '1. workspace-code')
 
     def test_seb_assignment_leave_says_exit_seb(self):
         seb_contest = create_contest(

@@ -1321,6 +1321,36 @@
     });
   })();
 
+  function applyLeaveProgress(progress) {
+    if (!progress) return;
+    var form = document.querySelector('form.assignment-leave-form');
+    if (!form) return;
+    if (progress.submitted != null) form.setAttribute('data-submitted', String(progress.submitted));
+    if (progress.total != null) form.setAttribute('data-total', String(progress.total));
+    if (progress.unsubmitted != null) form.setAttribute('data-unsubmitted', String(progress.unsubmitted));
+    if (progress.submitted_names) {
+      form.setAttribute('data-submitted-names', JSON.stringify(progress.submitted_names));
+    }
+    if (progress.unsubmitted_names) {
+      form.setAttribute('data-unsubmitted-names', JSON.stringify(progress.unsubmitted_names));
+    }
+  }
+
+  function markCurrentProblemAnswered() {
+    var code = app.dataset.problem;
+    if (!code) return;
+    items.forEach(function (item) {
+      if (item.dataset.code !== code) return;
+      if (item.dataset.status === 'unsolved') item.dataset.status = 'attempted';
+      var icon = item.querySelector('.drawer-st i');
+      if (icon) {
+        icon.className = 'attempted-problem-color fa fa-minus-circle';
+        icon.title = gettext('Attempted');
+      }
+    });
+    renderDrawer();
+  }
+
   var submitForm = $('#workspace-submit-form');
   if (submitForm) {
     submitForm.addEventListener('submit', function (event) {
@@ -1355,6 +1385,8 @@
           activateTab('result');
           history.replaceState(null, '', location.pathname + '?submission=' + payload.submission_id);
           clearCurrentDrafts();
+          applyLeaveProgress(payload.leave_progress);
+          markCurrentProblemAnswered();
           app.dataset.submissionGraded = '0';
           if (payload.status_url) app.dataset.statusUrl = payload.status_url;
           if (payload.ai_grade_url) app.dataset.aiGradeUrl = payload.ai_grade_url;

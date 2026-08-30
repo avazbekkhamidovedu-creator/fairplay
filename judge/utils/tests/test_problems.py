@@ -34,13 +34,20 @@ class ParticipationSubmitProgressTestCase(TestCase):
     def test_none_participation_is_empty(self):
         self.assertEqual(
             participation_submit_progress(None),
-            {'total': 0, 'submitted': 0, 'unsubmitted': 0},
+            {
+                'total': 0, 'submitted': 0, 'unsubmitted': 0,
+                'submitted_names': [], 'unsubmitted_names': [],
+            },
         )
 
     def test_counts_submitted_and_remaining_problems(self):
         self.assertEqual(
             participation_submit_progress(self.participation),
-            {'total': 2, 'submitted': 0, 'unsubmitted': 2},
+            {
+                'total': 2, 'submitted': 0, 'unsubmitted': 2,
+                'submitted_names': [],
+                'unsubmitted_names': ['1. leave-a', '2. leave-b'],
+            },
         )
 
         submission = Submission.objects.create(
@@ -53,5 +60,9 @@ class ParticipationSubmitProgressTestCase(TestCase):
         )
         self.assertEqual(
             participation_submit_progress(self.participation),
-            {'total': 2, 'submitted': 1, 'unsubmitted': 1},
+            {
+                'total': 2, 'submitted': 1, 'unsubmitted': 1,
+                'submitted_names': ['1. leave-a'],
+                'unsubmitted_names': ['2. leave-b'],
+            },
         )

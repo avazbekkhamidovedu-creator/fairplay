@@ -56,21 +56,44 @@ def user_editable_ids(profile):
     return set(Problem.get_editable_problems(profile.user).values_list('id', flat=True))
 
 
+def _leave_problem_label(contest_problem, index):
+    display = getattr(contest_problem, 'display_name', '') or ''
+    name = display or contest_problem.problem.name
+    return '%s. %s' % (index, name)
+
+
 def participation_submit_progress(participation):
     """How many assignment problems this participation has already submitted.
 
     Leave / Exit SEB does not create submissions; this is the count the
     confirmation dialog shows so students know unsubmitted work is dropped.
     """
+    empty = {
+        'total': 0, 'submitted': 0, 'unsubmitted': 0,
+        'submitted_names': [], 'unsubmitted_names': [],
+    }
     if participation is None:
-        return {'total': 0, 'submitted': 0, 'unsubmitted': 0}
-    total = participation.contest.contest_problems.count()
-    submitted = participation.submissions.values_list('problem_id', flat=True).distinct().count()
-    submitted = min(submitted, total)
+        return empty
+    contest_problems = list(
+        participation.contest.contest_problems.select_related('problem').order_by('order'),
+    )
+    submitted_ids = set(participation.submissions.values_list('problem_id', flat=True))
+    submitted_names = []
+    unsubmitted_names = []
+    for index, contest_problem in enumerate(contest_problems, 1):
+        label = _leave_problem_label(contest_problem, index)
+        if contest_problem.id in submitted_ids:
+            submitted_names.append(label)
+        else:
+            unsubmitted_names.append(label)
+    total = len(contest_problems)
+    submitted = len(submitted_names)
     return {
         'total': total,
         'submitted': submitted,
-        'unsubmitted': max(total - submitted, 0),
+        'unsubmitted': total - submitted,
+        'submitted_names': submitted_names,
+        'unsubmitted_names': unsubmitted_names,
     }
 
 

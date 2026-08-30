@@ -16,6 +16,8 @@
           data-submitted="{{ _progress.submitted }}"
           data-total="{{ _progress.total }}"
           data-unsubmitted="{{ _progress.unsubmitted }}"
+          data-submitted-names="{{ _progress.submitted_names|json }}"
+          data-unsubmitted-names="{{ _progress.unsubmitted_names|json }}"
           {% if _spectate %}data-spectate="1"{% endif %}
           {% if _contest.seb_required and not _spectate %}data-seb-exit="1"{% endif %}>
         {% csrf_token %}
