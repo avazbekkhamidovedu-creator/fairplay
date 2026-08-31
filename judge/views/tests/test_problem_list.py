@@ -203,3 +203,6 @@ class AssignmentProblemListTestCase(TestCase):
         self.assertContains(response, leave)
         self.assertContains(response, 'assignment-leave-form')
         self.assertContains(response, 'Leave')
+        self.assertContains(response, 'data-total=')
+        self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
+        self.assertNotContains(response, 'Submit &amp; Exit SEB')
