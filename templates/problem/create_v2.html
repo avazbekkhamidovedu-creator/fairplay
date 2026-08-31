@@ -243,6 +243,7 @@
 {% block body %}
   <div class="pcv2 pcv2-problem">
   <main class="v2-main" id="content-main">
+    {% include "messages.html" %}
     {% if import_editor_mode and (import_type_needs_review or import_name_needs_review or import_data_needs_review or import_config_needs_review) %}
     <fieldset class="module import-review-notice">
       <h2>{{ _('Review required') }}</h2>
@@ -2571,6 +2572,9 @@
       clearTimeout(t._timer);
       t._timer = setTimeout(() => { t.style.display = 'none'; }, ok ? 1500 : 2500);
     }
+    document.querySelectorAll('.messages li').forEach(function (li) {
+      showToast(li.textContent, true);
+    });
     function resetForm() {
       document.getElementById('f-name').value = '';
       document.querySelectorAll('.rich-editor').forEach(ed => { const r = ed.querySelector('.rich-editor-body'); if (r) r.innerHTML = ''; const ta = ed.querySelector('textarea'); if (ta) ta.value = ''; });

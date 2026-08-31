@@ -2886,6 +2886,10 @@
                 }
             };
 
+            document.querySelectorAll('.messages li').forEach(function (li) {
+                showToast(li.textContent);
+            });
+
             } catch (e) {
                 // Cosmetic initializers must never break saving (the submit
                 // handler above is already attached). Log and continue.
@@ -2901,6 +2905,7 @@
     {%- endmacro %}
     <div class="pcv2">
         <main class="v2-main" id="content-main">
+            {% include "messages.html" %}
             <div class="v2-split sp-split">
                 <form id="contest-form" class="v2-left" method="post" action="{{ save_url }}" novalidate autocomplete="off">
                     {% csrf_token %}

@@ -915,7 +915,12 @@ class ContestListV2ActionsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(resp.status_code, 302)
         cloned = Contest.objects.exclude(pk=self.ongoing.pk).get(name=self.ongoing.name)
         self.assertNotEqual(cloned.key, occupied)
-        self.assertRedirects(resp, reverse('contest_edit', args=[cloned.key]))
+        self.assertRedirects(resp, reverse('contest_edit', args=[cloned.key]),
+                             fetch_redirect_response=False)
+        notice = self.client.get(resp.url)
+        self.assertContains(notice, 'already in use')
+        self.assertContains(notice, occupied)
+        self.assertContains(notice, cloned.key)
 
 
 class ContestDeleteViewTestCase(CommonDataMixin, TestCase):

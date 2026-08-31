@@ -173,6 +173,10 @@ class ProblemCloneTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse('problem_edit_v2', args=('p000001',)))
         self.assertTrue(Problem.objects.filter(code='p000001').exists())
+        notice = self.client.get(response.url)
+        self.assertContains(notice, 'already in use')
+        self.assertContains(notice, 'p000000')
+        self.assertContains(notice, 'p000001')
 
     def test_clone_file_upload_config(self):
         problem = create_problem(

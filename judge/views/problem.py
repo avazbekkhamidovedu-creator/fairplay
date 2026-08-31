@@ -2256,6 +2256,12 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_user(self.request.user)
             revisions.set_comment(_('Cloned problem from %s') % old_code)
 
+        requested = (self.request.POST.get('code') or '').strip()
+        if requested and requested != problem.code:
+            messages.info(self.request, _('Saved with code %(new)s because %(old)s was already in use.') % {
+                'new': problem.code,
+                'old': requested,
+            })
         return HttpResponseRedirect(reverse('problem_edit_v2', args=(problem.code,)))
 
     def _clone_problem_data(self, original_data, new_problem, old_code, new_code):

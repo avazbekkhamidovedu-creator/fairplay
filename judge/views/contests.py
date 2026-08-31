@@ -2093,6 +2093,12 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_user(self.request.user)
             revisions.set_comment(_('Cloned contest from %s') % old_key)
 
+        requested = (self.request.POST.get('key') or '').strip()
+        if requested and requested != contest.key:
+            messages.info(self.request, _('Saved with ID %(new)s because %(old)s was already in use.') % {
+                'new': contest.key,
+                'old': requested,
+            })
         return HttpResponseRedirect(reverse('contest_edit', args=(contest.key,)))
 
 
