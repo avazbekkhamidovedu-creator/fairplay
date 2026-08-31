@@ -255,15 +255,22 @@
                 }
 
                 async function generateIndependentProblemCode() {
-                    var max = 1000000;
-                    for (var i = 0; i < max; i++) {
-                        var code = 'p' + String(i).padStart(6, '0');
-                        var exists = await checkProblemCode(code);
-                        if (exists === false) {
-                            return code;
+                    var response = await fetch(
+                        '{% url "problem_check_code" %}?suggest=1',
+                        {
+                            method: 'GET',
+                            cache: 'no-cache',
+                            headers: {'X-Requested-With': 'XMLHttpRequest'}
                         }
+                    );
+                    if (!response.ok) {
+                        throw new Error('suggest failed');
                     }
-                    return 'clone' + String(Date.now()).slice(-6);
+                    var data = await response.json();
+                    if (!data.code) {
+                        throw new Error('suggest failed');
+                    }
+                    return data.code;
                 }
 
                 function requestAutofillCode() {

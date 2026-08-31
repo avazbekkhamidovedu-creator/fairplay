@@ -32,18 +32,17 @@ function initializeContestKeyAutofill() {
     }
 
     async function generateUniqueContestKey() {
-        const max = 1000000;
-
-        for (let i = 0; i < max; i++) {
-            const key = `c${i.toString().padStart(6, '0')}`;
-            const exists = await checkContestKey(key);
-
-            if (exists === false) return key;
-            if (exists === null) throw new Error('check failed');
-        }
-
-        const timestamp = Date.now().toString().slice(-6);
-        return `contest${timestamp}`;
+        const response = await fetch('/api/v2/contest/check-key/?suggest=1', {
+            method: 'GET',
+            cache: 'no-cache',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        });
+        if (!response.ok) throw new Error('suggest failed');
+        const data = await response.json();
+        if (!data.key) throw new Error('suggest failed');
+        return data.key;
     }
 
     async function autofillContestKey(options) {

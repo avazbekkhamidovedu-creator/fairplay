@@ -59,6 +59,7 @@ from judge.utils.problems import _get_result_data, assignment_problem_stats, use
 from judge.utils.ranker import ranker
 from judge.utils.seb import read_seb_launch_token, request_matches_seb, seb_launch_context, seb_launch_url
 from judge.utils.stats import get_bar_chart, get_pie_chart
+from judge.utils.unique_ids import is_series_id, wants_auto_series
 from judge.utils.user_search import profile_choice_label
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
@@ -1146,12 +1147,42 @@ class ContestCreate(LoginRequiredMixin, View):
         """Validate identity, insert a new ``judge_contest`` row, return redirect."""
         if not payload.get('name'):
             return JsonResponse({'error': _('Missing required field: %s') % 'name'}, status=400)
-        key = (payload.get('key') or '').strip() or Contest.generate_unique_key()
+        submitted_key = (payload.get('key') or '').strip()
+        key = submitted_key or Contest.generate_unique_key()
         if not re.match(r'^[a-z0-9]+$', key):
-            return JsonResponse({'error': _('Assignment key must contain only lowercase letters and numbers.')},
+            return JsonResponse({'error': _('Assignment ID must contain only lowercase letters and numbers.')},
                                 status=400)
-        if Contest.objects.filter(key=key).exists():
-            return JsonResponse({'error': _('An assignment with this key already exists.')}, status=400)
+        extra = {}
+        existing = Contest.objects.filter(key=key).first()
+        if existing is not None:
+            is_author = (
+                request.profile is not None
+                and existing.authors.filter(id=request.profile.id).exists()
+            )
+            if is_author:
+                extra = {
+                    'already_saved': True,
+                    'message': _('This assignment ID is already saved. Opening the editor.'),
+                }
+                # Stay on the editor so a retry after a successful-but-errored
+                # first save does not look like a unique-key failure.
+                payload = dict(payload)
+                payload['action'] = 'continue'
+                return self._action_response(payload, existing.key, extra=extra)
+            if wants_auto_series(payload.get('key_auto'), key, 'c'):
+                extra = {
+                    'id_changed': True,
+                    'id_changed_from': key,
+                }
+                key = Contest.generate_unique_key()
+                extra['message'] = _('Saved with ID %(new)s because %(old)s was already in use.') % {
+                    'new': key,
+                    'old': extra['id_changed_from'],
+                }
+            else:
+                return JsonResponse({
+                    'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
+                }, status=400)
 
         try:
             with transaction.atomic():
@@ -1168,9 +1199,39 @@ class ContestCreate(LoginRequiredMixin, View):
                 self._sync_problems(contest, payload)
                 contest_id = contest.pk
                 self._log_assignment(request, contest, added=True)
+                key = contest.key
             from judge.utils.contest_ai import schedule_batch_ai_grade
             transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
-            return self._action_response(payload, contest.key)
+            return self._action_response(payload, key, extra=extra or None)
+        except IntegrityError:
+            if extra.get('id_changed') or is_series_id(key, 'c') or not submitted_key:
+                key = Contest.generate_unique_key()
+                extra = {
+                    'id_changed': True,
+                    'id_changed_from': submitted_key or extra.get('id_changed_from') or '',
+                    'message': _('Saved with ID %(new)s because the previous ID was already in use.') % {
+                        'new': key,
+                    },
+                }
+                try:
+                    with transaction.atomic():
+                        contest = Contest(key=key)
+                        self._apply_payload(contest, payload)
+                        contest.full_clean()
+                        contest.save()
+                        self._save_m2m(contest, payload)
+                        contest.authors.add(request.profile)
+                        self._sync_problems(contest, payload)
+                        contest_id = contest.pk
+                        self._log_assignment(request, contest, added=True)
+                    from judge.utils.contest_ai import schedule_batch_ai_grade
+                    transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
+                    return self._action_response(payload, contest.key, extra=extra)
+                except Exception as e:
+                    return self._error_response(e)
+            return JsonResponse({
+                'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
+            }, status=400)
         except Exception as e:
             return self._error_response(e)
 
@@ -1185,11 +1246,15 @@ class ContestCreate(LoginRequiredMixin, View):
                 if new_key != contest.key:
                     if not re.match(r'^[a-z0-9]+$', new_key):
                         return JsonResponse(
-                            {'error': _('Assignment key must contain only lowercase letters and numbers.')},
+                            {'error': _('Assignment ID must contain only lowercase letters and numbers.')},
                             status=400,
                         )
                     if Contest.objects.filter(key=new_key).exclude(pk=contest.pk).exists():
-                        return JsonResponse({'error': _('An assignment with this key already exists.')}, status=400)
+                        return JsonResponse({
+                            'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {
+                                'key': new_key,
+                            },
+                        }, status=400)
                     contest.key = new_key
 
                 before_score = self._scoring_snapshot(contest)
@@ -1233,7 +1298,7 @@ class ContestCreate(LoginRequiredMixin, View):
         )
 
     @staticmethod
-    def _action_response(payload, key, *, return_url=None):
+    def _action_response(payload, key, *, return_url=None, extra=None):
         """Build the post-save response from the ``action`` button clicked.
 
         ``save`` (default) → redirect to the contest page; ``continue`` → back
@@ -1243,15 +1308,18 @@ class ContestCreate(LoginRequiredMixin, View):
         action = payload.get('action') if isinstance(payload, dict) else None
         if action not in ('save', 'continue', 'another'):
             action = 'save'
+        body = {'ok': True, 'action': action, 'key': key}
+        if extra:
+            body.update(extra)
         if action == 'another':
-            return JsonResponse({'ok': True, 'action': 'another'})
+            return JsonResponse(body)
         if action == 'continue':
-            redirect = reverse('contest_edit', args=[key])
+            body['redirect'] = reverse('contest_edit', args=[key])
         elif action == 'save' and return_url:
-            redirect = return_url
+            body['redirect'] = return_url
         else:
-            redirect = reverse('contest_view', args=[key])
-        return JsonResponse({'ok': True, 'action': action, 'redirect': redirect})
+            body['redirect'] = reverse('contest_view', args=[key])
+        return JsonResponse(body)
 
     # ── template context ────────────────────────────────────────────────────
 
@@ -1953,10 +2021,13 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
 
 class ContestKeyCheckView(LoginRequiredMixin, View):
     def get(self, request, *args, **kwargs):
-        key = request.GET.get('key', '').strip()
+        if request.GET.get('suggest'):
+            key = Contest.generate_unique_key()
+            return JsonResponse({'key': key, 'exists': False})
 
+        key = request.GET.get('key', '').strip()
         if not key:
-            return JsonResponse({'error': 'missing key'}, status=400)
+            return JsonResponse({'error': _('Missing assignment ID.')}, status=400)
 
         exists = Contest.objects.filter(key=key).exists()
         return JsonResponse({'exists': exists})
@@ -1976,6 +2047,11 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
 
     def has_permission(self):
         return super().has_permission()
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial['key'] = Contest.generate_unique_key()
+        return initial
 
     def form_valid(self, form):
         contest = self.object

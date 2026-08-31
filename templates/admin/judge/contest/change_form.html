@@ -225,15 +225,22 @@
                 }
 
                 async function generateIndependentContestKey() {
-                    var max = 1000000;
-                    for (var i = 0; i < max; i++) {
-                        var key = 'c' + String(i).padStart(6, '0');
-                        var exists = await checkContestKey(key);
-                        if (exists === false) {
-                            return key;
+                    var response = await fetch(
+                        '{% url "contest_check_key" %}?suggest=1',
+                        {
+                            method: 'GET',
+                            cache: 'no-cache',
+                            headers: {'X-Requested-With': 'XMLHttpRequest'}
                         }
+                    );
+                    if (!response.ok) {
+                        throw new Error('suggest failed');
                     }
-                    return 'contest' + String(Date.now()).slice(-6);
+                    var data = await response.json();
+                    if (!data.key) {
+                        throw new Error('suggest failed');
+                    }
+                    return data.key;
                 }
 
                 function requestAutofillKey() {

@@ -161,6 +161,19 @@ class ProblemCloneTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'code': 'p000001', 'exists': False})
 
+    def test_clone_occupied_series_code_uses_next(self):
+        create_problem(code='p000000', name='Taken series', is_public=True, authors=('superuser',))
+        problem = create_problem(
+            code='clone-src-series', name='Clone Source Series', is_public=True, authors=('superuser',),
+        )
+        response = self.client.post(
+            reverse('problem_clone', args=(problem.code,)),
+            {'code': 'p000000'},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('problem_edit_v2', args=('p000001',)))
+        self.assertTrue(Problem.objects.filter(code='p000001').exists())
+
     def test_clone_file_upload_config(self):
         problem = create_problem(
             code='clone-file',

@@ -18,6 +18,7 @@ from judge.models.submission import Submission
 from judge.ratings import rate_contest
 from judge.storage import generate_seb_config_key, submission_storage
 from judge.utils.seb import first_invalid_seb_key, parse_seb_keys
+from judge.utils.unique_ids import next_prefixed_id
 
 __all__ = [
     'Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating',
@@ -302,11 +303,11 @@ class Contest(models.Model):
     @classmethod
     def generate_unique_key(cls):
         """Next unused assignment/contest id in the clone/admin series ``c000000``."""
-        for i in range(1000000):
-            key = 'c{:06d}'.format(i)
-            if not cls.objects.filter(key=key).exists():
-                return key
-        return 'contest{}'.format(str(timezone.now().timestamp()).replace('.', '')[-6:])
+        return next_prefixed_id(
+            cls.objects.values_list('key', flat=True),
+            'c',
+            fallback_prefix='contest',
+        )
 
     @cached_property
     def format_class(self):

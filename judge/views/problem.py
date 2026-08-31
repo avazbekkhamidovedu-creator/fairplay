@@ -1718,6 +1718,8 @@ class ProblemCodeCheckView(LoginRequiredMixin, View):
     def get(self, request, *args, **kwargs):
         if not (
             request.user.has_perm('judge.clone_problem')
+            or request.user.has_perm('judge.create_private_problem')
+            or request.user.has_perm('judge.add_problem')
             or request.user.is_superuser
         ):
             return JsonResponse({'error': _('Forbidden')}, status=403)

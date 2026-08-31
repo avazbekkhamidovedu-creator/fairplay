@@ -884,6 +884,39 @@ class ContestListV2ActionsTestCase(CommonDataMixin, TestCase):
         self.assertRedirects(resp, reverse('contest_edit', args=['clonedactions']))
         self.assertFalse(resp.url.startswith('/admin/'))
 
+    def test_clone_get_prefills_next_assignment_id(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        occupied = Contest.generate_unique_key()
+        create_contest(
+            key=occupied, name='Occupied clone key',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('superuser',),
+        )
+        response = self.client.get(reverse('contest_clone', args=[self.ongoing.key]))
+        self.assertEqual(response.status_code, 200)
+        key = response.context['form'].initial['key']
+        self.assertRegex(key, r'^c\d{6}$')
+        self.assertNotEqual(key, occupied)
+        html = response.content.decode()
+        self.assertIn('?suggest=1', html)
+        self.assertIn('generateUniqueContestKey', html)
+
+    def test_clone_occupied_series_key_uses_next(self):
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        occupied = Contest.generate_unique_key()
+        create_contest(
+            key=occupied, name='Occupied clone series',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('superuser',),
+        )
+        resp = self.client.post(reverse('contest_clone', args=[self.ongoing.key]), {'key': occupied})
+        self.assertEqual(resp.status_code, 302)
+        cloned = Contest.objects.exclude(pk=self.ongoing.pk).get(name=self.ongoing.name)
+        self.assertNotEqual(cloned.key, occupied)
+        self.assertRedirects(resp, reverse('contest_edit', args=[cloned.key]))
+
 
 class ContestDeleteViewTestCase(CommonDataMixin, TestCase):
     @classmethod

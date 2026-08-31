@@ -36,19 +36,21 @@ function initializeProblemCodeAutofill() {
     }
 
     async function generateUniqueCloneCode() {
-        const max = 1000000;
-
-        for (let i = 0; i < max; i++) {
-            const code = `p${i.toString().padStart(6, '0')}`;
-            const exists = await checkProblemCode(code);
-
-            if (exists === false) {
-                return code;
+        const response = await fetch('/api/v2/problem/check-code/?suggest=1', {
+            method: 'GET',
+            cache: 'no-cache',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
             }
+        });
+        if (!response.ok) {
+            throw new Error('suggest failed');
         }
-
-        const timestamp = Date.now().toString().slice(-6);
-        return `clone${timestamp}`;
+        const data = await response.json();
+        if (!data.code) {
+            throw new Error('suggest failed');
+        }
+        return data.code;
     }
 
     async function autofillProblemCode(options) {

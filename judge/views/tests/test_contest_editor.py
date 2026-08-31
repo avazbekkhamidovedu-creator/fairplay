@@ -803,6 +803,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         html = response.content.decode()
         self.assertIn('value="%s"' % key, html)
         self.assertIn('generateUniqueContestKey', html)
+        self.assertIn('?suggest=1', html)
         self.assertNotIn("replace(/[^a-z0-9]+/g, '')", html)
 
     def test_preview_title_comes_before_time(self):
@@ -829,6 +830,81 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         contest = Contest.objects.get(name='Homework Name Copy')
         self.assertNotEqual(contest.key, 'homeworknamecopy')
         self.assertRegex(contest.key, r'^c\d{6}$')
+
+    def test_check_key_suggests_next_unused(self):
+        occupied = Contest.generate_unique_key()
+        create_contest(
+            key=occupied, name='Occupied suggest key',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('superuser',),
+        )
+        response = self.client.get(reverse('contest_check_key'), {'suggest': '1'})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['exists'])
+        self.assertRegex(body['key'], r'^c\d{6}$')
+        self.assertNotEqual(body['key'], occupied)
+
+    def test_create_own_key_already_saved_opens_editor(self):
+        first = self._post(name='Mine', key='c000000')
+        self.assertEqual(first.status_code, 200, first.content)
+        retry = self._post(name='Mine again', key='c000000')
+        self.assertEqual(retry.status_code, 200, retry.content)
+        body = retry.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body['already_saved'])
+        self.assertEqual(body['key'], 'c000000')
+        self.assertIn('already saved', body['message'].lower())
+        self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
+        self.assertEqual(body['redirect'], reverse('contest_edit', args=['c000000']))
+
+    def test_create_series_key_taken_by_other_saves_next(self):
+        occupied = Contest.generate_unique_key()
+        create_contest(
+            key=occupied, name='Other assignment',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('fields_user_a',),
+        )
+        response = self._post(name='Collision', key=occupied)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body.get('id_changed'))
+        self.assertEqual(body['id_changed_from'], occupied)
+        self.assertNotEqual(body['key'], occupied)
+        self.assertRegex(body['key'], r'^c\d{6}$')
+        self.assertIn(body['key'], body['message'])
+        self.assertIn(occupied, body['message'])
+        self.assertTrue(Contest.objects.filter(key=body['key'], name='Collision').exists())
+
+    def test_create_custom_key_taken_returns_400_with_id(self):
+        create_contest(
+            key='homework1', name='Taken custom',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('fields_user_a',),
+        )
+        response = self._post(name='Dup custom', key='homework1')
+        self.assertEqual(response.status_code, 400)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn('homework1', error)
+
+    def test_create_series_key_without_auto_returns_400(self):
+        occupied = Contest.generate_unique_key()
+        create_contest(
+            key=occupied, name='Forced collision',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('fields_user_a',),
+        )
+        response = self._post(name='Forced', key=occupied, key_auto=False)
+        self.assertEqual(response.status_code, 400)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn(occupied, error)
 
     def test_per_problem_code_options_hidden_for_other_types(self):
         from judge.models.question import ProblemMCQConfig
