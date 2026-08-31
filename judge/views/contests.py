@@ -144,9 +144,10 @@ class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestL
         self.search_query = None
         queryset = self._get_queryset().order_by(self.order, 'key').filter(end_time__lt=self._now)
         if 'search' in self.request.GET:
-            self.search_query = search_query = ' '.join(self.request.GET.getlist('search')).strip()
-            if search_query:
-                queryset = queryset.filter(Q(key__icontains=search_query) | Q(name__icontains=search_query))
+            terms = [t.strip() for t in self.request.GET.getlist('search') if t.strip()]
+            self.search_query = ' '.join(terms) or None
+            for term in terms:
+                queryset = queryset.filter(Q(key__icontains=term) | Q(name__icontains=term))
         return queryset
 
     def get_paginator(self, queryset, per_page, orphans=0, allow_empty_first_page=True, **kwargs):
@@ -306,7 +307,8 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['now'] = self._now
         context['first_page_href'] = '.'
         context['page_suffix'] = '#past-contests' if self.group == 'status' else ''
-        context['search_query'] = ' '.join(self.request.GET.getlist('search')).strip()
+        context['search_terms'] = [t.strip() for t in self.request.GET.getlist('search') if t.strip()]
+        context['search_query'] = ' '.join(context['search_terms'])
 
         # Additional context for v2
         # Filter options are scoped to the contests the user can actually see,

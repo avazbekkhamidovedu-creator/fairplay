@@ -1337,23 +1337,23 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                     fmt_q |= qmap[code]
             if fmt_q:
                 queryset = queryset.filter(fmt_q)
-        if 'search' in self.request.GET:
-            self.search_query = query = ' '.join(self.request.GET.getlist('search')).strip()
-            if query:
-                if settings.ENABLE_FTS and self.full_text:
-                    queryset = self.apply_full_text(queryset, query)
-                else:
-                    text_filter = (
-                        Q(code__icontains=query)
-                        | Q(name__icontains=query)
-                        | Q(
-                            translations__name__icontains=query,
-                            translations__language=self.request.LANGUAGE_CODE,
-                        )
-                    )
-                    if self.search_full:
-                        text_filter |= Q(description__icontains=query)
-                    queryset = queryset.filter(text_filter)
+        self.search_terms = [t.strip() for t in self.request.GET.getlist('search') if t.strip()]
+        self.search_query = ' '.join(self.search_terms) or None
+        for term in self.search_terms:
+            if settings.ENABLE_FTS and self.full_text:
+                queryset = self.apply_full_text(queryset, term)
+                continue
+            text_filter = (
+                Q(code__icontains=term)
+                | Q(name__icontains=term)
+                | Q(
+                    translations__name__icontains=term,
+                    translations__language=self.request.LANGUAGE_CODE,
+                )
+            )
+            if self.search_full:
+                text_filter |= Q(description__icontains=term)
+            queryset = queryset.filter(text_filter)
         self.prepoint_queryset = queryset
         if self.point_start is not None:
             queryset = queryset.filter(points__gte=self.point_start)
@@ -1443,6 +1443,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                                        for code, label, q in self.get_format_options()]
             context['selected_formats'] = self.selected_formats
         context['has_fts'] = settings.ENABLE_FTS
+        context['search_terms'] = getattr(self, 'search_terms', None) or []
         context['search_query'] = self.search_query
         context['completed_problem_ids'] = self.get_completed_problems()
         context['attempted_problems'] = self.get_attempted_problems()
@@ -1567,6 +1568,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         self.has_public_editorial = self.GET_with_session(request, 'has_public_editorial')
 
         self.search_query = None
+        self.search_terms = []
         self.category = None
         self.selected_types = []
         self.selected_formats = []

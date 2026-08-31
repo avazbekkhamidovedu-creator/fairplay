@@ -303,31 +303,47 @@
                     else if (field === 'author') removeSelectValue($('#filter-author'), value);
                     else if (field === 'status') { $('#status-filter').val('').trigger('change'); return; }
                     else if (field === 'ac') { $('input[name=ac_min]').val(''); $('input[name=ac_max]').val(''); go(); }
-                    else if (field === 'search') { $('input[name=search]').val(''); go(); }
+                    else if (field === 'search') {
+                        var term = String($(this).attr('data-value'));
+                        $form.find('input[name=search]').filter(function () {
+                            return String(this.value) === term;
+                        }).first().remove();
+                        go();
+                    }
                     else if (field === 'full_text') { $('input[name=full_text]').prop('checked', false); go(); }
                     else if (field === 'search_full') { $('input[name=search_full]').prop('checked', false); go(); }
                 });
 
                 applyKnowledgeVisibility();
 
-                // Keyword search: debounce live submit, keep Enter immediate.
-                var searchTimer = null;
-                var SEARCH_DEBOUNCE_MS = 400;
-                function scheduleSearch() {
-                    if (searchTimer) clearTimeout(searchTimer);
-                    searchTimer = setTimeout(function () {
-                        searchTimer = null;
-                        go();
-                    }, SEARCH_DEBOUNCE_MS);
+                // Enter commits one keyword; the form is not submitted while typing.
+                var $searchInput = $('#search');
+                function goFromSearch() {
+                    try { sessionStorage.setItem('dkuoj-focus-search', '1'); } catch (err) {}
+                    go();
                 }
-                $form.find('input[name=search]').on('input', scheduleSearch);
-                $form.find('input[name=search], input[name=ac_min], input[name=ac_max]').keypress(function (e) {
+                function addSearchTerm(term) {
+                    var exists = $form.find('input[name=search]').filter(function () {
+                        return this.value === term;
+                    }).length;
+                    if (exists) return;
+                    $('<input>', {type: 'hidden', name: 'search', value: term}).appendTo($form);
+                    goFromSearch();
+                }
+                dkuojBindKeywordEnter($searchInput[0], addSearchTerm);
+                $form.find('input[name=ac_min], input[name=ac_max]').keypress(function (e) {
                     if (e.which === 13) {
                         e.preventDefault();
-                        if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
                         go();
                     }
                 });
+                try {
+                    if (sessionStorage.getItem('dkuoj-focus-search')) {
+                        sessionStorage.removeItem('dkuoj-focus-search');
+                        var searchEl = $searchInput[0];
+                        if (searchEl) searchEl.focus();
+                    }
+                } catch (err) {}
 
                 // Toggle the tags column.
                 $('#toggle-tags').click(function () {
@@ -653,8 +669,11 @@
 
                 <div class="filter-row">
                     <label class="filter-label">{{ _('Keyword') }}</label>
-                    <input type="text" id="search" name="search" class="input input-wide"
-                           value="{{ search_query or '' }}" placeholder="{{ _('Search by problem name, statement, etc.') }}">
+                    <input type="text" id="search" class="input input-wide" value="" autocomplete="off"
+                           placeholder="{{ _('Type a keyword, then press Enter') }}">
+                    {% for term in search_terms %}
+                        <input type="hidden" name="search" value="{{ term }}">
+                    {% endfor %}
                     {% if has_fts %}
                         <label class="checkbox-inline">
                             <input type="checkbox" name="full_text" value="1" {% if full_text %}checked{% endif %}>
@@ -670,7 +689,7 @@
                 <div class="filter-row selected-row">
                     <span class="filter-label">{{ _('Selected') }}</span>
                     <div class="chip-list" id="active-chips">
-                        {% set has_chip = selected_types or selected_formats or selected_organizations or selected_authors or problem_status or (ac_min != '') or (ac_max != '') or search_query or full_text %}
+                        {% set has_chip = selected_types or selected_formats or selected_organizations or selected_authors or problem_status or (ac_min != '') or (ac_max != '') or search_terms or full_text %}
                         {% for f in format_types %}{% if f.code in selected_formats %}
                             <span class="chip">{{ f.label }}<button type="button" data-field="format" data-value="{{ f.code }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
@@ -694,9 +713,9 @@
                         {% if ac_min != '' or ac_max != '' %}
                             <span class="chip">{{ _('AC %%') }} {{ ac_min or '0' }}~{{ ac_max or '100' }}%<button type="button" data-field="ac" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}
-                        {% if search_query %}
-                            <span class="chip">{{ search_query }}<button type="button" data-field="search" aria-label="{{ _('Remove') }}">&times;</button></span>
-                        {% endif %}
+                        {% for term in search_terms %}
+                            <span class="chip">{{ term }}<button type="button" data-field="search" data-value="{{ term }}" aria-label="{{ _('Remove') }}">&times;</button></span>
+                        {% endfor %}
                         {% if full_text %}
                             <span class="chip">{{ _('Full text search') }}<button type="button" data-field="full_text" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}

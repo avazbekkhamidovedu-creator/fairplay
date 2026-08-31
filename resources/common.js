@@ -526,6 +526,66 @@ window.dkuojRefreshSelects = function () {
     }
 })();
 
+// Bind a debounced input callback that does not fire while an IME is composing.
+// Without this, the first latin letter (e.g. "q" of "question") is treated as a
+// completed query: problem list live-submits and assignment list replaceState
+// both abort composition, so the rest of the word is lost.
+window.dkuojBindLiveSearch = function (input, callback, delayMs) {
+    var timer = null;
+    var composing = false;
+    delayMs = delayMs || 400;
+
+    function cancel() {
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
+    }
+
+    function schedule() {
+        if (composing) return;
+        cancel();
+        timer = setTimeout(function () {
+            timer = null;
+            callback();
+        }, delayMs);
+    }
+
+    if (!input) {
+        return {cancel: cancel, schedule: schedule};
+    }
+
+    input.addEventListener('compositionstart', function () {
+        composing = true;
+        cancel();
+    });
+    input.addEventListener('compositionend', function () {
+        composing = false;
+        schedule();
+    });
+    input.addEventListener('input', function (event) {
+        if (composing || event.isComposing) return;
+        schedule();
+    });
+
+    return {cancel: cancel, schedule: schedule};
+};
+
+// Enter commits the current input as one keyword (IME-safe). The box is cleared
+// so the next word can be typed. Empty Enter does nothing.
+window.dkuojBindKeywordEnter = function (input, onCommit) {
+    if (!input) return;
+    input.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter') return;
+        if (event.isComposing || event.keyCode === 229) return;
+        event.preventDefault();
+        var term = (input.value || '').trim();
+        if (!term) return;
+        input.value = '';
+        onCommit(term);
+    });
+};
+
 // ── Reusable auto-dismissing toast ──────────────────────────────────────
 // window.showToast('Grade saved', 'success') / ('...', 'error') / ('...', 'info')
 // Shows a top-right toast with a ✓ / ✗ / i icon that fades out after ~3s.

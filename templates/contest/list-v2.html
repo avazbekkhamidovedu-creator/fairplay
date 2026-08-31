@@ -19,7 +19,7 @@
                 org: [],
                 cls: [],
                 tags: [],
-                q: '{{ (search_query or '')|escapejs }}',
+                keywords: [{% for term in search_terms %}'{{ term|escapejs }}'{% if not loop.last %}, {% endif %}{% endfor %}],
                 order: '{{ (sort_by or '-start_time')|escapejs }}',
                 group: '{{ group|escapejs }}'
             };
@@ -150,7 +150,7 @@
                     classes: checkedValues('#class-multi-select'),
                     tags: checkedValues('#tag-multi-select'),
                     authors: document.getElementById('author-multi-select') ? checkedValues('#author-multi-select') : [],
-                    q: (document.getElementById('f-q').value || '').trim().toLowerCase(),
+                    keywords: state.keywords.slice(),
                     time: timeRadio ? timeRadio.value : ''
                 };
             }
@@ -163,7 +163,9 @@
                 if (st.classes.length) params.set('class', st.classes.join(','));
                 if (st.tags.length) params.set('tag', st.tags.join(','));
                 if (st.authors && st.authors.length) params.set('author', st.authors.join(','));
-                if (st.q) params.set('search', st.q);
+                if (st.keywords.length) {
+                    st.keywords.forEach(function(term) { params.append('search', term); });
+                }
                 if (st.time) params.set('time', st.time);
                 if (state.order !== '-start_time') params.set('order', state.order);
                 if (state.group !== 'course') params.set('group', state.group);
@@ -191,7 +193,7 @@
             window.applyClientFilter = function() {
                 var st = clientState();
                 var filtering = st.orgs.length || st.classes.length || st.tags.length ||
-                    (st.authors && st.authors.length) || st.q || st.time !== '';
+                    (st.authors && st.authors.length) || st.keywords.length || st.time !== '';
 
                 var visible = 0;
                 document.querySelectorAll('.cl-row').forEach(function(row) {
@@ -213,9 +215,11 @@
                         var rowAuthors = (row.dataset.authors || '').split(',');
                         if (!st.authors.some(function(a) { return rowAuthors.indexOf(a) !== -1; })) show = false;
                     }
-                    if (show && st.q) {
+                    if (show && st.keywords.length) {
                         var hay = (row.dataset.search || '').toLowerCase();
-                        if (hay.indexOf(st.q) === -1) show = false;
+                        if (!st.keywords.every(function(term) {
+                            return hay.indexOf(String(term).toLowerCase()) !== -1;
+                        })) show = false;
                     }
                     row.style.display = show ? '' : 'none';
                     if (show) visible++;
@@ -235,6 +239,7 @@
                     if (typeof window.refreshAssignmentBulk === 'function') {
                         window.refreshAssignmentBulk();
                     }
+                    renderActiveFilters();
                     return;
                 }
 
@@ -253,14 +258,86 @@
                 if (typeof window.refreshAssignmentBulk === 'function') {
                     window.refreshAssignmentBulk();
                 }
+                renderActiveFilters();
             };
 
-            // ── Keyword search filters live (debounced) ──
-            var searchTimer = null;
-            document.getElementById('f-q').addEventListener('input', function() {
-                clearTimeout(searchTimer);
-                searchTimer = setTimeout(applyClientFilter, 250);
+            var timeLabels = {
+                ongoing: {{ _('Ongoing')|htmltojs }},
+                upcoming: {{ _('Upcoming')|htmltojs }},
+                active: {{ _('Active')|htmltojs }},
+                past: {{ _('Past')|htmltojs }}
+            };
+            var removeChipLabel = {{ _('Remove')|htmltojs }};
+
+            function renderActiveFilters() {
+                var list = document.getElementById('active-filters');
+                if (!list) return;
+                list.querySelectorAll('.chip').forEach(function(el) { el.remove(); });
+                var st = clientState();
+                function addChip(field, value, label) {
+                    var chip = document.createElement('span');
+                    chip.className = 'chip';
+                    chip.appendChild(document.createTextNode(label));
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.setAttribute('data-field', field);
+                    btn.setAttribute('data-value', value);
+                    btn.setAttribute('aria-label', removeChipLabel);
+                    btn.innerHTML = '&times;';
+                    chip.appendChild(btn);
+                    list.appendChild(chip);
+                }
+                st.orgs.forEach(function(v) { addChip('org', v, v); });
+                st.classes.forEach(function(v) { addChip('class', v, v); });
+                st.tags.forEach(function(v) { addChip('tag', v, v); });
+                if (st.time) addChip('time', st.time, timeLabels[st.time] || st.time);
+                (st.authors || []).forEach(function(v) {
+                    var input = document.querySelector('#author-multi-select input[value="' + v + '"]');
+                    var span = input && input.parentNode.querySelector('span');
+                    addChip('author', v, (span && span.textContent.trim()) || v);
+                });
+                st.keywords.forEach(function(term) { addChip('search', term, term); });
+                var placeholder = list.querySelector('.chip-placeholder');
+                var hasAny = !!(st.orgs.length || st.classes.length || st.tags.length || st.time ||
+                    (st.authors && st.authors.length) || st.keywords.length);
+                if (placeholder) placeholder.hidden = hasAny;
+            }
+
+            // ── Keyword search: Enter commits one term; no live submit while typing ──
+            dkuojBindKeywordEnter(document.getElementById('f-q'), function(term) {
+                if (state.keywords.indexOf(term) === -1) state.keywords.push(term);
+                applyClientFilter();
             });
+
+            var chipList = document.getElementById('active-filters');
+            if (chipList) {
+                chipList.addEventListener('click', function(e) {
+                    var btn = e.target.closest('button[data-field]');
+                    if (!btn || !chipList.contains(btn)) return;
+                    var field = btn.getAttribute('data-field');
+                    var value = btn.getAttribute('data-value');
+                    if (field === 'search') {
+                        state.keywords = state.keywords.filter(function(k) { return k !== value; });
+                    } else if (field === 'time') {
+                        document.querySelectorAll('input[name="time-filter"]').forEach(function(c) {
+                            c.checked = (c.value === '');
+                        });
+                        refreshStatusLabel();
+                    } else {
+                        var rootId = field === 'org' ? 'org-multi-select'
+                            : (field === 'class' ? 'class-multi-select'
+                            : (field === 'author' ? 'author-multi-select' : 'tag-multi-select'));
+                        document.querySelectorAll('#' + rootId + ' input[type=checkbox]').forEach(function(cb) {
+                            if (cb.value === value) cb.checked = false;
+                        });
+                        if (field === 'org') refreshOrgLabel();
+                        else if (field === 'class') refreshClassLabel();
+                        else if (field === 'author') refreshAuthorLabel();
+                        else refreshTagLabel();
+                    }
+                    applyClientFilter();
+                });
+            }
 
             // ── Clear all filters (instant, no reload) ──
             window.clearFilters = function() {
@@ -277,7 +354,7 @@
                 refreshClassLabel();
                 refreshTagLabel();
                 refreshAuthorLabel();
-                state = { org: [], cls: [], tags: [], q: '', order: state.order, group: state.group };
+                state = { org: [], cls: [], tags: [], keywords: [], order: state.order, group: state.group };
                 applyClientFilter();
             };
 
@@ -759,7 +836,8 @@
 
             <div class="filter-row">
                 <label class="filter-label">{{ _('Keyword') }}</label>
-                <input type="text" id="f-q" class="input input-wide" placeholder="{{ _('Search by assignment name, key…') }}" value="{{ search_query or '' }}">
+                <input type="text" id="f-q" class="input input-wide" value="" autocomplete="off"
+                       placeholder="{{ _('Type a keyword, then press Enter') }}">
             </div>
 
             <div class="filter-row selected-row">
