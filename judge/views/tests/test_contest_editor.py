@@ -78,6 +78,15 @@ class ContestEditorHelperTestCase(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('boom', json.loads(response.content)['error'])
 
+    def test_error_response_maps_integrity_error_without_id_wording(self):
+        with self.assertLogs('judge.views.contests', level='ERROR'):
+            response = ContestCreate._error_response(IntegrityError('contestproblem unique'))
+        self.assertEqual(response.status_code, 400)
+        error = json.loads(response.content)['error']
+        self.assertIn('not an ID conflict', error)
+        self.assertNotIn('already exists', error)
+        self.assertNotIn('contestproblem', error)
+
     def test_error_response_masks_internal_errors(self):
         with self.assertLogs('judge.views.contests', level='ERROR'):
             response = ContestCreate._error_response(RuntimeError('internal secret'))
@@ -952,6 +961,27 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('c000099', body['message'])
         self.assertIn('c000000', body['message'])
         self.assertTrue(Contest.objects.filter(key='c000099', name='Race auto').exists())
+
+    def test_create_related_integrity_error_is_not_id_conflict(self):
+        with patch.object(ContestCreate, '_sync_problems', side_effect=IntegrityError('contestproblem unique')):
+            with self.assertLogs('judge.views.contests', level='ERROR'):
+                response = self._post(name='Related fail', key='quiz1')
+        self.assertEqual(response.status_code, 400, response.content)
+        error = response.json()['error']
+        self.assertNotIn('already exists', error)
+        self.assertIn('not an ID conflict', error)
+        self.assertFalse(Contest.objects.filter(key='quiz1').exists())
+
+    def test_create_series_related_integrity_error_does_not_retarget_id(self):
+        with patch.object(ContestCreate, '_sync_problems', side_effect=IntegrityError('contestproblem unique')):
+            with self.assertLogs('judge.views.contests', level='ERROR'):
+                response = self._post(name='Related fail series', key='c000000')
+        self.assertEqual(response.status_code, 400, response.content)
+        error = response.json()['error']
+        self.assertNotIn('already exists', error)
+        self.assertIn('not an ID conflict', error)
+        self.assertFalse(response.json().get('id_changed'))
+        self.assertFalse(Contest.objects.filter(name='Related fail series').exists())
 
     def test_per_problem_code_options_hidden_for_other_types(self):
         from judge.models.question import ProblemMCQConfig

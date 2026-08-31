@@ -425,6 +425,10 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         return {name: groups[name] for name in sorted(groups)}, statuses
 
 
+class _ContestKeyConflict(Exception):
+    """Insert hit ``Contest.key`` uniqueness, not some other integrity error."""
+
+
 class ContestCreate(LoginRequiredMixin, View):
     """Create or edit a contest with the split layout form.
 
@@ -1133,13 +1137,21 @@ class ContestCreate(LoginRequiredMixin, View):
         """Map a save failure to a JSON error response.
 
         Validation errors (bad dates/JSON/user input) return their message
-        with HTTP 400; anything else is logged and reported generically so
-        internal details never reach the browser.
+        with HTTP 400; integrity errors after the contest row is stored are
+        reported as a related-data failure, not an ID conflict. Anything else
+        is logged and reported generically so internal details never reach
+        the browser.
         """
         if isinstance(exception, ValidationError):
             # Django's ValidationError can carry dicts / lists of messages
             # (e.g. from full_clean()); flatten them into one readable line.
             return JsonResponse({'error': ' '.join(exception.messages)}, status=400)
+        if isinstance(exception, IntegrityError):
+            logger.exception('Contest save integrity error: %s', exception)
+            return JsonResponse({
+                'error': _('Could not save assignment details (not an ID conflict). '
+                           'Check the problem list and try again.'),
+            }, status=400)
         logger.exception('Contest save failed: %s', exception)
         return JsonResponse({'error': _('Failed to save assignment.')}, status=500)
 
@@ -1185,29 +1197,8 @@ class ContestCreate(LoginRequiredMixin, View):
                 }, status=400)
 
         try:
-            with transaction.atomic():
-                contest = Contest(key=key)
-                self._apply_payload(contest, payload)
-                # Run the model's own validation (field lengths, SEB keys,
-                # format config, Lua label script, start/end ordering) before
-                # the first save. Without this, an invalid payload could store
-                # a row that 500s every page that renders it.
-                contest.full_clean()
-                contest.save()
-                self._save_m2m(contest, payload)
-                contest.authors.add(request.profile)  # the creator becomes an author
-                self._sync_problems(contest, payload)
-                contest_id = contest.pk
-                self._log_assignment(request, contest, added=True)
-                key = contest.key
-            from judge.utils.contest_ai import schedule_batch_ai_grade
-            transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
-            return self._action_response(payload, key, extra=extra or None)
-        except IntegrityError:
-            # A race can still hit the unique key after the pre-save check
-            # saw it free. Series ids (and blank ids we generated) get the
-            # next free slot so the assignment is not lost; tell the user
-            # the ID that was actually stored.
+            contest = self._save_new_contest(request, payload, key)
+        except _ContestKeyConflict:
             if extra.get('id_changed') or is_series_id(key, 'c') or not submitted_key:
                 old_key = submitted_key or extra.get('id_changed_from') or ''
                 key = Contest.generate_unique_key()
@@ -1220,26 +1211,45 @@ class ContestCreate(LoginRequiredMixin, View):
                     },
                 }
                 try:
-                    with transaction.atomic():
-                        contest = Contest(key=key)
-                        self._apply_payload(contest, payload)
-                        contest.full_clean()
-                        contest.save()
-                        self._save_m2m(contest, payload)
-                        contest.authors.add(request.profile)
-                        self._sync_problems(contest, payload)
-                        contest_id = contest.pk
-                        self._log_assignment(request, contest, added=True)
-                    from judge.utils.contest_ai import schedule_batch_ai_grade
-                    transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
-                    return self._action_response(payload, contest.key, extra=extra)
+                    contest = self._save_new_contest(request, payload, key)
+                except _ContestKeyConflict:
+                    return JsonResponse({
+                        'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
+                    }, status=400)
                 except Exception as e:
                     return self._error_response(e)
-            return JsonResponse({
-                'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
-            }, status=400)
+            else:
+                return JsonResponse({
+                    'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
+                }, status=400)
         except Exception as e:
             return self._error_response(e)
+
+        contest_id = contest.pk
+        from judge.utils.contest_ai import schedule_batch_ai_grade
+        transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
+        return self._action_response(payload, contest.key, extra=extra or None)
+
+    def _save_new_contest(self, request, payload, key):
+        """Insert one contest row and its related data.
+
+        ``IntegrityError`` on ``contest.save()`` is a key collision and is
+        re-raised as ``_ContestKeyConflict``. Later integrity errors (problem
+        list, M2M) propagate unchanged so they are not reported as ID issues.
+        """
+        with transaction.atomic():
+            contest = Contest(key=key)
+            self._apply_payload(contest, payload)
+            contest.full_clean()
+            try:
+                contest.save()
+            except IntegrityError:
+                raise _ContestKeyConflict
+            self._save_m2m(contest, payload)
+            contest.authors.add(request.profile)
+            self._sync_problems(contest, payload)
+            self._log_assignment(request, contest, added=True)
+            return contest
 
     def _update(self, request, payload):
         """Update an existing contest row (and optionally its key) in place."""
