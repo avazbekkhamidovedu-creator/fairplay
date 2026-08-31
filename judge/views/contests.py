@@ -1204,13 +1204,19 @@ class ContestCreate(LoginRequiredMixin, View):
             transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
             return self._action_response(payload, key, extra=extra or None)
         except IntegrityError:
+            # A race can still hit the unique key after the pre-save check
+            # saw it free. Series ids (and blank ids we generated) get the
+            # next free slot so the assignment is not lost; tell the user
+            # the ID that was actually stored.
             if extra.get('id_changed') or is_series_id(key, 'c') or not submitted_key:
+                old_key = submitted_key or extra.get('id_changed_from') or ''
                 key = Contest.generate_unique_key()
                 extra = {
                     'id_changed': True,
-                    'id_changed_from': submitted_key or extra.get('id_changed_from') or '',
-                    'message': _('Saved with ID %(new)s because the previous ID was already in use.') % {
+                    'id_changed_from': old_key,
+                    'message': _('Saved with ID %(new)s because %(old)s was already in use.') % {
                         'new': key,
+                        'old': old_key or _('the previous ID'),
                     },
                 }
                 try:

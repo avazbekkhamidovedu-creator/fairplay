@@ -997,7 +997,7 @@
                             showToast(savedMsg);
                             setTimeout(function () {
                                 window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
-                            }, 1200);
+                            }, res.id_changed ? 2500 : 1200);
                         } else {
                             window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
                         }

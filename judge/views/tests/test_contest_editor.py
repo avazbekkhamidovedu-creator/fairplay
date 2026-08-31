@@ -17,6 +17,7 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -905,6 +906,52 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         error = response.json()['error']
         self.assertIn('already exists', error)
         self.assertIn(occupied, error)
+
+    def test_create_series_key_race_saves_next_and_tells_user(self):
+        original_save = Contest.save
+        calls = {'n': 0}
+
+        def racing_save(self, *args, **kwargs):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise IntegrityError('duplicate key')
+            return original_save(self, *args, **kwargs)
+
+        with patch.object(Contest, 'save', racing_save):
+            with patch.object(Contest, 'generate_unique_key', return_value='c000099'):
+                # Even if the teacher edited the prefilled id (key_auto=false),
+                # a race still saves under the next free series id.
+                response = self._post(name='Race no auto', key='c000000', key_auto=False)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body.get('id_changed'))
+        self.assertEqual(body['id_changed_from'], 'c000000')
+        self.assertEqual(body['key'], 'c000099')
+        self.assertIn('c000099', body['message'])
+        self.assertIn('c000000', body['message'])
+        self.assertTrue(Contest.objects.filter(key='c000099', name='Race no auto').exists())
+
+    def test_create_series_key_race_with_auto_saves_next(self):
+        original_save = Contest.save
+        calls = {'n': 0}
+
+        def racing_save(self, *args, **kwargs):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise IntegrityError('duplicate key')
+            return original_save(self, *args, **kwargs)
+
+        with patch.object(Contest, 'save', racing_save):
+            with patch.object(Contest, 'generate_unique_key', return_value='c000099'):
+                response = self._post(name='Race auto', key='c000000', key_auto=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body.get('id_changed'))
+        self.assertEqual(body['id_changed_from'], 'c000000')
+        self.assertEqual(body['key'], 'c000099')
+        self.assertIn('c000099', body['message'])
+        self.assertIn('c000000', body['message'])
+        self.assertTrue(Contest.objects.filter(key='c000099', name='Race auto').exists())
 
     def test_per_problem_code_options_hidden_for_other_types(self):
         from judge.models.question import ProblemMCQConfig
