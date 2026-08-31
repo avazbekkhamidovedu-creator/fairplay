@@ -237,7 +237,7 @@
           {% endif %}
           {% set row_diff = item_problem.difficulty %}
           <a class="drawer-problem{% if item_problem.code == problem.code %} active{% endif %}"
-             href="{{ item_problem.get_absolute_url() }}"
+             href="{{ item_problem.get_absolute_url() }}{% if workspace_preview_query %}?{{ workspace_preview_query }}{% endif %}"
              data-code="{{ item_problem.code }}"
              data-type="{{ item_problem.submission_type }}"
              data-format="{{ item_problem.format_filter_code }}"
@@ -259,7 +259,7 @@
               {% endif %}
             </span>
             <span class="drawer-problem-body">
-              <span class="drawer-problem-name">{% if workspace_in_contest %}{{ item.order }}. {% else %}{{ item_problem.code }} {% endif %}{{ item_problem.name }}</span>
+              <span class="drawer-problem-name">{% if workspace_in_contest or workspace_assignment_preview %}{{ item.order }}. {{ item.effective_name or item_problem.name }}{% else %}{{ item_problem.code }} {{ item_problem.name }}{% endif %}</span>
               <span class="drawer-problem-meta">
                 {% if row_diff %}<span class="difficulty-badge diff-{{ row_diff }}">{{ item_problem.difficulty_label }}</span>{% endif %}
                 <span class="drawer-attempts">

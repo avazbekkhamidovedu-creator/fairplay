@@ -3,8 +3,11 @@ from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from judge.models import Contest, ContestParticipation, ContestTag
-from judge.models.contest import MinValueOrNoneValidator
-from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, create_user
+from judge.models.contest import MinValueOrNoneValidator, contest_problem_display_name
+from judge.models.tests.util import (
+    CommonDataMixin, create_contest, create_contest_participation,
+    create_contest_problem, create_problem, create_user,
+)
 
 
 class ContestTestCase(CommonDataMixin, TestCase):
@@ -1157,3 +1160,19 @@ class ContestSEBTestCase(CommonDataMixin, TestCase):
         contest.seb_browser_exam_keys = ''
         contest.seb_config_keys = ''
         contest.full_clean()
+
+
+class ContestProblemDisplayNameTestCase(CommonDataMixin, TestCase):
+    def test_override_wins_over_problem_name(self):
+        problem = create_problem('disp-helper', name='Library Name')
+        contest = create_contest(key='disphelper')
+        cp = create_contest_problem(contest=contest, problem=problem, display_name='Assignment Name')
+        self.assertEqual(contest_problem_display_name(cp), 'Assignment Name')
+        self.assertEqual(problem.name, 'Library Name')
+
+    def test_empty_override_falls_back_to_problem_name(self):
+        problem = create_problem('disp-empty', name='Original Title')
+        contest = create_contest(key='dispemptycp')
+        cp = create_contest_problem(contest=contest, problem=problem, display_name='')
+        self.assertEqual(contest_problem_display_name(cp), 'Original Title')
+        self.assertEqual(contest_problem_display_name(cp, 'en'), 'Original Title')

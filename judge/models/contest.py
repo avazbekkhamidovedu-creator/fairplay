@@ -19,7 +19,10 @@ from judge.ratings import rate_contest
 from judge.storage import generate_seb_config_key, submission_storage
 from judge.utils.seb import first_invalid_seb_key, parse_seb_keys
 
-__all__ = ['Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating']
+__all__ = [
+    'Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating',
+    'contest_problem_display_name',
+]
 
 
 class MinValueOrNoneValidator(MinValueValidator):
@@ -112,6 +115,8 @@ class Contest(models.Model):
                                                       blank=True, related_name='view_contest_submissions',
                                                       help_text=_('These users will be able '
                                                                   'to see in-contest submissions.'))
+    # Model / Django admin default is visible (traditional contests). The
+    # assignment editor defaults new homework to SCOREBOARD_HIDDEN instead.
     scoreboard_visibility = models.CharField(verbose_name=_('scoreboard visibility'), default=SCOREBOARD_VISIBLE,
                                              help_text=_('Scoreboard visibility through the duration of the contest.'),
                                              max_length=1, choices=SCOREBOARD_VISIBILITY)
@@ -917,6 +922,8 @@ class ContestProblem(models.Model):
                                                    'question type (hidden for multiple-choice, shown for code). Only '
                                                    'applies to exam-style contests.'),
                                        default=None, null=True, blank=True)
+    display_name = models.CharField(max_length=100, blank=True, default='',
+                                    verbose_name=_('display name'))
 
     @property
     def results_hidden(self):
@@ -937,6 +944,19 @@ class ContestProblem(models.Model):
         verbose_name = _('contest problem')
         verbose_name_plural = _('contest problems')
         ordering = ('order',)
+
+
+def contest_problem_display_name(cp, language_code=None) -> str:
+    """Assignment-local title for a contest problem.
+
+    A non-empty ``display_name`` wins over the Problem's i18n translation and
+    canonical name. Empty string means "use the original Problem name".
+    """
+    if cp.display_name:
+        return cp.display_name
+    if language_code:
+        return cp.problem.translated_name(language_code)
+    return cp.problem.name
 
 
 class ContestSubmission(models.Model):

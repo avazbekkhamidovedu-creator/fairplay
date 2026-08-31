@@ -639,6 +639,17 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         html = response.content.decode()
         self.assertRegex(html, r'value="exam"\s+selected')
 
+    def test_create_defaults_scoreboard_hidden(self):
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['prefill']['scoreboard_visibility'], Contest.SCOREBOARD_HIDDEN)
+        html = response.content.decode()
+        self.assertRegex(html, r'value="H"[^>]*selected')
+        self.assertNotRegex(html, r'value="V"[^>]*selected')
+        self.assertLess(html.find('value="H"'), html.find('value="V"'))
+        self.assertIn('forceScoreboardHiddenDefault', html)
+        self.assertIn("sb.value = 'H'", html)
+
     def test_create_page_omits_crumb_and_layout_switch(self):
         """Tabs stay; the crumb row and Horizontal/Vertical switch under them do not."""
         html = self.client.get(reverse('contest_create')).content.decode()
@@ -720,6 +731,19 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_create')).content.decode()
         preview = html.split('id="pv-body"', 1)[1].split('</aside>', 1)[0]
         self.assertLess(preview.find('id="pv-title"'), preview.find('id="pv-time"'))
+
+    def test_preview_problems_link_and_read_display_name(self):
+        """syncPreviewProblems must read the display_name input and link the name."""
+        html = self.client.get(reverse('contest_create')).content.decode()
+        self.assertIn('function syncPreviewProblems()', html)
+        self.assertIn('function cpRowDisplayName(row)', html)
+        self.assertIn('function cpRowOverrideName(row)', html)
+        self.assertIn('input.cp-display-name', html)
+        self.assertIn('maxlength="100" value="" placeholder="', html)
+        self.assertNotIn("escapeHtml(row.dataset.name || 'Problem ' + row.dataset.pid)", html)
+        self.assertIn('function assignmentProblemHref(code)', html)
+        self.assertIn('assignment_preview=1', html)
+        self.assertIn('preview_codes=', html)
 
     def test_create_empty_key_is_auto_incremented_not_name(self):
         response = self._post(name='Homework Name Copy', key='')
@@ -919,6 +943,12 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertRegex(html, r'id="id_join_organizations"[^>]*multiple')
         prefill = edit.context['prefill']
         self.assertCountEqual([o[0] for o in prefill['join_organizations']], [org_a.id, org_b.id])
+
+    def test_create_omitted_scoreboard_visibility_saves_hidden(self):
+        response = self._post(name='SB Default', key='sbdefault')
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='sbdefault')
+        self.assertEqual(contest.scoreboard_visibility, Contest.SCOREBOARD_HIDDEN)
 
     def test_invalid_scoreboard_visibility_returns_400(self):
         response = self._post(name='SB Bad', key='sbbad', scoreboard_visibility='X')
@@ -1342,6 +1372,60 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertTrue(cp.is_pretested)
         self.assertEqual(cp.max_submissions, 3)
 
+    def test_create_saves_display_name(self):
+        problem = create_problem('display-name-create', is_public=True, name='Library Title')
+        response = self._post(
+            name='Named', key='dispname',
+            problems=[{'id': problem.id, 'points': 100, 'display_name': 'Quiz Q1'}],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        cp = Contest.objects.get(key='dispname').contest_problems.get()
+        self.assertEqual(cp.display_name, 'Quiz Q1')
+        self.assertEqual(cp.problem.name, 'Library Title')
+
+    def test_create_then_detail_shows_display_name(self):
+        problem = create_problem('display-name-detail', is_public=True, name='Library Original')
+        response = self._post(
+            name='Named Detail', key='dispdetail',
+            problems=[{'id': problem.id, 'points': 100, 'display_name': 'Quiz Title'}],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        detail = self.client.get(reverse('contest_view', args=['dispdetail']))
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.context['contest_problems'][0].effective_name, 'Quiz Title')
+        self.assertContains(detail, 'Quiz Title')
+
+    def test_create_rejects_display_name_too_long(self):
+        problem = create_problem('display-name-long', is_public=True)
+        response = self._post(
+            name='Too Long', key='displong',
+            problems=[{'id': problem.id, 'display_name': 'x' * 101}],
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('display name', json.loads(response.content)['error'].lower())
+
+    def test_create_empty_display_name_is_blank(self):
+        problem = create_problem('display-name-empty', is_public=True, name='Original')
+        response = self._post(
+            name='Empty Name', key='dispempty',
+            problems=[{'id': problem.id, 'display_name': '   '}],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        cp = Contest.objects.get(key='dispempty').contest_problems.get()
+        self.assertEqual(cp.display_name, '')
+        self.assertEqual(cp.problem.name, 'Original')
+
+    def test_create_library_title_as_display_name_is_not_an_override(self):
+        """Saving the library name as display_name must not freeze the title."""
+        problem = create_problem('display-name-same', is_public=True, name='Library Title')
+        response = self._post(
+            name='Same As Library', key='dispsame',
+            problems=[{'id': problem.id, 'points': 100, 'display_name': 'Library Title'}],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        cp = Contest.objects.get(key='dispsame').contest_problems.get()
+        self.assertEqual(cp.display_name, '')
+
 
 class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
     """Edit mode: problems are pre-filled and synced on save."""
@@ -1396,6 +1480,55 @@ class ContestEditProblemsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problems[0]['id'], self.problem.id)
         self.assertEqual(problems[0]['points'], 100)
         self.assertEqual(problems[0]['letter'], '1')
+        self.assertEqual(problems[0]['display_name'], '')
+        self.assertEqual(problems[0]['name'], self.problem.name)
+        html = response.content.decode()
+        marker = 'data-pid="%s"' % self.problem.id
+        start = html.find(marker)
+        self.assertNotEqual(start, -1)
+        open_div = html.rfind('<div class="cp-row"', 0, start)
+        nxt = html.find('<div class="cp-row"', start + 1)
+        row = html[open_div:nxt]
+        self.assertIn('placeholder="%s"' % self.problem.name, row)
+        self.assertRegex(row, r'class="pname cp-display-name"[^>]*value=""')
+        self.assertNotIn('value="%s"' % self.problem.name, row)
+
+    def test_get_prefills_display_name_override(self):
+        from judge.models import ContestProblem
+        ContestProblem.objects.filter(contest=self.contest, problem=self.problem).update(
+            display_name='Assignment Title',
+        )
+        response = self.client.get(reverse('contest_edit', args=['probeditcontest']))
+        self.assertEqual(response.status_code, 200)
+        problems = response.context['prefill']['problems']
+        self.assertEqual(problems[0]['display_name'], 'Assignment Title')
+        self.assertEqual(problems[0]['name'], self.problem.name)
+        html = response.content.decode()
+        self.assertIn('cp-display-name', html)
+        self.assertIn('Assignment Title', html)
+
+    def test_post_saves_and_clears_display_name(self):
+        response = self.client.post(
+            reverse('contest_edit', args=['probeditcontest']),
+            data=json.dumps(self._full_payload(problems=[{
+                'id': self.problem.id, 'points': 100, 'display_name': 'Renamed in assignment',
+            }])),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        cp = self.contest.contest_problems.get()
+        self.assertEqual(cp.display_name, 'Renamed in assignment')
+
+        response = self.client.post(
+            reverse('contest_edit', args=['probeditcontest']),
+            data=json.dumps(self._full_payload(problems=[{
+                'id': self.problem.id, 'points': 100, 'display_name': '',
+            }])),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        cp = self.contest.contest_problems.get()
+        self.assertEqual(cp.display_name, '')
 
     def test_post_updates_problem_points(self):
         response = self.client.post(

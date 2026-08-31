@@ -36,6 +36,7 @@ from judge import event_poster as event
 from judge.comments import CommentedDetailView, SubmissionCommentMixin
 from judge.forms import ProblemCloneForm, ProblemPointsVoteForm, ProblemSubmitForm
 from judge.models import (
+    Contest,
     ContestProblem,
     ContestSubmission,
     Judge,
@@ -62,6 +63,7 @@ from judge.models import (
     Solution,
     Submission,
     SubmissionSource,
+    contest_problem_display_name,
     problem_data_storage,
 )
 from judge.utils.diggpaginator import DiggPaginator
@@ -401,6 +403,90 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
     def get_comment_page(self):
         return 'p:%s' % self.object.code
 
+    def _apply_assignment_editor_preview(self, context, user):
+        """Drawer for Add/Edit Assignment preview links.
+
+        The editor opens ``/problem/<code>/?assignment_preview=1&preview_codes=…``
+        so the teacher sees the in-progress assignment set (answered/unanswered
+        filter only), not the practice library.
+        """
+        if self.request.GET.get('assignment_preview') != '1':
+            return
+        raw_codes = self.request.GET.get('preview_codes', '')
+        codes = [c.strip() for c in raw_codes.split(',') if c.strip()]
+        if not codes:
+            return
+        names = {}
+        raw_names = self.request.GET.get('preview_names', '')
+        if raw_names:
+            try:
+                parsed = json.loads(raw_names)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                names = {str(key): str(value).strip()[:100] for key, value in parsed.items() if value}
+        # The editor already chose these problems. Do not slice the practice
+        # bank (``get_visible_problems()[:250]``) — that drops later codes.
+        found = {
+            problem.code: problem
+            for problem in (
+                Problem.objects.filter(code__in=codes)
+                .select_related('mcq_config')
+                .prefetch_related('types', 'organizations')
+            )
+        }
+        can_attach_any = (
+            user.is_authenticated
+            and (
+                user.has_perm('judge.edit_all_contest')
+                or user.has_perm('judge.see_private_problem')
+            )
+        )
+        ordered = []
+        for index, code in enumerate(codes, 1):
+            problem = found.get(code)
+            if problem is None and code == self.object.code:
+                problem = self.object
+            if problem is None:
+                continue
+            if (
+                problem.id != self.object.id
+                and not can_attach_any
+                and not problem.is_accessible_by(user)
+            ):
+                continue
+            problem.order = index
+            problem.effective_name = names.get(code) or problem.name
+            ordered.append(problem)
+        if not ordered:
+            return
+        context['workspace_assignment_preview'] = True
+        context['workspace_in_contest'] = False
+        context['workspace_mode'] = 'assignment'
+        context['workspace_problems'] = ordered
+        context['workspace_context_id'] = ''
+        context['workspace_current_order'] = next(
+            (item.order for item in ordered if item.code == self.object.code),
+            None,
+        )
+        query = self.request.GET.copy()
+        query.pop('legacy', None)
+        query.pop('submission', None)
+        context['workspace_preview_query'] = query.urlencode()
+        preview_key = (self.request.GET.get('preview_key') or '').strip()
+        contest = Contest.objects.filter(key=preview_key).first() if preview_key else None
+        if contest is not None and contest.is_changeable_by(user):
+            context['workspace_context_name'] = contest.name
+            context['workspace_return_url'] = reverse('contest_edit', args=[contest.key])
+        else:
+            context['workspace_context_name'] = _('Assignment preview')
+            context['workspace_return_url'] = (
+                reverse('contest_create') if user.has_perm('judge.add_contest') else reverse('problem_list')
+            )
+        override = names.get(self.object.code)
+        if override:
+            context['title'] = override
+
     def get_context_data(self, **kwargs):
         context = super(ProblemDetail, self).get_context_data(**kwargs)
         user = self.request.user
@@ -416,6 +502,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             else get_contest_problem(self.object, user.profile)
         )
         context['contest_problem'] = contest_problem
+        context['workspace_assignment_preview'] = False
+        context['workspace_preview_query'] = ''
         # Drawer list follows the active participation, not whether *this* problem
         # happens to be in the assignment. After Join, the solving page always
         # shows the assignment problem set.
@@ -432,11 +520,14 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             contest_prefetch = ['problem__types', 'problem__organizations']
             if can_see_authors:
                 contest_prefetch.append('problem__authors__user')
-            context['workspace_problems'] = ContestProblem.objects.filter(
+            context['workspace_problems'] = list(ContestProblem.objects.filter(
                 contest=contest,
             ).select_related('problem', 'problem__mcq_config').prefetch_related(
                 *contest_prefetch,
-            ).order_by('order')
+            ).order_by('order'))
+            lang = self.request.LANGUAGE_CODE
+            for cp in context['workspace_problems']:
+                cp.effective_name = contest_problem_display_name(cp, lang)
             context['workspace_context_name'] = contest.name
             context['workspace_return_url'] = reverse('contest_view', args=[contest.key])
             context['workspace_current_order'] = contest_problem.order if contest_problem else None
@@ -455,6 +546,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['workspace_context_name'] = _('Problem list')
             context['workspace_return_url'] = reverse('problem_list')
             context['workspace_current_order'] = None
+        self._apply_assignment_editor_preview(context, user)
         if contest_problem:
             clarifications = self.object.clarifications
             context['has_clarifications'] = clarifications.count() > 0
@@ -512,6 +604,16 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['description'] = translation.description
             context['translated'] = True
 
+        if contest_problem:
+            context['title'] = contest_problem_display_name(
+                contest_problem, self.request.LANGUAGE_CODE,
+            )
+        if context.get('workspace_assignment_preview'):
+            for item in context.get('workspace_problems') or []:
+                if getattr(item, 'code', None) == self.object.code and getattr(item, 'effective_name', None):
+                    context['title'] = item.effective_name
+                    break
+
         if not self.object.og_image or not self.object.summary:
             metadata = generate_opengraph(
                 'generated-meta-problem:%s:%d' % (context['language'], self.object.id),
@@ -532,9 +634,15 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['vote'] = None
 
         if contest_problem:
-            cp_qs = ContestProblem.objects.filter(contest=contest_problem.contest)
+            cp_qs = ContestProblem.objects.filter(
+                contest=contest_problem.contest,
+            ).select_related('problem')
             context['next_contest_problem'] = cp_qs.filter(order__gt=contest_problem.order).order_by('order').first()
             context['prev_contest_problem'] = cp_qs.filter(order__lt=contest_problem.order).order_by('-order').first()
+            lang = self.request.LANGUAGE_CODE
+            for nav in (context['next_contest_problem'], context['prev_contest_problem']):
+                if nav is not None:
+                    nav.effective_name = contest_problem_display_name(nav, lang)
 
         context['submission_type'] = self.object.submission_type
         from judge.models import ProblemSubmissionType
@@ -1065,11 +1173,13 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 user_problem_cell = mark_safe('<td>???</td>')
 
             problem_stats = stats.get(cp.problem_id, {'user_count': 0, 'ac_rate': 0.0})
+            effective_name = contest_problem_display_name(cp, self.request.LANGUAGE_CODE)
             result.append({
                 'id': cp.problem_id,
                 'code': cp.problem.code,
                 'name': cp.problem.name,
-                'i18n_name': cp.i18n_name,
+                'i18n_name': effective_name,
+                'effective_name': effective_name,
                 'points': cp.points,
                 'partial': cp.partial,
                 'user_count': problem_stats['user_count'],
@@ -1691,18 +1801,23 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             return self.old_submission.language
         return self.request.profile.language
 
+    def _submit_problem_name(self):
+        if self.contest_problem is not None:
+            return contest_problem_display_name(self.contest_problem, self.request.LANGUAGE_CODE)
+        return self.object.translated_name(self.request.LANGUAGE_CODE)
+
     def get_content_title(self):
         return mark_safe(
             escape(_('Submit to %s'))
             % format_html(
                 '<a href="{0}">{1}</a>',
                 reverse('problem_detail', args=[self.object.code]),
-                self.object.translated_name(self.request.LANGUAGE_CODE),
+                self._submit_problem_name(),
             ),
         )
 
     def get_title(self):
-        return _('Submit to %s') % self.object.translated_name(self.request.LANGUAGE_CODE)
+        return _('Submit to %s') % self._submit_problem_name()
 
     def get_initial(self):
         if self.is_code:

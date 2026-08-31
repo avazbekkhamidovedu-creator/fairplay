@@ -1232,6 +1232,42 @@
         display: block;
     }
 
+    input.cp-display-name {
+        font-weight: 600;
+        font-size: inherit;
+        font-family: inherit;
+        color: inherit;
+        width: 100%;
+        min-width: 0;
+        border: 1px solid transparent;
+        background: transparent;
+        padding: 0.15rem 0.3rem;
+        margin: 0;
+        border-radius: var(--oj-radius);
+        cursor: text;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        box-sizing: border-box;
+
+        &:hover {
+            border-color: var(--oj-border);
+            background: var(--oj-surface-muted);
+        }
+
+        &:focus {
+            outline: none;
+            border-color: var(--oj-accent);
+            background: var(--oj-surface);
+            text-overflow: clip;
+        }
+
+        &::placeholder {
+            color: var(--oj-text-muted);
+            font-weight: 600;
+        }
+    }
+
     .pcode {
         color: var(--oj-text-muted);
         font-size: 11px;
