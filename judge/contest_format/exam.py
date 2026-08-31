@@ -25,7 +25,8 @@ class ExamContestFormat(DefaultContestFormat):
     @classmethod
     def validate(cls, config):
         if config is not None and (not isinstance(config, dict) or config):
-            raise ValidationError('exam contest expects no config or empty dict as config')
+            raise ValidationError(_('Exam format does not use extra configuration. '
+                                    'Leave the assignment format configuration empty.'))
 
     @cached_property
     def _problem_policy(self):

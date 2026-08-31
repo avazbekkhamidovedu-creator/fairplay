@@ -844,8 +844,13 @@
                     if (vals.length) data[f] = vals;
                     else delete data[f];
                 });
-                // format_config is JSON text; empty means "no config"
-                if (data.format_config === undefined || !data.format_config.trim()) delete data.format_config;
+                // format_config is JSON text; empty string stores None. Always
+                // send it when blank so switching ICPC → exam/default actually
+                // clears leftover config on edit (omitting the key would keep
+                // the old dict).
+                if (data.format_config === undefined || !String(data.format_config).trim()) {
+                    data.format_config = '';
+                }
 
                 // Description now lives in the RichEditor (markdown source of truth).
                 if (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown) {
@@ -923,7 +928,7 @@
                     var fmtChanged = (fmt && fmt.value !== pf.format_name) ||
                                     (fmtCfg && (fmtCfg.value || '') !== (pf.format_config || ''));
                     if (problemsChanged || fmtChanged) {
-                        if (!confirm({{ _('Changing problems or the format will rescore existing submissions. Continue?')|tojson }})) {
+                        if (!confirm({{ _('Changing the problem list or assignment format will recalculate scores for existing submissions. Continue?')|tojson }})) {
                             var btns2 = form.querySelectorAll('button[type=submit]');
                             for (var k = 0; k < btns2.length; k++) btns2[k].disabled = false;
                             return;
@@ -1963,8 +1968,26 @@
                 var list = document.getElementById('cp-list');
                 if (list) list.classList.toggle('is-exam', isExamFormat());
             };
+            function formatNeedsNoConfig(name) {
+                return name === 'exam' || name === 'default';
+            }
+            // Exam / Default reject leftover ICPC (etc.) JSON. Clear the
+            // Advanced textarea when switching so Save does not 400.
+            function syncFormatConfigForFormat() {
+                var fmt = document.getElementById('id_format_name');
+                var cfg = document.getElementById('id_format_config');
+                if (!fmt || !cfg || !formatNeedsNoConfig(fmt.value)) return;
+                if (!cfg.value.trim()) return;
+                cfg.value = '';
+                showToast({{ _('This format does not use extra configuration. Leftover settings were cleared.')|htmltojs }});
+            }
             var formatSel = document.getElementById('id_format_name');
-            if (formatSel) formatSel.addEventListener('change', window.syncExamResultsVisibility);
+            if (formatSel) {
+                formatSel.addEventListener('change', function () {
+                    window.syncExamResultsVisibility();
+                    syncFormatConfigForFormat();
+                });
+            }
             window.syncExamResultsVisibility();
             function libRowHtml(row, letter) {
                 var code = row.dataset.code || '';
