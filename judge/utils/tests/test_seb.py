@@ -8,7 +8,7 @@ from django.test import RequestFactory, SimpleTestCase, override_settings
 from django.urls import reverse
 
 from judge.models import Contest
-from judge.utils.seb import SEB_INSTALL_URL, read_seb_launch_token, request_matches_seb, \
+from judge.utils.seb import BEK_HEADER, SEB_INSTALL_URL, read_seb_launch_token, request_matches_seb, \
     seb_launch_context, sign_seb_launch_token
 
 BEK = hashlib.sha256(b'browser exam key').hexdigest()
@@ -91,6 +91,58 @@ class RequestMatchesSEBTestCase(SimpleTestCase):
         valid = seb_hash('http://testserver/page', BEK)
         request = self.factory.post('/page', {'_seb_request_hash': valid})
         self.assertFalse(request_matches_seb(request, [BEK], []))
+
+
+class SEBMismatchDiagnosticsTestCase(SimpleTestCase):
+    """The block page looks identical for every cause; the log must not."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+
+    def test_proxy_scheme_mismatch_is_named_as_such(self):
+        # TLS terminated at a proxy: SEB hashed https://, Django rebuilt http://.
+        request = self.factory.get('/contest/x')
+        seb_url = 'https://testserver/contest/x'
+        request.META[BEK_HEADER] = seb_hash(seb_url, BEK)
+        with self.assertLogs('judge.seb', level='WARNING') as logs:
+            self.assertFalse(request_matches_seb(request, [BEK], []))
+        self.assertIn('the keys are CORRECT', logs.output[0])
+        self.assertIn('SECURE_PROXY_SSL_HEADER', logs.output[0])
+        self.assertIn(seb_url, logs.output[0])
+
+    def test_forwarded_host_mismatch_is_named_as_such(self):
+        request = self.factory.get('/contest/x', HTTP_X_FORWARDED_HOST='oj.example.edu')
+        seb_url = 'http://oj.example.edu/contest/x'
+        request.META[BEK_HEADER] = seb_hash(seb_url, BEK)
+        with self.assertLogs('judge.seb', level='WARNING') as logs:
+            self.assertFalse(request_matches_seb(request, [BEK], []))
+        self.assertIn('the keys are CORRECT', logs.output[0])
+        self.assertIn('USE_X_FORWARDED_HOST', logs.output[0])
+
+    def test_stale_keys_are_named_as_such(self):
+        # Right URL, wrong key: no URL variant can rescue this one.
+        request = self.factory.get('/contest/x')
+        request.META[BEK_HEADER] = seb_hash('http://testserver/contest/x', 'f' * 64)
+        with self.assertLogs('judge.seb', level='WARNING') as logs:
+            self.assertFalse(request_matches_seb(request, [BEK], []))
+        self.assertIn('do not belong to the .seb', logs.output[0])
+        self.assertIn('changes both keys', logs.output[0])
+
+    def test_missing_headers_are_named_as_such(self):
+        with self.assertLogs('judge.seb', level='WARNING') as logs:
+            self.assertFalse(request_matches_seb(self.factory.get('/contest/x'), [BEK], []))
+        self.assertIn('neither', logs.output[0])
+
+    def test_no_keys_configured_is_named_as_such(self):
+        with self.assertLogs('judge.seb', level='WARNING') as logs:
+            self.assertFalse(request_matches_seb(self.factory.get('/contest/x'), [], []))
+        self.assertIn('no Browser Exam Key and no Config Key', logs.output[0])
+
+    def test_a_valid_request_logs_nothing(self):
+        request = self.factory.get('/contest/x')
+        request.META[BEK_HEADER] = seb_hash('http://testserver/contest/x', BEK)
+        with self.assertNoLogs('judge.seb', level='WARNING'):
+            self.assertTrue(request_matches_seb(request, [BEK], []))
 
 
 class SEBLaunchTokenTestCase(SimpleTestCase):

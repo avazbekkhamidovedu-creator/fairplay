@@ -720,6 +720,36 @@ class ContestCreate(LoginRequiredMixin, View):
                             _('No default Safe Exam Browser configuration has been set up by the site '
                               'administrator yet.'))
                     contest.seb_preset = preset
+                # Drop this contest's own file and hashes, so the preset actually
+                # takes effect. Every SEB accessor prefers the contest's own
+                # value, so leaving them would keep serving the old upload while
+                # the editor hides the fields that explain why — the failure that
+                # locks out macOS silently, since it authenticates with the
+                # Config Key alone and Windows matches on the BEK first.
+                # Judged against the STORED row, not the in-flight object: the
+                # text loop above has already blanked the key fields from a
+                # payload that omits them (the editor hides those inputs once
+                # this box is ticked, and a hidden input is not submitted), so
+                # the object no longer shows what is really overriding.
+                stored = Contest.objects.filter(pk=contest.pk).first() if contest.pk else None
+                overrides = [f for f in ('seb_config_file', 'seb_browser_exam_keys', 'seb_config_keys',
+                                         'seb_quit_url') if stored and getattr(stored, f)]
+                if overrides:
+                    # Re-keying a contest students are sitting right now would 403
+                    # every one of them, the same reason SEBConfigPreset.clean()
+                    # refuses to let a live preset be edited.
+                    now = timezone.now()
+                    if stored.seb_required and stored.start_time is not None and \
+                            stored.end_time is not None and stored.start_time <= now < stored.end_time:
+                        raise ValidationError(
+                            _('This exam is in progress. Switching it to the default configuration now '
+                              'would change the keys its students are authenticating with and lock them '
+                              'out. Wait until it ends, or leave it on its own configuration.'))
+                    # The stored object is left in place; only the reference is
+                    # cleared, so a mistaken switch is recoverable.
+                    contest.seb_config_file = None
+                    for field in ('seb_browser_exam_keys', 'seb_config_keys', 'seb_quit_url'):
+                        setattr(contest, field, '')
             else:
                 contest.seb_preset = None
 

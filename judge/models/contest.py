@@ -360,8 +360,50 @@ class Contest(models.Model):
                 invalid = first_invalid_seb_key(getattr(self, field))
                 if invalid is not None:
                     seb_errors[field] = _('"%s" is not a 64-character hex hash.') % invalid
+            seb_errors.update(self._seb_mixed_source_errors())
             if seb_errors:
                 raise ValidationError(seb_errors)
+
+    def _seb_source_of(self, own_value, preset_attr):
+        """Which record supplies a SEB setting: this contest, the preset, or nothing.
+
+        Every SEB accessor is "own value, else preset" — a replace, never a union.
+        """
+        if own_value:
+            return 'contest'
+        if self.seb_preset_id and getattr(self.seb_preset, preset_attr):
+            return 'preset'
+        return None
+
+    def _seb_mixed_source_errors(self):
+        """Reject a .seb from one record with key hashes from another.
+
+        The keys authenticate the exact file students receive, so drawing the two
+        from different records locks out every platform whose key is wrong —
+        silently, since a stale Config Key is invisible on Windows (which matches
+        on the Browser Exam Key first) and fatal on macOS (which sends only the
+        Config Key).
+        """
+        file_source = self._seb_source_of(self.seb_config_file, 'config_file')
+        if file_source is None:
+            return {}
+        where = {'contest': _('this assignment'), 'preset': _('the shared configuration')}
+        errors = {}
+        for field, own, preset_attr, label in (
+            ('seb_browser_exam_keys', self._parse_seb_keys(self.seb_browser_exam_keys),
+             'browser_exam_keys', _('Browser Exam Key')),
+            ('seb_config_keys', self._parse_seb_keys(self.seb_config_keys),
+             'config_keys', _('Config Key')),
+        ):
+            key_source = self._seb_source_of(own, preset_attr)
+            if key_source is not None and key_source != file_source:
+                errors[field] = _(
+                    'The .seb file comes from %(file_from)s but the %(label)s hashes come from '
+                    '%(keys_from)s. The hashes authenticate the exact file students receive, so this '
+                    'combination locks them out — on macOS silently, since it authenticates with the '
+                    'Config Key alone. Use the file and the hashes from the same place.',
+                ) % {'file_from': where[file_source], 'label': label, 'keys_from': where[key_source]}
+        return errors
 
     def is_in_contest(self, user):
         if user.is_authenticated:
