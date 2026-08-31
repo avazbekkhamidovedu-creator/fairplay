@@ -144,8 +144,71 @@
   else if (darkQuery.addListener) darkQuery.addListener(syncMonacoTheme);
 
   var items = $$('.drawer-problem');
+  (function applyAssignmentEditorPreview() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('assignment_preview') !== '1') return;
+    var codes = (params.get('preview_codes') || '').split(',').map(function (c) {
+      return c.trim();
+    }).filter(Boolean);
+    var names = {};
+    try {
+      var stored = JSON.parse(localStorage.getItem('dkuoj_assignment_preview') || 'null');
+      if (stored && Array.isArray(stored.codes) && stored.codes.length) {
+        if (!codes.length) codes = stored.codes.map(String);
+        names = stored.names || {};
+      }
+    } catch (err) { names = {}; }
+    if (!codes.length) return;
+    app.dataset.mode = 'assignment';
+    var order = {};
+    codes.forEach(function (code, index) { order[code] = index + 1; });
+    var list = $('#drawer-problems');
+    items.forEach(function (item) {
+      var code = item.dataset.code || '';
+      if (!Object.prototype.hasOwnProperty.call(order, code)) {
+        if (item.parentNode) item.parentNode.removeChild(item);
+        return;
+      }
+      var nameEl = item.querySelector('.drawer-problem-name');
+      if (nameEl) {
+        var label = names[code] || (nameEl.textContent || '').replace(/^\d+\.\s*/, '');
+        nameEl.textContent = order[code] + '. ' + label;
+      }
+      try {
+        var url = new URL(item.getAttribute('href'), window.location.origin);
+        url.searchParams.set('assignment_preview', '1');
+        url.searchParams.set('preview_codes', codes.join(','));
+        item.setAttribute('href', url.pathname + url.search);
+      } catch (err) {}
+    });
+    items = $$('.drawer-problem');
+    if (list) {
+      items.sort(function (a, b) {
+        return (order[a.dataset.code] || 0) - (order[b.dataset.code] || 0);
+      });
+      items.forEach(function (item) { list.appendChild(item); });
+    }
+    var practiceToolbar = document.querySelector('.ws-drawer-toolbar');
+    if (practiceToolbar) practiceToolbar.hidden = true;
+    var pager = document.querySelector('.ws-drawer-pagination');
+    if (pager) pager.hidden = true;
+    if (!$('#drawer-filter-status') && drawer && list) {
+      var wrap = document.createElement('div');
+      wrap.className = 'ws-drawer-summary';
+      var select = document.createElement('select');
+      select.id = 'drawer-filter-status';
+      [['', gettext('All')], ['answered', gettext('Answered')], ['unanswered', gettext('Unanswered')]].forEach(function (pair) {
+        var opt = document.createElement('option');
+        opt.value = pair[0];
+        opt.textContent = pair[1];
+        select.appendChild(opt);
+      });
+      wrap.appendChild(select);
+      drawer.insertBefore(wrap, list);
+    }
+  })();
   // Practice drawer paginates to fill the visible list; assignment lists are short and have no pager UI.
-  var useDrawerPaging = !!$('#drawer-page-info');
+  var useDrawerPaging = !!$('#drawer-page-info') && (app.dataset.mode || '') === 'practice';
   function drawerPageSize() {
     if (!useDrawerPaging) return Math.max(items.length, 1);
     var list = $('#drawer-problems');

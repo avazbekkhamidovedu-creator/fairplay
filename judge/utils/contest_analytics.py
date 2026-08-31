@@ -11,7 +11,7 @@ from pygments.util import ClassNotFound
 def get_contest_analytics(contest):
     """Compute all analytics metrics for a contest. Returns dict with summary stats,
     per-student metrics, chart data, and cross-student similarity."""
-    from judge.models.contest import ContestParticipation
+    from judge.models.contest import ContestParticipation, contest_problem_display_name
     from judge.models.problem import ProblemTemplate
     from judge.models.submission import Submission, SubmissionSource
 
@@ -45,12 +45,17 @@ def get_contest_analytics(contest):
 
     # Contest problems info
     contest_problems = list(
-        contest.contest_problems.order_by('order').select_related('problem').values_list(
-            'problem_id', 'problem__code', 'problem__name', 'points',
-        ),
+        contest.contest_problems.order_by('order').select_related('problem'),
     )
-    problem_ids = [cp[0] for cp in contest_problems]
-    problem_info = {cp[0]: {'code': cp[1], 'name': cp[2], 'max_points': cp[3]} for cp in contest_problems}
+    problem_ids = [cp.problem_id for cp in contest_problems]
+    problem_info = {
+        cp.problem_id: {
+            'code': cp.problem.code,
+            'name': contest_problem_display_name(cp),
+            'max_points': cp.points,
+        }
+        for cp in contest_problems
+    }
 
     # Per-(problem, language) starter templates; used to exclude template boilerplate
     # from code-pattern metrics and cross-student identifier similarity.

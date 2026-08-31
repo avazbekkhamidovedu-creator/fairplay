@@ -2,9 +2,10 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Language, ProblemSubmissionType, Submission
+from judge.models import Language, ProblemSubmissionType, ProblemTranslation, Submission, SubmissionSource
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
+from judge.views.submission import _submission_contest_problem_name, attach_contest_problem_display_names
 
 
 class SubmissionListFilterTest(CommonDataMixin, TestCase):
@@ -267,3 +268,80 @@ class SubmissionListFilterTest(CommonDataMixin, TestCase):
         self.client.force_login(self.users['normal'])
         response = self.client.post(reverse('submission_bulk_rejudge'), {'ids': [self.sub_alice_a.id]})
         self.assertEqual(response.status_code, 403)
+
+
+class SubmissionTitleConsistencyTest(CommonDataMixin, TestCase):
+    """List, detail, and poll rows must resolve the same problem title."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.problem = create_problem(code='title-i18n', name='Canonical Title', is_public=True)
+        ProblemTranslation.objects.create(
+            problem=cls.problem, language='zh-hans', name='中文标题', description='d',
+        )
+        cls.user = create_user(username='title_student')
+        lang = Language.get_python3()
+        cls.practice = Submission.objects.create(
+            user=cls.user.profile, problem=cls.problem, language=lang,
+            result='AC', status='D', case_points=100, case_total=100,
+            time=0.1, memory=2048,
+        )
+        cls.contest = create_contest(
+            key='titleasgn',
+            name='Title Assignment',
+            is_visible=True,
+            start_time=timezone.now() - timezone.timedelta(days=1),
+            end_time=timezone.now() + timezone.timedelta(days=1),
+        )
+        create_contest_problem(
+            contest=cls.contest, problem=cls.problem, display_name='Homework Alias',
+        )
+        create_contest_participation(contest=cls.contest, user=cls.user.profile)
+        cls.assignment = Submission.objects.create(
+            user=cls.user.profile, problem=cls.problem, language=lang,
+            result='AC', status='D', case_points=100, case_total=100,
+            time=0.1, memory=2048, contest_object=cls.contest,
+        )
+        SubmissionSource.objects.create(submission=cls.practice, source='print(1)')
+        SubmissionSource.objects.create(submission=cls.assignment, source='print(1)')
+
+    def test_list_fallback_matches_detail_when_translation_not_prefetched(self):
+        # No _trans / _i18n_name: list used to fall back to the canonical name.
+        listed = attach_contest_problem_display_names([self.practice], 'zh-hans')
+        self.assertEqual(listed[0].effective_problem_name, '中文标题')
+        self.assertEqual(
+            _submission_contest_problem_name(self.practice, 'zh-hans'),
+            listed[0].effective_problem_name,
+        )
+
+    def test_list_uses_prefetched_translation(self):
+        self.practice.problem._trans = list(self.problem.translations.filter(language='zh-hans'))
+        listed = attach_contest_problem_display_names([self.practice], 'zh-hans')
+        self.assertEqual(listed[0].effective_problem_name, '中文标题')
+
+    def test_assignment_alias_matches_on_list_and_detail(self):
+        listed = attach_contest_problem_display_names([self.assignment], 'zh-hans')
+        self.assertEqual(listed[0].effective_problem_name, 'Homework Alias')
+        self.assertEqual(
+            _submission_contest_problem_name(self.assignment, 'zh-hans'),
+            'Homework Alias',
+        )
+
+    def test_pages_and_poll_show_the_same_assignment_alias(self):
+        self.client.force_login(self.users['superuser'])
+        listing = self.client.get(reverse('all_submissions'))
+        detail = self.client.get(reverse('submission_status', args=[self.assignment.id]))
+        poll = self.client.get(reverse('submission_single_query'), {'id': self.assignment.id})
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(poll.status_code, 200)
+        row_marker = ('id="%d"' % self.assignment.id).encode()
+        content = listing.content
+        start = content.find(row_marker)
+        end = content.find(b'class="submission-row"', start + 1)
+        row_html = content[start:end if end != -1 else None]
+        self.assertIn(b'Homework Alias', row_html)
+        self.assertNotIn(b'Canonical Title', row_html)
+        self.assertContains(detail, 'Homework Alias')
+        self.assertContains(poll, 'Homework Alias')

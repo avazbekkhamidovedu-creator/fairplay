@@ -428,13 +428,13 @@
     <div style="float: right; /* table-layout: auto; */ display: flex; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; align-items: center;">
         {% if prev_contest_problem %}
         <a href="{{ url('problem_detail', prev_contest_problem.problem.code) }}" class="button"
-            title="{{ prev_contest_problem.problem.name }}">
+            title="{{ prev_contest_problem.effective_name or prev_contest_problem.problem.name }}">
             <i class="fa fa-chevron-left"></i> {{ _('Previous') }}
         </a>
         {% endif %}
         {% if next_contest_problem %}
         <a href="{{ url('problem_detail', next_contest_problem.problem.code) }}" class="button"
-            title="{{ next_contest_problem.problem.name }}">
+            title="{{ next_contest_problem.effective_name or next_contest_problem.problem.name }}">
             {{ _('Next') }} <i class="fa fa-chevron-right"></i>
         </a>
         {% endif %}

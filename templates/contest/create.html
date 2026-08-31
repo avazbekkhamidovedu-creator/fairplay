@@ -102,6 +102,9 @@
             float: none;
             margin: 0;
         }
+        #pv-body .pv-problems a {
+            color: var(--oj-link);
+        }
 
         @media (max-width: 900px) {
             .v2-split { grid-template-columns: 1fr; }
@@ -874,6 +877,7 @@
                         max_submissions: maxSubs && maxSubs.value ? maxSubs.value : null,
                         hide_results: results ? (results.value === '' ? null : results.value) : null,
                         output_prefix: outPrefix && outPrefix.value !== '' ? outPrefix.value : null,
+                        display_name: cpRowOverrideName(r),
                     });
                 });
                 data.problems = problems;
@@ -1140,6 +1144,54 @@
                 else countEl.classList.remove('score-mismatch');
             }
 
+            // Assignment-local title: read the editable input (falls back to
+            // a leftover span so older markup still previews).
+            function cpRowDisplayName(row) {
+                var input = row.querySelector('input.cp-display-name');
+                if (input) return (input.value || '').trim();
+                var pname = row.querySelector('.pname');
+                if (!pname) return '';
+                if (pname.tagName === 'INPUT' || pname.tagName === 'TEXTAREA') {
+                    return (pname.value || '').trim();
+                }
+                return (pname.textContent || '').trim();
+            }
+            // Empty or identical to the library title means "no override".
+            function cpRowOverrideName(row) {
+                var current = cpRowDisplayName(row);
+                var original = (row.dataset.name || '').trim();
+                if (!current || current === original) return '';
+                return current.slice(0, 100);
+            }
+
+            // Solving-page links from this editor carry the in-progress problem
+            // set so the workspace drawer matches assignment participation
+            // (only answered/unanswered), not the practice library.
+            function assignmentPreviewQueryString() {
+                var codes = [];
+                var names = {};
+                document.querySelectorAll('.cp-list .cp-row[data-pid]').forEach(function (r) {
+                    var c = r.dataset.code || '';
+                    if (!c) return;
+                    codes.push(c);
+                    names[c] = cpRowDisplayName(r) || r.dataset.name || c;
+                });
+                try {
+                    localStorage.setItem('dkuoj_assignment_preview', JSON.stringify({
+                        codes: codes, names: names, t: Date.now(),
+                    }));
+                } catch (e) {}
+                var parts = ['assignment_preview=1'];
+                if (codes.length) {
+                    parts.push('preview_codes=' + codes.map(encodeURIComponent).join(','));
+                }
+                return parts.join('&');
+            }
+            function assignmentProblemHref(code) {
+                if (!code) return '#';
+                return '/problem/' + encodeURIComponent(code) + '/?' + assignmentPreviewQueryString();
+            }
+
             // Mirror the problem rows into the "Student view preview" table so
             // the preview is not a static shell.
             function syncPreviewProblems() {
@@ -1154,16 +1206,24 @@
                 var html = '';
                 rows.forEach(function (r) {
                     var letter = r.querySelector('.label-letter');
-                    var pname = r.querySelector('.pname');
                     var pts = r.querySelector('input.cp-points');
+                    var nameText = cpRowDisplayName(r) || (r.dataset.name || '');
+                    var nameHtml = escapeHtml(nameText);
+                    var code = r.dataset.code || '';
+                    if (code) {
+                        nameHtml = '<a href="' + assignmentProblemHref(code) + '" target="_blank" rel="noopener">'
+                            + nameHtml + '</a>';
+                    }
                     html += '<tr><td>' + (letter ? letter.textContent : '') + '</td>'
-                          + '<td>' + (pname ? pname.textContent : '') + '</td>'
+                          + '<td>' + nameHtml + '</td>'
                           + '<td>' + (pts ? pts.value : '100') + '</td></tr>';
+                    var solve = r.querySelector('a.cp-solve-link');
+                    if (solve && code) solve.href = assignmentProblemHref(code);
                 });
                 tbody.innerHTML = html;
             }
 
-            form.addEventListener('input', function (e) { syncPreview(); syncScoreSummary(); });
+            form.addEventListener('input', function (e) { syncPreview(); syncScoreSummary(); syncPreviewProblems(); });
             form.addEventListener('change', function (e) {
                 // Tag pills don't affect the preview; skip the markdown render
                 // so checking Homework/Quiz/Exam stays instant.
@@ -1194,6 +1254,20 @@
             var keyInput = document.getElementById('id_key');
             var CHECK_KEY_URL = {{ url('contest_check_key')|tojson }};
             var isEditMode = {{ 'true' if contest else 'false' }};
+
+            // Create page: Hidden permanently. Browsers restore the old first
+            // option (Visible) via autofill; the custom select then shows that.
+            function forceScoreboardHiddenDefault() {
+                if (isEditMode) return;
+                var sb = document.getElementById('id_scoreboard_visibility');
+                if (!sb) return;
+                sb.value = 'H';
+                Array.prototype.forEach.call(sb.options, function (opt) {
+                    opt.selected = opt.value === 'H';
+                });
+                if (typeof window.dkuojRefreshSelects === 'function') window.dkuojRefreshSelects();
+            }
+            forceScoreboardHiddenDefault();
 
             function checkContestKey(key) {
                 if (!key) return Promise.resolve(null);
@@ -1927,12 +2001,15 @@
                     : '';
                 return '<span class="cp-drag" title="' + {{ _('Drag to reorder')|htmltojs }} + '">⠿</span>' +
                     '<span class="label-letter">' + letter + '</span>' +
-                    '<span class="pname">' + escapeHtml(row.dataset.name || 'Problem ' + row.dataset.pid) + '</span>' +
+                    '<input type="text" class="pname cp-display-name" maxlength="100" value="" placeholder="' +
+                    escapeHtml(row.dataset.name || '') +
+                    '" title="' + {{ _('Click to rename for this assignment')|htmltojs }} +
+                    '" aria-label="' + {{ _('Assignment display name')|htmltojs }} + '">' +
                     '<span><input type="number" class="cp-points" value="100" style="width:48px"></span>' +
                     '<span><input type="number" class="cp-max-subs" min="1" placeholder="∞" title="' + {{ _('Maximum number of submissions allowed for this problem — blank means unlimited.')|htmltojs }} + '" style="width:60px"></span>' +
                     '<span class="cp-actions">' +
                     '<button type="button" class="btn-icon" title="' + {{ _('Preview')|htmltojs }} + '" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>' +
-                    '<a class="btn-icon" title="' + {{ _('Solve')|htmltojs }} + '" href="' + solveUrl + '" target="_blank"><i class="fa fa-external-link"></i></a>' +
+                    '<a class="btn-icon cp-solve-link" title="' + {{ _('Solve')|htmltojs }} + '" href="' + solveUrl + '" target="_blank"><i class="fa fa-external-link"></i></a>' +
                     '<button type="button" class="btn-icon danger" title="' + {{ _('Remove')|htmltojs }} + '" onclick="this.closest(\'.cp-row\').remove();updateProblemIds()">&times;</button>' +
                     '</span>' +
                     '<div class="cp-options">' +
@@ -1967,6 +2044,7 @@
                 r.dataset.pid = pid;
                 r.dataset.code = meta.code || '';
                 r.dataset.format = meta.format || '';
+                r.dataset.name = meta.name || ('Problem ' + pid);
                 r.setAttribute('draggable', 'true');
                 r.innerHTML = libRowHtml(fake, '?');
                 cpList.appendChild(r);
@@ -1994,9 +2072,9 @@
                 if (pv.style.display === 'none') {
                     if (!pv.dataset.loaded) {
                         var code = row.dataset.code || '';
-                        var name = row.querySelector('.pname');
+                        var nameText = cpRowDisplayName(row) || row.dataset.name || '';
                         var pts = row.querySelector('input.cp-points');
-                        pv.innerHTML = '<b>' + (name ? name.textContent : '') + '</b>' +
+                        pv.innerHTML = '<b>' + escapeHtml(nameText) + '</b>' +
                             (code ? ' <span class="pcode">[' + code + ']</span>' : '') +
                             '<br>' + {{ _('Points')|htmltojs }} + ': ' + (pts ? pts.value : '100') +
                             '<div class="pv-status">' + {{ _('Loading statement…')|htmltojs }} + '</div>';
@@ -2354,6 +2432,7 @@
                         r.dataset.pid = row.dataset.pid;
                         r.dataset.code = row.dataset.code || '';
                         r.dataset.format = row.dataset.format || '';
+                        r.dataset.name = row.dataset.name || '';
                         r.setAttribute('draggable', 'true');
                         r.innerHTML = libRowHtml(row, '?');
                         if (insertAfter) {
@@ -2814,7 +2893,7 @@
     <div class="pcv2">
         <main class="v2-main" id="content-main">
             <div class="v2-split sp-split">
-                <form id="contest-form" class="v2-left" method="post" action="{{ save_url }}" novalidate>
+                <form id="contest-form" class="v2-left" method="post" action="{{ save_url }}" novalidate autocomplete="off">
                     {% csrf_token %}
                     <input type="hidden" name="problem_ids" id="problem-ids" value="{% for p in prefill.problems %}{{ p.id }}{% if not loop.last %},{% endif %}{% endfor %}">
 
@@ -3074,15 +3153,19 @@
                                     <span></span>
                                 </div>
                                 {% for p in prefill.problems %}
-                                <div class="cp-row" data-pid="{{ p.id }}" data-code="{{ p.code }}" data-format="{{ p.format or '' }}" draggable="true">
+                                <div class="cp-row" data-pid="{{ p.id }}" data-code="{{ p.code }}" data-name="{{ p.name }}" data-format="{{ p.format or '' }}" draggable="true">
                                     <span class="cp-drag" title="{{ _('Drag to reorder') }}">⠿</span>
                                     <span class="label-letter">{{ p.letter }}</span>
-                                    <span class="pname">{{ p.name }}</span>
+                                    <input type="text" class="pname cp-display-name" maxlength="100"
+                                           value="{{ p.display_name }}"
+                                           placeholder="{{ p.name }}"
+                                           title="{{ _('Click to rename for this assignment') }}"
+                                           aria-label="{{ _('Assignment display name') }}">
                                     <span><input type="number" class="cp-points" value="{{ p.points }}" style="width:48px"></span>
                                     <span><input type="number" class="cp-max-subs" min="1" placeholder="∞" title="{{ _('Maximum number of submissions allowed for this problem — blank means unlimited.') }}" style="width:60px" value="{{ p.max_submissions }}"></span>
                                     <span class="cp-actions">
                                         <button type="button" class="btn-icon" title="{{ _('Preview') }}" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>
-                                        <a class="btn-icon" title="{{ _('Solve') }}" href="{{ url('problem_detail', p.code) }}" target="_blank"><i class="fa fa-external-link"></i></a>
+                                        <a class="btn-icon cp-solve-link" title="{{ _('Solve') }}" href="{{ url('problem_detail', p.code) }}" target="_blank"><i class="fa fa-external-link"></i></a>
                                         <button type="button" class="btn-icon danger" title="{{ _('Remove') }}" onclick="this.closest('.cp-row').remove();updateProblemIds()">&times;</button>
                                     </span>
                                     {# Per-problem options (admin parity): partial credit, pretest-only,
@@ -3343,11 +3426,13 @@
                                     <div class="form-row">
                                         <label>{{ _('Scoreboard visibility') }}{{ tip(_('Scoreboard visibility through the duration of the assignment.')) }}</label>
                                         <div class="field">
-                                            <select id="id_scoreboard_visibility" name="scoreboard_visibility" data-oj-select>
+                                            <select id="id_scoreboard_visibility" name="scoreboard_visibility" data-oj-select autocomplete="off">
+                                                {# Hidden permanently first so a missing selected / browser autofill
+                                                   still lands on the create-page default instead of Visible. #}
+                                                <option value="H"{% if prefill.scoreboard_visibility != 'V' and prefill.scoreboard_visibility != 'C' and prefill.scoreboard_visibility != 'P' %} selected{% endif %}>{{ _('Hidden permanently') }}</option>
                                                 <option value="V"{% if prefill.scoreboard_visibility == 'V' %} selected{% endif %}>{{ _('Visible during assignment') }}</option>
                                                 <option value="C"{% if prefill.scoreboard_visibility == 'C' %} selected{% endif %}>{{ _('Hidden for duration of assignment') }}</option>
                                                 <option value="P"{% if prefill.scoreboard_visibility == 'P' %} selected{% endif %}>{{ _('Hidden for duration of participation') }}</option>
-                                                <option value="H"{% if prefill.scoreboard_visibility == 'H' %} selected{% endif %}>{{ _('Hidden permanently') }}</option>
                                             </select>
                                         </div>
                                     </div>

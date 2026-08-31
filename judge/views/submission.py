@@ -23,7 +23,8 @@ from django.views.generic import DetailView, ListView
 from judge import ai_hints, event_poster as event
 from judge.comments import SubmissionCommentMixin
 from judge.highlight_code import highlight_code
-from judge.models import Contest, Language, Problem, ProblemTranslation, Profile, Submission
+from judge.models import Contest, ContestProblem, Language, Problem, ProblemTranslation, Profile, Submission
+from judge.models.contest import contest_problem_display_name
 from judge.models.problem import SubmissionSourceAccess
 from judge.utils.contest_grade import attach_student_display_score, grade_desk_url
 from judge.utils.infinite_paginator import InfinitePaginationMixin
@@ -32,6 +33,57 @@ from judge.utils.problems import get_result_data, user_completed_ids, user_edita
 from judge.utils.raw_sql import join_sql_subquery, use_straight_join
 from judge.utils.views import DiggPaginatorMixin, TitleMixin, generic_message
 from judge.views.ide import IDE_PROBLEM_CODE
+
+
+def _problem_display_name(problem, language_code):
+    """Translated problem title; reuse list-page prefetch when present.
+
+    Matches ``Problem.translated_name`` so list and detail stay consistent,
+    but avoids an extra query when ``_trans`` / ``_i18n_name`` was prefetched.
+    """
+    if getattr(problem, '_i18n_name', None) is not None:
+        return problem.i18n_name
+    trans = getattr(problem, '_trans', None)
+    if trans is not None:
+        return trans[0].name if trans else problem.name
+    return problem.translated_name(language_code)
+
+
+def _submission_contest_problem_name(submission, language_code):
+    """Assignment-local title when the submission belongs to a contest."""
+    if not getattr(submission, 'contest_object_id', None):
+        return _problem_display_name(submission.problem, language_code)
+    try:
+        cp = ContestProblem.objects.select_related('problem').get(
+            contest_id=submission.contest_object_id, problem_id=submission.problem_id,
+        )
+    except ContestProblem.DoesNotExist:
+        return _problem_display_name(submission.problem, language_code)
+    return contest_problem_display_name(cp, language_code)
+
+
+def attach_contest_problem_display_names(submissions, language_code):
+    """Set ``effective_problem_name`` on each submission from ContestProblem."""
+    submissions = list(submissions)
+    pairs = {
+        (s.contest_object_id, s.problem_id)
+        for s in submissions if getattr(s, 'contest_object_id', None)
+    }
+    name_map = {}
+    if pairs:
+        contest_ids = {cid for cid, _ in pairs}
+        problem_ids = {pid for _, pid in pairs}
+        for cp in ContestProblem.objects.filter(
+            contest_id__in=contest_ids, problem_id__in=problem_ids,
+        ).select_related('problem'):
+            name_map[(cp.contest_id, cp.problem_id)] = contest_problem_display_name(cp, language_code)
+    for submission in submissions:
+        key = (submission.contest_object_id, submission.problem_id)
+        if submission.contest_object_id and key in name_map:
+            submission.effective_problem_name = name_map[key]
+        else:
+            submission.effective_problem_name = _problem_display_name(submission.problem, language_code)
+    return submissions
 
 
 def submission_related(queryset):
@@ -74,6 +126,9 @@ class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, Deta
             return self.no_permission(e.submission)
 
     def no_permission(self, submission):
+        # get_object() raises before assigning self.object, so use the
+        # submission passed from the except handler — not self.object.
+        self.object = submission
         problem = submission.problem
         if problem.is_accessible_by(self.request.user) and \
                 problem.submission_source_visibility == SubmissionSourceAccess.SOLVED:
@@ -81,7 +136,7 @@ class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, Deta
             message = escape(_('Permission denied. Solve %(problem)s in order to view it.')) % {
                 'problem': format_html('<a href="{0}">{1}</a>',
                                        reverse('problem_detail', args=[problem.code]),
-                                       problem.translated_name(self.request.LANGUAGE_CODE)),
+                                       _submission_contest_problem_name(submission, self.request.LANGUAGE_CODE)),
             }
             return generic_message(self.request, _("Can't access submission"), mark_safe(message), status=403)
         else:
@@ -90,7 +145,7 @@ class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, Deta
     def get_title(self):
         submission = self.object
         return _('Submission of %(problem)s by %(user)s') % {
-            'problem': submission.problem.translated_name(self.request.LANGUAGE_CODE),
+            'problem': _submission_contest_problem_name(submission, self.request.LANGUAGE_CODE),
             'user': submission.user.display_name,
         }
 
@@ -99,7 +154,7 @@ class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, Deta
         return mark_safe(escape(_('Submission of %(problem)s by %(user)s')) % {
             'problem': format_html('<a href="{0}">{1}</a>',
                                    reverse('problem_detail', args=[submission.problem.code]),
-                                   submission.problem.translated_name(self.request.LANGUAGE_CODE)),
+                                   _submission_contest_problem_name(submission, self.request.LANGUAGE_CODE)),
             'user': format_html('<a href="{0}">{1}</a>',
                                 reverse('user_page', args=[submission.user.user.username]),
                                 submission.user.display_name),
@@ -651,6 +706,7 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
         context['tab'] = self.tab
         submissions = context.get('submissions')
         if submissions is not None:
+            attach_contest_problem_display_names(submissions, self.request.LANGUAGE_CODE)
             for submission in submissions:
                 attach_student_display_score(submission)
         return context
@@ -764,6 +820,14 @@ class ProblemSubmissionsBase(SubmissionsListBase):
             raise ImproperlyConfigured('Must pass a problem')
         self.problem = get_object_or_404(Problem, code=kwargs['problem'])
         self.problem_name = self.problem.translated_name(self.request.LANGUAGE_CODE)
+        if self.in_contest:
+            try:
+                cp = ContestProblem.objects.select_related('problem').get(
+                    contest=self.contest, problem=self.problem,
+                )
+                self.problem_name = contest_problem_display_name(cp, self.request.LANGUAGE_CODE)
+            except ContestProblem.DoesNotExist:
+                pass
         return super(ProblemSubmissionsBase, self).get(request, *args, **kwargs)
 
     def get_all_submissions_page(self):
@@ -845,7 +909,9 @@ def single_submission(request):
         'editable_problem_ids': user_editable_ids(request.profile) if authenticated else [],
         'tester_problem_ids': user_tester_ids(request.profile) if authenticated else [],
         'show_problem': show_problem,
-        'problem_name': show_problem and submission.problem.translated_name(request.LANGUAGE_CODE),
+        'problem_name': show_problem and _submission_contest_problem_name(
+            submission, request.LANGUAGE_CODE,
+        ),
         'profile_id': request.profile.id if authenticated else 0,
     })
 
