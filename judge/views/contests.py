@@ -3472,15 +3472,20 @@ class ContestExportPDF(ContestMixin, View):
                 response['Content-Disposition'] = f'attachment; filename="contest_{contest_key}.pdf"'
                 return response
 
-            except Exception as e:
-                print(f'PDF generation error: {e}')
+            except Exception as error:
+                logger.exception('PDF generation failed for contest %s', contest_key)
+                return JsonResponse({
+                    'success': False,
+                    'error': str(error),
+                    'message': _('Unable to export this contest to PDF.'),
+                }, status=500)
 
             finally:
                 import os
-                os.unlink(pdf_path)
+                if os.path.exists(pdf_path):
+                    os.unlink(pdf_path)
 
         except Exception as e:
-            from django.http import JsonResponse
             return JsonResponse({
                 'success': False,
                 'error': str(e),
@@ -4065,15 +4070,20 @@ class ContestExportWord(ContestMixin, View):
                 response['Content-Disposition'] = f'attachment; filename="contest_{contest_key}.docx"'
                 return response
 
-            except Exception as e:
-                print(f'Word generation error: {e}')
+            except Exception as error:
+                logger.exception('Word generation failed for contest %s', contest_key)
+                return JsonResponse({
+                    'success': False,
+                    'error': str(error),
+                    'message': _('Unable to export this contest to Word.'),
+                }, status=500)
 
             finally:
                 import os
-                os.unlink(docx_path)
+                if os.path.exists(docx_path):
+                    os.unlink(docx_path)
 
         except Exception as e:
-            from django.http import JsonResponse
             return JsonResponse({
                 'success': False,
                 'error': str(e),
