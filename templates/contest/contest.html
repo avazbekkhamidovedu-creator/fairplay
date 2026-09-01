@@ -429,54 +429,6 @@
                 }
             </style>
 
-            <script type="text/javascript">
-                $(document).ready(function() {
-                    var $scoreModal = $('#contest-grade-import-modal');
-                    $('#btn-open-grade-import').on('click', function (e) {
-                        e.preventDefault();
-                        $scoreModal.prop('hidden', false);
-                    });
-                    $scoreModal.find('.js-close-score-import').on('click', function () {
-                        $scoreModal.prop('hidden', true);
-                    });
-                    $('#contest-grade-csv').on('change', function () {
-                        var file = this.files && this.files[0];
-                        var fileName = $(this).val().split('\\').pop() || {{ _('No file selected')|tojson }};
-                        $('#contest-score-file-name').text(fileName);
-                        var $column = $('#contest-score-column');
-                        $column.empty().prop('disabled', true);
-                        if (!file) {
-                            $column.append($('<option>', {value: '', text: {{ _('Choose a CSV file first')|tojson }}}));
-                            return;
-                        }
-                        var reader = new FileReader();
-                        reader.onload = function (event) {
-                            var header = String(event.target.result || '').split(/\r?\n/, 1)[0];
-                            var columns = header.match(/(?:^|,)(?:"([^"]*(?:""[^"]*)*)"|([^",]*))/g) || [];
-                            var candidates = columns.map(function (column) {
-                                return column.replace(/^,/, '').replace(/^"|"$/g, '').replace(/""/g, '');
-                            }).filter(function (column) {
-                                var key = column.trim().toLowerCase().replace(/\s+/g, ' ');
-                                return key === 'score' || key === 'grade' || key === 'points' ||
-                                    key.indexOf('score') !== -1 || key.indexOf('grade') !== -1;
-                            });
-                            if (!candidates.length) {
-                                $column.append($('<option>', {value: '', text: {{ _('No score column detected')|tojson }}));
-                                return;
-                            }
-                            $column.append($('<option>', {value: '', text: {{ _('Choose the Canvas score column')|tojson }}));
-                            candidates.forEach(function (column) {
-                                $column.append($('<option>', {value: column, text: column}));
-                            });
-                            $column.prop('disabled', false);
-                            if (candidates.length === 1) {
-                                $column.val(candidates[0]);
-                            }
-                        };
-                        reader.readAsText(file.slice(0, 65536));
-                    });
-                });
-            </script>
         {% if can_edit %}
             <div class="contest-export-bar">
                 <button type="button" class="button" id="btn-open-grade-import"
@@ -522,30 +474,25 @@
                         <h2 id="contest-grade-import-title">{{ _('Export Scores') }}</h2>
                         <p>
                             <a href="{{ url('contest_export_scores', contest.key) }}" class="button">
-                                <i class="fa fa-download"></i> {{ _('Directly download the Scores') }}
+                                <i class="fa fa-download"></i> {{ _('Export Scores') }}
                             </a>
                         </p>
-                        <h3>{{ _('Import / Update Scores') }}</h3>
+                        <h3>{{ _('Export joined scores') }}</h3>
                         <p class="helptext">
-                            {{ _('Upload a CSV downloaded from Canvas grades. Please include either NetID/username or both first name and last name, and a grade column.') }}
+                            {{ _('Upload a CSV downloaded from Canvas grades. Its rows remain the source of truth, and a column named after this assignment is added for matched students only.') }}
                             <br>
-                            {{ _('If Canvas provides more than one score column, select the one to import below.') }}
+                            {{ _('OJ-only accounts, including test students, are not added to this export.') }}
                         </p>
-                    <form method="post" enctype="multipart/form-data" action="{{ url('contest_import_scores', contest.key) }}" id="contest-grade-import-form" class="course-form">
+                    <form method="post" enctype="multipart/form-data" action="{{ url('contest_export_joined_scores', contest.key) }}" id="contest-grade-import-form" class="course-form">
                         {% csrf_token %}
                         <label for="contest-grade-csv" class="checkbox-row">
                             <strong>{{ _('Canvas score CSV') }}</strong>
                         </label>
-                        <input type="file" class="oj-input" id="contest-grade-csv" name="grade_csv" accept=".csv,text/csv">
+                        <input type="file" class="oj-input" id="contest-grade-csv" name="grade_csv" accept=".csv,text/csv"
+                               onchange="document.getElementById('contest-score-file-name').textContent = this.files.length ? this.files[0].name : {{ _('No file selected')|tojson }};">
                         <p class="helptext" style="margin-top: 0.45rem; margin-bottom: 0.45rem;" id="contest-score-file-name">{{ _('No file selected') }}</p>
-                        <label for="contest-score-column" class="checkbox-row">
-                            <strong>{{ _('Score column') }}</strong>
-                        </label>
-                        <select class="oj-input" id="contest-score-column" name="score_column" disabled>
-                            <option value="">{{ _('Choose a CSV file first') }}</option>
-                        </select>
                         <p style="margin-top: 0.85rem;">
-                            <button type="submit" class="button"><i class="fa fa-upload"></i> {{ _('Upload and join grades') }}</button>
+                            <button type="submit" class="button"><i class="fa fa-download"></i> {{ _('Export joined scores') }}</button>
                             <button type="button" class="button js-close-score-import"
                                     onclick="document.getElementById('contest-grade-import-modal').setAttribute('hidden', 'hidden');">{{ _('Cancel') }}</button>
                         </p>

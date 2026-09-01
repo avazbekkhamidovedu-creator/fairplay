@@ -71,7 +71,7 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestMossDelete', 'contest_ranking_ajax',
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
-           'ContestImportScores',
+           'ContestExportJoinedScores',
            'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease',
            'ContestBatchAIGrade', 'ContestSEBConfig', 'SEBLaunchConfig', 'SEBLaunchToken', 'SEBQuit',
            'ContestTagCreateView', 'ContestSEBFileView',
@@ -4226,7 +4226,7 @@ class ContestExportScores(ContestMixin, PermissionRequiredMixin, BaseDetailView)
         return response
 
 
-class ContestImportScores(ContestMixin, PermissionRequiredMixin, View):
+class ContestExportJoinedScores(ContestMixin, PermissionRequiredMixin, BaseDetailView):
     permission_required = 'judge.edit_own_contest'
     http_method_names = ['post']
 
@@ -4240,29 +4240,16 @@ class ContestImportScores(ContestMixin, PermissionRequiredMixin, View):
             messages.error(request, _('Choose a CSV file to upload.'))
             return HttpResponseRedirect(reverse('contest_view', args=[self.object.key]))
 
-        from judge.utils.import_export import import_contest_scores_from_csv
-        result = import_contest_scores_from_csv(
-            self.object,
-            csv_file,
-            score_column=request.POST.get('score_column'),
-        )
+        from judge.utils.import_export import export_contest_scores_joined_csv
+        result = export_contest_scores_joined_csv(self.object, csv_file)
+        if result.errors:
+            for error in result.errors:
+                messages.error(request, error)
+            return HttpResponseRedirect(reverse('contest_view', args=[self.object.key]))
 
-        if result.applied:
-            messages.success(
-                request,
-                _('Contest score import finished: %(updated)d score(s) updated.') % {
-                    'updated': result.updated,
-                },
-            )
-        else:
-            messages.error(
-                request,
-                _('Contest score import was not applied. Fix the listed CSV errors and try again.'),
-            )
-        for error in result.errors:
-            messages.error(request, error)
-
-        return HttpResponseRedirect(reverse('contest_view', args=[self.object.key]))
+        response = HttpResponse(result.csv_content, content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = 'attachment; filename="{}-joined-scores.csv"'.format(self.object.key)
+        return response
 
 
 class ContestExportSubmissions(ContestMixin, PermissionRequiredMixin, BaseDetailView):
