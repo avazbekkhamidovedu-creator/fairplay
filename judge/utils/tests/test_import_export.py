@@ -12,6 +12,7 @@ from judge.models.tests.util import (
     create_user,
 )
 from judge.utils.import_export import (
+    export_contest_scores_csv,
     export_contest_scores_joined_csv,
     import_contest_scores_from_csv,
     process_user_csv,
@@ -241,9 +242,11 @@ class ContestScoreImportTestCase(TestCase):
         create_contest_participation(contest=contest, user=alice.profile, score=87.5)
         create_contest_participation(contest=contest, user=test_user.profile, score=100)
         canvas_csv = (
-            'SIS Login ID,first name,last name,Current Score\n'
-            'alice,Alice,Qiu,70\n'
-            'canvas-only,Canvas,Student,80\n'
+            'Student,ID,SIS Login ID,Section,Current Score\n'
+            ',,,Manual Posting,\n'
+            '    Points Possible,,,100,(read only)\n'
+            '"Qiu, Alice",101,,CS205,70\n'
+            '"Student, Canvas",102,canvas-only,CS205,80\n'
         ).encode('utf-8')
 
         result = export_contest_scores_joined_csv(contest, io.BytesIO(canvas_csv))
@@ -251,7 +254,20 @@ class ContestScoreImportTestCase(TestCase):
 
         self.assertEqual(result.errors, [])
         self.assertEqual(result.joined, 1)
-        self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0][contest.name], '87.5')
-        self.assertEqual(rows[1][contest.name], '')
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(rows[0]['Section'], 'Manual Posting')
+        self.assertEqual(rows[1]['Student'], '    Points Possible')
+        self.assertEqual(rows[2][contest.name], '87.5')
+        self.assertEqual(rows[3][contest.name], '')
         self.assertNotIn('test-user', result.csv_content)
+
+    def test_direct_score_export_uses_canvas_student_columns(self):
+        contest = create_contest(key='canvas-export', name='Assignment 1')
+        alice = create_user(username='alice', first_name='Alice', last_name='Qiu')
+        create_contest_participation(contest=contest, user=alice.profile, score=87.5)
+
+        rows = list(csv.DictReader(io.StringIO(export_contest_scores_csv(contest).lstrip('\ufeff'))))
+
+        self.assertEqual(rows[0]['Student'], 'Qiu, Alice')
+        self.assertEqual(rows[0]['SIS Login ID'], 'alice')
+        self.assertEqual(rows[0]['Assignment 1'], '87.5')

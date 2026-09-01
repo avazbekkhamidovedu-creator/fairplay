@@ -481,6 +481,8 @@
                         <p class="helptext">
                             {{ _('Upload a CSV downloaded from Canvas grades. Its rows remain the source of truth, and a column named after this assignment is added for matched students only.') }}
                             <br>
+                            {{ _('All Canvas columns, including Student and the grading metadata rows, are preserved. Student names such as "Lastname, Firstname" are supported.') }}
+                            <br>
                             {{ _('OJ-only accounts, including test students, are not added to this export.') }}
                         </p>
                     <form method="post" enctype="multipart/form-data" action="{{ url('contest_export_joined_scores', contest.key) }}" id="contest-grade-import-form" class="course-form">

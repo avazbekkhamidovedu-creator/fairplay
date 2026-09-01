@@ -4318,7 +4318,7 @@ class ContestExportScores(ContestMixin, PermissionRequiredMixin, BaseDetailView)
         # Defaults to match management command behavior, can be expanded with query params if needed
         csv_content = export_contest_scores_csv(self.object, include_disqualified=False, include_virtual=False)
 
-        response = HttpResponse(csv_content, content_type='text/csv')
+        response = HttpResponse(csv_content, content_type='text/csv; charset=utf-8')
         filename = f'{self.object.key}-scores.csv'
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
