@@ -17,6 +17,7 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -76,6 +77,15 @@ class ContestEditorHelperTestCase(TestCase):
         response = ContestCreate._error_response(ValidationError('boom'))
         self.assertEqual(response.status_code, 400)
         self.assertIn('boom', json.loads(response.content)['error'])
+
+    def test_error_response_maps_integrity_error_without_id_wording(self):
+        with self.assertLogs('judge.views.contests', level='ERROR'):
+            response = ContestCreate._error_response(IntegrityError('contestproblem unique'))
+        self.assertEqual(response.status_code, 400)
+        error = json.loads(response.content)['error']
+        self.assertIn('not an ID conflict', error)
+        self.assertNotIn('already exists', error)
+        self.assertNotIn('contestproblem', error)
 
     def test_error_response_masks_internal_errors(self):
         with self.assertLogs('judge.views.contests', level='ERROR'):
@@ -803,6 +813,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         html = response.content.decode()
         self.assertIn('value="%s"' % key, html)
         self.assertIn('generateUniqueContestKey', html)
+        self.assertIn('?suggest=1', html)
         self.assertNotIn("replace(/[^a-z0-9]+/g, '')", html)
 
     def test_preview_title_comes_before_time(self):
@@ -829,6 +840,148 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         contest = Contest.objects.get(name='Homework Name Copy')
         self.assertNotEqual(contest.key, 'homeworknamecopy')
         self.assertRegex(contest.key, r'^c\d{6}$')
+
+    def test_check_key_suggests_next_unused(self):
+        occupied = Contest.generate_unique_key()
+        create_contest(
+            key=occupied, name='Occupied suggest key',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('superuser',),
+        )
+        response = self.client.get(reverse('contest_check_key'), {'suggest': '1'})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['exists'])
+        self.assertRegex(body['key'], r'^c\d{6}$')
+        self.assertNotEqual(body['key'], occupied)
+
+    def test_create_own_key_already_saved_opens_editor(self):
+        first = self._post(name='Mine', key='c000000')
+        self.assertEqual(first.status_code, 200, first.content)
+        retry = self._post(name='Mine again', key='c000000')
+        self.assertEqual(retry.status_code, 200, retry.content)
+        body = retry.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body['already_saved'])
+        self.assertEqual(body['key'], 'c000000')
+        self.assertIn('already saved', body['message'].lower())
+        self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
+        self.assertEqual(body['redirect'], reverse('contest_edit', args=['c000000']))
+
+    def test_create_series_key_taken_by_other_saves_next(self):
+        occupied = Contest.generate_unique_key()
+        create_contest(
+            key=occupied, name='Other assignment',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('fields_user_a',),
+        )
+        response = self._post(name='Collision', key=occupied)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body.get('id_changed'))
+        self.assertEqual(body['id_changed_from'], occupied)
+        self.assertNotEqual(body['key'], occupied)
+        self.assertRegex(body['key'], r'^c\d{6}$')
+        self.assertIn(body['key'], body['message'])
+        self.assertIn(occupied, body['message'])
+        self.assertTrue(Contest.objects.filter(key=body['key'], name='Collision').exists())
+
+    def test_create_custom_key_taken_returns_400_with_id(self):
+        create_contest(
+            key='homework1', name='Taken custom',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('fields_user_a',),
+        )
+        response = self._post(name='Dup custom', key='homework1')
+        self.assertEqual(response.status_code, 400)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn('homework1', error)
+
+    def test_create_series_key_without_auto_returns_400(self):
+        occupied = Contest.generate_unique_key()
+        create_contest(
+            key=occupied, name='Forced collision',
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=1),
+            authors=('fields_user_a',),
+        )
+        response = self._post(name='Forced', key=occupied, key_auto=False)
+        self.assertEqual(response.status_code, 400)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn(occupied, error)
+
+    def test_create_series_key_race_saves_next_and_tells_user(self):
+        original_save = Contest.save
+        calls = {'n': 0}
+
+        def racing_save(self, *args, **kwargs):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise IntegrityError('duplicate key')
+            return original_save(self, *args, **kwargs)
+
+        with patch.object(Contest, 'save', racing_save):
+            with patch.object(Contest, 'generate_unique_key', return_value='c000099'):
+                # Even if the teacher edited the prefilled id (key_auto=false),
+                # a race still saves under the next free series id.
+                response = self._post(name='Race no auto', key='c000000', key_auto=False)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body.get('id_changed'))
+        self.assertEqual(body['id_changed_from'], 'c000000')
+        self.assertEqual(body['key'], 'c000099')
+        self.assertIn('c000099', body['message'])
+        self.assertIn('c000000', body['message'])
+        self.assertTrue(Contest.objects.filter(key='c000099', name='Race no auto').exists())
+
+    def test_create_series_key_race_with_auto_saves_next(self):
+        original_save = Contest.save
+        calls = {'n': 0}
+
+        def racing_save(self, *args, **kwargs):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise IntegrityError('duplicate key')
+            return original_save(self, *args, **kwargs)
+
+        with patch.object(Contest, 'save', racing_save):
+            with patch.object(Contest, 'generate_unique_key', return_value='c000099'):
+                response = self._post(name='Race auto', key='c000000', key_auto=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body.get('id_changed'))
+        self.assertEqual(body['id_changed_from'], 'c000000')
+        self.assertEqual(body['key'], 'c000099')
+        self.assertIn('c000099', body['message'])
+        self.assertIn('c000000', body['message'])
+        self.assertTrue(Contest.objects.filter(key='c000099', name='Race auto').exists())
+
+    def test_create_related_integrity_error_is_not_id_conflict(self):
+        with patch.object(ContestCreate, '_sync_problems', side_effect=IntegrityError('contestproblem unique')):
+            with self.assertLogs('judge.views.contests', level='ERROR'):
+                response = self._post(name='Related fail', key='quiz1')
+        self.assertEqual(response.status_code, 400, response.content)
+        error = response.json()['error']
+        self.assertNotIn('already exists', error)
+        self.assertIn('not an ID conflict', error)
+        self.assertFalse(Contest.objects.filter(key='quiz1').exists())
+
+    def test_create_series_related_integrity_error_does_not_retarget_id(self):
+        with patch.object(ContestCreate, '_sync_problems', side_effect=IntegrityError('contestproblem unique')):
+            with self.assertLogs('judge.views.contests', level='ERROR'):
+                response = self._post(name='Related fail series', key='c000000')
+        self.assertEqual(response.status_code, 400, response.content)
+        error = response.json()['error']
+        self.assertNotIn('already exists', error)
+        self.assertIn('not an ID conflict', error)
+        self.assertFalse(response.json().get('id_changed'))
+        self.assertFalse(Contest.objects.filter(name='Related fail series').exists())
 
     def test_per_problem_code_options_hidden_for_other_types(self):
         from judge.models.question import ProblemMCQConfig

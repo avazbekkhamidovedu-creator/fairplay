@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.utils.translation import gettext as _
 
 from judge.models import Problem, ProblemGroup, ProblemType, Solution
+from judge.utils.unique_ids import next_prefixed_id
 
 # Scalar / FK attnames compared when building an admin CHANGE message. FK ids map back to
 # the model field (``group_id`` → ``group``) so the log shows the same verbose names as
@@ -30,12 +31,11 @@ _PROBLEM_LOG_M2M = (
 
 
 def generate_problem_code():
-    existing_codes = set(Problem.objects.values_list('code', flat=True))
-    for index in range(1000000):
-        code = 'p{:06d}'.format(index)
-        if code not in existing_codes:
-            return code
-    return 'mcq{}'.format(str(int(timezone.now().timestamp()))[-6:])
+    return next_prefixed_id(
+        Problem.objects.values_list('code', flat=True),
+        'p',
+        fallback_prefix='mcq',
+    )
 
 
 def default_problem_group():
@@ -61,13 +61,14 @@ def default_problem_type():
     return ptype
 
 
-def apply_simple_problem_defaults(problem):
+def apply_simple_problem_defaults(problem, preferred_code=None):
     """Fill the code-centric required scalar fields a non-code problem doesn't use.
 
     M2M defaults (``types``) must be assigned by the caller after the problem is saved.
     """
     if not problem.code:
-        problem.code = generate_problem_code()
+        preferred = (preferred_code or '').strip()
+        problem.code = preferred or generate_problem_code()
     if problem.date is None:
         problem.date = timezone.now()
     if problem.time_limit is None:

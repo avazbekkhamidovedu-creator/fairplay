@@ -233,6 +233,105 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem.name, 'HTTP vs TCP')
         self.assertTrue(ProblemMCQConfig.objects.filter(problem=problem, multiple_select=False).exists())
 
+    def test_create_page_prefills_suggested_code(self):
+        create_problem(code='p000000', name='Taken series', authors=('superuser',))
+        self.client.force_login(self.users['creator'])
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['suggested_code'], 'p000001')
+        html = response.content.decode()
+        self.assertIn('value="p000001"', html)
+        self.assertIn('id="f-code"', html)
+
+    def test_create_own_code_already_saved_opens_editor(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Retry save',
+            'description': 'Same code twice.',
+            'points': 5,
+            'group_id': self.group.id,
+            'code': 'p000000',
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        first = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(first.status_code, 200, first.content)
+        retry = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(retry.status_code, 200, retry.content)
+        body = retry.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body['already_saved'])
+        self.assertEqual(body['code'], 'p000000')
+        self.assertIn('already saved', body['message'].lower())
+        self.assertEqual(Problem.objects.filter(code='p000000').count(), 1)
+        self.assertEqual(body['redirect'], reverse('problem_edit_v2', args=['p000000']))
+
+    def test_create_series_code_taken_by_other_saves_next(self):
+        create_problem(code='p000000', name='Other problem', authors=('superuser',))
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Collision',
+            'description': 'Series taken.',
+            'points': 5,
+            'group_id': self.group.id,
+            'code': 'p000000',
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body.get('id_changed'))
+        self.assertEqual(body['id_changed_from'], 'p000000')
+        self.assertEqual(body['code'], 'p000001')
+        self.assertIn('p000001', body['message'])
+        self.assertIn('p000000', body['message'])
+        self.assertTrue(Problem.objects.filter(code='p000001', name='Collision').exists())
+
+    def test_create_custom_code_taken_returns_400_with_id(self):
+        create_problem(code='myquiz', name='Taken custom', authors=('superuser',))
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Dup custom',
+            'description': 'Custom taken.',
+            'points': 5,
+            'group_id': self.group.id,
+            'code': 'myquiz',
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn('myquiz', error)
+
     def test_create_multiple_choice_defaults_to_proportional_scoring(self):
         self.client.force_login(self.users['creator'])
         payload = {

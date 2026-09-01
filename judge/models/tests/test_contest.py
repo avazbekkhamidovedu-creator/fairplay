@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
@@ -1017,6 +1019,12 @@ class ContestTestCase(CommonDataMixin, TestCase):
         second = Contest.generate_unique_key()
         self.assertRegex(second, r'^c\d{6}$')
         self.assertNotEqual(second, first)
+
+    @patch('judge.models.contest.Contest.objects.values_list')
+    def test_generate_unique_key_uses_one_existing_key_query(self, values_list):
+        values_list.return_value = ['c000000', 'c000002']
+        self.assertEqual(Contest.generate_unique_key(), 'c000001')
+        values_list.assert_called_once_with('key', flat=True)
 
 
 class ContestTagTestCase(TestCase):

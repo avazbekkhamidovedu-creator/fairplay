@@ -48,11 +48,22 @@ from judge.models import (Class, Language, LanguageLimit, License, Organization,
 from judge.models.problem_data import CHECKERS
 from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.utils.problem_create import (apply_simple_problem_defaults, default_problem_group, default_problem_type,
-                                        log_problem_admin_entry, problem_admin_changed_fields, problem_admin_snapshot)
+                                        generate_problem_code, log_problem_admin_entry,
+                                        problem_admin_changed_fields, problem_admin_snapshot)
+from judge.utils.unique_ids import wants_auto_series
 from judge.utils.user_search import profile_choice_payload, profile_choice_payloads
 
 # Types the redesigned page offers but the backend cannot grade/store yet.
 NOT_IMPLEMENTED_TYPES = {'compound', 'other'}
+
+
+class ProblemAlreadySaved(Exception):
+    """The submitted code belongs to a problem this user already authored."""
+
+    def __init__(self, problem):
+        self.problem = problem
+        super().__init__(problem.code)
+
 
 # Difficulty ProblemType.full_name defaults when attaching the standard easy/medium/hard row.
 _DIFFICULTY_FULL_NAMES = {
@@ -169,6 +180,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             ):
                 context['can_clone_problem'] = True
                 context['clone_url'] = reverse('problem_clone', args=[problem.code])
+        else:
+            context['suggested_code'] = generate_problem_code()
         return render(request, self.template_name, context)
 
     def get_context(self, request):
@@ -204,6 +217,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'can_change_manually_managed': user.has_perm('judge.change_manually_managed'),
             'can_full_markup': user.has_perm('judge.problem_full_markup'),
             'default_group_id': default_problem_group().id,
+            'suggested_code': '',
             'save_url': reverse('problem_create_v2'),
             'ai_difficulty_url': reverse('problem_create_v2_ai_difficulty'),
             'create_problem_type_url': reverse('problem_create_v2_problem_type'),
@@ -335,6 +349,17 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     revisions.set_comment(_('Edited from create_v2'))
                 else:
                     revisions.set_comment(_('Created from create_v2'))
+        except ProblemAlreadySaved as e:
+            problem = e.problem
+            return JsonResponse({
+                'ok': True,
+                'already_saved': True,
+                'id': problem.id,
+                'code': problem.code,
+                'name': problem.name,
+                'redirect': reverse('problem_edit_v2', args=[problem.code]),
+                'message': _('This problem code is already saved. Opening the editor.'),
+            })
         except PermissionError as e:
             return JsonResponse({'error': str(e)}, status=403)
         except ValueError as e:
@@ -359,14 +384,23 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             redirect = reverse('problem_edit_v2', args=[problem.code])
         else:
             redirect = reverse('problem_detail', args=[problem.code])
-        return JsonResponse({
+        body = {
             'ok': True,
             'id': problem.id,
             'code': problem.code,
             'name': problem.name,
             'format': problem.format_filter_code,
             'redirect': redirect,
-        })
+        }
+        submitted_code = (payload.get('code') or '').strip()
+        if existing is None and submitted_code and submitted_code != problem.code:
+            body['id_changed'] = True
+            body['id_changed_from'] = submitted_code
+            body['message'] = _('Saved with code %(new)s because %(old)s was already in use.') % {
+                'new': problem.code,
+                'old': submitted_code,
+            }
+        return JsonResponse(body)
 
     # ------------------------------------------------------------------ edit support
     def _get_editable_problem(self, request, code):
@@ -1057,6 +1091,32 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         except (BadZipfile, OSError, ValueError):
             return []
 
+    def _preferred_create_code(self, payload, request):
+        """Resolve the prefilled/submitted code for a new problem.
+
+        Does not write to the database. Raises ``ProblemAlreadySaved`` when the
+        code belongs to a problem this user already authored (retry after a
+        successful-but-errored first save). Auto-suggested ``p######`` values
+        that another user took are replaced with the next free code.
+        """
+        code = (payload.get('code') or '').strip()
+        if not code:
+            return None
+        if not re.match(r'^[a-z0-9]+$', code):
+            raise ValueError(_('Problem code must contain only lowercase letters and numbers.'))
+        existing = Problem.objects.filter(code=code).first()
+        if existing is None:
+            return code
+        if request.profile and existing.authors.filter(id=request.profile.id).exists():
+            raise ProblemAlreadySaved(existing)
+        if wants_auto_series(payload.get('code_auto'), code, 'p'):
+            return generate_problem_code()
+        raise ValueError(_('Problem code "%(code)s" already exists. Choose a different code.') % {'code': code})
+
+    def _init_problem_defaults(self, problem, payload, request, is_create):
+        preferred = self._preferred_create_code(payload, request) if is_create else None
+        apply_simple_problem_defaults(problem, preferred_code=preferred)
+
     def _create_code(self, request, payload, name, problem=None, zip_upload=None):
         user = request.user
         if not _can_create_code(user):
@@ -1088,7 +1148,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.time_limit = self._num(payload.get('time_limit'), 1)
             problem.memory_limit = int(self._num(payload.get('memory_limit'), 256) * 1024)  # MB -> KB
             problem.group = self._resolve_group(payload)
-            apply_simple_problem_defaults(problem)  # fills code + any unset limits
+            self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
@@ -1396,7 +1456,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.points = self._num(payload.get('points'), 1)
             problem.partial = True if multiple else False
             problem.group = self._resolve_group(payload)
-            apply_simple_problem_defaults(problem)
+            self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
@@ -1446,7 +1506,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.points = self._num(payload.get('points'), 1)
             problem.partial = False
             problem.group = self._resolve_group(payload)
-            apply_simple_problem_defaults(problem)
+            self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
@@ -1483,7 +1543,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.points = self._num(payload.get('points'), 1)
             problem.partial = bool(payload.get('partial'))
             problem.group = self._resolve_group(payload)
-            apply_simple_problem_defaults(problem)
+            self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
@@ -1529,7 +1589,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             # AI grading returns a 0-100 percentage, so partial credit must be on for it to count.
             problem.partial = True
             problem.group = self._resolve_group(payload)
-            apply_simple_problem_defaults(problem)
+            self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
@@ -1588,7 +1648,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             # credit must be on for the awarded score to reach Profile.points and the standings.
             problem.partial = True
             problem.group = self._resolve_group(payload)
-            apply_simple_problem_defaults(problem)
+            self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 

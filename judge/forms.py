@@ -21,7 +21,9 @@ from django.utils.translation import gettext_lazy as _, ngettext_lazy
 from judge.models import Class, Contest, Language, Organization, Problem, ProblemPointsVote, Profile, Submission, \
     WebAuthnCredential
 from judge.utils.mail import validate_email_domain
+from judge.utils.problem_create import generate_problem_code
 from judge.utils.subscription import newsletter_id
+from judge.utils.unique_ids import is_series_id
 from judge.utils.user_search import apply_profile_choice_labels
 from judge.widgets import (
     AceWidget, HeavySelect2MultipleWidget, MarkdownCheckboxSelectMultiple, MarkdownRadioSelect,
@@ -710,7 +712,11 @@ class ProblemCloneForm(Form):
     def clean_code(self):
         code = self.cleaned_data['code']
         if Problem.objects.filter(code=code).exists():
-            raise ValidationError(_('Problem with code already exists.'))
+            if is_series_id(code, 'p'):
+                return generate_problem_code()
+            raise ValidationError(_('Problem code "%(code)s" already exists. Choose a different code.') % {
+                'code': code,
+            })
         return code
 
 
@@ -720,7 +726,11 @@ class ContestCloneForm(Form):
     def clean_key(self):
         key = self.cleaned_data['key']
         if Contest.objects.filter(key=key).exists():
-            raise ValidationError(_('Contest with key already exists.'))
+            if is_series_id(key, 'c'):
+                return Contest.generate_unique_key()
+            raise ValidationError(_('Assignment ID "%(key)s" already exists. Choose a different ID.') % {
+                'key': key,
+            })
         return key
 
 

@@ -887,6 +887,11 @@
                 var actionInput = document.getElementById('form-action');
                 if (actionInput && actionInput.value) data.action = actionInput.value;
 
+                if (!window.DMOJ_IS_EDIT) {
+                    var keyEl = document.getElementById('id_key');
+                    if (keyEl) data.key_auto = keyEl.dataset.autoGen === '1';
+                }
+
                 // Target-score sanity check (pure UX, not a model field): warn
                 // when the sum of problem points differs from the entered target.
                 var targetInput = document.getElementById('f-score');
@@ -982,11 +987,17 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
                     if (res.ok) {
+                        var savedMsg = res.message;
                         if (res.action === 'another') {
                             // "Save and add another": stay put and clear the form.
                             if (typeof window.resetFormForAnother === 'function') window.resetFormForAnother();
                             else form.reset();
-                            showToast({{ _("Assignment saved — create another one.")|htmltojs }});
+                            showToast(savedMsg || {{ _("Assignment saved — create another one.")|htmltojs }});
+                        } else if (savedMsg) {
+                            showToast(savedMsg);
+                            setTimeout(function () {
+                                window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
+                            }, res.id_changed ? 2500 : 1200);
                         } else {
                             window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
                         }
@@ -1282,19 +1293,17 @@
             }
 
             function generateUniqueContestKey() {
-                var max = 1000000;
-                function tryIndex(i) {
-                    if (i >= max) {
-                        return Promise.resolve('contest' + String(Date.now()).slice(-6));
-                    }
-                    var key = 'c' + String(i).padStart(6, '0');
-                    return checkContestKey(key).then(function (exists) {
-                        if (exists === false) return key;
-                        if (exists === null) throw new Error('check failed');
-                        return tryIndex(i + 1);
-                    });
-                }
-                return tryIndex(0);
+                return fetch(CHECK_KEY_URL + '?suggest=1', {
+                    method: 'GET',
+                    cache: 'no-cache',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                }).then(function (response) {
+                    if (!response.ok) throw new Error('suggest failed');
+                    return response.json();
+                }).then(function (data) {
+                    if (!data.key) throw new Error('suggest failed');
+                    return data.key;
+                });
             }
 
             if (keyInput && !isEditMode) {
@@ -2877,6 +2886,10 @@
                 }
             };
 
+            document.querySelectorAll('.messages li').forEach(function (li) {
+                showToast(li.textContent);
+            });
+
             } catch (e) {
                 // Cosmetic initializers must never break saving (the submit
                 // handler above is already attached). Log and continue.
@@ -2892,6 +2905,7 @@
     {%- endmacro %}
     <div class="pcv2">
         <main class="v2-main" id="content-main">
+            {% include "messages.html" %}
             <div class="v2-split sp-split">
                 <form id="contest-form" class="v2-left" method="post" action="{{ save_url }}" novalidate autocomplete="off">
                     {% csrf_token %}

@@ -1718,6 +1718,8 @@ class ProblemCodeCheckView(LoginRequiredMixin, View):
     def get(self, request, *args, **kwargs):
         if not (
             request.user.has_perm('judge.clone_problem')
+            or request.user.has_perm('judge.create_private_problem')
+            or request.user.has_perm('judge.add_problem')
             or request.user.is_superuser
         ):
             return JsonResponse({'error': _('Forbidden')}, status=403)
@@ -2254,6 +2256,12 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_user(self.request.user)
             revisions.set_comment(_('Cloned problem from %s') % old_code)
 
+        requested = (self.request.POST.get('code') or '').strip()
+        if requested and requested != problem.code:
+            messages.info(self.request, _('Saved with code %(new)s because %(old)s was already in use.') % {
+                'new': problem.code,
+                'old': requested,
+            })
         return HttpResponseRedirect(reverse('problem_edit_v2', args=(problem.code,)))
 
     def _clone_problem_data(self, original_data, new_problem, old_code, new_code):
