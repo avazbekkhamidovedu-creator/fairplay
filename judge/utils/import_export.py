@@ -21,6 +21,7 @@ CSV_FIELD_ALIASES = {
     'username': ('username', 'netid', 'sis login id', 'login id'),
     'first_name': ('first_name', 'first name', 'firstname'),
     'last_name': ('last_name', 'last name', 'lastname', 'surname'),
+    'student': ('student',),
     'email': ('email', 'e-mail', 'netid@duke.edu'),
 }
 SCORE_FIELD_ALIASES = {
@@ -106,6 +107,7 @@ def csv_row_to_user_fields(raw_row: dict, header_map: Dict[str, str]) -> dict:
         'username': get('username'),
         'first_name': get('first_name'),
         'last_name': get('last_name'),
+        'student': get('student'),
         'email': get('email'),
     }
 
@@ -121,6 +123,37 @@ def _build_name_key(first_name: str, last_name: str) -> str:
     if not first_normalized or not last_normalized:
         return ''
     return ' '.join(part for part in (first_normalized, last_normalized) if part)
+
+
+def _student_name_keys(student_name: str) -> set[str]:
+    """Return possible name keys for a Canvas Student value."""
+    normalized = _normalize_participant_name(student_name)
+    if not normalized:
+        return set()
+
+    keys = {normalized}
+    if ',' in student_name:
+        first_part, last_part = (part.strip() for part in student_name.split(',', 1))
+        keys.update({
+            _build_name_key(first_part, last_part),
+            _build_name_key(last_part, first_part),
+        })
+    return keys - {''}
+
+
+def _find_participation_by_name(user_fields: dict, by_name: dict):
+    """Find a unique participant using split-name or Canvas Student fields."""
+    name_keys = set()
+    if user_fields['first_name'] and user_fields['last_name']:
+        name_keys.add(_build_name_key(user_fields['first_name'], user_fields['last_name']))
+    name_keys.update(_student_name_keys(user_fields['student']))
+
+    matches = {
+        participation.pk: participation
+        for name_key in name_keys
+        for participation in by_name.get(name_key, [])
+    }
+    return next(iter(matches.values())) if len(matches) == 1 else None
 
 
 class ContestScoreImportResult:
@@ -155,7 +188,10 @@ def export_contest_scores_joined_csv(contest: Contest, csv_file) -> ContestScore
 
     fieldnames = list(reader.fieldnames)
     header_map = resolve_csv_headers(fieldnames)
-    can_match_by_name = 'first_name' in header_map and 'last_name' in header_map
+    can_match_by_name = (
+        'student' in header_map or
+        ('first_name' in header_map and 'last_name' in header_map)
+    )
     if 'username' not in header_map and not can_match_by_name:
         result.errors.append(_('Missing identifier columns. Provide username/NetID or both first and last name.'))
         return result
@@ -190,11 +226,8 @@ def export_contest_scores_joined_csv(contest: Contest, csv_file) -> ContestScore
         username = user_fields['username']
         if username:
             participation = by_username.get(username.casefold())
-        else:
-            name_key = _build_name_key(user_fields['first_name'], user_fields['last_name'])
-            matches = by_name.get(name_key, [])
-            if len(matches) == 1:
-                participation = matches[0]
+        if participation is None:
+            participation = _find_participation_by_name(user_fields, by_name)
 
         row[score_header] = ''
         if participation is not None:
@@ -551,18 +584,18 @@ def export_contest_scores_csv(contest: Contest, include_disqualified: bool = Fal
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['NetID', 'first_name', 'last_name', 'score'])
+    writer.writerow(['Student', 'SIS Login ID', contest.name or 'DKUOJ Score'])
 
     for participation in qs:
         user = participation.user.user
         writer.writerow([
+            ', '.join(part for part in (user.last_name, user.first_name) if part),
             user.username or '',
-            user.first_name or '',
-            user.last_name or '',
             participation.score,
         ])
 
-    return output.getvalue()
+    # Excel opens UTF-8 CSV files correctly when the BOM is present.
+    return '\ufeff{}'.format(output.getvalue())
 
 
 def export_contest_submissions_zip(contest: Contest, include_disqualified: bool = False,
