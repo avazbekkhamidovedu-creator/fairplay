@@ -1,4 +1,5 @@
 """Tests for CSV user import (judge.utils.import_export.process_user_csv)."""
+import csv
 import io
 
 from django.contrib.auth.models import User
@@ -10,7 +11,11 @@ from judge.models.tests.util import (
     create_contest_participation,
     create_user,
 )
-from judge.utils.import_export import import_contest_scores_from_csv, process_user_csv
+from judge.utils.import_export import (
+    export_contest_scores_joined_csv,
+    import_contest_scores_from_csv,
+    process_user_csv,
+)
 
 
 class UserImportTestCase(TestCase):
@@ -228,3 +233,25 @@ class ContestScoreImportTestCase(TestCase):
         self.assertIn('unable to parse score', result.errors[-1])
         participation.refresh_from_db()
         self.assertEqual(participation.score, 0)
+
+    def test_joined_export_keeps_canvas_rows_only(self):
+        contest = create_contest(key='joined-scores')
+        alice = create_user(username='alice', first_name='Alice', last_name='Qiu')
+        test_user = create_user(username='test-user', first_name='Test', last_name='Student')
+        create_contest_participation(contest=contest, user=alice.profile, score=87.5)
+        create_contest_participation(contest=contest, user=test_user.profile, score=100)
+        canvas_csv = (
+            'SIS Login ID,first name,last name,Current Score\n'
+            'alice,Alice,Qiu,70\n'
+            'canvas-only,Canvas,Student,80\n'
+        ).encode('utf-8')
+
+        result = export_contest_scores_joined_csv(contest, io.BytesIO(canvas_csv))
+        rows = list(csv.DictReader(io.StringIO(result.csv_content.lstrip('\ufeff'))))
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.joined, 1)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][contest.name], '87.5')
+        self.assertEqual(rows[1][contest.name], '')
+        self.assertNotIn('test-user', result.csv_content)

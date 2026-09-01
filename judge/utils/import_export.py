@@ -131,6 +131,82 @@ class ContestScoreImportResult:
         self.applied = False
 
 
+class ContestScoreJoinResult:
+    def __init__(self):
+        self.csv_content = ''
+        self.errors = []
+        self.joined = 0
+
+
+def export_contest_scores_joined_csv(contest: Contest, csv_file) -> ContestScoreJoinResult:
+    """Append DKUOJ scores to Canvas CSV rows without adding OJ-only participants."""
+    result = ContestScoreJoinResult()
+
+    try:
+        decoded_file = csv_file.read().decode('utf-8-sig').splitlines()
+    except UnicodeDecodeError:
+        result.errors.append(_('File is not a valid UTF-8 CSV.'))
+        return result
+
+    reader = csv.DictReader(decoded_file)
+    if not reader.fieldnames:
+        result.errors.append(_('CSV file is empty or missing headers.'))
+        return result
+
+    fieldnames = list(reader.fieldnames)
+    header_map = resolve_csv_headers(fieldnames)
+    can_match_by_name = 'first_name' in header_map and 'last_name' in header_map
+    if 'username' not in header_map and not can_match_by_name:
+        result.errors.append(_('Missing identifier columns. Provide username/NetID or both first and last name.'))
+        return result
+
+    participations = ContestParticipation.objects.filter(
+        contest=contest,
+        virtual=ContestParticipation.LIVE,
+        is_disqualified=False,
+    ).select_related('user__user')
+    by_username = {
+        (participation.user.user.username or '').casefold(): participation
+        for participation in participations
+    }
+    by_name = {}
+    for participation in participations:
+        user = participation.user.user
+        name_key = _build_name_key(user.first_name, user.last_name)
+        if name_key:
+            by_name.setdefault(name_key, []).append(participation)
+
+    score_header = contest.name or 'DKUOJ Score'
+    while score_header in fieldnames:
+        score_header = '{} (DKUOJ)'.format(score_header)
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames + [score_header], extrasaction='ignore')
+    writer.writeheader()
+    for raw_row in reader:
+        row = {fieldname: raw_row.get(fieldname, '') for fieldname in fieldnames}
+        user_fields = csv_row_to_user_fields(raw_row, header_map)
+        participation = None
+        username = user_fields['username']
+        if username:
+            participation = by_username.get(username.casefold())
+        else:
+            name_key = _build_name_key(user_fields['first_name'], user_fields['last_name'])
+            matches = by_name.get(name_key, [])
+            if len(matches) == 1:
+                participation = matches[0]
+
+        row[score_header] = ''
+        if participation is not None:
+            row[score_header] = round(float(participation.score), contest.points_precision)
+            result.joined += 1
+        writer.writerow(row)
+
+    # Excel opens UTF-8 CSV files correctly when the BOM is present.
+    result.csv_content = '\ufeff{}'.format(output.getvalue())
+    return result
+
+
 def _parse_score_value(raw_value) -> Optional[float]:
     """Parse a loose score format from Canvas or contest-grade CSV rows."""
     if raw_value is None:

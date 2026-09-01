@@ -316,7 +316,8 @@ urlpatterns = [
         path('/', lambda _, contest: HttpResponsePermanentRedirect(reverse('contest_view', args=[contest]))),
 
         path('/export/scores', contests.ContestExportScores.as_view(), name='contest_export_scores'),
-        path('/import-scores', contests.ContestImportScores.as_view(), name='contest_import_scores'),
+        path('/export/joined-scores', contests.ContestExportJoinedScores.as_view(),
+             name='contest_export_joined_scores'),
         path('/export/submissions', contests.ContestExportSubmissions.as_view(), name='contest_export_submissions'),
     ])),
 
