@@ -171,8 +171,9 @@ class ContestScoreJoinResult:
         self.joined = 0
 
 
-def export_contest_scores_joined_csv(contest: Contest, csv_file) -> ContestScoreJoinResult:
-    """Append DKUOJ scores to Canvas CSV rows without adding OJ-only participants."""
+def export_contest_scores_joined_csv(
+        contest: Contest, csv_file, score_column: Optional[str] = None) -> ContestScoreJoinResult:
+    """Write DKUOJ scores to a selected Canvas column without adding OJ-only participants."""
     result = ContestScoreJoinResult()
 
     try:
@@ -212,12 +213,16 @@ def export_contest_scores_joined_csv(contest: Contest, csv_file) -> ContestScore
         if name_key:
             by_name.setdefault(name_key, []).append(participation)
 
-    score_header = contest.name or 'DKUOJ Score'
-    while score_header in fieldnames:
-        score_header = '{} (DKUOJ)'.format(score_header)
+    requested_score_header = (score_column or '').strip() or contest.name or 'DKUOJ Score'
+    matching_header = next(
+        (header for header in fieldnames if _header_key(header) == _header_key(requested_score_header)),
+        None,
+    )
+    score_header = matching_header or requested_score_header
+    output_fieldnames = fieldnames if matching_header else fieldnames + [score_header]
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=fieldnames + [score_header], extrasaction='ignore')
+    writer = csv.DictWriter(output, fieldnames=output_fieldnames, extrasaction='ignore')
     writer.writeheader()
     for raw_row in reader:
         row = {fieldname: raw_row.get(fieldname, '') for fieldname in fieldnames}

@@ -4339,7 +4339,9 @@ class ContestExportJoinedScores(ContestMixin, PermissionRequiredMixin, BaseDetai
             return HttpResponseRedirect(reverse('contest_view', args=[self.object.key]))
 
         from judge.utils.import_export import export_contest_scores_joined_csv
-        result = export_contest_scores_joined_csv(self.object, csv_file)
+        result = export_contest_scores_joined_csv(
+            self.object, csv_file, score_column=request.POST.get('score_column'),
+        )
         if result.errors:
             for error in result.errors:
                 messages.error(request, error)

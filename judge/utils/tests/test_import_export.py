@@ -271,3 +271,21 @@ class ContestScoreImportTestCase(TestCase):
         self.assertEqual(rows[0]['Student'], 'Qiu, Alice')
         self.assertEqual(rows[0]['SIS Login ID'], 'alice')
         self.assertEqual(rows[0]['Assignment 1'], '87.5')
+
+    def test_joined_export_overwrites_selected_canvas_column(self):
+        contest = create_contest(key='joined-column')
+        alice = create_user(username='alice', first_name='Alice', last_name='Qiu')
+        create_contest_participation(contest=contest, user=alice.profile, score=87.5)
+        canvas_csv = (
+            'Student,SIS Login ID,Current Score\n'
+            '"Qiu, Alice",alice,70\n'
+        ).encode('utf-8')
+
+        result = export_contest_scores_joined_csv(
+            contest, io.BytesIO(canvas_csv), score_column='current score',
+        )
+        reader = csv.DictReader(io.StringIO(result.csv_content.lstrip('\ufeff')))
+        rows = list(reader)
+
+        self.assertEqual(reader.fieldnames, ['Student', 'SIS Login ID', 'Current Score'])
+        self.assertEqual(rows[0]['Current Score'], '87.5')
