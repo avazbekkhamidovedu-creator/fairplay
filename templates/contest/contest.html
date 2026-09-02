@@ -28,6 +28,34 @@
             $button.prop('disabled', true);
         });
 
+        $(document).on('submit', '#contest-grade-import-form', function () {
+            var form = this;
+            var fileInput = document.getElementById('contest-grade-csv');
+            if (!fileInput.files.length) {
+                return;
+            }
+
+            var token = window.crypto && window.crypto.randomUUID ?
+                window.crypto.randomUUID() :
+                Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+            form.elements.export_token.value = token;
+            document.cookie = 'contest_score_export=; Max-Age=0; path=/; SameSite=Lax';
+
+            var $button = $(form).find('button[type="submit"]');
+            $button.html('<i class="fa fa-spinner fa-spin"></i> {{ _("Exporting...") }}');
+            $button.prop('disabled', true);
+
+            var completionCookie = 'contest_score_export=' + token;
+            var refreshWhenComplete = window.setInterval(function () {
+                if (document.cookie.split('; ').indexOf(completionCookie) === -1) {
+                    return;
+                }
+                window.clearInterval(refreshWhenComplete);
+                document.cookie = 'contest_score_export=; Max-Age=0; path=/; SameSite=Lax';
+                window.location.reload();
+            }, 200);
+        });
+
         $(document).on('click', '#exportDropdownBtn', function (event) {
             event.preventDefault();
             event.stopPropagation();
@@ -487,6 +515,7 @@
                         </p>
                     <form method="post" enctype="multipart/form-data" action="{{ url('contest_export_joined_scores', contest.key) }}" id="contest-grade-import-form" class="course-form">
                         {% csrf_token %}
+                        <input type="hidden" name="export_token" value="">
                         <label for="contest-grade-csv" class="checkbox-row">
                             <strong>{{ _('Canvas score CSV') }}</strong>
                         </label>
