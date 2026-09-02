@@ -681,7 +681,7 @@
       savedHeading.textContent = gettext('Answer saved');
       var savedMsg = document.createElement('p');
       savedMsg.textContent = gettext(
-        'Your answer has been saved. Press the button below to run AI grading.'
+        'Your answer has been saved. Press the button below to run AI Feedback.'
       );
       wrap.appendChild(savedHeading);
       wrap.appendChild(savedMsg);
@@ -771,7 +771,7 @@
       btn.type = 'button';
       btn.className = 'tool-btn ai-grade-btn';
       btn.id = 'ai-grade-btn';
-      btn.textContent = gettext('View AI grading');
+      btn.textContent = gettext('View AI Feedback');
       row.appendChild(btn);
       container.appendChild(row);
     } else {
@@ -789,7 +789,7 @@
     }
     btn.hidden = false;
     btn.disabled = false;
-    btn.textContent = gettext('View AI grading');
+    btn.textContent = gettext('View AI Feedback');
     app.dataset.aiGradeUrl = status.ai_grade_url;
     return btn;
   }
@@ -809,7 +809,7 @@
     var help = $('#ai-grade-help');
     if (help && status.ai_grade_remaining != null && Number(status.ai_grade_remaining) > 0) {
       help.textContent = gettext(
-        'AI grading uses your latest submission for this problem. Press the button to score this version.'
+        'AI Feedback uses your latest submission for this problem. Press the button to score this version.'
       ) + ' (' + status.ai_grade_remaining + ' ' + gettext('uses remaining') + ')';
     }
     var result = $('#ai-grade-result');
@@ -817,7 +817,7 @@
     var btn = $('#ai-grade-btn');
     if (btn) {
       btn.disabled = false;
-      btn.textContent = gettext('View AI grading');
+      btn.textContent = gettext('View AI Feedback');
     }
   }
   function formatAnswerDisplay(rows) {
@@ -1318,14 +1318,14 @@
           var box = $('#ai-grade-result');
           if (box) box.hidden = false;
           if (res.ok && res.json.ok) {
-            if (box) box.textContent = gettext('AI grading finished. Reloading…');
+            if (box) box.textContent = gettext('AI Feedback finished. Reloading…');
             location.reload();
           } else {
             if (box) {
               box.textContent = (res.json && res.json.error) || gettext('Request failed. Please try again.');
             }
             btn.disabled = false;
-            btn.textContent = gettext('View AI grading');
+            btn.textContent = gettext('View AI Feedback');
           }
         })
         .catch(function () {
@@ -1335,7 +1335,7 @@
             box.textContent = gettext('Request failed. Please try again.');
           }
           btn.disabled = false;
-          btn.textContent = gettext('View AI grading');
+          btn.textContent = gettext('View AI Feedback');
         });
     });
   })();

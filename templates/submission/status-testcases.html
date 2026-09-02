@@ -9,11 +9,11 @@
     <h3>{{ _('Results hidden') }}</h3>
     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
 {% elif ai_batch_pending %}
-    <h3>{{ _('Awaiting AI grading') }}</h3>
-    <p>{{ _('This assignment uses batch AI grading. Scores use your latest submission per problem and will appear after the teacher runs AI grading (or automatically after the contest ends).') }}</p>
+    <h3>{{ _('Awaiting AI Feedback') }}</h3>
+    <p>{{ _('This assignment uses batch AI Feedback. Scores use your latest submission per problem and will appear after the teacher runs AI Feedback (or automatically after the contest ends).') }}</p>
 {% elif ai_awaiting_manual %}
     <h3>{{ _('Answer saved') }}</h3>
-    <p>{{ _('Your answer has been saved. Press "View AI grading" to score this submission.') }}</p>
+    <p>{{ _('Your answer has been saved. Press "View AI Feedback" to score this submission.') }}</p>
 {% elif submission.problem.submission_type == 'S' and not problem_has_ai_grading %}
     <h3>{{ _('Answer saved') }}</h3>
     <p>{{ _('Your answer has been saved.') }}</p>

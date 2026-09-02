@@ -55,7 +55,7 @@ class ContestAIGradingCreateTestCase(CommonDataMixin, TestCase):
         html = response.content.decode()
         self.assertIn('id_allow_student_ai_grading', html)
         self.assertIn('id_ai_grading_auto_delay_minutes', html)
-        self.assertIn('Allow Student Use AI Grading', html)
+        self.assertIn('Enable AI Feedback', html)
         self.assertIn('Allow Student Use AI Hint', html)
         self.assertIn('id_auto_grade_after_end', html)
         self.assertNotIn('id_ai_grading_mode', html)

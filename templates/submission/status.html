@@ -134,7 +134,7 @@
     {% if can_trigger_ai_grade %}
     <div id="ai-grade-section" class="ai-hint-section" style="margin: 1em 0;">
         <button id="ai-grade-btn" class="btn btn-info" type="button">
-            {{ _('View AI grading') }}
+            {{ _('View AI Feedback') }}
             {% if not is_teacher %}
             <span id="ai-grade-quota">
                 ({{ rate_remaining }} {{ _('use') }}{{ 's' if rate_remaining != 1 else '' }} {{ _('remaining this window') }})
@@ -147,9 +147,9 @@
         {% endif %}
         <p style="font-size:12px;color:var(--oj-text-muted);margin:0.4em 0 0;">
             {% if is_teacher %}
-                {{ _('Run AI grading on this submission (teachers are not quota-limited).') }}
+                {{ _('Run AI Feedback on this submission (teachers are not quota-limited).') }}
             {% else %}
-                {{ _('AI grading uses your latest submission for this problem. Press the button to score this version.') }}
+                {{ _('AI Feedback uses your latest submission for this problem. Press the button to score this version.') }}
             {% endif %}
         </p>
         <div id="ai-grade-result" style="display:none; margin-top: 0.75em; padding: 0.75em;
@@ -175,18 +175,18 @@
                         (res.data.rate_remaining === 1 ? '' : 's') +
                         ' {{ _('remaining this window') }})';
                 }
-                box.textContent = '{{ _('AI grading finished. Reloading…') }}';
+                box.textContent = '{{ _('AI Feedback finished. Reloading…') }}';
                 location.reload();
             } else {
                 box.textContent = (res.data && res.data.error) || '{{ _('Request failed. Please try again.') }}';
                 btn.disabled = false;
-                btn.textContent = '{{ _('View AI grading') }}';
+                btn.textContent = '{{ _('View AI Feedback') }}';
             }
         }).catch(function () {
             document.getElementById('ai-grade-result').style.display = 'block';
             document.getElementById('ai-grade-result').textContent = '{{ _('Request failed. Please try again.') }}';
             btn.disabled = false;
-            btn.textContent = '{{ _('View AI grading') }}';
+            btn.textContent = '{{ _('View AI Feedback') }}';
         });
     });
     </script>

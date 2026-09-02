@@ -1324,7 +1324,7 @@
                 if (!aiBatchMode) return;
                 var $btn = $('#btn-ai-grade');
                 $btn.html('<i class="fa fa-magic"></i> ' + (aiBatchDone
-                    ? '{{ _('Re-run AI grading') }}'
+                    ? '{{ _('Re-run AI Feedback') }}'
                     : '{{ _('Batch grading') }}'));
             }
 
@@ -1334,9 +1334,9 @@
                     if (!res.ok) { alert(res.error || '{{ _('Failed') }}'); return; }
                     aiBatchDone = false;
                     refreshAiBatchButton();
-                    alert('{{ _('AI grading queued. It grades each student’s latest submission per problem. Refresh this page when it finishes.') }}');
+                    alert('{{ _('AI Feedback queued. It grades each student’s latest submission per problem. Refresh this page when it finishes.') }}');
                 }).fail(function (xhr) {
-                    var msg = '{{ _('Failed to start AI grading') }}';
+                    var msg = '{{ _('Failed to start AI Feedback') }}';
                     try { msg = (xhr.responseJSON && xhr.responseJSON.error) || msg; } catch (e) {}
                     alert(msg);
                 }).always(function () { $btn.prop('disabled', false); });

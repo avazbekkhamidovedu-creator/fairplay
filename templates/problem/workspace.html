@@ -540,9 +540,9 @@
                     <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
                   {% elif not workspace_is_code and workspace_submission.result == 'IR' and workspace_submission.can_trigger_ai_grade %}
                     <h3>{{ _('Answer saved') }}</h3>
-                    <p>{{ _('Your answer has been saved. Press the button below to run AI grading.') }}</p>
+                    <p>{{ _('Your answer has been saved. Press the button below to run AI Feedback.') }}</p>
                     <p style="margin-top:0.75rem;">
-                      <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI grading') }}</button>
+                      <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI Feedback') }}</button>
                     </p>
                   {% elif not workspace_is_code and workspace_submission.result == 'IR' and not workspace_submission.problem_has_ai_grading %}
                     <h3>{{ _('Answer saved') }}</h3>
@@ -564,7 +564,7 @@
                     {% endif %}
                     {% if workspace_is_code and workspace_submission.can_trigger_ai_grade %}
                       <p style="margin-top:0.75rem;">
-                        <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI grading') }}</button>
+                        <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI Feedback') }}</button>
                       </p>
                     {% endif %}
                   {% endif %}
