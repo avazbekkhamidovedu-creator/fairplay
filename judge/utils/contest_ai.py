@@ -426,7 +426,7 @@ def schedule_batch_ai_grade(contest_id):
 def ai_mode_help_text():
     return _(
         'Teachers can always run AI grading from the Grade page. '
-        'Turn on “Enable AI Feedback” so students can request AI on the '
+        'Enable “Allow Student Use AI Feedback” so students can request AI on the '
         'result page (latest submission only). Auto grade after end re-grades '
         'objective questions only and does not call the LLM; set it to Off (−1) '
         'to cancel a scheduled auto-run after you grade manually.',
