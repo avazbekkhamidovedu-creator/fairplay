@@ -413,7 +413,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         client.force_login(editor)
         html = client.get(reverse('contest_create')).content.decode()
         self.assertIn('id_allow_student_ai_grading', html)
-        self.assertIn('Enable AI Feedback', html)
+        self.assertIn('Allow Student Use AI Feedback', html)
         self.assertIn('Allow Student Use AI Hint', html)
         self.assertNotIn('id_ai_grading_mode', html)
 
