@@ -79,8 +79,8 @@ class ShortAnswerQuestionType(QuestionType):
             return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
 
         from judge.utils.contest_ai import (
-            contest_awaits_student_ai, contest_defers_ai, should_run_ai_now,
-            student_allowed_ai_grading,
+            contest_awaits_student_ai, contest_defers_ai, resolve_contest_for_ai,
+            should_run_ai_now, student_allowed_ai_grading,
         )
         if not should_run_ai_now(submission):
             if contest_defers_ai(submission):
@@ -89,7 +89,11 @@ class ShortAnswerQuestionType(QuestionType):
                           'extended_feedback': _('Awaiting batch AI grading.')}]
                 return GradingResult(case_points=0, case_total=case_total, result='IE', cases=cases)
             if contest_awaits_student_ai(submission):
-                contest = getattr(submission, 'contest_object', None)
+                try:
+                    viewer = submission.user.user
+                except Exception:
+                    viewer = None
+                contest = resolve_contest_for_ai(submission, user=viewer)
                 if contest is None or student_allowed_ai_grading(contest):
                     msg = _('Request AI grading to score this submission.')
                 else:

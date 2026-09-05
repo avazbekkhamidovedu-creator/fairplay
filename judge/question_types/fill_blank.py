@@ -111,8 +111,8 @@ class FillBlankQuestionType(QuestionType):
         # or errors, so a misconfigured LLM never leaves a submission ungraded.
         if config is not None and config.grading_mode == GRADE_AI:
             from judge.utils.contest_ai import (
-                contest_awaits_student_ai, contest_defers_ai, should_run_ai_now,
-                student_allowed_ai_grading,
+                contest_awaits_student_ai, contest_defers_ai, resolve_contest_for_ai,
+                should_run_ai_now, student_allowed_ai_grading,
             )
             if should_run_ai_now(submission):
                 graded = self._grade_ai(problem, config, blanks, answers)
@@ -128,7 +128,11 @@ class FillBlankQuestionType(QuestionType):
                 } for index, weight in enumerate(weights)]
                 return GradingResult(case_points=0, case_total=case_total, result='IE', cases=cases)
             elif contest_awaits_student_ai(submission):
-                contest = getattr(submission, 'contest_object', None)
+                try:
+                    viewer = submission.user.user
+                except Exception:
+                    viewer = None
+                contest = resolve_contest_for_ai(submission, user=viewer)
                 if contest is None or student_allowed_ai_grading(contest):
                     msg = _('Request AI grading to score this submission.')
                 else:

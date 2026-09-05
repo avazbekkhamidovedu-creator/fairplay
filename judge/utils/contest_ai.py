@@ -1,8 +1,10 @@
 """Contest-level AI grading and post-end objective auto-grade.
 
 Teachers always may run AI (submission button or Grade-page “Run AI grading”).
-Students may request AI only when ``allow_student_ai_grading`` is on (subject to
-quota). Submit never auto-invokes the LLM.
+Students need a dual gate: the problem must enable AI Feedback **and** the
+assignment must allow student use (``allow_student_ai_grading``). Practice
+submissions with no contest only need the problem-level enable. Submit never
+auto-invokes the LLM.
 
 ``ai_grading_auto_delay_minutes`` schedules objective machine grading after
 ``end_time`` (MCQ / true-false / exact fill-blank) — not the LLM.
@@ -70,6 +72,43 @@ def student_allowed_ai_grading(contest):
         return bool(contest.allow_student_ai_grading)
     # Pre-migration / legacy rows: realtime mode meant students could request.
     return contest_ai_mode(contest) == 'realtime'
+
+
+def resolve_contest_for_ai(submission, *, user=None, contest=None):
+    """Which assignment's Allow Student Use AI Feedback gate applies.
+
+    Prefer ``submission.contest_object`` (the submit's real assignment). If the
+    row has no contest, fall back to an explicit workspace contest or the
+    viewer's active participation — but only when that contest actually
+    contains this problem, so practice opens are not mis-gated.
+    """
+    linked = getattr(submission, 'contest_object', None)
+    if linked is not None:
+        return linked
+
+    candidates = []
+    if contest is not None:
+        candidates.append(contest)
+    if user is not None and getattr(user, 'is_authenticated', False):
+        try:
+            current = user.profile.current_contest
+            if current is not None:
+                candidates.append(current.contest)
+        except Exception:
+            pass
+
+    problem_id = getattr(submission, 'problem_id', None) or getattr(
+        getattr(submission, 'problem', None), 'id', None,
+    )
+    if problem_id is None:
+        return None
+    for candidate in candidates:
+        try:
+            if candidate.problems.filter(id=problem_id).exists():
+                return candidate
+        except Exception:
+            continue
+    return None
 
 
 def should_run_ai_now(submission, *, batch_pass=False, manual_trigger=False):
@@ -293,7 +332,7 @@ def student_can_see_code_ai(user, submission):
         return True
     if not is_owner:
         return False
-    contest = getattr(submission, 'contest_object', None)
+    contest = resolve_contest_for_ai(submission, user=user)
     if contest is None or student_allowed_ai_grading(contest):
         return True
     if bool(getattr(contest, 'ai_grading_batch_finished_at', None)):
@@ -301,8 +340,16 @@ def student_can_see_code_ai(user, submission):
     return False
 
 
-def student_can_trigger_ai(user, submission):
-    """Show the on-demand AI grading button (teachers always; students when allowed)."""
+def student_can_trigger_ai(user, submission, *, contest=None):
+    """Show the on-demand AI Feedback button.
+
+    Dual gate for students:
+      problem Allow Student Use AI Feedback (``problem_has_ai_grading``)
+      AND assignment Allow Student Use AI Feedback (when a contest applies).
+
+    Teachers always may trigger when the problem supports AI. Practice
+    (no contest) only needs the problem-level enable.
+    """
     from judge.ai_grading_quota import get_remaining, is_teacher_viewer
 
     if user is None or not user.is_authenticated:
@@ -321,7 +368,7 @@ def student_can_trigger_ai(user, submission):
     if not is_latest_submission(submission):
         return False
 
-    contest = getattr(submission, 'contest_object', None)
+    contest = resolve_contest_for_ai(submission, user=user, contest=contest)
     # Teachers may always force an LLM pass (Grade desk / Rejudge parity).
     if teacher:
         return True
@@ -345,7 +392,7 @@ def student_quota_disabled():
     return student_quota_limit() <= 0
 
 
-def ai_grade_context(user, submission):
+def ai_grade_context(user, submission, *, contest=None):
     """Template/API context for the on-demand AI grading button."""
     from judge.ai_grading_quota import (
         get_remaining, is_rate_limited, is_teacher_viewer, rate_limit_count,
@@ -353,7 +400,7 @@ def ai_grade_context(user, submission):
     )
 
     ctx = {
-        'can_trigger': student_can_trigger_ai(user, submission),
+        'can_trigger': student_can_trigger_ai(user, submission, contest=contest),
         'is_teacher': is_teacher_viewer(user, submission),
         'remaining': 0,
         'rate_limited': False,

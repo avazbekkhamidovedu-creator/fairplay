@@ -194,6 +194,49 @@ class ContestAIGradingHelpersTestCase(CommonDataMixin, TestCase):
             self.assertFalse(student_can_trigger_ai(self.student, self.newer))
             self.assertTrue(student_can_trigger_ai(self.author, self.newer))
 
+    def test_dual_gate_assignment_off_problem_on_hides_student_button(self):
+        """Problem AI on + assignment allow off → student blocked; teacher allowed."""
+        self.contest.allow_student_ai_grading = False
+        self.contest.save(update_fields=['allow_student_ai_grading'])
+        self.newer.status = 'D'
+        self.newer.result = 'AC'
+        self.newer.time = 0.01
+        self.newer.memory = 1024
+        self.newer.save(update_fields=['status', 'result', 'time', 'memory'])
+        self.newer = Submission.objects.select_related(
+            'contest_object', 'problem', 'user__user',
+        ).get(pk=self.newer.pk)
+        with self.settings(DMOJ_AI_GRADING_STUDENT_QUOTA=100):
+            self.assertFalse(student_can_trigger_ai(self.student, self.newer))
+            self.assertTrue(student_can_trigger_ai(self.author, self.newer))
+            client = Client()
+            client.force_login(self.student)
+            page = client.get(reverse('submission_status', args=[self.newer.id]))
+            self.assertEqual(page.status_code, 200)
+            self.assertNotContains(page, 'View AI Feedback')
+
+    def test_dual_gate_uses_active_contest_when_submission_missing_contest_object(self):
+        """In-assignment workspace must not fall through to practice rules."""
+        self.contest.allow_student_ai_grading = False
+        self.contest.save(update_fields=['allow_student_ai_grading'])
+        self.newer.status = 'D'
+        self.newer.result = 'AC'
+        self.newer.contest_object = None
+        self.newer.save(update_fields=['status', 'result', 'contest_object'])
+        self.student.profile.current_contest = self.part
+        self.student.profile.save(update_fields=['current_contest'])
+        self.newer = Submission.objects.select_related(
+            'contest_object', 'problem', 'user__user',
+        ).get(pk=self.newer.pk)
+        with self.settings(DMOJ_AI_GRADING_STUDENT_QUOTA=100):
+            # Without active contest context this would look like practice (allowed).
+            self.student.profile.current_contest = None
+            self.student.profile.save(update_fields=['current_contest'])
+            self.assertTrue(student_can_trigger_ai(self.student, self.newer))
+            self.student.profile.current_contest = self.part
+            self.student.profile.save(update_fields=['current_contest'])
+            self.assertFalse(student_can_trigger_ai(self.student, self.newer))
+
 
 class ContestBatchAIGradeViewTestCase(CommonDataMixin, TestCase):
     @classmethod
