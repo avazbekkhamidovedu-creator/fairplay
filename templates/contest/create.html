@@ -994,43 +994,17 @@
                 })
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
-                    if (res.already_saved) {
-                        // The key belongs to an assignment this user already saved.
-                        // Never auto-redirect: that would silently discard whatever
-                        // the form currently holds. Ask the user to choose instead.
-                        var alreadyMsg = {{ _('Assignment ID "{0}" is already saved as "{1}". Open the existing assignment?')|tojson }};
-                        alreadyMsg = alreadyMsg.replace('{0}', res.key).replace('{1}', res.name);
-                        if (confirm(alreadyMsg)) {
-                            isDirty = false;  // leaving on purpose
-                            window.location.href = res.redirect;
-                        } else {
-                            // Keep editing: hand over a freshly generated key so the
-                            // next save succeeds without the user fixing the ID by hand.
-                            generateUniqueContestKey().then(function (key) {
-                                var keyEl = document.getElementById('id_key');
-                                if (keyEl) {
-                                    keyEl.value = key;
-                                    keyEl.dataset.autoGen = '1';
-                                }
-                            }).catch(function () {});
-                        }
-                    } else if (res.ok) {
+                    if (res.ok) {
                         // A successful save means the local draft is no longer
                         // "unsaved": clear it so a stale draft can't resurrect an
                         // already-used key on the next create.
                         try { localStorage.removeItem(DRAFT_KEY); } catch (err) {}
                         isDirty = false;
-                        var savedMsg = res.message;
                         if (res.action === 'another') {
                             // "Save and add another": stay put and clear the form.
                             if (typeof window.resetFormForAnother === 'function') window.resetFormForAnother();
                             else form.reset();
-                            showToast(savedMsg || {{ _("Assignment saved — create another one.")|htmltojs }});
-                        } else if (savedMsg) {
-                            showToast(savedMsg);
-                            setTimeout(function () {
-                                window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
-                            }, res.id_changed ? 2500 : 1200);
+                            showToast({{ _("Assignment saved — create another one.")|htmltojs }});
                         } else {
                             window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
                         }

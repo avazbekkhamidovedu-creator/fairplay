@@ -59,7 +59,6 @@ from judge.utils.problems import _get_result_data, assignment_problem_stats, use
 from judge.utils.ranker import ranker
 from judge.utils.seb import read_seb_launch_token, request_matches_seb, seb_launch_context, seb_launch_url
 from judge.utils.stats import get_bar_chart, get_pie_chart
-from judge.utils.unique_ids import is_series_id, wants_auto_series
 from judge.utils.user_search import profile_choice_label
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
@@ -427,6 +426,11 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
 
 class _ContestKeyConflict(Exception):
     """Insert hit ``Contest.key`` uniqueness, not some other integrity error."""
+
+
+# Bounded retries when reserving an auto key; a duplicate INSERT means another
+# creator won the id and we should try the next free one.
+_KEY_RESERVATION_ATTEMPTS = 5
 
 
 class ContestCreate(LoginRequiredMixin, View):
@@ -1159,44 +1163,19 @@ class ContestCreate(LoginRequiredMixin, View):
         """Validate identity, insert a new ``judge_contest`` row, return redirect."""
         if not payload.get('name'):
             return JsonResponse({'error': _('Missing required field: %s') % 'name'}, status=400)
+
         submitted_key = (payload.get('key') or '').strip()
-        key = submitted_key or Contest.generate_unique_key()
-        if not re.match(r'^[a-z0-9]+$', key):
-            return JsonResponse({'error': _('Assignment ID must contain only lowercase letters and numbers.')},
-                                status=400)
-        extra = {}
-        existing = Contest.objects.filter(key=key).first()
-        if existing is not None:
-            is_author = (
-                request.profile is not None
-                and existing.authors.filter(id=request.profile.id).exists()
-            )
-            if is_author:
-                # The key belongs to an assignment this user already saved. Do NOT
-                # auto-redirect to its editor: that would silently discard whatever
-                # the form currently holds (the user may have just typed a whole new
-                # assignment over a stale draft). Return a distinct signal instead and
-                # let the frontend offer an explicit "open existing vs keep editing"
-                # choice. This also keeps the retry-after-errored-save case honest:
-                # the data IS already stored, so a plain "already exists" error would
-                # be wrong there.
-                return JsonResponse({
-                    'already_saved': True,
-                    'key': existing.key,
-                    'name': existing.name,
-                    'redirect': reverse('contest_edit', args=[existing.key]),
-                })
-            if wants_auto_series(payload.get('key_auto'), key, 'c'):
-                extra = {
-                    'id_changed': True,
-                    'id_changed_from': key,
-                }
-                key = Contest.generate_unique_key()
-                extra['message'] = _('Saved with ID %(new)s because %(old)s was already in use.') % {
-                    'new': key,
-                    'old': extra['id_changed_from'],
-                }
-            else:
+        if payload.get('key_auto') or not submitted_key:
+            # Auto key: reserve the next free id atomically at save time, so two
+            # simultaneous creators can never be handed the same key.
+            key = None
+        else:
+            # Manually chosen key: validate it and reject duplicates outright.
+            key = submitted_key
+            if not re.match(r'^[a-z0-9]+$', key):
+                return JsonResponse({'error': _('Assignment ID must contain only lowercase letters and numbers.')},
+                                    status=400)
+            if Contest.objects.filter(key=key).exists():
                 return JsonResponse({
                     'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
                 }, status=400)
@@ -1204,57 +1183,48 @@ class ContestCreate(LoginRequiredMixin, View):
         try:
             contest = self._save_new_contest(request, payload, key)
         except _ContestKeyConflict:
-            if extra.get('id_changed') or is_series_id(key, 'c') or not submitted_key:
-                old_key = submitted_key or extra.get('id_changed_from') or ''
-                key = Contest.generate_unique_key()
-                extra = {
-                    'id_changed': True,
-                    'id_changed_from': old_key,
-                    'message': _('Saved with ID %(new)s because %(old)s was already in use.') % {
-                        'new': key,
-                        'old': old_key or _('the previous ID'),
-                    },
-                }
-                try:
-                    contest = self._save_new_contest(request, payload, key)
-                except _ContestKeyConflict:
-                    return JsonResponse({
-                        'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
-                    }, status=400)
-                except Exception as e:
-                    return self._error_response(e)
-            else:
-                return JsonResponse({
-                    'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
-                }, status=400)
+            return JsonResponse({
+                'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': submitted_key or key},
+            }, status=400)
         except Exception as e:
             return self._error_response(e)
 
         contest_id = contest.pk
         from judge.utils.contest_ai import schedule_batch_ai_grade
         transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
-        return self._action_response(payload, contest.key, extra=extra or None)
+        return self._action_response(payload, contest.key)
 
     def _save_new_contest(self, request, payload, key):
         """Insert one contest row and its related data.
 
-        ``IntegrityError`` on ``contest.save()`` is a key collision and is
-        re-raised as ``_ContestKeyConflict``. Later integrity errors (problem
-        list, M2M) propagate unchanged so they are not reported as ID issues.
+        ``key=None`` requests an auto key, reserved atomically: the next free
+        id is inserted inside the same transaction, and a concurrent insert
+        that wins the id makes us retry with the next free id.
+        ``IntegrityError`` on a *provided* key is a collision and is re-raised
+        as ``_ContestKeyConflict``. Later integrity errors (problem list, M2M)
+        propagate unchanged so they are not reported as ID issues.
         """
-        with transaction.atomic():
-            contest = Contest(key=key)
-            self._apply_payload(contest, payload)
-            contest.full_clean()
+        for _ in range(_KEY_RESERVATION_ATTEMPTS):
+            candidate = key or Contest.generate_unique_key()
             try:
-                contest.save()
-            except IntegrityError:
-                raise _ContestKeyConflict
-            self._save_m2m(contest, payload)
-            contest.authors.add(request.profile)
-            self._sync_problems(contest, payload)
-            self._log_assignment(request, contest, added=True)
+                with transaction.atomic():
+                    contest = Contest(key=candidate)
+                    self._apply_payload(contest, payload)
+                    contest.full_clean()
+                    try:
+                        contest.save()
+                    except IntegrityError:
+                        raise _ContestKeyConflict
+                    self._save_m2m(contest, payload)
+                    contest.authors.add(request.profile)
+                    self._sync_problems(contest, payload)
+                    self._log_assignment(request, contest, added=True)
+            except _ContestKeyConflict:
+                if key is None:
+                    continue  # auto key raced; reserve the next free id
+                raise
             return contest
+        raise _ContestKeyConflict
 
     def _update(self, request, payload):
         """Update an existing contest row (and optionally its key) in place."""

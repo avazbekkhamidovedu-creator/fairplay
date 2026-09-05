@@ -856,50 +856,42 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertRegex(body['key'], r'^c\d{6}$')
         self.assertNotEqual(body['key'], occupied)
 
-    def test_create_own_key_already_saved_returns_signal_without_redirect(self):
-        # Saving a second assignment under a key this user already owns must NOT
-        # auto-redirect to the existing one (that would discard the in-progress
-        # edits). It returns a distinct "already_saved" signal the frontend turns
-        # into an explicit "open existing vs keep editing" prompt.
+    def test_create_own_key_already_saved_returns_400(self):
+        # Saving a second assignment under a key this user already owns must not
+        # auto-redirect or silently renumber — it fails cleanly so the user can
+        # pick a different ID without losing the in-progress edits.
         first = self._post(name='Mine', key='c000000')
         self.assertEqual(first.status_code, 200, first.content)
         retry = self._post(name='Mine again', key='c000000')
-        self.assertEqual(retry.status_code, 200, retry.content)
-        body = retry.json()
-        self.assertTrue(body['already_saved'])
-        # Not a success response: no `ok`, no `message`, no `action` — the
-        # frontend must not treat this as "saved, redirect now".
-        self.assertNotIn('ok', body)
-        self.assertNotIn('message', body)
-        self.assertNotIn('action', body)
-        self.assertEqual(body['key'], 'c000000')
-        self.assertEqual(body['name'], 'Mine')
-        self.assertEqual(body['redirect'], reverse('contest_edit', args=['c000000']))
+        self.assertEqual(retry.status_code, 400, retry.content)
+        error = retry.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn('c000000', error)
+        self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
 
     def test_create_own_key_already_saved_does_not_overwrite_existing(self):
         # The retry is a no-op on the stored row: the existing assignment keeps
         # its original name, and no duplicate row is created.
         self._post(name='Mine', key='c000000')
         retry = self._post(name='Mine again', key='c000000')
-        self.assertEqual(retry.status_code, 200, retry.content)
+        self.assertEqual(retry.status_code, 400, retry.content)
         self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
         existing = Contest.objects.get(key='c000000')
         self.assertEqual(existing.name, 'Mine')
 
-    def test_create_own_key_already_saved_ignores_key_auto(self):
-        # key_auto only affects keys owned by *other* users. A collision with the
-        # author's own key always yields the "already_saved" prompt, never a
-        # silent auto-renumber, so the user gets to choose instead.
+    def test_create_auto_key_ignores_submitted_key(self):
+        # With key_auto the submitted key is only a suggestion: the server
+        # reserves a fresh key atomically, so a stale suggestion never collides.
         self._post(name='Mine', key='c000000')
         retry = self._post(name='Mine again', key='c000000', key_auto=True)
         self.assertEqual(retry.status_code, 200, retry.content)
         body = retry.json()
-        self.assertTrue(body['already_saved'])
         self.assertNotIn('id_changed', body)
-        self.assertEqual(body['key'], 'c000000')
+        self.assertNotEqual(body['key'], 'c000000')
         self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
+        self.assertTrue(Contest.objects.filter(name='Mine again').exists())
 
-    def test_create_series_key_taken_by_other_saves_next(self):
+    def test_create_series_key_taken_by_other_returns_400(self):
         occupied = Contest.generate_unique_key()
         create_contest(
             key=occupied, name='Other assignment',
@@ -908,16 +900,11 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             authors=('fields_user_a',),
         )
         response = self._post(name='Collision', key=occupied)
-        self.assertEqual(response.status_code, 200, response.content)
-        body = response.json()
-        self.assertTrue(body['ok'])
-        self.assertTrue(body.get('id_changed'))
-        self.assertEqual(body['id_changed_from'], occupied)
-        self.assertNotEqual(body['key'], occupied)
-        self.assertRegex(body['key'], r'^c\d{6}$')
-        self.assertIn(body['key'], body['message'])
-        self.assertIn(occupied, body['message'])
-        self.assertTrue(Contest.objects.filter(key=body['key'], name='Collision').exists())
+        self.assertEqual(response.status_code, 400, response.content)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn(occupied, error)
+        self.assertFalse(Contest.objects.filter(name='Collision').exists())
 
     def test_create_custom_key_taken_returns_400_with_id(self):
         create_contest(
@@ -946,7 +933,9 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('already exists', error)
         self.assertIn(occupied, error)
 
-    def test_create_series_key_race_saves_next_and_tells_user(self):
+    def test_create_series_key_race_returns_400(self):
+        # A manual key that loses a race (another INSERT lands between our check
+        # and our own INSERT) fails cleanly, not with a 500 or a silent renumber.
         original_save = Contest.save
         calls = {'n': 0}
 
@@ -957,20 +946,15 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             return original_save(self, *args, **kwargs)
 
         with patch.object(Contest, 'save', racing_save):
-            with patch.object(Contest, 'generate_unique_key', return_value='c000099'):
-                # Even if the teacher edited the prefilled id (key_auto=false),
-                # a race still saves under the next free series id.
-                response = self._post(name='Race no auto', key='c000000', key_auto=False)
-        self.assertEqual(response.status_code, 200, response.content)
-        body = response.json()
-        self.assertTrue(body.get('id_changed'))
-        self.assertEqual(body['id_changed_from'], 'c000000')
-        self.assertEqual(body['key'], 'c000099')
-        self.assertIn('c000099', body['message'])
-        self.assertIn('c000000', body['message'])
-        self.assertTrue(Contest.objects.filter(key='c000099', name='Race no auto').exists())
+            response = self._post(name='Race manual', key='c000000', key_auto=False)
+        self.assertEqual(response.status_code, 400, response.content)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertFalse(Contest.objects.filter(name='Race manual').exists())
 
-    def test_create_series_key_race_with_auto_saves_next(self):
+    def test_create_auto_key_race_reserves_next_free(self):
+        # An auto key retries atomically when its INSERT loses a race, landing on
+        # the next free id instead of colliding.
         original_save = Contest.save
         calls = {'n': 0}
 
@@ -981,16 +965,13 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             return original_save(self, *args, **kwargs)
 
         with patch.object(Contest, 'save', racing_save):
-            with patch.object(Contest, 'generate_unique_key', return_value='c000099'):
+            with patch.object(Contest, 'generate_unique_key', side_effect=['c000099', 'c000100']):
                 response = self._post(name='Race auto', key='c000000', key_auto=True)
         self.assertEqual(response.status_code, 200, response.content)
         body = response.json()
-        self.assertTrue(body.get('id_changed'))
-        self.assertEqual(body['id_changed_from'], 'c000000')
-        self.assertEqual(body['key'], 'c000099')
-        self.assertIn('c000099', body['message'])
-        self.assertIn('c000000', body['message'])
-        self.assertTrue(Contest.objects.filter(key='c000099', name='Race auto').exists())
+        self.assertNotIn('id_changed', body)
+        self.assertEqual(body['key'], 'c000100')
+        self.assertTrue(Contest.objects.filter(key='c000100', name='Race auto').exists())
 
     def test_create_related_integrity_error_is_not_id_conflict(self):
         with patch.object(ContestCreate, '_sync_problems', side_effect=IntegrityError('contestproblem unique')):
