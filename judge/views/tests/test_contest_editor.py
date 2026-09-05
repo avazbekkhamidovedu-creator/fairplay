@@ -856,18 +856,48 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertRegex(body['key'], r'^c\d{6}$')
         self.assertNotEqual(body['key'], occupied)
 
-    def test_create_own_key_already_saved_opens_editor(self):
+    def test_create_own_key_already_saved_returns_signal_without_redirect(self):
+        # Saving a second assignment under a key this user already owns must NOT
+        # auto-redirect to the existing one (that would discard the in-progress
+        # edits). It returns a distinct "already_saved" signal the frontend turns
+        # into an explicit "open existing vs keep editing" prompt.
         first = self._post(name='Mine', key='c000000')
         self.assertEqual(first.status_code, 200, first.content)
         retry = self._post(name='Mine again', key='c000000')
         self.assertEqual(retry.status_code, 200, retry.content)
         body = retry.json()
-        self.assertTrue(body['ok'])
         self.assertTrue(body['already_saved'])
+        # Not a success response: no `ok`, no `message`, no `action` — the
+        # frontend must not treat this as "saved, redirect now".
+        self.assertNotIn('ok', body)
+        self.assertNotIn('message', body)
+        self.assertNotIn('action', body)
         self.assertEqual(body['key'], 'c000000')
-        self.assertIn('already saved', body['message'].lower())
-        self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
+        self.assertEqual(body['name'], 'Mine')
         self.assertEqual(body['redirect'], reverse('contest_edit', args=['c000000']))
+
+    def test_create_own_key_already_saved_does_not_overwrite_existing(self):
+        # The retry is a no-op on the stored row: the existing assignment keeps
+        # its original name, and no duplicate row is created.
+        self._post(name='Mine', key='c000000')
+        retry = self._post(name='Mine again', key='c000000')
+        self.assertEqual(retry.status_code, 200, retry.content)
+        self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
+        existing = Contest.objects.get(key='c000000')
+        self.assertEqual(existing.name, 'Mine')
+
+    def test_create_own_key_already_saved_ignores_key_auto(self):
+        # key_auto only affects keys owned by *other* users. A collision with the
+        # author's own key always yields the "already_saved" prompt, never a
+        # silent auto-renumber, so the user gets to choose instead.
+        self._post(name='Mine', key='c000000')
+        retry = self._post(name='Mine again', key='c000000', key_auto=True)
+        self.assertEqual(retry.status_code, 200, retry.content)
+        body = retry.json()
+        self.assertTrue(body['already_saved'])
+        self.assertNotIn('id_changed', body)
+        self.assertEqual(body['key'], 'c000000')
+        self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
 
     def test_create_series_key_taken_by_other_saves_next(self):
         occupied = Contest.generate_unique_key()

@@ -1172,15 +1172,20 @@ class ContestCreate(LoginRequiredMixin, View):
                 and existing.authors.filter(id=request.profile.id).exists()
             )
             if is_author:
-                extra = {
+                # The key belongs to an assignment this user already saved. Do NOT
+                # auto-redirect to its editor: that would silently discard whatever
+                # the form currently holds (the user may have just typed a whole new
+                # assignment over a stale draft). Return a distinct signal instead and
+                # let the frontend offer an explicit "open existing vs keep editing"
+                # choice. This also keeps the retry-after-errored-save case honest:
+                # the data IS already stored, so a plain "already exists" error would
+                # be wrong there.
+                return JsonResponse({
                     'already_saved': True,
-                    'message': _('This assignment ID is already saved. Opening the editor.'),
-                }
-                # Stay on the editor so a retry after a successful-but-errored
-                # first save does not look like a unique-key failure.
-                payload = dict(payload)
-                payload['action'] = 'continue'
-                return self._action_response(payload, existing.key, extra=extra)
+                    'key': existing.key,
+                    'name': existing.name,
+                    'redirect': reverse('contest_edit', args=[existing.key]),
+                })
             if wants_auto_series(payload.get('key_auto'), key, 'c'):
                 extra = {
                     'id_changed': True,
