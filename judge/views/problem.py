@@ -524,11 +524,18 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             return
         if draft.content:
             context['workspace_server_draft'] = {'content': draft.content, 'language': draft.language_id}
+        upload = getattr(draft, 'upload', None)
+        if upload is not None:
+            # A file input cannot be prefilled, so without this the page looks exactly like one
+            # where nothing was ever uploaded — and a student who cannot see their saved file has
+            # no reason to believe it will be submitted.
+            context['workspace_draft_upload'] = {'name': upload.original_name, 'size': upload.size}
 
     def get_context_data(self, **kwargs):
         context = super(ProblemDetail, self).get_context_data(**kwargs)
         context['workspace_draft_url'] = None
         context['workspace_server_draft'] = None
+        context['workspace_draft_upload'] = None
         user = self.request.user
         authed = user.is_authenticated
         can_see_authors = user_can_see_problem_author_metadata(user)

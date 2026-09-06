@@ -8,6 +8,8 @@ submission at the deadline.
 """
 import json
 
+from django.core.exceptions import ObjectDoesNotExist
+from django.core.files import File
 from django.utils.translation import gettext as _
 
 from judge.models import ProblemSubmissionType
@@ -89,6 +91,9 @@ def normalize_draft_content(problem, raw):
         content = _normalize_fill_blank(problem, raw)
     elif submission_type == ProblemSubmissionType.SHORT_ANSWER:
         content = _normalize_short_answer(problem, raw)
+    elif submission_type == ProblemSubmissionType.FILE:
+        # The answer is the uploaded object; this field carries nothing.
+        content = ''
     else:
         raise DraftContentError(_('Drafts are not supported for this question type.'))
 
@@ -110,4 +115,18 @@ def draft_answer(draft):
     if submission_type == ProblemSubmissionType.SHORT_ANSWER:
         # store_answer reads 'answer'; the stored payload mirrors SubmissionSource, which uses 'text'.
         return {'answer': payload.get('text') or ''}
+    if submission_type == ProblemSubmissionType.FILE:
+        try:
+            upload = draft.upload
+        except ObjectDoesNotExist:
+            raise DraftContentError(_('Draft has no uploaded file.'))
+        # A plain File, never the FieldFile itself. Assigning one model's FieldFile to another
+        # model's FileField re-points the new row at the *same* object instead of copying it, so
+        # deleting the draft afterwards would take the submission's file with it. Naming it after
+        # the student's own filename is also what gets that name onto the graded submission.
+        #
+        # Opened first: an unopened FieldFile reports itself closed, which makes the wrapper
+        # report itself unseekable, and the storage refuses content it cannot rewind and hash.
+        upload.file.open('rb')
+        return {'file': File(upload.file, name=upload.original_name)}
     raise DraftContentError(_('Drafts are not supported for this question type.'))

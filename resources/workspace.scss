@@ -1128,6 +1128,13 @@
   display: block;
   max-width: 100%;
 }
+/* The only trace of a file saved but not submitted: a file input cannot show one. */
+.ws-file-upload .ws-file-draft {
+  margin: .65rem 0 0;
+  color: var(--oj-text-muted);
+  font-size: var(--oj-font-size-sm, 12px);
+  line-height: 1.4;
+}
 .ws-result-file {
   margin: .75rem 0 0;
 }

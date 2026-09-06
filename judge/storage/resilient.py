@@ -38,6 +38,21 @@ def generate_submission_key(submission_id, original_name, now=None):
     return 'submissions/%04d/%02d/%d/%s%s' % (now.year, now.month, submission_id, uuid.uuid4().hex, ext)
 
 
+def generate_assignment_draft_key(draft_id, original_name, now=None):
+    """Object key for a file answer a student has saved but not submitted.
+
+    Deliberately outside the ``submissions/`` tree: a draft is not a submission, and the two have
+    opposite housekeeping rules. An object here that no draft row points at is garbage to sweep;
+    one under ``submissions/`` is a student's graded work and must never be swept."""
+    now = now or timezone.now()
+    ext = posixpath.splitext(original_name)[1].lower()
+    if not _EXT_RE.fullmatch(ext):
+        ext = ''
+    return 'assignment_drafts/%04d/%02d/%d/%s%s' % (
+        now.year, now.month, draft_id or 0, uuid.uuid4().hex, ext,
+    )
+
+
 def generate_class_material_key(class_id, original_name, now=None):
     """Object key for course-class materials (same store as submission files)."""
     now = now or timezone.now()

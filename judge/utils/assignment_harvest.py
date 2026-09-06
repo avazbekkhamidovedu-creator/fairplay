@@ -114,6 +114,11 @@ def harvest_participation(participation, *, part=None):
         # The submission is now the record of what the student wrote, so the draft body is no
         # longer needed; the row stays as evidence of when the answer was collected.
         AssignmentDraft.objects.filter(pk=draft.pk).update(content='')
+        upload = getattr(draft, 'upload', None)
+        if upload is not None:
+            # The bytes were copied into the SubmissionFile above, so this second copy is now
+            # just a bill and a second place to leak unsubmitted work from.
+            upload.delete()
         used[contest_problem.id] = used.get(contest_problem.id, 0) + 1
         created.append(submission)
 

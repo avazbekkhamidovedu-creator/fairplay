@@ -755,6 +755,9 @@
                   {% endif %}
                   {{ form.file.errors }}
                   {{ form.file }}
+                  {# A file input cannot be prefilled, so this line is the only trace of a file
+                     already saved on the server. JS rewrites it whole after each upload. #}
+                  <p class="ws-file-draft" id="ws-file-draft"{% if not workspace_draft_upload %} hidden{% endif %}>{% if workspace_draft_upload %}{{ _('Saved: %(name)s. If you do not submit it yourself, this file is submitted for you at the deadline.', name=workspace_draft_upload.name) }}{% endif %}</p>
                   {% if workspace_file_config %}
                     <p class="help-text">
                       {% if workspace_file_config.allowed_extension_list() %}

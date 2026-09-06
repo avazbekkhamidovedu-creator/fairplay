@@ -87,6 +87,9 @@ class AssignmentDraftContentTestCase(CommonDataMixin, TestCase):
         draft = self._draft(ProblemSubmissionType.SHORT_ANSWER, json.dumps({'text': 'because'}))
         self.assertTrue(draft.has_content())
 
+    def test_file_draft_without_upload_is_empty(self):
+        self.assertFalse(self._draft(ProblemSubmissionType.FILE, '').has_content())
+
 
 class AssignmentDraftUniquenessTestCase(CommonDataMixin, TestCase):
     """One draft per participation and problem: saving again must overwrite, never accumulate."""

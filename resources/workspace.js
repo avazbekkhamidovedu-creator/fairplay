@@ -137,6 +137,46 @@
   }
   window.addEventListener('pagehide', flushServerDraft);
 
+  // A file answer cannot ride along in the text draft, so it gets its own upload. It is sent the
+  // moment the student picks the file rather than debounced: there are no keystrokes to coalesce,
+  // and the whole point is to cover the student who chooses a file and never presses Submit.
+  function setFileDraftLine(text) {
+    var line = $('#ws-file-draft');
+    if (!line) return;
+    line.textContent = text || '';
+    line.hidden = !text;
+  }
+  function uploadFileDraft(file) {
+    if (!serverDraftsEnabled() || !file) return;
+    var data = new FormData();
+    data.append('csrfmiddlewaretoken', csrfToken());
+    data.append('file', file);
+    setFileDraftLine(gettext('Saving your file…'));
+    fetch(serverDraftUrl, { method: 'POST', credentials: 'same-origin', body: data })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          if (!response.ok || !payload.file) {
+            // Naming the reason matters here: the usual causes are a rejected extension or an
+            // oversized file, both of which the student can act on.
+            throw new Error(payload.error || gettext('Your file was not saved.'));
+          }
+          setFileDraftLine(interpolate(
+            gettext('Saved: %(name)s. If you do not submit it yourself, this file is submitted ' +
+                    'for you at the deadline.'),
+            {name: payload.file.name},
+          ));
+        });
+      })
+      .catch(function (err) { setFileDraftLine(err.message || gettext('Your file was not saved.')); });
+  }
+  if (isFileProblem() && serverDraftsEnabled()) {
+    document.addEventListener('change', function (event) {
+      var input = event.target;
+      if (!input || input.type !== 'file' || !input.closest('.ws-file-upload')) return;
+      if (input.files && input.files.length) uploadFileDraft(input.files[0]);
+    });
+  }
+
   function saveDraft() {
     if (!draftsEnabled() || !source) return;
     try { localStorage.setItem(draftKey(), sourceValue()); } catch (err) { /* ignore */ }
@@ -149,6 +189,9 @@
     // pending save matters: otherwise a queued keystroke lands afterwards and recreates the draft,
     // making an already-submitted answer look like unsubmitted work to the deadline sweep.
     cancelPendingServerDraft();
+    // The submit deleted the whole draft server-side, file included, so the "saved" line would
+    // otherwise still be advertising a file that is no longer held for this student.
+    setFileDraftLine('');
     if (!draftsEnabled() || !window.localStorage) return;
     var prefix = draftContextPrefix() + '-';
     var toRemove = [];

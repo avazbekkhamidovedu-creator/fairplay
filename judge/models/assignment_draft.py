@@ -16,13 +16,16 @@ import json
 
 from django.db import models
 from django.db.models import CASCADE
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 
 from judge.models.contest import ContestParticipation
 from judge.models.problem import Problem, ProblemSubmissionType, ProblemTemplate
 from judge.models.runtime import Language
+from judge.storage import generate_assignment_draft_key, submission_storage
 
-__all__ = ['AssignmentDraft']
+__all__ = ['AssignmentDraft', 'AssignmentDraftFile']
 
 
 def _json_payload(content):
@@ -81,6 +84,9 @@ class AssignmentDraft(models.Model):
         if submission_type == ProblemSubmissionType.SHORT_ANSWER:
             payload = _json_payload(self.content)
             return bool(str((payload or {}).get('text') or '').strip())
+        if submission_type == ProblemSubmissionType.FILE:
+            # A file draft is the uploaded object, not this text field.
+            return hasattr(self, 'upload')
         return bool((self.content or '').strip())
 
     class Meta:
@@ -91,3 +97,53 @@ class AssignmentDraft(models.Model):
         ]
         verbose_name = _('assignment draft')
         verbose_name_plural = _('assignment drafts')
+
+
+def assignment_draft_upload_to(instance, filename):
+    """upload_to: generated object key; the student's own filename stays on ``original_name``."""
+    return generate_assignment_draft_key(instance.draft_id, filename)
+
+
+class AssignmentDraftFile(models.Model):
+    """The file a participant uploaded as an in-progress answer to a file-upload problem.
+
+    Every other question type fits in ``AssignmentDraft.content``; a file does not, so it gets a
+    row of its own and an object in ``submission_storage`` — the same store the submitted file
+    ends up in, so harvesting is a copy within one backend rather than a move between two.
+
+    ``original_name`` is kept here for the same reason ``SubmissionFile`` keeps it: the storage key
+    is generated, and the student's own filename is what a teacher is offered on download. Harvest
+    carries it across, so the file a teacher grades is named the way the student saved it.
+    """
+    draft = models.OneToOneField(AssignmentDraft, verbose_name=_('draft'), related_name='upload',
+                                 on_delete=CASCADE)
+    file = models.FileField(verbose_name=_('uploaded file'), storage=submission_storage,
+                            upload_to=assignment_draft_upload_to, max_length=255)
+    original_name = models.CharField(verbose_name=_('original filename'), max_length=255)
+    size = models.PositiveBigIntegerField(verbose_name=_('file size'), default=0)
+    uploaded_on = models.DateTimeField(verbose_name=_('uploaded on'), auto_now=True)
+
+    def __str__(self):
+        return self.original_name
+
+    class Meta:
+        verbose_name = _('assignment draft file')
+        verbose_name_plural = _('assignment draft files')
+
+
+@receiver(pre_delete, sender=AssignmentDraftFile)
+def _assignment_draft_file_delete_stored_object(sender, instance, **kwargs):
+    """Drop the bytes with the row, including when the draft or participation cascades away.
+
+    Harvesting has already copied anything worth keeping into a ``SubmissionFile``, so what is
+    left here is a student's unsubmitted work: storing it past the row that explains it is both a
+    bill and a place to leak it from.
+    """
+    if not instance.file:
+        return
+    try:
+        instance.file.delete(save=False)
+    except Exception:
+        # A store that is briefly unreachable must not block deleting the row; the object is then
+        # unreferenced, which is what the storage sweep is for.
+        pass
