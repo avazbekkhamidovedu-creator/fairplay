@@ -4,6 +4,7 @@ from django.contrib.auth.models import User
 from django.contrib.flatpages.models import FlatPage
 
 from judge.admin.ai_hints import AIHintLogAdmin
+from judge.admin.assignment_draft import AssignmentDraftAdmin
 from judge.admin.comments import CommentAdmin
 from judge.admin.contest import ContestAdmin, ContestParticipationAdmin, ContestTagAdmin
 from judge.admin.interface import BlogPostAdmin, FlatPageAdmin, LicenseAdmin, LogEntryAdmin, NavigationBarAdmin
@@ -16,12 +17,13 @@ from judge.admin.stored_file import StoredFileRecordAdmin
 from judge.admin.submission import SubmissionAdmin
 from judge.admin.taxon import ProblemGroupAdmin, ProblemTypeAdmin
 from judge.admin.ticket import TicketAdmin
-from judge.models import AIHintLog, BlogPost, Class, Comment, CommentLock, Contest, ContestParticipation, \
-    ContestTag, Judge, Language, License, MiscConfig, NavigationBar, Organization, \
+from judge.models import AIHintLog, AssignmentDraft, BlogPost, Class, Comment, CommentLock, Contest, \
+    ContestParticipation, ContestTag, Judge, Language, License, MiscConfig, NavigationBar, Organization, \
     OrganizationRequest, Problem, ProblemGroup, ProblemPointsVote, ProblemType, Profile, \
     SEBConfigPreset, StoredFileRecord, Submission, Ticket
 
 admin.site.register(AIHintLog, AIHintLogAdmin)
+admin.site.register(AssignmentDraft, AssignmentDraftAdmin)
 admin.site.register(BlogPost, BlogPostAdmin)
 admin.site.register(Comment, CommentAdmin)
 admin.site.register(CommentLock)
