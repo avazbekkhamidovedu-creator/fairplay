@@ -921,7 +921,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         context['workspace_part_lock_done'] = done
         context['workspace_part_lock_current'] = current
         context['workspace_can_finish_part'] = bool(
-            applies and participation and current and not done and not bypass and not participation.spectate
+            applies and participation and current and not done and not bypass and not participation.spectate,
         )
         context['workspace_finish_confirm'] = (
             finish_confirm_message(participation) if participation else ''
