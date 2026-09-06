@@ -185,8 +185,8 @@
         dkuojFillLeaveNames(document.getElementById('leave-confirm-submitted-body'), submittedNames, false);
         dkuojFillLeaveNames(document.getElementById('leave-confirm-unsubmitted-body'), unsubmittedNames, true);
         document.getElementById('leave-confirm-warn').textContent =
-            {{ _('Leaving will not submit any unsubmitted problems.')|htmltojs }};
-        var note = {{ _('Only answers you have already submitted will be kept.')|htmltojs }};
+            {{ _('Leaving does not submit anything right now.')|htmltojs }};
+        var note = {{ _('Your saved answers are submitted automatically when the assignment closes.')|htmltojs }};
         if (isSeb) {
             note += ' ' + {{ _('You might not be able to re-enter this assignment.')|htmltojs }};
         }

@@ -123,6 +123,14 @@
 .submit-cluster .finish-non-code-part-form {
   margin: 0;
 }
+/* Reassurance next to Submit: the answer is already on the server. Dropped on
+   narrow toolbars, where the buttons themselves need the room. */
+.submit-cluster .submit-autosave-hint {
+  color: var(--oj-text-muted);
+  font-size: .78rem;
+  line-height: 1.15;
+  max-width: 15rem;
+}
 .timer-wrap { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
 .timer-wrap.warn { color: var(--oj-danger); }
 .timer-wrap.expired { color: var(--oj-danger); }
@@ -1316,6 +1324,7 @@
   .ws-toolbar { padding-inline: .6rem; }
   .ws-toolbar.has-leave { display: flex; }
   .ws-toolbar.has-leave .submit-cluster { margin-left: auto; }
+  .submit-cluster .submit-autosave-hint { display: none; }
   .ws-toolbar .ctx-label { max-width: 9rem; }
   .ws-filter-panel.open,
   .ws-filter-panel.exposed { grid-template-columns: 1fr; }

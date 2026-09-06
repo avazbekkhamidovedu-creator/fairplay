@@ -66,7 +66,8 @@ def participation_submit_progress(participation):
     """How many assignment problems this participation has already submitted.
 
     Leave / Exit SEB does not create submissions; this is the count the
-    confirmation dialog shows so students know unsubmitted work is dropped.
+    confirmation dialog shows, next to the reminder that whatever is still
+    saved as a draft is submitted for them when the assignment closes.
     """
     empty = {
         'total': 0, 'submitted': 0, 'unsubmitted': 0,

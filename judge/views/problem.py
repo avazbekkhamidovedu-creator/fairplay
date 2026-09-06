@@ -66,6 +66,7 @@ from judge.models import (
     contest_problem_display_name,
     problem_data_storage,
 )
+from judge.utils.assignment_harvest import participation_is_harvestable
 from judge.utils.contest_parts import (
     PART_OPEN, current_part, finish_confirm_message, first_part_done,
     ide_blocked_response, part_lock_applies, part_lock_ui_state,
@@ -557,6 +558,11 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         current_participation = user.profile.current_contest if authed else None
         workspace_in_contest = current_participation is not None
         context['workspace_in_contest'] = workspace_in_contest
+        # Whether the submit area may promise auto-submit. Asking the harvest itself keeps the
+        # promise from outliving the behaviour for spectators, disqualified students and staff.
+        context['workspace_autosubmit'] = (
+            workspace_in_contest and participation_is_harvestable(current_participation)
+        )
         if workspace_in_contest:
             contest = current_participation.contest
             if contest.format_class.has_hidden_results:

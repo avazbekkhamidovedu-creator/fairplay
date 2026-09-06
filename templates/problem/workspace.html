@@ -161,6 +161,9 @@
       </div>
     {% endif %}
     <div class="submit-cluster">
+      {% if form and workspace_autosubmit %}
+        <span class="submit-autosave-hint" id="ws-autosave-hint">{{ _('Draft saved. If you do not submit, it is submitted automatically at the deadline.') }}</span>
+      {% endif %}
       {% if workspace_can_finish_part %}
         {% set part_lock = {'can_finish': true, 'finish_confirm': workspace_finish_confirm} %}
         {% set contest = request.participation.contest %}
