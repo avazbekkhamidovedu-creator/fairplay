@@ -796,25 +796,18 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertNotIn('id="id_key"', before)
         self.assertIn('id="id_key"', after)
 
-    def test_create_prefills_auto_increment_assignment_id(self):
-        occupied = Contest.generate_unique_key()
-        self.assertRegex(occupied, r'^c\d{6}$')
-        create_contest(
-            key=occupied, name='Occupied auto key',
-            start_time=timezone.now(),
-            end_time=timezone.now() + timedelta(hours=1),
-            authors=('superuser',),
-        )
+    def test_create_key_is_blank_auto_generated(self):
+        # Create mode must leave the id blank: it is auto-generated and reserved
+        # atomically at save time, so pre-filling a "suggestion" would mislead
+        # editors (two simultaneous creators would see the same suggestion but
+        # land on different ids).
         response = self.client.get(reverse('contest_create'))
-        key = response.context['prefill']['key']
-        self.assertRegex(key, r'^c\d{6}$')
-        self.assertNotEqual(key, occupied)
-        self.assertFalse(Contest.objects.filter(key=key).exists())
+        self.assertEqual(response.context['prefill']['key'], '')
         html = response.content.decode()
-        self.assertIn('value="%s"' % key, html)
-        self.assertIn('generateUniqueContestKey', html)
-        self.assertIn('?suggest=1', html)
+        self.assertNotIn('generateUniqueContestKey', html)
+        self.assertNotIn('?suggest=1', html)
         self.assertNotIn("replace(/[^a-z0-9]+/g, '')", html)
+        self.assertIn('placeholder="Auto-generated"', html)
 
     def test_preview_title_comes_before_time(self):
         html = self.client.get(reverse('contest_create')).content.decode()

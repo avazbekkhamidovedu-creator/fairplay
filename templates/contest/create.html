@@ -1299,33 +1299,15 @@
                 }).catch(function () { return null; });
             }
 
-            function generateUniqueContestKey() {
-                return fetch(CHECK_KEY_URL + '?suggest=1', {
-                    method: 'GET',
-                    cache: 'no-cache',
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                }).then(function (response) {
-                    if (!response.ok) throw new Error('suggest failed');
-                    return response.json();
-                }).then(function (data) {
-                    if (!data.key) throw new Error('suggest failed');
-                    return data.key;
-                });
-            }
-
             if (keyInput && !isEditMode) {
-                keyInput.dataset.autoGen = keyInput.value ? '1' : '0';
+                // Blank key = auto-generated (and atomically reserved) at save
+                // time; the field shows an "Auto-generated" placeholder instead
+                // of a misleading pre-filled id. Typing marks it as a manual id,
+                // which the server then validates strictly.
+                keyInput.dataset.autoGen = keyInput.value ? '0' : '1';
                 keyInput.addEventListener('input', function () {
                     this.dataset.autoGen = '0';
                 });
-                if (!keyInput.value) {
-                    generateUniqueContestKey().then(function (key) {
-                        if (!keyInput.value || keyInput.dataset.autoGen === '1') {
-                            keyInput.value = key;
-                            keyInput.dataset.autoGen = '1';
-                        }
-                    }).catch(function () {});
-                }
             }
 
             // --- Date helpers: datetime-local inputs are wall-clock local time; toISOString() would shift to UTC ---
@@ -2909,10 +2891,10 @@
                 if (nameEl2) nameEl2.focus();
                 try { localStorage.removeItem(DRAFT_KEY); } catch (err) {}
                 if (keyInput && !isEditMode) {
-                    generateUniqueContestKey().then(function (key) {
-                        keyInput.value = key;
-                        keyInput.dataset.autoGen = '1';
-                    }).catch(function () {});
+                    // Next assignment's id is auto-generated too — clear any
+                    // manually typed key and reset to the blank placeholder.
+                    keyInput.value = '';
+                    keyInput.dataset.autoGen = '1';
                 }
             };
 
@@ -3386,10 +3368,10 @@
                                 <summary>{{ _('Identity') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
                                     <div class="form-row">
-                                        <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Auto-incremented like c000000 — edit it only if you need a specific ID.')) }}</label>
+                                        <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Leave blank to auto-generate (like c000000); type here only if you need a specific ID.')) }}</label>
                                         <div class="field">
-                                            <input type="text" id="id_key" name="key" required
-                                                   placeholder="{{ _('Auto-incremented') }}"
+                                            <input type="text" id="id_key" name="key"
+                                                   placeholder="{{ _('Auto-generated') }}"
                                                    pattern="[a-z0-9]+" maxlength="20"
                                                    value="{{ prefill.key or '' }}">
                                         </div>

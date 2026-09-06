@@ -1539,9 +1539,11 @@ class ContestCreate(LoginRequiredMixin, View):
                 prefill['vis_mode'] = 'public'
             else:
                 prefill['vis_mode'] = 'hidden'
-        else:
-            # Same auto-increment series as clone / admin (c000000, c000001, …).
-            prefill['key'] = Contest.generate_unique_key()
+        # New assignment (create mode): leave `key` blank (the prefill default
+        # is already ''). The id is auto-generated and atomically reserved at
+        # save time, so pre-filling a "suggestion" here would mislead editors
+        # into thinking that exact id is already theirs — two simultaneous
+        # creators would see the same suggestion but land on different ids.
 
         ctx = {
             'title': _('Edit Assignment') if contest else _('Add Assignment'),
