@@ -118,6 +118,8 @@
      data-is-mcq="{{ '1' if workspace_is_mcq else '0' }}"
      data-run-url="{{ url('problem_workspace_run', problem.code) }}"
      data-subs-url="{{ url('problem_workspace_submissions', problem.code) }}"
+     {% if workspace_draft_url %}data-draft-url="{{ workspace_draft_url }}"{% endif %}
+     {% if workspace_server_draft %}data-has-server-draft="1"{% endif %}
      data-testcases-url="{{ url('submission_testcases_query') }}"
      data-timer-seconds="{{ workspace_timer_seconds|default(0) }}"
      data-show-timer="{{ '1' if workspace_show_timer else '0' }}"
@@ -128,6 +130,7 @@
      {% if ai_hints_possible %}data-ai-hints-possible="1" data-ai-hints-remaining="{{ ai_hints_remaining }}"{% if workspace_submission %} data-ai-hint-url="{{ url('submission_ai_hint', workspace_submission.id) }}"{% endif %}{% endif %}
      {% if workspace_submission and workspace_submission.ai_grade_url %}data-ai-grade-url="{{ workspace_submission.ai_grade_url }}"{% endif %}
      {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}data-image-upload-url="{{ url('martor_image_uploader') }}"{% endif %}>
+  <script type="application/json" id="workspace-server-draft">{{ (workspace_server_draft or {})|tojson }}</script>
   <div class="ws-toolbar{% if workspace_in_contest %} has-leave{% endif %}">
     <div class="ws-toolbar-left">
       <button class="tool-btn icon-only" type="button" id="btn-overview" aria-expanded="false" title="{{ _('Problem set') }}" aria-label="{{ _('Problem set') }}">

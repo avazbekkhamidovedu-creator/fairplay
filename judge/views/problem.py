@@ -36,6 +36,7 @@ from judge import event_poster as event
 from judge.comments import CommentedDetailView, SubmissionCommentMixin
 from judge.forms import ProblemCloneForm, ProblemPointsVoteForm, ProblemSubmitForm
 from judge.models import (
+    AssignmentDraft,
     Contest,
     ContestProblem,
     ContestSubmission,
@@ -506,8 +507,28 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         if override:
             context['title'] = override
 
+    def _add_workspace_draft_context(self, context, participation, contest_problem):
+        """Tell the workspace where to save drafts, and hand it the draft already on the server.
+
+        The server draft wins over the browser's local copy on load: it is the one auto-submit
+        will act on, and it is what the student sees after switching devices.
+        """
+        if contest_problem is None or participation.spectate or participation.ended:
+            return
+        contest = participation.contest
+        if user_bypasses_part_lock(self.request.user, contest):
+            return
+        context['workspace_draft_url'] = reverse('assignment_draft', args=[contest.key, self.object.code])
+        draft = AssignmentDraft.objects.filter(participation=participation, problem=self.object).first()
+        if draft is None or draft.harvested_at is not None:
+            return
+        if draft.content:
+            context['workspace_server_draft'] = {'content': draft.content, 'language': draft.language_id}
+
     def get_context_data(self, **kwargs):
         context = super(ProblemDetail, self).get_context_data(**kwargs)
+        context['workspace_draft_url'] = None
+        context['workspace_server_draft'] = None
         user = self.request.user
         authed = user.is_authenticated
         can_see_authors = user_can_see_problem_author_metadata(user)
@@ -550,6 +571,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['workspace_context_name'] = contest.name
             context['workspace_return_url'] = reverse('contest_view', args=[contest.key])
             context['workspace_current_order'] = contest_problem.order if contest_problem else None
+            self._add_workspace_draft_context(context, current_participation, contest_problem)
         else:
             context['workspace_mode'] = 'practice'
             context['workspace_context_id'] = ''
@@ -2124,6 +2146,10 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             participation=participation, contest_problem=contest_problem,
             judge_id=judge_id,
         )
+        if participation is not None:
+            # Only a *successful* submit clears the draft, which is what makes a surviving draft
+            # mean "never submitted, or edited since" — the exact set auto-submit has to collect.
+            AssignmentDraft.objects.filter(participation=participation, problem=self.object).delete()
         return submission
 
     def form_valid(self, form):
