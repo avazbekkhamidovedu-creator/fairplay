@@ -62,7 +62,6 @@ from judge.models import (
     RuntimeVersion,
     Solution,
     Submission,
-    SubmissionSource,
     contest_problem_display_name,
     problem_data_storage,
 )
@@ -87,6 +86,7 @@ from judge.utils.problems import (
     user_tester_ids,
 )
 from judge.utils.strings import safe_float_or_none, safe_int_or_none
+from judge.utils.submission_create import create_submission
 from judge.utils.tickets import own_ticket_filter
 from judge.utils.views import QueryStringSortMixin, SingleObjectFormView, TitleMixin, add_file_response, generic_message
 
@@ -2112,22 +2112,19 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             return locked
         return None
 
-    def _attach_contest(self, submission):
+    def _create_submission(self, language, answer, judge_id=None):
+        """Hand the validated answer to the shared, request-independent submission path."""
         contest_problem = self.contest_problem
-        if contest_problem is not None:
-            # Use the contest object from current_contest.contest because we already use it
-            # in profile.update_contest().
-            submission.contest_object = self.request.profile.current_contest.contest
-            if self.request.profile.current_contest.live:
-                submission.locked_after = submission.contest_object.locked_after
-            submission.save()
-            ContestSubmission(
-                submission=submission,
-                problem=contest_problem,
-                participation=self.request.profile.current_contest,
-            ).save()
-        else:
-            submission.save()
+        # Use the contest object from current_contest.contest because we already use it
+        # in profile.update_contest().
+        participation = self.request.profile.current_contest if contest_problem is not None else None
+        submission = create_submission(
+            self.request.profile, self.object,
+            language=language, answer=answer,
+            participation=participation, contest_problem=contest_problem,
+            judge_id=judge_id,
+        )
+        return submission
 
     def form_valid(self, form):
         blocked = self._submission_blocked_response()
@@ -2161,35 +2158,14 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                     _('This problem only accepts submissions in: %s') % ', '.join(harness_language_names),
                 )
 
-        with transaction.atomic():
-            self.new_submission = form.save(commit=False)
-            self._attach_contest(self.new_submission)
-            source = SubmissionSource(submission=self.new_submission, source=form.cleaned_data['source'])
-            source.save()
-
-        # Save a query.
-        self.new_submission.source = source
-        from judge.utils.contest_ai import supersede_older_in_flight
-        supersede_older_in_flight(self.new_submission)
-        self.new_submission.judge(force_judge=True, judge_id=form.cleaned_data['judge'])
+        self.new_submission = self._create_submission(
+            form.cleaned_data['language'], form.cleaned_data['source'], judge_id=form.cleaned_data['judge'],
+        )
 
         return self._workspace_success_response(form)
 
     def _noncode_form_valid(self, form):
-        with transaction.atomic():
-            self.new_submission = Submission(
-                user=self.request.profile, problem=self.object,
-                language=Language.get_answer_language(),
-            )
-            self._attach_contest(self.new_submission)
-            self.grader.store_answer(self.new_submission, form.cleaned_data)
-
-        from judge.utils.contest_ai import contest_defers_ai, mark_awaiting_batch_ai, supersede_older_in_flight
-        supersede_older_in_flight(self.new_submission)
-        if contest_defers_ai(self.new_submission):
-            mark_awaiting_batch_ai(self.new_submission)
-        else:
-            self.new_submission.judge(force_judge=True)
+        self.new_submission = self._create_submission(Language.get_answer_language(), form.cleaned_data)
 
         return self._workspace_success_response(form)
 
