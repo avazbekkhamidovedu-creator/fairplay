@@ -1184,7 +1184,8 @@ class ContestCreate(LoginRequiredMixin, View):
             contest = self._save_new_contest(request, payload, key)
         except _ContestKeyConflict:
             return JsonResponse({
-                'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': submitted_key or key},
+                'error': _('Assignment ID "%(key)s" already exists. '
+                           'Choose a different ID.') % {'key': submitted_key or key},
             }, status=400)
         except Exception as e:
             return self._error_response(e)
@@ -1204,7 +1205,7 @@ class ContestCreate(LoginRequiredMixin, View):
         as ``_ContestKeyConflict``. Later integrity errors (problem list, M2M)
         propagate unchanged so they are not reported as ID issues.
         """
-        for _ in range(_KEY_RESERVATION_ATTEMPTS):
+        for _attempt in range(_KEY_RESERVATION_ATTEMPTS):
             candidate = key or Contest.generate_unique_key()
             try:
                 with transaction.atomic():
