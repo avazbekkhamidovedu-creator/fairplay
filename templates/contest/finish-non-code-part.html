@@ -1,7 +1,7 @@
 {% if part_lock and part_lock.can_finish %}
     <form action="{{ url('contest_finish_non_code_part', contest.key) }}" method="post"
           class="finish-non-code-part-form"
-          data-confirm="{{ part_lock.finish_confirm or _('Once you continue, you cannot return to this part. Continue?') }}">
+          data-confirm="{{ part_lock.finish_confirm or _('Your saved answers for this part will be submitted now. You cannot return to it. Continue?') }}">
         {% csrf_token %}
         <button type="submit" class="{{ button_class|default('button') }}">
             <i class="fa fa-arrow-right"></i> {{ _('Finish this part') }}

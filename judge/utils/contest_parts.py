@@ -224,7 +224,8 @@ def first_accessible_contest_problem(participation, user):
 
 def finish_confirm_message(participation):
     if current_part(participation) == PART_CODE:
-        return _('Once you continue, you cannot return to the programming problems, '
-                 'and the site IDE will close. Continue to the non-programming questions?')
-    return _('Once you continue, you cannot return to the non-programming questions. '
-             'Continue to the programming problems?')
+        return _('Your saved answers for the programming problems will be submitted now. '
+                 'You cannot return to them, and the site IDE will close. '
+                 'Continue to the non-programming questions?')
+    return _('Your saved answers for the non-programming questions will be submitted now. '
+             'You cannot return to them. Continue to the programming problems?')

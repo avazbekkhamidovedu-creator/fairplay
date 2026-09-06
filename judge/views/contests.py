@@ -53,6 +53,7 @@ from judge.models import Contest, ContestMoss, ContestParticipation, ContestProb
 from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
+from judge.utils.assignment_harvest import harvest_participation
 from judge.utils.celery import redirect_to_task_status
 from judge.utils.contest_parts import (
     PART_CODE, PART_NON_CODE, PART_OPEN, chosen_part,
@@ -2464,13 +2465,20 @@ class ContestFinishNonCodePart(LoginRequiredMixin, ContestMixin, SingleObjectMix
         if not part:
             return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
         if not first_part_done(participation):
-            now = timezone.now()
-            if part == PART_CODE:
-                participation.code_part_completed_at = now
-                participation.save(update_fields=['code_part_completed_at'])
-            else:
-                participation.non_code_part_completed_at = now
-                participation.save(update_fields=['non_code_part_completed_at'])
+            # Collect before locking. Once the timestamp lands, these problems answer 403 for
+            # this student, so a draft left behind would be stranded somewhere they can no
+            # longer submit it — and collecting it afterwards would mean giving the backend a
+            # way around the part lock. Doing both in one transaction also means a failed
+            # collection leaves the part open to retry instead of locking answers away.
+            with transaction.atomic():
+                harvest_participation(participation, part=part)
+                now = timezone.now()
+                if part == PART_CODE:
+                    participation.code_part_completed_at = now
+                    participation.save(update_fields=['code_part_completed_at'])
+                else:
+                    participation.non_code_part_completed_at = now
+                    participation.save(update_fields=['non_code_part_completed_at'])
         next_problem = first_accessible_contest_problem(participation, request.user)
         if next_problem is not None:
             return HttpResponseRedirect(reverse('problem_detail', args=(next_problem.problem.code,)))
