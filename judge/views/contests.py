@@ -1244,8 +1244,10 @@ class ContestCreate(LoginRequiredMixin, View):
             return self._error_response(e)
 
         contest_id = contest.pk
+        from judge.utils.assignment_schedule import reschedule_assignment_harvest
         from judge.utils.contest_ai import schedule_batch_ai_grade
         transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
+        transaction.on_commit(lambda cid=contest_id: reschedule_assignment_harvest(cid))
         return self._action_response(payload, contest.key, extra=extra or None)
 
     def _save_new_contest(self, request, payload, key):
@@ -1313,8 +1315,10 @@ class ContestCreate(LoginRequiredMixin, View):
                 if self._scoring_snapshot(contest) != before_score:
                     self._queue_rescore(contest_key)
                 self._log_assignment(request, contest, added=False)
+            from judge.utils.assignment_schedule import reschedule_assignment_harvest
             from judge.utils.contest_ai import schedule_batch_ai_grade
             transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
+            transaction.on_commit(lambda cid=contest_id: reschedule_assignment_harvest(cid))
             return self._action_response(payload, contest_key)
         except Exception as e:
             return self._error_response(e)
@@ -2364,6 +2368,11 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
         profile.save()
         contest._updating_stats_only = True
         contest.update_user_count()
+        # With a personal time limit this student's deadline only exists once they have started,
+        # so their auto-submit can only be scheduled here.
+        if contest.time_limit is not None:
+            from judge.utils.assignment_schedule import schedule_participation_harvest
+            transaction.on_commit(lambda pid=participation.pk: schedule_participation_harvest(pid))
         return HttpResponseRedirect(reverse('problem_list'))
 
     def ask_for_access_code(self, form=None):

@@ -9,6 +9,7 @@ from django.utils import timezone
 from judge.models import AssignmentDraft, Contest, ContestParticipation, ContestProblem, ContestSubmission, \
     Language, ProblemMCQOption, ProblemTemplate, Submission
 from judge.models.tests.util import create_contest, create_problem, create_user
+from judge.tasks.contest import auto_grade_contest
 from judge.utils.assignment_harvest import harvest_participation
 from judge.utils.submission_create import create_submission
 
@@ -220,6 +221,92 @@ class HarvestExclusionTestCase(HarvestTestMixin, TestCase):
         self._code_draft()
         created = harvest_participation(self.participation)
         self.assertEqual([s.problem_id for s in created], [self.code.id])
+
+
+class _NoProgress:
+    """Stub for judge.utils.celery.Progress so the task runs without a Celery result backend."""
+
+    def __init__(self, *args, **kwargs):
+        self.done = self.total = 0
+
+    def did(self, delta):
+        self.done += delta
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class HarvestBeforeAutoGradeTestCase(HarvestTestMixin, TestCase):
+    """With ``ai_grading_auto_delay_minutes = 0`` auto-grade lands on the deadline itself.
+
+    That is the same instant auto-submit is scheduled for, and the re-grade works off the latest
+    submission per problem — so a paper collected after that snapshot would never be scored. The
+    task collects first, and these tests pin that order down.
+    """
+
+    def setUp(self):
+        super().setUp()
+        Contest.objects.filter(pk=self.contest.pk).update(ai_grading_auto_delay_minutes=0)
+
+    def _hand_in_mcq(self):
+        submission = Submission.objects.create(
+            user=self.student.profile, problem=self.mcq, language=Language.get_answer_language(),
+            contest_object=self.contest, status='D', result='WA',
+        )
+        ContestSubmission.objects.create(
+            submission=submission, problem=self.mcq_problem, participation=self.participation,
+        )
+        return submission
+
+    def test_draft_is_collected_before_the_regrade_picks_its_targets(self):
+        self._mcq_draft()
+
+        with mock.patch('judge.tasks.contest.Progress', _NoProgress), \
+                mock.patch.object(Submission, 'judge', autospec=True) as mock_judge:
+            auto_grade_contest(self.contest.key)
+
+        submission = self._submissions().get(problem=self.mcq)
+        # Collecting grades on submit (no ``rejudge``), the auto-grade pass re-grades. Both calls
+        # landing on the same submission, in that order, is what "collected first" means here.
+        self.assertEqual(
+            [(call.args[0].id, bool(call.kwargs.get('rejudge'))) for call in mock_judge.call_args_list],
+            [(submission.id, False), (submission.id, True)],
+        )
+
+    def test_answer_never_submitted_by_hand_still_gets_scored(self):
+        self._mcq_draft()
+
+        with mock.patch('judge.tasks.contest.Progress', _NoProgress):
+            self.assertEqual(auto_grade_contest(self.contest.key), 1)
+
+        submission = self._submissions().get(problem=self.mcq)
+        self.assertEqual(submission.result, 'AC')
+        self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 50)
+
+    def test_nothing_to_collect_leaves_the_regrade_unchanged(self):
+        submission = self._hand_in_mcq()
+
+        with mock.patch('judge.tasks.contest.Progress', _NoProgress), \
+                mock.patch.object(Submission, 'judge', autospec=True) as mock_judge:
+            auto_grade_contest(self.contest.key)
+
+        self.assertEqual([call.args[0].id for call in mock_judge.call_args_list], [submission.id])
+
+    def test_a_failed_collection_does_not_cost_the_class_its_regrade(self):
+        submission = self._hand_in_mcq()
+
+        with mock.patch('judge.tasks.contest.Progress', _NoProgress), \
+                mock.patch('judge.utils.assignment_harvest.harvest_participation',
+                           side_effect=RuntimeError('boom')), \
+                mock.patch.object(Submission, 'judge', autospec=True) as mock_judge:
+            with self.assertLogs('judge.assignment_harvest', level='ERROR'):
+                auto_grade_contest(self.contest.key)
+
+        self.assertEqual([call.args[0].id for call in mock_judge.call_args_list], [submission.id])
 
 
 class HarvestScoringTestMixin:

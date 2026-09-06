@@ -524,8 +524,10 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         if form.changed_data and 'locked_after' in form.changed_data:
             self.set_locked_after(obj, form.cleaned_data['locked_after'])
 
+        from judge.utils.assignment_schedule import reschedule_assignment_harvest
         from judge.utils.contest_ai import schedule_batch_ai_grade
         schedule_batch_ai_grade(obj.id)
+        reschedule_assignment_harvest(obj.id)
 
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)

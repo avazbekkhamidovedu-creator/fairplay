@@ -200,6 +200,11 @@ class Contest(models.Model):
     ai_grading_batch_finished_at = models.DateTimeField(
         verbose_name=_('batch AI finished'), null=True, blank=True,
     )
+    harvest_scheduled_task_id = models.CharField(
+        verbose_name=_('scheduled auto-submit task id'), max_length=255, blank=True, default='',
+        help_text=_('Celery task that auto-submits saved answers when this assignment ends. '
+                    'Assignments with a personal time limit are scheduled per participation instead.'),
+    )
     show_short_display = models.BooleanField(verbose_name=_('show short form settings display'),
                                              help_text=_('Whether to show a section containing contest settings '
                                                          'on the contest page or not.'),
@@ -886,6 +891,11 @@ class ContestParticipation(models.Model):
         verbose_name=_('programming part completed'),
         null=True, blank=True,
         help_text=_('When the student finished the programming part and locked those answers.'),
+    )
+    harvest_scheduled_task_id = models.CharField(
+        verbose_name=_('scheduled auto-submit task id'), max_length=255, blank=True, default='',
+        help_text=_('Celery task that auto-submits this student’s saved answers when their own '
+                    'deadline arrives. Used only when the assignment has a personal time limit.'),
     )
 
     def recompute_results(self):
