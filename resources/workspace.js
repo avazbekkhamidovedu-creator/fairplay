@@ -714,7 +714,8 @@
     label.textContent = gettext('Result') + ': ';
     line.appendChild(label);
     appendResultCode(line, status.result || status.status, resultClassFromStatus(status));
-    if (status.points != null && !isMcqProblem()) {
+    var showScores = status.show_ai_scores === true || isCodeProblem() || isMcqProblem();
+    if (status.points != null && showScores && !isMcqProblem()) {
       line.appendChild(document.createTextNode(' · ' + status.points));
     }
     wrap.appendChild(heading);
@@ -732,9 +733,9 @@
         ' ' + formatScorePart(status.points) + ' / ' + formatScorePart(status.points_total)
       ));
       wrap.appendChild(score);
-    } else {
+    } else if (showScores && status.points != null) {
       var score = document.createElement('p');
-      score.textContent = gettext('Score') + ': ' + (status.points == null ? '-' : status.points);
+      score.textContent = gettext('Score') + ': ' + status.points;
       wrap.appendChild(score);
     }
     main.appendChild(wrap);
@@ -1299,7 +1300,7 @@
       var gradeUrl = app.dataset.aiGradeUrl;
       if (!gradeUrl || btn.disabled) return;
       btn.disabled = true;
-      btn.textContent = gettext('Grading…');
+      btn.textContent = gettext('Thinking…');
       fetch(gradeUrl, {
         method: 'POST',
         credentials: 'same-origin',

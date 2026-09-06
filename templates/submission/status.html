@@ -159,7 +159,7 @@
     document.getElementById('ai-grade-btn').addEventListener('click', function () {
         var btn = this;
         btn.disabled = true;
-        btn.textContent = '{{ _('Grading…') }}';
+        btn.textContent = '{{ _('Thinking…') }}';
         fetch('{{ url('submission_ai_grade', submission.id) }}', {
             method: 'POST',
             headers: {'X-CSRFToken': '{{ csrf_token }}', 'X-Requested-With': 'XMLHttpRequest'},

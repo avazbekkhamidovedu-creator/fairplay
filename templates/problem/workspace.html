@@ -555,12 +555,14 @@
                             title="{{ workspace_submission.long_status or workspace_submission.result or '' }}">
                         {{ workspace_submission.result or workspace_submission.status or '?' }}
                       </span>
-                      {% if not workspace_is_mcq and workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}
+                      {% if workspace_is_code and workspace_submission.points is not none %} · {{ workspace_submission.points }}{% elif workspace_is_mcq and workspace_submission.points is not none %} · {{ workspace_submission.points }}{% elif workspace_submission.show_ai_scores and workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}
                     </p>
                     {% if workspace_is_code %}
                       <p><b>{{ _('Resources') }}:</b> {{ workspace_submission.time|default(0) }}s, {{ workspace_submission.memory|default(0) }}KB</p>
                     {% elif workspace_is_mcq %}
                       <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points|floatformat(-3) }} / {{ workspace_submission.points_total|floatformat(-3) }}</p>
+                    {% elif workspace_submission.show_ai_scores and workspace_submission.points is not none %}
+                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points }}</p>
                     {% endif %}
                     {% if workspace_is_code and workspace_submission.can_trigger_ai_grade %}
                       <p style="margin-top:0.75rem;">

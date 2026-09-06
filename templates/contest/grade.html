@@ -486,14 +486,53 @@
             text-transform: uppercase;
         }
         .gd-result-summary .rs-value { font-weight: 700; color: var(--oj-text, #222); }
+        .gd-section-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: var(--oj-text, #222);
+            margin: 0.85rem 0 0.35rem;
+        }
+        .gd-section-title:first-child { margin-top: 0.15rem; }
+        .gd-section-hint {
+            font-size: 11px;
+            color: var(--oj-text-muted, #888);
+            margin: 0 0 0.4rem;
+            line-height: 1.4;
+        }
+        .gd-ai-section {
+            margin-top: 0.85rem;
+            padding-top: 0.65rem;
+            border-top: 1px solid var(--oj-border, #dde3ea);
+        }
+        .gd-cases-scroll {
+            max-height: min(40vh, 360px);
+            overflow: auto;
+            margin-top: 0.25rem;
+            border: 1px solid var(--oj-border, #dde3ea);
+            border-radius: 6px;
+        }
+        .gd-ai-section .gd-cases-scroll {
+            max-height: min(36vh, 320px);
+        }
         .gd-testcases { width: 100%; border-collapse: collapse; font-size: 12px; }
         .gd-testcases th, .gd-testcases td {
             border-bottom: 1px solid var(--oj-border, #ccc);
             padding: 0.3rem 0.45rem;
             text-align: left;
+            vertical-align: top;
         }
-        .gd-testcases th { color: var(--oj-text-muted, #666); font-weight: 600; }
+        .gd-testcases th { color: var(--oj-text-muted, #666); font-weight: 600; position: sticky; top: 0; background: var(--oj-surface, #fff); z-index: 1; }
         .gd-testcases tr:last-child td { border-bottom: none; }
+        .gd-testcases .gd-case-feedback {
+            max-height: 160px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-weight: 400;
+            margin-top: 0.2rem;
+            line-height: 1.4;
+        }
         /* AI short-answer / fill-blank — same columns as submission status. */
         .gd-ai-grading { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 0.25rem; }
         .gd-ai-grading th, .gd-ai-grading td {
@@ -502,15 +541,24 @@
             vertical-align: top;
             text-align: left;
         }
-        .gd-ai-grading th { color: var(--oj-text-muted, #666); font-weight: 600; background: var(--oj-bg, #f5f7fa); }
+        .gd-ai-grading th { color: var(--oj-text-muted, #666); font-weight: 600; background: var(--oj-bg, #f5f7fa); position: sticky; top: 0; z-index: 1; }
         .gd-ai-grading .ac { text-align: center; white-space: nowrap; }
         .gd-ai-grading tr.gd-ai-row.has-detail { cursor: pointer; }
         .gd-ai-grading tr.gd-ai-row.has-detail:hover { background: var(--oj-bg, #f5f7fa); }
         .gd-ai-grading .gd-ai-chevron { margin-right: 0.3rem; color: var(--oj-text-muted, #888); }
+        .gd-ai-grading td.gd-ai-preview {
+            max-width: 280px;
+            max-height: 4.8em;
+            overflow: auto;
+            white-space: normal;
+            word-break: break-word;
+        }
         .gd-ai-detail td { background: var(--oj-info-soft, #eef5ff); }
         .gd-ai-detail .gd-ai-feedback-box {
             padding: 0.5rem 0.65rem;
             border-left: 3px solid var(--oj-info, #1958c1);
+            max-height: 240px;
+            overflow: auto;
         }
         .gd-ai-detail .gd-ai-feedback-box strong {
             display: block;
@@ -518,7 +566,7 @@
             color: var(--oj-info, #1958c1);
             margin-bottom: 0.2rem;
         }
-        .gd-ai-detail .gd-ai-feedback-box p { margin: 0; white-space: pre-wrap; line-height: 1.45; }
+        .gd-ai-detail .gd-ai-feedback-box p { margin: 0; white-space: pre-wrap; line-height: 1.45; word-break: break-word; }
         .gd-ai-review-box {
             margin: 0 0 0.75rem;
             padding: 0.65rem 0.75rem;
@@ -526,6 +574,8 @@
             border-radius: 6px;
             background: var(--oj-bg, #f7f9fc);
             font-size: 12px;
+            max-height: 280px;
+            overflow: auto;
         }
         .gd-ai-review-box strong {
             display: block;
@@ -987,50 +1037,49 @@
                 }
                 html += '</div>';
 
-                if (s.test_cases && s.test_cases.length) {
-                    var isAiAnswer = (s.problem_type === 'S' || s.problem_type === 'B');
-                    if (isAiAnswer) {
-                        // Same columns as templates/submission/status-testcases.html
-                        // so teachers can verify AI scores against detailed feedback.
-                        html += '<table class="gd-ai-grading"><thead><tr>' +
-                            '<th>{{ _('Sub-question') }}</th>' +
-                            '<th class="ac">{{ _('Score') }}</th>' +
-                            '<th class="ac">{{ _('Status') }}</th>' +
-                            '<th>{{ _('Feedback') }}</th>' +
-                            '</tr></thead><tbody>';
-                        s.test_cases.forEach(function (tc, idx) {
-                            // Scored AI rows: feedback = sub-question name, extended = detail.
-                            // IR placeholders historically put the status message in feedback only —
-                            // surface that in the Feedback column so the cell is not blank.
-                            var name = tc.feedback || ('{{ _('Sub-question') }} ' + (idx + 1));
-                            var detail = tc.extended_feedback || '';
-                            if (!detail && tc.status === 'IR' && tc.feedback) {
-                                detail = tc.feedback;
-                                name = '{{ _('Sub-question') }} ' + (idx + 1);
-                            }
-                            var preview = detail.length > 120 ? detail.slice(0, 120) + '…' : detail;
-                            var statusLabel = tc.status === 'AC' ? '{{ _('Correct') }}'
-                                : (tc.status === 'IR' ? '{{ _('Awaiting AI') }}' : '{{ _('Partial') }}');
-                            var rowClass = 'gd-ai-row' + (detail ? ' has-detail' : '');
-                            html += '<tr class="' + rowClass + '" data-ai-idx="' + idx + '">' +
-                                '<td>' + (detail ? '<i class="fa fa-chevron-right fa-fw gd-ai-chevron"></i>' : '') +
-                                esc(name) + '</td>' +
-                                '<td class="ac">' +
-                                (tc.points != null ? Number(tc.points).toFixed(1) : '—') +
-                                ' / ' + (tc.total != null ? Number(tc.total).toFixed(1) : '—') +
-                                '</td>' +
-                                '<td class="ac">' + esc(statusLabel) + '</td>' +
-                                '<td>' + esc(preview) + '</td></tr>';
-                            if (detail) {
-                                html += '<tr class="gd-ai-detail" data-ai-detail="' + idx + '" style="display:none">' +
-                                    '<td colspan="4"><div class="gd-ai-feedback-box">' +
-                                    '<strong>{{ _('Detailed Feedback') }}</strong>' +
-                                    '<p>' + esc(detail) + '</p></div></td></tr>';
-                            }
-                        });
-                        // Total row — same layout as the submission Result tab.
+                // Shared AI Feedback table (short-answer / fill-blank / code rubric rows).
+                function renderAiFeedbackTable(cases, opts) {
+                    opts = opts || {};
+                    var out = '<div class="gd-cases-scroll"><table class="gd-ai-grading"><thead><tr>' +
+                        '<th>{{ _('Sub-question') }}</th>' +
+                        '<th class="ac">{{ _('Score') }}</th>' +
+                        '<th class="ac">{{ _('Status') }}</th>' +
+                        '<th>{{ _('Feedback') }}</th>' +
+                        '</tr></thead><tbody>';
+                    cases.forEach(function (tc, idx) {
+                        // Scored AI rows: feedback = sub-question name, extended = detail.
+                        // IR placeholders historically put the status message in feedback only —
+                        // surface that in the Feedback column so the cell is not blank.
+                        var name = tc.feedback || ('{{ _('Sub-question') }} ' + (idx + 1));
+                        name = String(name).replace(/^\[AI\]\s*/, '');
+                        var detail = tc.extended_feedback || '';
+                        if (!detail && tc.status === 'IR' && tc.feedback) {
+                            detail = tc.feedback;
+                            name = '{{ _('Sub-question') }} ' + (idx + 1);
+                        }
+                        var preview = detail.length > 120 ? detail.slice(0, 120) + '…' : detail;
+                        var statusLabel = tc.status === 'AC' ? '{{ _('Correct') }}'
+                            : (tc.status === 'IR' ? '{{ _('Awaiting AI') }}' : '{{ _('Partial') }}');
+                        var rowClass = 'gd-ai-row' + (detail ? ' has-detail' : '');
+                        out += '<tr class="' + rowClass + '" data-ai-idx="' + idx + '">' +
+                            '<td>' + (detail ? '<i class="fa fa-chevron-right fa-fw gd-ai-chevron"></i>' : '') +
+                            esc(name) + '</td>' +
+                            '<td class="ac">' +
+                            (tc.points != null ? Number(tc.points).toFixed(1) : '—') +
+                            ' / ' + (tc.total != null ? Number(tc.total).toFixed(1) : '—') +
+                            '</td>' +
+                            '<td class="ac">' + esc(statusLabel) + '</td>' +
+                            '<td class="gd-ai-preview">' + esc(preview) + '</td></tr>';
+                        if (detail) {
+                            out += '<tr class="gd-ai-detail" data-ai-detail="' + idx + '" style="display:none">' +
+                                '<td colspan="4"><div class="gd-ai-feedback-box">' +
+                                '<strong>{{ _('Detailed Feedback') }}</strong>' +
+                                '<p>' + esc(detail) + '</p></div></td></tr>';
+                        }
+                    });
+                    if (opts.showTotal) {
                         var sumPts = 0, sumTot = 0, hasPts = false, hasTot = false, allAc = true, anyIr = false;
-                        s.test_cases.forEach(function (tc) {
+                        cases.forEach(function (tc) {
                             if (tc.points != null) { sumPts += Number(tc.points); hasPts = true; }
                             if (tc.total != null) { sumTot += Number(tc.total); hasTot = true; }
                             if (tc.status !== 'AC') allAc = false;
@@ -1041,44 +1090,67 @@
                         if (!hasPts && s.case_points != null) sumPts = Number(s.case_points);
                         var totalStatus = allAc ? '{{ _('All correct') }}'
                             : (anyIr ? '{{ _('Awaiting AI') }}' : '{{ _('Partial credit') }}');
-                        html += '</tbody><tfoot><tr class="gd-ai-total">' +
+                        out += '</tbody><tfoot><tr class="gd-ai-total">' +
                             '<td><strong>{{ _('Total') }}</strong></td>' +
                             '<td class="ac"><strong>' + sumPts.toFixed(1) + ' / ' + sumTot.toFixed(1) + '</strong></td>' +
-                            '<td class="ac">' + esc(totalStatus) + '</td><td></td></tr></tfoot></table>';
+                            '<td class="ac">' + esc(totalStatus) + '</td><td></td></tr></tfoot></table></div>';
+                    } else {
+                        out += '</tbody></table></div>';
+                    }
+                    return out;
+                }
+
+                if (s.test_cases && s.test_cases.length) {
+                    var isAiAnswer = (s.problem_type === 'S' || s.problem_type === 'B');
+                    if (isAiAnswer) {
+                        // Same columns as templates/submission/status-testcases.html
+                        // so teachers can verify AI scores against detailed feedback.
+                        html += '<div class="gd-section-title">{{ _('AI Feedback') }}</div>';
+                        html += renderAiFeedbackTable(s.test_cases, { showTotal: true });
                     } else if (isCode) {
-                        html += '<table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Time') }}</th><th>{{ _('Memory') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
-                            s.test_cases.map(function (tc) {
-                                // batch -1 marks supplementary AI rubric rows (teacher-only); show
-                                // their sub-question name instead of a bare case number.
-                                var label = (tc.batch === -1 && tc.feedback)
-                                    ? '<span title="' + esc(tc.extended_feedback || '') + '">' + esc(tc.feedback) + '</span>'
-                                    : tc.case;
-                                // For code AI rubric rows, also show extended feedback under the name.
-                                var pts = (tc.points != null ? tc.points : '—');
-                                if (tc.batch === -1 && tc.extended_feedback) {
-                                    pts = pts + '<div class="muted" style="font-weight:400;margin-top:0.2rem">' +
-                                        esc(tc.extended_feedback) + '</div>';
-                                }
-                                return '<tr><td>' + label + '</td><td>' + esc(tc.status) + '</td><td>' +
-                                    (tc.time != null ? Number(tc.time).toFixed(2) + 's' : '—') + '</td><td>' +
-                                    (tc.memory != null ? esc(tc.memory) : '—') + '</td><td>' +
-                                    pts + '</td></tr>';
-                            }).join('') +
-                            '</tbody></table>';
+                        // Partition like the student Result tab: judge cases on top,
+                        // supplementary AI rubric rows (batch=-1) in their own section.
+                        var machineCases = s.test_cases.filter(function (tc) {
+                            return tc.batch !== -1;
+                        });
+                        var aiCases = s.test_cases.filter(function (tc) {
+                            return tc.batch === -1;
+                        });
+                        if (machineCases.length) {
+                            html += '<div class="gd-section-title">{{ _('Test results') }}</div>';
+                            html += '<div class="gd-cases-scroll"><table class="gd-testcases"><thead><tr>' +
+                                '<th>#</th><th>{{ _('Result') }}</th><th>{{ _('Time') }}</th>' +
+                                '<th>{{ _('Memory') }}</th><th>{{ _('Points') }}</th>' +
+                                '</tr></thead><tbody>' +
+                                machineCases.map(function (tc) {
+                                    return '<tr><td>' + esc(tc.case) + '</td><td>' + esc(tc.status) + '</td><td>' +
+                                        (tc.time != null ? Number(tc.time).toFixed(2) + 's' : '—') + '</td><td>' +
+                                        (tc.memory != null ? esc(tc.memory) : '—') + '</td><td>' +
+                                        (tc.points != null ? tc.points : '—') + '</td></tr>';
+                                }).join('') +
+                                '</tbody></table></div>';
+                        }
+                        if (aiCases.length) {
+                            html += '<div class="gd-ai-section">' +
+                                '<div class="gd-section-title">{{ _('AI Feedback') }}</div>' +
+                                '<p class="gd-section-hint">{{ _('Based on this submission. Separate from the test-case score above.') }}</p>' +
+                                renderAiFeedbackTable(aiCases, { showTotal: false }) +
+                                '</div>';
+                        }
                     } else {
                         // MCQ / file / etc.: no wall-time or memory from the judge bridge.
                         // Show points on the assignment scale (same as POINTS above).
-                        html += '<table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
+                        html += '<div class="gd-cases-scroll"><table class="gd-testcases"><thead><tr><th>#</th><th>{{ _('Result') }}</th><th>{{ _('Points') }}</th></tr></thead><tbody>' +
                             s.test_cases.map(function (tc) {
                                 return '<tr><td>' + tc.case + '</td><td>' + esc(tc.status) + '</td><td>' +
                                     formatScaledCasePoints(tc, s) +
                                     '</td></tr>';
                             }).join('') +
-                            '</tbody></table>';
+                            '</tbody></table></div>';
                     }
                 }
                 resultBody.innerHTML = html;
-                if (s.test_cases && s.test_cases.length && (s.problem_type === 'S' || s.problem_type === 'B')) {
+                if (s.test_cases && s.test_cases.length) {
                     $(resultBody).find('tr.gd-ai-row.has-detail').on('click', function () {
                         var idx = this.getAttribute('data-ai-idx');
                         var detail = resultBody.querySelector('tr.gd-ai-detail[data-ai-detail="' + idx + '"]');
