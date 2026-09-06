@@ -274,3 +274,21 @@ class FileDraftHarvestTestCase(FileDraftTestMixin, TestCase):
 
         self.assertEqual(self._harvest(), [])
         self.assertEqual(Submission.objects.filter(contest_object=self.contest).count(), 1)
+
+    def test_a_file_the_store_cannot_produce_costs_only_itself(self):
+        # Reading a file draft goes to the object store, which fails in ways this code has no list
+        # of. Whatever comes back, the student's other answers still have to be collected, and the
+        # unreadable draft must not be left holding a claim: the claim is what tells every later
+        # sweep to skip it, so an answer that keeps one without a submission is unrecoverable.
+        essay = create_problem('filedraft-essay', submission_type='S', is_public=False,
+                               points=10, partial=True)
+        ContestProblem.objects.create(contest=self.contest, problem=essay, points=10, order=2)
+        AssignmentDraft.objects.create(participation=self.participation, problem=essay,
+                                       content='{"text": "the rest of the paper"}')
+        self._upload()
+        self.storage.delete(self._draft_file().file.name)
+
+        created = self._harvest()
+
+        self.assertEqual([submission.problem_id for submission in created], [essay.id])
+        self.assertIsNone(AssignmentDraft.objects.get(problem=self.problem).harvested_at)

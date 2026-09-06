@@ -17,7 +17,7 @@ from django.db.models import Count
 from django.utils import timezone
 
 from judge.models import AssignmentDraft, ContestProblem, ContestSubmission, Language, ProblemSubmissionType
-from judge.utils.assignment_draft import DraftContentError, draft_answer
+from judge.utils.assignment_draft import draft_answer
 from judge.utils.contest_parts import PART_CODE, user_bypasses_part_lock
 from judge.utils.submission_create import create_submission
 
@@ -93,7 +93,12 @@ def harvest_participation(participation, *, part=None):
             continue
         try:
             answer = draft_answer(draft)
-        except DraftContentError:
+        except Exception:
+            # Not just DraftContentError: reading a file draft goes to the object store, which can
+            # fail in ways this module has no list of. Letting one escape would leave the claim on
+            # a draft that produced no submission — an answer nobody can recover, since the claim
+            # is what tells every later sweep to skip it — and abandon the drafts this
+            # participation has left, which is the whole rest of the student's paper.
             logger.exception('Unusable draft %d for participation %d', draft.pk, participation.pk)
             _release(draft)
             continue
