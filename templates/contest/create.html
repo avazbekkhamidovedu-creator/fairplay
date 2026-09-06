@@ -811,7 +811,7 @@
                  'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
                  'show_short_display', 'is_private', 'is_organization_private',
                  'limit_join_organizations', 'seb_required', 'allow_ai_hints',
-                 'allow_student_ai_grading',
+                 'allow_student_ai_grading', 'lock_non_code_part',
                  // Not a model field: the server resolves it to Contest.seb_preset
                  // (the site default) so the client never names a preset id.
                  'seb_use_default'].forEach(function(f) {
@@ -3001,6 +3001,12 @@
                                 <label>
                                     <input type="checkbox" id="id_allow_virtual_participation" name="allow_virtual_participation"{% if prefill.allow_virtual_participation %} checked{% endif %}>
                                     {{ _('Allow virtual join') }}{{ tip(_('Allow users to join virtually after the assignment ends.')) }}
+                                </label>
+                            </div>
+                            <div class="form-row form-row-check">
+                                <label>
+                                    <input type="checkbox" id="id_lock_non_code_part" name="lock_non_code_part"{% if prefill.lock_non_code_part %} checked{% endif %}>
+                                    {{ _('Lock non-programming part') }}{{ tip(_('Students choose whether to start with non-programming or programming questions. After they finish the first part, they cannot return to it. The site IDE is available only while they are working on programming problems. If this assignment has only non-programming questions, the site IDE stays closed for the whole assignment.')) }}
                                 </label>
                             </div>
                             <div class="form-row form-row-check">

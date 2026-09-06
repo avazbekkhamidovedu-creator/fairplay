@@ -54,6 +54,11 @@ from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
+from judge.utils.contest_parts import (
+    PART_CODE, PART_NON_CODE, PART_OPEN, chosen_part,
+    first_accessible_contest_problem, first_part_done, is_code_problem,
+    part_lock_applies, part_lock_ui_state, problem_part_state, user_bypasses_part_lock,
+)
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, user_completed_ids
 from judge.utils.ranker import ranker
@@ -76,7 +81,8 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease',
            'ContestBatchAIGrade', 'ContestSEBConfig', 'SEBLaunchConfig', 'SEBLaunchToken', 'SEBQuit',
            'ContestTagCreateView', 'ContestSEBFileView',
-           'ContestFinalizeView', 'ContestUnfinalizeView']
+           'ContestFinalizeView', 'ContestUnfinalizeView',
+           'ContestFinishNonCodePart', 'ContestStartPart']
 
 
 def _valid_tz(name):
@@ -104,7 +110,18 @@ class ContestListMixin(object):
         return Contest.get_visible_contests(self.request.user)
 
 
-class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestListMixin, ListView):
+class ContestInSessionListRedirectMixin(object):
+    """While joined, the Assignments nav must open the current assignment, not the list."""
+
+    def dispatch(self, request, *args, **kwargs):
+        participation = getattr(request, 'participation', None)
+        if getattr(request, 'in_contest', False) and participation is not None:
+            return HttpResponseRedirect(reverse('contest_view', args=(participation.contest.key,)))
+        return super().dispatch(request, *args, **kwargs)
+
+
+class ContestList(ContestInSessionListRedirectMixin, QueryStringSortMixin, DiggPaginatorMixin, TitleMixin,
+                  ContestListMixin, ListView):
     model = Contest
     paginate_by = 20
     template_name = 'contest/list.html'
@@ -194,7 +211,8 @@ class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestL
         return context
 
 
-class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestListMixin, ListView):
+class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, DiggPaginatorMixin, TitleMixin,
+                    ContestListMixin, ListView):
     """Redesigned contest list with filters, sorting, and layout options.
 
     All matching contests are rendered and filtering happens client-side (no
@@ -449,7 +467,7 @@ class ContestCreate(LoginRequiredMixin, View):
         'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
         'show_short_display', 'is_private', 'is_organization_private',
         'limit_join_organizations', 'seb_required', 'allow_ai_hints',
-        'allow_student_ai_grading',
+        'allow_student_ai_grading', 'lock_non_code_part',
     )
     _text_fields = (
         'name', 'description', 'access_code', 'problem_label_script',
@@ -1451,6 +1469,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
             'allow_ai_hints': False,
             'allow_student_ai_grading': False,
+            'lock_non_code_part': False,
             'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
             'problems': [],
             'target_score': 100,
@@ -2032,7 +2051,29 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
         context['contest_attempted_problem_ids'] = attempted
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         context['enable_social'] = settings.DMOJ_ENABLE_SOCIAL
+        self._attach_part_lock_context(context, problems)
         return context
+
+    def _attach_part_lock_context(self, context, problems):
+        contest = self.object
+        participation = getattr(self.request, 'participation', None)
+        if participation is not None and participation.contest_id != contest.id:
+            participation = context.get('live_participation')
+        elif participation is None:
+            participation = context.get('live_participation')
+        state = part_lock_ui_state(contest, participation, self.request.user)
+        context['part_lock'] = state
+        applies = state['enabled']
+        bypass = state['bypass']
+        for problem in problems:
+            if not applies or bypass:
+                problem.part_locked = False
+            elif participation is None:
+                problem.part_locked = True
+            else:
+                problem.part_locked = problem_part_state(participation, problem, self.request.user) != PART_OPEN
+        context['part_lock_non_code_problems'] = [p for p in problems if not is_code_problem(p)]
+        context['part_lock_code_problems'] = [p for p in problems if is_code_problem(p)]
 
 
 class ContestKeyCheckView(LoginRequiredMixin, View):
@@ -2355,6 +2396,75 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
         profile.remove_contest()
         if contest.seb_required and not was_spectating and not contest.user_bypasses_seb(request.user):
             return HttpResponseRedirect(contest.seb_effective_quit_url or reverse('seb_quit'))
+        return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
+
+
+class ContestStartPart(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
+    """Student picks which part to start."""
+
+    http_method_names = ['post']
+
+    def post(self, request, *args, **kwargs):
+        contest = self.get_object()
+        participation = request.profile.current_contest
+        if participation is None or participation.contest_id != contest.id:
+            return generic_message(
+                request,
+                _('Not in this assignment'),
+                _('Join the assignment before choosing a part.'),
+                status=403,
+            )
+        if not part_lock_applies(contest) or user_bypasses_part_lock(request.user, contest) or participation.spectate:
+            return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
+        if chosen_part(participation):
+            return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
+        part = (request.POST.get('part') or '').strip()
+        if part not in (PART_NON_CODE, PART_CODE):
+            return generic_message(
+                request,
+                _('Invalid part'),
+                _('Choose the non-programming part or the programming part.'),
+                status=400,
+            )
+        participation.chosen_part = part
+        participation.save(update_fields=['chosen_part'])
+        next_problem = first_accessible_contest_problem(participation, request.user)
+        if next_problem is not None:
+            return HttpResponseRedirect(reverse('problem_detail', args=(next_problem.problem.code,)))
+        return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
+
+
+class ContestFinishNonCodePart(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
+    """Lock the part the student started and unlock the other part."""
+
+    http_method_names = ['post']
+
+    def post(self, request, *args, **kwargs):
+        contest = self.get_object()
+        participation = request.profile.current_contest
+        if participation is None or participation.contest_id != contest.id:
+            return generic_message(
+                request,
+                _('Not in this assignment'),
+                _('Join the assignment before finishing this part.'),
+                status=403,
+            )
+        if not part_lock_applies(contest) or user_bypasses_part_lock(request.user, contest) or participation.spectate:
+            return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
+        part = chosen_part(participation)
+        if not part:
+            return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
+        if not first_part_done(participation):
+            now = timezone.now()
+            if part == PART_CODE:
+                participation.code_part_completed_at = now
+                participation.save(update_fields=['code_part_completed_at'])
+            else:
+                participation.non_code_part_completed_at = now
+                participation.save(update_fields=['non_code_part_completed_at'])
+        next_problem = first_accessible_contest_problem(participation, request.user)
+        if next_problem is not None:
+            return HttpResponseRedirect(reverse('problem_detail', args=(next_problem.problem.code,)))
         return HttpResponseRedirect(reverse('contest_view', args=(contest.key,)))
 
 

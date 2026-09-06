@@ -1,0 +1,20 @@
+{% if part_lock and part_lock.needs_choice %}
+    <div class="part-choice">
+        <div class="part-choice-actions">
+            <form action="{{ url('contest_start_part', contest.key) }}" method="post">
+                {% csrf_token %}
+                <input type="hidden" name="part" value="non_code">
+                <button type="submit" class="{{ button_class|default('button') }}">
+                    {{ _('Start non-programming questions') }}
+                </button>
+            </form>
+            <form action="{{ url('contest_start_part', contest.key) }}" method="post">
+                {% csrf_token %}
+                <input type="hidden" name="part" value="code">
+                <button type="submit" class="{{ button_class|default('button') }}">
+                    {{ _('Start programming problems') }}
+                </button>
+            </form>
+        </div>
+    </div>
+{% endif %}

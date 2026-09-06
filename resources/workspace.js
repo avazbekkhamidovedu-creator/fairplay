@@ -388,6 +388,17 @@
   var index = items.indexOf(current);
   var prevBtn = $('#btn-prev');
   var nextBtn = $('#btn-next');
+  function isLockedProblem(item) {
+    return !item || item.getAttribute('data-locked') === '1' || item.classList.contains('is-locked');
+  }
+  function nearestUnlocked(from, step) {
+    var i = from + step;
+    while (i >= 0 && i < items.length) {
+      if (!isLockedProblem(items[i])) return i;
+      i += step;
+    }
+    return -1;
+  }
   function setProblemNav(button, disabled, enabledTitle, disabledTitle) {
     if (!button) return;
     button.disabled = disabled;
@@ -396,12 +407,16 @@
     button.style.opacity = disabled ? '0.35' : '';
     button.style.cursor = disabled ? 'not-allowed' : '';
   }
-  var atFirst = items.length === 0 || index <= 0;
-  var atLast = items.length === 0 || index < 0 || index >= items.length - 1;
-  setProblemNav(prevBtn, atFirst, gettext('Previous problem'), gettext('Already the first problem'));
-  setProblemNav(nextBtn, atLast, gettext('Next problem'), gettext('Already the last problem'));
-  if (prevBtn) prevBtn.addEventListener('click', function () { if (index > 0) location.assign(items[index - 1].href); });
-  if (nextBtn) nextBtn.addEventListener('click', function () { if (index >= 0 && index + 1 < items.length) location.assign(items[index + 1].href); });
+  var prevIndex = nearestUnlocked(index, -1);
+  var nextIndex = nearestUnlocked(index, 1);
+  setProblemNav(prevBtn, prevIndex < 0, gettext('Previous problem'), gettext('Already the first problem'));
+  setProblemNav(nextBtn, nextIndex < 0, gettext('Next problem'), gettext('Already the last problem'));
+  if (prevBtn) prevBtn.addEventListener('click', function () {
+    if (prevIndex >= 0) location.assign(items[prevIndex].href);
+  });
+  if (nextBtn) nextBtn.addEventListener('click', function () {
+    if (nextIndex >= 0) location.assign(items[nextIndex].href);
+  });
 
   // Duration countdown: server remaining seconds (participation.time_remaining); does not pause on leave.
   var timerExpired = false;

@@ -10,6 +10,7 @@ from django.views import View
 from django.views.generic import TemplateView
 
 from judge.models import Language, Problem, Submission, SubmissionSource
+from judge.utils.contest_parts import ide_blocked_response
 from judge.utils.views import TitleMixin
 
 __all__ = ['IDEView', 'IDESubmitView', 'IDESubmissionStatus']
@@ -42,6 +43,12 @@ class IDEView(LoginRequiredMixin, TitleMixin, TemplateView):
     template_name = 'ide/ide.html'
     title = 'IDE'
 
+    def get(self, request, *args, **kwargs):
+        blocked = ide_blocked_response(request)
+        if blocked is not None:
+            return blocked
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         languages = Language.objects.filter(
@@ -65,6 +72,9 @@ class IDESubmitView(LoginRequiredMixin, View):
     """
 
     def post(self, request):
+        blocked = ide_blocked_response(request, json_mode=True)
+        if blocked is not None:
+            return blocked
         # Rate limiting check
         cache_key = f'ide_run:{request.profile.id}'
         current_count = cache.get(cache_key, 0)

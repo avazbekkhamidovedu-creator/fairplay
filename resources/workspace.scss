@@ -120,6 +120,9 @@
   padding-left: .85rem;
   border-left: 1px solid var(--oj-border);
 }
+.submit-cluster .finish-non-code-part-form {
+  margin: 0;
+}
 .timer-wrap { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
 .timer-wrap.warn { color: var(--oj-danger); }
 .timer-wrap.expired { color: var(--oj-danger); }

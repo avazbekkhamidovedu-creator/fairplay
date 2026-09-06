@@ -6,6 +6,17 @@
             #problem-table th {
                 padding: 0;
             }
+            .assignment-part-lock .part-choice-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+            .part-lock-badge {
+                display: inline-block;
+                margin-left: 0.4rem;
+                font-size: 11px;
+                color: var(--oj-text-muted);
+            }
         </style>
     {% endif %}
     <style>
@@ -512,6 +523,22 @@
         {% endif %}
         <div id="common-content">
             <div id="content-left" class="problems h-scrollable-table">
+                {% if part_lock and part_lock.enabled %}
+                    <div class="assignment-part-lock" style="margin-bottom: 0.85rem;">
+                        {% if part_lock.needs_choice %}
+                            <p>{{ _('Choose which part to start. The other part stays locked. After you finish the first part, you cannot return to it. The site IDE is available only while you work on programming problems.') }}</p>
+                        {% elif part_lock.current == 'code' and part_lock.done %}
+                            <p>{{ _('The non-programming part is finished and locked. Continue with the programming problems.') }}</p>
+                        {% elif part_lock.current == 'non_code' and part_lock.done %}
+                            <p>{{ _('The programming part is finished and locked. Continue with the non-programming questions. The site IDE is closed.') }}</p>
+                        {% elif part_lock.current == 'code' %}
+                            <p>{{ _('You are working on programming problems. Finish this part to continue to the non-programming questions. You cannot return after continuing.') }}</p>
+                        {% elif part_lock.current == 'non_code' %}
+                            <p>{{ _('You are working on non-programming questions. Finish this part to continue to the programming problems. You cannot return after continuing.') }}</p>
+                        {% endif %}
+                        {% include "contest/start-part.html" %}
+                    </div>
+                {% endif %}
                 <table id="problem-table" class="table striped">
                     <thead>
                     <tr>
@@ -531,7 +558,12 @@
                                 {{ problem.user_problem_cell }}
                             {% endif %}
                             <td class="problem">
-                                <a href="{{ url('problem_detail', problem.code) }}">{{ problem.effective_name or problem.i18n_name or problem.name }}</a>
+                                {% if problem.part_locked %}
+                                    {{ problem.effective_name or problem.i18n_name or problem.name }}
+                                    <span class="part-lock-badge">{{ _('Locked') }}</span>
+                                {% else %}
+                                    <a href="{{ url('problem_detail', problem.code) }}">{{ problem.effective_name or problem.i18n_name or problem.name }}</a>
+                                {% endif %}
                             </td>
                             <td class="p">{{ problem.points|floatformat }}{% if problem.partial %}p{% endif %}</td>
                             <td class="users">
