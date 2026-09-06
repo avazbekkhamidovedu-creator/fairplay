@@ -4339,7 +4339,9 @@ class ContestExportJoinedScores(ContestMixin, PermissionRequiredMixin, BaseDetai
             return HttpResponseRedirect(reverse('contest_view', args=[self.object.key]))
 
         from judge.utils.import_export import export_contest_scores_joined_csv
-        result = export_contest_scores_joined_csv(self.object, csv_file)
+        result = export_contest_scores_joined_csv(
+            self.object, csv_file, score_column=request.POST.get('score_column'),
+        )
         if result.errors:
             for error in result.errors:
                 messages.error(request, error)
@@ -4347,6 +4349,12 @@ class ContestExportJoinedScores(ContestMixin, PermissionRequiredMixin, BaseDetai
 
         response = HttpResponse(result.csv_content, content_type='text/csv; charset=utf-8')
         response['Content-Disposition'] = 'attachment; filename="{}-joined-scores.csv"'.format(self.object.key)
+        export_token = request.POST.get('export_token', '')
+        if re.fullmatch(r'[A-Za-z0-9-]{8,128}', export_token):
+            response.set_cookie(
+                'contest_score_export', export_token,
+                max_age=60, path='/', samesite='Lax', secure=request.is_secure(),
+            )
         return response
 
 
