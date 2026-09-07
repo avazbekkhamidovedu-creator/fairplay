@@ -780,10 +780,9 @@
             }
 
             // ── Unsaved-changes guard (edit mode only) ──────────────────────
-            // Create mode is protected by the local draft autosave below; edit
-            // mode has no such net, so a stray navigation would silently drop
-            // every edit. Track whether the form is "dirty" and warn before
-            // leaving. Cleared on a successful save (see the submit handler).
+            // A stray navigation in edit mode would silently drop every edit.
+            // Track whether the form is "dirty" and warn before leaving.
+            // Cleared on a successful save (see the submit handler).
             var isDirty = false;
             function markDirty() { isDirty = true; }
 
@@ -995,10 +994,6 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
                     if (res.ok) {
-                        // A successful save means the local draft is no longer
-                        // "unsaved": clear it so a stale draft can't resurrect an
-                        // already-used key on the next create.
-                        try { localStorage.removeItem(DRAFT_KEY); } catch (err) {}
                         isDirty = false;
                         if (res.action === 'another') {
                             // "Save and add another": stay put and clear the form.
@@ -2788,69 +2783,6 @@
             }
             {% endif %}
 
-            // --- Draft autosave (6c, create mode only) ---
-            var DRAFT_KEY = 'dkuoj_contest_draft';
-            function collectDraft() {
-                var fd = new FormData(form);
-                // Deliberately NOT capturing `key`: a restored key may belong to an
-                // assignment saved earlier, and re-inserting it re-triggers the
-                // "ID already exists" collision. The fresh server-generated key
-                // stays in the field instead.
-                var draft = {
-                    name: fd.get('name') || '',
-                    tags: [],
-                };
-                Array.from(document.getElementById('id_tags').selectedOptions).forEach(function (o) {
-                    draft.tags.push(o.value);
-                });
-                if (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown) {
-                    draft.description = RichEditor.getMarkdown('desc') || '';
-                }
-                return draft;
-            }
-            function applyDraft(draft) {
-                if (!draft) return;
-                // The key is intentionally left untouched: the server pre-filled it
-                // with a freshly generated unique id, and restoring a stale draft
-                // key here is what caused "ID already exists" on save.
-                var nameEl = document.getElementById('id_name');
-                if (nameEl && draft.name) nameEl.value = draft.name;
-                if (draft.tags && draft.tags.length) {
-                    draft.tags.forEach(function (id) {
-                        var opt = document.getElementById('id_tags').querySelector('option[value="' + id + '"]');
-                        if (opt) opt.selected = true;
-                    });
-                    syncTagPills();
-                }
-                if (draft.description && typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
-                    RichEditor.setMarkdown('desc', draft.description);
-                }
-            }
-            if (!{{ 'true' if contest else 'false' }}) {
-                var saveDraftTimer = null;
-                form.addEventListener('input', function () {
-                    if (saveDraftTimer) clearTimeout(saveDraftTimer);
-                    saveDraftTimer = setTimeout(function () {
-                        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(collectDraft())); } catch (err) {}
-                    }, 500);
-                });
-                try {
-                    var saved = localStorage.getItem(DRAFT_KEY);
-                    if (saved) {
-                        var draft = JSON.parse(saved);
-                        if (draft && draft.name) {
-                            var msg = {{ _('Recover the unsaved draft?')|tojson }};
-                            if (confirm(msg)) {
-                                applyDraft(draft);
-                                showToast({{ _('Draft restored.')|htmltojs }});
-                            } else {
-                                localStorage.removeItem(DRAFT_KEY);
-                            }
-                        }
-                    }
-                } catch (err) {}
-            }
-
             // --- Unsaved-changes warning (edit mode) -------------------------
             // Attached last so every initializer above (select2, RichEditor,
             // timezone picker, …) has already run: programmatic prefill must not
@@ -2889,7 +2821,6 @@
                 if (score) score.value = 100;
                 var nameEl2 = document.getElementById('id_name');
                 if (nameEl2) nameEl2.focus();
-                try { localStorage.removeItem(DRAFT_KEY); } catch (err) {}
                 if (keyInput && !isEditMode) {
                     // Next assignment's id is auto-generated too — clear any
                     // manually typed key and reset to the blank placeholder.

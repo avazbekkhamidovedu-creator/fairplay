@@ -884,6 +884,52 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
         self.assertTrue(Contest.objects.filter(name='Mine again').exists())
 
+    def test_create_full_payload_produces_consistent_assignment(self):
+        """A complete create round-trips every field category into one coherent
+        assignment: auto-generated key, duration, problems (points/partial/order),
+        M2M (orgs/tags/curators/testers), the creator as author, and a redirect."""
+        problem = create_problem('completeness-prob', is_public=True)
+        now = timezone.now()
+        response = self._post(
+            name='Complete Assignment',
+            key='',
+            start_time=(now + timedelta(hours=1)).isoformat(),
+            end_time=(now + timedelta(hours=5)).isoformat(),
+            duration_hours=1,
+            duration_minutes=30,
+            description='full description',
+            format_name='default',
+            scoreboard_visibility='V',
+            problems=[{'id': problem.id, 'points': 150, 'partial': False}],
+            organizations=[self.organization.id],
+            tags=[self.tag.id],
+            curators=[self.user_a.id],
+            testers=[self.user_b.id],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['action'], 'save')
+
+        contest = Contest.objects.get(name='Complete Assignment')
+        self.assertRegex(contest.key, r'^c\d{6}$')
+        self.assertEqual(contest.time_limit, timedelta(hours=1, minutes=30))
+        self.assertEqual(contest.description, 'full description')
+
+        problems = list(contest.contest_problems.order_by('order'))
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0].problem_id, problem.id)
+        self.assertEqual(problems[0].points, 150)
+        self.assertFalse(problems[0].partial)
+        self.assertEqual(problems[0].order, 1)
+
+        self.assertCountEqual(list(contest.organizations.values_list('id', flat=True)), [self.organization.id])
+        self.assertCountEqual(list(contest.tags.values_list('id', flat=True)), [self.tag.id])
+        self.assertCountEqual(list(contest.curators.values_list('id', flat=True)), [self.user_a.id])
+        self.assertCountEqual(list(contest.testers.values_list('id', flat=True)), [self.user_b.id])
+        self.assertIn(self.editor.profile, contest.authors.all())
+        self.assertEqual(body['redirect'], reverse('contest_view', args=[contest.key]))
+
     def test_create_series_key_taken_by_other_returns_400(self):
         occupied = Contest.generate_unique_key()
         create_contest(
