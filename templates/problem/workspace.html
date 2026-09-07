@@ -689,7 +689,7 @@
                 </div>
               </div>
               <div class="ide-bottom-body" id="bottom-result" hidden>
-                <div class="alert alert-info" id="run-message">{{ _('Custom Run reuses the site IDE sandbox (same as /ide/): it does not use hidden tests for this problem or affect scores.') }}</div>
+                <pre class="alert alert-info workspace-run-message" id="run-message"></pre>
                 <pre class="workspace-run-output" id="workspace-run-output"></pre>
               </div>
             </div>
@@ -780,5 +780,6 @@
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
+  <script src="{{ static('ide_run_result.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
   <script src="{{ static('workspace.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}

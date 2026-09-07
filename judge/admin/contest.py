@@ -172,6 +172,7 @@ class SimpleContestCreationForm(ContestForm):
             'rate_exclude', 'access_code', 'private_contestants', 'organizations', 'classes',
             'join_organizations', 'view_contest_scoreboard', 'view_contest_submissions', 'banned_users',
             'allow_student_ai_grading', 'ai_grading_mode', 'ai_grading_auto_delay_minutes',
+            'hide_sandbox_output',
         )
 
     def __init__(self, *args, **kwargs):
@@ -185,6 +186,7 @@ class SimpleContestCreationForm(ContestForm):
             'rating_floor', 'rating_ceiling', 'performance_ceiling_override', 'rate_exclude', 'access_code',
             'private_contestants', 'organizations', 'classes', 'join_organizations', 'view_contest_scoreboard',
             'view_contest_submissions', 'banned_users', 'allow_student_ai_grading', 'ai_grading_auto_delay_minutes',
+            'hide_sandbox_output',
         ):
             self.fields[field_name].required = False
         self.fields['creation_preset'].choices = (
@@ -254,7 +256,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
             'fields': (
                 'is_visible', 'use_clarifications', 'hide_problem_tags', 'hide_problem_authors',
                 'show_short_display', 'run_pretests_only', 'locked_after', 'scoreboard_visibility',
-                'points_precision', 'allow_virtual_participation',
+                'points_precision', 'allow_virtual_participation', 'hide_sandbox_output',
             ),
         }),
         (_('Advanced Details'), {
@@ -293,7 +295,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                            'tester_see_scoreboard', 'spectators')}),
         (_('Settings'), {'fields': ('is_visible', 'use_clarifications', 'hide_problem_tags', 'hide_problem_authors',
                                     'show_short_display', 'run_pretests_only', 'locked_after', 'scoreboard_visibility',
-                                    'points_precision', 'allow_virtual_participation')}),
+                                    'points_precision', 'allow_virtual_participation', 'hide_sandbox_output')}),
         (_('Scheduling'), {'fields': ('start_time', 'end_time', 'time_limit')}),
         (_('Details'), {'fields': ('description', 'og_image', 'logo_override_image', 'tags', 'summary')}),
         (_('Format'), {'fields': ('format_name', 'format_config', 'problem_label_script')}),
@@ -359,6 +361,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                 'scoreboard_visibility': Contest.SCOREBOARD_VISIBLE,
                 'points_precision': str(Contest._meta.get_field('points_precision').default),
                 'allow_virtual_participation': True,
+                'hide_sandbox_output': False,
                 'time_limit': '',
                 'description': '',
                 'og_image': '',
@@ -407,6 +410,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         obj.scoreboard_visibility = Contest.SCOREBOARD_VISIBLE
         obj.points_precision = Contest._meta.get_field('points_precision').default
         obj.allow_virtual_participation = True
+        obj.hide_sandbox_output = False
         obj.time_limit = None
         obj.og_image = ''
         obj.logo_override_image = ''

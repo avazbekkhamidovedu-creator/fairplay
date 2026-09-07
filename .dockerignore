@@ -1,4 +1,5 @@
 .git
+.venv
 .github
 .gitlab-ci.yml
 .gitlab-ci-local

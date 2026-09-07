@@ -248,6 +248,13 @@ class Contest(models.Model):
         default=True,
         help_text=_('Allow users to join virtually after the assignment ends.'),
     )
+    hide_sandbox_output = models.BooleanField(
+        verbose_name=_('Hide IDE / Run Test output'),
+        default=False,
+        help_text=_('Hide sandbox stdout from students. The verdict, compile errors, and '
+                    'runtime exceptions remain visible. This does not close the IDE, lock '
+                    'problems, or change Submit.'),
+    )
     allow_ai_hints = models.BooleanField(
         verbose_name=_('allow student use AI hints'),
         default=False,

@@ -449,7 +449,7 @@ class ContestCreate(LoginRequiredMixin, View):
         'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
         'show_short_display', 'is_private', 'is_organization_private',
         'limit_join_organizations', 'seb_required', 'allow_ai_hints',
-        'allow_student_ai_grading',
+        'allow_student_ai_grading', 'hide_sandbox_output',
     )
     _text_fields = (
         'name', 'description', 'access_code', 'problem_label_script',
@@ -1451,6 +1451,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
             'allow_ai_hints': False,
             'allow_student_ai_grading': False,
+            'hide_sandbox_output': False,
             'vis_mode': 'org' if self.request.user.has_perm('judge.create_private_contest') else 'hidden',
             'problems': [],
             'target_score': 100,

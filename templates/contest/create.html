@@ -811,7 +811,7 @@
                  'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
                  'show_short_display', 'is_private', 'is_organization_private',
                  'limit_join_organizations', 'seb_required', 'allow_ai_hints',
-                 'allow_student_ai_grading',
+                 'allow_student_ai_grading', 'hide_sandbox_output',
                  // Not a model field: the server resolves it to Contest.seb_preset
                  // (the site default) so the client never names a preset id.
                  'seb_use_default'].forEach(function(f) {
@@ -3001,6 +3001,12 @@
                                 <label>
                                     <input type="checkbox" id="id_allow_virtual_participation" name="allow_virtual_participation"{% if prefill.allow_virtual_participation %} checked{% endif %}>
                                     {{ _('Allow virtual join') }}{{ tip(_('Allow users to join virtually after the assignment ends.')) }}
+                                </label>
+                            </div>
+                            <div class="form-row form-row-check">
+                                <label>
+                                    <input type="checkbox" id="id_hide_sandbox_output" name="hide_sandbox_output"{% if prefill.hide_sandbox_output %} checked{% endif %}>
+                                    {{ _('Hide IDE / Run Test output') }}{{ tip(_('Hide sandbox stdout from students. The verdict, compile errors, and runtime exceptions remain visible. This does not close the IDE, lock problems, or change Submit.')) }}
                                 </label>
                             </div>
                             <div class="form-row form-row-check">

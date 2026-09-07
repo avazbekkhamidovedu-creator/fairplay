@@ -205,6 +205,7 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.context['prefill']['name'], 'Editable')
         self.assertEqual(response.context['prefill']['description'], 'original description')
         self.assertFalse(response.context['prefill']['allow_ai_hints'])
+        self.assertFalse(response.context['prefill']['hide_sandbox_output'])
 
     def test_edit_profile_selects_use_name_username_labels(self):
         """Authors/curators chips match profile_select2: Name (username)."""
@@ -232,6 +233,23 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('contest_edit', args=['editablecontest']))
         self.assertTrue(response.context['prefill']['allow_ai_hints'])
         self.assertContains(response, 'id="id_allow_ai_hints"')
+
+    def test_post_roundtrips_hide_sandbox_output(self):
+        self.client.force_login(self.editor)
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(self._full_payload(hide_sandbox_output=True)),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.hide_sandbox_output)
+        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
+        self.assertTrue(response.context['prefill']['hide_sandbox_output'])
+        self.assertContains(response, 'id="id_hide_sandbox_output"')
+        html = response.content.decode()
+        self.assertRegex(html, r'id="id_hide_sandbox_output"[^>]*checked')
+        self.assertNotIn('lock_non_code_part', html)
 
     def test_get_tmp_timezone_overrides_echo(self):
         """?tz=... only changes how stored UTC is echoed back, not the saved profile tz."""
@@ -737,6 +755,16 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertLess(html.find('value="H"'), html.find('value="V"'))
         self.assertIn('forceScoreboardHiddenDefault', html)
         self.assertIn("sb.value = 'H'", html)
+
+    def test_create_defaults_hide_sandbox_output_off(self):
+        response = self.client.get(reverse('contest_create'))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['prefill']['hide_sandbox_output'])
+        html = response.content.decode()
+        self.assertIn('id="id_hide_sandbox_output"', html)
+        self.assertNotRegex(html, r'id="id_hide_sandbox_output"[^>]*checked')
+        self.assertNotIn('lock_non_code_part', html)
+        self.assertNotIn('Lock non-programming part', html)
 
     def test_create_page_omits_crumb_and_layout_switch(self):
         """Tabs stay; the crumb row and Horizontal/Vertical switch under them do not."""
@@ -1385,6 +1413,13 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertTrue(contest.is_organization_private)
         self.assertTrue(contest.limit_join_organizations)
         self.assertTrue(contest.allow_ai_hints)
+        self.assertFalse(contest.hide_sandbox_output)
+
+    def test_hide_sandbox_output_saved(self):
+        response = self._post(name='Hide Out', key='hideout', hide_sandbox_output=True)
+        self.assertEqual(response.status_code, 200)
+        contest = Contest.objects.get(key='hideout')
+        self.assertTrue(contest.hide_sandbox_output)
 
     def test_seb_fields_saved(self):
         # Keys must be valid 64-char hex hashes: model validation (full_clean)
