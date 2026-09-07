@@ -194,22 +194,6 @@
         }
         .contest-problems-wrap tr:last-child td { border-bottom: none; }
         .contest-problems-wrap tr:hover td { background: var(--oj-hover-overlay); }
-        .part-lock-note { margin: 0 0 0.75rem; color: var(--oj-text-muted); }
-        .part-lock-heading td {
-            font-weight: 600;
-            background: var(--oj-bg) !important;
-            color: var(--oj-text-muted);
-        }
-        .part-lock-badge {
-            display: inline-block;
-            margin-left: 0.4rem;
-            font-size: 11px;
-            color: var(--oj-text-muted);
-        }
-        .part-locked-row td { opacity: 0.7; }
-        .finish-non-code-part-form { margin: 0 0 0.85rem; }
-        .part-choice { margin: 0 0 0.85rem; }
-        .part-choice-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
         /* Export controls row */
         .contest-export-bar {
@@ -577,23 +561,6 @@
 
         <div class="contest-problems-wrap">
             <h2><i class="fa fa-fw fa-question-circle"></i>{{ _('Problems') }}</h2>
-            {% if part_lock and part_lock.enabled %}
-                <p class="part-lock-note">
-                    {% if part_lock.needs_choice %}
-                        {{ _('Choose which part to start. The other part stays locked. After you finish the first part, you cannot return to it. The site IDE is available only while you work on programming problems.') }}
-                    {% elif part_lock.current == 'code' and part_lock.done %}
-                        {{ _('The non-programming part is finished and locked. Continue with the programming problems.') }}
-                    {% elif part_lock.current == 'non_code' and part_lock.done %}
-                        {{ _('The programming part is finished and locked. Continue with the non-programming questions. The site IDE is closed.') }}
-                    {% elif part_lock.current == 'code' %}
-                        {{ _('You are working on programming problems. Finish this part to continue to the non-programming questions. You cannot return after continuing.') }}
-                    {% else %}
-                        {{ _('You are working on non-programming questions. Finish this part to continue to the programming problems. You cannot return after continuing.') }}
-                    {% endif %}
-                </p>
-                {% include "contest/start-part.html" %}
-                {% include "contest/finish-non-code-part.html" %}
-            {% endif %}
             <table>
                 <thead>
                 <tr>
@@ -607,34 +574,9 @@
                 </tr>
                 </thead>
                 <tbody>
-                {% if part_lock and part_lock.show_parts %}
-                    {% if part_lock_non_code_problems %}
-                        <tr class="part-lock-heading"><td colspan="{{ 5 if metadata.has_public_editorials else 4 }}">
-                            {{ _('Non-programming') }}
-                            {% if part_lock.current == 'non_code' %} — {{ _('Current') }}
-                            {% elif part_lock.needs_choice or part_lock.current == 'code' %} — {{ _('Locked') }}
-                            {% endif %}
-                        </td></tr>
-                        {% for problem in part_lock_non_code_problems %}
-                            {% include "contest/contest-problem-row.html" %}
-                        {% endfor %}
-                    {% endif %}
-                    {% if part_lock_code_problems %}
-                        <tr class="part-lock-heading"><td colspan="{{ 5 if metadata.has_public_editorials else 4 }}">
-                            {{ _('Programming') }}
-                            {% if part_lock.current == 'code' %} — {{ _('Current') }}
-                            {% elif part_lock.needs_choice or part_lock.current == 'non_code' %} — {{ _('Locked') }}
-                            {% endif %}
-                        </td></tr>
-                        {% for problem in part_lock_code_problems %}
-                            {% include "contest/contest-problem-row.html" %}
-                        {% endfor %}
-                    {% endif %}
-                {% else %}
                     {% for problem in contest_problems %}
                         {% include "contest/contest-problem-row.html" %}
                     {% endfor %}
-                {% endif %}
                 </tbody>
             </table>
         </div>

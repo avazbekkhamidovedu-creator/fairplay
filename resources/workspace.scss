@@ -120,9 +120,6 @@
   padding-left: .85rem;
   border-left: 1px solid var(--oj-border);
 }
-.submit-cluster .finish-non-code-part-form {
-  margin: 0;
-}
 /* Reassurance next to Submit: the answer is already on the server. Dropped on
    narrow toolbars, where the buttons themselves need the room. */
 .submit-cluster .submit-autosave-hint {
@@ -853,6 +850,9 @@
   color: var(--oj-text-muted);
   font-size: .8rem;
   border-top: 1px solid var(--oj-border);
+}
+#draft-status.is-error {
+  color: var(--oj-danger);
 }
 .ide-v-splitter {
   flex: 0 0 10px;

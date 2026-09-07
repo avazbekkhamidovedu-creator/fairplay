@@ -61,6 +61,11 @@ class AutoSubmitScheduleMixin:
         self.participation = ContestParticipation.objects.select_related('contest').get(pk=self.participation.pk)
         return self.participation
 
+    def _end_assignment(self, ago=timedelta(hours=1)):
+        Contest.objects.filter(pk=self.contest.pk).update(end_time=timezone.now() - ago)
+        self.contest.refresh_from_db()
+        self._reload_participation()
+
     def _harvested_submissions(self):
         return Submission.objects.filter(contest_object=self.contest)
 
@@ -93,6 +98,7 @@ class ContestLevelScheduleTestCase(AutoSubmitScheduleMixin, TestCase):
             contest=self.contest, user=create_user(username='autosubmit_idle').profile,
         )
         self._draft()
+        self._end_assignment()
 
         with mock.patch('judge.tasks.assignment_harvest.harvest_participation_drafts.delay') as delay:
             self.assertEqual(harvest_contest_drafts(self.contest.key), 1)
@@ -223,11 +229,77 @@ class DeadlineChangeTestCase(AutoSubmitScheduleMixin, TestCase):
         self.assertEqual(self.participation.harvest_scheduled_task_id, '')
 
 
+class DeadlineGuardTestCase(AutoSubmitScheduleMixin, TestCase):
+    """A leftover ETA must not collect papers while the student can still write."""
+
+    def test_a_shared_deadline_still_in_the_future_queues_nobody(self):
+        self._draft()
+
+        with mock.patch('judge.tasks.assignment_harvest.harvest_participation_drafts.delay') as delay:
+            self.assertEqual(harvest_contest_drafts(self.contest.key), 0)
+
+        delay.assert_not_called()
+        self.assertFalse(self._harvested_submissions().exists())
+
+    def test_a_student_still_inside_their_window_is_not_collected(self):
+        self._draft()
+
+        with mock.patch.object(Submission, 'judge', autospec=True):
+            self.assertEqual(harvest_participation_drafts(self.participation.pk), 0)
+
+        self.assertFalse(self._harvested_submissions().exists())
+        draft = AssignmentDraft.objects.get(participation=self.participation)
+        self.assertIsNone(draft.harvested_at)
+
+    def test_moving_the_deadline_later_stops_the_old_task(self):
+        self._draft()
+        self._end_assignment(ago=timedelta(minutes=1))
+        Contest.objects.filter(pk=self.contest.pk).update(
+            end_time=timezone.now() + timedelta(hours=2),
+        )
+        self.contest.refresh_from_db()
+        self._reload_participation()
+
+        with mock.patch('judge.tasks.assignment_harvest.harvest_participation_drafts.delay') as delay:
+            self.assertEqual(harvest_contest_drafts(self.contest.key), 0)
+        delay.assert_not_called()
+
+        with mock.patch.object(Submission, 'judge', autospec=True):
+            self.assertEqual(harvest_participation_drafts(self.participation.pk), 0)
+        self.assertFalse(self._harvested_submissions().exists())
+
+    def test_the_deadline_task_collects_once_the_window_has_closed(self):
+        self._draft()
+        self._end_assignment(ago=timedelta(minutes=1))
+
+        with mock.patch.object(Submission, 'judge', autospec=True):
+            self.assertEqual(harvest_participation_drafts(self.participation.pk), 1)
+        self.assertEqual(self._harvested_submissions().count(), 1)
+
+    def test_reschedule_command_schedules_open_assignments(self):
+        with mock.patch(CONTEST_APPLY_ASYNC) as apply_async:
+            apply_async.return_value = mock.Mock(id='task-backfill')
+            out = StringIO()
+            call_command('reschedule_assignment_harvests', stdout=out)
+
+        apply_async.assert_called()
+        self.assertIn('scheduled', out.getvalue())
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.harvest_scheduled_task_id, 'task-backfill')
+
+    def test_reschedule_command_skips_ended_assignments(self):
+        self._end_assignment()
+
+        with mock.patch(CONTEST_APPLY_ASYNC) as apply_async:
+            out = StringIO()
+            call_command('reschedule_assignment_harvests', stdout=out)
+
+        apply_async.assert_not_called()
+        self.assertIn('scheduled 0', out.getvalue())
+
+
 class RecoverySweepTestCase(AutoSubmitScheduleMixin, TestCase):
     """The ETA tasks live in worker memory; this is what stops a restart from costing a class."""
-
-    def _end_assignment(self, ago=timedelta(hours=1)):
-        Contest.objects.filter(pk=self.contest.pk).update(end_time=timezone.now() - ago)
 
     def _sweep(self, *args):
         out, err = StringIO(), StringIO()
@@ -355,7 +427,7 @@ class WholeClassDeadlineTestCase(TestCase):
                                     allowed_languages=('PY3',), points=50)
         cls.contest = create_contest(
             key='wholeclassasn', name='Whole class assignment', start_time=now - timedelta(hours=1),
-            end_time=now + timedelta(minutes=5), is_visible=True,
+            end_time=now - timedelta(minutes=1), is_visible=True,
         )
         cls.contest_problems = {
             problem: ContestProblem.objects.create(

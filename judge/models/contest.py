@@ -253,15 +253,6 @@ class Contest(models.Model):
         default=True,
         help_text=_('Allow users to join virtually after the assignment ends.'),
     )
-    lock_non_code_part = models.BooleanField(
-        verbose_name=_('lock non-programming part'),
-        default=False,
-        help_text=_('Students choose whether to start with non-programming or programming '
-                    'questions. After they finish the first part, they cannot return to it. '
-                    'The site IDE is available only while they are working on programming '
-                    'problems. If this assignment has only non-programming questions, the '
-                    'site IDE stays closed for the whole assignment.'),
-    )
     allow_ai_hints = models.BooleanField(
         verbose_name=_('allow student use AI hints'),
         default=False,
@@ -877,21 +868,6 @@ class ContestParticipation(models.Model):
     virtual = models.IntegerField(verbose_name=_('virtual participation id'), default=LIVE,
                                   help_text=_('0 means non-virtual, otherwise the n-th virtual participation.'))
     format_data = JSONField(verbose_name=_('contest format specific data'), null=True, blank=True)
-    chosen_part = models.CharField(
-        verbose_name=_('chosen assignment part'),
-        max_length=16, blank=True, default='',
-        help_text=_('Which part the student started: non_code or code.'),
-    )
-    non_code_part_completed_at = models.DateTimeField(
-        verbose_name=_('non-programming part completed'),
-        null=True, blank=True,
-        help_text=_('When the student finished the non-programming part and locked those answers.'),
-    )
-    code_part_completed_at = models.DateTimeField(
-        verbose_name=_('programming part completed'),
-        null=True, blank=True,
-        help_text=_('When the student finished the programming part and locked those answers.'),
-    )
     harvest_scheduled_task_id = models.CharField(
         verbose_name=_('scheduled auto-submit task id'), max_length=255, blank=True, default='',
         help_text=_('Celery task that auto-submits this student’s saved answers when their own '

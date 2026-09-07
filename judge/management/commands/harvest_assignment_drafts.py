@@ -25,7 +25,10 @@ class Command(BaseCommand):
             'participations whose deadline has already passed. Safe to run at any time and '
             'safe to overlap with the scheduled deadline tasks, because collecting a draft is '
             'idempotent. Run from cron (recommended: */10). Exits nonzero when a participation '
-            'could not be collected, so cron MAILTO doubles as the alert channel.')
+            'could not be collected, so cron MAILTO doubles as the alert channel. '
+            'Host crontab (adjust the manage.py path): '
+            '*/10 * * * * cd /app && python3 manage.py harvest_assignment_drafts '
+            '&& python3 manage.py check_assignment_harvest_consistency')
 
     def add_arguments(self, parser):
         parser.add_argument('--grace-minutes', type=int, default=5, metavar='N',

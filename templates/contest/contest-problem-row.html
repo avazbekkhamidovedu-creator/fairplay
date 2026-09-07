@@ -1,9 +1,6 @@
-                    <tr{% if problem.part_locked %} class="part-locked-row"{% endif %}>
+                    <tr>
                         <td>
-                            {% if problem.part_locked %}
-                                {{ problem.effective_name or problem.i18n_name or problem.name }}
-                                <span class="part-lock-badge">{{ _('Locked') }}</span>
-                            {% elif request.user.is_superuser or is_editor or is_tester or contest.is_in_contest(request.user) %}
+                            {% if request.user.is_superuser or is_editor or is_tester or contest.is_in_contest(request.user) %}
                                 <a href="{{ url('problem_detail', problem.code) }}">{{ problem.effective_name or problem.i18n_name or problem.name }}</a>
                             {% elif contest.ended and (problem.is_public or has_joined) %}
                                 <a href="{{ url('problem_detail', problem.code) }}">{{ problem.effective_name or problem.i18n_name or problem.name }}</a>

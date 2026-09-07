@@ -205,7 +205,6 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.context['prefill']['name'], 'Editable')
         self.assertEqual(response.context['prefill']['description'], 'original description')
         self.assertFalse(response.context['prefill']['allow_ai_hints'])
-        self.assertFalse(response.context['prefill']['lock_non_code_part'])
 
     def test_edit_profile_selects_use_name_username_labels(self):
         """Authors/curators chips match profile_select2: Name (username)."""
@@ -233,20 +232,6 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('contest_edit', args=['editablecontest']))
         self.assertTrue(response.context['prefill']['allow_ai_hints'])
         self.assertContains(response, 'id="id_allow_ai_hints"')
-
-    def test_post_roundtrips_lock_non_code_part(self):
-        self.client.force_login(self.editor)
-        response = self.client.post(
-            reverse('contest_edit', args=['editablecontest']),
-            data=json.dumps(self._full_payload(lock_non_code_part=True)),
-            content_type='application/json',
-        )
-        self.assertEqual(response.status_code, 200, response.content)
-        self.contest.refresh_from_db()
-        self.assertTrue(self.contest.lock_non_code_part)
-        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
-        self.assertTrue(response.context['prefill']['lock_non_code_part'])
-        self.assertContains(response, 'id="id_lock_non_code_part"')
 
     def test_get_tmp_timezone_overrides_echo(self):
         """?tz=... only changes how stored UTC is echoed back, not the saved profile tz."""
@@ -1238,7 +1223,6 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertNotIn('data-sort="group"', library)
         self.assertIn('id="cp-from-library"', html)
         self.assertIn('id="id_allow_ai_hints"', html)
-        self.assertIn('id="id_lock_non_code_part"', html)
 
     def test_library_author_filter_hidden_without_problem_perm(self):
         html = self.client.get(reverse('contest_create')).content.decode()
@@ -1391,7 +1375,6 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             run_pretests_only=True, tester_see_submissions=True, tester_see_scoreboard=True,
             is_private=True, is_organization_private=True, limit_join_organizations=True,
             allow_ai_hints=True,
-            lock_non_code_part=True,
         )
         self.assertEqual(response.status_code, 200)
         contest = Contest.objects.get(key='flagtest')
@@ -1402,7 +1385,6 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertTrue(contest.is_organization_private)
         self.assertTrue(contest.limit_join_organizations)
         self.assertTrue(contest.allow_ai_hints)
-        self.assertTrue(contest.lock_non_code_part)
 
     def test_seb_fields_saved(self):
         # Keys must be valid 64-char hex hashes: model validation (full_clean)

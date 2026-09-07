@@ -16,7 +16,7 @@ from django.views.generic import View
 from judge.forms import FileSubmitForm
 from judge.models import AssignmentDraft, AssignmentDraftFile, Language, Problem, ProblemSubmissionType
 from judge.utils.assignment_draft import DraftContentError, normalize_draft_content
-from judge.utils.contest_parts import PART_OPEN, problem_part_state, user_bypasses_part_lock
+from judge.utils.assignment_harvest import user_bypasses_assignment_rules
 
 logger = logging.getLogger('judge.assignment_draft')
 
@@ -41,7 +41,7 @@ class AssignmentDraftView(LoginRequiredMixin, View):
         contest = participation.contest
         # Spectators and staff who bypass assignment rules are not being graded, so a draft of
         # theirs would only give auto-submit work that must not be submitted.
-        if participation.spectate or user_bypasses_part_lock(self.request.user, contest):
+        if participation.spectate or user_bypasses_assignment_rules(self.request.user, contest):
             return self._error(_('Answers are not saved in this mode.'), 403)
         if participation.ended:
             # The window is closed and auto-submit has already run or is about to: accepting a
@@ -51,8 +51,6 @@ class AssignmentDraftView(LoginRequiredMixin, View):
         problem = get_object_or_404(Problem, code=self.kwargs['problem'])
         if not contest.contest_problems.filter(problem_id=problem.id).exists():
             return self._error(_('This problem is not part of this assignment.'), 404)
-        if problem_part_state(participation, problem, self.request.user) != PART_OPEN:
-            return self._error(_('This part is locked.'), 403)
         return participation, problem
 
     def _save_file_draft(self, participation, problem, upload):

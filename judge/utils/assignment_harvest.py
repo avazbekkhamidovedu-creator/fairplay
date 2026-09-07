@@ -6,10 +6,9 @@ problem was never submitted, or was submitted and then edited. Those are exactly
 student loses marks on today, and nothing else has to be compared or guessed at.
 
 Harvesting can be triggered more than once for the same participation — a deadline task and the
-recovery sweep can overlap, and finishing a part happens right next to the deadline — so each
-draft is claimed with a compare-and-set on ``harvested_at`` before a submission is created. A
-claim that fails to produce a submission is released again, because a duplicate submission is a
-far smaller problem than an answer that silently disappeared.
+recovery sweep can overlap — so each draft is claimed with a compare-and-set on ``harvested_at``
+before a submission is created. A claim that fails to produce a submission is released again,
+because a duplicate submission is a far smaller problem than an answer that silently disappeared.
 """
 import logging
 
@@ -18,12 +17,44 @@ from django.utils import timezone
 
 from judge.models import AssignmentDraft, ContestProblem, ContestSubmission, Language, ProblemSubmissionType
 from judge.utils.assignment_draft import draft_answer
-from judge.utils.contest_parts import PART_CODE, user_bypasses_part_lock
 from judge.utils.submission_create import create_submission
 
-__all__ = ['harvest_participation', 'participation_is_harvestable']
+__all__ = [
+    'harvest_participation', 'participation_deadline_has_arrived',
+    'participation_is_harvestable', 'user_bypasses_assignment_rules',
+]
 
 logger = logging.getLogger('judge.assignment_harvest')
+
+
+def user_bypasses_assignment_rules(user, contest):
+    """Staff, teachers, testers and spectators are not sitting the assignment for a grade."""
+    if user is None or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    if contest.is_editable_by(user):
+        return True
+    profile_id = user.profile.id
+    if profile_id in contest.editor_ids or profile_id in contest.tester_ids or profile_id in contest.spectator_ids:
+        return True
+    if contest.is_viewable_by_org_admin(user) or contest.is_viewable_by_course_teacher(user):
+        return True
+    return False
+
+
+def participation_deadline_has_arrived(participation, now=None):
+    """Whether this student's answering window is already closed.
+
+    Scheduled deadline tasks can fire after a teacher moved the deadline later, if revoking the
+    old Celery ETA failed. Collecting then would submit work while the student is still writing.
+    ``ended`` uses a strict ``<``, so a task scheduled at the exact ``end_time`` would skip; ``<=``
+    is the check that matches "the deadline has arrived".
+    """
+    if now is None:
+        now = timezone.now()
+    end = participation.end_time
+    return end is not None and end <= now
 
 
 def participation_is_harvestable(participation):
@@ -33,7 +64,7 @@ def participation_is_harvestable(participation):
     if participation.is_disqualified:
         return False
     # Staff who read the assignment with bypass rights are not sitting it.
-    return not user_bypasses_part_lock(participation.user.user, participation.contest)
+    return not user_bypasses_assignment_rules(participation.user.user, participation.contest)
 
 
 def _claim(draft, now):
@@ -45,12 +76,8 @@ def _release(draft):
     AssignmentDraft.objects.filter(pk=draft.pk).update(harvested_at=None)
 
 
-def harvest_participation(participation, *, part=None):
-    """Submit every substantive draft ``participation`` still holds; return the submissions made.
-
-    Pass ``part`` (``PART_CODE`` or ``PART_NON_CODE``) to collect only that half of a
-    split-part assignment, leaving the other half for its own deadline.
-    """
+def harvest_participation(participation):
+    """Submit every substantive draft ``participation`` still holds; return the submissions made."""
     if not participation_is_harvestable(participation):
         return []
 
@@ -80,8 +107,6 @@ def harvest_participation(participation, *, part=None):
         contest_problem = contest_problems.get(draft.problem_id)
         if contest_problem is None:
             # The problem was removed from the assignment after the student answered it.
-            continue
-        if part is not None and (draft.problem.submission_type == ProblemSubmissionType.CODE) != (part == PART_CODE):
             continue
         if not draft.has_content():
             continue

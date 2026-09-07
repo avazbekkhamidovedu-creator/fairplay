@@ -29,18 +29,6 @@
       opacity: .35;
       cursor: not-allowed;
     }
-    .ws-part-lock-banner {
-      margin: 0 0 .75rem;
-      padding: .7rem .9rem;
-      border: 1px solid var(--oj-accent, #2980B9);
-      border-radius: var(--oj-radius, 6px);
-      background: color-mix(in srgb, var(--oj-accent, #2980B9) 8%, var(--oj-surface, #fff));
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: .65rem;
-    }
-    .drawer-problem.is-locked { opacity: .55; pointer-events: none; cursor: not-allowed; }
     .ai-grade-section {
       margin-bottom: 1rem;
       padding: .85rem 1rem;
@@ -162,13 +150,7 @@
     {% endif %}
     <div class="submit-cluster">
       {% if form and workspace_autosubmit %}
-        <span class="submit-autosave-hint" id="ws-autosave-hint">{{ _('Draft saved. If you do not submit, it is submitted automatically at the deadline.') }}</span>
-      {% endif %}
-      {% if workspace_can_finish_part %}
-        {% set part_lock = {'can_finish': true, 'finish_confirm': workspace_finish_confirm} %}
-        {% set contest = request.participation.contest %}
-        {% set button_class = 'tool-btn' %}
-        {% include "contest/finish-non-code-part.html" %}
+        <span class="submit-autosave-hint" id="ws-autosave-hint"{% if not workspace_server_draft %} hidden{% endif %}>{{ _('Draft saved. If you do not submit, it is submitted automatically at the deadline.') }}</span>
       {% endif %}
       {% if form %}<button class="tool-btn submit-btn" type="button" id="btn-submit"{% if workspace_is_code and not form.fields.language.queryset.exists() %} disabled{% endif %}{% if workspace_show_timer and workspace_timer_seconds <= 0 %} disabled{% endif %}><i class="fa fa-cloud-upload"></i> {{ _('Submit') }}</button>{% endif %}
       {% if workspace_show_timer %}
@@ -178,21 +160,6 @@
       {% endif %}
     </div>
   </div>
-  {% if workspace_part_lock %}
-    <div class="ws-part-lock-banner">
-      {% if workspace_part_lock_current == 'code' and workspace_part_lock_done %}
-        {{ _('Non-programming questions are locked. Continue with the programming problems.') }}
-      {% elif workspace_part_lock_current == 'non_code' and workspace_part_lock_done %}
-        {{ _('Programming problems are locked. Continue with the non-programming questions. The site IDE is closed.') }}
-      {% elif workspace_part_lock_current == 'code' %}
-        {{ _('You are working on programming problems. Finish this part to continue. You cannot return after continuing.') }}
-      {% elif workspace_part_lock_current == 'non_code' %}
-        {{ _('You are working on non-programming questions. Finish this part to continue. You cannot return after continuing.') }}
-      {% else %}
-        {% include "contest/start-part.html" %}
-      {% endif %}
-    </div>
-  {% endif %}
   <div class="ws-body layout-lr" id="ws-body">
     <div class="ws-drawer-backdrop" id="drawer-backdrop"></div>
     <aside class="ws-drawer" id="ws-drawer" aria-label="{{ _('Problem set') }}">
@@ -275,10 +242,8 @@
             {% set row_status = 'solved' if row_best is not none and row_best >= row_points else 'attempted' %}
           {% endif %}
           {% set row_diff = item_problem.difficulty %}
-          <a class="drawer-problem{% if item_problem.code == problem.code %} active{% endif %}{% if item.part_locked %} is-locked{% endif %}"
-             href="{% if item.part_locked %}#{% else %}{{ item_problem.get_absolute_url() }}{% if workspace_preview_query %}?{{ workspace_preview_query }}{% endif %}{% endif %}"
-             {% if item.part_locked %}aria-disabled="true" title="{{ _('Locked') }}"{% endif %}
-             data-locked="{{ '1' if item.part_locked else '0' }}"
+          <a class="drawer-problem{% if item_problem.code == problem.code %} active{% endif %}"
+             href="{{ item_problem.get_absolute_url() }}{% if workspace_preview_query %}?{{ workspace_preview_query }}{% endif %}"
              data-code="{{ item_problem.code }}"
              data-type="{{ item_problem.submission_type }}"
              data-format="{{ item_problem.format_filter_code }}"

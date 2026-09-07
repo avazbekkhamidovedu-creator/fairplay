@@ -66,12 +66,7 @@ from judge.models import (
     contest_problem_display_name,
     problem_data_storage,
 )
-from judge.utils.assignment_harvest import participation_is_harvestable
-from judge.utils.contest_parts import (
-    PART_OPEN, current_part, finish_confirm_message, first_part_done,
-    ide_blocked_response, part_lock_applies, part_lock_ui_state,
-    problem_part_lock_response, problem_part_state, user_bypasses_part_lock,
-)
+from judge.utils.assignment_harvest import participation_is_harvestable, user_bypasses_assignment_rules
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
@@ -413,13 +408,6 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
 
     def get(self, request, *args, **kwargs):
         try:
-            problem = super(ProblemMixin, self).get_object()
-        except Http404:
-            return self.no_such_problem()
-        blocked = problem_part_lock_response(request, problem)
-        if blocked is not None:
-            return blocked
-        try:
             return super(ProblemMixin, self).get(request, *args, **kwargs)
         except Http404:
             return self.no_such_problem()
@@ -517,7 +505,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         if contest_problem is None or participation.spectate or participation.ended:
             return
         contest = participation.contest
-        if user_bypasses_part_lock(self.request.user, contest):
+        if user_bypasses_assignment_rules(self.request.user, contest):
             return
         context['workspace_draft_url'] = reverse('assignment_draft', args=[contest.key, self.object.code])
         draft = AssignmentDraft.objects.filter(participation=participation, problem=self.object).first()
@@ -691,22 +679,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             cp_qs = ContestProblem.objects.filter(
                 contest=contest_problem.contest,
             ).select_related('problem')
-            nav_user = self.request.user
-            nav_part = current_participation
-            context['next_contest_problem'] = next(
-                (
-                    cp for cp in cp_qs.filter(order__gt=contest_problem.order).order_by('order')
-                    if problem_part_state(nav_part, cp.problem, nav_user) == PART_OPEN
-                ),
-                None,
-            )
-            context['prev_contest_problem'] = next(
-                (
-                    cp for cp in cp_qs.filter(order__lt=contest_problem.order).order_by('-order')
-                    if problem_part_state(nav_part, cp.problem, nav_user) == PART_OPEN
-                ),
-                None,
-            )
+            context['next_contest_problem'] = cp_qs.filter(order__gt=contest_problem.order).order_by('order').first()
+            context['prev_contest_problem'] = cp_qs.filter(order__lt=contest_problem.order).order_by('-order').first()
             lang = self.request.LANGUAGE_CODE
             for nav in (context['next_contest_problem'], context['prev_contest_problem']):
                 if nav is not None:
@@ -943,33 +917,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                 context['form'] = grader.build_form(self.object, self.request.profile)
                 context['submit_url'] = reverse('problem_submit', args=[self.object.code])
 
-        self._attach_workspace_part_lock(context, current_participation)
         return context
-
-    def _attach_workspace_part_lock(self, context, participation):
-        contest = participation.contest if participation is not None else None
-        applies = bool(contest and part_lock_applies(contest))
-        bypass = bool(contest and user_bypasses_part_lock(self.request.user, contest))
-        done = bool(participation and first_part_done(participation))
-        current = current_part(participation) if participation and not bypass else ''
-        context['workspace_part_lock'] = applies and not bypass
-        context['workspace_part_lock_done'] = done
-        context['workspace_part_lock_current'] = current
-        context['workspace_can_finish_part'] = bool(
-            applies and participation and current and not done and not bypass and not participation.spectate,
-        )
-        context['workspace_finish_confirm'] = (
-            finish_confirm_message(participation) if participation else ''
-        )
-        context['part_lock'] = part_lock_ui_state(contest, participation, self.request.user) if contest else {}
-        if contest is not None:
-            context['contest'] = contest
-        for item in context.get('workspace_problems') or []:
-            problem = item.problem if getattr(item, 'problem', None) is not None else item
-            item.part_locked = (
-                applies and not bypass
-                and problem_part_state(participation, problem, self.request.user) != PART_OPEN
-            )
 
     def post(self, request, *args, **kwargs):
         """Post submission comments from the Result tab.
@@ -1614,15 +1562,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             )
             context['title_url'] = reverse('contest_view', args=[self.contest.key])
             context['title_crumb'] = _('Problems')
-            participation = self.profile.current_contest
             context['contest'] = self.contest
-            context['part_lock'] = part_lock_ui_state(self.contest, participation, self.request.user)
-            for problem in context.get('problems') or []:
-                problem['part_locked'] = (
-                    context['part_lock']['enabled']
-                    and not context['part_lock']['bypass']
-                    and problem_part_state(participation, problem, self.request.user) != PART_OPEN
-                )
         return context
 
     def get_noui_slider_points(self):
@@ -2130,21 +2070,6 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 _('Too many submissions'),
                 _('You have exceeded the submission limit for this problem.'),
             )
-        locked = problem_part_lock_response(self.request, self.object)
-        if locked is not None:
-            if self._wants_workspace_json():
-                participation = getattr(self.request, 'participation', None)
-                if participation is None:
-                    participation = getattr(self.request.profile, 'current_contest', None)
-                state = problem_part_state(participation, self.object, self.request.user)
-                if state == 'non_code_locked':
-                    message = _('You have finished the non-programming part '
-                                'and cannot return to those questions.')
-                else:
-                    message = _('Finish the non-programming questions first. '
-                                'Programming problems stay closed until then.')
-                return self._workspace_json_error(message, status=403)
-            return locked
         return None
 
     def _create_submission(self, language, answer, judge_id=None):
@@ -2656,14 +2581,6 @@ class ProblemWorkspaceRun(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, V
             return JsonResponse({'error': _('This language is not allowed for this problem.')}, status=400)
         if request.profile.current_contest and not get_contest_problem(self.object, request.profile):
             return JsonResponse({'error': _('This problem is not in your active assignment.')}, status=403)
-        ide_blocked = ide_blocked_response(request, json_mode=True)
-        if ide_blocked is not None:
-            return ide_blocked
-        locked = problem_part_lock_response(request, self.object)
-        if locked is not None:
-            return JsonResponse({
-                'error': _('This problem is locked until you finish the current assignment part.'),
-            }, status=403)
         # Reuse the site IDE endpoint as-is: same rate limits, source/input
         # caps, output truncation, and bridge protocol. Submissions are filed
         # under the internal `idepractice` sandbox problem (see IDE_PROBLEM_CODE)
