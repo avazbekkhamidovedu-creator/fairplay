@@ -233,6 +233,12 @@
     var language = languageSelect();
     queueServerDraft(sourceValue(), language ? language.value : '');
   }
+  function resetFileInputs() {
+    // After a successful submit the input still holds that file. Picking a revised copy with the
+    // same name does not fire `change` in most browsers, so the new answer would never be saved
+    // as a draft. Clearing the value makes the next selection a real change.
+    $$('.ws-file-upload input[type="file"]').forEach(function (input) { input.value = ''; });
+  }
   function clearCurrentDrafts() {
     // Called after a successful submit, which already dropped the server draft. Cancelling the
     // pending save matters: otherwise a queued keystroke lands afterwards and recreates the draft,
@@ -241,6 +247,8 @@
     // The submit deleted the whole draft server-side, file included, so the "saved" line would
     // otherwise still be advertising a file that is no longer held for this student.
     setFileDraftLine('');
+    showAutosaveHint(false);
+    resetFileInputs();
     if (!draftsEnabled() || !window.localStorage) return;
     var prefix = draftContextPrefix() + '-';
     var toRemove = [];

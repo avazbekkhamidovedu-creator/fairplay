@@ -7,7 +7,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('judge', '0214_lock_non_code_part'),
+        ('judge', '0213_contestproblem_display_name'),
     ]
 
     operations = [

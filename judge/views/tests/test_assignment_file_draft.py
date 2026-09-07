@@ -196,6 +196,21 @@ class FileDraftUploadTestCase(FileDraftTestMixin, TestCase):
         self.assertIsNone(response.context['workspace_draft_upload'])
         self.assertNotContains(response, 'Saved: ')
 
+    def test_uploading_after_hand_submit_saves_a_new_draft(self):
+        # A successful submit deletes the draft. Picking another file has to create one again,
+        # otherwise a student who revises after submitting once has nothing for auto-submit.
+        self.client.post(reverse('problem_submit', args=[self.problem.code]), {'file': _pdf()})
+
+        response = self._upload(_pdf('revised.pdf', b'%PDF-1.4 the revised answer'))
+
+        self.assertEqual(response.status_code, 200)
+        stored = self._draft_file()
+        self.assertEqual(stored.original_name, 'revised.pdf')
+        self.assertEqual(stored.file.read(), b'%PDF-1.4 the revised answer')
+        page = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(page.context['workspace_draft_upload'],
+                         {'name': 'revised.pdf', 'size': len(b'%PDF-1.4 the revised answer')})
+
 
 class FileDraftHarvestTestCase(FileDraftTestMixin, TestCase):
     """At the deadline the saved file has to become a submission a teacher can actually open."""
@@ -243,6 +258,48 @@ class FileDraftHarvestTestCase(FileDraftTestMixin, TestCase):
         self.assertEqual(row['upload']['download_url'],
                          reverse('submission_file_download', args=(submission.id,)))
 
+    def test_a_one_shot_store_stream_is_still_collected(self):
+        # Production reads go to S3: the object is there, but the stream cannot rewind.
+        # ResilientStorage hashes then writes, so wrapping that stream used to raise,
+        # release the claim, and leave Grade with only the hand-submitted file.
+        self._upload()
+
+        original_open = self.storage.primary.open
+
+        class OneShotStream:
+            def __init__(self, data):
+                self._data = data
+                self._pos = 0
+                self.closed = False
+
+            def read(self, size=-1):
+                if size is None or size < 0:
+                    chunk = self._data[self._pos:]
+                    self._pos = len(self._data)
+                    return chunk
+                chunk = self._data[self._pos:self._pos + size]
+                self._pos += len(chunk)
+                return chunk
+
+            def seekable(self):
+                return False
+
+            def seek(self, *args, **kwargs):
+                raise OSError('not seekable')
+
+            def close(self):
+                self.closed = True
+
+        def open_once(name, mode='rb'):
+            return OneShotStream(original_open(name, mode).read())
+
+        with mock.patch.object(self.storage.primary, 'open', side_effect=open_once):
+            created = self._harvest()
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].upload.original_name, 'report.pdf')
+        self.assertEqual(created[0].upload.file.read(), PDF)
+
     def test_the_teacher_can_download_what_was_collected(self):
         self._upload()
         submission = self._harvest()[0]
@@ -274,6 +331,26 @@ class FileDraftHarvestTestCase(FileDraftTestMixin, TestCase):
 
         self.assertEqual(self._harvest(), [])
         self.assertEqual(Submission.objects.filter(contest_object=self.contest).count(), 1)
+
+    def test_a_new_file_after_hand_submit_is_saved_and_collected(self):
+        # Submit once, then pick a replacement: that second file is the answer auto-submit must
+        # still collect. The first upload is already a real submission and must be left alone.
+        self._upload()
+        self.client.post(reverse('problem_submit', args=[self.problem.code]), {'file': _pdf()})
+
+        response = self._upload(_pdf('revised.pdf', b'%PDF-1.4 the revised answer'))
+
+        self.assertEqual(response.status_code, 200)
+        stored = self._draft_file()
+        self.assertEqual(stored.original_name, 'revised.pdf')
+        self.assertTrue(stored.draft.has_content())
+
+        created = self._harvest()
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].upload.original_name, 'revised.pdf')
+        self.assertEqual(created[0].upload.file.read(), b'%PDF-1.4 the revised answer')
+        self.assertEqual(Submission.objects.filter(contest_object=self.contest).count(), 2)
 
     def test_a_file_the_store_cannot_produce_costs_only_itself(self):
         # Reading a file draft goes to the object store, which fails in ways this code has no list

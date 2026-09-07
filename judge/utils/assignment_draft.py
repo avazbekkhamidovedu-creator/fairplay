@@ -7,6 +7,7 @@ way out. Anything that does not fit is rejected at save time rather than becomin
 submission at the deadline.
 """
 import json
+from tempfile import SpooledTemporaryFile
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.files import File
@@ -102,6 +103,27 @@ def normalize_draft_content(problem, raw):
     return content
 
 
+def _seekable_copy(field_file):
+    """Read ``field_file`` once into a spool the submission store can hash and rewind.
+
+    Remote object stores (S3, Box) return a stream that is finished after one pass.
+    Opening it first does not make it seekable — that only looks true for local files,
+    which is why harvest tests against FileSystemStorage never caught the miss.
+    """
+    field_file.open('rb')
+    try:
+        spool = SpooledTemporaryFile(max_size=1024 * 1024)
+        while True:
+            chunk = field_file.read(65536)
+            if not chunk:
+                break
+            spool.write(chunk)
+        spool.seek(0)
+        return spool
+    finally:
+        field_file.close()
+
+
 def draft_answer(draft):
     """The draft's content as the cleaned-data ``create_submission`` expects for its problem."""
     submission_type = draft.problem.submission_type
@@ -120,13 +142,12 @@ def draft_answer(draft):
             upload = draft.upload
         except ObjectDoesNotExist:
             raise DraftContentError(_('Draft has no uploaded file.'))
-        # A plain File, never the FieldFile itself. Assigning one model's FieldFile to another
-        # model's FileField re-points the new row at the *same* object instead of copying it, so
-        # deleting the draft afterwards would take the submission's file with it. Naming it after
-        # the student's own filename is also what gets that name onto the graded submission.
-        #
-        # Opened first: an unopened FieldFile reports itself closed, which makes the wrapper
-        # report itself unseekable, and the storage refuses content it cannot rewind and hash.
-        upload.file.open('rb')
-        return {'file': File(upload.file, name=upload.original_name)}
+        if not upload.file:
+            raise DraftContentError(_('Draft has no uploaded file.'))
+        # A local, seekable copy — never the FieldFile. Two reasons, both fatal if skipped:
+        # assigning one model's FieldFile to another re-points at the same object, so deleting
+        # the draft would take the graded file with it; and S3 (django-storages) hands back a
+        # one-shot stream. ResilientStorage hashes then rewinds before it writes, so wrapping
+        # that stream is exactly the "unseekable" rejection that leaves a Saved draft uncollected.
+        return {'file': File(_seekable_copy(upload.file), name=upload.original_name)}
     raise DraftContentError(_('Drafts are not supported for this question type.'))
