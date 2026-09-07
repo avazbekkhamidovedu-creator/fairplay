@@ -47,7 +47,7 @@ from judge import contest_format
 from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
-from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestSubmission, \
+from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, \
     ContestTag, Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade, \
     contest_problem_display_name
 from judge.models.profile import Class, Organization
