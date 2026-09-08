@@ -6,7 +6,6 @@ from io import BytesIO
 from unittest import mock
 
 import yaml
-
 from django.contrib.admin.models import ADDITION, CHANGE, LogEntry
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.base import ContentFile
