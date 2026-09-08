@@ -109,38 +109,50 @@ class FillBlankQuestionType(QuestionType):
 
         # AI mode scores the whole response; fall back to exact matching if the model is unavailable
         # or errors, so a misconfigured LLM never leaves a submission ungraded.
-        if config is not None and config.grading_mode == GRADE_AI:
-            from judge.utils.contest_ai import (
-                contest_awaits_student_ai, contest_defers_ai, should_run_ai_now,
-                student_allowed_ai_grading,
+        from judge.utils.contest_ai import (
+            contest_awaits_student_ai, contest_defers_ai, lightweight_ai_feedback_ok,
+            resolve_contest_for_ai, should_run_ai_now, student_allowed_ai_grading,
+        )
+        use_ai_pipeline = (
+            (config is not None and config.grading_mode == GRADE_AI)
+            or (
+                getattr(submission, '_ai_batch_pass', False)
+                and lightweight_ai_feedback_ok(submission)
             )
+        )
+        if use_ai_pipeline:
             if should_run_ai_now(submission):
                 graded = self._grade_ai(problem, config, blanks, answers)
                 if graded is not None:
                     return graded
-            elif contest_defers_ai(submission):
-                weights = _blank_weights(blanks)
-                case_total = sum(weights)
-                cases = [{
-                    'case': index + 1, 'status': 'IR', 'points': 0, 'total': weight,
-                    'feedback': '',
-                    'extended_feedback': _('Awaiting batch AI grading.'),
-                } for index, weight in enumerate(weights)]
-                return GradingResult(case_points=0, case_total=case_total, result='IE', cases=cases)
-            elif contest_awaits_student_ai(submission):
-                contest = getattr(submission, 'contest_object', None)
-                if contest is None or student_allowed_ai_grading(contest):
-                    msg = _('Request AI grading to score this submission.')
-                else:
-                    msg = _('Awaiting teacher review.')
-                weights = _blank_weights(blanks)
-                case_total = sum(weights)
-                cases = [{
-                    'case': index + 1, 'status': 'IR', 'points': 0, 'total': weight,
-                    'feedback': '',
-                    'extended_feedback': msg,
-                } for index, weight in enumerate(weights)]
-                return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
+            elif config is not None and config.grading_mode == GRADE_AI:
+                if contest_defers_ai(submission):
+                    weights = _blank_weights(blanks)
+                    case_total = sum(weights)
+                    cases = [{
+                        'case': index + 1, 'status': 'IR', 'points': 0, 'total': weight,
+                        'feedback': '',
+                        'extended_feedback': _('Awaiting batch AI grading.'),
+                    } for index, weight in enumerate(weights)]
+                    return GradingResult(case_points=0, case_total=case_total, result='IE', cases=cases)
+                if contest_awaits_student_ai(submission):
+                    try:
+                        viewer = submission.user.user
+                    except Exception:
+                        viewer = None
+                    contest = resolve_contest_for_ai(submission, user=viewer)
+                    if contest is None or student_allowed_ai_grading(contest):
+                        msg = _('Request AI grading to score this submission.')
+                    else:
+                        msg = _('Awaiting teacher review.')
+                    weights = _blank_weights(blanks)
+                    case_total = sum(weights)
+                    cases = [{
+                        'case': index + 1, 'status': 'IR', 'points': 0, 'total': weight,
+                        'feedback': '',
+                        'extended_feedback': msg,
+                    } for index, weight in enumerate(weights)]
+                    return GradingResult(case_points=0, case_total=case_total, result='IR', cases=cases)
         return self._grade_exact(config, blanks, answers)
 
     def _grade_exact(self, config, blanks, answers):

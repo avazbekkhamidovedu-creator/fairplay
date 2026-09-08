@@ -510,11 +510,17 @@
         border-left-width: .5em;
         border-radius: 4px;
         color: $color_primary75;
+        max-height: 240px;
+        overflow: auto;
     }
 
     .case-output {
         margin: 0;
         margin-right: 1em;
+        max-height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
     }
 
     table td {
@@ -617,15 +623,77 @@
 .ai-sq-name { font-weight: 500; color: var(--oj-text); }
 .ai-sq-score { font-family: monospace; font-size: 13px; }
 .ai-sq-status { font-size: 13px; padding: 4px 12px; border-radius: 3px; }
-.ai-sq-feedback { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--oj-text-muted); }
+.ai-sq-feedback { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--oj-text-muted); text-align: center; }
 /* Chevron rotation on toggle */
 .ai-chevron { font-size: 12px; color: var(--oj-text-muted); margin-right: 2px; transition: transform 0.2s; }
 .ai-grading-row.open .ai-chevron { transform: rotate(90deg); }
 .ai-grading-total td { background: var(--oj-bg); font-size: 14px; font-weight: 600; border-top: 2px solid var(--oj-border); padding: 16px 18px; }
 .ai-feedback-box { padding: 10px 14px; background: var(--oj-info-soft); border-left: 4px solid var(--oj-info);
-    margin: 4px 0; border-radius: 0 4px 4px 0; }
+    margin: 4px 0; border-radius: 0 4px 4px 0; max-height: 280px; overflow: auto; }
 .ai-feedback-box strong { font-size: 12px; color: var(--oj-info); }
-.ai-feedback-box p { margin: 6px 0 0; font-size: 13px; color: var(--oj-text); line-height: 1.5; }
+.ai-feedback-box p { margin: 6px 0 0; font-size: 13px; color: var(--oj-text); line-height: 1.5; word-break: break-word; }
+
+/* Shared with Grade desk: Result summary + Test results / AI Feedback partitions. */
+.gd-result-summary { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 13px; margin-bottom: 1rem; }
+.gd-result-summary .rs-label {
+    color: var(--oj-text-muted); font-size: 11px; text-transform: uppercase;
+}
+.gd-result-summary .rs-value { font-weight: 700; color: var(--oj-text); }
+.gd-section-title {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--oj-text); margin: 0.85rem 0 0.35rem;
+}
+.gd-section-title:first-child { margin-top: 0.15rem; }
+.gd-section-hint {
+    font-size: 11px; color: var(--oj-text-muted); margin: 0 0 0.4rem; line-height: 1.4;
+}
+.gd-ai-section {
+    margin-top: 0.85rem; padding-top: 0.65rem; border-top: 1px solid var(--oj-border);
+}
+.gd-cases-scroll {
+    max-height: min(40vh, 360px); overflow: auto; margin-top: 0.25rem;
+    border: 1px solid var(--oj-border); border-radius: 6px;
+}
+.gd-ai-section .gd-cases-scroll { max-height: min(36vh, 320px); }
+.gd-testcases { width: 100%; border-collapse: collapse; font-size: 12px; }
+.gd-testcases th, .gd-testcases td {
+    border-bottom: 1px solid var(--oj-border); padding: 0.3rem 0.45rem;
+    text-align: left; vertical-align: top;
+}
+.gd-testcases th {
+    color: var(--oj-text-muted); font-weight: 600; position: sticky; top: 0;
+    background: var(--oj-surface); z-index: 1;
+}
+.gd-testcases tr:last-child td { border-bottom: none; }
+.gd-testcases .case-row.toggle { cursor: pointer; }
+.gd-ai-grading { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 0; }
+.gd-ai-grading th, .gd-ai-grading td {
+    border-bottom: 1px solid var(--oj-border); padding: 0.4rem 0.5rem;
+    vertical-align: top; text-align: left;
+}
+.gd-ai-grading th {
+    color: var(--oj-text-muted); font-weight: 600; background: var(--oj-bg);
+    position: sticky; top: 0; z-index: 1;
+}
+.gd-ai-grading .ac { text-align: center; white-space: nowrap; }
+.gd-ai-grading tr.gd-ai-row.has-detail { cursor: pointer; }
+.gd-ai-grading tr.gd-ai-row.has-detail:hover { background: var(--oj-bg); }
+.gd-ai-grading .gd-ai-chevron { margin-right: 0.3rem; color: var(--oj-text-muted); }
+.gd-ai-grading td.gd-ai-preview {
+    max-width: 280px; max-height: 4.8em; overflow: auto;
+    white-space: normal; word-break: break-word;
+}
+.gd-ai-detail td { background: var(--oj-info-soft); }
+.gd-ai-detail .gd-ai-feedback-box {
+    padding: 0.5rem 0.65rem; border-left: 3px solid var(--oj-info);
+    max-height: 240px; overflow: auto;
+}
+.gd-ai-detail .gd-ai-feedback-box strong {
+    display: block; font-size: 11px; color: var(--oj-info); margin-bottom: 0.2rem;
+}
+.gd-ai-detail .gd-ai-feedback-box p {
+    margin: 0; white-space: pre-wrap; line-height: 1.45; word-break: break-word;
+}
 
 /* --- AI grading loading spinner --- */
 .ai-grading-loading {

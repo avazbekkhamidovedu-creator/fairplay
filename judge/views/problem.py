@@ -123,11 +123,20 @@ def workspace_ai_grade_fields(request, submission):
     """On-demand AI grading button state for the Workspace / submit JSON."""
     from judge.utils.contest_ai import ai_grade_context, problem_has_ai_grading
 
-    ctx = ai_grade_context(request.user, submission)
+    contest = None
+    try:
+        current = getattr(request.profile, 'current_contest', None)
+        if current is not None:
+            contest = current.contest
+    except Exception:
+        contest = None
+    ctx = ai_grade_context(request.user, submission, contest=contest)
     fields = {
         'can_trigger_ai_grade': bool(ctx.get('can_trigger')),
         'ai_grade_remaining': ctx.get('remaining', 0),
         'problem_has_ai_grading': problem_has_ai_grading(submission.problem),
+        # Students see Feedback text only; teachers still see numeric AI scores.
+        'show_ai_scores': bool(ctx.get('is_teacher')),
     }
     if fields['can_trigger_ai_grade']:
         fields['ai_grade_url'] = reverse('submission_ai_grade', args=[submission.id])

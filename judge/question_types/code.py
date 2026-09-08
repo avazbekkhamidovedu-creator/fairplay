@@ -183,8 +183,11 @@ def supplementary_ai_grade(submission):
 
     problem = submission.problem
     config = _config(problem)
+    from judge.utils.contest_ai import lightweight_ai_feedback_ok
     if config is None or not config.ai_enabled:
-        return None
+        # Assignment Allow ON: still score Overall from statement + code.
+        if not lightweight_ai_feedback_ok(submission):
+            return None
     if not llm.is_configured():
         return None
 

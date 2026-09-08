@@ -11,8 +11,8 @@ from judge.models import Contest, ContestSubmission, Language, ProblemCodeConfig
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
     create_contest_problem, create_problem, create_user
 from judge.utils.contest_ai import (
-    is_latest_submission, latest_submissions_for_contest, should_run_ai_now, student_can_trigger_ai,
-    supersede_older_in_flight,
+    is_latest_submission, latest_submissions_for_contest, problem_has_ai_grading,
+    should_run_ai_now, student_can_trigger_ai, supersede_older_in_flight,
 )
 
 
@@ -55,7 +55,7 @@ class ContestAIGradingCreateTestCase(CommonDataMixin, TestCase):
         html = response.content.decode()
         self.assertIn('id_allow_student_ai_grading', html)
         self.assertIn('id_ai_grading_auto_delay_minutes', html)
-        self.assertIn('Allow Student Use AI Grading', html)
+        self.assertIn('Allow Student Use AI Feedback', html)
         self.assertIn('Allow Student Use AI Hint', html)
         self.assertIn('id_auto_grade_after_end', html)
         self.assertNotIn('id_ai_grading_mode', html)
@@ -194,6 +194,80 @@ class ContestAIGradingHelpersTestCase(CommonDataMixin, TestCase):
             self.assertFalse(student_can_trigger_ai(self.student, self.newer))
             self.assertTrue(student_can_trigger_ai(self.author, self.newer))
 
+    def test_master_switch_assignment_off_problem_on_hides_student_button(self):
+        """Problem AI on + assignment allow off → student blocked; teacher allowed."""
+        self.contest.allow_student_ai_grading = False
+        self.contest.save(update_fields=['allow_student_ai_grading'])
+        self.newer.status = 'D'
+        self.newer.result = 'AC'
+        self.newer.time = 0.01
+        self.newer.memory = 1024
+        self.newer.save(update_fields=['status', 'result', 'time', 'memory'])
+        self.newer = Submission.objects.select_related(
+            'contest_object', 'problem', 'user__user',
+        ).get(pk=self.newer.pk)
+        with self.settings(DMOJ_AI_GRADING_STUDENT_QUOTA=100):
+            self.assertFalse(student_can_trigger_ai(self.student, self.newer))
+            self.assertTrue(student_can_trigger_ai(self.author, self.newer))
+            client = Client()
+            client.force_login(self.student)
+            page = client.get(reverse('submission_status', args=[self.newer.id]))
+            self.assertEqual(page.status_code, 200)
+            self.assertNotContains(page, 'View AI Feedback')
+
+    def test_master_switch_assignment_on_problem_off_shows_student_button(self):
+        """Assignment Allow ON enables Feedback on supported types without problem AI."""
+        from judge.models import ProblemShortAnswerConfig
+
+        sa = create_problem(code='ailightsa', submission_type='S', points=10)
+        ProblemShortAnswerConfig.objects.create(problem=sa, reference_answer='x', ai_enabled=False)
+        create_contest_problem(contest=self.contest, problem=sa, points=10, order=2)
+        self.contest.allow_student_ai_grading = True
+        self.contest.save(update_fields=['allow_student_ai_grading'])
+        self.assertFalse(problem_has_ai_grading(sa))
+
+        lang = Language.get_default_language()
+        sub = Submission.objects.create(
+            user=self.student.profile, problem=sa, language=lang,
+            status='D', result='IR', contest_object=self.contest,
+        )
+        SubmissionSource.objects.create(submission=sub, source='{"text":"maybe"}')
+        sub = Submission.objects.select_related(
+            'contest_object', 'problem', 'user__user',
+        ).get(pk=sub.pk)
+
+        with self.settings(DMOJ_AI_GRADING_STUDENT_QUOTA=100):
+            self.assertTrue(should_run_ai_now(sub, manual_trigger=True))
+            self.assertTrue(student_can_trigger_ai(self.student, sub))
+            self.assertTrue(student_can_trigger_ai(self.author, sub))
+            client = Client()
+            client.force_login(self.student)
+            page = client.get(reverse('submission_status', args=[sub.id]))
+            self.assertEqual(page.status_code, 200)
+            self.assertContains(page, 'View AI Feedback')
+
+    def test_master_switch_uses_active_contest_when_submission_missing_contest_object(self):
+        """In-assignment workspace must not fall through to practice rules."""
+        self.contest.allow_student_ai_grading = False
+        self.contest.save(update_fields=['allow_student_ai_grading'])
+        self.newer.status = 'D'
+        self.newer.result = 'AC'
+        self.newer.contest_object = None
+        self.newer.save(update_fields=['status', 'result', 'contest_object'])
+        self.student.profile.current_contest = self.part
+        self.student.profile.save(update_fields=['current_contest'])
+        self.newer = Submission.objects.select_related(
+            'contest_object', 'problem', 'user__user',
+        ).get(pk=self.newer.pk)
+        with self.settings(DMOJ_AI_GRADING_STUDENT_QUOTA=100):
+            # Without active contest context this would look like practice (allowed).
+            self.student.profile.current_contest = None
+            self.student.profile.save(update_fields=['current_contest'])
+            self.assertTrue(student_can_trigger_ai(self.student, self.newer))
+            self.student.profile.current_contest = self.part
+            self.student.profile.save(update_fields=['current_contest'])
+            self.assertFalse(student_can_trigger_ai(self.student, self.newer))
+
 
 class ContestBatchAIGradeViewTestCase(CommonDataMixin, TestCase):
     @classmethod
@@ -221,8 +295,12 @@ class ContestBatchAIGradeViewTestCase(CommonDataMixin, TestCase):
         client.force_login(self.author)
         response = client.get(self.grade_url)
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.context['grade_ai_batch'])
-        self.assertIn('Batch grading', response.content.decode())
+        html = response.content.decode()
+        # Jinja TemplateResponse may leave response.context unset; assert on rendered JS/UI.
+        if response.context is not None:
+            self.assertTrue(response.context['grade_ai_batch'])
+        self.assertIn('aiBatchMode = true', html)
+        self.assertTrue(('Batch grading' in html) or ('AI Feedback' in html))
 
     def test_post_queues_task(self):
         client = Client()

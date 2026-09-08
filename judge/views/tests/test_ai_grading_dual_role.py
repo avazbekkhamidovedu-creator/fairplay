@@ -25,7 +25,8 @@ from judge.models.tests.util import (
     create_problem, create_user,
 )
 from judge.utils.contest_ai import (
-    contest_awaits_student_ai, problem_has_ai_grading, should_run_ai_now, student_can_trigger_ai,
+    contest_awaits_student_ai, problem_has_ai_grading, problem_supports_ai_feedback,
+    should_run_ai_now, student_can_trigger_ai,
 )
 
 
@@ -185,8 +186,13 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
             for kind, problem, _cp in self.contests[key]['problems']:
                 sub = _done_sub(self.student, problem, self.contests[key]['contest'], 'x')
                 self.assertFalse(should_run_ai_now(sub), msg='%s %s' % (key, kind))
-                if problem_has_ai_grading(problem):
-                    self.assertTrue(should_run_ai_now(sub, manual_trigger=True))
+                # Assignment Allow ON → all supported types (problem AI optional).
+                if problem_supports_ai_feedback(problem):
+                    self.assertTrue(should_run_ai_now(sub, manual_trigger=True),
+                                    msg='%s %s' % (key, kind))
+                else:
+                    self.assertFalse(should_run_ai_now(sub, manual_trigger=True),
+                                     msg='%s %s' % (key, kind))
 
     def test_exam_batch_only_runs_on_batch_pass(self):
         for key in ('ex1', 'ex2'):
@@ -211,33 +217,33 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
     def test_student_quota_zero_hides_button_teacher_sees_it_on_homework_ai(self):
         for key in ('hw1', 'hw2'):
             for kind, problem, sub in self._subs_for(key):
-                has_ai = problem_has_ai_grading(problem)
+                supports = problem_supports_ai_feedback(problem)
                 self.assertFalse(student_can_trigger_ai(self.student, sub), msg=kind)
                 student_page = self._status(self.student_client, sub)
                 self.assertEqual(student_page.status_code, 200)
-                self.assertNotContains(student_page, 'View AI grading')
+                self.assertNotContains(student_page, 'View AI Feedback')
                 teacher_page = self._status(self.teacher_client, sub)
                 self.assertEqual(teacher_page.status_code, 200)
-                if has_ai:
+                if supports:
                     self.assertTrue(student_can_trigger_ai(self.teacher, sub), msg=kind)
-                    self.assertContains(teacher_page, 'View AI grading')
+                    self.assertContains(teacher_page, 'View AI Feedback')
                 else:
                     self.assertFalse(student_can_trigger_ai(self.teacher, sub), msg=kind)
-                    self.assertNotContains(teacher_page, 'View AI grading')
+                    self.assertNotContains(teacher_page, 'View AI Feedback')
 
     def test_exam_student_no_button_teacher_can_trigger_ai_types(self):
         for key in ('ex1', 'ex2'):
             for kind, problem, sub in self._subs_for(key):
                 student_page = self._status(self.student_client, sub)
                 self.assertEqual(student_page.status_code, 200)
-                self.assertNotContains(student_page, 'View AI grading')
+                self.assertNotContains(student_page, 'View AI Feedback')
                 teacher_page = self._status(self.teacher_client, sub)
                 self.assertEqual(teacher_page.status_code, 200)
                 if problem_has_ai_grading(problem):
                     self.assertTrue(student_can_trigger_ai(self.teacher, sub), msg='%s %s' % (key, kind))
-                    self.assertContains(teacher_page, 'View AI grading')
+                    self.assertContains(teacher_page, 'View AI Feedback')
                 else:
-                    self.assertNotContains(teacher_page, 'View AI grading')
+                    self.assertNotContains(teacher_page, 'View AI Feedback')
 
     def test_off_student_hidden_teacher_can_force_ai(self):
         """AI grading Off: students never see the button; teachers still can
@@ -246,15 +252,15 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
             for kind, problem, sub in self._subs_for(key):
                 student_page = self._status(self.student_client, sub)
                 self.assertEqual(student_page.status_code, 200)
-                self.assertNotContains(student_page, 'View AI grading')
+                self.assertNotContains(student_page, 'View AI Feedback')
                 teacher_page = self._status(self.teacher_client, sub)
                 self.assertEqual(teacher_page.status_code, 200)
                 if problem_has_ai_grading(problem):
                     self.assertTrue(student_can_trigger_ai(self.teacher, sub), msg='%s %s' % (key, kind))
-                    self.assertContains(teacher_page, 'View AI grading')
+                    self.assertContains(teacher_page, 'View AI Feedback')
                 else:
                     self.assertFalse(student_can_trigger_ai(self.teacher, sub), msg='%s %s' % (key, kind))
-                    self.assertNotContains(teacher_page, 'View AI grading')
+                    self.assertNotContains(teacher_page, 'View AI Feedback')
 
     def test_other_student_cannot_view_or_trigger(self):
         _, _, sub = self._subs_for('hw1')[0]
@@ -329,15 +335,16 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         cache.clear()
         for key in ('hw1', 'hw2', 'ex1', 'off1'):
             for kind, problem, sub in self._subs_for(key):
-                if not problem_has_ai_grading(problem):
-                    self.assertFalse(student_can_trigger_ai(self.student, sub), msg='%s %s' % (key, kind))
-                    continue
-                if key in ('hw1', 'hw2'):
-                    self.assertTrue(student_can_trigger_ai(self.student, sub), msg='%s %s' % (key, kind))
+                supports = problem_supports_ai_feedback(problem)
+                if key in ('hw1', 'hw2') and supports:
+                    # Master switch: assignment Allow alone on supported types.
+                    self.assertTrue(student_can_trigger_ai(self.student, sub),
+                                    msg='%s %s' % (key, kind))
                     page = self._status(self.student_client, sub)
-                    self.assertContains(page, 'View AI grading')
+                    self.assertContains(page, 'View AI Feedback')
                 else:
-                    self.assertFalse(student_can_trigger_ai(self.student, sub), msg='%s %s' % (key, kind))
+                    self.assertFalse(student_can_trigger_ai(self.student, sub),
+                                     msg='%s %s' % (key, kind))
 
     @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=10)
     def test_student_rate_limit_five_per_problem(self):
@@ -353,7 +360,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
             self.assertIn('try again later', resp.json()['error'].lower())
             # Button stays available; limit is soft (no ban).
             page = self._status(self.student_client, sa)
-            self.assertContains(page, 'View AI grading')
+            self.assertContains(page, 'View AI Feedback')
             # A different AI problem is still allowed (limit is per problem).
             code_ai = [row for row in self._subs_for('hw1') if row[0] == 'codeai'][0][2]
             resp = self._ai_post(self.student_client, code_ai)
@@ -380,11 +387,16 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
             url = reverse('contest_grade', args=[key])
             teacher = self.teacher_client.get(url)
             self.assertEqual(teacher.status_code, 200, key)
+            html = teacher.content.decode()
             if expect_btn:
-                self.assertTrue(teacher.context['grade_ai_batch'])
-                self.assertIn('Batch grading', teacher.content.decode())
+                if teacher.context is not None:
+                    self.assertTrue(teacher.context['grade_ai_batch'])
+                self.assertIn('aiBatchMode = true', html)
+                self.assertTrue(('Batch grading' in html) or ('AI Feedback' in html))
             else:
-                self.assertFalse(teacher.context['grade_ai_batch'])
+                if teacher.context is not None:
+                    self.assertFalse(teacher.context['grade_ai_batch'])
+                self.assertIn('aiBatchMode = false', html)
             student = self.student_client.get(url)
             self.assertIn(student.status_code, (302, 403, 404))
 
@@ -413,7 +425,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         client.force_login(editor)
         html = client.get(reverse('contest_create')).content.decode()
         self.assertIn('id_allow_student_ai_grading', html)
-        self.assertIn('Allow Student Use AI Grading', html)
+        self.assertIn('Allow Student Use AI Feedback', html)
         self.assertIn('Allow Student Use AI Hint', html)
         self.assertNotIn('id_ai_grading_mode', html)
 
@@ -447,11 +459,12 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         sub = Submission.objects.filter(user=self.student.profile, problem=mcq).latest('id')
         self.assertEqual(sub.result, 'AC')
         page = self._status(self.student_client, sub)
-        self.assertNotContains(page, 'View AI grading')
+        self.assertNotContains(page, 'View AI Feedback')
         page = self._status(self.teacher_client, sub)
-        self.assertNotContains(page, 'View AI grading')
+        self.assertNotContains(page, 'View AI Feedback')
 
-    def test_http_submit_fill_blank_exact_no_ai_button(self):
+    def test_http_submit_fill_blank_exact_still_machine_grades_with_feedback_button(self):
+        """Exact fill-blank keeps machine grading; assignment Allow still offers Feedback."""
         info = self.contests['hw2']
         fb = [p for kind, p, _cp in info['problems'] if kind == 'fbex'][0]
         self.student.profile.current_contest = info['part']
@@ -463,8 +476,10 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertEqual(resp.status_code, 302, resp.content)
         sub = Submission.objects.filter(user=self.student.profile, problem=fb).latest('id')
         self.assertFalse(problem_has_ai_grading(fb))
-        self.assertNotContains(self._status(self.student_client, sub), 'View AI grading')
-        self.assertNotContains(self._status(self.teacher_client, sub), 'View AI grading')
+        self.assertTrue(problem_supports_ai_feedback(fb))
+        self.assertEqual(sub.result, 'AC')
+        self.assertContains(self._status(self.student_client, sub), 'View AI Feedback')
+        self.assertContains(self._status(self.teacher_client, sub), 'View AI Feedback')
 
     def test_http_submit_exam_fill_blank_ai_awaits_teacher(self):
         info = self.contests['ex1']
@@ -482,10 +497,10 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertNotEqual(sub.error, 'AI_BATCH_PENDING')
         student_page = self._status(self.student_client, sub)
         self.assertContains(student_page, 'Results hidden')
-        self.assertNotContains(student_page, 'View AI grading')
+        self.assertNotContains(student_page, 'View AI Feedback')
         teacher_page = self._status(self.teacher_client, sub)
         self.assertContains(teacher_page, 'Answer saved')
-        self.assertContains(teacher_page, 'View AI grading')
+        self.assertContains(teacher_page, 'View AI Feedback')
 
     def test_http_submit_exam_short_answer_awaits_teacher(self):
         info = self.contests['ex2']
@@ -503,10 +518,10 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertNotEqual(sub.error, 'AI_BATCH_PENDING')
         page = self._status(self.student_client, sub)
         self.assertContains(page, 'Results hidden')
-        self.assertNotContains(page, 'View AI grading')
+        self.assertNotContains(page, 'View AI Feedback')
         teacher_page = self._status(self.teacher_client, sub)
         self.assertContains(teacher_page, 'Answer saved')
-        self.assertContains(teacher_page, 'View AI grading')
+        self.assertContains(teacher_page, 'View AI Feedback')
 
     def test_http_submit_off_short_answer_finishes_without_student_ai_button(self):
         info = self.contests['off2']
@@ -521,9 +536,9 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         sub = Submission.objects.filter(user=self.student.profile, problem=sa).latest('id')
         self.assertEqual(sub.status, 'D')
         self.assertNotEqual(sub.error, 'AI_BATCH_PENDING')
-        self.assertNotContains(self._status(self.student_client, sub), 'View AI grading')
+        self.assertNotContains(self._status(self.student_client, sub), 'View AI Feedback')
         # Teachers can still force AI even when students are not allowed.
-        self.assertContains(self._status(self.teacher_client, sub), 'View AI grading')
+        self.assertContains(self._status(self.teacher_client, sub), 'View AI Feedback')
 
     @override_settings(DMOJ_AI_GRADING_STUDENT_QUOTA=10)
     def test_practice_short_answer_defers_to_ai_button(self):
@@ -539,7 +554,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertTrue(should_run_ai_now(sub, manual_trigger=True))
         self.assertEqual(sub.result, 'IR')
         page = self._status(self.student_client, sub)
-        self.assertContains(page, 'View AI grading')
+        self.assertContains(page, 'View AI Feedback')
 
     def test_practice_short_answer_ai_disabled_hides_button(self):
         p = create_problem(code='practiceoff', submission_type='S', points=10, is_public=True)
@@ -556,7 +571,7 @@ class AIGradingDualRoleTestCase(CommonDataMixin, TestCase):
         self.assertContains(page, 'Answer saved')
         self.assertContains(page, 'Your answer has been saved.')
         self.assertNotContains(page, 'AI grading')
-        self.assertNotContains(page, 'View AI grading')
+        self.assertNotContains(page, 'View AI Feedback')
         self.assertFalse(student_can_trigger_ai(self.student, sub))
         self.assertFalse(student_can_trigger_ai(self.teacher, sub))
 
@@ -637,13 +652,13 @@ class CodeAIJudgeIRTestCase(CommonDataMixin, TestCase):
             reverse('submission_testcases_query'), {'id': sub.id},
         )
         self.assertEqual(widget.status_code, 200, widget.content)
-        self.assertContains(widget, 'Execution Results')
+        self.assertContains(widget, 'Test results')
         self.assertNotContains(widget, 'Answer saved')
         # The real IR verdict rows are shown.
         self.assertContains(widget, 'case-IR')
         # Teachers can still trigger the supplementary AI rubric pass.
         page = self._status(self.teacher_client, sub)
-        self.assertContains(page, 'View AI grading')
+        self.assertContains(page, 'View AI Feedback')
         self.assertNotContains(page, 'Answer saved')
 
     def test_code_wa_verdict_is_not_rendered_as_answer_saved(self):
@@ -655,7 +670,7 @@ class CodeAIJudgeIRTestCase(CommonDataMixin, TestCase):
             reverse('submission_testcases_query'), {'id': sub.id},
         )
         self.assertEqual(widget.status_code, 200, widget.content)
-        self.assertContains(widget, 'Execution Results')
+        self.assertContains(widget, 'Test results')
         self.assertNotContains(widget, 'Answer saved')
         self.assertContains(widget, 'case-WA')
 
@@ -666,6 +681,6 @@ class CodeAIJudgeIRTestCase(CommonDataMixin, TestCase):
             reverse('submission_testcases_query'), {'id': sub.id},
         )
         self.assertEqual(widget.status_code, 200, widget.content)
-        self.assertContains(widget, 'Execution Results')
+        self.assertContains(widget, 'Test results')
         self.assertNotContains(widget, 'Answer saved')
-        self.assertNotContains(widget, 'View AI grading')
+        self.assertNotContains(widget, 'View AI Feedback')
