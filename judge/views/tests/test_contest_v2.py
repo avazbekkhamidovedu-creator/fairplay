@@ -1209,3 +1209,81 @@ class ContestDetailAssignmentStatsTestCase(TestCase):
         response = stranger.get(reverse('contest_view', args=[self.contest.key]))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, ranked_private)
+
+
+class ContestJoinLeaveRejoinTestCase(CommonDataMixin, TestCase):
+    """A student who joins then leaves an in-progress (time-limited) assignment
+    must be able to get back in: the list offers "Join" (not a dead "Enter"
+    link), and rejoining re-attaches the original live participation without
+    restarting the timer."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.student = create_user(username='joinleave_student')
+        _now = timezone.now()
+        cls.contest = create_contest(
+            key='joinleave',
+            name='Join Leave Rejoin',
+            start_time=_now - timedelta(hours=1),
+            end_time=_now + timedelta(hours=3),
+            time_limit=timedelta(hours=2),
+            is_visible=True,
+            authors=('superuser',),
+        )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.student)
+
+    def test_list_shows_join_not_enter_after_leave(self):
+        # Join, then leave: the participation stays live (window not expired),
+        # so the row must still offer "Join" (a re-attach), never a plain
+        # "Enter" link that only opens the detail page without re-joining.
+        self.client.post(reverse('contest_join', args=[self.contest.key]))
+        self.client.post(reverse('contest_leave', args=[self.contest.key]))
+        self.student.profile.refresh_from_db()
+        self.assertIsNone(self.student.profile.current_contest)
+
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.contest.key)
+        self.assertIn('data-status="active"', row)
+        self.assertIn('>Join</button>', row)
+        self.assertIn(reverse('contest_join', args=[self.contest.key]), row)
+        self.assertNotIn('>Enter<', row)
+
+    def test_rejoin_after_leave_reattaches_same_participation(self):
+        from judge.models import ContestParticipation
+
+        response = self.client.post(reverse('contest_join', args=[self.contest.key]))
+        self.assertEqual(response.status_code, 302)
+        self.student.profile.refresh_from_db()
+        participation = self.student.profile.current_contest
+        self.assertIsNotNone(participation)
+        self.assertTrue(participation.live)
+        self.assertFalse(participation.spectate)
+        original_real_start = participation.real_start
+
+        response = self.client.post(reverse('contest_leave', args=[self.contest.key]))
+        self.assertEqual(response.status_code, 302)
+        self.student.profile.refresh_from_db()
+        self.assertIsNone(self.student.profile.current_contest)
+
+        # Rejoin must re-attach the SAME live participation: timer not reset,
+        # still live (not demoted to spectator), and no duplicate row created.
+        response = self.client.post(reverse('contest_join', args=[self.contest.key]))
+        self.assertEqual(response.status_code, 302)
+        self.student.profile.refresh_from_db()
+        reattached = self.student.profile.current_contest
+        self.assertIsNotNone(reattached)
+        self.assertEqual(reattached.id, participation.id)
+        self.assertTrue(reattached.live)
+        self.assertFalse(reattached.spectate)
+        self.assertEqual(reattached.real_start, original_real_start)
+        self.assertEqual(
+            ContestParticipation.objects.filter(
+                contest=self.contest, user=self.student.profile,
+                virtual=ContestParticipation.LIVE,
+            ).count(),
+            1,
+        )

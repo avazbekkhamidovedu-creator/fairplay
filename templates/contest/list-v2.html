@@ -678,7 +678,20 @@
                 </div>
                 <div class="cl-join-actions">
                     {% if status == 'active' %}
-                        <a class="button primary" href="{{ url('contest_view', contest.key) }}">{{ _('Enter') }}</a>
+                        {# Active participations use the same join entry as ongoing:
+                           Join re-attaches the existing (unexpired) participation
+                           without restarting the timer. #}
+                        {% if contest.is_live_joinable_by(request.user) %}
+                            <form action="{{ url('contest_join', contest.key) }}" method="post">
+                                {% csrf_token %}
+                                <button type="submit" class="button primary">{{ _('Join') }}</button>
+                            </form>
+                        {% elif contest.is_spectatable_by(request.user) %}
+                            <form action="{{ url('contest_join', contest.key) }}" method="post">
+                                {% csrf_token %}
+                                <button type="submit" class="button">{{ _('Spectate') }}</button>
+                            </form>
+                        {% endif %}
                         {% if contest.can_see_own_scoreboard(request.user) %}
                             <a class="button" href="{{ url('contest_ranking', contest.key) }}">{{ _('Rankings') }}</a>
                         {% endif %}
