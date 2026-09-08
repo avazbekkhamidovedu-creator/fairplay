@@ -789,6 +789,15 @@ class ContestListV2ActionsTestCase(CommonDataMixin, TestCase):
         self.assertRedirects(resp, reverse('contest_edit', args=['clonedactions']))
         self.assertFalse(resp.url.startswith('/admin/'))
 
+    def test_clone_keeps_hide_sandbox_output(self):
+        self.ongoing.hide_sandbox_output = True
+        self.ongoing.save(update_fields=['hide_sandbox_output'])
+        self.client.force_login(self.users['staff_contest_edit_all'])
+        resp = self.client.post(reverse('contest_clone', args=[self.ongoing.key]), {'key': 'clonedhideout'})
+        self.assertRedirects(resp, reverse('contest_edit', args=['clonedhideout']))
+        cloned = Contest.objects.get(key='clonedhideout')
+        self.assertTrue(cloned.hide_sandbox_output)
+
     def test_clone_get_prefills_next_assignment_id(self):
         self.client.force_login(self.users['staff_contest_edit_all'])
         occupied = Contest.generate_unique_key()

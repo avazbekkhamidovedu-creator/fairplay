@@ -1918,11 +1918,36 @@
   var runBtn = $('#btn-run');
   if (runBtn) {
     runBtn.addEventListener('click', function () {
-      var button = runBtn, message = $('#run-message'), select = languageSelect();
+      var button = runBtn, select = languageSelect();
       if (runTimer || !select) return;
       button.disabled = true;
       activateBottom('result');
-      message.textContent = gettext('Submitting isolated run...');
+      var outEl = $('#workspace-run-output');
+      var msgEl = $('#run-message');
+      function setRunMessageHtml(html) {
+        if (msgEl) msgEl.innerHTML = html || '';
+      }
+      function setRunMessageText(text) {
+        setRunMessageHtml('');
+        if (msgEl) msgEl.textContent = text || '';
+      }
+      function setRunOutputHtml(html) {
+        if (outEl) outEl.innerHTML = html || '';
+      }
+      function setRunOutputText(text) {
+        if (outEl) outEl.textContent = text || '';
+      }
+      function applyCompletedRun(data) {
+        if (typeof formatIdeRunParts === 'function') {
+          var parts = formatIdeRunParts(data);
+          setRunMessageHtml(parts.infoHtml);
+          setRunOutputHtml(parts.outputHtml);
+          return;
+        }
+        setRunOutputHtml(typeof formatIdeRunResult === 'function' ? formatIdeRunResult(data) : '');
+      }
+      setRunMessageText(gettext('Submitting isolated run...'));
+      setRunOutputHtml('');
       var data = new FormData();
       data.append('source', sourceValue());
       data.append('language', select.value);
@@ -1931,33 +1956,35 @@
       fetch(app.dataset.runUrl, { method: 'POST', body: data, credentials: 'same-origin' })
         .then(function (response) { return response.json().then(function (json) { if (!response.ok) throw new Error(json.error || gettext('Run failed.')); return json; }); })
         .then(function (payload) {
-          message.textContent = gettext('Queued...');
+          setRunMessageText(gettext('Queued...'));
+          setRunOutputHtml('');
           var attempts = 0;
           runTimer = window.setInterval(function () {
             attempts++;
             fetch(payload.submission_url, { credentials: 'same-origin' })
               .then(function (response) { return response.json(); })
               .then(function (status) {
-                var output = status.output || status.error || '';
-                var outEl = $('#workspace-run-output');
-                if (outEl) {
-                  // Status endpoint may return ANSI-converted HTML for compiler output.
-                  if (output && /<[a-z][\s\S]*>/i.test(output)) outEl.innerHTML = output;
-                  else outEl.textContent = output;
+                var complete = typeof isIdeRunComplete === 'function'
+                  ? isIdeRunComplete(status.status)
+                  : (status.status === 'D' || status.status === 'IE' || status.status === 'CE' || status.status === 'AB');
+                if (complete) {
+                  applyCompletedRun(status);
+                } else if (!complete && typeof formatIdeRunPending === 'function') {
+                  setRunMessageText(formatIdeRunPending(status.status) || gettext('Queued...'));
+                  setRunOutputHtml('');
+                } else if (!complete) {
+                  setRunMessageText(status.status || gettext('Queued...'));
+                  setRunOutputHtml('');
                 }
-                var pending = status.status === 'QU' || status.status === 'P' || status.status === 'G';
-                if (status.status === 'QU') message.textContent = gettext('Queued...');
-                else if (status.status === 'P') message.textContent = gettext('Processing...');
-                else if (status.status === 'G') message.textContent = gettext('Grading...');
-                else message.textContent = status.result || status.status || gettext('Done');
-                if (!pending || attempts >= 60) {
+                if (complete || attempts >= 60) {
                   window.clearInterval(runTimer);
                   runTimer = null;
                   button.disabled = false;
-                  if (pending && attempts >= 60) {
-                    message.textContent = gettext(
+                  if (!complete && attempts >= 60) {
+                    setRunMessageText(gettext(
                       'Run stayed queued. Check that the IDE sandbox problem (idepractice) is loaded on a judge.',
-                    );
+                    ));
+                    setRunOutputHtml('');
                   }
                 }
               })
@@ -1965,11 +1992,16 @@
                 window.clearInterval(runTimer);
                 runTimer = null;
                 button.disabled = false;
-                message.textContent = gettext('Could not retrieve run status.');
+                setRunMessageText(gettext('Could not retrieve run status.'));
+                setRunOutputHtml('');
               });
           }, 1000);
         })
-        .catch(function (error) { button.disabled = false; message.textContent = error.message; });
+        .catch(function (error) {
+          button.disabled = false;
+          setRunMessageText(error.message);
+          setRunOutputHtml('');
+        });
     });
   }
 }());

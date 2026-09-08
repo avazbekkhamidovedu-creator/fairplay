@@ -10,6 +10,7 @@ from django.views import View
 from django.views.generic import TemplateView
 
 from judge.models import Language, Problem, Submission, SubmissionSource
+from judge.utils.sandbox_output import should_hide_sandbox_output
 from judge.utils.views import TitleMixin
 
 __all__ = ['IDEView', 'IDESubmitView', 'IDESubmissionStatus']
@@ -171,6 +172,7 @@ class IDESubmissionStatus(LoginRequiredMixin, View):
         # compiler/interpreter output are converted to HTML here; the frontend
         # inserts them as-is. Keep truncation on pre-conversion text to avoid
         # slicing inside an HTML tag.
+        hide_output = should_hide_sandbox_output(request.user)
         response = {
             'status': submission_obj.status,
             'result': submission_obj.result,
@@ -191,11 +193,15 @@ class IDESubmissionStatus(LoginRequiredMixin, View):
                 if len(output) > IDE_OUTPUT_LIMIT:
                     output = output[:IDE_OUTPUT_LIMIT] + '\n\n[Output truncated to 10KB]'
 
-                response['output'] = _ansi_to_html(output)
+                if not hide_output:
+                    response['output'] = _ansi_to_html(output)
                 response['test_case_status'] = test_case.status
                 response['test_case_time'] = test_case.time
                 response['test_case_memory'] = test_case.memory
                 response['feedback'] = _ansi_to_html(test_case.feedback)
                 response['extended_feedback'] = _ansi_to_html(test_case.extended_feedback)
+
+        if hide_output:
+            response['output_hidden'] = True
 
         return JsonResponse(response)

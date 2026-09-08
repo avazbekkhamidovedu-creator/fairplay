@@ -51,3 +51,6 @@ media/
 # (dev/CI); tests that write uploads land real files here.
 submission_files/
 submission_files_backup/
+
+# Host-only memory / bind-mount overrides. Never ship to git.
+docker-compose.override.yml

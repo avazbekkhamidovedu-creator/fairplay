@@ -11,6 +11,7 @@
         window.MONACO_VS_URL = '{{ static("libs/monaco/vs") }}';
     </script>
     <script type="text/javascript" src="{{ static('libs/monaco/vs/loader.js') }}"></script>
+    <script src="{{ static('ide_run_result.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
     {% if REQUIRE_JAX %}
         {% include "mathjax-load.html" %}
     {% endif %}
@@ -224,57 +225,12 @@
                             clearInterval(statusCheckInterval);
                             $('#run-button').prop('disabled', false).text('{{ _("Run Code") }}');
 
-                            // Build output as HTML. Labels and numeric fields
-                            // are escaped; data.error/output/feedback/extended_feedback
-                            // arrive from the server as ansi2html-converted HTML and
-                            // are inserted as-is.
-                            var html = '';
-
-                            if (data.status === 'CE') {
-                                html = escHtml('{{ _("Compilation Error") }}') + '\n\n';
-                                html += data.error || escHtml('{{ _("(no error message)") }}');
-                            } else if (data.status === 'IE') {
-                                html = escHtml('{{ _("Internal Error") }}') + '\n\n';
-                                html += escHtml('{{ _("An error occurred on the judge server. Please try again or contact an administrator.") }}');
-                            } else if (data.status === 'AB') {
-                                html = escHtml('{{ _("Aborted") }}') + '\n\n';
-                                html += escHtml('{{ _("The submission was aborted.") }}');
-                            } else {
-                                // Normal completion
-                                html = escHtml('{{ _("Result:") }} ' + (data.result || 'N/A')) + '\n';
-
-                                // Show feedback for error results (IR, RTE, etc.)
-                                if (data.feedback || data.extended_feedback) {
-                                    if (data.feedback) {
-                                        html += escHtml('{{ _("Details:") }} ') + data.feedback + '\n';
-                                    }
-                                    if (data.extended_feedback) {
-                                        html += data.extended_feedback + '\n';
-                                    }
-                                }
-
-                                if (data.time !== null && data.time !== undefined) {
-                                    html += escHtml('{{ _("Time:") }} ' + data.time.toFixed(3) + 's') + '\n';
-                                }
-                                if (data.memory !== null && data.memory !== undefined) {
-                                    html += escHtml('{{ _("Memory:") }} ' + data.memory.toFixed(0) + ' KB') + '\n';
-                                }
-                                html += '\n' + escHtml('{{ _("Output:") }}') + '\n';
-                                html += data.output || escHtml('{{ _("(no output)") }}');
+                            if (typeof formatIdeRunResult === 'function') {
+                                setOutputHtml(formatIdeRunResult(data));
                             }
-
-                            setOutputHtml(html);
                         } else {
-                            // Still processing
-                            var statusText = '';
-                            if (data.status === 'QU') {
-                                statusText = '{{ _("Queued...") }}';
-                            } else if (data.status === 'P') {
-                                statusText = '{{ _("Processing...") }}';
-                            } else if (data.status === 'G') {
-                                statusText = '{{ _("Grading...") }}';
-                            }
-                            setOutputText(statusText);
+                            setOutputText(typeof formatIdeRunPending === 'function'
+                                ? formatIdeRunPending(data.status) : '');
                         }
                     })
                     .fail(function(xhr) {

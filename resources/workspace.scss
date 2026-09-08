@@ -1155,9 +1155,18 @@
   color: var(--oj-text-muted);
 }
 .ws-license { margin: 1rem 0; }
+.workspace-run-message {
+  margin: 0 0 .7rem;
+  padding: .65rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  overflow: auto;
+}
 .workspace-run-output {
   min-height: 6rem;
-  margin: .7rem 0 0;
+  margin: 0;
   padding: .65rem;
   border: 1px solid var(--oj-border);
   border-radius: 4px;

@@ -15,6 +15,7 @@ from judge.models import (
     ProblemTemplate,
     Submission,
     SubmissionSource,
+    SubmissionTestCase,
 )
 from judge.models.tests.util import (
     create_contest,
@@ -74,6 +75,7 @@ class ProblemWorkspaceTestCase(TestCase):
     def setUp(self):
         self.client = Client()
         self.client.force_login(self.user)
+        self.contest.refresh_from_db()
 
     def test_detail_uses_workspace_shell_and_legacy_escape_hatch(self):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
@@ -97,6 +99,89 @@ class ProblemWorkspaceTestCase(TestCase):
         run = Submission.objects.get(id=response.json()['submission_id'])
         self.assertEqual(run.problem.code, 'idepractice')
         self.assertFalse(hasattr(run, 'contest_submission'))
+        self.assertIn('/ide/', response.json()['submission_url'])
+
+    def test_workspace_page_uses_shared_run_result(self):
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertContains(response, 'ide_run_result.js')
+        self.assertContains(response, 'id="workspace-run-output"')
+        self.assertContains(response, 'id="run-message"')
+        self.assertNotContains(response, 'does not use hidden tests')
+        self.assertNotContains(response, 'Custom Run reuses')
+
+    def test_workspace_run_status_hides_stdout_for_student(self):
+        self.contest.hide_sandbox_output = True
+        self.contest.save(update_fields=['hide_sandbox_output'])
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        with mock.patch.object(Submission, 'judge'):
+            response = self.client.post(reverse('problem_workspace_run', args=[self.problem.code]), {
+                'source': 'print(99)', 'language': self.language.id, 'input': '',
+            })
+        self.assertEqual(response.status_code, 200, response.content)
+        run = Submission.objects.get(id=response.json()['submission_id'])
+        run.status = 'D'
+        run.result = 'AC'
+        run.time = 0.02
+        run.memory = 1024
+        run.save()
+        SubmissionTestCase.objects.create(
+            submission=run, case=1, status='AC', time=0.02, memory=1024, output='99\n',
+        )
+        status = self.client.get(response.json()['submission_url'])
+        self.assertEqual(status.status_code, 200)
+        body = status.json()
+        self.assertNotIn('output', body)
+        self.assertTrue(body['output_hidden'])
+        self.assertEqual(body['result'], 'AC')
+
+    def test_workspace_run_status_keeps_ir_traceback_and_author_sees_stdout(self):
+        self.contest.hide_sandbox_output = True
+        self.contest.save(update_fields=['hide_sandbox_output'])
+        student_part = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = student_part
+        self.user.profile.save()
+        with mock.patch.object(Submission, 'judge'):
+            response = self.client.post(reverse('problem_workspace_run', args=[self.problem.code]), {
+                'source': 'raise ZeroDivisionError()', 'language': self.language.id, 'input': '',
+            })
+        run = Submission.objects.get(id=response.json()['submission_id'])
+        run.status = 'D'
+        run.result = 'IR'
+        run.time = 0.01
+        run.memory = 512
+        run.save()
+        SubmissionTestCase.objects.create(
+            submission=run, case=1, status='IR', time=0.01, memory=512,
+            output='should-hide', feedback='ZeroDivisionError',
+            extended_feedback='Traceback (most recent call last):\nZeroDivisionError',
+        )
+        body = self.client.get(response.json()['submission_url']).json()
+        self.assertNotIn('output', body)
+        self.assertIn('ZeroDivisionError', body['feedback'])
+        self.assertIn('Traceback', body['extended_feedback'])
+
+        author_part = create_contest_participation(contest=self.contest, user=self.author.profile)
+        self.author.profile.current_contest = author_part
+        self.author.profile.save()
+        self.client.force_login(self.author)
+        with mock.patch.object(Submission, 'judge'):
+            author_resp = self.client.post(reverse('problem_workspace_run', args=[self.problem.code]), {
+                'source': 'print(7)', 'language': self.language.id, 'input': '',
+            })
+        author_run = Submission.objects.get(id=author_resp.json()['submission_id'])
+        author_run.status = 'D'
+        author_run.result = 'AC'
+        author_run.time = 0.01
+        author_run.memory = 256
+        author_run.save()
+        SubmissionTestCase.objects.create(
+            submission=author_run, case=1, status='AC', time=0.01, memory=256, output='7\n',
+        )
+        author_body = self.client.get(author_resp.json()['submission_url']).json()
+        self.assertIn('7', author_body['output'])
+        self.assertNotIn('output_hidden', author_body)
 
     def test_selected_own_submission_exposes_result_and_source_for_editor_restore(self):
         submission = Submission.objects.create(
