@@ -564,7 +564,6 @@
         <li><button type="button" data-sort="{{ sort_value }}"{% if sort_by == sort_value %} class="active"{% endif %}>{{ label }}</button></li>
     {% endmacro %}
     {% macro assignment_row(contest, status, participation=None) %}
-        {% set solved = solved_counts.get(contest.id, (0, 0)) if solved_counts else (0, 0) %}
         {% set org_names = contest.organizations.all()|map(attribute='name')|join(',') %}
         {% set class_names = contest.classes.all()|map(attribute='name')|join(',') %}
         {% set tag_names = contest.tags.all()|map(attribute='name')|join(',') %}
@@ -635,11 +634,6 @@
                         <span class="emph muted">· {{ _('your window:') }} {{ contest.time_limit|timedelta('localized-no-seconds') }}</span>
                     {% endif %}
                 </div>
-            </div>
-            <div class="cl-solved-col">
-                {% if solved[1] %}
-                <span class="cl-solved">{{ _('Solved') }} {{ solved[0] }}/{{ solved[1] }}</span>
-                {% endif %}
             </div>
             <div class="cl-users">
                 {% if status == 'upcoming' %}

@@ -47,7 +47,7 @@ from judge import contest_format
 from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
-from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestSubmission, \
+from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, \
     ContestTag, Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade, \
     contest_problem_display_name
 from judge.models.profile import Class, Organization
@@ -338,9 +338,6 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
         context['sort_by'] = self.order
         context['group'] = self.group
         context['time_filter'] = tf
-        context['solved_counts'] = self._solved_data(
-            [p.contest for p in active] + present + future + list(context['past_contests']),
-        )
         if self.group == 'course':
             course_groups, contest_statuses = self._get_course_groups(context)
             context['course_groups'] = course_groups
@@ -353,43 +350,6 @@ class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, Contes
     def _total_count(self, active, present, future):
         """Number of assignments matching the (server-side) filters."""
         return len(active) + len(present) + len(future) + self.get_queryset().values('id').count()
-
-    def _solved_data(self, contests):
-        """Map contest id -> (solved problems, total problems) for the current user.
-
-        "Solved" is this user's live participation on *that contest's* problems:
-        a ContestSubmission with result AC and contest-scaled full points
-        (same criterion as ``contest_completed_ids``). Practice / problem-bank
-        ACs and virtual participations do not count. Never-joined contests stay
-        at 0. Editors see their own live progress, not all students'.
-        """
-        profile = self.request.profile
-        contest_ids = [c.id for c in contests if c is not None]
-        if not profile or not contest_ids:
-            return {}
-        contest_problems = list(
-            ContestProblem.objects.filter(contest_id__in=contest_ids).values_list('contest_id', 'problem_id'),
-        )
-        problems_by_contest = defaultdict(list)
-        for cid, pid in contest_problems:
-            problems_by_contest[cid].append(pid)
-        solved_by_contest = defaultdict(set)
-        for cid, pid in (
-            ContestSubmission.objects.filter(
-                participation__user=profile,
-                participation__virtual=ContestParticipation.LIVE,
-                participation__contest_id__in=contest_ids,
-                submission__result='AC',
-                points__gte=F('problem__points'),
-            )
-            .values_list('participation__contest_id', 'problem__problem_id')
-            .distinct()
-        ):
-            solved_by_contest[cid].add(pid)
-        return {
-            cid: (len(solved_by_contest[cid]), len(problems_by_contest[cid]))
-            for cid in contest_ids
-        }
 
     def _get_course_groups(self, context):
         """Group the displayed assignments by their first organization (course).

@@ -1387,17 +1387,40 @@
 
   function applyLeaveProgress(progress) {
     if (!progress) return;
-    var form = document.querySelector('form.assignment-leave-form');
-    if (!form) return;
-    if (progress.submitted != null) form.setAttribute('data-submitted', String(progress.submitted));
-    if (progress.total != null) form.setAttribute('data-total', String(progress.total));
-    if (progress.unsubmitted != null) form.setAttribute('data-unsubmitted', String(progress.unsubmitted));
-    if (progress.submitted_names) {
-      form.setAttribute('data-submitted-names', JSON.stringify(progress.submitted_names));
-    }
-    if (progress.unsubmitted_names) {
-      form.setAttribute('data-unsubmitted-names', JSON.stringify(progress.unsubmitted_names));
-    }
+    var forms = document.querySelectorAll('form.assignment-leave-form');
+    if (!forms.length) return;
+    // Empty name lists are valid (every problem submitted). Do not treat [] as missing.
+    var submittedNames = progress.submitted_names;
+    var unsubmittedNames = progress.unsubmitted_names;
+    Array.prototype.forEach.call(forms, function (form) {
+      if (progress.submitted != null) form.setAttribute('data-submitted', String(progress.submitted));
+      if (progress.total != null) form.setAttribute('data-total', String(progress.total));
+      if (progress.unsubmitted != null) form.setAttribute('data-unsubmitted', String(progress.unsubmitted));
+      if (submittedNames != null) {
+        form.setAttribute('data-submitted-names', JSON.stringify(submittedNames));
+      }
+      if (unsubmittedNames != null) {
+        form.setAttribute('data-unsubmitted-names', JSON.stringify(unsubmittedNames));
+      }
+    });
+  }
+
+  function leaveProgressFromDrawer() {
+    var submittedNames = [];
+    var unsubmittedNames = [];
+    items.forEach(function (item) {
+      var nameEl = item.querySelector('.drawer-problem-name');
+      var label = ((nameEl && nameEl.textContent) || item.dataset.code || '').trim();
+      if (item.dataset.status !== 'unsolved') submittedNames.push(label);
+      else unsubmittedNames.push(label);
+    });
+    return {
+      submitted: submittedNames.length,
+      unsubmitted: unsubmittedNames.length,
+      total: items.length,
+      submitted_names: submittedNames,
+      unsubmitted_names: unsubmittedNames,
+    };
   }
 
   function markCurrentProblemAnswered() {
@@ -1413,6 +1436,7 @@
       }
     });
     renderDrawer();
+    applyLeaveProgress(leaveProgressFromDrawer());
   }
 
   var submitForm = $('#workspace-submit-form');
