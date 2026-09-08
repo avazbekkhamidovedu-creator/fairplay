@@ -76,6 +76,7 @@ from judge.utils.problems import (
     contest_attempted_ids,
     contest_completed_ids,
     hot_problems,
+    log_workspace_progress,
     participation_submit_progress,
     user_attempted_ids,
     user_completed_ids,
@@ -2012,7 +2013,12 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             if participation is None and self.request.user.is_authenticated:
                 participation = self.request.profile.current_contest
             if participation is not None:
-                payload['leave_progress'] = participation_submit_progress(participation)
+                payload['leave_progress'] = participation_submit_progress(
+                    participation,
+                    log_step='json_submit',
+                    problem=self.object.code,
+                    submission_id=submission.id,
+                )
             return JsonResponse(payload)
         return super().form_valid(form)
 
@@ -2596,6 +2602,39 @@ class ProblemWorkspaceRun(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, V
         # so they never attach ContestSubmission or touch this problem's tests.
         from judge.views.ide import IDESubmitView
         return IDESubmitView().post(request)
+
+
+class WorkspaceProgressTrace(LoginRequiredMixin, View):
+    """Beacon for what the browser received/applied for the progress bar and Leave dialog."""
+
+    http_method_names = ['post']
+    ALLOWED_STEPS = frozenset(('client_leave_dialog',))
+    ALLOWED_FIELDS = frozenset((
+        'href', 'mode', 'problem', 'source', 'submission_id', 'has_leave_progress',
+        'bar_label', 'bar_value', 'bar_max',
+        'leave_submitted', 'leave_unsubmitted', 'leave_total',
+        'leave_submitted_names', 'leave_unsubmitted_names',
+        'payload_submitted', 'payload_unsubmitted', 'payload_total',
+    ))
+
+    def post(self, request, *args, **kwargs):
+        if len(request.body) > 8192:
+            return JsonResponse({'ok': False}, status=400)
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'ok': False}, status=400)
+        if not isinstance(payload, dict):
+            return JsonResponse({'ok': False}, status=400)
+        step = payload.get('step')
+        if step not in self.ALLOWED_STEPS:
+            return JsonResponse({'ok': False}, status=400)
+        extra = {key: payload[key] for key in self.ALLOWED_FIELDS if key in payload}
+        participation = getattr(request, 'participation', None)
+        if participation is None and request.user.is_authenticated:
+            participation = request.profile.current_contest
+        log_workspace_progress(step, participation, user=request.user.username, **extra)
+        return JsonResponse({'ok': True})
 
 
 class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleObjectMixin, View):

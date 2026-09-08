@@ -25,6 +25,7 @@
       height: 10px;
       accent-color: var(--oj-accent, #2980B9);
     }
+    .ws-toolbar-progress.is-hidden { display: none; }
     .ws-app .ws-toolbar .nav-arrows .tool-btn:disabled {
       opacity: .35;
       cursor: not-allowed;
@@ -137,7 +138,7 @@
         <button class="tool-btn icon-only" id="btn-next" type="button" title="{{ _('Next problem') }}"><i class="fa fa-chevron-right"></i></button>
       </span>
       <div class="ws-layout-switch"><button class="layout-toggle" type="button" id="layout-toggle"><i class="fa fa-columns"></i> <span id="layout-mode">{{ _('Left-right') }}</span></button></div>
-      <div class="ws-toolbar-progress" title="{% if workspace_mode == 'practice' %}{{ _('solved (current filter)') }}{% else %}{{ _('answered') }}{% endif %}">
+      <div class="ws-toolbar-progress{% if workspace_in_contest %} is-hidden{% endif %}" title="{% if workspace_mode == 'practice' %}{{ _('solved (current filter)') }}{% else %}{{ _('answered') }}{% endif %}">
         <span class="solved-frac" id="toolbar-progress-label">0/0</span>
         <progress id="toolbar-progress-bar" max="1" value="0" aria-hidden="true"></progress>
       </div>

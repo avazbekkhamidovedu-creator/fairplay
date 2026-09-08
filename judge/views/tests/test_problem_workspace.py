@@ -27,13 +27,15 @@ from judge.models.tests.util import (
 )
 
 AUTOSAVE_HINT = 'Draft saved. If you do not submit, it is submitted automatically at the deadline.'
-# The leave dialog ships with every assignment surface, so this is the line all three share.
 AUTOSUBMIT_PROMISE = 'Your saved answers are submitted automatically when the assignment closes.'
-LEAVE_HARVEST_WARN = 'Leaving submits your saved answers now.'
+LEAVE_HARVEST_WARN = (
+    'When you leave, answers you have not submitted yet will be submitted automatically.'
+)
 CONTRADICTORY_COPY = (
     'Leaving will not submit any unsubmitted problems.',
     'Only answers you have already submitted will be kept.',
     'Leaving does not submit anything right now.',
+    'Leaving submits your saved answers now.',
 )
 
 
@@ -279,6 +281,47 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertTrue(any('workspace-code' in name for name in progress['submitted_names']))
         self.assertEqual(progress['unsubmitted_names'], [])
 
+    def test_assignment_workspace_submit_logs_leave_progress_trace(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        with mock.patch.object(Submission, 'judge'):
+            with self.assertLogs('judge.workspace.progress', level='INFO') as captured:
+                response = self.client.post(
+                    reverse('problem_submit', args=[self.problem.code]),
+                    {'workspace': '1', 'source': 'print(1)', 'language': self.language.id, 'judge': ''},
+                    HTTP_X_WORKSPACE_SUBMIT='1',
+                )
+        self.assertEqual(response.status_code, 200, response.content)
+        joined = '\n'.join(captured.output)
+        self.assertIn('workspace-progress', joined)
+        self.assertIn('"step": "json_submit"', joined)
+        self.assertIn('"submitted": 1', joined)
+
+    def test_workspace_progress_trace_endpoint_logs_client_snapshot(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        with self.assertLogs('judge.workspace.progress', level='INFO') as captured:
+            response = self.client.post(
+                reverse('workspace_progress_trace'),
+                data=json.dumps({
+                    'step': 'client_leave_dialog',
+                    'href': '/problem/workspace-code',
+                    'leave_submitted': '0',
+                    'leave_unsubmitted': '1',
+                    'leave_total': '1',
+                    'bar_label': '0 / 1',
+                }),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json(), {'ok': True})
+        joined = '\n'.join(captured.output)
+        self.assertIn('"step": "client_leave_dialog"', joined)
+        self.assertIn('"leave_submitted": "0"', joined)
+        self.assertIn('workspace-code', joined)
+
     def test_assignment_my_submissions_filters_by_contest_object(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
         self.user.profile.current_contest = participation
@@ -474,6 +517,8 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertEqual(assignment.context['workspace_mode'], 'assignment')
         self.assertContains(assignment, 'ws-toolbar-progress')
         self.assertContains(assignment, 'id="toolbar-progress-bar"', html=False)
+        self.assertContains(assignment, 'ws-toolbar-progress is-hidden')
+        self.assertNotContains(practice, 'ws-toolbar-progress is-hidden')
         self.assertNotContains(assignment, 'id="drawer-progress"', html=False)
         self.assertNotContains(practice, 'id="drawer-close"', html=False)
         self.assertNotContains(assignment, 'id="drawer-close"', html=False)
@@ -575,7 +620,8 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-unsubmitted-names')
         self.assertContains(response, '1. workspace-code')
         self.assertContains(response, LEAVE_HARVEST_WARN)
-        self.assertContains(response, 'Your saved answers are submitted automatically when the assignment closes.')
+        self.assertContains(response, 'leave-confirm-stats" hidden')
+        self.assertNotContains(response, AUTOSUBMIT_PROMISE)
         self.assertNotContains(response, 'Leaving will not submit any unsubmitted problems.')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
         self.assertNotContains(response, 'Submit your work and exit Safe Exam Browser')
@@ -643,9 +689,8 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertFalse(response.context['workspace_autosubmit'])
         self.assertNotContains(response, AUTOSAVE_HINT)
 
-    def test_the_assignment_surfaces_agree_on_what_happens_at_the_deadline(self):
-        # A student moves between the assignment page, the problem list and the workspace. Any one
-        # of the three still saying unsubmitted work is dropped would undo the other two.
+    def test_the_assignment_surfaces_agree_on_leave_auto_submit(self):
+        # Leave dialog is shared by the assignment page, problem list and workspace.
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
         self.user.profile.current_contest = participation
         self.user.profile.save()
@@ -654,8 +699,9 @@ class ProblemWorkspaceTestCase(TestCase):
                      reverse('problem_detail', args=[self.problem.code])):
             with self.subTest(page=page):
                 response = self.client.get(page)
-                self.assertContains(response, AUTOSUBMIT_PROMISE)
                 self.assertContains(response, LEAVE_HARVEST_WARN)
+                self.assertContains(response, 'leave-confirm-stats" hidden')
+                self.assertNotContains(response, AUTOSUBMIT_PROMISE)
                 for stale in CONTRADICTORY_COPY:
                     self.assertNotContains(response, stale)
 

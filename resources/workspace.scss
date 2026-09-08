@@ -98,6 +98,7 @@
   line-height: 1;
   white-space: nowrap;
 }
+.ws-toolbar-progress.is-hidden { display: none; }
 .ws-toolbar-progress progress {
   display: block;
   flex: 0 0 160px;

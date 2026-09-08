@@ -46,6 +46,7 @@
         color: var(--oj-link, #247);
         user-select: none;
     }
+    .leave-confirm-stats[hidden] { display: none; }
     .leave-confirm-warn {
         margin: 0 0 0.4rem;
         color: var(--oj-danger, #c0392b);
@@ -80,7 +81,7 @@
 <div class="leave-confirm-overlay" id="leave-confirm-overlay" hidden>
     <div class="leave-confirm-box" role="dialog" aria-modal="true" aria-labelledby="leave-confirm-title">
         <h3 class="leave-confirm-title" id="leave-confirm-title"></h3>
-        <div class="leave-confirm-stats">
+        <div class="leave-confirm-stats" hidden>
             <section class="leave-confirm-stat">
                 <div class="leave-confirm-stat-head" id="leave-confirm-submitted-head"></div>
                 <div id="leave-confirm-submitted-body"></div>
@@ -99,6 +100,56 @@
     </div>
 </div>
 <script type="text/javascript">
+    function dkuojClipTraceValue(value, max) {
+        if (value == null) return value;
+        value = String(value);
+        return value.length > max ? value.slice(0, max) + '…' : value;
+    }
+
+    window.dkuojProgressBarSnapshot = function () {
+        var label = document.getElementById('toolbar-progress-label');
+        var bar = document.getElementById('toolbar-progress-bar');
+        return {
+            bar_label: label ? label.textContent : null,
+            bar_value: bar ? String(bar.value) : null,
+            bar_max: bar ? String(bar.max) : null,
+        };
+    };
+
+    window.dkuojLeaveFormSnapshot = function (form) {
+        if (!form) return {};
+        return {
+            leave_submitted: form.getAttribute('data-submitted'),
+            leave_unsubmitted: form.getAttribute('data-unsubmitted'),
+            leave_total: form.getAttribute('data-total'),
+            leave_submitted_names: dkuojClipTraceValue(form.getAttribute('data-submitted-names'), 400),
+            leave_unsubmitted_names: dkuojClipTraceValue(form.getAttribute('data-unsubmitted-names'), 400),
+        };
+    };
+
+    window.dkuojTraceWorkspaceProgress = function (step, extra) {
+        extra = extra || {};
+        var csrf = '';
+        var meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta) csrf = meta.getAttribute('content') || '';
+        if (!csrf && window.jQuery && typeof $.cookie === 'function') csrf = $.cookie('csrftoken') || '';
+        var body = {step: step, href: location.pathname + location.search};
+        Object.keys(extra).forEach(function (key) { body[key] = extra[key]; });
+        try {
+            fetch({{ url('workspace_progress_trace')|htmltojs }}, {
+                method: 'POST',
+                credentials: 'same-origin',
+                keepalive: true,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrf,
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify(body),
+            }).catch(function () {});
+        } catch (err) { /* tracing must never block Leave / Submit */ }
+    };
+
     function dkuojClearAssignmentDrafts(contestKey) {
         if (!contestKey || !window.localStorage) return;
         // Matches workspace.js draftContextPrefix(): dkuoj-ws-draft-{assignment|exam}-{contest}-…
@@ -169,36 +220,28 @@
     function dkuojShowLeaveConfirm(form) {
         var overlay = document.getElementById('leave-confirm-overlay');
         if (!overlay) return true;
-        var submittedNames = dkuojParseLeaveNames(form, 'data-submitted-names');
-        var unsubmittedNames = dkuojParseLeaveNames(form, 'data-unsubmitted-names');
-        var submitted = parseInt(form.getAttribute('data-submitted') || '0', 10);
-        var unsubmitted = parseInt(form.getAttribute('data-unsubmitted') || '0', 10);
-        var total = parseInt(form.getAttribute('data-total') || '0', 10);
-        if (isNaN(submitted) || submitted < 0) submitted = 0;
-        if (isNaN(total) || total < 0) total = 0;
-        if (isNaN(unsubmitted) || unsubmitted < 0) {
-            unsubmitted = total ? Math.max(total - submitted, 0) : 0;
-        }
         var isSeb = form.getAttribute('data-seb-exit') === '1';
         var title = isSeb ? {{ _('Exit SEB?')|htmltojs }} : {{ _('Leave?')|htmltojs }};
         var okLabel = isSeb ? {{ _('Exit SEB')|htmltojs }} : {{ _('Leave')|htmltojs }};
         document.getElementById('leave-confirm-title').textContent = title;
-        document.getElementById('leave-confirm-submitted-head').textContent =
-            {{ _('Submitted:')|htmltojs }} + ' ' + submitted + ' / ' + total;
-        document.getElementById('leave-confirm-unsubmitted-head').textContent =
-            {{ _('Not submitted:')|htmltojs }} + ' ' + unsubmitted;
-        dkuojFillLeaveNames(document.getElementById('leave-confirm-submitted-body'), submittedNames, false);
-        dkuojFillLeaveNames(document.getElementById('leave-confirm-unsubmitted-body'), unsubmittedNames, true);
         document.getElementById('leave-confirm-warn').textContent =
-            {{ _('Leaving submits your saved answers now.')|htmltojs }};
-        var note = {{ _('Your saved answers are submitted automatically when the assignment closes.')|htmltojs }};
+            {{ _('When you leave, answers you have not submitted yet will be submitted automatically.')|htmltojs }};
+        var noteEl = document.getElementById('leave-confirm-note');
         if (isSeb) {
-            note += ' ' + {{ _('You might not be able to re-enter this assignment.')|htmltojs }};
+            noteEl.hidden = false;
+            noteEl.textContent = {{ _('You might not be able to re-enter this assignment.')|htmltojs }};
+        } else {
+            noteEl.hidden = true;
+            noteEl.textContent = '';
         }
-        document.getElementById('leave-confirm-note').textContent = note;
         document.getElementById('leave-confirm-ok').textContent = okLabel;
         overlay.hidden = false;
         document.getElementById('leave-confirm-ok').focus();
+        var trace = window.dkuojLeaveFormSnapshot(form);
+        var bar = window.dkuojProgressBarSnapshot();
+        Object.keys(bar).forEach(function (key) { trace[key] = bar[key]; });
+        trace.source = 'leave_dialog';
+        window.dkuojTraceWorkspaceProgress('client_leave_dialog', trace);
 
         function close(keepDisabled) {
             overlay.hidden = true;
