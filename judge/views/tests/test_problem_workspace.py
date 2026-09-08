@@ -25,6 +25,16 @@ from judge.models.tests.util import (
     create_user,
 )
 
+AUTOSAVE_HINT = 'Draft saved. If you do not submit, it is submitted automatically at the deadline.'
+# The leave dialog ships with every assignment surface, so this is the line all three share.
+AUTOSUBMIT_PROMISE = 'Your saved answers are submitted automatically when the assignment closes.'
+LEAVE_HARVEST_WARN = 'Leaving submits your saved answers now.'
+CONTRADICTORY_COPY = (
+    'Leaving will not submit any unsubmitted problems.',
+    'Only answers you have already submitted will be kept.',
+    'Leaving does not submit anything right now.',
+)
+
 
 class ProblemWorkspaceTestCase(TestCase):
     fixtures = ['language_all.json']
@@ -479,7 +489,9 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-unsubmitted="1"')
         self.assertContains(response, 'data-unsubmitted-names')
         self.assertContains(response, '1. workspace-code')
-        self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
+        self.assertContains(response, LEAVE_HARVEST_WARN)
+        self.assertContains(response, 'Your saved answers are submitted automatically when the assignment closes.')
+        self.assertNotContains(response, 'Leaving will not submit any unsubmitted problems.')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
         self.assertNotContains(response, 'Submit your work and exit Safe Exam Browser')
 
@@ -521,13 +533,61 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-seb-exit="1"')
         self.assertContains(response, 'seb-exit')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
-        self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
+        self.assertContains(response, LEAVE_HARVEST_WARN)
 
     def test_practice_workspace_has_no_leave_button(self):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertEqual(response.context['workspace_mode'], 'practice')
         self.assertNotContains(response, 'assignment-leave-form')
         self.assertNotContains(response, reverse('contest_leave', args=[self.contest.key]))
+
+    def test_assignment_submit_area_says_the_answer_is_submitted_at_the_deadline(self):
+        # A student who runs out of time is only spared by the collection if they were told it
+        # exists, and next to the button they did not press is where they would look.
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertTrue(response.context['workspace_autosubmit'])
+        self.assertContains(response, AUTOSAVE_HINT)
+
+    def test_practice_submit_area_promises_nothing(self):
+        # Nothing collects practice drafts, so the same line here would be a lie.
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(response.context['workspace_mode'], 'practice')
+        self.assertFalse(response.context['workspace_autosubmit'])
+        self.assertNotContains(response, AUTOSAVE_HINT)
+
+    def test_the_assignment_surfaces_agree_on_what_happens_at_the_deadline(self):
+        # A student moves between the assignment page, the problem list and the workspace. Any one
+        # of the three still saying unsubmitted work is dropped would undo the other two.
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        for page in (reverse('contest_view', args=[self.contest.key]),
+                     reverse('problem_list'),
+                     reverse('problem_detail', args=[self.problem.code])):
+            with self.subTest(page=page):
+                response = self.client.get(page)
+                self.assertContains(response, AUTOSUBMIT_PROMISE)
+                self.assertContains(response, LEAVE_HARVEST_WARN)
+                for stale in CONTRADICTORY_COPY:
+                    self.assertNotContains(response, stale)
+
+    def test_a_spectator_is_not_promised_a_submission_they_will_not_get(self):
+        # Spectating work is never collected, so the promise has to follow the collection rather
+        # than merely "is inside an assignment".
+        from judge.models import ContestParticipation
+
+        participation = create_contest_participation(
+            contest=self.contest, user=self.user.profile, virtual=ContestParticipation.SPECTATE,
+        )
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertEqual(response.context['workspace_mode'], 'assignment')
+        self.assertFalse(response.context['workspace_autosubmit'])
+        self.assertNotContains(response, AUTOSAVE_HINT)
 
     def test_practice_workspace_form_disables_browser_autocomplete(self):
         response = self.client.get(reverse('problem_detail', args=[self.mcq.code]))

@@ -103,7 +103,18 @@ class ContestListMixin(object):
         return Contest.get_visible_contests(self.request.user)
 
 
-class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestListMixin, ListView):
+class ContestInSessionListRedirectMixin(object):
+    """While joined, the Assignments nav must open the current assignment, not the list."""
+
+    def dispatch(self, request, *args, **kwargs):
+        participation = getattr(request, 'participation', None)
+        if getattr(request, 'in_contest', False) and participation is not None:
+            return HttpResponseRedirect(reverse('contest_view', args=(participation.contest.key,)))
+        return super().dispatch(request, *args, **kwargs)
+
+
+class ContestList(ContestInSessionListRedirectMixin, QueryStringSortMixin, DiggPaginatorMixin, TitleMixin,
+                  ContestListMixin, ListView):
     model = Contest
     paginate_by = 20
     template_name = 'contest/list.html'
@@ -193,7 +204,8 @@ class ContestList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestL
         return context
 
 
-class ContestListV2(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ContestListMixin, ListView):
+class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, DiggPaginatorMixin, TitleMixin,
+                    ContestListMixin, ListView):
     """Redesigned contest list with filters, sorting, and layout options.
 
     All matching contests are rendered and filtering happens client-side (no
@@ -1151,8 +1163,10 @@ class ContestCreate(LoginRequiredMixin, View):
             return self._error_response(e)
 
         contest_id = contest.pk
+        from judge.utils.assignment_schedule import reschedule_assignment_harvest
         from judge.utils.contest_ai import schedule_batch_ai_grade
         transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
+        transaction.on_commit(lambda cid=contest_id: reschedule_assignment_harvest(cid))
         return self._action_response(payload, contest.key)
 
     def _save_new_contest(self, request, payload, key):
@@ -1231,8 +1245,10 @@ class ContestCreate(LoginRequiredMixin, View):
                 if self._scoring_snapshot(contest) != before_score:
                     self._queue_rescore(contest_key)
                 self._log_assignment(request, contest, added=False)
+            from judge.utils.assignment_schedule import reschedule_assignment_harvest
             from judge.utils.contest_ai import schedule_batch_ai_grade
             transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
+            transaction.on_commit(lambda cid=contest_id: reschedule_assignment_harvest(cid))
             return self._action_response(payload, contest_key)
         except Exception as e:
             return self._error_response(e)
@@ -2261,6 +2277,11 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
         profile.save()
         contest._updating_stats_only = True
         contest.update_user_count()
+        # With a personal time limit this student's deadline only exists once they have started,
+        # so their auto-submit can only be scheduled here.
+        if contest.time_limit is not None:
+            from judge.utils.assignment_schedule import schedule_participation_harvest
+            transaction.on_commit(lambda pid=participation.pk: schedule_participation_harvest(pid))
         return HttpResponseRedirect(reverse('problem_list'))
 
     def ask_for_access_code(self, form=None):
@@ -2289,7 +2310,16 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
             return generic_message(request, _('No such contest'),
                                    _('You are not in contest "%s".') % contest.key, 404)
 
-        was_spectating = profile.current_contest.spectate
+        participation = profile.current_contest
+        was_spectating = participation.spectate
+        # Leave does not cancel the participation: the same row, its timer and any leftover
+        # drafts stay. One Leave is one harvest; a later deadline sweep still picks up drafts
+        # that this call missed or that the student wrote after coming back.
+        try:
+            from judge.utils.assignment_harvest import harvest_participation
+            harvest_participation(participation)
+        except Exception:
+            logger.exception('Auto-submit on leave failed for participation %d', participation.pk)
         profile.remove_contest()
         if contest.seb_required and not was_spectating and not contest.user_bypasses_seb(request.user):
             return HttpResponseRedirect(contest.seb_effective_quit_url or reverse('seb_quit'))

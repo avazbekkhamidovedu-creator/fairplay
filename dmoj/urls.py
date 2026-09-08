@@ -13,9 +13,9 @@ from django.views.generic import RedirectView
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
 from judge.views import (
-    TitledTemplateView, api, blog, comment, contest_analytics, contests, file_upload, fill_blank, grade, ide, language,
-    license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage, ranked_submission,
-    register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
+    TitledTemplateView, api, assignment_draft, blog, comment, contest_analytics, contests, file_upload, fill_blank,
+    grade, ide, language, license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage,
+    ranked_submission, register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
 from judge.views.editor_attachment import editor_file_download, editor_file_uploader
 from judge.views.problem_create_v2 import (
@@ -286,6 +286,7 @@ urlpatterns = [
         path('/ranking/ajax', contests.contest_ranking_ajax, name='contest_ranking_ajax'),
         path('/join', contests.ContestJoin.as_view(), name='contest_join'),
         path('/leave', contests.ContestLeave.as_view(), name='contest_leave'),
+        path('/draft/<str:problem>', assignment_draft.AssignmentDraftView.as_view(), name='assignment_draft'),
         path('/seb-config', contests.ContestSEBConfig.as_view(), name='contest_seb_config'),
         path('/seb-launch-token', contests.SEBLaunchToken.as_view(), name='seb_launch_token'),
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),

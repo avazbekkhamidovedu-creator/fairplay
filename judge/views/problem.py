@@ -36,6 +36,7 @@ from judge import event_poster as event
 from judge.comments import CommentedDetailView, SubmissionCommentMixin
 from judge.forms import ProblemCloneForm, ProblemPointsVoteForm, ProblemSubmitForm
 from judge.models import (
+    AssignmentDraft,
     Contest,
     ContestProblem,
     ContestSubmission,
@@ -62,10 +63,10 @@ from judge.models import (
     RuntimeVersion,
     Solution,
     Submission,
-    SubmissionSource,
     contest_problem_display_name,
     problem_data_storage,
 )
+from judge.utils.assignment_harvest import participation_is_harvestable, user_bypasses_assignment_rules
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
@@ -82,6 +83,7 @@ from judge.utils.problems import (
     user_tester_ids,
 )
 from judge.utils.strings import safe_float_or_none, safe_int_or_none
+from judge.utils.submission_create import create_submission
 from judge.utils.tickets import own_ticket_filter
 from judge.utils.views import QueryStringSortMixin, SingleObjectFormView, TitleMixin, add_file_response, generic_message
 
@@ -413,6 +415,12 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
     def get_comment_page(self):
         return 'p:%s' % self.object.code
 
+    def get(self, request, *args, **kwargs):
+        try:
+            return super(ProblemMixin, self).get(request, *args, **kwargs)
+        except Http404:
+            return self.no_such_problem()
+
     def _apply_assignment_editor_preview(self, context, user):
         """Drawer for Add/Edit Assignment preview links.
 
@@ -497,8 +505,35 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         if override:
             context['title'] = override
 
+    def _add_workspace_draft_context(self, context, participation, contest_problem):
+        """Tell the workspace where to save drafts, and hand it the draft already on the server.
+
+        The server draft wins over the browser's local copy on load: it is the one auto-submit
+        will act on, and it is what the student sees after switching devices.
+        """
+        if contest_problem is None or participation.spectate or participation.ended:
+            return
+        contest = participation.contest
+        if user_bypasses_assignment_rules(self.request.user, contest):
+            return
+        context['workspace_draft_url'] = reverse('assignment_draft', args=[contest.key, self.object.code])
+        draft = AssignmentDraft.objects.filter(participation=participation, problem=self.object).first()
+        if draft is None or draft.harvested_at is not None:
+            return
+        if draft.content:
+            context['workspace_server_draft'] = {'content': draft.content, 'language': draft.language_id}
+        upload = getattr(draft, 'upload', None)
+        if upload is not None:
+            # A file input cannot be prefilled, so without this the page looks exactly like one
+            # where nothing was ever uploaded — and a student who cannot see their saved file has
+            # no reason to believe it will be submitted.
+            context['workspace_draft_upload'] = {'name': upload.original_name, 'size': upload.size}
+
     def get_context_data(self, **kwargs):
         context = super(ProblemDetail, self).get_context_data(**kwargs)
+        context['workspace_draft_url'] = None
+        context['workspace_server_draft'] = None
+        context['workspace_draft_upload'] = None
         user = self.request.user
         authed = user.is_authenticated
         can_see_authors = user_can_see_problem_author_metadata(user)
@@ -520,6 +555,11 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         current_participation = user.profile.current_contest if authed else None
         workspace_in_contest = current_participation is not None
         context['workspace_in_contest'] = workspace_in_contest
+        # Whether the submit area may promise auto-submit. Asking the harvest itself keeps the
+        # promise from outliving the behaviour for spectators, disqualified students and staff.
+        context['workspace_autosubmit'] = (
+            workspace_in_contest and participation_is_harvestable(current_participation)
+        )
         if workspace_in_contest:
             contest = current_participation.contest
             if contest.format_class.has_hidden_results:
@@ -541,6 +581,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['workspace_context_name'] = contest.name
             context['workspace_return_url'] = reverse('contest_view', args=[contest.key])
             context['workspace_current_order'] = contest_problem.order if contest_problem else None
+            self._add_workspace_draft_context(context, current_participation, contest_problem)
         else:
             context['workspace_mode'] = 'practice'
             context['workspace_context_id'] = ''
@@ -1195,6 +1236,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 'user_count': problem_stats['user_count'],
                 'ac_rate': problem_stats['ac_rate'],
                 'user_problem_cell': user_problem_cell,
+                'submission_type': cp.problem.submission_type,
             })
 
         return result
@@ -1529,6 +1571,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             )
             context['title_url'] = reverse('contest_view', args=[self.contest.key])
             context['title_crumb'] = _('Problems')
+            context['contest'] = self.contest
         return context
 
     def get_noui_slider_points(self):
@@ -2038,22 +2081,23 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             )
         return None
 
-    def _attach_contest(self, submission):
+    def _create_submission(self, language, answer, judge_id=None):
+        """Hand the validated answer to the shared, request-independent submission path."""
         contest_problem = self.contest_problem
-        if contest_problem is not None:
-            # Use the contest object from current_contest.contest because we already use it
-            # in profile.update_contest().
-            submission.contest_object = self.request.profile.current_contest.contest
-            if self.request.profile.current_contest.live:
-                submission.locked_after = submission.contest_object.locked_after
-            submission.save()
-            ContestSubmission(
-                submission=submission,
-                problem=contest_problem,
-                participation=self.request.profile.current_contest,
-            ).save()
-        else:
-            submission.save()
+        # Use the contest object from current_contest.contest because we already use it
+        # in profile.update_contest().
+        participation = self.request.profile.current_contest if contest_problem is not None else None
+        submission = create_submission(
+            self.request.profile, self.object,
+            language=language, answer=answer,
+            participation=participation, contest_problem=contest_problem,
+            judge_id=judge_id,
+        )
+        if participation is not None:
+            # Only a *successful* submit clears the draft, which is what makes a surviving draft
+            # mean "never submitted, or edited since" — the exact set auto-submit has to collect.
+            AssignmentDraft.objects.filter(participation=participation, problem=self.object).delete()
+        return submission
 
     def form_valid(self, form):
         blocked = self._submission_blocked_response()
@@ -2087,35 +2131,14 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                     _('This problem only accepts submissions in: %s') % ', '.join(harness_language_names),
                 )
 
-        with transaction.atomic():
-            self.new_submission = form.save(commit=False)
-            self._attach_contest(self.new_submission)
-            source = SubmissionSource(submission=self.new_submission, source=form.cleaned_data['source'])
-            source.save()
-
-        # Save a query.
-        self.new_submission.source = source
-        from judge.utils.contest_ai import supersede_older_in_flight
-        supersede_older_in_flight(self.new_submission)
-        self.new_submission.judge(force_judge=True, judge_id=form.cleaned_data['judge'])
+        self.new_submission = self._create_submission(
+            form.cleaned_data['language'], form.cleaned_data['source'], judge_id=form.cleaned_data['judge'],
+        )
 
         return self._workspace_success_response(form)
 
     def _noncode_form_valid(self, form):
-        with transaction.atomic():
-            self.new_submission = Submission(
-                user=self.request.profile, problem=self.object,
-                language=Language.get_answer_language(),
-            )
-            self._attach_contest(self.new_submission)
-            self.grader.store_answer(self.new_submission, form.cleaned_data)
-
-        from judge.utils.contest_ai import contest_defers_ai, mark_awaiting_batch_ai, supersede_older_in_flight
-        supersede_older_in_flight(self.new_submission)
-        if contest_defers_ai(self.new_submission):
-            mark_awaiting_batch_ai(self.new_submission)
-        else:
-            self.new_submission.judge(force_judge=True)
+        self.new_submission = self._create_submission(Language.get_answer_language(), form.cleaned_data)
 
         return self._workspace_success_response(form)
 

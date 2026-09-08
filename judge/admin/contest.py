@@ -166,7 +166,8 @@ class SimpleContestCreationForm(ContestForm):
             'key', 'name', 'authors', 'curators', 'testers', 'tester_see_submissions', 'tester_see_scoreboard',
             'spectators', 'is_visible', 'use_clarifications', 'hide_problem_tags', 'hide_problem_authors',
             'show_short_display', 'run_pretests_only', 'locked_after', 'scoreboard_visibility', 'points_precision',
-            'allow_virtual_participation', 'start_time', 'end_time', 'time_limit', 'description', 'og_image',
+            'allow_virtual_participation', 'start_time', 'end_time', 'time_limit',
+            'description', 'og_image',
             'logo_override_image', 'tags', 'summary', 'format_name', 'format_config', 'problem_label_script',
             'is_rated', 'rate_all', 'rating_floor', 'rating_ceiling', 'performance_ceiling_override',
             'rate_exclude', 'access_code', 'private_contestants', 'organizations', 'classes',
@@ -180,7 +181,8 @@ class SimpleContestCreationForm(ContestForm):
             'key', 'authors', 'curators', 'testers', 'tester_see_submissions', 'tester_see_scoreboard',
             'spectators', 'is_visible', 'use_clarifications', 'hide_problem_tags', 'hide_problem_authors',
             'show_short_display', 'run_pretests_only', 'locked_after', 'scoreboard_visibility', 'points_precision',
-            'allow_virtual_participation', 'time_limit', 'description', 'og_image', 'logo_override_image', 'tags',
+            'allow_virtual_participation', 'time_limit', 'description', 'og_image',
+            'logo_override_image', 'tags',
             'summary', 'format_name', 'format_config', 'problem_label_script', 'is_rated', 'rate_all',
             'rating_floor', 'rating_ceiling', 'performance_ceiling_override', 'rate_exclude', 'access_code',
             'private_contestants', 'organizations', 'classes', 'join_organizations', 'view_contest_scoreboard',
@@ -522,8 +524,10 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         if form.changed_data and 'locked_after' in form.changed_data:
             self.set_locked_after(obj, form.cleaned_data['locked_after'])
 
+        from judge.utils.assignment_schedule import reschedule_assignment_harvest
         from judge.utils.contest_ai import schedule_batch_ai_grade
         schedule_batch_ai_grade(obj.id)
+        reschedule_assignment_harvest(obj.id)
 
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)

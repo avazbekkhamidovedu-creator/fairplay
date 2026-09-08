@@ -30,6 +30,10 @@ x-app: &app
     - ${DATA_DIR:-/srv/dkuoj}/local_settings.py:/app/dmoj/local_settings.py:ro
     - ${DATA_DIR:-/srv/dkuoj}/static:/app/static
     - ${DATA_DIR:-/srv/dkuoj}/media:/app/media
+    # File answers (drafts + submissions) when S3 is not configured. Web writes
+    # them; Celery harvests them. Without a shared mount each container has its
+    # own empty disk and deadline collection silently skips file drafts.
+    - ${DATA_DIR:-/srv/dkuoj}/submission_files:/app/submission_files
     # Problem test data (DMOJ_PROBLEM_DATA_ROOT) — same path inside & out so the
     # test-data management features work. Keep in sync with the judge's copy.
     - ${PROBLEM_DATA_ROOT:-/mnt/problems}:/mnt/problems

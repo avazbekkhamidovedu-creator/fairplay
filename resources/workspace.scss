@@ -120,6 +120,14 @@
   padding-left: .85rem;
   border-left: 1px solid var(--oj-border);
 }
+/* Reassurance next to Submit: the answer is already on the server. Dropped on
+   narrow toolbars, where the buttons themselves need the room. */
+.submit-cluster .submit-autosave-hint {
+  color: var(--oj-text-muted);
+  font-size: .78rem;
+  line-height: 1.15;
+  max-width: 15rem;
+}
 .timer-wrap { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
 .timer-wrap.warn { color: var(--oj-danger); }
 .timer-wrap.expired { color: var(--oj-danger); }
@@ -843,6 +851,9 @@
   font-size: .8rem;
   border-top: 1px solid var(--oj-border);
 }
+#draft-status.is-error {
+  color: var(--oj-danger);
+}
 .ide-v-splitter {
   flex: 0 0 10px;
   position: relative;
@@ -1125,6 +1136,13 @@
   display: block;
   max-width: 100%;
 }
+/* The only trace of a file saved but not submitted: a file input cannot show one. */
+.ws-file-upload .ws-file-draft {
+  margin: .65rem 0 0;
+  color: var(--oj-text-muted);
+  font-size: var(--oj-font-size-sm, 12px);
+  line-height: 1.4;
+}
 .ws-result-file {
   margin: .75rem 0 0;
 }
@@ -1306,6 +1324,7 @@
   .ws-toolbar { padding-inline: .6rem; }
   .ws-toolbar.has-leave { display: flex; }
   .ws-toolbar.has-leave .submit-cluster { margin-left: auto; }
+  .submit-cluster .submit-autosave-hint { display: none; }
   .ws-toolbar .ctx-label { max-width: 9rem; }
   .ws-filter-panel.open,
   .ws-filter-panel.exposed { grid-template-columns: 1fr; }

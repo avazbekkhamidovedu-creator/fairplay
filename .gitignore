@@ -42,6 +42,9 @@ dmoj/test_settings.py
 static_test_root/
 .local-backups/
 
+# Ops notes kept on the machine, not in the repo.
+docs/
+
 # Runtime uploads (MEDIA_ROOT) — never commit.
 media/
 # Local fallback for submission_storage when DMOJ_S3_ENDPOINT_URL is empty

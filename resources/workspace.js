@@ -66,16 +66,193 @@
     return 'dkuoj-ws-draft-' + mode + '-' + ctx + '-' + app.dataset.problem;
   }
   function draftKey() { var language = languageSelect(); return draftContextPrefix() + '-' + (language ? language.value : 'answer'); }
-  function setDraftStatus(text) {
+  function setDraftStatus(text, kind) {
     var status = $('#draft-status');
-    if (status) status.textContent = text || '';
+    if (!status) return;
+    status.textContent = text || '';
+    status.classList.toggle('is-error', kind === 'error');
   }
+  function showAutosaveHint(visible) {
+    var hint = $('#ws-autosave-hint');
+    if (hint) hint.hidden = !visible;
+  }
+  // Server-side drafts. localStorage keeps the answer through a reload, but the server cannot read
+  // it, so the deadline sweep would have nothing to submit for a student who never pressed Submit.
+  // The answer is therefore mirrored to the server, which is also what makes it follow the student
+  // to another device. Present only in assignments where this participation is actually graded.
+  var serverDraftUrl = app.dataset.draftUrl || '';
+  var serverDraftTimer = null;
+  var serverDraftRetryTimer = null;
+  var pendingServerDraft = null;
+  // 'idle' | 'saving' | 'saved' | 'error' — local-only copy must not hide a failed sync.
+  var serverDraftSync = 'idle';
+  var SERVER_DRAFT_RETRY_MS = [2000, 5000];
+  function serverDraftsEnabled() { return !!serverDraftUrl; }
+  function serverDraftBody(payload) {
+    var data = new FormData();
+    data.append('csrfmiddlewaretoken', csrfToken());
+    data.append('content', payload.content == null ? '' : payload.content);
+    if (payload.language) data.append('language', payload.language);
+    return data;
+  }
+  function cancelServerDraftRetry() {
+    if (serverDraftRetryTimer) { clearTimeout(serverDraftRetryTimer); serverDraftRetryTimer = null; }
+  }
+  function cancelPendingServerDraft() {
+    pendingServerDraft = null;
+    if (serverDraftTimer) { clearTimeout(serverDraftTimer); serverDraftTimer = null; }
+    cancelServerDraftRetry();
+  }
+  function setLocalDraftStatus() {
+    if (serverDraftSync === 'error' || serverDraftSync === 'saving') return;
+    setDraftStatus(gettext('Saved on this device only'), 'local');
+  }
+  function markServerDraftSaved() {
+    serverDraftSync = 'saved';
+    setDraftStatus(gettext('Answer saved'), 'saved');
+    showAutosaveHint(true);
+  }
+  function markServerDraftFailed(payload, attempt) {
+    if (attempt < SERVER_DRAFT_RETRY_MS.length) {
+      serverDraftSync = 'error';
+      setDraftStatus(gettext('Not synced to the server. Retrying…'), 'error');
+      showAutosaveHint(false);
+      serverDraftRetryTimer = setTimeout(function () {
+        serverDraftRetryTimer = null;
+        sendServerDraft(payload, attempt + 1);
+      }, SERVER_DRAFT_RETRY_MS[attempt]);
+      return;
+    }
+    serverDraftSync = 'error';
+    setDraftStatus(gettext('Not synced to the server'), 'error');
+    showAutosaveHint(false);
+  }
+  function sendServerDraft(payload, attempt) {
+    if (!serverDraftsEnabled()) return Promise.resolve();
+    attempt = attempt || 0;
+    cancelServerDraftRetry();
+    serverDraftSync = 'saving';
+    return fetch(serverDraftUrl, { method: 'POST', credentials: 'same-origin', body: serverDraftBody(payload) })
+      .then(function (response) {
+        if (response.ok) markServerDraftSaved();
+        else markServerDraftFailed(payload, attempt);
+      })
+      .catch(function () { markServerDraftFailed(payload, attempt); });
+  }
+  // Typing fires constantly, so text answers are coalesced; a discrete choice is sent at once.
+  function queueServerDraft(content, language) {
+    if (!serverDraftsEnabled()) return;
+    pendingServerDraft = { content: content, language: language };
+    if (serverDraftTimer) clearTimeout(serverDraftTimer);
+    cancelServerDraftRetry();
+    serverDraftTimer = setTimeout(function () {
+      serverDraftTimer = null;
+      var payload = pendingServerDraft;
+      pendingServerDraft = null;
+      if (payload) sendServerDraft(payload);
+    }, 1500);
+  }
+  function saveServerDraftNow(content, language) {
+    if (!serverDraftsEnabled()) return;
+    cancelPendingServerDraft();
+    sendServerDraft({ content: content, language: language });
+  }
+  function flushServerDraft(options) {
+    // pagehide: sendBeacon is still delivered, an in-flight fetch may not be.
+    // Timer expiry keeps the page open, so use fetch and let retries update the status.
+    if (!serverDraftsEnabled() || !pendingServerDraft) return Promise.resolve();
+    var payload = pendingServerDraft;
+    cancelPendingServerDraft();
+    var useBeacon = !(options && options.beacon === false);
+    if (useBeacon && navigator.sendBeacon && navigator.sendBeacon(serverDraftUrl, serverDraftBody(payload))) {
+      markServerDraftSaved();
+      return Promise.resolve();
+    }
+    return sendServerDraft(payload);
+  }
+  // Leave waits for this so the harvest in ContestLeave sees the last keystrokes.
+  window.dkuojFlushServerDraft = function () {
+    return flushServerDraft({ beacon: false });
+  };
+  function serverDraft() {
+    var el = $('#workspace-server-draft');
+    if (!el) return null;
+    var payload;
+    try { payload = JSON.parse(el.textContent || '{}'); } catch (err) { return null; }
+    return payload && payload.content != null ? payload : null;
+  }
+  // The stored content mirrors the submitted answer's shape, one JSON object per question type.
+  function serverDraftAnswer() {
+    var draft = serverDraft();
+    if (!draft) return null;
+    try { return JSON.parse(draft.content || '{}'); } catch (err) { return null; }
+  }
+  window.addEventListener('pagehide', flushServerDraft);
+
+  // A file answer cannot ride along in the text draft, so it gets its own upload. It is sent the
+  // moment the student picks the file rather than debounced: there are no keystrokes to coalesce,
+  // and the whole point is to cover the student who chooses a file and never presses Submit.
+  function setFileDraftLine(text) {
+    var line = $('#ws-file-draft');
+    if (!line) return;
+    line.textContent = text || '';
+    line.hidden = !text;
+  }
+  function uploadFileDraft(file) {
+    if (!serverDraftsEnabled() || !file) return;
+    var data = new FormData();
+    data.append('csrfmiddlewaretoken', csrfToken());
+    data.append('file', file);
+    setFileDraftLine(gettext('Saving your file…'));
+    fetch(serverDraftUrl, { method: 'POST', credentials: 'same-origin', body: data })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          if (!response.ok || !payload.file) {
+            // Naming the reason matters here: the usual causes are a rejected extension or an
+            // oversized file, both of which the student can act on.
+            throw new Error(payload.error || gettext('Your file was not saved.'));
+          }
+          setFileDraftLine(interpolate(
+            gettext('Saved: %(name)s. If you do not submit it yourself, this file is submitted ' +
+                    'for you at the deadline.'),
+            {name: payload.file.name},
+          ));
+          showAutosaveHint(true);
+        });
+      })
+      .catch(function (err) { setFileDraftLine(err.message || gettext('Your file was not saved.')); });
+  }
+  if (isFileProblem() && serverDraftsEnabled()) {
+    document.addEventListener('change', function (event) {
+      var input = event.target;
+      if (!input || input.type !== 'file' || !input.closest('.ws-file-upload')) return;
+      if (input.files && input.files.length) uploadFileDraft(input.files[0]);
+    });
+  }
+
   function saveDraft() {
     if (!draftsEnabled() || !source) return;
     try { localStorage.setItem(draftKey(), sourceValue()); } catch (err) { /* ignore */ }
-    setDraftStatus(gettext('Local draft saved'));
+    setLocalDraftStatus();
+    var language = languageSelect();
+    queueServerDraft(sourceValue(), language ? language.value : '');
+  }
+  function resetFileInputs() {
+    // After a successful submit the input still holds that file. Picking a revised copy with the
+    // same name does not fire `change` in most browsers, so the new answer would never be saved
+    // as a draft. Clearing the value makes the next selection a real change.
+    $$('.ws-file-upload input[type="file"]').forEach(function (input) { input.value = ''; });
   }
   function clearCurrentDrafts() {
+    // Called after a successful submit, which already dropped the server draft. Cancelling the
+    // pending save matters: otherwise a queued keystroke lands afterwards and recreates the draft,
+    // making an already-submitted answer look like unsubmitted work to the deadline sweep.
+    cancelPendingServerDraft();
+    // The submit deleted the whole draft server-side, file included, so the "saved" line would
+    // otherwise still be advertising a file that is no longer held for this student.
+    setFileDraftLine('');
+    showAutosaveHint(false);
+    resetFileInputs();
     if (!draftsEnabled() || !window.localStorage) return;
     var prefix = draftContextPrefix() + '-';
     var toRemove = [];
@@ -430,6 +607,7 @@
       timer.classList.remove('warn');
       if (label) label.textContent = gettext('Time expired');
       setSubmitBlocked(true);
+      flushServerDraft({ beacon: false });
     }
     if (initial <= 0) {
       expire();
@@ -503,16 +681,20 @@
         if (ta) ta.value = md;
         if (!draftsEnabled()) return;
         try { localStorage.setItem(answerDraftKey(), md); } catch (err) { /* ignore */ }
-        setDraftStatus(gettext('Local draft saved'));
+        setLocalDraftStatus();
+        queueServerDraft(JSON.stringify({ text: md }));
       },
     });
     RichEditor.mount(app);
     var initialAnswer = ($('#id_answer') || {}).value || '';
-    var savedAnswer = null;
-    if (draftsEnabled()) {
+    // The server draft wins: it is the copy the deadline sweep will submit, and the only one that
+    // is there after switching devices.
+    var remoteAnswer = serverDraftAnswer();
+    var savedAnswer = remoteAnswer && typeof remoteAnswer.text === 'string' ? remoteAnswer.text : null;
+    if (savedAnswer === null && draftsEnabled()) {
       try { savedAnswer = localStorage.getItem(answerDraftKey()); } catch (err) { savedAnswer = null; }
     }
-    if (!initialAnswer && savedAnswer) initialAnswer = savedAnswer;
+    if (savedAnswer) initialAnswer = savedAnswer;
     if (initialAnswer) RichEditor.setMarkdown('workspace-answer', initialAnswer);
   }
 
@@ -535,18 +717,33 @@
       }
     });
     if (!draftsEnabled()) return;
-    var saved = null;
-    try { saved = JSON.parse(localStorage.getItem(fillBlankDraftKey()) || 'null'); } catch (err) { saved = null; }
-    if (saved && typeof saved === 'object') {
-      fields.forEach(function (field) {
-        if (!field.value && saved[field.name] != null) field.value = saved[field.name];
+    // The submitted answer is a list in blank order, and the field name carries that order, so
+    // sort by it rather than trusting DOM order (blanks may be rendered inline in the statement).
+    var ordered = fields.slice().sort(function (a, b) {
+      return (parseInt(a.name.replace(/^\D+/, ''), 10) || 0) - (parseInt(b.name.replace(/^\D+/, ''), 10) || 0);
+    });
+    var remoteAnswers = (serverDraftAnswer() || {}).answers;
+    if (Array.isArray(remoteAnswers)) {
+      ordered.forEach(function (field, index) {
+        if (remoteAnswers[index] != null) field.value = remoteAnswers[index];
       });
+    } else {
+      var saved = null;
+      try { saved = JSON.parse(localStorage.getItem(fillBlankDraftKey()) || 'null'); } catch (err) { saved = null; }
+      if (saved && typeof saved === 'object') {
+        fields.forEach(function (field) {
+          if (!field.value && saved[field.name] != null) field.value = saved[field.name];
+        });
+      }
     }
     function persist() {
       var payload = {};
       fields.forEach(function (field) { payload[field.name] = field.value; });
       try { localStorage.setItem(fillBlankDraftKey(), JSON.stringify(payload)); } catch (err) { /* ignore */ }
-      setDraftStatus(gettext('Local draft saved'));
+      setLocalDraftStatus();
+      queueServerDraft(JSON.stringify({
+        answers: ordered.map(function (field) { return field.value; }),
+      }));
     }
     fields.forEach(function (field) {
       field.addEventListener('input', persist);
@@ -561,8 +758,11 @@
     var form = inputs[0].form;
     if (form) form.setAttribute('autocomplete', 'off');
     if (!draftsEnabled()) return;
-    var saved = null;
-    try { saved = JSON.parse(localStorage.getItem(mcqDraftKey()) || 'null'); } catch (err) { saved = null; }
+    var remoteSelected = (serverDraftAnswer() || {}).selected;
+    var saved = Array.isArray(remoteSelected) ? remoteSelected : null;
+    if (saved === null) {
+      try { saved = JSON.parse(localStorage.getItem(mcqDraftKey()) || 'null'); } catch (err) { saved = null; }
+    }
     if (Array.isArray(saved) && saved.length) {
       var selected = {};
       saved.forEach(function (id) { selected[String(id)] = true; });
@@ -576,7 +776,10 @@
     function persist() {
       var values = inputs.filter(function (input) { return input.checked; }).map(function (input) { return input.value; });
       try { localStorage.setItem(mcqDraftKey(), JSON.stringify(values)); } catch (err) { /* ignore */ }
-      setDraftStatus(gettext('Local draft saved'));
+      setLocalDraftStatus();
+      // A click is a whole answer, not a keystroke: send it right away so the last choice before
+      // the deadline is never sitting in a debounce timer.
+      saveServerDraftNow(JSON.stringify({ selected: values }));
     }
     inputs.forEach(function (input) {
       input.addEventListener('change', persist);
@@ -1640,8 +1843,21 @@
   if (!source) return;
 
   if (draftsEnabled()) {
+    // The server draft wins over the local one: it is what the deadline sweep will submit, and the
+    // only copy that follows the student to another device. Its language comes back too, so the
+    // restored source is not read as a different language's code.
+    var remoteDraft = serverDraft();
     var saved = null;
-    try { saved = localStorage.getItem(draftKey()); } catch (err) { saved = null; }
+    if (remoteDraft) {
+      saved = remoteDraft.content;
+      var remoteLanguage = languageSelect();
+      if (remoteLanguage && remoteDraft.language
+          && remoteLanguage.querySelector('option[value="' + remoteDraft.language + '"]')) {
+        remoteLanguage.value = String(remoteDraft.language);
+      }
+    } else {
+      try { saved = localStorage.getItem(draftKey()); } catch (err) { saved = null; }
+    }
     if (saved !== null) source.value = saved;
     else if (!source.value) applyLanguageTemplate();
   } else if (!source.value) {
@@ -1657,11 +1873,14 @@
         if (languageDraft !== null) {
           setSource(languageDraft);
           setEditorLanguage();
+          // The language is part of what gets submitted, so the server copy has to follow it.
+          saveDraft();
           return;
         }
       }
       setSource(templateForLanguage(languageEl.value));
       setEditorLanguage();
+      saveDraft();
     });
   }
   bindLoadEditorButton($('#btn-load-editor'));
