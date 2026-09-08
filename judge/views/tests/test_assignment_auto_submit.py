@@ -13,6 +13,7 @@ from unittest import mock
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from judge.models import AssignmentDraft, Contest, ContestParticipation, ContestProblem, Language, \
@@ -528,3 +529,107 @@ class WholeClassDeadlineTestCase(TestCase):
 
         self.assertEqual(queued, 0)
         self.assertEqual(self._submissions().count(), 4)
+
+
+class LeaveHarvestTestCase(AutoSubmitScheduleMixin, TestCase):
+    """One Leave is one harvest. The participation stays; the deadline still collects leftovers."""
+
+    def _join(self):
+        self.student.profile.current_contest = self.participation
+        self.student.profile.save()
+        self.client.force_login(self.student)
+
+    def _leave(self):
+        return self.client.post(reverse('contest_leave', args=[self.contest.key]))
+
+    def test_leaving_collects_the_saved_draft(self):
+        self._join()
+        draft = self._draft()
+
+        response = self._leave()
+
+        self.assertRedirects(response, reverse('contest_view', args=[self.contest.key]),
+                             fetch_redirect_response=False)
+        draft.refresh_from_db()
+        self.assertIsNotNone(draft.harvested_at)
+        self.assertEqual(self._harvested_submissions().count(), 1)
+        self.student.profile.refresh_from_db()
+        self.assertIsNone(self.student.profile.current_contest)
+        self.assertTrue(ContestParticipation.objects.filter(pk=self.participation.pk).exists())
+
+    def test_leaving_again_without_a_new_draft_does_not_submit_twice(self):
+        self._join()
+        self._draft()
+        self._leave()
+
+        self._join()
+        self._leave()
+
+        self.assertEqual(self._harvested_submissions().count(), 1)
+
+    def test_leaving_still_exits_if_collection_fails(self):
+        self._join()
+        draft = self._draft()
+
+        with mock.patch('judge.utils.assignment_harvest.harvest_participation',
+                        side_effect=RuntimeError('boom')):
+            with self.assertLogs('judge.views.contests', level='ERROR'):
+                self._leave()
+
+        self.student.profile.refresh_from_db()
+        self.assertIsNone(self.student.profile.current_contest)
+        draft.refresh_from_db()
+        self.assertIsNone(draft.harvested_at)
+        self.assertFalse(self._harvested_submissions().exists())
+
+    def test_a_student_who_left_can_still_be_collected_at_the_deadline(self):
+        # Leave does not cancel the participation. Collection failed this time, so the
+        # unharvested draft is still sitting on that row when the window closes.
+        self._join()
+        draft = self._draft()
+        with mock.patch('judge.utils.assignment_harvest.harvest_participation',
+                        side_effect=RuntimeError('boom')):
+            with self.assertLogs('judge.views.contests', level='ERROR'):
+                self._leave()
+
+        self._end_assignment()
+        call_command('harvest_assignment_drafts', stdout=StringIO(), stderr=StringIO())
+
+        draft.refresh_from_db()
+        self.assertIsNotNone(draft.harvested_at)
+        self.assertEqual(self._harvested_submissions().count(), 1)
+
+    def test_coming_back_after_leave_leaves_a_new_draft_for_the_deadline(self):
+        self._join()
+        draft = self._draft()
+        self._leave()
+        self.assertEqual(self._harvested_submissions().count(), 1)
+
+        AssignmentDraft.objects.filter(pk=draft.pk).update(
+            content=json.dumps({'selected': [self.option.id]}),
+            harvested_at=None,
+        )
+        self._end_assignment()
+        call_command('harvest_assignment_drafts', stdout=StringIO(), stderr=StringIO())
+
+        self.assertEqual(self._harvested_submissions().count(), 2)
+
+    def test_a_spectator_leave_does_not_collect(self):
+        spectator_user = create_user(username='autosubmit_leave_spectator')
+        spectator = ContestParticipation.objects.create(
+            contest=self.contest, user=spectator_user.profile,
+            virtual=ContestParticipation.SPECTATE,
+        )
+        AssignmentDraft.objects.create(
+            participation=spectator, problem=self.mcq,
+            content=json.dumps({'selected': [self.option.id]}),
+        )
+        spectator_user.profile.current_contest = spectator
+        spectator_user.profile.save()
+        self.client.force_login(spectator_user)
+
+        self.client.post(reverse('contest_leave', args=[self.contest.key]))
+
+        self.assertFalse(self._harvested_submissions().exists())
+        spectator_user.profile.refresh_from_db()
+        self.assertIsNone(spectator_user.profile.current_contest)

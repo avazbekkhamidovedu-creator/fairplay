@@ -5,9 +5,9 @@ list, because a successful manual submit deletes its draft: a draft that is stil
 problem was never submitted, or was submitted and then edited. Those are exactly the two cases a
 student loses marks on today, and nothing else has to be compared or guessed at.
 
-Harvesting can be triggered more than once for the same participation — a deadline task and the
-recovery sweep can overlap — so each draft is claimed with a compare-and-set on ``harvested_at``
-before a submission is created. A claim that fails to produce a submission is released again,
+Harvesting can be triggered more than once for the same participation — Leave, a deadline task
+and the recovery sweep can overlap — so each draft is claimed with a compare-and-set on
+``harvested_at`` before a submission is created. A claim that fails to produce a submission is released again,
 because a duplicate submission is a far smaller problem than an answer that silently disappeared.
 """
 import logging

@@ -2372,7 +2372,16 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
             return generic_message(request, _('No such contest'),
                                    _('You are not in contest "%s".') % contest.key, 404)
 
-        was_spectating = profile.current_contest.spectate
+        participation = profile.current_contest
+        was_spectating = participation.spectate
+        # Leave does not cancel the participation: the same row, its timer and any leftover
+        # drafts stay. One Leave is one harvest; a later deadline sweep still picks up drafts
+        # that this call missed or that the student wrote after coming back.
+        try:
+            from judge.utils.assignment_harvest import harvest_participation
+            harvest_participation(participation)
+        except Exception:
+            logger.exception('Auto-submit on leave failed for participation %d', participation.pk)
         profile.remove_contest()
         if contest.seb_required and not was_spectating and not contest.user_bypasses_seb(request.user):
             return HttpResponseRedirect(contest.seb_effective_quit_url or reverse('seb_quit'))

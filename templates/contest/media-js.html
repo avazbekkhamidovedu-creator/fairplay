@@ -185,7 +185,7 @@
         dkuojFillLeaveNames(document.getElementById('leave-confirm-submitted-body'), submittedNames, false);
         dkuojFillLeaveNames(document.getElementById('leave-confirm-unsubmitted-body'), unsubmittedNames, true);
         document.getElementById('leave-confirm-warn').textContent =
-            {{ _('Leaving does not submit anything right now.')|htmltojs }};
+            {{ _('Leaving submits your saved answers now.')|htmltojs }};
         var note = {{ _('Your saved answers are submitted automatically when the assignment closes.')|htmltojs }};
         if (isSeb) {
             note += ' ' + {{ _('You might not be able to re-enter this assignment.')|htmltojs }};
@@ -207,8 +207,19 @@
         function onOk() {
             close(true);
             form.dataset.leaveConfirmed = '1';
-            if (typeof form.requestSubmit === 'function') form.requestSubmit();
-            else form.submit();
+            function submitLeave() {
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
+            }
+            // Wait for the last debounced draft so this Leave harvests what is on screen.
+            if (typeof window.dkuojFlushServerDraft === 'function') {
+                var flushed = window.dkuojFlushServerDraft();
+                if (flushed && typeof flushed.then === 'function') {
+                    flushed.then(submitLeave, submitLeave);
+                    return;
+                }
+            }
+            submitLeave();
         }
         function onOverlay(event) {
             if (event.target === overlay) close();

@@ -28,9 +28,11 @@ from judge.models.tests.util import (
 AUTOSAVE_HINT = 'Draft saved. If you do not submit, it is submitted automatically at the deadline.'
 # The leave dialog ships with every assignment surface, so this is the line all three share.
 AUTOSUBMIT_PROMISE = 'Your saved answers are submitted automatically when the assignment closes.'
+LEAVE_HARVEST_WARN = 'Leaving submits your saved answers now.'
 CONTRADICTORY_COPY = (
     'Leaving will not submit any unsubmitted problems.',
     'Only answers you have already submitted will be kept.',
+    'Leaving does not submit anything right now.',
 )
 
 
@@ -487,7 +489,7 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-unsubmitted="1"')
         self.assertContains(response, 'data-unsubmitted-names')
         self.assertContains(response, '1. workspace-code')
-        self.assertContains(response, 'Leaving does not submit anything right now.')
+        self.assertContains(response, LEAVE_HARVEST_WARN)
         self.assertContains(response, 'Your saved answers are submitted automatically when the assignment closes.')
         self.assertNotContains(response, 'Leaving will not submit any unsubmitted problems.')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
@@ -531,7 +533,7 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-seb-exit="1"')
         self.assertContains(response, 'seb-exit')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
-        self.assertContains(response, 'Leaving does not submit anything right now.')
+        self.assertContains(response, LEAVE_HARVEST_WARN)
 
     def test_practice_workspace_has_no_leave_button(self):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
@@ -568,6 +570,7 @@ class ProblemWorkspaceTestCase(TestCase):
             with self.subTest(page=page):
                 response = self.client.get(page)
                 self.assertContains(response, AUTOSUBMIT_PROMISE)
+                self.assertContains(response, LEAVE_HARVEST_WARN)
                 for stale in CONTRADICTORY_COPY:
                     self.assertNotContains(response, stale)
 

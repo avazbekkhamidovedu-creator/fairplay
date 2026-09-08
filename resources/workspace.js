@@ -128,11 +128,11 @@
     showAutosaveHint(false);
   }
   function sendServerDraft(payload, attempt) {
-    if (!serverDraftsEnabled()) return;
+    if (!serverDraftsEnabled()) return Promise.resolve();
     attempt = attempt || 0;
     cancelServerDraftRetry();
     serverDraftSync = 'saving';
-    fetch(serverDraftUrl, { method: 'POST', credentials: 'same-origin', body: serverDraftBody(payload) })
+    return fetch(serverDraftUrl, { method: 'POST', credentials: 'same-origin', body: serverDraftBody(payload) })
       .then(function (response) {
         if (response.ok) markServerDraftSaved();
         else markServerDraftFailed(payload, attempt);
@@ -160,16 +160,20 @@
   function flushServerDraft(options) {
     // pagehide: sendBeacon is still delivered, an in-flight fetch may not be.
     // Timer expiry keeps the page open, so use fetch and let retries update the status.
-    if (!serverDraftsEnabled() || !pendingServerDraft) return;
+    if (!serverDraftsEnabled() || !pendingServerDraft) return Promise.resolve();
     var payload = pendingServerDraft;
     cancelPendingServerDraft();
     var useBeacon = !(options && options.beacon === false);
     if (useBeacon && navigator.sendBeacon && navigator.sendBeacon(serverDraftUrl, serverDraftBody(payload))) {
       markServerDraftSaved();
-      return;
+      return Promise.resolve();
     }
-    sendServerDraft(payload);
+    return sendServerDraft(payload);
   }
+  // Leave waits for this so the harvest in ContestLeave sees the last keystrokes.
+  window.dkuojFlushServerDraft = function () {
+    return flushServerDraft({ beacon: false });
+  };
   function serverDraft() {
     var el = $('#workspace-server-draft');
     if (!el) return null;
