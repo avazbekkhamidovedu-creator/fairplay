@@ -128,6 +128,27 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(detail, 'Raw submitted answer')
         self.assertContains(detail, 'id="workspace-result-comments"')
 
+    def test_short_answer_submitted_source_renders_markdown_table(self):
+        short = create_problem(code='workspace-short', is_public=True, submission_type='S')
+        md = '| A | B |\n| --- | --- |\n| 1 | 2 |'
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=short, language=Language.get_answer_language(),
+            result='AC', status='D', points=100, time=0, memory=0,
+        )
+        SubmissionSource.objects.create(submission=submission, source=json.dumps({'text': md}))
+        status = self.client.get(reverse(
+            'problem_workspace_submission_status', args=[short.code, submission.id],
+        ))
+        self.assertEqual(status.status_code, 200)
+        row = status.json()['answer_display'][0]
+        self.assertIn('| A | B |', row['value'])
+        self.assertIn('<table', row['html'])
+        detail = self.client.get(
+            reverse('problem_detail', args=[short.code]) + '?submission=%d' % submission.id,
+        )
+        self.assertContains(detail, '<table')
+        self.assertContains(detail, 'result-source-md')
+
     def test_workspace_submissions_list_returns_oj_style_html_rows(self):
         submission = Submission.objects.create(
             user=self.user.profile, problem=self.problem, language=self.language,

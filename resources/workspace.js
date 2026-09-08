@@ -878,11 +878,11 @@
       var summary = document.createElement('summary');
       summary.id = 'submitted-source-summary';
       summary.textContent = gettext('Submitted source');
-      var pre = document.createElement('pre');
-      pre.className = 'result-source';
-      pre.id = 'submitted-source';
+      var sourceEl = document.createElement(isCodeProblem() ? 'pre' : 'div');
+      sourceEl.className = isCodeProblem() ? 'result-source' : 'result-source result-source-md content-description';
+      sourceEl.id = 'submitted-source';
       details.appendChild(summary);
-      details.appendChild(pre);
+      details.appendChild(sourceEl);
       sourceBlock.appendChild(details);
       box.appendChild(sourceBlock);
     }
@@ -895,15 +895,60 @@
     }
     return box;
   }
+  function typesetSubmittedSource(el) {
+    if (el && window.MathJax && typeof MathJax.typesetPromise === 'function') {
+      MathJax.typesetPromise([el]).catch(function () {});
+    }
+  }
+  function submittedSourceHost(wantHtml) {
+    var el = $('#submitted-source');
+    if (!el) return null;
+    if (wantHtml && el.tagName === 'PRE') {
+      var div = document.createElement('div');
+      div.id = 'submitted-source';
+      div.className = 'result-source result-source-md content-description';
+      el.parentNode.replaceChild(div, el);
+      return div;
+    }
+    return el;
+  }
+  function renderedAnswerHtml(answerDisplay) {
+    var htmlParts = (answerDisplay || []).map(function (item) {
+      return item && item.html ? String(item.html) : '';
+    }).filter(Boolean);
+    if (htmlParts.length) return htmlParts.join('');
+    if (isCodeProblem() || isMcqProblem() || isFileProblem()) return '';
+    var md = formatAnswerDisplay(answerDisplay);
+    if (!md || !window.RichEditor || typeof RichEditor.mdToHtml !== 'function') return '';
+    return RichEditor.mdToHtml(md);
+  }
+  function parseJsonResponse(response) {
+    return response.text().then(function (text) {
+      var json = null;
+      try { json = text ? JSON.parse(text) : {}; } catch (parseErr) {
+        throw new Error(gettext('Failed to load submission.'));
+      }
+      if (!response.ok) throw new Error((json && json.error) || gettext('Failed to load submission.'));
+      return json;
+    });
+  }
   function updateSubmittedSource(sourceText, answerDisplay) {
     var block = $('#workspace-result-source');
-    var pre = $('#submitted-source');
-    if (!block || !pre) return;
+    if (!block) return;
+    var html = renderedAnswerHtml(answerDisplay);
     var readable = formatAnswerDisplay(answerDisplay);
     var display = readable || sourceText || '';
-    if (!display) return;
-    pre.textContent = display;
-    pre.dataset.rawSource = sourceText || '';
+    if (!display && !html) return;
+    var el = submittedSourceHost(!!html);
+    if (!el) return;
+    if (html) {
+      el.innerHTML = html;
+      el.classList.add('result-source-md', 'content-description');
+      typesetSubmittedSource(el);
+    } else {
+      el.textContent = display;
+    }
+    el.dataset.rawSource = sourceText || '';
     var summary = $('#submitted-source-summary') || block.querySelector('summary');
     if (summary) summary.textContent = gettext('Submitted source');
     var details = block.querySelector('details.result-source-details');
@@ -1018,7 +1063,7 @@
       });
   }
   function appendTestcasesPanel(submissionId) {
-    if (isFileProblem() || isMcqProblem()) return Promise.resolve();
+    if (isFileProblem() || isMcqProblem() || !isCodeProblem()) return Promise.resolve();
     ensureResultStructure();
     var main = $('#workspace-result-main');
     var baseUrl = app.dataset.testcasesUrl;
@@ -1103,12 +1148,7 @@
     app.dataset.statusUrl = statusUrl;
     app.dataset.submissionGraded = '0';
     return fetch(statusUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(function (response) {
-        return response.json().then(function (json) {
-          if (!response.ok) throw new Error(json.error || gettext('Failed to load submission.'));
-          return json;
-        });
-      })
+      .then(parseJsonResponse)
       .then(function (status) {
         applyStatusPayload(status, null);
         if (statusIsPending(status)) pollFormal(statusUrl, null);
@@ -1148,8 +1188,8 @@
     var maxAttempts = 300; // 5 minutes at 1s; covers long compile/judge queues
     formalPollTimer = window.setInterval(function () {
       attempts++;
-      fetch(url, { credentials: 'same-origin' })
-        .then(function (response) { return response.json(); })
+      fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+        .then(parseJsonResponse)
         .then(function (status) {
           lastStatus = status;
           applyStatusPayload(status, button);
@@ -1178,8 +1218,8 @@
                 message.type === 'processing' || message.type === 'grading-end' ||
                 message.type === 'compile-error' || message.type === 'aborted' ||
                 message.type === 'internal-error') {
-              fetch(url, { credentials: 'same-origin' })
-                .then(function (response) { return response.json(); })
+              fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(parseJsonResponse)
                 .then(function (status) { applyStatusPayload(status, button); });
             }
           },
@@ -1282,7 +1322,7 @@
       });
     } else if (!isFileProblem() && app.dataset.statusUrl) {
       fetch(app.dataset.statusUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-        .then(function (response) { return response.json(); })
+        .then(parseJsonResponse)
         .then(function (status) {
           applyStatusPayload(status, null);
           if (statusIsPending(status)) pollFormal(app.dataset.statusUrl, null);

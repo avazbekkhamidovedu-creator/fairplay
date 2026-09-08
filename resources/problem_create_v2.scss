@@ -1027,7 +1027,25 @@ a.btn-soft:focus {
 .content-preview .h-scrollable-table,
 .pv-stem .h-scrollable-table {
   overflow-x: auto;
+  max-width: 100%;
   margin: 0.6em 0;
+}
+.content-preview .h-scrollable-table table.table,
+.pv-stem .h-scrollable-table table.table {
+  width: max-content;
+  max-width: 100%;
+  table-layout: auto;
+  margin-left: 0;
+  margin-right: 0;
+}
+.content-preview .h-scrollable-table table.table th,
+.content-preview .h-scrollable-table table.table td,
+.pv-stem .h-scrollable-table table.table th,
+.pv-stem .h-scrollable-table table.table td {
+  height: auto;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .pv-stem h3 { font-size: 1.6em; margin: 0.5em 0 0.35em; font-weight: 700; }
 .pv-stem h4 {

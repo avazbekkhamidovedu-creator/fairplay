@@ -214,4 +214,26 @@
     td {
         vertical-align: top;
     }
+
+    // Markdown tables: shrink to content, wrap after the statement width.
+    // Do not use global .table { width: 100% } — that is for ranking / lists.
+    .h-scrollable-table {
+        overflow-x: auto;
+        max-width: 100%;
+    }
+
+    table.table {
+        width: max-content;
+        max-width: 100%;
+        table-layout: auto;
+        margin-left: 0;
+        margin-right: 0;
+
+        th, td {
+            height: auto;
+            white-space: normal;
+            overflow-wrap: break-word;
+            word-break: break-word;
+        }
+    }
 }

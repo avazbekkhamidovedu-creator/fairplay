@@ -600,8 +600,12 @@
               {% endif %}
               <details class="result-source-details">
                 <summary id="submitted-source-summary">{{ _('Submitted source') }}</summary>
-                <pre class="result-source" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}
-{% endfor %}{% elif workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</pre>
+                {% if workspace_is_code %}
+                <pre class="result-source" id="submitted-source">{% if workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</pre>
+                {% else %}
+                <div class="result-source result-source-md content-description" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.html %}{{ item.html|safe }}{% else %}{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}{% endif %}
+{% endfor %}{% elif workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</div>
+                {% endif %}
               </details>
             </div>
             <div id="workspace-result-comments" class="ws-result-comments"{% if not workspace_enable_comments %} hidden{% endif %}>

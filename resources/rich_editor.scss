@@ -251,18 +251,21 @@
 .rich-editor-body img.img-selected { outline: 2px solid var(--oj-accent); outline-offset: 1px; }
 
 /* Match site .h-scrollable-table / .table (problem markdown renderer).
-   Editor overrides: top/left align + min height so the caret tracks the cell. */
+   Editor overrides: top/left align + min height so the caret tracks the cell.
+   Size to content (not 100% / fixed columns); wrap only after hitting the editor width. */
 .rich-editor-body .h-scrollable-table {
   overflow-x: auto;
+  max-width: 100%;
   margin: 0.6em 0;
 }
 .rich-editor-body table.table {
   border-spacing: 0;
-  width: 100%;
-  margin: 0 auto 0.5em;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 0.5em;
   border-collapse: collapse;
   font-size: 0.95em;
-  table-layout: fixed;
+  table-layout: auto;
 }
 .rich-editor-body table.table th,
 .rich-editor-body table.table td {
@@ -272,7 +275,10 @@
   text-align: left;
   min-width: 2.5em;
   min-height: 1.6em;
+  height: auto;
   line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: break-word;
   word-break: break-word;
   position: relative;
 }
@@ -280,7 +286,6 @@
   background: var(--oj-text-secondary);
   color: var(--oj-surface);
   font-weight: 600;
-  white-space: normal;
 }
 .rich-editor-body table.table td {
   background: var(--oj-surface);
