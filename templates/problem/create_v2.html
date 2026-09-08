@@ -409,10 +409,10 @@
 
           <!-- AI Grading (short-answer / fill-blank / programming) -->
           <div class="form-row type-panel" data-for="short,blank,programming" id="ai-row" style="display:none;">
-            <label>{{ _('AI Grading') }}</label>
+            <label>{{ _('AI Feedback') }}</label>
             <div class="field">
               <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem;">
-                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> {{ _('Enable AI grading') }}
+                <input type="checkbox" id="f-ai" onchange="renderScoreConf()"> {{ _('Allow Student Use AI Feedback') }}
               </label>
               <div class="help" id="ai-help">{{ _('Sends the rubric and student answer to the configured LLM for automated scoring. In an assignment/exam, the teacher chooses realtime (each submit) or batch (latest submit after the contest). Always uses the latest submission. Requires LITELLM_API_BASE.') }}</div>
               <div id="ai-conf" class="score-conf" style="display:none;">
@@ -1945,7 +1945,7 @@
       } else if (currentType === 'short') {
         partialConf.style.display = partialOn ? 'block' : 'none';
         if (partialOn) {
-          partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Short-answer partial scoring depends on <b>AI grading</b> or keyword matching (configure tiers in the AI grading Rubric below).')}</div>`;
+          partialConf.innerHTML = `<div style="font-size:12px;color:var(--muted);">${gettext('Short-answer partial scoring depends on <b>AI Feedback</b> or keyword matching (configure tiers in the AI Feedback Rubric below).')}</div>`;
         }
       } else if (currentType === 'programming') {
         partialConf.style.display = partialOn ? 'block' : 'none';

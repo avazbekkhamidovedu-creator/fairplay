@@ -779,6 +779,13 @@
                 setTimeout(function () { toastEl.style.display = 'none'; }, 2500);
             }
 
+            // ── Unsaved-changes guard (edit mode only) ──────────────────────
+            // A stray navigation in edit mode would silently drop every edit.
+            // Track whether the form is "dirty" and warn before leaving.
+            // Cleared on a successful save (see the submit handler).
+            var isDirty = false;
+            function markDirty() { isDirty = true; }
+
             // ── Form submission ───────────────────────────────────────────────
             // Registered FIRST on purpose: even if some cosmetic initializer
             // below throws (a missing element, a broken translation, ...), the
@@ -987,17 +994,12 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
                     if (res.ok) {
-                        var savedMsg = res.message;
+                        isDirty = false;
                         if (res.action === 'another') {
                             // "Save and add another": stay put and clear the form.
                             if (typeof window.resetFormForAnother === 'function') window.resetFormForAnother();
                             else form.reset();
-                            showToast(savedMsg || {{ _("Assignment saved — create another one.")|htmltojs }});
-                        } else if (savedMsg) {
-                            showToast(savedMsg);
-                            setTimeout(function () {
-                                window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
-                            }, res.id_changed ? 2500 : 1200);
+                            showToast({{ _("Assignment saved — create another one.")|htmltojs }});
                         } else {
                             window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
                         }
@@ -1292,33 +1294,15 @@
                 }).catch(function () { return null; });
             }
 
-            function generateUniqueContestKey() {
-                return fetch(CHECK_KEY_URL + '?suggest=1', {
-                    method: 'GET',
-                    cache: 'no-cache',
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                }).then(function (response) {
-                    if (!response.ok) throw new Error('suggest failed');
-                    return response.json();
-                }).then(function (data) {
-                    if (!data.key) throw new Error('suggest failed');
-                    return data.key;
-                });
-            }
-
             if (keyInput && !isEditMode) {
-                keyInput.dataset.autoGen = keyInput.value ? '1' : '0';
+                // Blank key = auto-generated (and atomically reserved) at save
+                // time; the field shows an "Auto-generated" placeholder instead
+                // of a misleading pre-filled id. Typing marks it as a manual id,
+                // which the server then validates strictly.
+                keyInput.dataset.autoGen = keyInput.value ? '0' : '1';
                 keyInput.addEventListener('input', function () {
                     this.dataset.autoGen = '0';
                 });
-                if (!keyInput.value) {
-                    generateUniqueContestKey().then(function (key) {
-                        if (!keyInput.value || keyInput.dataset.autoGen === '1') {
-                            keyInput.value = key;
-                            keyInput.dataset.autoGen = '1';
-                        }
-                    }).catch(function () {});
-                }
             }
 
             // --- Date helpers: datetime-local inputs are wall-clock local time; toISOString() would shift to UTC ---
@@ -2799,63 +2783,23 @@
             }
             {% endif %}
 
-            // --- Draft autosave (6c, create mode only) ---
-            var DRAFT_KEY = 'dkuoj_contest_draft';
-            function collectDraft() {
-                var fd = new FormData(form);
-                var draft = {
-                    name: fd.get('name') || '',
-                    key: fd.get('key') || '',
-                    tags: [],
-                };
-                Array.from(document.getElementById('id_tags').selectedOptions).forEach(function (o) {
-                    draft.tags.push(o.value);
+            // --- Unsaved-changes warning (edit mode) -------------------------
+            // Attached last so every initializer above (select2, RichEditor,
+            // timezone picker, …) has already run: programmatic prefill must not
+            // trip the "dirty" flag. Problem rows are added/removed/reordered by
+            // direct DOM mutation (no form input/change), so watch the list too.
+            if (window.DMOJ_IS_EDIT) {
+                form.addEventListener('input', markDirty);
+                form.addEventListener('change', markDirty);
+                var cpList = document.getElementById('cp-list');
+                if (cpList && window.MutationObserver) {
+                    new MutationObserver(markDirty).observe(cpList, { childList: true, subtree: true });
+                }
+                window.addEventListener('beforeunload', function (e) {
+                    if (!isDirty) return;
+                    e.preventDefault();
+                    e.returnValue = '';
                 });
-                if (typeof RichEditor !== 'undefined' && RichEditor.getMarkdown) {
-                    draft.description = RichEditor.getMarkdown('desc') || '';
-                }
-                return draft;
-            }
-            function applyDraft(draft) {
-                if (!draft) return;
-                var nameEl = document.getElementById('id_name');
-                var keyEl = document.getElementById('id_key');
-                if (nameEl && draft.name) nameEl.value = draft.name;
-                if (keyEl && draft.key) keyEl.value = draft.key;
-                if (draft.tags && draft.tags.length) {
-                    draft.tags.forEach(function (id) {
-                        var opt = document.getElementById('id_tags').querySelector('option[value="' + id + '"]');
-                        if (opt) opt.selected = true;
-                    });
-                    syncTagPills();
-                }
-                if (draft.description && typeof RichEditor !== 'undefined' && RichEditor.setMarkdown) {
-                    RichEditor.setMarkdown('desc', draft.description);
-                }
-            }
-            if (!{{ 'true' if contest else 'false' }}) {
-                var saveDraftTimer = null;
-                form.addEventListener('input', function () {
-                    if (saveDraftTimer) clearTimeout(saveDraftTimer);
-                    saveDraftTimer = setTimeout(function () {
-                        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(collectDraft())); } catch (err) {}
-                    }, 500);
-                });
-                try {
-                    var saved = localStorage.getItem(DRAFT_KEY);
-                    if (saved) {
-                        var draft = JSON.parse(saved);
-                        if (draft && draft.name) {
-                            var msg = {{ _('Recover the unsaved draft?')|tojson }};
-                            if (confirm(msg)) {
-                                applyDraft(draft);
-                                showToast({{ _('Draft restored.')|htmltojs }});
-                            } else {
-                                localStorage.removeItem(DRAFT_KEY);
-                            }
-                        }
-                    }
-                } catch (err) {}
             }
 
             // --- "Save and add another": clear the form but stay put (6a) ---
@@ -2877,12 +2821,11 @@
                 if (score) score.value = 100;
                 var nameEl2 = document.getElementById('id_name');
                 if (nameEl2) nameEl2.focus();
-                try { localStorage.removeItem(DRAFT_KEY); } catch (err) {}
                 if (keyInput && !isEditMode) {
-                    generateUniqueContestKey().then(function (key) {
-                        keyInput.value = key;
-                        keyInput.dataset.autoGen = '1';
-                    }).catch(function () {});
+                    // Next assignment's id is auto-generated too — clear any
+                    // manually typed key and reset to the blank placeholder.
+                    keyInput.value = '';
+                    keyInput.dataset.autoGen = '1';
                 }
             };
 
@@ -3012,7 +2955,7 @@
                             <div class="form-row form-row-check">
                                 <label>
                                     <input type="checkbox" id="id_allow_student_ai_grading" name="allow_student_ai_grading"{% if prefill.allow_student_ai_grading %} checked{% endif %}>
-                                    {{ _('Allow Student Use AI Grading') }}{{ tip(_('When enabled, students can request AI grading on the submission page (subject to quota). Teachers can always run AI from the Grade page regardless of this setting.')) }}
+                                    {{ _('Allow Student Use AI Feedback') }}{{ tip(_('When enabled, students can request AI Feedback on supported problem types (programming, short answer, fill-in-the-blank) from the result page, even if the problem’s own AI Feedback is off. Teachers can always run AI from the Grade page when a problem has AI Feedback configured.')) }}
                                 </label>
                             </div>
                             <div class="form-row" id="ai-batch-delay-row">
@@ -3356,10 +3299,10 @@
                                 <summary>{{ _('Identity') }} <span class="chev"></span></summary>
                                 <div class="fold-body">
                                     <div class="form-row">
-                                        <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Auto-incremented like c000000 — edit it only if you need a specific ID.')) }}</label>
+                                        <label>{{ _('Assignment ID') }}{{ tip(_('Short unique identifier (lowercase letters and digits only), used in the URL. Leave blank to auto-generate (like c000000); type here only if you need a specific ID.')) }}</label>
                                         <div class="field">
-                                            <input type="text" id="id_key" name="key" required
-                                                   placeholder="{{ _('Auto-incremented') }}"
+                                            <input type="text" id="id_key" name="key"
+                                                   placeholder="{{ _('Auto-generated') }}"
                                                    pattern="[a-z0-9]+" maxlength="20"
                                                    value="{{ prefill.key or '' }}">
                                         </div>

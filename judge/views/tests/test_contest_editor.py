@@ -796,25 +796,18 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertNotIn('id="id_key"', before)
         self.assertIn('id="id_key"', after)
 
-    def test_create_prefills_auto_increment_assignment_id(self):
-        occupied = Contest.generate_unique_key()
-        self.assertRegex(occupied, r'^c\d{6}$')
-        create_contest(
-            key=occupied, name='Occupied auto key',
-            start_time=timezone.now(),
-            end_time=timezone.now() + timedelta(hours=1),
-            authors=('superuser',),
-        )
+    def test_create_key_is_blank_auto_generated(self):
+        # Create mode must leave the id blank: it is auto-generated and reserved
+        # atomically at save time, so pre-filling a "suggestion" would mislead
+        # editors (two simultaneous creators would see the same suggestion but
+        # land on different ids).
         response = self.client.get(reverse('contest_create'))
-        key = response.context['prefill']['key']
-        self.assertRegex(key, r'^c\d{6}$')
-        self.assertNotEqual(key, occupied)
-        self.assertFalse(Contest.objects.filter(key=key).exists())
+        self.assertEqual(response.context['prefill']['key'], '')
         html = response.content.decode()
-        self.assertIn('value="%s"' % key, html)
-        self.assertIn('generateUniqueContestKey', html)
-        self.assertIn('?suggest=1', html)
+        self.assertNotIn('generateUniqueContestKey', html)
+        self.assertNotIn('?suggest=1', html)
         self.assertNotIn("replace(/[^a-z0-9]+/g, '')", html)
+        self.assertIn('placeholder="Auto-generated"', html)
 
     def test_preview_title_comes_before_time(self):
         html = self.client.get(reverse('contest_create')).content.decode()
@@ -856,20 +849,88 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertRegex(body['key'], r'^c\d{6}$')
         self.assertNotEqual(body['key'], occupied)
 
-    def test_create_own_key_already_saved_opens_editor(self):
+    def test_create_own_key_already_saved_returns_400(self):
+        # Saving a second assignment under a key this user already owns must not
+        # auto-redirect or silently renumber — it fails cleanly so the user can
+        # pick a different ID without losing the in-progress edits.
         first = self._post(name='Mine', key='c000000')
         self.assertEqual(first.status_code, 200, first.content)
         retry = self._post(name='Mine again', key='c000000')
+        self.assertEqual(retry.status_code, 400, retry.content)
+        error = retry.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn('c000000', error)
+        self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
+
+    def test_create_own_key_already_saved_does_not_overwrite_existing(self):
+        # The retry is a no-op on the stored row: the existing assignment keeps
+        # its original name, and no duplicate row is created.
+        self._post(name='Mine', key='c000000')
+        retry = self._post(name='Mine again', key='c000000')
+        self.assertEqual(retry.status_code, 400, retry.content)
+        self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
+        existing = Contest.objects.get(key='c000000')
+        self.assertEqual(existing.name, 'Mine')
+
+    def test_create_auto_key_ignores_submitted_key(self):
+        # With key_auto the submitted key is only a suggestion: the server
+        # reserves a fresh key atomically, so a stale suggestion never collides.
+        self._post(name='Mine', key='c000000')
+        retry = self._post(name='Mine again', key='c000000', key_auto=True)
         self.assertEqual(retry.status_code, 200, retry.content)
         body = retry.json()
-        self.assertTrue(body['ok'])
-        self.assertTrue(body['already_saved'])
-        self.assertEqual(body['key'], 'c000000')
-        self.assertIn('already saved', body['message'].lower())
+        self.assertNotIn('id_changed', body)
+        self.assertNotEqual(body['key'], 'c000000')
         self.assertEqual(Contest.objects.filter(key='c000000').count(), 1)
-        self.assertEqual(body['redirect'], reverse('contest_edit', args=['c000000']))
+        self.assertTrue(Contest.objects.filter(name='Mine again').exists())
 
-    def test_create_series_key_taken_by_other_saves_next(self):
+    def test_create_full_payload_produces_consistent_assignment(self):
+        """A complete create round-trips every field category into one coherent
+        assignment: auto-generated key, duration, problems (points/partial/order),
+        M2M (orgs/tags/curators/testers), the creator as author, and a redirect."""
+        problem = create_problem('completeness-prob', is_public=True)
+        now = timezone.now()
+        response = self._post(
+            name='Complete Assignment',
+            key='',
+            start_time=(now + timedelta(hours=1)).isoformat(),
+            end_time=(now + timedelta(hours=5)).isoformat(),
+            duration_hours=1,
+            duration_minutes=30,
+            description='full description',
+            format_name='default',
+            scoreboard_visibility='V',
+            problems=[{'id': problem.id, 'points': 150, 'partial': False}],
+            organizations=[self.organization.id],
+            tags=[self.tag.id],
+            curators=[self.user_a.id],
+            testers=[self.user_b.id],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['action'], 'save')
+
+        contest = Contest.objects.get(name='Complete Assignment')
+        self.assertRegex(contest.key, r'^c\d{6}$')
+        self.assertEqual(contest.time_limit, timedelta(hours=1, minutes=30))
+        self.assertEqual(contest.description, 'full description')
+
+        problems = list(contest.contest_problems.order_by('order'))
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0].problem_id, problem.id)
+        self.assertEqual(problems[0].points, 150)
+        self.assertFalse(problems[0].partial)
+        self.assertEqual(problems[0].order, 1)
+
+        self.assertCountEqual(list(contest.organizations.values_list('id', flat=True)), [self.organization.id])
+        self.assertCountEqual(list(contest.tags.values_list('id', flat=True)), [self.tag.id])
+        self.assertCountEqual(list(contest.curators.values_list('id', flat=True)), [self.user_a.id])
+        self.assertCountEqual(list(contest.testers.values_list('id', flat=True)), [self.user_b.id])
+        self.assertIn(self.editor.profile, contest.authors.all())
+        self.assertEqual(body['redirect'], reverse('contest_view', args=[contest.key]))
+
+    def test_create_series_key_taken_by_other_returns_400(self):
         occupied = Contest.generate_unique_key()
         create_contest(
             key=occupied, name='Other assignment',
@@ -878,16 +939,11 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             authors=('fields_user_a',),
         )
         response = self._post(name='Collision', key=occupied)
-        self.assertEqual(response.status_code, 200, response.content)
-        body = response.json()
-        self.assertTrue(body['ok'])
-        self.assertTrue(body.get('id_changed'))
-        self.assertEqual(body['id_changed_from'], occupied)
-        self.assertNotEqual(body['key'], occupied)
-        self.assertRegex(body['key'], r'^c\d{6}$')
-        self.assertIn(body['key'], body['message'])
-        self.assertIn(occupied, body['message'])
-        self.assertTrue(Contest.objects.filter(key=body['key'], name='Collision').exists())
+        self.assertEqual(response.status_code, 400, response.content)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertIn(occupied, error)
+        self.assertFalse(Contest.objects.filter(name='Collision').exists())
 
     def test_create_custom_key_taken_returns_400_with_id(self):
         create_contest(
@@ -916,7 +972,9 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('already exists', error)
         self.assertIn(occupied, error)
 
-    def test_create_series_key_race_saves_next_and_tells_user(self):
+    def test_create_series_key_race_returns_400(self):
+        # A manual key that loses a race (another INSERT lands between our check
+        # and our own INSERT) fails cleanly, not with a 500 or a silent renumber.
         original_save = Contest.save
         calls = {'n': 0}
 
@@ -927,20 +985,15 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             return original_save(self, *args, **kwargs)
 
         with patch.object(Contest, 'save', racing_save):
-            with patch.object(Contest, 'generate_unique_key', return_value='c000099'):
-                # Even if the teacher edited the prefilled id (key_auto=false),
-                # a race still saves under the next free series id.
-                response = self._post(name='Race no auto', key='c000000', key_auto=False)
-        self.assertEqual(response.status_code, 200, response.content)
-        body = response.json()
-        self.assertTrue(body.get('id_changed'))
-        self.assertEqual(body['id_changed_from'], 'c000000')
-        self.assertEqual(body['key'], 'c000099')
-        self.assertIn('c000099', body['message'])
-        self.assertIn('c000000', body['message'])
-        self.assertTrue(Contest.objects.filter(key='c000099', name='Race no auto').exists())
+            response = self._post(name='Race manual', key='c000000', key_auto=False)
+        self.assertEqual(response.status_code, 400, response.content)
+        error = response.json()['error']
+        self.assertIn('already exists', error)
+        self.assertFalse(Contest.objects.filter(name='Race manual').exists())
 
-    def test_create_series_key_race_with_auto_saves_next(self):
+    def test_create_auto_key_race_reserves_next_free(self):
+        # An auto key retries atomically when its INSERT loses a race, landing on
+        # the next free id instead of colliding.
         original_save = Contest.save
         calls = {'n': 0}
 
@@ -951,16 +1004,13 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             return original_save(self, *args, **kwargs)
 
         with patch.object(Contest, 'save', racing_save):
-            with patch.object(Contest, 'generate_unique_key', return_value='c000099'):
+            with patch.object(Contest, 'generate_unique_key', side_effect=['c000099', 'c000100']):
                 response = self._post(name='Race auto', key='c000000', key_auto=True)
         self.assertEqual(response.status_code, 200, response.content)
         body = response.json()
-        self.assertTrue(body.get('id_changed'))
-        self.assertEqual(body['id_changed_from'], 'c000000')
-        self.assertEqual(body['key'], 'c000099')
-        self.assertIn('c000099', body['message'])
-        self.assertIn('c000000', body['message'])
-        self.assertTrue(Contest.objects.filter(key='c000099', name='Race auto').exists())
+        self.assertNotIn('id_changed', body)
+        self.assertEqual(body['key'], 'c000100')
+        self.assertTrue(Contest.objects.filter(key='c000100', name='Race auto').exists())
 
     def test_create_related_integrity_error_is_not_id_conflict(self):
         with patch.object(ContestCreate, '_sync_problems', side_effect=IntegrityError('contestproblem unique')):

@@ -1,8 +1,13 @@
-"""Contest-level AI grading and post-end objective auto-grade.
+"""Contest-level AI Feedback and post-end objective auto-grade.
 
-Teachers always may run AI (submission button or Grade-page “Run AI grading”).
-Students may request AI only when ``allow_student_ai_grading`` is on (subject to
-quota). Submit never auto-invokes the LLM.
+Teachers may run AI Feedback from the submission button or Grade-page batch
+when the problem has AI config, or (lightweight) when the assignment allows
+student Feedback on a supported type. For students in an assignment, the
+``allow_student_ai_grading`` flag is the master switch: it alone controls
+whether View AI Feedback appears on supported problem types (programming,
+short answer, fill-blank). Practice (no contest) still requires problem-level
+AI enable. Empty rubric / grading tables fall back to Overall at runtime.
+Submit never auto-invokes the LLM.
 
 ``ai_grading_auto_delay_minutes`` schedules objective machine grading after
 ``end_time`` (MCQ / true-false / exact fill-blank) — not the LLM.
@@ -21,7 +26,7 @@ AI_BATCH_PENDING = 'AI_BATCH_PENDING'
 
 
 def problem_has_ai_grading(problem):
-    """True when this problem type would invoke the LLM grader."""
+    """True when this problem has problem-level AI Feedback / rubric config on."""
     from judge.models import ProblemSubmissionType
     from judge.models.question import GRADE_AI
 
@@ -42,6 +47,38 @@ def problem_has_ai_grading(problem):
         except Exception:
             return False
     return False
+
+
+def problem_supports_ai_feedback(problem):
+    """Problem types that can send statement + answer to the LLM for Feedback."""
+    from judge.models import ProblemSubmissionType
+
+    return problem.submission_type in (
+        ProblemSubmissionType.CODE,
+        ProblemSubmissionType.SHORT_ANSWER,
+        ProblemSubmissionType.FILL_BLANK,
+    )
+
+
+def lightweight_ai_feedback_ok(submission, *, user=None, contest=None):
+    """Assignment Allow ON enables Feedback without problem-level AI config."""
+    if not problem_supports_ai_feedback(submission.problem):
+        return False
+    if user is None:
+        try:
+            user = submission.user.user
+        except Exception:
+            user = None
+    resolved = resolve_contest_for_ai(submission, user=user, contest=contest)
+    return resolved is not None and student_allowed_ai_grading(resolved)
+
+
+def ai_feedback_callable(submission, *, user=None, contest=None):
+    """Whether an on-demand / batch AI Feedback pass can run for this row."""
+    return (
+        problem_has_ai_grading(submission.problem)
+        or lightweight_ai_feedback_ok(submission, user=user, contest=contest)
+    )
 
 
 def problem_is_objective_machine_graded(problem):
@@ -72,13 +109,50 @@ def student_allowed_ai_grading(contest):
     return contest_ai_mode(contest) == 'realtime'
 
 
+def resolve_contest_for_ai(submission, *, user=None, contest=None):
+    """Which assignment's Allow Student Use AI Feedback gate applies.
+
+    Prefer ``submission.contest_object`` (the submit's real assignment). If the
+    row has no contest, fall back to an explicit workspace contest or the
+    viewer's active participation — but only when that contest actually
+    contains this problem, so practice opens are not mis-gated.
+    """
+    linked = getattr(submission, 'contest_object', None)
+    if linked is not None:
+        return linked
+
+    candidates = []
+    if contest is not None:
+        candidates.append(contest)
+    if user is not None and getattr(user, 'is_authenticated', False):
+        try:
+            current = user.profile.current_contest
+            if current is not None:
+                candidates.append(current.contest)
+        except Exception:
+            pass
+
+    problem_id = getattr(submission, 'problem_id', None) or getattr(
+        getattr(submission, 'problem', None), 'id', None,
+    )
+    if problem_id is None:
+        return None
+    for candidate in candidates:
+        try:
+            if candidate.problems.filter(id=problem_id).exists():
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
 def should_run_ai_now(submission, *, batch_pass=False, manual_trigger=False):
     """Whether this submission should hit the LLM *right now*.
 
     Submit never auto-invokes the model — only ``manual_trigger`` (student/teacher
     button) or ``batch_pass`` (teacher batch job) may run AI grading.
     """
-    if not problem_has_ai_grading(submission.problem):
+    if not ai_feedback_callable(submission):
         return False
     if batch_pass or getattr(submission, '_ai_batch_pass', False):
         return True
@@ -95,13 +169,13 @@ def contest_awaits_student_ai(submission):
     judge result — never the synthetic "awaiting AI" placeholder that the
     internally-graded AI types (short answer / AI fill-blank) produce.
     """
-    if not problem_has_ai_grading(submission.problem):
+    if not problem_supports_ai_feedback(submission.problem):
         return False
     from judge.models import ProblemSubmissionType
     if submission.problem.submission_type == ProblemSubmissionType.CODE:
         return False
     # Practice and every contest: never auto-call the LLM on submit.
-    return True
+    return ai_feedback_callable(submission)
 
 
 def contest_defers_ai(submission):
@@ -132,7 +206,7 @@ def supersede_older_in_flight(new_submission):
     from judge.models import ProblemSubmissionType, Submission
 
     contest = getattr(new_submission, 'contest_object', None)
-    if not problem_has_ai_grading(new_submission.problem):
+    if not ai_feedback_callable(new_submission):
         return 0
     if contest is not None and not student_allowed_ai_grading(contest):
         return 0
@@ -225,7 +299,7 @@ def run_ai_for_submission(submission, *, batch_pass=False, manual_trigger=False,
 
     if not is_latest_submission(submission):
         return 'skipped-not-latest'
-    if not problem_has_ai_grading(submission.problem):
+    if not ai_feedback_callable(submission):
         return 'skipped-no-ai'
     if not should_run_ai_now(submission, batch_pass=batch_pass, manual_trigger=manual_trigger):
         return 'skipped-mode'
@@ -293,7 +367,7 @@ def student_can_see_code_ai(user, submission):
         return True
     if not is_owner:
         return False
-    contest = getattr(submission, 'contest_object', None)
+    contest = resolve_contest_for_ai(submission, user=user)
     if contest is None or student_allowed_ai_grading(contest):
         return True
     if bool(getattr(contest, 'ai_grading_batch_finished_at', None)):
@@ -301,13 +375,21 @@ def student_can_see_code_ai(user, submission):
     return False
 
 
-def student_can_trigger_ai(user, submission):
-    """Show the on-demand AI grading button (teachers always; students when allowed)."""
+def student_can_trigger_ai(user, submission, *, contest=None):
+    """Show the on-demand AI Feedback button.
+
+    Students in an assignment: assignment ``allow_student_ai_grading`` is the
+    master switch on supported types (problem-level AI config optional).
+    Practice (no contest): problem-level AI enable only.
+    Teachers: may force when the problem has AI config, or when assignment
+    Allow enables the lightweight path (bypass assignment-off only when the
+    problem itself has AI Feedback configured).
+    """
     from judge.ai_grading_quota import get_remaining, is_teacher_viewer
 
     if user is None or not user.is_authenticated:
         return False
-    if not problem_has_ai_grading(submission.problem):
+    if not problem_supports_ai_feedback(submission.problem):
         return False
     try:
         is_owner = submission.user.user_id == user.id
@@ -321,11 +403,17 @@ def student_can_trigger_ai(user, submission):
     if not is_latest_submission(submission):
         return False
 
-    contest = getattr(submission, 'contest_object', None)
-    # Teachers may always force an LLM pass (Grade desk / Rejudge parity).
+    contest = resolve_contest_for_ai(submission, user=user, contest=contest)
     if teacher:
-        return True
-    if contest is not None and not student_allowed_ai_grading(contest):
+        # Problem AI on → always (assignment-off bypass). Else lightweight only.
+        if problem_has_ai_grading(submission.problem):
+            return True
+        return contest is not None and student_allowed_ai_grading(contest)
+    if contest is not None:
+        # Master switch: assignment Allow alone; no problem-level requirement.
+        if not student_allowed_ai_grading(contest):
+            return False
+    elif not problem_has_ai_grading(submission.problem):
         return False
     if student_quota_disabled():
         return False
@@ -345,7 +433,7 @@ def student_quota_disabled():
     return student_quota_limit() <= 0
 
 
-def ai_grade_context(user, submission):
+def ai_grade_context(user, submission, *, contest=None):
     """Template/API context for the on-demand AI grading button."""
     from judge.ai_grading_quota import (
         get_remaining, is_rate_limited, is_teacher_viewer, rate_limit_count,
@@ -353,7 +441,7 @@ def ai_grade_context(user, submission):
     )
 
     ctx = {
-        'can_trigger': student_can_trigger_ai(user, submission),
+        'can_trigger': student_can_trigger_ai(user, submission, contest=contest),
         'is_teacher': is_teacher_viewer(user, submission),
         'remaining': 0,
         'rate_limited': False,
@@ -425,9 +513,12 @@ def schedule_batch_ai_grade(contest_id):
 
 def ai_mode_help_text():
     return _(
-        'Teachers can always run AI grading from the Grade page. '
-        'Enable “Allow Student Use AI Grading” so students can request AI on the '
-        'submission page (latest submission only). Auto grade after end re-grades '
-        'objective questions only and does not call the LLM; set it to Off (−1) '
-        'to cancel a scheduled auto-run after you grade manually.',
+        'Teachers can always run AI Feedback from the Grade page when a problem '
+        'has AI Feedback configured. Enable “Allow Student Use AI Feedback” so '
+        'students can request Feedback on supported problem types '
+        '(programming, short answer, fill-in-the-blank) from the result page '
+        '(latest submission only), even if the problem’s own AI Feedback is off. '
+        'Auto grade after end re-grades objective questions only and does not '
+        'call the LLM; set it to Off (−1) to cancel a scheduled auto-run after '
+        'you grade manually.',
     )
