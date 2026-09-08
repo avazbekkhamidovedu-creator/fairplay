@@ -1,3 +1,6 @@
+import json
+import logging
+import sys
 from collections import defaultdict
 from math import e
 
@@ -11,9 +14,55 @@ from judge.models import ContestParticipation, ContestSubmission, Problem, Submi
 
 __all__ = [
     'assignment_problem_stats', 'contest_completed_ids', 'get_result_data',
-    'participation_submit_progress', 'user_completed_ids', 'user_editable_ids',
-    'user_tester_ids',
+    'log_workspace_progress', 'participation_submit_progress',
+    'user_completed_ids', 'user_editable_ids', 'user_tester_ids',
 ]
+
+progress_log = logging.getLogger('judge.workspace.progress')
+
+
+def _ensure_progress_log_handler():
+    # Attach our own console handler so INFO lines show in docker logs even when
+    # the root logger stays at WARNING (Django's default).
+    if progress_log.handlers:
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
+    progress_log.addHandler(handler)
+    progress_log.setLevel(logging.INFO)
+    progress_log.propagate = False
+
+
+def _clip_progress_value(value, limit=400):
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [_clip_progress_value(item, 120) for item in value[:40]]
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) > limit:
+        return text[:limit] + '…'
+    return text
+
+
+def log_workspace_progress(step, participation=None, progress=None, **fields):
+    """One grep-able line for the assignment progress / leave-dialog data path."""
+    _ensure_progress_log_handler()
+    payload = {'step': step}
+    if participation is not None:
+        profile = getattr(participation, 'user', None)
+        payload['user'] = getattr(profile, 'username', None)
+        payload['participation'] = getattr(participation, 'id', None)
+        contest = getattr(participation, 'contest', None)
+        payload['contest'] = getattr(contest, 'key', None)
+    if progress:
+        payload['submitted'] = progress.get('submitted')
+        payload['unsubmitted'] = progress.get('unsubmitted')
+        payload['total'] = progress.get('total')
+        payload['submitted_names'] = _clip_progress_value(progress.get('submitted_names'))
+        payload['unsubmitted_names'] = _clip_progress_value(progress.get('unsubmitted_names'))
+    for key, value in fields.items():
+        payload[key] = _clip_progress_value(value)
+    progress_log.info('workspace-progress %s', json.dumps(payload, ensure_ascii=False, default=str))
 
 
 def assignment_problem_stats(contest):
@@ -62,12 +111,11 @@ def _leave_problem_label(contest_problem, index):
     return '%s. %s' % (index, name)
 
 
-def participation_submit_progress(participation):
+def participation_submit_progress(participation, log_step=None, **log_fields):
     """How many assignment problems this participation has already submitted.
 
-    Leave / Exit SEB does not create submissions; this is the count the
-    confirmation dialog shows, next to the reminder that whatever is still
-    saved as a draft is submitted for them when the assignment closes.
+    Counts stay on the leave form for tracing even while the dialog hides them.
+    Pass log_step only on the submit/leave hot spots — page renders stay quiet.
     """
     empty = {
         'total': 0, 'submitted': 0, 'unsubmitted': 0,
@@ -89,13 +137,16 @@ def participation_submit_progress(participation):
             unsubmitted_names.append(label)
     total = len(contest_problems)
     submitted = len(submitted_names)
-    return {
+    result = {
         'total': total,
         'submitted': submitted,
         'unsubmitted': total - submitted,
         'submitted_names': submitted_names,
         'unsubmitted_names': unsubmitted_names,
     }
+    if log_step:
+        log_workspace_progress(log_step, participation, progress=result, **log_fields)
+    return result
 
 
 def contest_completed_ids(participation):

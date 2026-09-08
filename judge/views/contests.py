@@ -55,7 +55,8 @@ from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
 from judge.utils.opengraph import generate_opengraph
-from judge.utils.problems import _get_result_data, assignment_problem_stats, user_completed_ids
+from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
+    user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.seb import read_seb_launch_token, request_matches_seb, seb_launch_context, seb_launch_url
 from judge.utils.stats import get_bar_chart, get_pie_chart
@@ -2313,6 +2314,7 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
 
         participation = profile.current_contest
         was_spectating = participation.spectate
+        participation_submit_progress(participation, log_step='leave_post')
         # Leave does not cancel the participation: the same row, its timer and any leftover
         # drafts stay. One Leave is one harvest; a later deadline sweep still picks up drafts
         # that this call missed or that the student wrote after coming back.

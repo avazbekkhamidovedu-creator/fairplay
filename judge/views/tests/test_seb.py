@@ -233,8 +233,11 @@ class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
         response = self.client.get(path, **bek_header(path))
         self.assertContains(response, 'Exit SEB')
         self.assertContains(response, 'data-seb-exit="1"')
-        self.assertContains(response, 'Leaving submits your saved answers now.')
-        self.assertContains(response, 'Your saved answers are submitted automatically when the assignment closes.')
+        self.assertContains(
+            response,
+            'When you leave, answers you have not submitted yet will be submitted automatically.',
+        )
+        self.assertNotContains(response, 'Your saved answers are submitted automatically when the assignment closes.')
         self.assertNotContains(response, 'Leaving will not submit any unsubmitted problems.')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
         self.assertNotContains(response, 'Submit your work and exit Safe Exam Browser')

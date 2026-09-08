@@ -141,6 +141,8 @@ urlpatterns = [
     path('problems/import-excel/<int:draft>/<int:item>/<str:action>/',
          problem_import.ProblemImportItemActionView.as_view(), name='problem_import_item_action'),
 
+    path('workspace/progress-trace', problem.WorkspaceProgressTrace.as_view(),
+         name='workspace_progress_trace'),
     path('problem/<str:problem>', include([
         path('', problem.ProblemDetail.as_view(), name='problem_detail'),
         path('/editorial', problem.ProblemSolution.as_view(), name='problem_editorial'),
