@@ -5,6 +5,7 @@ import zipfile
 from io import BytesIO
 from unittest import mock
 
+import yaml
 from django.contrib.admin.models import ADDITION, CHANGE, LogEntry
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.base import ContentFile
@@ -1663,6 +1664,9 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             'description': 'with harness',
             'points': 5,
             'group_id': self.group.id,
+            'testcases': [
+                {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+            ],
             'harness': {
                 'language_id': lang.id,
                 'harness_code': 'def check():\n    pass\n',
@@ -1681,6 +1685,177 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         self.assertEqual(harness.language_id, lang.id)
         self.assertTrue(harness.skip_precompile)
         self.assertIn('def check', harness.harness_code)
+        cfg = self._harness_init_cfg(problem, harness.language.key)
+        self.assertIn('def check', cfg['code'])
+        self.assertTrue(cfg['skip_precompile'])
+        self.assertNotIn('run_student_main', cfg)
+
+    def _harness_init_cfg(self, problem, lang_key):
+        path = os.path.join(problem_data_storage.location, problem.code, 'init.yml')
+        self.assertTrue(os.path.exists(path), 'init.yml was not written for %s' % problem.code)
+        with open(path, encoding='utf-8') as fh:
+            init = yaml.safe_load(fh)
+        self.assertIn('harness_grader', init)
+        self.assertIn(lang_key, init['harness_grader'])
+        return init['harness_grader'][lang_key]
+
+    def test_edit_harness_updates_init_yml(self):
+        lang = Language.objects.filter(common_name='Python').first()
+        self.assertIsNotNone(lang)
+        problem = self._make_code_problem()
+        create_payload = {
+            'type': 'programming',
+            'name': problem.name,
+            'description': problem.description,
+            'points': 5,
+            'group_id': self.group.id,
+            'edit_code': problem.code,
+            'testcases': [
+                {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+            ],
+            'harness': {
+                'language_id': lang.id,
+                'harness_code': 'OLD_HARNESS = True\n',
+                'skip_precompile': False,
+                'run_student_main': False,
+            },
+        }
+        create_resp = self.client.post(
+            reverse('problem_edit_v2', args=[problem.code]),
+            data=json.dumps(create_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.content)
+        cfg = self._harness_init_cfg(problem, lang.key)
+        self.assertIn('OLD_HARNESS', cfg['code'])
+        self.assertNotIn('skip_precompile', cfg)
+
+        edit_payload = {
+            'type': 'programming',
+            'name': problem.name,
+            'description': problem.description,
+            'points': 5,
+            'group_id': self.group.id,
+            'edit_code': problem.code,
+            'testcases': [
+                {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+            ],
+            'harness': {
+                'language_id': lang.id,
+                'harness_code': 'NEW_HARNESS = True\n',
+                'skip_precompile': True,
+                'run_student_main': True,
+            },
+        }
+        edit_resp = self.client.post(
+            reverse('problem_edit_v2', args=[problem.code]),
+            data=json.dumps(edit_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        harness = ProblemHarness.objects.get(problem=problem)
+        self.assertIn('NEW_HARNESS', harness.harness_code)
+        cfg = self._harness_init_cfg(problem, lang.key)
+        self.assertIn('NEW_HARNESS', cfg['code'])
+        self.assertNotIn('OLD_HARNESS', cfg['code'])
+        self.assertTrue(cfg['skip_precompile'])
+        self.assertTrue(cfg['run_student_main'])
+
+    def test_clear_harness_removes_grader_from_init_yml(self):
+        lang = Language.objects.filter(common_name='Python').first()
+        self.assertIsNotNone(lang)
+        problem = self._make_code_problem()
+        self.client.post(
+            reverse('problem_edit_v2', args=[problem.code]),
+            data=json.dumps({
+                'type': 'programming',
+                'name': problem.name,
+                'description': problem.description,
+                'points': 5,
+                'group_id': self.group.id,
+                'edit_code': problem.code,
+                'testcases': [
+                    {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+                ],
+                'harness': {
+                    'language_id': lang.id,
+                    'harness_code': 'def check():\n    pass\n',
+                    'skip_precompile': True,
+                },
+            }),
+            content_type='application/json',
+        )
+        self._harness_init_cfg(problem, lang.key)
+
+        clear_resp = self.client.post(
+            reverse('problem_edit_v2', args=[problem.code]),
+            data=json.dumps({
+                'type': 'programming',
+                'name': problem.name,
+                'description': problem.description,
+                'points': 5,
+                'group_id': self.group.id,
+                'edit_code': problem.code,
+                'testcases': [
+                    {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+                ],
+                'harness': {'delete': True},
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(clear_resp.status_code, 200, clear_resp.content)
+        self.assertFalse(ProblemHarness.objects.filter(problem=problem).exists())
+        path = os.path.join(problem_data_storage.location, problem.code, 'init.yml')
+        self.assertTrue(os.path.exists(path))
+        with open(path, encoding='utf-8') as fh:
+            init = yaml.safe_load(fh)
+        self.assertNotIn('harness_grader', init or {})
+
+    def test_harness_only_edit_updates_init_yml(self):
+        lang = Language.objects.filter(common_name='Python').first()
+        self.assertIsNotNone(lang)
+        problem = self._make_code_problem()
+        self.client.post(
+            reverse('problem_edit_v2', args=[problem.code]),
+            data=json.dumps({
+                'type': 'programming',
+                'name': problem.name,
+                'description': problem.description,
+                'points': 5,
+                'group_id': self.group.id,
+                'edit_code': problem.code,
+                'testcases': [
+                    {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
+                ],
+                'harness': {
+                    'language_id': lang.id,
+                    'harness_code': 'FIRST = 1\n',
+                },
+            }),
+            content_type='application/json',
+        )
+        omit_cases = self.client.post(
+            reverse('problem_edit_v2', args=[problem.code]),
+            data=json.dumps({
+                'type': 'programming',
+                'name': problem.name,
+                'description': problem.description,
+                'points': 5,
+                'group_id': self.group.id,
+                'edit_code': problem.code,
+                'harness': {
+                    'language_id': lang.id,
+                    'harness_code': 'SECOND = 2\n',
+                    'run_student_main': True,
+                },
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(omit_cases.status_code, 200, omit_cases.content)
+        self.assertEqual(problem.cases.count(), 1)
+        cfg = self._harness_init_cfg(problem, lang.key)
+        self.assertIn('SECOND', cfg['code'])
+        self.assertTrue(cfg['run_student_main'])
 
     def test_edit_page_links_to_test_data(self):
         problem = self._make_code_problem()

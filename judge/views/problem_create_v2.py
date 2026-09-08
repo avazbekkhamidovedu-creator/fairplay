@@ -1091,6 +1091,17 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         except (BadZipfile, OSError, ValueError):
             return []
 
+    def _compile_problem_init(self, problem, files=None):
+        """Write init.yml after cases and harness are in the DB (classic test_data order)."""
+        from judge.models import ProblemData
+        from judge.utils.problem_data import ProblemDataCompiler
+
+        data, _created = ProblemData.objects.get_or_create(problem=problem)
+        problem.__dict__.pop('data_files', None)
+        if files is None:
+            files = self._zip_member_names(data.zipfile)
+        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), files)
+
     def _preferred_create_code(self, payload, request):
         """Resolve the prefilled/submitted code for a new problem.
 
@@ -1162,19 +1173,28 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             # Supplementary AI rubric scoring config (test-case judging is unchanged).
             self._save_code_config(problem, payload)
 
+            # Same order as classic /test_data: persist cases and harness first,
+            # then compile init.yml so the judge snapshot includes both.
             checker = payload.get('checker') or ''
+            files_for_init = None
             if zip_upload is not None:
-                self._save_testcases_from_zip(
+                files_for_init = self._save_testcases_from_zip(
                     problem, zip_upload,
                     meta_cases=cleaned_cases if cleaned_cases is not None else [],
                     checker=checker,
                 )
             elif sync_cases and payload.get('zip_mode'):
-                self._save_testcase_matches(problem, cleaned_cases or [], checker=checker)
+                files_for_init = self._save_testcase_matches(
+                    problem, cleaned_cases or [], checker=checker,
+                )
             elif sync_cases and (cleaned_cases or payload.get('edit_code')):
-                self._save_testcases(problem, cleaned_cases or [], checker=checker)
+                files_for_init = self._save_testcases(
+                    problem, cleaned_cases or [], checker=checker,
+                )
             if 'harness' in payload:
                 self._save_harness(problem, payload)
+            if files_for_init is not None or 'harness' in payload:
+                self._compile_problem_init(problem, files=files_for_init)
         # Always ping judges after the row exists (first create used to notify
         # inside atomic(), so Judge.problems never picked up the new code).
         from judge.utils.problem_data import notify_judges_of_problem_data
@@ -1252,7 +1272,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         ``input_file`` / ``output_file`` / points / pretest for each Normal case.
         """
         from judge.models import ProblemData
-        from judge.utils.problem_data import ProblemDataCompiler
 
         if not uploaded_zip:
             raise ValueError(_('Your zip file is invalid!'))
@@ -1281,12 +1300,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         data.zipfile.save(zip_name, uploaded_zip, save=False)
         data.save()
         problem.__dict__.pop('data_files', None)
-        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), namelist)
+        return namelist
 
     def _save_testcase_matches(self, problem, testcases, checker=''):
         """Keep the existing zip and update which members each case uses (classic test_data)."""
         from judge.models import ProblemData
-        from judge.utils.problem_data import ProblemDataCompiler
 
         try:
             data = problem.data_files
@@ -1300,7 +1318,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         self._apply_checker(data, checker)
         data.save()
         problem.__dict__.pop('data_files', None)
-        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), namelist)
+        return namelist
 
     def _write_zip_matched_cases(self, problem, testcases, valid_names):
         from judge.models import ProblemTestCase
@@ -1368,7 +1386,6 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         from django.core.files.base import ContentFile as DjangoContentFile
 
         from judge.models import ProblemData, ProblemTestCase, problem_data_storage
-        from judge.utils.problem_data import ProblemDataCompiler
 
         self._clear_problem_data_files(problem)
         problem.cases.filter(type='C').delete()
@@ -1427,7 +1444,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         # Drop cached reverse OneToOne so later ``problem.data_files`` sees this write
         # (same request often already touched data_files before _save_testcases).
         problem.__dict__.pop('data_files', None)
-        ProblemDataCompiler.generate(problem, data, problem.cases.order_by('order'), valid_files)
+        return valid_files
 
     # ------------------------------------------------------------------ mcq problem
     def _create_mcq(self, request, payload, name, multiple, problem=None):
