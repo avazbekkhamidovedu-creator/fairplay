@@ -137,6 +137,7 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertNotIn('class="cl-solved-col"', html)
         self.assertNotIn('class="cl-solved"', html)
         self.assertNotIn('Solved 0/', html)
+        self.assertIn('class="cl-trailing"', html)
         self.assertLess(html.index('class="cl-users"'), html.index('class="cl-actions"'))
 
     def test_class_checkbox_includes_data_org(self):
