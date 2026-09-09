@@ -268,6 +268,22 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertIn('source', body)
         self.assertEqual(body['source'], 'print(1)')
 
+    def test_workspace_submit_still_succeeds_if_ai_grade_payload_breaks(self):
+        with mock.patch.object(Submission, 'judge'):
+            with mock.patch(
+                'judge.views.problem.workspace_ai_grade_fields',
+                side_effect=TypeError("ai_grade_context() got an unexpected keyword argument 'contest'"),
+            ):
+                response = self.client.post(
+                    reverse('problem_submit', args=[self.problem.code]),
+                    {'workspace': '1', 'source': 'print(1)', 'language': self.language.id, 'judge': ''},
+                    HTTP_X_WORKSPACE_SUBMIT='1',
+                )
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertIn('submission_id', payload)
+        self.assertTrue(Submission.objects.filter(id=payload['submission_id']).exists())
+
     def test_assignment_workspace_submit_includes_updated_leave_progress(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
         self.user.profile.current_contest = participation
@@ -758,6 +774,8 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'dkuojShowAssignmentNotice')
         self.assertContains(response, LEAVE_WARN)
         html = response.content.decode()
+        self.assertIn('DKUOJ_PREEXAM_TITLE', html)
+        self.assertIn('manually submitted your answers before it ends', html)
         self.assertIn('data-timer-window-seconds=', html)
         self.assertGreater(response.context['workspace_timer_window_seconds'], 0)
 

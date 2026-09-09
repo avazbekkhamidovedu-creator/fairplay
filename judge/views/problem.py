@@ -135,7 +135,10 @@ def workspace_ai_grade_fields(request, submission):
             contest = current.contest
     except Exception:
         contest = None
-    ctx = ai_grade_context(request.user, submission, contest=contest)
+    try:
+        ctx = ai_grade_context(request.user, submission, contest=contest)
+    except TypeError:
+        ctx = ai_grade_context(request.user, submission)
     fields = {
         'can_trigger_ai_grade': bool(ctx.get('can_trigger')),
         'ai_grade_remaining': ctx.get('remaining', 0),
@@ -2027,7 +2030,12 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 'status_url': reverse('problem_workspace_submission_status', args=(self.object.code, submission.id)),
             }
             if not hidden:
-                payload.update(workspace_ai_grade_fields(self.request, submission))
+                try:
+                    payload.update(workspace_ai_grade_fields(self.request, submission))
+                except Exception:
+                    logging.getLogger('judge.problem').exception(
+                        'Workspace AI-grade payload failed after submit %s', submission.id,
+                    )
             participation = getattr(self.request, 'participation', None)
             if participation is None and self.request.user.is_authenticated:
                 participation = self.request.profile.current_contest

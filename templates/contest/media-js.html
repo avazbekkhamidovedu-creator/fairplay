@@ -22,6 +22,23 @@
         box-shadow: var(--oj-shadow-modal, 0 8px 24px rgba(0, 0, 0, 0.18));
     }
     .leave-confirm-title { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--oj-text); }
+    .leave-confirm-overlay.is-preexam .leave-confirm-title {
+        font-size: 1.45rem;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        color: var(--oj-accent, #2980B9);
+    }
+    .leave-confirm-overlay.is-time-warn .leave-confirm-title {
+        font-size: 1.2rem;
+        font-weight: 800;
+        line-height: 1.45;
+        color: var(--oj-danger, #c0392b);
+    }
+    .leave-confirm-overlay.is-time-warn .leave-confirm-warn {
+        font-size: 15px;
+        line-height: 1.55;
+        font-weight: 700;
+    }
     .leave-confirm-stats {
         margin: 0 0 0.85rem;
         padding: 0.65rem 0.85rem;
@@ -211,6 +228,9 @@
 
     window.DKUOJ_MANUAL_SUBMIT_WARN = {{ _('You must press Submit on every problem. Unsubmitted answers will not count toward your grade.')|htmltojs }};
     window.DKUOJ_MANUAL_SUBMIT_TITLE = {{ _('Please submit your work')|htmltojs }};
+    window.DKUOJ_PREEXAM_TITLE = {{ _('Pre-exam reminder')|htmltojs }};
+    window.DKUOJ_TIME_WARN_TITLE = {{ _('10%% of time remaining')|htmltojs }};
+    window.DKUOJ_TIME_WARN_TEXT = {{ _('This assignment has 10%% of its time remaining. Please make sure you have manually submitted your answers before it ends.')|htmltojs }};
     window.DKUOJ_MANUAL_SUBMIT_OK = {{ _('OK')|htmltojs }};
 
     var leaveOverlayCloser = null;
@@ -260,6 +280,9 @@
         var overlay = document.getElementById('leave-confirm-overlay');
         if (!overlay || !overlay.hidden) return false;
         opts = opts || {};
+        overlay.classList.remove('is-preexam', 'is-time-warn');
+        if (opts.kind === 'join') overlay.classList.add('is-preexam');
+        if (opts.kind === '10pct') overlay.classList.add('is-time-warn');
         document.getElementById('leave-confirm-title').textContent =
             opts.title || window.DKUOJ_MANUAL_SUBMIT_TITLE;
         document.getElementById('leave-confirm-warn').textContent =
@@ -298,6 +321,7 @@
         var isSeb = form.getAttribute('data-seb-exit') === '1';
         var title = isSeb ? {{ _('Exit SEB?')|htmltojs }} : {{ _('Leave?')|htmltojs }};
         var okLabel = isSeb ? {{ _('Exit SEB')|htmltojs }} : {{ _('Leave')|htmltojs }};
+        overlay.classList.remove('is-preexam', 'is-time-warn');
         document.getElementById('leave-confirm-title').textContent = title;
         document.getElementById('leave-confirm-warn').textContent =
             {% if assignment_harvest_enabled() %}

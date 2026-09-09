@@ -601,7 +601,15 @@
     if (app.dataset.manualSubmitNotice !== '1') return false;
     if (noticeSeen(kind)) return false;
     if (typeof window.dkuojShowAssignmentNotice !== 'function') return false;
-    var shown = window.dkuojShowAssignmentNotice({});
+    var opts = { kind: kind };
+    if (kind === 'join') {
+      opts.title = window.DKUOJ_PREEXAM_TITLE || gettext('Pre-exam reminder');
+      opts.warn = window.DKUOJ_MANUAL_SUBMIT_WARN;
+    } else if (kind === '10pct') {
+      opts.title = window.DKUOJ_TIME_WARN_TEXT || gettext('This assignment has 10%% of its time remaining. Please make sure you have manually submitted your answers before it ends.');
+      opts.warn = window.DKUOJ_MANUAL_SUBMIT_WARN;
+    }
+    var shown = window.dkuojShowAssignmentNotice(opts);
     if (shown) markNoticeSeen(kind);
     return shown;
   }
