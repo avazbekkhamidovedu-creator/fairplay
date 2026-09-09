@@ -248,6 +248,22 @@ class ContestGradeAnswerDisplayTestCase(GradeTestBase):
         row = next(s for s in payload if s['id'] == sub.id)
         self.assertEqual(row['answer_display'][0]['value'], 'Paris')
 
+    def test_short_answer_display_includes_rendered_table_html(self):
+        short = create_problem('grade-short', submission_type='S')
+        ContestProblem.objects.create(contest=self.contest, problem=short, points=5, order=4)
+        md = '| A | B |\n| --- | --- |\n| 1 | 2 |'
+        sub = Submission.objects.create(
+            user=self.student.profile, problem=short,
+            language=Language.get_answer_language(), result='AC', status='D',
+            contest_object=self.contest, points=5.0, case_total=1,
+        )
+        SubmissionSource.objects.create(submission=sub, source=json.dumps({'text': md}))
+        response = self._client(self.curator).get(self.grade_url)
+        payload = json.loads(response.content.decode('utf-8').split('var submissions = ')[1].split(';\n')[0])
+        row = next(s for s in payload if s['id'] == sub.id)
+        self.assertEqual(row['answer_display'][0]['value'], md)
+        self.assertIn('<table', row['answer_display'][0]['html'])
+
     def test_description_is_rendered_html(self):
         from judge.models import Problem
         Problem.objects.filter(id=self.problem.id).update(
