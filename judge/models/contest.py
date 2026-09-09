@@ -652,10 +652,9 @@ class Contest(models.Model):
         if user.profile.id in self.editor_ids or user.profile.id in self.tester_ids:
             return True
 
-        # A student whose personal time window has already expired must not be able
-        # to re-enter the assignment as a spectator, which would otherwise let them
-        # keep submitting on an unscored SPECTATE row.
-        if self.time_limit is not None and self.has_completed_contest(user):
+        # Virtual and spectator joins share the same switch: disabling virtual
+        # participation also disables spectating.
+        if not self.allow_virtual_participation:
             return False
 
         if self.limit_join_organizations:
