@@ -148,8 +148,6 @@
     </div>
     {% if workspace_in_contest %}
       <div class="ws-toolbar-center">
-        {% set leave_variant = 'toolbar' %}
-        {% include "contest/leave-form.html" %}
         {% if workspace_show_timer %}
           <span class="timer-wrap{% if workspace_timer_seconds <= 0 %} expired{% elif workspace_timer_window_seconds and workspace_timer_seconds <= workspace_timer_window_seconds // 10 %} warn{% endif %}" id="ws-timer" title="{% if workspace_timer_is_duration %}{{ _('Duration remaining') }}{% else %}{{ _('Validity remaining') }}{% endif %}">
             <i class="fa fa-clock-o" aria-hidden="true"></i>
@@ -165,6 +163,11 @@
     <div class="submit-cluster">
       {% if form and workspace_draft_url %}
         <span class="submit-autosave-hint" id="ws-autosave-hint"{% if not workspace_server_draft and not workspace_draft_upload %} hidden{% endif %}>{% if workspace_autosubmit %}{{ _('Draft saved. If you do not submit, it is submitted automatically at the deadline.') }}{% else %}{{ _('Draft saved. Press Submit to record this answer for grading.') }}{% endif %}</span>
+      {% endif %}
+      {% if workspace_in_contest %}
+        {% set leave_variant = 'toolbar' %}
+        {% include "contest/leave-form.html" %}
+        {% if form %}<span class="submit-cluster-sep" aria-hidden="true"></span>{% endif %}
       {% endif %}
       {% if form %}<button class="tool-btn submit-btn" type="button" id="btn-submit"{% if workspace_is_code and not form.fields.language.queryset.exists() %} disabled{% endif %}{% if workspace_show_timer and workspace_timer_seconds <= 0 %} disabled{% endif %}><i class="fa fa-cloud-upload"></i> {{ _('Submit') }}</button>{% endif %}
     </div>

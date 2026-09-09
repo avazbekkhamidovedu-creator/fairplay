@@ -597,17 +597,42 @@
   function markNoticeSeen(kind) {
     try { sessionStorage.setItem(submitNoticeKey(kind), '1'); } catch (err) {}
   }
-  function showManualSubmitNotice(kind) {
+  function timeWarnBody(remainingSecs) {
+    var secs = Math.max(0, Math.floor(Number(remainingSecs) || 0));
+    var minutes = Math.floor(secs / 60);
+    var seconds = secs % 60;
+    return interpolate(
+      gettext('%(min)s min %(sec)s sec remaining. Please make sure you have manually submitted your answers before it ends.'),
+      {min: String(minutes), sec: String(seconds)},
+    );
+  }
+  function joinPendingKey() {
+    return 'dkuoj-ws-join-pending-' + (app.dataset.contextId || '');
+  }
+  function consumeJoinPending() {
+    try {
+      if (sessionStorage.getItem(joinPendingKey()) === '1') {
+        sessionStorage.removeItem(joinPendingKey());
+        return true;
+      }
+    } catch (err) {}
+    return false;
+  }
+  function showManualSubmitNotice(kind, remainingSecs) {
     if (app.dataset.manualSubmitNotice !== '1') return false;
-    if (noticeSeen(kind)) return false;
+    if (kind === 'join') {
+      if (!consumeJoinPending() && noticeSeen(kind)) return false;
+    } else if (noticeSeen(kind)) {
+      return false;
+    }
     if (typeof window.dkuojShowAssignmentNotice !== 'function') return false;
     var opts = { kind: kind };
     if (kind === 'join') {
       opts.title = window.DKUOJ_PREEXAM_TITLE || gettext('Pre-exam reminder');
       opts.warn = window.DKUOJ_MANUAL_SUBMIT_WARN;
     } else if (kind === '10pct') {
-      opts.title = window.DKUOJ_TIME_WARN_TEXT || gettext('This assignment has 10%% of its time remaining. Please make sure you have manually submitted your answers before it ends.');
-      opts.warn = window.DKUOJ_MANUAL_SUBMIT_WARN;
+      opts.title = window.DKUOJ_TIME_WARN_TITLE || gettext('A kind reminder');
+      opts.warn = timeWarnBody(remainingSecs);
     }
     var shown = window.dkuojShowAssignmentNotice(opts);
     if (shown) markNoticeSeen(kind);
@@ -622,7 +647,7 @@
       markNoticeSeen('10pct');
       return;
     }
-    showManualSubmitNotice('10pct');
+    showManualSubmitNotice('10pct', remaining);
   }
   var timerWindowSecs = Number(app.dataset.timerWindowSeconds || 0);
   var timerWarnAt = timerWindowSecs > 0 ? Math.max(1, Math.floor(timerWindowSecs * 0.1)) : 0;

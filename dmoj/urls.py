@@ -294,7 +294,6 @@ urlpatterns = [
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
         path('/analytics', contest_analytics.ContestAnalytics.as_view(), name='contest_analytics'),
         path('/grade', contests.ContestGrade.as_view(), name='contest_grade'),
-        path('/drafts', contests.ContestDrafts.as_view(), name='contest_drafts'),
         path('/grade/save', contests.ContestGradeSave.as_view(), name='contest_grade_save'),
         path('/grade/status', contests.ContestGradeStatus.as_view(), name='contest_grade_status'),
         path('/grade/release', contests.ContestGradeRelease.as_view(), name='contest_grade_release'),

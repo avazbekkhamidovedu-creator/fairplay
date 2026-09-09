@@ -3,8 +3,9 @@ import json
 from django.test import TestCase
 from django.urls import reverse
 
-from judge.models import AssignmentDraft, Language, ProblemSubmissionType, ProblemTemplate
+from judge.models import AssignmentDraft, Language, ProblemMCQOption, ProblemSubmissionType, ProblemTemplate
 from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, create_problem
+from judge.utils.assignment_draft import format_draft_preview
 
 
 class AssignmentDraftContentTestCase(CommonDataMixin, TestCase):
@@ -68,6 +69,16 @@ class AssignmentDraftContentTestCase(CommonDataMixin, TestCase):
     def test_mcq_with_selection_has_content(self):
         draft = self._draft(ProblemSubmissionType.MCQ, json.dumps({'selected': [3]}))
         self.assertTrue(draft.has_content())
+
+    def test_mcq_preview_shows_choice_text_instead_of_row_ids(self):
+        problem = self.problems[ProblemSubmissionType.MCQ]
+        option = ProblemMCQOption.objects.create(problem=problem, order=0, text='Paris', is_correct=True)
+        ProblemMCQOption.objects.create(problem=problem, order=1, text='Lyon', is_correct=False)
+        draft = self._draft(ProblemSubmissionType.MCQ, json.dumps({'selected': [option.id]}))
+        preview = format_draft_preview(draft)
+        self.assertIn('Paris', preview)
+        self.assertNotIn('Lyon', preview)
+        self.assertNotIn('True', preview)
 
     def test_fill_blank_all_blank_is_empty(self):
         for content in ('', json.dumps({'answers': []}), json.dumps({'answers': ['', '  ']})):

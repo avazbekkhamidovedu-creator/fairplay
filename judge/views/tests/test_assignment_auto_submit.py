@@ -682,8 +682,8 @@ class HarvestDisabledTestCase(AutoSubmitScheduleMixin, TestCase):
         self.assertEqual(self.contest.harvest_scheduled_task_id, '')
 
 
-class ContestDraftsViewTestCase(TestCase):
-    """Editors can read the last live-window save; students cannot."""
+class ShowAssignmentDraftsCommandTestCase(TestCase):
+    """CLI is the diagnostic for leftover drafts after the teacher Drafts page was removed."""
 
     fixtures = ['language_all.json']
 
@@ -707,14 +707,14 @@ class ContestDraftsViewTestCase(TestCase):
             language=Language.objects.get(key='PY3'),
         )
 
-    def test_editor_sees_the_last_saved_draft(self):
-        self.client.force_login(self.teacher)
-        response = self.client.get(reverse('contest_drafts', args=[self.contest.key]))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'drafts_student')
-        self.assertContains(response, 'print(1)')
+    def test_command_prints_the_saved_source(self):
+        out = StringIO()
+        call_command('show_assignment_drafts', self.contest.key, stdout=out)
+        text = out.getvalue()
+        self.assertIn('drafts_student', text)
+        self.assertIn('print(1)', text)
 
-    def test_student_cannot_open_drafts(self):
-        self.client.force_login(self.student)
-        response = self.client.get(reverse('contest_drafts', args=[self.contest.key]))
+    def test_the_drafts_page_is_gone(self):
+        self.client.force_login(self.teacher)
+        response = self.client.get('/contest/%s/drafts' % self.contest.key)
         self.assertEqual(response.status_code, 404)

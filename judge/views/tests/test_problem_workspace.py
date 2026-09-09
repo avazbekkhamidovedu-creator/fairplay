@@ -640,9 +640,12 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'id="ws-timer"')
         self.assertContains(response, 'Validity remaining')
         html = response.content.decode()
-        self.assertLess(html.index('ws-toolbar-center'), html.index('id="ws-timer"'))
-        self.assertLess(html.index('id="ws-timer"'), html.index('id="btn-submit"'))
-        self.assertLess(html.index('id="ws-timer"'), html.index('submit-cluster'))
+        toolbar = html.split('class="ws-toolbar', 1)[1].split('class="ws-body', 1)[0]
+        self.assertLess(toolbar.index('ws-toolbar-center'), toolbar.index('id="ws-timer"'))
+        self.assertLess(toolbar.index('id="ws-timer"'), toolbar.index('submit-cluster'))
+        self.assertLess(toolbar.index('assignment-leave-form'), toolbar.index('submit-cluster-sep'))
+        self.assertLess(toolbar.index('submit-cluster-sep'), toolbar.index('id="btn-submit"'))
+        self.assertLess(toolbar.index('submit-cluster'), toolbar.index('assignment-leave-form'))
         self.assertIn('data-timer-window-seconds=', html)
         self.assertContains(response, 'data-submitted="0"')
         self.assertContains(response, 'data-total="1"')
@@ -650,7 +653,7 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-unsubmitted-names')
         self.assertContains(response, '1. workspace-code')
         self.assertContains(response, LEAVE_WARN)
-        self.assertContains(response, LEAVE_NOTE)
+        self.assertNotContains(response, LEAVE_NOTE)
         self.assertContains(response, 'leave-confirm-stats" hidden')
         self.assertNotContains(response, LEAVE_HARVEST_WARN)
         self.assertNotContains(response, AUTOSUBMIT_PROMISE)
@@ -678,8 +681,10 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'Duration remaining')
         self.assertNotContains(response, 'Validity remaining')
         html = response.content.decode()
-        self.assertLess(html.index('assignment-leave-form'), html.index('id="ws-timer"'))
-        self.assertLess(html.index('id="ws-timer"'), html.index('submit-cluster'))
+        toolbar = html.split('class="ws-toolbar', 1)[1].split('class="ws-body', 1)[0]
+        self.assertLess(toolbar.index('id="ws-timer"'), toolbar.index('submit-cluster'))
+        self.assertLess(toolbar.index('submit-cluster'), toolbar.index('assignment-leave-form'))
+        self.assertLess(toolbar.index('assignment-leave-form'), toolbar.index('id="btn-submit"'))
 
     def test_assignment_leave_progress_counts_submitted_problems(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
@@ -756,7 +761,7 @@ class ProblemWorkspaceTestCase(TestCase):
             with self.subTest(page=page):
                 response = self.client.get(page)
                 self.assertContains(response, LEAVE_WARN)
-                self.assertContains(response, LEAVE_NOTE)
+                self.assertNotContains(response, LEAVE_NOTE)
                 self.assertContains(response, 'leave-confirm-stats" hidden')
                 self.assertNotContains(response, AUTOSUBMIT_PROMISE)
                 for stale in CONTRADICTORY_COPY:
@@ -775,7 +780,7 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, LEAVE_WARN)
         html = response.content.decode()
         self.assertIn('DKUOJ_PREEXAM_TITLE', html)
-        self.assertIn('manually submitted your answers before it ends', html)
+        self.assertIn('A kind reminder', html)
         self.assertIn('data-timer-window-seconds=', html)
         self.assertGreater(response.context['workspace_timer_window_seconds'], 0)
 

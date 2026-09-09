@@ -208,7 +208,7 @@ class AssignmentProblemListTestCase(TestCase):
             response,
             'You must press Submit on every problem. Unsubmitted answers will not count toward your grade.',
         )
-        self.assertContains(response, 'Only answers you have already submitted will be kept.')
+        self.assertNotContains(response, 'Only answers you have already submitted will be kept.')
         self.assertNotContains(
             response,
             'When you leave, answers you have not submitted yet will be submitted automatically.',
