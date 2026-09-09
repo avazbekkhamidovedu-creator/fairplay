@@ -206,7 +206,11 @@ class AssignmentProblemListTestCase(TestCase):
         self.assertContains(response, 'data-total=')
         self.assertContains(
             response,
+            'You must press Submit on every problem. Unsubmitted answers will not count toward your grade.',
+        )
+        self.assertNotContains(response, 'Only answers you have already submitted will be kept.')
+        self.assertNotContains(
+            response,
             'When you leave, answers you have not submitted yet will be submitted automatically.',
         )
-        self.assertNotContains(response, 'Your saved answers are submitted automatically when the assignment closes.')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')

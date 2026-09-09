@@ -64,7 +64,18 @@
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
 }
-.ws-toolbar-center { justify-self: center; }
+.ws-toolbar-center {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  white-space: nowrap;
+}
+.ws-toolbar-center .timer-wrap {
+  font-size: 1.45rem;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
 .ws-toolbar.has-leave .submit-cluster {
   justify-self: end;
   margin-left: 0;
@@ -112,7 +123,7 @@
   cursor: not-allowed;
   border-color: var(--oj-border);
 }
-/* Submit / timer on the right (prototype .submit-cluster { margin-left: auto }) */
+/* Submit on the right; Leave sits immediately before it. */
 .submit-cluster {
   display: inline-flex;
   align-items: center;
@@ -120,6 +131,16 @@
   margin-left: auto;
   padding-left: .85rem;
   border-left: 1px solid var(--oj-border);
+}
+.submit-cluster .assignment-leave-form {
+  display: inline-flex;
+  margin: 0;
+}
+.submit-cluster-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 1.55rem;
+  background: var(--oj-border);
 }
 /* Reassurance next to Submit: the answer is already on the server. Dropped on
    narrow toolbars, where the buttons themselves need the room. */

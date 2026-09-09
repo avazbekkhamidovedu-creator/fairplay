@@ -2314,13 +2314,18 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
 
         participation = profile.current_contest
         was_spectating = participation.spectate
-        participation_submit_progress(participation, log_step='leave_post')
-        # Leave does not cancel the participation: the same row, its timer and any leftover
-        # drafts stay. One Leave is one harvest; a later deadline sweep still picks up drafts
-        # that this call missed or that the student wrote after coming back.
         try:
-            from judge.utils.assignment_harvest import harvest_participation
-            harvest_participation(participation)
+            participation_submit_progress(participation, log_step='leave_post')
+        except TypeError:
+            participation_submit_progress(participation)
+        # Leave does not cancel the participation: the same row, its timer and any leftover
+        # drafts stay. When harvest is on, one Leave is one harvest; a later deadline sweep
+        # still picks up drafts that this call missed or that the student wrote after coming
+        # back. When harvest is off, drafts stay drafts.
+        try:
+            from judge.utils.assignment_harvest import assignment_harvest_enabled, harvest_participation
+            if assignment_harvest_enabled():
+                harvest_participation(participation)
         except Exception:
             logger.exception('Auto-submit on leave failed for participation %d', participation.pk)
         profile.remove_contest()

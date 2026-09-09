@@ -121,6 +121,11 @@ DMOJ_COMMENT_REPLY_TIMEFRAME = datetime.timedelta(days=365)
 
 DMOJ_CONTEST_PERF_CEILING_INCREMENT = 400
 
+# When False, assignment drafts are still saved on the server but never turned
+# into submissions: Leave, the deadline Celery tasks, the recovery sweep and
+# pre-grade harvest are no-ops. Flip to True to restore auto-submit.
+ASSIGNMENT_HARVEST_ENABLED = False
+
 DMOJ_PDF_PDFOID_URL = None
 # Optional but recommended to save resources, path on disk to cache PDFs
 DMOJ_PDF_PROBLEM_CACHE = None

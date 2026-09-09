@@ -201,20 +201,22 @@ def auto_grade_contest(self, contest_key):
     Scheduled after ``end_time`` + ``ai_grading_auto_delay_minutes``. Multiple
     choice, true/false, and exact fill-blank are rejudged; AI types are skipped.
     """
-    from judge.utils.assignment_harvest import harvest_participation
+    from judge.utils.assignment_harvest import assignment_harvest_enabled, harvest_participation
     from judge.utils.contest_ai import (
         latest_submissions_for_contest, problem_is_objective_machine_graded,
     )
 
     contest = Contest.objects.get(key=contest_key)
     # With a zero delay this runs at the same instant as auto-submit, and re-grading before the
-    # papers are in would miss them. Harvesting here is idempotent and normally a no-op.
-    for participation in contest.users.select_related('contest', 'user__user').iterator():
-        try:
-            harvest_participation(participation)
-        except Exception:
-            logging.getLogger('judge.assignment_harvest').exception(
-                'Pre-grade auto-submit failed for participation %s', participation.pk)
+    # papers are in would miss them. Harvesting here is idempotent and normally a no-op; skipped
+    # entirely when the harvest switch is off.
+    if assignment_harvest_enabled():
+        for participation in contest.users.select_related('contest', 'user__user').iterator():
+            try:
+                harvest_participation(participation)
+            except Exception:
+                logging.getLogger('judge.assignment_harvest').exception(
+                    'Pre-grade auto-submit failed for participation %s', participation.pk)
 
     latest = latest_submissions_for_contest(contest)
     targets = [sub for sub in latest.values() if problem_is_objective_machine_graded(sub.problem)]

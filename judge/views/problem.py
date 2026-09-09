@@ -66,7 +66,9 @@ from judge.models import (
     contest_problem_display_name,
     problem_data_storage,
 )
-from judge.utils.assignment_harvest import participation_is_harvestable, user_bypasses_assignment_rules
+from judge.utils.assignment_harvest import (
+    assignment_harvest_enabled, participation_is_harvestable, user_bypasses_assignment_rules,
+)
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
@@ -574,6 +576,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         # promise from outliving the behaviour for spectators, disqualified students and staff.
         context['workspace_autosubmit'] = (
             workspace_in_contest and participation_is_harvestable(current_participation)
+            and assignment_harvest_enabled()
         )
         if workspace_in_contest:
             contest = current_participation.contest
@@ -793,16 +796,32 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                     ):
                         context['workspace_attempt_counts'][row['problem_id']] = row['c']
                         context['workspace_best_points'][row['problem_id']] = row['p']
-        # Duration countdown only when assignment defines personal time_limit (not window deadline).
-        context['workspace_show_timer'] = bool(
-            workspace_in_contest and current_participation.contest.time_limit is not None,
-        )
+        # Assignment workspace always shows the participation clock: Duration when
+        # the contest has time_limit, otherwise Validity. Both are time_remaining.
+        context['workspace_show_timer'] = bool(workspace_in_contest)
         context['workspace_timer_seconds'] = 0
-        if context['workspace_show_timer'] and self.request.participation.end_time:
-            remaining = self.request.participation.time_remaining
+        context['workspace_timer_window_seconds'] = 0
+        context['workspace_timer_is_duration'] = False
+        context['workspace_timer_remaining'] = None
+        if workspace_in_contest:
+            context['workspace_timer_is_duration'] = current_participation.contest.time_limit is not None
+            start = current_participation.start
+            end = current_participation.end_time
+            if start is not None and end is not None:
+                context['workspace_timer_window_seconds'] = max(0, int((end - start).total_seconds()))
+            remaining = current_participation.time_remaining
+            context['workspace_timer_remaining'] = remaining
             context['workspace_timer_seconds'] = (
                 max(0, int(remaining.total_seconds())) if remaining is not None else 0
             )
+        context['workspace_participation_id'] = (
+            current_participation.pk if workspace_in_contest else ''
+        )
+        context['workspace_manual_submit_notice'] = bool(
+            workspace_in_contest
+            and not current_participation.spectate
+            and not assignment_harvest_enabled(),
+        )
         context['workspace_submission'] = None
         context['workspace_enable_comments'] = False
         selected_submission_id = self.request.GET.get('submission')
@@ -2022,7 +2041,12 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
                 'status_url': reverse('problem_workspace_submission_status', args=(self.object.code, submission.id)),
             }
             if not hidden:
-                payload.update(workspace_ai_grade_fields(self.request, submission))
+                try:
+                    payload.update(workspace_ai_grade_fields(self.request, submission))
+                except Exception:
+                    logging.getLogger('judge.problem').exception(
+                        'Workspace AI-grade payload failed after submit %s', submission.id,
+                    )
             participation = getattr(self.request, 'participation', None)
             if participation is None and self.request.user.is_authenticated:
                 participation = self.request.profile.current_contest
