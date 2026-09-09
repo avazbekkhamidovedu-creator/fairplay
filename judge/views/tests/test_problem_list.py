@@ -204,9 +204,10 @@ class AssignmentProblemListTestCase(TestCase):
         self.assertContains(response, 'assignment-leave-form')
         self.assertContains(response, 'Leave')
         self.assertContains(response, 'data-total=')
-        self.assertContains(
+        self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
+        self.assertContains(response, 'Only answers you have already submitted will be kept.')
+        self.assertNotContains(
             response,
             'When you leave, answers you have not submitted yet will be submitted automatically.',
         )
-        self.assertNotContains(response, 'Your saved answers are submitted automatically when the assignment closes.')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')

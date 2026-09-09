@@ -12,7 +12,7 @@ from unittest import mock
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -71,6 +71,7 @@ class AutoSubmitScheduleMixin:
         return Submission.objects.filter(contest_object=self.contest)
 
 
+@override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
 class ContestLevelScheduleTestCase(AutoSubmitScheduleMixin, TestCase):
     """One shared deadline gets one task, and it fans out only to students who left work behind."""
 
@@ -117,6 +118,7 @@ class ContestLevelScheduleTestCase(AutoSubmitScheduleMixin, TestCase):
         delay.assert_not_called()
 
 
+@override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
 class ParticipationLevelScheduleTestCase(AutoSubmitScheduleMixin, TestCase):
     """A personal time limit means the assignment does not close for everybody at once."""
 
@@ -162,6 +164,7 @@ class ParticipationLevelScheduleTestCase(AutoSubmitScheduleMixin, TestCase):
         apply_async.assert_not_called()
 
 
+@override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
 class DeadlineChangeTestCase(AutoSubmitScheduleMixin, TestCase):
     """A moved deadline has to take the collection with it, in both directions."""
 
@@ -230,6 +233,7 @@ class DeadlineChangeTestCase(AutoSubmitScheduleMixin, TestCase):
         self.assertEqual(self.participation.harvest_scheduled_task_id, '')
 
 
+@override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
 class DeadlineGuardTestCase(AutoSubmitScheduleMixin, TestCase):
     """A leftover ETA must not collect papers while the student can still write."""
 
@@ -299,6 +303,7 @@ class DeadlineGuardTestCase(AutoSubmitScheduleMixin, TestCase):
         self.assertIn('scheduled 0', out.getvalue())
 
 
+@override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
 class RecoverySweepTestCase(AutoSubmitScheduleMixin, TestCase):
     """The ETA tasks live in worker memory; this is what stops a restart from costing a class."""
 
@@ -405,6 +410,7 @@ class RecoverySweepTestCase(AutoSubmitScheduleMixin, TestCase):
                 self._sweep()
 
 
+@override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
 class WholeClassDeadlineTestCase(TestCase):
     """The worst case for the judge: one shared deadline, so every unsubmitted answer in the class
     arrives in the same second.
@@ -531,6 +537,7 @@ class WholeClassDeadlineTestCase(TestCase):
         self.assertEqual(self._submissions().count(), 4)
 
 
+@override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
 class LeaveHarvestTestCase(AutoSubmitScheduleMixin, TestCase):
     """One Leave is one harvest. The participation stays; the deadline still collects leftovers."""
 
@@ -633,3 +640,81 @@ class LeaveHarvestTestCase(AutoSubmitScheduleMixin, TestCase):
         self.assertFalse(self._harvested_submissions().exists())
         spectator_user.profile.refresh_from_db()
         self.assertIsNone(spectator_user.profile.current_contest)
+
+
+class HarvestDisabledTestCase(AutoSubmitScheduleMixin, TestCase):
+    """Default switch: drafts stay on the server and are never collected."""
+
+    def test_leave_does_not_collect(self):
+        self.student.profile.current_contest = self.participation
+        self.student.profile.save()
+        self.client.force_login(self.student)
+        draft = self._draft()
+
+        self.client.post(reverse('contest_leave', args=[self.contest.key]))
+
+        draft.refresh_from_db()
+        self.assertIsNone(draft.harvested_at)
+        self.assertFalse(self._harvested_submissions().exists())
+        self.student.profile.refresh_from_db()
+        self.assertIsNone(self.student.profile.current_contest)
+
+    def test_deadline_task_does_not_queue(self):
+        self._draft()
+        self._end_assignment()
+        with mock.patch('judge.tasks.assignment_harvest.harvest_participation_drafts.delay') as delay:
+            self.assertEqual(harvest_contest_drafts(self.contest.key), 0)
+        delay.assert_not_called()
+
+    def test_sweep_does_not_collect(self):
+        draft = self._draft()
+        self._end_assignment()
+        call_command('harvest_assignment_drafts', stdout=StringIO(), stderr=StringIO())
+        draft.refresh_from_db()
+        self.assertIsNone(draft.harvested_at)
+        self.assertFalse(self._harvested_submissions().exists())
+
+    def test_schedule_does_not_enqueue(self):
+        with mock.patch(CONTEST_APPLY_ASYNC) as apply_async:
+            schedule_contest_harvest(self.contest.id)
+        apply_async.assert_not_called()
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.harvest_scheduled_task_id, '')
+
+
+class ContestDraftsViewTestCase(TestCase):
+    """Editors can read the last live-window save; students cannot."""
+
+    fixtures = ['language_all.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        now = timezone.now()
+        cls.teacher = create_user(username='drafts_teacher')
+        cls.student = create_user(username='drafts_student')
+        cls.contest = create_contest(
+            key='draftsview', name='Drafts view',
+            start_time=now - timedelta(hours=1), end_time=now + timedelta(hours=1),
+            is_visible=True, authors=('drafts_teacher',),
+        )
+        cls.problem = create_problem('drafts-prob', is_public=False, allowed_languages=('PY3',))
+        ContestProblem.objects.create(contest=cls.contest, problem=cls.problem, points=50, order=1)
+        cls.participation = ContestParticipation.objects.create(
+            contest=cls.contest, user=cls.student.profile,
+        )
+        AssignmentDraft.objects.create(
+            participation=cls.participation, problem=cls.problem, content='print(1)',
+            language=Language.objects.get(key='PY3'),
+        )
+
+    def test_editor_sees_the_last_saved_draft(self):
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse('contest_drafts', args=[self.contest.key]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'drafts_student')
+        self.assertContains(response, 'print(1)')
+
+    def test_student_cannot_open_drafts(self):
+        self.client.force_login(self.student)
+        response = self.client.get(reverse('contest_drafts', args=[self.contest.key]))
+        self.assertEqual(response.status_code, 404)

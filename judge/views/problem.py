@@ -66,7 +66,9 @@ from judge.models import (
     contest_problem_display_name,
     problem_data_storage,
 )
-from judge.utils.assignment_harvest import participation_is_harvestable, user_bypasses_assignment_rules
+from judge.utils.assignment_harvest import (
+    assignment_harvest_enabled, participation_is_harvestable, user_bypasses_assignment_rules,
+)
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
@@ -560,6 +562,7 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         # promise from outliving the behaviour for spectators, disqualified students and staff.
         context['workspace_autosubmit'] = (
             workspace_in_contest and participation_is_harvestable(current_participation)
+            and assignment_harvest_enabled()
         )
         if workspace_in_contest:
             contest = current_participation.contest

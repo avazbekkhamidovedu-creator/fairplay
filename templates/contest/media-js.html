@@ -225,8 +225,17 @@
         var okLabel = isSeb ? {{ _('Exit SEB')|htmltojs }} : {{ _('Leave')|htmltojs }};
         document.getElementById('leave-confirm-title').textContent = title;
         document.getElementById('leave-confirm-warn').textContent =
-            {{ _('When you leave, answers you have not submitted yet will be submitted automatically.')|htmltojs }};
+            {% if assignment_harvest_enabled() %}
+                {{ _('When you leave, answers you have not submitted yet will be submitted automatically.')|htmltojs }}
+            {% else %}
+                {{ _('Leaving will not submit any unsubmitted problems.')|htmltojs }}
+            {% endif %};
         var noteEl = document.getElementById('leave-confirm-note');
+        var note = {% if assignment_harvest_enabled() %}
+            {{ _('Your saved answers are submitted automatically when the assignment closes.')|htmltojs }}
+        {% else %}
+            {{ _('Only answers you have already submitted will be kept.')|htmltojs }}
+        {% endif %};
         if (isSeb) {
             noteEl.hidden = false;
             noteEl.textContent = {{ _('You might not be able to re-enter this assignment.')|htmltojs }};

@@ -7,6 +7,7 @@
     {% endif %}
     {% if can_edit %}
         {{ make_tab('grade', 'fa-check-square-o', url('contest_grade', contest.key), _('Grade')) }}
+        {{ make_tab('drafts', 'fa-floppy-o', url('contest_drafts', contest.key), _('Drafts')) }}
         {{ make_tab('analytics', 'fa-line-chart', url('contest_analytics', contest.key), _('Analytics')) }}
     {% endif %}
 

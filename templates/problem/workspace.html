@@ -150,8 +150,8 @@
       </div>
     {% endif %}
     <div class="submit-cluster">
-      {% if form and workspace_autosubmit %}
-        <span class="submit-autosave-hint" id="ws-autosave-hint"{% if not workspace_server_draft and not workspace_draft_upload %} hidden{% endif %}>{{ _('Draft saved. If you do not submit, it is submitted automatically at the deadline.') }}</span>
+      {% if form and workspace_draft_url %}
+        <span class="submit-autosave-hint" id="ws-autosave-hint"{% if not workspace_server_draft and not workspace_draft_upload %} hidden{% endif %}>{% if workspace_autosubmit %}{{ _('Draft saved. If you do not submit, it is submitted automatically at the deadline.') }}{% else %}{{ _('Draft saved. Press Submit to record this answer for grading.') }}{% endif %}</span>
       {% endif %}
       {% if form %}<button class="tool-btn submit-btn" type="button" id="btn-submit"{% if workspace_is_code and not form.fields.language.queryset.exists() %} disabled{% endif %}{% if workspace_show_timer and workspace_timer_seconds <= 0 %} disabled{% endif %}><i class="fa fa-cloud-upload"></i> {{ _('Submit') }}</button>{% endif %}
       {% if workspace_show_timer %}

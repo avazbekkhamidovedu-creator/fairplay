@@ -47,7 +47,7 @@ from judge import contest_format
 from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
-from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, \
+from judge.models import AssignmentDraft, Contest, ContestMoss, ContestParticipation, ContestProblem, \
     ContestTag, Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade, \
     contest_problem_display_name
 from judge.models.profile import Class, Organization
@@ -73,7 +73,7 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestParticipationList', 'ContestParticipationDisqualify', 'get_contest_ranking_list',
            'base_contest_ranking_list', 'ContestExportPDF', 'ContestExportScores', 'ContestExportSubmissions',
            'ContestExportJoinedScores',
-           'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease',
+           'ContestGrade', 'ContestGradeSave', 'ContestGradeRelease', 'ContestDrafts',
            'ContestBatchAIGrade', 'ContestSEBConfig', 'SEBLaunchConfig', 'SEBLaunchToken', 'SEBQuit',
            'ContestTagCreateView', 'ContestSEBFileView',
            'ContestFinalizeView', 'ContestUnfinalizeView']
@@ -2316,11 +2316,13 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
         was_spectating = participation.spectate
         participation_submit_progress(participation, log_step='leave_post')
         # Leave does not cancel the participation: the same row, its timer and any leftover
-        # drafts stay. One Leave is one harvest; a later deadline sweep still picks up drafts
-        # that this call missed or that the student wrote after coming back.
+        # drafts stay. When harvest is on, one Leave is one harvest; a later deadline sweep
+        # still picks up drafts that this call missed or that the student wrote after coming
+        # back. When harvest is off, drafts stay drafts.
         try:
-            from judge.utils.assignment_harvest import harvest_participation
-            harvest_participation(participation)
+            from judge.utils.assignment_harvest import assignment_harvest_enabled, harvest_participation
+            if assignment_harvest_enabled():
+                harvest_participation(participation)
         except Exception:
             logger.exception('Auto-submit on leave failed for participation %d', participation.pk)
         profile.remove_contest()
@@ -2521,6 +2523,56 @@ ContestRankingProfile = namedtuple(
 )
 
 BestSolutionData = namedtuple('BestSolutionData', 'code points time state is_pretested')
+
+
+class ContestDrafts(TitleMixin, ContestMixin, DetailView):
+    """Read-only list of live-participation drafts for assignment editors.
+
+    A surviving draft is the last save while the student's window was open.
+    Writes after the window closes are rejected, so this is the legitimate last
+    unsubmitted copy. It is not a Submission and is not on the Grade page.
+    """
+    template_name = 'contest/drafts.html'
+
+    def get_title(self):
+        return _('%s Drafts') % self.object.name
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect_to_login(self.request.get_full_path())
+        self.object = get_object_or_404(Contest, key=kwargs['contest'])
+        if not self.object.is_editable_by(request.user):
+            raise Http404()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        drafts = (
+            AssignmentDraft.objects
+            .filter(
+                participation__contest=self.object,
+                participation__virtual=ContestParticipation.LIVE,
+            )
+            .select_related('participation__user__user', 'problem', 'language')
+            .prefetch_related('upload')
+            .order_by('participation__user__user__username', 'problem__code')
+        )
+        rows = []
+        for draft in drafts:
+            upload = getattr(draft, 'upload', None)
+            if not draft.has_content() and upload is None:
+                continue
+            rows.append({
+                'username': draft.participation.user.username,
+                'problem_code': draft.problem.code,
+                'problem_name': draft.problem.name,
+                'updated_on': draft.updated_on,
+                'harvested_at': draft.harvested_at,
+                'filename': upload.original_name if upload is not None else '',
+                'preview': (draft.content or '')[:400],
+            })
+        context['draft_rows'] = rows
+        return context
 
 
 class ContestGrade(TitleMixin, ContestMixin, DetailView):
