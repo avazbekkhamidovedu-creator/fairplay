@@ -800,6 +800,14 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['workspace_timer_seconds'] = (
                 max(0, int(remaining.total_seconds())) if remaining is not None else 0
             )
+        context['workspace_participation_id'] = (
+            current_participation.pk if workspace_in_contest else ''
+        )
+        context['workspace_manual_submit_notice'] = bool(
+            workspace_in_contest
+            and not current_participation.spectate
+            and not assignment_harvest_enabled(),
+        )
         context['workspace_submission'] = None
         context['workspace_enable_comments'] = False
         selected_submission_id = self.request.GET.get('submission')

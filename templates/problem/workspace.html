@@ -113,6 +113,8 @@
      data-timer-seconds="{{ workspace_timer_seconds|default(0) }}"
      data-timer-window-seconds="{{ workspace_timer_window_seconds|default(0) }}"
      data-show-timer="{{ '1' if workspace_show_timer else '0' }}"
+     {% if workspace_participation_id %}data-participation-id="{{ workspace_participation_id }}"{% endif %}
+     {% if workspace_manual_submit_notice %}data-manual-submit-notice="1"{% endif %}
      {% if workspace_submission %}data-submission-id="{{ workspace_submission.id }}" data-submission-graded="{{ '1' if workspace_submission.is_graded else '0' }}"{% if not workspace_submission.results_hidden %} data-submission-result="{{ workspace_submission.result or '' }}"{% endif %}{% if workspace_submission.status_url %} data-status-url="{{ workspace_submission.status_url }}"{% endif %}{% if workspace_submission.id_secret %} data-sub-channel="sub_{{ workspace_submission.id_secret }}"{% endif %}{% endif %}
      {% if workspace_submission and last_msg is defined %}data-last-msg="{{ last_msg }}"{% endif %}
      data-event-ws="{{ EVENT_DAEMON_LOCATION }}"

@@ -209,6 +209,81 @@
         }
     }
 
+    window.DKUOJ_MANUAL_SUBMIT_WARN = {{ _('You must press Submit on every problem. Unsubmitted answers will not count toward your grade.')|htmltojs }};
+    window.DKUOJ_MANUAL_SUBMIT_TITLE = {{ _('Please submit your work')|htmltojs }};
+    window.DKUOJ_MANUAL_SUBMIT_OK = {{ _('OK')|htmltojs }};
+
+    var leaveOverlayCloser = null;
+
+    function dkuojCloseLeaveOverlay() {
+        if (leaveOverlayCloser) leaveOverlayCloser();
+    }
+
+    function dkuojOpenLeaveOverlay(handlers) {
+        var overlay = document.getElementById('leave-confirm-overlay');
+        var cancel = document.getElementById('leave-confirm-cancel');
+        var ok = document.getElementById('leave-confirm-ok');
+        dkuojCloseLeaveOverlay();
+        handlers = handlers || {};
+        function close(reason) {
+            overlay.hidden = true;
+            overlay.removeEventListener('click', onOverlay);
+            document.removeEventListener('keydown', onKey);
+            cancel.removeEventListener('click', onCancel);
+            ok.removeEventListener('click', onOk);
+            cancel.hidden = false;
+            ok.classList.add('leave-confirm-btn-danger');
+            leaveOverlayCloser = null;
+            if (typeof handlers.onDismiss === 'function' && reason !== 'ok') handlers.onDismiss();
+        }
+        function onCancel() { close('cancel'); }
+        function onOk() {
+            if (typeof handlers.onOk === 'function') handlers.onOk(function () { close('ok'); });
+            else close('ok');
+        }
+        function onOverlay(event) {
+            if (event.target === overlay) close('cancel');
+        }
+        function onKey(event) {
+            if (event.key === 'Escape') close('cancel');
+        }
+        cancel.addEventListener('click', onCancel);
+        ok.addEventListener('click', onOk);
+        overlay.addEventListener('click', onOverlay);
+        document.addEventListener('keydown', onKey);
+        leaveOverlayCloser = close;
+        overlay.hidden = false;
+        ok.focus();
+    }
+
+    window.dkuojShowAssignmentNotice = function (opts) {
+        var overlay = document.getElementById('leave-confirm-overlay');
+        if (!overlay || !overlay.hidden) return false;
+        opts = opts || {};
+        document.getElementById('leave-confirm-title').textContent =
+            opts.title || window.DKUOJ_MANUAL_SUBMIT_TITLE;
+        document.getElementById('leave-confirm-warn').textContent =
+            opts.warn || window.DKUOJ_MANUAL_SUBMIT_WARN;
+        var noteEl = document.getElementById('leave-confirm-note');
+        if (opts.note) {
+            noteEl.hidden = false;
+            noteEl.textContent = opts.note;
+        } else {
+            noteEl.hidden = true;
+            noteEl.textContent = '';
+        }
+        overlay.querySelector('.leave-confirm-stats').hidden = true;
+        document.getElementById('leave-confirm-cancel').hidden = true;
+        var ok = document.getElementById('leave-confirm-ok');
+        ok.textContent = opts.okLabel || window.DKUOJ_MANUAL_SUBMIT_OK;
+        ok.classList.remove('leave-confirm-btn-danger');
+        dkuojOpenLeaveOverlay({
+            onOk: function (done) { done(); if (typeof opts.onClose === 'function') opts.onClose(); },
+            onDismiss: function () { if (typeof opts.onClose === 'function') opts.onClose(); },
+        });
+        return true;
+    };
+
     function dkuojEnableLeaveButtons(form) {
         // common.js disables submit buttons on any form submit to prevent
         // double posts. Leave opens a confirm dialog instead of navigating,
@@ -228,7 +303,7 @@
             {% if assignment_harvest_enabled() %}
                 {{ _('When you leave, answers you have not submitted yet will be submitted automatically.')|htmltojs }}
             {% else %}
-                {{ _('Leaving will not submit any unsubmitted problems.')|htmltojs }}
+                window.DKUOJ_MANUAL_SUBMIT_WARN
             {% endif %};
         var noteEl = document.getElementById('leave-confirm-note');
         var note = {% if assignment_harvest_enabled() %}
@@ -239,55 +314,41 @@
         if (isSeb) {
             noteEl.hidden = false;
             noteEl.textContent = {{ _('You might not be able to re-enter this assignment.')|htmltojs }};
+        } else if (!{% if assignment_harvest_enabled() %}true{% else %}false{% endif %}) {
+            noteEl.hidden = false;
+            noteEl.textContent = note;
         } else {
             noteEl.hidden = true;
             noteEl.textContent = '';
         }
         document.getElementById('leave-confirm-ok').textContent = okLabel;
-        overlay.hidden = false;
-        document.getElementById('leave-confirm-ok').focus();
+        document.getElementById('leave-confirm-ok').classList.add('leave-confirm-btn-danger');
+        document.getElementById('leave-confirm-cancel').hidden = false;
         var trace = window.dkuojLeaveFormSnapshot(form);
         var bar = window.dkuojProgressBarSnapshot();
         Object.keys(bar).forEach(function (key) { trace[key] = bar[key]; });
         trace.source = 'leave_dialog';
         window.dkuojTraceWorkspaceProgress('client_leave_dialog', trace);
 
-        function close(keepDisabled) {
-            overlay.hidden = true;
-            overlay.removeEventListener('click', onOverlay);
-            document.removeEventListener('keydown', onKey);
-            document.getElementById('leave-confirm-cancel').removeEventListener('click', onCancel);
-            document.getElementById('leave-confirm-ok').removeEventListener('click', onOk);
-            if (!keepDisabled) dkuojEnableLeaveButtons(form);
-        }
-        function onCancel() { close(false); }
-        function onOk() {
-            close(true);
-            form.dataset.leaveConfirmed = '1';
-            function submitLeave() {
-                if (typeof form.requestSubmit === 'function') form.requestSubmit();
-                else form.submit();
-            }
-            // Wait for the last debounced draft so this Leave harvests what is on screen.
-            if (typeof window.dkuojFlushServerDraft === 'function') {
-                var flushed = window.dkuojFlushServerDraft();
-                if (flushed && typeof flushed.then === 'function') {
-                    flushed.then(submitLeave, submitLeave);
-                    return;
+        dkuojOpenLeaveOverlay({
+            onDismiss: function () { dkuojEnableLeaveButtons(form); },
+            onOk: function (done) {
+                done();
+                form.dataset.leaveConfirmed = '1';
+                function submitLeave() {
+                    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                    else form.submit();
                 }
-            }
-            submitLeave();
-        }
-        function onOverlay(event) {
-            if (event.target === overlay) close();
-        }
-        function onKey(event) {
-            if (event.key === 'Escape') close();
-        }
-        document.getElementById('leave-confirm-cancel').addEventListener('click', onCancel);
-        document.getElementById('leave-confirm-ok').addEventListener('click', onOk);
-        overlay.addEventListener('click', onOverlay);
-        document.addEventListener('keydown', onKey);
+                if (typeof window.dkuojFlushServerDraft === 'function') {
+                    var flushed = window.dkuojFlushServerDraft();
+                    if (flushed && typeof flushed.then === 'function') {
+                        flushed.then(submitLeave, submitLeave);
+                        return;
+                    }
+                }
+                submitLeave();
+            },
+        });
         return false;
     }
 

@@ -588,15 +588,51 @@
     var button = $('#btn-submit');
     if (button) button.disabled = !!blocked || button.dataset.forceDisabled === '1';
   }
+  function submitNoticeKey(kind) {
+    return 'dkuoj-ws-submit-notice-' + kind + '-' + (app.dataset.contextId || '') + '-' + (app.dataset.participationId || '');
+  }
+  function noticeSeen(kind) {
+    try { return !!sessionStorage.getItem(submitNoticeKey(kind)); } catch (err) { return false; }
+  }
+  function markNoticeSeen(kind) {
+    try { sessionStorage.setItem(submitNoticeKey(kind), '1'); } catch (err) {}
+  }
+  function showManualSubmitNotice(kind) {
+    if (app.dataset.manualSubmitNotice !== '1') return false;
+    if (noticeSeen(kind)) return false;
+    if (typeof window.dkuojShowAssignmentNotice !== 'function') return false;
+    var shown = window.dkuojShowAssignmentNotice({});
+    if (shown) markNoticeSeen(kind);
+    return shown;
+  }
+  var joinNoticeShownThisPage = false;
+  function maybeTenPercentNotice(remaining, warnAt) {
+    if (app.dataset.manualSubmitNotice !== '1') return;
+    if (!(warnAt > 0 && remaining <= warnAt && remaining > 0)) return;
+    if (noticeSeen('10pct')) return;
+    if (joinNoticeShownThisPage) {
+      markNoticeSeen('10pct');
+      return;
+    }
+    showManualSubmitNotice('10pct');
+  }
+  var timerWindowSecs = Number(app.dataset.timerWindowSeconds || 0);
+  var timerWarnAt = timerWindowSecs > 0 ? Math.max(1, Math.floor(timerWindowSecs * 0.1)) : 0;
+  var timerInitial = Number(app.dataset.timerSeconds || 0);
+  var timerStartedAt = Date.now();
+  function timerRemaining() {
+    return Math.max(0, timerInitial - Math.round((Date.now() - timerStartedAt) / 1000));
+  }
+  joinNoticeShownThisPage = showManualSubmitNotice('join');
+  maybeTenPercentNotice(timerRemaining(), timerWarnAt);
+  joinNoticeShownThisPage = false;
+
   (function initDurationTimer() {
     if (app.dataset.showTimer !== '1') return;
     var timer = $('#ws-timer');
     if (!timer) return;
     var label = timer.querySelector('.time-remaining');
-    var initial = Number(app.dataset.timerSeconds || (label && label.getAttribute('data-secs')) || 0);
-    var windowSecs = Number(app.dataset.timerWindowSeconds || 0);
-    var warnAt = windowSecs > 0 ? Math.max(1, Math.floor(windowSecs * 0.1)) : 0;
-    var startedAt = Date.now();
+    var warnAt = timerWarnAt;
     function expire() {
       timer.classList.add('expired');
       timer.classList.remove('warn');
@@ -604,7 +640,7 @@
       setSubmitBlocked(true);
       flushServerDraft({ beacon: false });
     }
-    if (initial <= 0) {
+    if (timerInitial <= 0) {
       expire();
       return;
     }
@@ -612,8 +648,9 @@
       count_down(window.jQuery(label));
     }
     var tick = function () {
-      var remaining = Math.max(0, initial - Math.round((Date.now() - startedAt) / 1000));
+      var remaining = timerRemaining();
       timer.classList.toggle('warn', warnAt > 0 && remaining <= warnAt && remaining > 0);
+      maybeTenPercentNotice(remaining, warnAt);
       if (remaining <= 0) {
         window.clearInterval(handle);
         expire();

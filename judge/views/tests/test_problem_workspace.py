@@ -28,7 +28,10 @@ from judge.models.tests.util import (
 
 AUTOSAVE_HINT = 'Draft saved. Press Submit to record this answer for grading.'
 AUTOSAVE_HINT_HARVEST = 'Draft saved. If you do not submit, it is submitted automatically at the deadline.'
-LEAVE_WARN = 'Leaving will not submit any unsubmitted problems.'
+LEAVE_WARN = (
+    'You must press Submit on every problem. '
+    'Unsubmitted answers will not count toward your grade.'
+)
 LEAVE_NOTE = 'Only answers you have already submitted will be kept.'
 LEAVE_HARVEST_WARN = (
     'When you leave, answers you have not submitted yet will be submitted automatically.'
@@ -743,6 +746,21 @@ class ProblemWorkspaceTestCase(TestCase):
                 for stale in CONTRADICTORY_COPY:
                     self.assertNotContains(response, stale)
 
+    def test_assignment_workspace_asks_the_student_to_submit_themselves(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertTrue(response.context['workspace_manual_submit_notice'])
+        self.assertEqual(response.context['workspace_participation_id'], participation.pk)
+        self.assertContains(response, 'data-manual-submit-notice="1"')
+        self.assertContains(response, 'data-participation-id="%s"' % participation.pk)
+        self.assertContains(response, 'dkuojShowAssignmentNotice')
+        self.assertContains(response, LEAVE_WARN)
+        html = response.content.decode()
+        self.assertIn('data-timer-window-seconds=', html)
+        self.assertGreater(response.context['workspace_timer_window_seconds'], 0)
+
     def test_a_spectator_is_not_promised_a_submission_they_will_not_get(self):
         # Spectating work is never collected, so the promise has to follow the collection rather
         # than merely "is inside an assignment".
@@ -756,6 +774,8 @@ class ProblemWorkspaceTestCase(TestCase):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertEqual(response.context['workspace_mode'], 'assignment')
         self.assertFalse(response.context['workspace_autosubmit'])
+        self.assertFalse(response.context['workspace_manual_submit_notice'])
+        self.assertNotContains(response, 'data-manual-submit-notice="1"')
         self.assertNotContains(response, AUTOSAVE_HINT)
 
     def test_practice_workspace_form_disables_browser_autocomplete(self):

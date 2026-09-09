@@ -233,7 +233,10 @@ class ContestSEBEnforcementTestCase(CommonDataMixin, TestCase):
         response = self.client.get(path, **bek_header(path))
         self.assertContains(response, 'Exit SEB')
         self.assertContains(response, 'data-seb-exit="1"')
-        self.assertContains(response, 'Leaving will not submit any unsubmitted problems.')
+        self.assertContains(
+            response,
+            'You must press Submit on every problem. Unsubmitted answers will not count toward your grade.',
+        )
         self.assertContains(response, 'Only answers you have already submitted will be kept.')
         self.assertNotContains(
             response,
