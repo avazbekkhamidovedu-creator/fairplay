@@ -359,12 +359,15 @@
         if (isSeb) {
             noteEl.hidden = false;
             noteEl.textContent = {{ _('You might not be able to re-enter this assignment.')|htmltojs }};
-        } else if ({% if assignment_harvest_enabled() %}true{% else %}false{% endif %}) {
+        {% if assignment_harvest_enabled() %}
+        } else {
             noteEl.hidden = false;
             noteEl.textContent = {{ _('Your saved answers are submitted automatically when the assignment closes.')|htmltojs }};
+        {% else %}
         } else {
             noteEl.hidden = true;
             noteEl.textContent = '';
+        {% endif %}
         }
         document.getElementById('leave-confirm-ok').textContent = okLabel;
         document.getElementById('leave-confirm-ok').classList.remove('leave-confirm-btn-primary');
