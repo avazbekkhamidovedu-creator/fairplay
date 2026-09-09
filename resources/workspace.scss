@@ -1145,8 +1145,29 @@
   }
 }
 .answer-form .ws-answer-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.answer-form .ws-short-answer .rich-editor { min-height: 12rem; max-height: 20rem; }
-.answer-form .ws-short-answer .rich-editor-body { min-height: 8rem; max-height: 16rem; overflow: auto; }
+.answer-form .answer-body:has(.ws-short-answer) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.answer-form .ws-short-answer {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+.answer-form .ws-short-answer .rich-editor {
+  flex: 1 1 auto;
+  min-height: 16rem;
+  height: 100%;
+  max-height: none;
+}
+.answer-form .ws-short-answer .rich-editor-body {
+  min-height: 12rem;
+  max-height: none;
+  overflow: auto;
+}
 .ws-file-upload .file-upload-instructions,
 .ws-file-upload .ws-file-upload-lead {
   margin: 0 0 .85rem;
