@@ -580,7 +580,8 @@
   if (prevBtn) prevBtn.addEventListener('click', function () { if (index > 0) location.assign(items[index - 1].href); });
   if (nextBtn) nextBtn.addEventListener('click', function () { if (index >= 0 && index + 1 < items.length) location.assign(items[index + 1].href); });
 
-  // Duration countdown: server remaining seconds (participation.time_remaining); does not pause on leave.
+  // Participation countdown: same seconds as #contest-time-remaining (time_remaining).
+  // Digits use count_down; this tick only turns the clock red at 10% and blocks Submit.
   var timerExpired = false;
   function setSubmitBlocked(blocked) {
     timerExpired = !!blocked;
@@ -591,17 +592,11 @@
     if (app.dataset.showTimer !== '1') return;
     var timer = $('#ws-timer');
     if (!timer) return;
-    var label = timer.querySelector('span');
-    var initial = Number(app.dataset.timerSeconds || 0);
+    var label = timer.querySelector('.time-remaining');
+    var initial = Number(app.dataset.timerSeconds || (label && label.getAttribute('data-secs')) || 0);
+    var windowSecs = Number(app.dataset.timerWindowSeconds || 0);
+    var warnAt = windowSecs > 0 ? Math.max(1, Math.floor(windowSecs * 0.1)) : 0;
     var startedAt = Date.now();
-    function formatRemaining(seconds) {
-      var d = Math.floor(seconds / 86400);
-      var h = Math.floor(seconds % 86400 / 3600);
-      var m = Math.floor(seconds % 3600 / 60);
-      var s = seconds % 60;
-      var clock = [h, m, s].map(function (n) { return String(n).padStart(2, '0'); }).join(':');
-      return (d ? d + gettext('d ') : '') + clock;
-    }
     function expire() {
       timer.classList.add('expired');
       timer.classList.remove('warn');
@@ -613,10 +608,12 @@
       expire();
       return;
     }
+    if (label && window.jQuery && typeof count_down === 'function') {
+      count_down(window.jQuery(label));
+    }
     var tick = function () {
       var remaining = Math.max(0, initial - Math.round((Date.now() - startedAt) / 1000));
-      if (label) label.textContent = formatRemaining(remaining);
-      timer.classList.toggle('warn', remaining <= 600 && remaining > 0);
+      timer.classList.toggle('warn', warnAt > 0 && remaining <= warnAt && remaining > 0);
       if (remaining <= 0) {
         window.clearInterval(handle);
         expire();

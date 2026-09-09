@@ -616,6 +616,15 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, reverse('contest_leave', args=[self.contest.key]))
         self.assertContains(response, 'assignment-leave-form')
         self.assertContains(response, 'Leave')
+        self.assertTrue(response.context['workspace_show_timer'])
+        self.assertFalse(response.context['workspace_timer_is_duration'])
+        self.assertContains(response, 'id="ws-timer"')
+        self.assertContains(response, 'Validity remaining')
+        html = response.content.decode()
+        self.assertLess(html.index('ws-toolbar-center'), html.index('id="ws-timer"'))
+        self.assertLess(html.index('id="ws-timer"'), html.index('id="btn-submit"'))
+        self.assertLess(html.index('id="ws-timer"'), html.index('submit-cluster'))
+        self.assertIn('data-timer-window-seconds=', html)
         self.assertContains(response, 'data-submitted="0"')
         self.assertContains(response, 'data-total="1"')
         self.assertContains(response, 'data-unsubmitted="1"')
@@ -628,6 +637,30 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(response, AUTOSUBMIT_PROMISE)
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
         self.assertNotContains(response, 'Submit your work and exit Safe Exam Browser')
+
+    def test_assignment_toolbar_timer_uses_duration_when_time_limit_is_set(self):
+        contest = create_contest(
+            key='wsduration', name='Duration Workspace',
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            time_limit=timezone.timedelta(minutes=30),
+            is_visible=True,
+            authors=('workspace-author',),
+        )
+        create_contest_problem(contest=contest, problem=self.problem, points=100, order=1)
+        participation = create_contest_participation(contest=contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertTrue(response.context['workspace_show_timer'])
+        self.assertTrue(response.context['workspace_timer_is_duration'])
+        self.assertEqual(response.context['workspace_timer_window_seconds'], 30 * 60)
+        self.assertContains(response, 'id="ws-timer"')
+        self.assertContains(response, 'Duration remaining')
+        self.assertNotContains(response, 'Validity remaining')
+        html = response.content.decode()
+        self.assertLess(html.index('assignment-leave-form'), html.index('id="ws-timer"'))
+        self.assertLess(html.index('id="ws-timer"'), html.index('submit-cluster'))
 
     def test_assignment_leave_progress_counts_submitted_problems(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
@@ -674,6 +707,8 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertEqual(response.context['workspace_mode'], 'practice')
         self.assertNotContains(response, 'assignment-leave-form')
         self.assertNotContains(response, reverse('contest_leave', args=[self.contest.key]))
+        self.assertFalse(response.context['workspace_show_timer'])
+        self.assertNotContains(response, 'id="ws-timer"')
 
     def test_assignment_submit_area_says_press_submit(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)

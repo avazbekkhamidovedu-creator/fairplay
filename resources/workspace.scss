@@ -64,7 +64,18 @@
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
 }
-.ws-toolbar-center { justify-self: center; }
+.ws-toolbar-center {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  white-space: nowrap;
+}
+.ws-toolbar-center .timer-wrap {
+  font-size: 1.45rem;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
 .ws-toolbar.has-leave .submit-cluster {
   justify-self: end;
   margin-left: 0;
@@ -112,7 +123,7 @@
   cursor: not-allowed;
   border-color: var(--oj-border);
 }
-/* Submit / timer on the right (prototype .submit-cluster { margin-left: auto }) */
+/* Submit on the right (timer sits beside Leave in .ws-toolbar-center). */
 .submit-cluster {
   display: inline-flex;
   align-items: center;
