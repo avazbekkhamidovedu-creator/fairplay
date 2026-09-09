@@ -569,7 +569,7 @@ class ProblemWorkspaceTestCase(TestCase):
             [self.problem.code],
         )
 
-    def test_expired_live_window_rejoins_as_spectator(self):
+    def test_expired_live_window_cannot_rejoin_as_spectator(self):
         from judge.models import ContestParticipation
 
         contest = create_contest(
@@ -588,11 +588,17 @@ class ProblemWorkspaceTestCase(TestCase):
         self.user.profile.save()
 
         response = self.client.post(reverse('contest_join', args=[contest.key]))
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
         self.user.profile.refresh_from_db()
-        self.assertIsNotNone(self.user.profile.current_contest)
-        self.assertTrue(self.user.profile.current_contest.spectate)
-        self.assertEqual(self.user.profile.current_contest.virtual, ContestParticipation.SPECTATE)
+        # The expired personal window must not downgrade into a spectator row that
+        # would let the student keep submitting on an unscored SPECTATE row.
+        self.assertIsNone(self.user.profile.current_contest)
+        self.assertFalse(
+            ContestParticipation.objects.filter(
+                contest=contest, user=self.user.profile,
+                virtual=ContestParticipation.SPECTATE,
+            ).exists(),
+        )
 
     def test_assignment_workspace_exposes_context_id_for_drafts(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)

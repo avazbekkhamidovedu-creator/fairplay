@@ -2270,10 +2270,8 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                     raise ContestAccessDenied()
 
                 if participation.ended:
-                    participation = ContestParticipation.objects.get_or_create(
-                        contest=contest, user=profile, virtual=SPECTATE,
-                        defaults={'real_start': timezone.now()},
-                    )[0]
+                    return generic_message(request, _('Cannot enter'),
+                                           _('You are not able to join this contest.'))
 
         profile.current_contest = participation
         profile.save()

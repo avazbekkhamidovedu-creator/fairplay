@@ -472,7 +472,7 @@ class ContestTestCase(CommonDataMixin, TestCase):
                 'can_see_own_scoreboard': self.assertTrue,
                 'can_see_full_scoreboard': self.assertFalse,
                 'is_live_joinable_by': self.assertFalse,
-                'is_spectatable_by': self.assertTrue,
+                'is_spectatable_by': self.assertFalse,
                 'has_completed_contest': self.assertTrue,
             },
             'non_staff_tester': {
