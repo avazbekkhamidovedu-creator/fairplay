@@ -4,12 +4,40 @@
 in object storage, so a raw SQL dump is not enough. This command joins those
 pieces and can copy uploaded files onto disk.
 """
+import re
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
 from judge.models import AssignmentDraft, Contest, ContestParticipation
 from judge.utils.assignment_draft import format_draft_preview
+
+_UNSAFE_CHARS = re.compile(r'[^\w.\-]+', re.UNICODE)
+
+
+def safe_export_leaf(value, fallback='file'):
+    """Keep only the last path component so a stored filename cannot leave save_dir."""
+    raw = str(value or '').replace('\\', '/').replace('\x00', '')
+    leaf = raw.rsplit('/', 1)[-1]
+    if leaf in ('', '.', '..'):
+        return fallback
+    cleaned = _UNSAFE_CHARS.sub('_', leaf).strip('._')
+    return (cleaned or fallback)[:180]
+
+
+def export_path_under(save_dir, user, problem_code, original_name):
+    """Build ``save_dir / student_problem_filename`` and refuse to leave ``save_dir``."""
+    save_root = Path(save_dir).expanduser().resolve()
+    filename = '%s_%s_%s' % (
+        safe_export_leaf(user, 'student'),
+        safe_export_leaf(problem_code, 'problem'),
+        safe_export_leaf(original_name, 'upload'),
+    )
+    dest = (save_root / filename).resolve()
+
+    if not dest.is_relative_to(save_root):
+        raise CommandError('Refusing to write outside %s' % save_root)
+    return dest
 
 
 class Command(BaseCommand):
@@ -63,7 +91,7 @@ class Command(BaseCommand):
             except Exception as exc:
                 self.stdout.write('unreadable: %s' % exc)
             if save_dir is not None and upload is not None and upload.file:
-                dest = save_dir / ('%s_%s_%s' % (user, draft.problem.code, upload.original_name))
+                dest = export_path_under(save_dir, user, draft.problem.code, upload.original_name)
                 with upload.file.open('rb') as src, dest.open('wb') as out:
                     while True:
                         chunk = src.read(65536)

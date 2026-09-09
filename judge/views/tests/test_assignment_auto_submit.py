@@ -6,16 +6,19 @@ they each have their own, both re-pointed when a teacher moves the deadline, and
 catches whatever the ETA tasks lost.
 """
 import json
+import tempfile
 from datetime import timedelta
 from io import StringIO
+from pathlib import Path
 from unittest import mock
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from judge.management.commands.show_assignment_drafts import export_path_under, safe_export_leaf
 from judge.models import AssignmentDraft, Contest, ContestParticipation, ContestProblem, Language, \
     ProblemMCQOption, Submission
 from judge.models.tests.util import create_contest, create_problem, create_user
@@ -718,3 +721,26 @@ class ShowAssignmentDraftsCommandTestCase(TestCase):
         self.client.force_login(self.teacher)
         response = self.client.get('/contest/%s/drafts' % self.contest.key)
         self.assertEqual(response.status_code, 404)
+
+
+class SafeExportPathTestCase(SimpleTestCase):
+    """--save-files must not follow a student filename out of the chosen directory."""
+
+    def test_unix_and_windows_traversal_stay_inside_save_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            save = Path(tmp) / 'exports'
+            save.mkdir()
+            unix = export_path_under(save, 'alice', 'p1', '../../etc/passwd')
+            windows = export_path_under(save, 'alice', 'p1', '..\\..\\evil.txt')
+            self.assertTrue(unix.is_relative_to(save.resolve()))
+            self.assertTrue(windows.is_relative_to(save.resolve()))
+            self.assertEqual(unix.name, 'alice_p1_passwd')
+            self.assertEqual(windows.name, 'alice_p1_evil.txt')
+
+    def test_dotdot_filename_falls_back(self):
+        self.assertEqual(safe_export_leaf('..'), 'file')
+        self.assertEqual(safe_export_leaf(''), 'file')
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = export_path_under(tmp, 'alice', 'p1', '..')
+            self.assertTrue(dest.is_relative_to(Path(tmp).resolve()))
+            self.assertEqual(dest.name, 'alice_p1_upload')
