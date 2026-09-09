@@ -138,6 +138,7 @@ def workspace_ai_grade_fields(request, submission):
     try:
         ctx = ai_grade_context(request.user, submission, contest=contest)
     except TypeError:
+        # Older runtimes (this host's image) only accept (user, submission).
         ctx = ai_grade_context(request.user, submission)
     fields = {
         'can_trigger_ai_grade': bool(ctx.get('can_trigger')),
@@ -301,7 +302,17 @@ def get_workspace_answer_display(submission):
 
     if submission.problem.submission_type == 'S':
         text = payload.get('text', '')
-        return [{'label': '', 'value': text if text != '' else _('(empty)')}]
+        if text == '':
+            return [{'label': '', 'value': _('(empty)')}]
+        html = ''
+        try:
+            from judge.utils.markdown_preview import render_preview_html
+            html = render_preview_html(text, submission.problem.markdown_style)
+        except Exception:
+            logging.getLogger('judge.problem').exception(
+                'Failed to render short-answer markdown for submission %s', submission.id,
+            )
+        return [{'label': '', 'value': text, 'html': html}]
 
     return [{'label': '', 'value': raw}] if raw else []
 
@@ -2692,21 +2703,27 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
         answer_display = get_workspace_answer_display(submission) if source is not None else []
         comments_html = ''
         if settings.DMOJ_ENABLE_COMMENTS:
-            comment_handler = SubmissionCommentMixin()
-            comment_handler.object = submission
-            comment_handler.request = request
-            comment_handler.comment_use_rich_editor = True
-            comment_ctx = comment_handler.get_comment_context()
-            comment_ctx.update({
-                'request': request,
-                'ENABLE_COMMENTS': True,
-                'comment_use_rich_editor': True,
-                'comment_form_action': '%s?submission=%d' % (
-                    reverse('problem_detail', args=[problem.code]),
-                    submission.id,
-                ),
-            })
-            comments_html = render_to_string('comments/list.html', comment_ctx, request=request)
+            try:
+                comment_handler = SubmissionCommentMixin()
+                comment_handler.object = submission
+                comment_handler.request = request
+                comment_handler.comment_use_rich_editor = True
+                comment_ctx = comment_handler.get_comment_context()
+                comment_ctx.update({
+                    'request': request,
+                    'ENABLE_COMMENTS': True,
+                    'comment_use_rich_editor': True,
+                    'comment_form_action': '%s?submission=%d' % (
+                        reverse('problem_detail', args=[problem.code]),
+                        submission.id,
+                    ),
+                })
+                comments_html = render_to_string('comments/list.html', comment_ctx, request=request)
+            except Exception:
+                logging.getLogger('judge.problem').exception(
+                    'Failed to render workspace comments for submission %s', submission.id,
+                )
+                comments_html = ''
         return JsonResponse({
             'id': submission.id,
             'status': submission.status,

@@ -534,8 +534,8 @@
   }
   code { padding: .1em .3em; border-radius: 3px; }
   pre code { padding: 0; background: transparent; }
-  table { border-collapse: collapse; margin: .8em 0; }
-  th, td { border: 1px solid var(--oj-border); padding: .35rem .55rem; }
+  table { border-collapse: collapse; margin: .8em 0; width: max-content; max-width: 100%; }
+  th, td { border: 1px solid var(--oj-border); padding: .35rem .55rem; height: auto; white-space: normal; overflow-wrap: break-word; word-break: break-word; }
   img { max-width: 100%; height: auto; }
 
   .inline-blank-ph {
@@ -1071,6 +1071,10 @@
   background: var(--oj-bg);
   color: var(--oj-text);
   white-space: pre-wrap;
+}
+.result-source-md {
+  white-space: normal;
+  font-family: inherit;
 }
 .ws-result-comments {
   margin-top: 1rem;
