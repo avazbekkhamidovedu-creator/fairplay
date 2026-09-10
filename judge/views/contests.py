@@ -2583,7 +2583,8 @@ class ContestGradeSave(ContestMixin, DetailView):
             'note': submission.review_note,
             'released': grade.released,
             'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
-            'reviewed_at': timezone.localtime(submission.reviewed_at).strftime('%Y-%m-%d %H:%M') if submission.reviewed_at else None,
+            'reviewed_at': (timezone.localtime(submission.reviewed_at)
+                            .strftime('%Y-%m-%d %H:%M') if submission.reviewed_at else None),
         })
 
 

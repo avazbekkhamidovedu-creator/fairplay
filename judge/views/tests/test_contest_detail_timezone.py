@@ -125,4 +125,3 @@ class ContestDetailTimezoneTestCase(CommonDataMixin, TestCase):
         expected = self.contest.start_time.astimezone(
             __import__('zoneinfo').ZoneInfo('America/Toronto')).strftime('%Y-%m-%dT%H:%M')
         self.assertEqual(response.context['prefill']['start_time'], expected)
-
