@@ -131,8 +131,9 @@ def _refresh_contest_score(submission):
 
     Mirrors ``Submission.update_contest`` but maps the combined
     (test-case + AI) submission score onto the contest problem's scale, so
-    rankings and exports use the AI-inclusive score. A teacher's manual
-    override still wins over the machine score.
+    rankings and exports use the AI-inclusive score. A *released* manual
+    override still wins over the machine score; an unreleased one stays
+    hidden from the ranking.
     """
     try:
         contest = submission.contest
@@ -147,7 +148,7 @@ def _refresh_contest_score(submission):
     if not contest_problem.partial and contest.points != contest_problem.points:
         contest.points = 0
     manual_grade = submission.manual_grade_override
-    if manual_grade is not None and manual_grade.points is not None:
+    if manual_grade is not None and manual_grade.points is not None and manual_grade.released:
         contest.points = manual_grade.points
     contest.save()
     contest.participation.recompute_results()

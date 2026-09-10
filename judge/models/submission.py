@@ -234,11 +234,12 @@ class Submission(models.Model):
                                if self.case_total > 0 else 0, 3)
         if not contest_problem.partial and contest.points != contest_problem.points:
             contest.points = 0
-        # A teacher's manual override always wins over the machine score, so a
-        # rejudge (which recomputes machine points) must not wipe it: the actual
-        # contest score stays on the manual grade regardless of release state.
+        # A released manual override wins over the machine score, so a rejudge
+        # (which recomputes machine points) must not wipe it. Until the teacher
+        # releases it, the machine score stands (the ranking must not leak an
+        # unreleased grade).
         manual_grade = self.manual_grade_override
-        if manual_grade is not None and manual_grade.points is not None:
+        if manual_grade is not None and manual_grade.points is not None and manual_grade.released:
             contest.points = manual_grade.points
         contest.save()
         contest.participation.recompute_results()

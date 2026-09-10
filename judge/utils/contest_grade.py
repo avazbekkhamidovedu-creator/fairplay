@@ -213,8 +213,9 @@ def build_grade_payload(submissions, final_ids):
             manual_points = manual_grade.points
             machine_points = manual_grade.machine_points
             released = manual_grade.released
-            if contest_submission is None:
-                display_points = manual_points
+            # The grade desk always shows the teacher's override, independent of
+            # the (release-gated) effective score stored on ContestSubmission.
+            display_points = manual_points
         else:
             manual_points = None
             machine_points = display_points
@@ -233,7 +234,7 @@ def build_grade_payload(submissions, final_ids):
             'problem': sub.problem.code,
             'problem_type': sub.problem.submission_type,
             'lang': sub.language.short_name or sub.language.key,
-            'date': sub.date.strftime('%Y-%m-%d %H:%M'),
+            'date': timezone.localtime(sub.date).strftime('%Y-%m-%d %H:%M'),
             'result': sub.short_status,
             'points': display_points,
             'total': display_total,
@@ -260,7 +261,7 @@ def build_grade_payload(submissions, final_ids):
             'case_total': sub.case_total,
             'review_note': sub.review_note or '',
             'reviewed_by': sub.reviewed_by.user.username if sub.reviewed_by else None,
-            'reviewed_at': sub.reviewed_at.strftime('%Y-%m-%d %H:%M') if sub.reviewed_at else None,
+            'reviewed_at': timezone.localtime(sub.reviewed_at).strftime('%Y-%m-%d %H:%M') if sub.reviewed_at else None,
             'manual_points': manual_points,
             'machine_points': machine_points,
             'released': released,
@@ -383,8 +384,41 @@ def apply_manual_grade(profile, submission, score, note=None):
     submission.save(update_fields=['review_note', 'reviewed_by', 'reviewed_at'])
 
     if contest_submission is not None:
-        contest_submission.points = score
-        contest_submission.save(update_fields=['points'])
-        contest_submission.participation.recompute_results()
+        # The ranking reflects the manual override only once it is released;
+        # until then the machine score stands, so a teacher who saves (but has
+        # not yet released) a grade never leaks it through the scoreboard.
+        # Re-saving an already-released override still propagates its new score.
+        effective = grade.points if (grade.released and grade.points is not None) else contest_submission.points
+        if contest_submission.points != effective:
+            contest_submission.points = effective
+            contest_submission.save(update_fields=['points'])
+            contest_submission.participation.recompute_results()
 
     return grade, score, total
+
+
+def sync_released_manual_grades(contest):
+    """Propagate released manual scores into ``ContestSubmission.points`` and recompute.
+
+    ``ContestGradeRelease`` flips ``released=True`` on every manual grade in the
+    contest; this folds those overrides into the effective contest score so the
+    ranking (``ContestParticipation.score`` + per-problem ``format_data``) and the
+    CSV exports reflect the release. Practice submissions have no
+    ``ContestSubmission`` row and are ignored here.
+    """
+    grades = (SubmissionManualGrade.objects
+              .filter(submission__contest_object=contest, released=True, points__isnull=False)
+              .select_related('submission__contest__participation'))
+    participation_ids = set()
+    for grade in grades:
+        contest_submission = grade.submission.contest_or_none
+        if contest_submission is None:
+            continue
+        if contest_submission.points != grade.points:
+            contest_submission.points = grade.points
+            contest_submission.save(update_fields=['points'])
+        participation_ids.add(contest_submission.participation_id)
+    for participation_id in participation_ids:
+        participation = ContestParticipation.objects.filter(id=participation_id).first()
+        if participation is not None:
+            participation.recompute_results()

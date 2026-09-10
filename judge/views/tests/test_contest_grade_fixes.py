@@ -406,9 +406,19 @@ class ManualGradePriorityTestCase(GradeTestBase):
         self.assertEqual(grade.points, 88.0)
         self.assertFalse(grade.released)
         self.assertEqual(grade.machine_points, 50.0)
-        # The actual contest score folds the override in immediately.
+        # Until released, the contest score (ranking) stays on the machine score.
         self.contest_submission.refresh_from_db()
-        self.assertEqual(self.contest_submission.points, 88.0)
+        self.assertEqual(self.contest_submission.points, 50.0)
+
+    def test_release_propagates_manual_grade_to_contest_score(self):
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '88'})
+        self.contest_submission.refresh_from_db()
+        self.assertEqual(self.contest_submission.points, 50.0)  # machine until release
+
+        self._client(self.curator).post(self.release_url)
+        self.contest_submission.refresh_from_db()
+        self.assertEqual(self.contest_submission.points, 88.0)  # released manual wins
 
     def test_release_all_reveals_manual_grade(self):
         self._client(self.curator).post(
@@ -655,7 +665,7 @@ class StudentVisibleScoreTestCase(GradeTestBase):
         self._client(self.curator).post(
             self.save_url, {'submission': self.submission.id, 'score': '20'})
         self.contest_submission.refresh_from_db()
-        self.assertEqual(self.contest_submission.points, 20.0)
+        self.assertEqual(self.contest_submission.points, 12.5)
 
         score = self._list_as(self.student, self.submission)
         self.assertIn(b'12.5 / 25', score)
