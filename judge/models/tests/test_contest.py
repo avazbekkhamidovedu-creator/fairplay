@@ -388,6 +388,19 @@ class ContestTestCase(CommonDataMixin, TestCase):
         }
         self._test_object_methods_with_users(self.basic_contest, data)
 
+    def test_spectating_requires_assignment_opt_in(self):
+        """Students cannot spectate unless the assignment explicitly permits it."""
+        self.basic_contest.allow_spectate = False
+        self.basic_contest.save(update_fields=('allow_spectate',))
+
+        self.assertFalse(self.basic_contest.is_spectatable_by(self.users['normal']))
+        # Assignment staff retain their existing ability to inspect the contest.
+        self.assertTrue(self.basic_contest.is_spectatable_by(self.users['superuser']))
+
+        self.basic_contest.allow_spectate = True
+        self.basic_contest.save(update_fields=('allow_spectate',))
+        self.assertTrue(self.basic_contest.is_spectatable_by(self.users['normal']))
+
     def test_hidden_scoreboard_contest_methods(self):
         data = {
             'staff_contest_edit_own': {

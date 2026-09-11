@@ -412,7 +412,7 @@ class ContestCreate(LoginRequiredMixin, View):
     # Scalar fields handled generically from the JSON payload.
     _bool_fields = (
         'is_visible', 'is_rated', 'use_clarifications', 'hide_problem_tags',
-        'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
+        'hide_problem_authors', 'allow_virtual_participation', 'allow_spectate', 'run_pretests_only',
         'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
         'show_short_display', 'is_private', 'is_organization_private',
         'limit_join_organizations', 'seb_required', 'allow_ai_hints',
@@ -1373,7 +1373,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'seb_browser_exam_keys': '', 'seb_config_keys': '', 'seb_quit_url': '',
             'is_visible': False, 'is_rated': False, 'use_clarifications': True,
             'hide_problem_tags': False, 'hide_problem_authors': False,
-            'allow_virtual_participation': True, 'run_pretests_only': False,
+            'allow_virtual_participation': True, 'allow_spectate': False, 'run_pretests_only': False,
             'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': False,
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,

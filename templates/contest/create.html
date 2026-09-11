@@ -746,7 +746,7 @@
                 // the user lacks change_contest_visibility; the server skips
                 // permission-gated fields either way).
                 ['is_rated', 'use_clarifications', 'hide_problem_tags',
-                 'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
+                 'hide_problem_authors', 'allow_virtual_participation', 'allow_spectate', 'run_pretests_only',
                  'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
                  'show_short_display', 'is_private', 'is_organization_private',
                  'limit_join_organizations', 'seb_required', 'allow_ai_hints',
@@ -2851,8 +2851,13 @@
                             <div class="form-row form-row-check">
                                 <label>
                                     <input type="checkbox" id="id_allow_virtual_participation" name="allow_virtual_participation"{% if prefill.allow_virtual_participation %} checked{% endif %}>
-                                    {{ _('Allow virtual join & Allow spectate') }}{{ tip(_('Allow users to join virtually after the assignment ends. Allow students to spectate an assignment and continue submitting while the assignment is still active, but submissions made while spectating will not count toward statistics or rankings.
-')) }}
+                                    {{ _('Allow virtual join') }}{{ tip(_('Allow students to start a virtual participation after the assignment ends.')) }}
+                                </label>
+                            </div>
+                            <div class="form-row form-row-check">
+                                <label>
+                                    <input type="checkbox" id="id_allow_spectate" name="allow_spectate"{% if prefill.allow_spectate %} checked{% endif %}>
+                                    {{ _('Allow spectate') }}{{ tip(_('Allow students to spectate while the assignment is active. Spectator submissions do not count toward statistics or rankings.')) }}
                                 </label>
                             </div>
                             <div class="form-row form-row-check">

@@ -152,7 +152,7 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
             'description': 'updated description',
             'is_visible': True, 'is_rated': False, 'use_clarifications': True,
             'hide_problem_tags': False, 'hide_problem_authors': False,
-            'allow_virtual_participation': True, 'run_pretests_only': True,
+            'allow_virtual_participation': True, 'allow_spectate': False, 'run_pretests_only': True,
             'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': True,
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False,
@@ -1086,7 +1086,8 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertGreater(advanced.count('class="oj-tip"'), 10)
         basic = before[before.find('Basic information'):]
         self.assertIn('The assignment format module to use.', basic)
-        self.assertIn('Allow users to join virtually after the assignment ends.', basic)
+        self.assertIn('Allow students to start a virtual participation after the assignment ends.', basic)
+        self.assertIn('Spectator submissions do not count toward statistics or rankings.', basic)
         self.assertIn('A JSON object to serve as the configuration for the chosen assignment format module.', advanced)
 
     def test_advanced_fields_round_trip(self):
@@ -1095,6 +1096,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             format_name='icpc',
             format_config='{"penalty": 20}',
             allow_virtual_participation=False,
+            allow_spectate=True,
             use_clarifications=False,
             hide_problem_tags=True,
             show_short_display=True,
@@ -1111,6 +1113,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(contest.format_name, 'icpc')
         self.assertEqual(contest.format_config, {'penalty': 20})
         self.assertFalse(contest.allow_virtual_participation)
+        self.assertTrue(contest.allow_spectate)
         self.assertFalse(contest.use_clarifications)
         self.assertTrue(contest.hide_problem_tags)
         self.assertTrue(contest.show_short_display)
@@ -1127,6 +1130,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         prefill = edit.context['prefill']
         self.assertEqual(prefill['format_name'], 'icpc')
         self.assertFalse(prefill['allow_virtual_participation'])
+        self.assertTrue(prefill['allow_spectate'])
         self.assertFalse(prefill['use_clarifications'])
         self.assertTrue(prefill['hide_problem_tags'])
         self.assertTrue(prefill['show_short_display'])
@@ -1139,9 +1143,11 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         before, advanced = html.split('class="advanced-hidden"', 1)
         self.assertIn('id="id_format_name"', before)
         self.assertIn('id="id_allow_virtual_participation"', before)
+        self.assertIn('id="id_allow_spectate"', before)
         self.assertNotIn('id="id_format_config"', before)
         self.assertNotIn('id="id_format_name"', advanced)
         self.assertNotIn('id="id_allow_virtual_participation"', advanced)
+        self.assertNotIn('id="id_allow_spectate"', advanced)
         self.assertIn('id="id_format_config"', advanced)
         self.assertNotIn('name="cheat_level"', html)
 
