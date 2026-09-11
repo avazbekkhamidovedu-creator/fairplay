@@ -2851,7 +2851,8 @@
                             <div class="form-row form-row-check">
                                 <label>
                                     <input type="checkbox" id="id_allow_virtual_participation" name="allow_virtual_participation"{% if prefill.allow_virtual_participation %} checked{% endif %}>
-                                    {{ _('Allow virtual join & Spectate') }}{{ tip(_('Allow users to join virtually after the assignment ends. Also allow users to spectate the assignment if the assignment is not finished.')) }}
+                                    {{ _('Allow virtual join & Allow spectate') }}{{ tip(_('Allow users to join virtually after the assignment ends. Allow students to spectate an assignment and continue submitting while the assignment is still active, but submissions made while spectating will not count toward statistics or rankings.
+')) }}
                                 </label>
                             </div>
                             <div class="form-row form-row-check">
