@@ -164,9 +164,9 @@
 /* Contest row */
 .cl-row {
     display: grid;
-    /* Fixed action column so Join / icons / Grade cannot wrap and stagger
-       neighbouring rows; each card is its own grid. */
-    grid-template-columns: minmax(0, 1fr) 76px 20rem;
+    /* Title grows; Users + actions share one auto column so short Past
+       buttons do not leave a 20rem hole between the name and Join. */
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.75rem 1rem;
     align-items: center;
     padding: 0.8rem 0.95rem;
@@ -180,7 +180,7 @@
 }
 
 .cl-list--selectable .cl-row {
-    grid-template-columns: 1.75rem minmax(0, 1fr) 76px 20rem;
+    grid-template-columns: 1.75rem minmax(0, 1fr) auto;
 }
 
 .cl-select {
@@ -268,9 +268,20 @@
     }
 }
 
+.cl-trailing {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    white-space: nowrap;
+    min-width: 0;
+}
+
 .cl-users {
     text-align: center;
     min-width: 64px;
+    flex-shrink: 0;
     font-size: 13px;
     color: var(--oj-text-muted);
 
@@ -293,7 +304,8 @@
 
 .cl-actions {
     min-width: 0;
-    width: 100%;
+    width: auto;
+    flex-shrink: 0;
     text-align: right;
     display: flex;
     flex-wrap: nowrap;
@@ -591,6 +603,12 @@
 
     .cl-list--selectable .cl-row > :not(.cl-select) {
         grid-column: 2;
+    }
+
+    .cl-trailing {
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        white-space: normal;
     }
 
     .cl-users,

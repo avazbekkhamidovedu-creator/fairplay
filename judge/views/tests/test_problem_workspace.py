@@ -26,15 +26,20 @@ from judge.models.tests.util import (
     create_user,
 )
 
-AUTOSAVE_HINT = 'Draft saved. If you do not submit, it is submitted automatically at the deadline.'
-AUTOSUBMIT_PROMISE = 'Your saved answers are submitted automatically when the assignment closes.'
+AUTOSAVE_HINT = 'Draft saved. Press Submit to record this answer for grading.'
+AUTOSAVE_HINT_HARVEST = 'Draft saved. If you do not submit, it is submitted automatically at the deadline.'
+LEAVE_WARN = (
+    'You must press Submit on every problem. '
+    'Unsubmitted answers will not count toward your grade.'
+)
+LEAVE_NOTE = 'Only answers you have already submitted will be kept.'
 LEAVE_HARVEST_WARN = (
     'When you leave, answers you have not submitted yet will be submitted automatically.'
 )
+AUTOSUBMIT_PROMISE = 'Your saved answers are submitted automatically when the assignment closes.'
 CONTRADICTORY_COPY = (
-    'Leaving will not submit any unsubmitted problems.',
-    'Only answers you have already submitted will be kept.',
-    'Leaving does not submit anything right now.',
+    LEAVE_HARVEST_WARN,
+    AUTOSUBMIT_PROMISE,
     'Leaving submits your saved answers now.',
 )
 
@@ -225,6 +230,27 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(detail, 'Raw submitted answer')
         self.assertContains(detail, 'id="workspace-result-comments"')
 
+    def test_short_answer_submitted_source_renders_markdown_table(self):
+        short = create_problem(code='workspace-short', is_public=True, submission_type='S')
+        md = '| A | B |\n| --- | --- |\n| 1 | 2 |'
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=short, language=Language.get_answer_language(),
+            result='AC', status='D', points=100, time=0, memory=0,
+        )
+        SubmissionSource.objects.create(submission=submission, source=json.dumps({'text': md}))
+        status = self.client.get(reverse(
+            'problem_workspace_submission_status', args=[short.code, submission.id],
+        ))
+        self.assertEqual(status.status_code, 200)
+        row = status.json()['answer_display'][0]
+        self.assertIn('| A | B |', row['value'])
+        self.assertIn('<table', row['html'])
+        detail = self.client.get(
+            reverse('problem_detail', args=[short.code]) + '?submission=%d' % submission.id,
+        )
+        self.assertContains(detail, '<table')
+        self.assertContains(detail, 'result-source-md')
+
     def test_workspace_submissions_list_returns_oj_style_html_rows(self):
         submission = Submission.objects.create(
             user=self.user.profile, problem=self.problem, language=self.language,
@@ -262,6 +288,22 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertIn('status', body)
         self.assertIn('source', body)
         self.assertEqual(body['source'], 'print(1)')
+
+    def test_workspace_submit_still_succeeds_if_ai_grade_payload_breaks(self):
+        with mock.patch.object(Submission, 'judge'):
+            with mock.patch(
+                'judge.views.problem.workspace_ai_grade_fields',
+                side_effect=TypeError("ai_grade_context() got an unexpected keyword argument 'contest'"),
+            ):
+                response = self.client.post(
+                    reverse('problem_submit', args=[self.problem.code]),
+                    {'workspace': '1', 'source': 'print(1)', 'language': self.language.id, 'judge': ''},
+                    HTTP_X_WORKSPACE_SUBMIT='1',
+                )
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertIn('submission_id', payload)
+        self.assertTrue(Submission.objects.filter(id=payload['submission_id']).exists())
 
     def test_assignment_workspace_submit_includes_updated_leave_progress(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
@@ -614,17 +656,56 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, reverse('contest_leave', args=[self.contest.key]))
         self.assertContains(response, 'assignment-leave-form')
         self.assertContains(response, 'Leave')
+        self.assertTrue(response.context['workspace_show_timer'])
+        self.assertFalse(response.context['workspace_timer_is_duration'])
+        self.assertContains(response, 'id="ws-timer"')
+        self.assertContains(response, 'Validity remaining')
+        html = response.content.decode()
+        toolbar = html.split('class="ws-toolbar', 1)[1].split('class="ws-body', 1)[0]
+        self.assertLess(toolbar.index('ws-toolbar-center'), toolbar.index('id="ws-timer"'))
+        self.assertLess(toolbar.index('id="ws-timer"'), toolbar.index('submit-cluster'))
+        self.assertLess(toolbar.index('assignment-leave-form'), toolbar.index('submit-cluster-sep'))
+        self.assertLess(toolbar.index('submit-cluster-sep'), toolbar.index('id="btn-submit"'))
+        self.assertLess(toolbar.index('submit-cluster'), toolbar.index('assignment-leave-form'))
+        self.assertIn('data-timer-window-seconds=', html)
         self.assertContains(response, 'data-submitted="0"')
         self.assertContains(response, 'data-total="1"')
         self.assertContains(response, 'data-unsubmitted="1"')
         self.assertContains(response, 'data-unsubmitted-names')
         self.assertContains(response, '1. workspace-code')
-        self.assertContains(response, LEAVE_HARVEST_WARN)
+        self.assertContains(response, LEAVE_WARN)
+        self.assertNotContains(response, LEAVE_NOTE)
         self.assertContains(response, 'leave-confirm-stats" hidden')
+        self.assertNotContains(response, LEAVE_HARVEST_WARN)
         self.assertNotContains(response, AUTOSUBMIT_PROMISE)
-        self.assertNotContains(response, 'Leaving will not submit any unsubmitted problems.')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
         self.assertNotContains(response, 'Submit your work and exit Safe Exam Browser')
+
+    def test_assignment_toolbar_timer_uses_duration_when_time_limit_is_set(self):
+        contest = create_contest(
+            key='wsduration', name='Duration Workspace',
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            time_limit=timezone.timedelta(minutes=30),
+            is_visible=True,
+            authors=('workspace-author',),
+        )
+        create_contest_problem(contest=contest, problem=self.problem, points=100, order=1)
+        participation = create_contest_participation(contest=contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertTrue(response.context['workspace_show_timer'])
+        self.assertTrue(response.context['workspace_timer_is_duration'])
+        self.assertEqual(response.context['workspace_timer_window_seconds'], 30 * 60)
+        self.assertContains(response, 'id="ws-timer"')
+        self.assertContains(response, 'Duration remaining')
+        self.assertNotContains(response, 'Validity remaining')
+        html = response.content.decode()
+        toolbar = html.split('class="ws-toolbar', 1)[1].split('class="ws-body', 1)[0]
+        self.assertLess(toolbar.index('id="ws-timer"'), toolbar.index('submit-cluster'))
+        self.assertLess(toolbar.index('submit-cluster'), toolbar.index('assignment-leave-form'))
+        self.assertLess(toolbar.index('assignment-leave-form'), toolbar.index('id="btn-submit"'))
 
     def test_assignment_leave_progress_counts_submitted_problems(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
@@ -664,23 +745,24 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-seb-exit="1"')
         self.assertContains(response, 'seb-exit')
         self.assertNotContains(response, 'Submit &amp; Exit SEB')
-        self.assertContains(response, LEAVE_HARVEST_WARN)
+        self.assertContains(response, LEAVE_WARN)
 
     def test_practice_workspace_has_no_leave_button(self):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertEqual(response.context['workspace_mode'], 'practice')
         self.assertNotContains(response, 'assignment-leave-form')
         self.assertNotContains(response, reverse('contest_leave', args=[self.contest.key]))
+        self.assertFalse(response.context['workspace_show_timer'])
+        self.assertNotContains(response, 'id="ws-timer"')
 
-    def test_assignment_submit_area_says_the_answer_is_submitted_at_the_deadline(self):
-        # A student who runs out of time is only spared by the collection if they were told it
-        # exists, and next to the button they did not press is where they would look.
+    def test_assignment_submit_area_says_press_submit(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
         self.user.profile.current_contest = participation
         self.user.profile.save()
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
-        self.assertTrue(response.context['workspace_autosubmit'])
+        self.assertFalse(response.context['workspace_autosubmit'])
         self.assertContains(response, AUTOSAVE_HINT)
+        self.assertNotContains(response, AUTOSAVE_HINT_HARVEST)
 
     def test_practice_submit_area_promises_nothing(self):
         # Nothing collects practice drafts, so the same line here would be a lie.
@@ -689,7 +771,7 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertFalse(response.context['workspace_autosubmit'])
         self.assertNotContains(response, AUTOSAVE_HINT)
 
-    def test_the_assignment_surfaces_agree_on_leave_auto_submit(self):
+    def test_the_assignment_surfaces_agree_that_leave_does_not_submit(self):
         # Leave dialog is shared by the assignment page, problem list and workspace.
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)
         self.user.profile.current_contest = participation
@@ -699,11 +781,29 @@ class ProblemWorkspaceTestCase(TestCase):
                      reverse('problem_detail', args=[self.problem.code])):
             with self.subTest(page=page):
                 response = self.client.get(page)
-                self.assertContains(response, LEAVE_HARVEST_WARN)
+                self.assertContains(response, LEAVE_WARN)
+                self.assertNotContains(response, LEAVE_NOTE)
                 self.assertContains(response, 'leave-confirm-stats" hidden')
                 self.assertNotContains(response, AUTOSUBMIT_PROMISE)
                 for stale in CONTRADICTORY_COPY:
                     self.assertNotContains(response, stale)
+
+    def test_assignment_workspace_asks_the_student_to_submit_themselves(self):
+        participation = create_contest_participation(contest=self.contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertTrue(response.context['workspace_manual_submit_notice'])
+        self.assertEqual(response.context['workspace_participation_id'], participation.pk)
+        self.assertContains(response, 'data-manual-submit-notice="1"')
+        self.assertContains(response, 'data-participation-id="%s"' % participation.pk)
+        self.assertContains(response, 'dkuojShowAssignmentNotice')
+        self.assertContains(response, LEAVE_WARN)
+        html = response.content.decode()
+        self.assertIn('DKUOJ_PREEXAM_TITLE', html)
+        self.assertIn('A kind reminder', html)
+        self.assertIn('data-timer-window-seconds=', html)
+        self.assertGreater(response.context['workspace_timer_window_seconds'], 0)
 
     def test_a_spectator_is_not_promised_a_submission_they_will_not_get(self):
         # Spectating work is never collected, so the promise has to follow the collection rather
@@ -718,6 +818,8 @@ class ProblemWorkspaceTestCase(TestCase):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertEqual(response.context['workspace_mode'], 'assignment')
         self.assertFalse(response.context['workspace_autosubmit'])
+        self.assertFalse(response.context['workspace_manual_submit_notice'])
+        self.assertNotContains(response, 'data-manual-submit-notice="1"')
         self.assertNotContains(response, AUTOSAVE_HINT)
 
     def test_practice_workspace_form_disables_browser_autocomplete(self):

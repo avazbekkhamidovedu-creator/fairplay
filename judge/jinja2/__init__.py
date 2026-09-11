@@ -9,6 +9,7 @@ from statici18n.templatetags.statici18n import inlinei18n
 from judge.highlight_code import highlight_code
 from judge.impersonation import can_impersonate_user
 from judge.user_translations import gettext
+from judge.utils.assignment_harvest import assignment_harvest_enabled
 from judge.utils.problems import participation_submit_progress
 from . import (camo, datetime, filesize, format, gravatar, language, markdown, rating, reference, render, social,
                spaceless, submission, timedelta)
@@ -25,6 +26,7 @@ registry.function('mptt_tree', get_cached_trees)
 registry.function('user_trans', gettext)
 registry.function('can_impersonate_user', can_impersonate_user)
 registry.function('participation_submit_progress', participation_submit_progress)
+registry.function('assignment_harvest_enabled', assignment_harvest_enabled)
 
 
 @registry.function

@@ -580,28 +580,92 @@
   if (prevBtn) prevBtn.addEventListener('click', function () { if (index > 0) location.assign(items[index - 1].href); });
   if (nextBtn) nextBtn.addEventListener('click', function () { if (index >= 0 && index + 1 < items.length) location.assign(items[index + 1].href); });
 
-  // Duration countdown: server remaining seconds (participation.time_remaining); does not pause on leave.
+  // Participation countdown: same seconds as #contest-time-remaining (time_remaining).
+  // Digits use count_down; this tick only turns the clock red at 10% and blocks Submit.
   var timerExpired = false;
   function setSubmitBlocked(blocked) {
     timerExpired = !!blocked;
     var button = $('#btn-submit');
     if (button) button.disabled = !!blocked || button.dataset.forceDisabled === '1';
   }
+  function submitNoticeKey(kind) {
+    return 'dkuoj-ws-submit-notice-' + kind + '-' + (app.dataset.contextId || '') + '-' + (app.dataset.participationId || '');
+  }
+  function noticeSeen(kind) {
+    try { return !!sessionStorage.getItem(submitNoticeKey(kind)); } catch (err) { return false; }
+  }
+  function markNoticeSeen(kind) {
+    try { sessionStorage.setItem(submitNoticeKey(kind), '1'); } catch (err) {}
+  }
+  function timeWarnBody(remainingSecs) {
+    var secs = Math.max(0, Math.floor(Number(remainingSecs) || 0));
+    var minutes = Math.floor(secs / 60);
+    var seconds = secs % 60;
+    return interpolate(
+      gettext('%(min)s min %(sec)s sec remaining. Please make sure you have manually submitted your answers before it ends.'),
+      {min: String(minutes), sec: String(seconds)},
+    );
+  }
+  function joinPendingKey() {
+    return 'dkuoj-ws-join-pending-' + (app.dataset.contextId || '');
+  }
+  function consumeJoinPending() {
+    try {
+      if (sessionStorage.getItem(joinPendingKey()) === '1') {
+        sessionStorage.removeItem(joinPendingKey());
+        return true;
+      }
+    } catch (err) {}
+    return false;
+  }
+  function showManualSubmitNotice(kind, remainingSecs) {
+    if (app.dataset.manualSubmitNotice !== '1') return false;
+    if (kind === 'join') {
+      if (!consumeJoinPending() && noticeSeen(kind)) return false;
+    } else if (noticeSeen(kind)) {
+      return false;
+    }
+    if (typeof window.dkuojShowAssignmentNotice !== 'function') return false;
+    var opts = { kind: kind };
+    if (kind === 'join') {
+      opts.title = window.DKUOJ_PREEXAM_TITLE || gettext('Pre-exam reminder');
+      opts.warn = window.DKUOJ_MANUAL_SUBMIT_WARN;
+    } else if (kind === '10pct') {
+      opts.title = window.DKUOJ_TIME_WARN_TITLE || gettext('A kind reminder');
+      opts.warn = timeWarnBody(remainingSecs);
+    }
+    var shown = window.dkuojShowAssignmentNotice(opts);
+    if (shown) markNoticeSeen(kind);
+    return shown;
+  }
+  var joinNoticeShownThisPage = false;
+  function maybeTenPercentNotice(remaining, warnAt) {
+    if (app.dataset.manualSubmitNotice !== '1') return;
+    if (!(warnAt > 0 && remaining <= warnAt && remaining > 0)) return;
+    if (noticeSeen('10pct')) return;
+    if (joinNoticeShownThisPage) {
+      markNoticeSeen('10pct');
+      return;
+    }
+    showManualSubmitNotice('10pct', remaining);
+  }
+  var timerWindowSecs = Number(app.dataset.timerWindowSeconds || 0);
+  var timerWarnAt = timerWindowSecs > 0 ? Math.max(1, Math.floor(timerWindowSecs * 0.1)) : 0;
+  var timerInitial = Number(app.dataset.timerSeconds || 0);
+  var timerStartedAt = Date.now();
+  function timerRemaining() {
+    return Math.max(0, timerInitial - Math.round((Date.now() - timerStartedAt) / 1000));
+  }
+  joinNoticeShownThisPage = showManualSubmitNotice('join');
+  maybeTenPercentNotice(timerRemaining(), timerWarnAt);
+  joinNoticeShownThisPage = false;
+
   (function initDurationTimer() {
     if (app.dataset.showTimer !== '1') return;
     var timer = $('#ws-timer');
     if (!timer) return;
-    var label = timer.querySelector('span');
-    var initial = Number(app.dataset.timerSeconds || 0);
-    var startedAt = Date.now();
-    function formatRemaining(seconds) {
-      var d = Math.floor(seconds / 86400);
-      var h = Math.floor(seconds % 86400 / 3600);
-      var m = Math.floor(seconds % 3600 / 60);
-      var s = seconds % 60;
-      var clock = [h, m, s].map(function (n) { return String(n).padStart(2, '0'); }).join(':');
-      return (d ? d + gettext('d ') : '') + clock;
-    }
+    var label = timer.querySelector('.time-remaining');
+    var warnAt = timerWarnAt;
     function expire() {
       timer.classList.add('expired');
       timer.classList.remove('warn');
@@ -609,14 +673,17 @@
       setSubmitBlocked(true);
       flushServerDraft({ beacon: false });
     }
-    if (initial <= 0) {
+    if (timerInitial <= 0) {
       expire();
       return;
     }
+    if (label && window.jQuery && typeof count_down === 'function') {
+      count_down(window.jQuery(label));
+    }
     var tick = function () {
-      var remaining = Math.max(0, initial - Math.round((Date.now() - startedAt) / 1000));
-      if (label) label.textContent = formatRemaining(remaining);
-      timer.classList.toggle('warn', remaining <= 600 && remaining > 0);
+      var remaining = timerRemaining();
+      timer.classList.toggle('warn', warnAt > 0 && remaining <= warnAt && remaining > 0);
+      maybeTenPercentNotice(remaining, warnAt);
       if (remaining <= 0) {
         window.clearInterval(handle);
         expire();
@@ -1081,11 +1148,11 @@
       var summary = document.createElement('summary');
       summary.id = 'submitted-source-summary';
       summary.textContent = gettext('Submitted source');
-      var pre = document.createElement('pre');
-      pre.className = 'result-source';
-      pre.id = 'submitted-source';
+      var sourceEl = document.createElement(isCodeProblem() ? 'pre' : 'div');
+      sourceEl.className = isCodeProblem() ? 'result-source' : 'result-source result-source-md content-description';
+      sourceEl.id = 'submitted-source';
       details.appendChild(summary);
-      details.appendChild(pre);
+      details.appendChild(sourceEl);
       sourceBlock.appendChild(details);
       box.appendChild(sourceBlock);
     }
@@ -1098,15 +1165,60 @@
     }
     return box;
   }
+  function typesetSubmittedSource(el) {
+    if (el && window.MathJax && typeof MathJax.typesetPromise === 'function') {
+      MathJax.typesetPromise([el]).catch(function () {});
+    }
+  }
+  function submittedSourceHost(wantHtml) {
+    var el = $('#submitted-source');
+    if (!el) return null;
+    if (wantHtml && el.tagName === 'PRE') {
+      var div = document.createElement('div');
+      div.id = 'submitted-source';
+      div.className = 'result-source result-source-md content-description';
+      el.parentNode.replaceChild(div, el);
+      return div;
+    }
+    return el;
+  }
+  function renderedAnswerHtml(answerDisplay) {
+    var htmlParts = (answerDisplay || []).map(function (item) {
+      return item && item.html ? String(item.html) : '';
+    }).filter(Boolean);
+    if (htmlParts.length) return htmlParts.join('');
+    if (isCodeProblem() || isMcqProblem() || isFileProblem()) return '';
+    var md = formatAnswerDisplay(answerDisplay);
+    if (!md || !window.RichEditor || typeof RichEditor.mdToHtml !== 'function') return '';
+    return RichEditor.mdToHtml(md);
+  }
+  function parseJsonResponse(response) {
+    return response.text().then(function (text) {
+      var json = null;
+      try { json = text ? JSON.parse(text) : {}; } catch (parseErr) {
+        throw new Error(gettext('Failed to load submission.'));
+      }
+      if (!response.ok) throw new Error((json && json.error) || gettext('Failed to load submission.'));
+      return json;
+    });
+  }
   function updateSubmittedSource(sourceText, answerDisplay) {
     var block = $('#workspace-result-source');
-    var pre = $('#submitted-source');
-    if (!block || !pre) return;
+    if (!block) return;
+    var html = renderedAnswerHtml(answerDisplay);
     var readable = formatAnswerDisplay(answerDisplay);
     var display = readable || sourceText || '';
-    if (!display) return;
-    pre.textContent = display;
-    pre.dataset.rawSource = sourceText || '';
+    if (!display && !html) return;
+    var el = submittedSourceHost(!!html);
+    if (!el) return;
+    if (html) {
+      el.innerHTML = html;
+      el.classList.add('result-source-md', 'content-description');
+      typesetSubmittedSource(el);
+    } else {
+      el.textContent = display;
+    }
+    el.dataset.rawSource = sourceText || '';
     var summary = $('#submitted-source-summary') || block.querySelector('summary');
     if (summary) summary.textContent = gettext('Submitted source');
     var details = block.querySelector('details.result-source-details');
@@ -1221,7 +1333,7 @@
       });
   }
   function appendTestcasesPanel(submissionId) {
-    if (isFileProblem() || isMcqProblem()) return Promise.resolve();
+    if (isFileProblem() || isMcqProblem() || !isCodeProblem()) return Promise.resolve();
     ensureResultStructure();
     var main = $('#workspace-result-main');
     var baseUrl = app.dataset.testcasesUrl;
@@ -1306,12 +1418,7 @@
     app.dataset.statusUrl = statusUrl;
     app.dataset.submissionGraded = '0';
     return fetch(statusUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(function (response) {
-        return response.json().then(function (json) {
-          if (!response.ok) throw new Error(json.error || gettext('Failed to load submission.'));
-          return json;
-        });
-      })
+      .then(parseJsonResponse)
       .then(function (status) {
         applyStatusPayload(status, null);
         if (statusIsPending(status)) pollFormal(statusUrl, null);
@@ -1351,8 +1458,8 @@
     var maxAttempts = 300; // 5 minutes at 1s; covers long compile/judge queues
     formalPollTimer = window.setInterval(function () {
       attempts++;
-      fetch(url, { credentials: 'same-origin' })
-        .then(function (response) { return response.json(); })
+      fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+        .then(parseJsonResponse)
         .then(function (status) {
           lastStatus = status;
           applyStatusPayload(status, button);
@@ -1381,8 +1488,8 @@
                 message.type === 'processing' || message.type === 'grading-end' ||
                 message.type === 'compile-error' || message.type === 'aborted' ||
                 message.type === 'internal-error') {
-              fetch(url, { credentials: 'same-origin' })
-                .then(function (response) { return response.json(); })
+              fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(parseJsonResponse)
                 .then(function (status) { applyStatusPayload(status, button); });
             }
           },
@@ -1485,7 +1592,7 @@
       });
     } else if (!isFileProblem() && app.dataset.statusUrl) {
       fetch(app.dataset.statusUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-        .then(function (response) { return response.json(); })
+        .then(parseJsonResponse)
         .then(function (status) {
           applyStatusPayload(status, null);
           if (statusIsPending(status)) pollFormal(app.dataset.statusUrl, null);

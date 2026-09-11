@@ -64,7 +64,18 @@
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
 }
-.ws-toolbar-center { justify-self: center; }
+.ws-toolbar-center {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  white-space: nowrap;
+}
+.ws-toolbar-center .timer-wrap {
+  font-size: 1.45rem;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
 .ws-toolbar.has-leave .submit-cluster {
   justify-self: end;
   margin-left: 0;
@@ -112,7 +123,7 @@
   cursor: not-allowed;
   border-color: var(--oj-border);
 }
-/* Submit / timer on the right (prototype .submit-cluster { margin-left: auto }) */
+/* Submit on the right; Leave sits immediately before it. */
 .submit-cluster {
   display: inline-flex;
   align-items: center;
@@ -120,6 +131,16 @@
   margin-left: auto;
   padding-left: .85rem;
   border-left: 1px solid var(--oj-border);
+}
+.submit-cluster .assignment-leave-form {
+  display: inline-flex;
+  margin: 0;
+}
+.submit-cluster-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 1.55rem;
+  background: var(--oj-border);
 }
 /* Reassurance next to Submit: the answer is already on the server. Dropped on
    narrow toolbars, where the buttons themselves need the room. */
@@ -513,8 +534,8 @@
   }
   code { padding: .1em .3em; border-radius: 3px; }
   pre code { padding: 0; background: transparent; }
-  table { border-collapse: collapse; margin: .8em 0; }
-  th, td { border: 1px solid var(--oj-border); padding: .35rem .55rem; }
+  table { border-collapse: collapse; margin: .8em 0; width: max-content; max-width: 100%; }
+  th, td { border: 1px solid var(--oj-border); padding: .35rem .55rem; height: auto; white-space: normal; overflow-wrap: break-word; word-break: break-word; }
   img { max-width: 100%; height: auto; }
 
   .inline-blank-ph {
@@ -1051,6 +1072,10 @@
   color: var(--oj-text);
   white-space: pre-wrap;
 }
+.result-source-md {
+  white-space: normal;
+  font-family: inherit;
+}
 .ws-result-comments {
   margin-top: 1rem;
 }
@@ -1120,8 +1145,29 @@
   }
 }
 .answer-form .ws-answer-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.answer-form .ws-short-answer .rich-editor { min-height: 12rem; max-height: 20rem; }
-.answer-form .ws-short-answer .rich-editor-body { min-height: 8rem; max-height: 16rem; overflow: auto; }
+.answer-form .answer-body:has(.ws-short-answer) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.answer-form .ws-short-answer {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+.answer-form .ws-short-answer .rich-editor {
+  flex: 1 1 auto;
+  min-height: 16rem;
+  height: 100%;
+  max-height: none;
+}
+.answer-form .ws-short-answer .rich-editor-body {
+  min-height: 12rem;
+  max-height: none;
+  overflow: auto;
+}
 .ws-file-upload .file-upload-instructions,
 .ws-file-upload .ws-file-upload-lead {
   margin: 0 0 .85rem;

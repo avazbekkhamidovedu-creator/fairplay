@@ -457,6 +457,26 @@
             min-width: 3.5rem;
         }
         .gd-answer-value { word-break: break-word; white-space: pre-wrap; }
+        .gd-answer-md {
+            font-family: inherit;
+            white-space: normal;
+            overflow: auto;
+            color: #e5e7eb;
+        }
+        .gd-answer-md table.table {
+            width: max-content;
+            max-width: 100%;
+            table-layout: auto;
+            margin-left: 0;
+            margin-right: 0;
+        }
+        .gd-answer-md table.table th,
+        .gd-answer-md table.table td {
+            height: auto;
+            white-space: normal;
+            overflow-wrap: break-word;
+            word-break: break-word;
+        }
 
         /* ── Right pane: result (top) + grading (bottom) ─────────────────── */
         .grade-right {
@@ -918,6 +938,12 @@
                 // rows (same rendering as the student workspace), not the raw JSON
                 // payload stored in SubmissionSource.
                 if (s.answer_display && s.answer_display.length) {
+                    var htmlParts = s.answer_display.map(function (item) {
+                        return item && item.html ? String(item.html) : '';
+                    }).filter(Boolean);
+                    if (htmlParts.length) {
+                        return '<div class="gd-answer gd-answer-md content-description">' + htmlParts.join('') + '</div>';
+                    }
                     return '<div class="gd-answer">' + s.answer_display.map(function (item) {
                         return '<div class="gd-answer-row">' +
                             (item.label ? '<span class="gd-answer-label">' + esc(item.label) + '</span>' : '') +

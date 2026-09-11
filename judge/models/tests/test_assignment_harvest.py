@@ -3,7 +3,7 @@ import json
 from datetime import timedelta
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from judge.models import AssignmentDraft, Contest, ContestParticipation, ContestProblem, ContestSubmission, \
@@ -239,6 +239,7 @@ class _NoProgress:
         return False
 
 
+@override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
 class HarvestBeforeAutoGradeTestCase(HarvestTestMixin, TestCase):
     """With ``ai_grading_auto_delay_minutes = 0`` auto-grade lands on the deadline itself.
 

@@ -111,7 +111,10 @@
      {% if workspace_server_draft %}data-has-server-draft="1"{% endif %}
      data-testcases-url="{{ url('submission_testcases_query') }}"
      data-timer-seconds="{{ workspace_timer_seconds|default(0) }}"
+     data-timer-window-seconds="{{ workspace_timer_window_seconds|default(0) }}"
      data-show-timer="{{ '1' if workspace_show_timer else '0' }}"
+     {% if workspace_participation_id %}data-participation-id="{{ workspace_participation_id }}"{% endif %}
+     {% if workspace_manual_submit_notice %}data-manual-submit-notice="1"{% endif %}
      {% if workspace_submission %}data-submission-id="{{ workspace_submission.id }}" data-submission-graded="{{ '1' if workspace_submission.is_graded else '0' }}"{% if not workspace_submission.results_hidden %} data-submission-result="{{ workspace_submission.result or '' }}"{% endif %}{% if workspace_submission.status_url %} data-status-url="{{ workspace_submission.status_url }}"{% endif %}{% if workspace_submission.id_secret %} data-sub-channel="sub_{{ workspace_submission.id_secret }}"{% endif %}{% endif %}
      {% if workspace_submission and last_msg is defined %}data-last-msg="{{ last_msg }}"{% endif %}
      data-event-ws="{{ EVENT_DAEMON_LOCATION }}"
@@ -145,20 +148,28 @@
     </div>
     {% if workspace_in_contest %}
       <div class="ws-toolbar-center">
-        {% set leave_variant = 'toolbar' %}
-        {% include "contest/leave-form.html" %}
+        {% if workspace_show_timer %}
+          <span class="timer-wrap{% if workspace_timer_seconds <= 0 %} expired{% elif workspace_timer_window_seconds and workspace_timer_seconds <= workspace_timer_window_seconds // 10 %} warn{% endif %}" id="ws-timer" title="{% if workspace_timer_is_duration %}{{ _('Duration remaining') }}{% else %}{{ _('Validity remaining') }}{% endif %}">
+            <i class="fa fa-clock-o" aria-hidden="true"></i>
+            {% if workspace_timer_seconds <= 0 or not workspace_timer_remaining %}
+              <span class="time-remaining" data-secs="0">{{ _('Time expired') }}</span>
+            {% else %}
+              {{ as_countdown(workspace_timer_remaining) }}
+            {% endif %}
+          </span>
+        {% endif %}
       </div>
     {% endif %}
     <div class="submit-cluster">
-      {% if form and workspace_autosubmit %}
-        <span class="submit-autosave-hint" id="ws-autosave-hint"{% if not workspace_server_draft and not workspace_draft_upload %} hidden{% endif %}>{{ _('Draft saved. If you do not submit, it is submitted automatically at the deadline.') }}</span>
+      {% if form and workspace_draft_url %}
+        <span class="submit-autosave-hint" id="ws-autosave-hint"{% if not workspace_server_draft and not workspace_draft_upload %} hidden{% endif %}>{% if workspace_autosubmit %}{{ _('Draft saved. If you do not submit, it is submitted automatically at the deadline.') }}{% else %}{{ _('Draft saved. Press Submit to record this answer for grading.') }}{% endif %}</span>
+      {% endif %}
+      {% if workspace_in_contest %}
+        {% set leave_variant = 'toolbar' %}
+        {% include "contest/leave-form.html" %}
+        {% if form %}<span class="submit-cluster-sep" aria-hidden="true"></span>{% endif %}
       {% endif %}
       {% if form %}<button class="tool-btn submit-btn" type="button" id="btn-submit"{% if workspace_is_code and not form.fields.language.queryset.exists() %} disabled{% endif %}{% if workspace_show_timer and workspace_timer_seconds <= 0 %} disabled{% endif %}><i class="fa fa-cloud-upload"></i> {{ _('Submit') }}</button>{% endif %}
-      {% if workspace_show_timer %}
-        <span class="timer-wrap{% if workspace_timer_seconds <= 0 %} expired{% endif %}" id="ws-timer" title="{{ _('Assignment duration remaining') }}">
-          <i class="fa fa-clock-o"></i> <span>{% if workspace_timer_seconds <= 0 %}{{ _('Time expired') }}{% endif %}</span>
-        </span>
-      {% endif %}
     </div>
   </div>
   <div class="ws-body layout-lr" id="ws-body">
@@ -607,8 +618,12 @@
               {% endif %}
               <details class="result-source-details">
                 <summary id="submitted-source-summary">{{ _('Submitted source') }}</summary>
-                <pre class="result-source" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}
-{% endfor %}{% elif workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</pre>
+                {% if workspace_is_code %}
+                <pre class="result-source" id="submitted-source">{% if workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</pre>
+                {% else %}
+                <div class="result-source result-source-md content-description" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.html %}{{ item.html|safe }}{% else %}{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}{% endif %}
+{% endfor %}{% elif workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</div>
+                {% endif %}
               </details>
             </div>
             <div id="workspace-result-comments" class="ws-result-comments"{% if not workspace_enable_comments %} hidden{% endif %}>

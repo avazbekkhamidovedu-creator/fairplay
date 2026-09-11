@@ -20,9 +20,23 @@ from judge.utils.assignment_draft import draft_answer
 from judge.utils.submission_create import create_submission
 
 __all__ = [
-    'harvest_participation', 'participation_deadline_has_arrived',
-    'participation_is_harvestable', 'user_bypasses_assignment_rules',
+    'assignment_harvest_enabled', 'harvest_participation',
+    'participation_deadline_has_arrived', 'participation_is_harvestable',
+    'user_bypasses_assignment_rules',
 ]
+
+
+def assignment_harvest_enabled():
+    """Whether drafts may be turned into submissions.
+
+    Draft saving does not consult this: students still get a server copy while
+    they type. Every *trigger* (Leave, deadline task, recovery sweep, pre-grade
+    harvest) must, so a leftover Celery ETA cannot collect after the switch
+    is flipped off.
+    """
+    from django.conf import settings
+    return bool(getattr(settings, 'ASSIGNMENT_HARVEST_ENABLED', False))
+
 
 logger = logging.getLogger('judge.assignment_harvest')
 

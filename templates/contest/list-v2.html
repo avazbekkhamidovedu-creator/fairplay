@@ -635,19 +635,20 @@
                     {% endif %}
                 </div>
             </div>
-            <div class="cl-users">
-                {% if status == 'upcoming' %}
-                    —
-                {% else %}
-                    {% if contest.can_see_own_scoreboard(request.user) %}
-                        <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
+            <div class="cl-trailing">
+                <div class="cl-users">
+                    {% if status == 'upcoming' %}
+                        —
                     {% else %}
-                        {{ contest.user_count }}
+                        {% if contest.can_see_own_scoreboard(request.user) %}
+                            <a href="{{ url('contest_ranking', contest.key) }}">{{ contest.user_count }}</a>
+                        {% else %}
+                            {{ contest.user_count }}
+                        {% endif %}
+                        <span class="lbl">{{ _('Users') }}</span>
                     {% endif %}
-                    <span class="lbl">{{ _('Users') }}</span>
-                {% endif %}
-            </div>
-            <div class="cl-actions">
+                </div>
+                <div class="cl-actions">
                 {# Manage slot first (Delete → Edit → Clone → Grade), then Join.
                    Both wrappers always render so row heights/columns stay aligned. #}
                 <div class="cl-manage-actions">
@@ -717,6 +718,7 @@
                             {% endif %}
                         {% endif %}
                     {% endif %}
+                </div>
                 </div>
             </div>
         </article>

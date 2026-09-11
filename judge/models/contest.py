@@ -652,6 +652,11 @@ class Contest(models.Model):
         if user.profile.id in self.editor_ids or user.profile.id in self.tester_ids:
             return True
 
+        # Virtual and spectator joins share the same switch: disabling virtual
+        # participation also disables spectating.
+        if not self.allow_virtual_participation:
+            return False
+
         if self.limit_join_organizations:
             return self.join_organizations.filter(id__in=user.profile.organizations.all()).exists()
         return True

@@ -15,6 +15,8 @@ import logging
 from django.conf import settings
 from django.utils import timezone
 
+from judge.utils.assignment_harvest import assignment_harvest_enabled
+
 __all__ = [
     'schedule_contest_harvest', 'schedule_participation_harvest', 'reschedule_assignment_harvest',
 ]
@@ -53,7 +55,7 @@ def schedule_contest_harvest(contest_id):
     _revoke(contest.harvest_scheduled_task_id)
     contest.harvest_scheduled_task_id = ''
 
-    if contest.time_limit is None and _can_schedule(contest.end_time):
+    if assignment_harvest_enabled() and contest.time_limit is None and _can_schedule(contest.end_time):
         try:
             from judge.tasks.assignment_harvest import harvest_contest_drafts
             result = harvest_contest_drafts.apply_async(args=[contest.key], eta=contest.end_time)
@@ -79,8 +81,8 @@ def schedule_participation_harvest(participation_id):
     _revoke(participation.harvest_scheduled_task_id)
     participation.harvest_scheduled_task_id = ''
 
-    if participation.contest.time_limit is not None and not participation.spectate \
-            and _can_schedule(participation.end_time):
+    if assignment_harvest_enabled() and participation.contest.time_limit is not None \
+            and not participation.spectate and _can_schedule(participation.end_time):
         try:
             from judge.tasks.assignment_harvest import harvest_participation_drafts
             result = harvest_participation_drafts.apply_async(

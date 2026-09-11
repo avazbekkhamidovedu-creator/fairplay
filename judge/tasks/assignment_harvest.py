@@ -11,7 +11,9 @@ from celery import shared_task
 from django.utils import timezone
 
 from judge.models import AssignmentDraft, Contest, ContestParticipation
-from judge.utils.assignment_harvest import harvest_participation, participation_deadline_has_arrived
+from judge.utils.assignment_harvest import (
+    assignment_harvest_enabled, harvest_participation, participation_deadline_has_arrived,
+)
 
 __all__ = ('harvest_contest_drafts', 'harvest_participation_drafts')
 
@@ -33,6 +35,8 @@ def harvest_participation_drafts(participation_id):
     )
     if participation is None:
         return 0
+    if not assignment_harvest_enabled():
+        return 0
     if not participation_deadline_has_arrived(participation):
         return 0
     return len(harvest_participation(participation))
@@ -50,6 +54,8 @@ def harvest_contest_drafts(contest_key):
     """
     contest = Contest.objects.filter(key=contest_key).first()
     if contest is None:
+        return 0
+    if not assignment_harvest_enabled():
         return 0
     if contest.time_limit is None and contest.end_time > timezone.now():
         return 0

@@ -17,7 +17,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from judge.models import AssignmentDraft, ContestParticipation
-from judge.utils.assignment_harvest import harvest_participation
+from judge.utils.assignment_harvest import assignment_harvest_enabled, harvest_participation
 
 
 class Command(BaseCommand):
@@ -41,6 +41,10 @@ class Command(BaseCommand):
                             help='restrict the sweep to one assignment, by contest key')
 
     def handle(self, *args, **options):
+        if not assignment_harvest_enabled():
+            self.stdout.write('ASSIGNMENT_HARVEST_ENABLED is off; not collecting')
+            return
+
         cutoff = timezone.now() - timedelta(minutes=options['grace_minutes'])
         limit = options['limit']
 
