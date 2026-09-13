@@ -457,6 +457,30 @@ class ContestGradePayloadTestCase(GradeTestBase):
         self.assertEqual(response.context['grade_released_count'], 0)
         self.assertEqual(response.context['grade_unreleased_count'], 1)
 
+    def test_release_badge_requires_a_released_manual_score(self):
+        """Machine-only rows must not be presented as manually released."""
+        subs, _ = self._page_json()
+        row = next(row for row in subs if row['id'] == self.submission.id)
+        self.assertIsNone(row['manual_points'])
+        self.assertFalse(row['released'])
+
+        self._client(self.curator).post(
+            self.save_url, {'submission': self.submission.id, 'score': '80'})
+        subs, _ = self._page_json()
+        row = next(row for row in subs if row['id'] == self.submission.id)
+        self.assertEqual(row['manual_points'], 80.0)
+        self.assertFalse(row['released'])
+
+        self._client(self.curator).post(self.release_url)
+        subs, _ = self._page_json()
+        row = next(row for row in subs if row['id'] == self.submission.id)
+        self.assertEqual(row['manual_points'], 80.0)
+        self.assertTrue(row['released'])
+
+        html = self._client(self.curator).get(self.grade_url).content.decode()
+        self.assertIn('if (s.manual_points != null && s.released)', html)
+        self.assertNotIn('if (s.manual_points == null || s.released)', html)
+
 
 class ContestGradeJSValidityTestCase(GradeTestBase):
     """The inline <script> the grade page renders must be valid JavaScript.

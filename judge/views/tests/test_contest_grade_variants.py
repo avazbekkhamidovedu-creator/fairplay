@@ -416,6 +416,36 @@ class ContestGradeReleaseVariantTestCase(GradeTestBase):
         self.assertTrue(other_grade.released)
         self.assertFalse(my_grade.released)
 
+    def test_release_batch_loads_affected_participations_once(self):
+        """Release All must not query ContestParticipation once per student."""
+        classmate = create_user(username='gradevar_release_classmate')
+        other_part = create_contest_participation(contest=self.contest, user=classmate.profile)
+        other_sub = Submission.objects.create(
+            user=classmate.profile, problem=self.problem,
+            language=Language.objects.get(key='PY3'), result='WA', status='D',
+            contest_object=self.contest, points=25.0, case_total=100,
+        )
+        ContestSubmission.objects.create(
+            submission=other_sub, problem=self.contest_problem,
+            participation=other_part, points=25.0,
+        )
+        SubmissionManualGrade.objects.create(
+            submission=other_sub, points=70.0, machine_points=25.0,
+        )
+        self._save_grade('77')
+
+        manager = ContestParticipation.objects
+        with mock.patch.object(manager, 'in_bulk', wraps=manager.in_bulk) as in_bulk:
+            response = self._client(self.curator).post(self.release_url)
+
+        self.assertEqual(response.status_code, 200)
+        in_bulk.assert_called_once()
+        self.assertEqual(set(in_bulk.call_args.args[0]), {self.participation.id, other_part.id})
+        self.participation.refresh_from_db()
+        other_part.refresh_from_db()
+        self.assertEqual(self.participation.score, 77.0)
+        self.assertEqual(other_part.score, 70.0)
+
     def test_release_anonymous_is_401(self):
         response = Client().post(self.release_url)
         self.assertEqual(response.status_code, 401)

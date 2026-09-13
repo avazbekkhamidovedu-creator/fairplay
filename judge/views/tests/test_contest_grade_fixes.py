@@ -615,6 +615,18 @@ class StudentVisibleScoreTestCase(GradeTestBase):
         self.assertTrue(row.display_released)
         self.assertContains(workspace, 'ws-released-mini')
 
+    def test_released_null_manual_grade_is_not_a_student_release(self):
+        """Release All may flag an empty record, but there is no score to publish."""
+        from judge.utils.contest_grade import attach_student_display_score
+
+        SubmissionManualGrade.objects.create(
+            submission=self.submission, points=None, machine_points=50, released=True,
+        )
+        sub = Submission.objects.get(id=self.submission.id)
+        attach_student_display_score(sub)
+        self.assertEqual(sub.display_points, 50)
+        self.assertFalse(sub.display_released)
+
     def test_left_assignment_still_uses_assignment_scale_and_release_gate(self):
         """Not in_contest / already left: still ContestProblem.points + Release."""
         from judge.views.problem import workspace_display_points, workspace_display_points_total

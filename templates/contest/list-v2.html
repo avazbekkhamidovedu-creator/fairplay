@@ -703,7 +703,7 @@
                         {% elif contest.is_spectatable_by(request.user) %}
                             <form action="{{ url('contest_join', contest.key) }}" method="post">
                                 {% csrf_token %}
-                                <button type="submit" class="button">{{ _('Virtual') }}</button>
+                                <button type="submit" class="button">{{ _('Spectate') }}</button>
                             </form>
                         {% endif %}
                     {% elif status == 'upcoming' %}

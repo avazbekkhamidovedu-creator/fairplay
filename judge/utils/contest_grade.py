@@ -336,9 +336,9 @@ def student_display_points_total(submission):
 
 
 def student_display_released(submission):
-    """Whether this submission's manual override has been released to the student."""
+    """Whether a concrete manual score was released for this submission."""
     manual = submission.manual_grade_override
-    return manual is not None and manual.released
+    return manual is not None and manual.released and manual.points is not None
 
 
 def attach_student_display_score(submission):
@@ -418,7 +418,9 @@ def sync_released_manual_grades(contest):
             contest_submission.points = grade.points
             contest_submission.save(update_fields=['points'])
         participation_ids.add(contest_submission.participation_id)
-    for participation_id in participation_ids:
-        participation = ContestParticipation.objects.filter(id=participation_id).first()
-        if participation is not None:
-            participation.recompute_results()
+    # Fetch every affected participation in one query.  Release All can touch
+    # thousands of submissions, so looking up one participation per id here
+    # turns an otherwise bulk operation into an avoidable N+1 query pattern.
+    participations = ContestParticipation.objects.in_bulk(participation_ids)
+    for participation in participations.values():
+        participation.recompute_results()

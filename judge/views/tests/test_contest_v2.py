@@ -776,6 +776,15 @@ class ContestListV2ActionsTestCase(CommonDataMixin, TestCase):
         row = _assignment_row_html(html, self.upcoming.key)
         self.assertIn('>Remind<', row)
 
+    def test_ongoing_spectate_path_is_labelled_spectate_not_virtual(self):
+        """Editors may spectate, but cannot join as live participants."""
+        self.client.force_login(self.users['superuser'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.ongoing.key)
+        join_actions = row[row.index('class="cl-join-actions"'):]
+        self.assertIn('>Spectate</button>', join_actions)
+        self.assertNotIn('>Virtual</button>', join_actions)
+
     def test_past_virtual_join_stays_in_join_slot(self):
         self.client.force_login(self.users['normal_user'])
         html = self.client.get(reverse('contest_list')).content.decode()
