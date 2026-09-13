@@ -236,9 +236,6 @@
                     if (emptyEl) emptyEl.hidden = true;
                     var q2 = currentParams().toString();
                     history.replaceState(null, '', location.pathname + (q2 ? '?' + q2 : ''));
-                    if (typeof window.refreshAssignmentBulk === 'function') {
-                        window.refreshAssignmentBulk();
-                    }
                     renderActiveFilters();
                     return;
                 }
@@ -255,9 +252,6 @@
 
                 var q = currentParams().toString();
                 history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
-                if (typeof window.refreshAssignmentBulk === 'function') {
-                    window.refreshAssignmentBulk();
-                }
                 renderActiveFilters();
             };
 
@@ -432,7 +426,7 @@
             // ── Apply the filters from the URL on first load ──
             applyClientFilter();
 
-            // Assignment delete: per-row + bulk, confirmation modal, then POST.
+            // Assignment delete: per-row confirmation modal, then POST.
             var delForm = document.getElementById('assignment-delete-form');
             var delKeys = document.getElementById('assignment-delete-keys');
             var delModal = document.getElementById('assignment-delete-modal');
@@ -459,23 +453,6 @@
                 }
                 delModal.hidden = false;
             }
-            function visibleSelects() {
-                return Array.from(document.querySelectorAll('.assignment-select')).filter(function(cb) {
-                    var row = cb.closest('.cl-row');
-                    return row && row.style.display !== 'none';
-                });
-            }
-            function refreshBulk() {
-                var boxes = visibleSelects();
-                var n = boxes.filter(function(cb) { return cb.checked; }).length;
-                var countEl = document.getElementById('bulk-count');
-                var btn = document.getElementById('bulk-delete-btn');
-                var all = document.getElementById('select-all-assignments');
-                if (countEl) countEl.textContent = n;
-                if (btn) btn.disabled = n === 0;
-                if (all) all.checked = boxes.length > 0 && n === boxes.length;
-            }
-            window.refreshAssignmentBulk = refreshBulk;
             document.querySelectorAll('.js-del-assignment').forEach(function(btn) {
                 btn.addEventListener('click', function() {
                     openAssignmentDeleteModal([{
@@ -484,30 +461,6 @@
                     }]);
                 });
             });
-            document.querySelectorAll('.assignment-select').forEach(function(cb) {
-                cb.addEventListener('change', refreshBulk);
-            });
-            var selectAll = document.getElementById('select-all-assignments');
-            if (selectAll) {
-                selectAll.addEventListener('change', function() {
-                    var checked = selectAll.checked;
-                    visibleSelects().forEach(function(cb) { cb.checked = checked; });
-                    refreshBulk();
-                });
-            }
-            var bulkBtn = document.getElementById('bulk-delete-btn');
-            if (bulkBtn) {
-                bulkBtn.addEventListener('click', function() {
-                    openAssignmentDeleteModal(visibleSelects().filter(function(cb) {
-                        return cb.checked;
-                    }).map(function(cb) {
-                        return {
-                            key: cb.getAttribute('data-key') || '',
-                            name: cb.getAttribute('data-name') || '',
-                        };
-                    }));
-                });
-            }
             var delCancel = document.getElementById('assignment-delete-cancel');
             if (delCancel) delCancel.addEventListener('click', closeAssignmentDeleteModal);
             if (delModal) {
@@ -533,7 +486,6 @@
                     delForm.submit();
                 });
             }
-            refreshBulk();
         });
     </script>
 {% endblock %}
@@ -571,15 +523,6 @@
                  data-orgs="{{ org_names }}" data-classes="{{ class_names }}" data-tags="{{ tag_names }}"
                  {% if can_see_problem_authors %}data-authors="{{ contest.authors.all()|map(attribute='id')|join(',') }}" {% endif %}
                  data-search="{{ contest.name }} {{ contest.key }}">
-            {% if perms.judge.delete_contest %}
-            <div class="cl-select">
-                {% if contest.is_deletable_by(request.user) %}
-                    <input type="checkbox" class="assignment-select"
-                           data-key="{{ contest.key }}" data-name="{{ contest.name }}"
-                           title="{{ _('Select') }}" aria-label="{{ _('Select %(name)s', name=contest.name) }}">
-                {% endif %}
-            </div>
-            {% endif %}
             <div>
                 <div class="cl-primary-line">
                     <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
@@ -884,14 +827,6 @@
                     <button type="button" class="group-switch-btn{% if group == 'course' %} active{% endif %}" data-group="course" title="{{ _('Group assignments by course') }}">{{ _('By course') }}</button>
                     <button type="button" class="group-switch-btn{% if group == 'status' %} active{% endif %}" data-group="status" title="{{ _('Group assignments by status') }}">{{ _('By status') }}</button>
                 </div>
-                {% if perms.judge.delete_contest %}
-                    <label class="bulk-select-all" title="{{ _('Select all') }}">
-                        <input type="checkbox" id="select-all-assignments" aria-label="{{ _('Select all') }}">
-                    </label>
-                    <button type="button" class="sort-btn bulk-delete-btn" id="bulk-delete-btn" disabled>
-                        <i class="fa fa-trash"></i> {{ _('Delete selected') }} (<span id="bulk-count">0</span>)
-                    </button>
-                {% endif %}
             </div>
             <div class="toolbar-right">
                 <span class="progress-label">{{ total_count }} {{ _('assignments') }}</span>
@@ -900,7 +835,7 @@
     </form>
 
     {# ── Contest List ── #}
-    <div class="cl-list{% if perms.judge.delete_contest %} cl-list--selectable{% endif %}" id="contest-list">
+    <div class="cl-list" id="contest-list">
         {% if group == 'course' %}
             {% if course_groups %}
                 {% for course_name, contests in course_groups.items() %}

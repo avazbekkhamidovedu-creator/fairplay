@@ -761,9 +761,11 @@ class ContestListV2ActionsTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_list')).content.decode()
         row = _assignment_row_html(html, self.ongoing.key)
         self.assertIn('js-del-assignment', row)
-        self.assertIn('assignment-select', row)
         self.assertIn('fa-trash', row)
-        self.assertIn('bulk-delete-btn', html)
+        self.assertNotIn('assignment-select', row)
+        self.assertNotIn('id="bulk-delete-btn"', html)
+        self.assertNotIn('select-all-assignments', html)
+        self.assertNotIn('cl-list--selectable', html)
         self.assertIn(reverse('contest_bulk_delete'), html)
         manage = row[row.index('class="cl-manage-actions"'):row.index('class="cl-join-actions"')]
         self.assertLess(manage.index('fa-trash'), manage.index('fa-pencil'))

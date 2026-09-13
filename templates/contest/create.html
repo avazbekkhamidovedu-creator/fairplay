@@ -1982,6 +1982,18 @@
                 });
             }
             window.syncExamResultsVisibility();
+            function defaultCpPoints(source) {
+                var raw = '';
+                if (source) {
+                    if (source.dataset && source.dataset.points != null && source.dataset.points !== '') {
+                        raw = source.dataset.points;
+                    } else if (source.points != null && source.points !== '') {
+                        raw = source.points;
+                    }
+                }
+                var n = parseInt(raw, 10);
+                return !isNaN(n) ? String(n) : '100';
+            }
             function libRowHtml(row, letter) {
                 var code = row.dataset.code || '';
                 var isCode = (row.dataset.format || '').toLowerCase() === 'c';
@@ -1998,7 +2010,7 @@
                     escapeHtml(row.dataset.name || '') +
                     '" title="' + {{ _('Click to rename for this assignment')|htmltojs }} +
                     '" aria-label="' + {{ _('Assignment display name')|htmltojs }} + '">' +
-                    '<span><input type="number" class="cp-points" value="100" style="width:48px"></span>' +
+                    '<span><input type="number" class="cp-points" value="' + defaultCpPoints(row) + '" style="width:48px"></span>' +
                     '<span><input type="number" class="cp-max-subs" min="1" placeholder="∞" title="' + {{ _('Maximum number of submissions allowed for this problem — blank means unlimited.')|htmltojs }} + '" style="width:60px"></span>' +
                     '<span class="cp-actions">' +
                     '<button type="button" class="btn-icon" title="' + {{ _('Preview')|htmltojs }} + '" onclick="toggleCpPreview(this)"><i class="fa fa-eye"></i></button>' +
@@ -2032,6 +2044,7 @@
                 fake.dataset.code = meta.code || '';
                 fake.dataset.name = meta.name || ('Problem ' + pid);
                 fake.dataset.format = meta.format || '';
+                fake.dataset.points = meta.points != null && meta.points !== '' ? meta.points : '';
                 var r = document.createElement('div');
                 r.className = 'cp-row';
                 r.dataset.pid = pid;
@@ -3747,6 +3760,7 @@
                         <tbody id="lib-results">
                             {% for problem in problems %}
                             <tr data-pid="{{ problem.id }}" data-code="{{ problem.code }}" data-name="{{ problem.name }}"
+                                data-points="{{ problem.points|int }}"
                                 data-org-ids="{% for o in problem.organizations.all() %}{{ o.id }}{% if not loop.last %},{% endif %}{% endfor %}"
                                 {% if can_see_problem_authors %}data-author-ids="{% for a in problem.authors.all() %}{{ a.id }}{% if not loop.last %},{% endif %}{% endfor %}"{% endif %}
                                 data-format="{{ problem.format_filter_code }}"

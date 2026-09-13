@@ -100,6 +100,14 @@ class ContestEditorHelperTestCase(TestCase):
             ContestCreate._queue_rescore('somekey')
         mock_task.s.assert_called_once_with('somekey')
 
+    def test_contest_problem_points_defaults_to_library_score(self):
+        problem = create_problem('helper-pts', is_public=True, points=25)
+        self.assertEqual(ContestCreate._contest_problem_points(None, problem), 25)
+        self.assertEqual(ContestCreate._contest_problem_points('', problem), 25)
+        self.assertEqual(ContestCreate._contest_problem_points('bogus', problem), 25)
+        self.assertEqual(ContestCreate._contest_problem_points(40, problem), 40)
+        self.assertEqual(ContestCreate._contest_problem_points('40', problem), 40)
+
 
 class ContestEditViewTestCase(CommonDataMixin, TestCase):
     """Edit mode: access control, prefill, in-place update, key rename, M2M."""
@@ -1079,6 +1087,8 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('data-format="single"', lib)
         self.assertIn('data-format="truefalse"', lib)
         self.assertIn('data-format="multiple"', lib)
+        self.assertIn('data-points="%s"' % int(code.points), lib)
+        self.assertIn('function defaultCpPoints', lib)
         self.assertIn('cp-opt-partial', lib)
         self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-pretested', lib)
         self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-out-prefix', lib)
@@ -1731,13 +1741,29 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(cp.order, 1)
 
     def test_create_with_problem_ids_backward_compatible(self):
-        # The legacy plain-id list (points default to 100) must still work.
-        problem = create_problem('problems-legacy-test', is_public=True)
+        # The legacy plain-id list keeps the library problem's own score.
+        problem = create_problem('problems-legacy-test', is_public=True, points=25)
         response = self._post(name='Legacy Prob', key='legacyprob', problem_ids=[problem.id])
         self.assertEqual(response.status_code, 200)
         contest = Contest.objects.get(key='legacyprob')
         cp = contest.contest_problems.get()
-        self.assertEqual(cp.points, 100)
+        self.assertEqual(cp.points, 25)
+
+    def test_create_omitted_points_uses_problem_points(self):
+        problem = create_problem('omit-pts', is_public=True, points=7)
+        response = self._post(name='Omit Pts', key='omitpts', problems=[{'id': problem.id}])
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='omitpts')
+        self.assertEqual(contest.contest_problems.get().points, 7)
+
+    def test_library_rows_carry_problem_points(self):
+        problem = create_problem('lib-pts-25', is_public=True, points=25)
+        html = self.client.get(reverse('contest_create')).content.decode()
+        marker = 'data-pid="%s"' % problem.id
+        start = html.find(marker)
+        self.assertNotEqual(start, -1, marker)
+        row = html[start:html.find('</tr>', start)]
+        self.assertIn('data-points="25"', row)
 
     # NOTE: attaching a *hidden* problem is only possible for trusted editors
     # (edit_all_contest / see_private_problem). Curators are blocked from it —
