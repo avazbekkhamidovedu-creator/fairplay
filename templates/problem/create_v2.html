@@ -13,6 +13,7 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="stylesheet" href="{{ static('vendor/katex.min.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
   <link rel="stylesheet" href="{{ static('rich_editor.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
   <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
   {# Same pattern as base.html DARK_STYLE_CSS: rebuild page styles with vars-dark. #}
@@ -1327,7 +1328,7 @@
       renderPreview();
     }
 
-    /* RichEditor / MarkdownPreview loaded from static JS; see resources/rich_editor.js */
+    /* RichEditor / MarkdownPreview: source in resources/js/rich_editor/ */
 
     /* ---------- Options (rich text / Markdown) ---------- */
     function optionEditorTpl(name) {
@@ -2577,7 +2578,14 @@
     });
     function resetForm() {
       document.getElementById('f-name').value = '';
-      document.querySelectorAll('.rich-editor').forEach(ed => { const r = ed.querySelector('.rich-editor-body'); if (r) r.innerHTML = ''; const ta = ed.querySelector('textarea'); if (ta) ta.value = ''; });
+      document.querySelectorAll('.rich-editor[data-editor]').forEach((ed) => {
+        const name = ed.getAttribute('data-editor');
+        if (window.RichEditor && name) RichEditor.setMarkdown(name, '');
+        else {
+          const ta = ed.querySelector('textarea');
+          if (ta) ta.value = '';
+        }
+      });
       document.getElementById('options').innerHTML = '';
       document.getElementById('blank-answers').innerHTML = '';
       { const t = document.getElementById('f-blank-trim'); if (t) t.checked = true;

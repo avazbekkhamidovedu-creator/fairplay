@@ -56,6 +56,12 @@ styles:
   image: node:20
   script:
     - npm install -g sass postcss-cli postcss autoprefixer
+    - npm ci
+    - npm run build:editor
+    - npm run test:editor
+    - test -s resources/rich_editor.js
+    - test -s resources/vendor/katex.min.css
+    - test -d resources/vendor/fonts
     - ./make_style.sh
 
 # ---------------------------------------------------------------------------

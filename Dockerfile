@@ -11,10 +11,12 @@
 FROM node:20-bookworm-slim AS styles
 WORKDIR /app
 RUN npm install -g sass postcss-cli postcss autoprefixer
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package.json package-lock.json vite.config.mjs ./
+# Vite lives in devDependencies; the editor IIFE and KaTeX copy need a full install.
+RUN npm ci
 COPY resources ./resources
 COPY make_style.sh ./
+RUN npm run build:editor
 RUN ./make_style.sh
 RUN mkdir -p resources/libs/monaco && cp -R node_modules/monaco-editor/min/vs resources/libs/monaco/vs
 

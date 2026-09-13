@@ -2,9 +2,10 @@
 import json
 import os
 
-from django.test import RequestFactory, SimpleTestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase
 
 from judge.jinja2.markdown import markdown
+from judge.jinja2.reference import reference
 from judge.utils.markdown_preview import render_preview_html
 from judge.views.preview import ProblemMarkdownBatchPreviewView
 
@@ -44,16 +45,24 @@ class ProblemPreviewTemplateContractTest(SimpleTestCase):
         with open(os.path.abspath(PREVIEW_TEMPLATE), encoding='utf-8') as f:
             source = f.read()
         self.assertIn("markdown('problem'", source)
+        self.assertIn('|reference', source)
 
 
 class SharedPreviewHelperTest(SimpleTestCase):
-    def test_helper_matches_markdown_filter(self):
+    def test_helper_matches_problem_page_pipeline(self):
         for case in _load_cases():
             with self.subTest(case=case['id']):
                 self.assertEqual(
                     render_preview_html(case['markdown'], 'problem'),
-                    str(markdown(case['markdown'], 'problem')),
+                    str(reference(markdown(case['markdown'], 'problem'))),
                 )
+
+
+class PreviewUserReferenceTest(TestCase):
+    def test_user_token_becomes_profile_link(self):
+        html = render_preview_html('See [user:nobodyhere]', 'problem')
+        self.assertNotIn('[user:nobodyhere]', html)
+        self.assertIn('nobodyhere', html)
 
 
 class ProblemPreviewBatchContractTest(SimpleTestCase):

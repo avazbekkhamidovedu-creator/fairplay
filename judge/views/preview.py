@@ -71,8 +71,8 @@ class MarkdownBatchPreviewView(View):
     Response::
         {"items": [{"key": "stem", "html": "<p>...</p>"}, ...]}
 
-    Each fragment is rendered with the same ``markdown(style)`` pipeline as the
-    corresponding single preview / problem page (no client-side md→html).
+    Each fragment is rendered with the same ``markdown(style)|reference``
+    pipeline as the corresponding single preview / problem page.
     """
 
     style = 'default'

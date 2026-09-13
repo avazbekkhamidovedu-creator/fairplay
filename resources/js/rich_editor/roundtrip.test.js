@@ -1,0 +1,383 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import RichEditor from './index.js';
+
+function mountTwo(doc) {
+  doc.body.innerHTML = `
+    <div data-rich-mount="stem"></div>
+    <div data-rich-mount="opt-a" data-compact></div>
+  `;
+  RichEditor.mount(doc);
+}
+
+function mdHas(out, ...needles) {
+  needles.forEach((n) => expect(out).toContain(n));
+}
+
+function pipeLine(md) {
+  return String(md).split('\n').find((l) => l.includes('|')) || '';
+}
+
+function pipeCols(md) {
+  const line = pipeLine(md);
+  return line.split('|').length - 2;
+}
+
+function pipeRows(md) {
+  return (String(md).match(/^\|/gm) || []).length;
+}
+
+describe('RichEditor facade', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    RichEditor._instances.clear();
+  });
+
+  afterEach(() => {
+    RichEditor.configure({ fileUploadUrl: '', searchUsersUrl: '', imageUploadUrl: '' });
+    RichEditor._instances.forEach((ed) => ed.destroy && ed.destroy());
+    RichEditor._instances.clear();
+    document.body.innerHTML = '';
+  });
+
+  it('mounts and exposes getMarkdown / setMarkdown', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', '**hello**');
+    expect(RichEditor.getMarkdown('stem')).toContain('hello');
+    expect(RichEditor.getMarkdown('stem')).toMatch(/\*\*hello\*\*|__hello__/);
+  });
+
+  it('keeps two instances independent', () => {
+    mountTwo(document);
+    RichEditor.setMarkdown('stem', 'stem text');
+    RichEditor.setMarkdown('opt-a', 'option text');
+    expect(RichEditor.getMarkdown('stem')).toContain('stem text');
+    expect(RichEditor.getMarkdown('opt-a')).toContain('option text');
+    expect(RichEditor.getMarkdown('stem')).not.toContain('option text');
+  });
+
+  it('round-trips bold, fence, table, and image url', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const src = [
+      'A **bold** word',
+      '',
+      '```python',
+      'print(1)',
+      '```',
+      '',
+      '| A | B |',
+      '| --- | --- |',
+      '| 1 | 2 |',
+      '',
+      '![diagram](https://example.com/x.png)',
+    ].join('\n');
+    RichEditor.setMarkdown('stem', src);
+    const out = RichEditor.getMarkdown('stem');
+    mdHas(out, 'bold', 'print(1)', 'https://example.com/x.png');
+    expect(out).toMatch(/```/);
+    expect(out).toMatch(/\|/);
+  });
+
+  it('preserves site math delimiters', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const src = 'Inline ~x^2~ and $$ E=mc^2 $$ and \\(a+b\\) and\n$$\n\\int x\n$$\n';
+    RichEditor.setMarkdown('stem', src);
+    const out = RichEditor.getMarkdown('stem');
+    expect(out).toMatch(/~x\^2~|\$\$ ?x\^2/);
+    expect(out).toMatch(/E=mc\^2/);
+    expect(out).toMatch(/a\+b|\\\(a\+b\\\)/);
+    expect(out).toMatch(/\\int x/);
+  });
+
+  it('serializes blanks in document order and after delete', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', 'A {{blank}} and {{blank}} end');
+    let out = RichEditor.getMarkdown('stem');
+    const first = out.match(/\{\{\s*blank\s*\}\}/g) || [];
+    expect(first.length).toBe(2);
+
+    const inst = RichEditor._instances.get('stem');
+    let seen = 0;
+    let pos = null;
+    inst.state.doc.descendants((node, p) => {
+      if (node.type.name === 'blank') {
+        seen += 1;
+        if (seen === 1) pos = p;
+      }
+    });
+    expect(pos).not.toBeNull();
+    inst.chain().focus().deleteRange({ from: pos, to: pos + 1 }).run();
+    out = RichEditor.getMarkdown('stem');
+    const second = out.match(/\{\{\s*blank\s*\}\}/g) || [];
+    expect(second.length).toBe(1);
+  });
+
+  it('preserves mention, mark, sized image, and heading marks', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const src = [
+      '# Title',
+      '',
+      'See [user:alice] and <mark>hi</mark>',
+      '',
+      '<img src="https://example.com/y.png" alt="fig" style="width:120px;">',
+    ].join('\n');
+    RichEditor.setMarkdown('stem', src);
+    const out = RichEditor.getMarkdown('stem');
+    expect(out).toMatch(/^#\s+Title/m);
+    expect(out).toContain('[user:alice]');
+    expect(out).toMatch(/<mark>hi<\/mark>|==hi==/);
+    expect(out).toContain('https://example.com/y.png');
+  });
+
+  it('serializes paragraph alignment as an HTML wrapper', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const inst = RichEditor._instances.get('stem');
+    inst.chain().focus().setContent('centered line', { contentType: 'markdown' }).setTextAlign('center').run();
+    expect(RichEditor.getMarkdown('stem')).toContain('text-align:center');
+  });
+
+  it('mode switch does not drop markdown', async () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', '**keep**');
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-mode="markdown"]').click();
+    expect(root.classList.contains('mode-markdown')).toBe(true);
+    expect(RichEditor.getMarkdown('stem')).toMatch(/keep/);
+    root.querySelector('[data-mode="rich"]').click();
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(RichEditor.getMarkdown('stem')).toMatch(/keep/);
+  });
+
+  it('survives many rich/markdown toggles without losing list+bold', async () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const src = '1. **dd**\n2. one\n';
+    RichEditor.setMarkdown('stem', src);
+    const root = document.querySelector('[data-editor="stem"]');
+    for (let i = 0; i < 6; i++) {
+      root.querySelector('[data-mode="markdown"]').click();
+      root.querySelector('textarea').value = src;
+      root.querySelector('[data-mode="rich"]').click();
+      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const out = RichEditor.getMarkdown('stem');
+    expect(out).toMatch(/dd/);
+    expect(out).toMatch(/one/);
+    expect(root.classList.contains('mode-markdown')).toBe(false);
+    expect(root.querySelector('.ProseMirror')).toBeTruthy();
+  });
+
+  it('inserts latex from the math popover', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', 'before ');
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-cmd="math"]').click();
+    const input = document.querySelector('.rte-math-input');
+    expect(input).toBeTruthy();
+    input.value = 'E=mc^2';
+    document.querySelector('#rte-math-popover .rte-btn-ok').click();
+    const md = RichEditor.getMarkdown('stem');
+    expect(md).toMatch(/\$\$E=mc\^2\$\$/);
+    expect(md).not.toMatch(/\$\$\s*\n/);
+  });
+
+  it('keeps one-line math on one line across mode switches', async () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', '$$a^2 + b^2 = c^2$$');
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-mode="markdown"]').click();
+    root.querySelector('[data-mode="rich"]').click();
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    const md = RichEditor.getMarkdown('stem');
+    expect(md).toMatch(/\$\$a\^2 \+ b\^2 = c\^2\$\$/);
+    expect(md.replace(/\$\$a\^2 \+ b\^2 = c\^2\$\$/g, '')).not.toMatch(/\$\$/);
+  });
+
+  it('keeps fenced code language and can change it', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', '```python\nprint(1)\n```\n');
+    expect(RichEditor.getMarkdown('stem')).toMatch(/```python/);
+    const inst = RichEditor._instances.get('stem');
+    inst.chain().focus().updateAttributes('codeBlock', { language: 'cpp' }).run();
+    expect(RichEditor.getMarkdown('stem')).toMatch(/```cpp/);
+    expect(document.querySelector('.code-block-lang-input')).toBeTruthy();
+  });
+
+  it('hides the image button when file upload is configured', () => {
+    RichEditor.configure({ fileUploadUrl: '/upload-file', imageUploadUrl: '/upload-image' });
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    expect(document.querySelector('[data-cmd="file"]').style.display).not.toBe('none');
+    expect(document.querySelector('[data-cmd="image"]').style.display).toBe('none');
+  });
+
+  it('renders mentions as profile links and keeps [user:] in markdown', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', 'See [user:alice]');
+    const chip = document.querySelector('.rte-mention');
+    expect(chip).toBeTruthy();
+    expect(chip.textContent).toBe('alice');
+    expect(chip.querySelector('a')?.getAttribute('href')).toBe('/user/alice');
+    expect(RichEditor.getMarkdown('stem')).toContain('[user:alice]');
+  });
+
+  it('serializes a resized image as an HTML img with width', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const inst = RichEditor._instances.get('stem');
+    inst.chain().focus().setImage({ src: 'https://example.com/x.png', alt: 'fig', width: '240px' }).run();
+    expect(RichEditor.getMarkdown('stem')).toContain('width:240px');
+    const wrap = document.querySelector('.rte-image-wrap');
+    expect(wrap).toBeTruthy();
+    expect(wrap.querySelector('.img-resize-handle.se')).toBeTruthy();
+    expect(wrap.querySelector('.img-resize-handle.sw')).toBeTruthy();
+    expect(wrap.querySelector('.img-resize-handle.e')).toBeTruthy();
+    expect(wrap.querySelector('.img-resize-handle.w')).toBeTruthy();
+  });
+
+  it('searches mentions with the username query param', async () => {
+    const urls = [];
+    const orig = globalThis.fetch;
+    globalThis.fetch = (url) => {
+      urls.push(String(url));
+      return Promise.resolve({
+        json: () => Promise.resolve({ status: 200, data: [{ username: 'alice', text: 'Alice (alice)' }] }),
+      });
+    };
+    RichEditor.configure({ searchUsersUrl: '/martor/search-user/' });
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    document.querySelector('[data-cmd="mention"]').click();
+    const input = document.querySelector('.rte-mention-input');
+    input.value = 'alice';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 250));
+    expect(urls.some((u) => u.includes('username=alice'))).toBe(true);
+    document.querySelector('#rte-mention-popover .rte-mention-results [data-username="alice"]').click();
+    expect(RichEditor.getMarkdown('stem')).toContain('[user:alice]');
+    globalThis.fetch = orig;
+  });
+
+  it('does not accumulate blank lines across rich/markdown switches', async () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const src = 'alpha\n\nbeta\n\n1. one\n2. two\n';
+    RichEditor.setMarkdown('stem', src);
+    const first = RichEditor.getMarkdown('stem');
+    const root = document.querySelector('[data-editor="stem"]');
+    for (let i = 0; i < 5; i++) {
+      root.querySelector('[data-mode="markdown"]').click();
+      root.querySelector('[data-mode="rich"]').click();
+      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const last = RichEditor.getMarkdown('stem');
+    const extraBlanks = (s) => (s.match(/\n{3,}/g) || []).length;
+    expect(extraBlanks(last)).toBe(extraBlanks(first));
+    expect((last.match(/alpha/g) || []).length).toBe(1);
+    expect((last.match(/beta/g) || []).length).toBe(1);
+  });
+
+  it('positions popovers in viewport coordinates', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const root = document.querySelector('[data-editor="stem"]');
+    const btn = root.querySelector('[data-cmd="math"]');
+    btn.getBoundingClientRect = () => ({
+      top: 80, right: 200, bottom: 108, left: 160, width: 40, height: 28, x: 160, y: 80,
+    });
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 900 });
+    Object.defineProperty(window, 'scrollX', { configurable: true, value: 40 });
+    btn.click();
+    const pop = document.querySelector('#rte-math-popover');
+    expect(pop.hidden).toBe(false);
+    expect(pop.style.position).toBe('fixed');
+    expect(parseFloat(pop.style.top)).toBeCloseTo(114, 0);
+    expect(parseFloat(pop.style.left)).toBeCloseTo(160, 0);
+    expect(parseFloat(pop.style.top)).toBeLessThan(200);
+  });
+
+  it('serializes an ordered list as one list, not split items', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', 'lead\n\n1. alpha\n2. beta\n3. gamma\n');
+    const out = RichEditor.getMarkdown('stem');
+    const items = out.match(/^\d+\.\s+\w+/gm) || [];
+    expect(items.length).toBeGreaterThanOrEqual(3);
+    expect(out).not.toMatch(/alpha\n\n\d+\.\s+beta/);
+  });
+
+  it('opens a row×col picker and inserts that table', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    document.querySelector('[data-cmd="table"]').click();
+    const picker = document.querySelector('#rte-table-picker');
+    expect(picker).toBeTruthy();
+    expect(picker.hidden).toBe(false);
+    expect(picker.querySelectorAll('.rte-table-picker-cell').length).toBe(100);
+    picker.querySelector('[data-rows="2"][data-cols="3"]').click();
+    expect(picker.hidden).toBe(true);
+    const md = RichEditor.getMarkdown('stem');
+    expect(pipeCols(md)).toBe(3);
+    expect(pipeRows(md)).toBe(3);
+  });
+
+  it('adds and deletes table rows and columns from the cell menu', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', '| A | B |\n| --- | --- |\n| 1 | 2 |\n');
+    const inst = RichEditor._instances.get('stem');
+    const focusBodyCell = () => {
+      let cellPos = null;
+      inst.state.doc.descendants((node, pos) => {
+        if (cellPos == null && node.type.name === 'tableCell') {
+          cellPos = pos + 1;
+          return false;
+        }
+      });
+      inst.chain().focus().setTextSelection(cellPos).run();
+    };
+    focusBodyCell();
+    const chrome = document.querySelector('#rte-table-cell-chrome');
+    expect(chrome).toBeTruthy();
+    expect(chrome.hidden).toBe(false);
+    expect(pipeCols(RichEditor.getMarkdown('stem'))).toBe(2);
+    document.querySelector('.rte-table-cell-handle').click();
+    document.querySelector('[data-table-act="col-right"]').click();
+    expect(pipeCols(RichEditor.getMarkdown('stem'))).toBe(3);
+    focusBodyCell();
+    document.querySelector('.rte-table-cell-handle').click();
+    document.querySelector('[data-table-act="row-below"]').click();
+    const bodyRows = pipeRows(RichEditor.getMarkdown('stem'));
+    expect(bodyRows).toBeGreaterThanOrEqual(4);
+    focusBodyCell();
+    document.querySelector('.rte-table-cell-handle').click();
+    document.querySelector('[data-table-act="del-col"]').click();
+    expect(pipeCols(RichEditor.getMarkdown('stem'))).toBe(2);
+    focusBodyCell();
+    document.querySelector('.rte-table-cell-handle').click();
+    document.querySelector('[data-table-act="del-row"]').click();
+    expect(pipeRows(RichEditor.getMarkdown('stem'))).toBeLessThan(bodyRows);
+  });
+
+  it('blank-insert button stays hidden until shown by the page', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const btn = document.querySelector('.blank-insert');
+    expect(btn).toBeTruthy();
+    expect(btn.style.display).toBe('none');
+  });
+});

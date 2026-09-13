@@ -10,7 +10,7 @@ node_modules
 .vscode
 .sass-cache
 sass_processed
-# Generated style assets are rebuilt in the styles stage.
+# Generated style / editor assets are rebuilt in the styles stage.
 resources/style.css
 resources/ace-dmoj.css
 resources/featherlight.css
@@ -18,6 +18,11 @@ resources/martor-description.css
 resources/select2-dmoj.css
 resources/dark
 resources/vars.scss
+resources/rich_editor.js
+resources/rich_editor.css
+resources/vendor/katex.min.css
+resources/vendor/fonts
+resources/vendor/katex-fonts
 dmoj/local_settings.py
 bridge_logs
 *.sqlite3
