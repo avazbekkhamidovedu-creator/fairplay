@@ -68,6 +68,7 @@
     .ws-title-actions .row-action.row-action-danger { color: var(--oj-danger) !important; }
   </style>
   {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
+    <link rel="stylesheet" href="{{ static('vendor/katex.min.css') }}">
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
     <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
   {% endif %}
@@ -621,7 +622,7 @@
                 {% if workspace_is_code %}
                 <pre class="result-source" id="submitted-source">{% if workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</pre>
                 {% else %}
-                <div class="result-source result-source-md content-description" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.html %}{{ item.html|safe }}{% else %}{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}{% endif %}
+                <div class="result-source{% if workspace_submission and workspace_submission.answer_display and workspace_submission.answer_display[0].html %} result-source-md content-description{% endif %}" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.html %}<div class="result-source-md content-description">{{ item.html|safe }}</div>{% else %}<div class="result-source-row">{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}</div>{% endif %}
 {% endfor %}{% elif workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</div>
                 {% endif %}
               </details>

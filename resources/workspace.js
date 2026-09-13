@@ -1183,14 +1183,38 @@
     return el;
   }
   function renderedAnswerHtml(answerDisplay) {
-    var htmlParts = (answerDisplay || []).map(function (item) {
+    var rows = answerDisplay || [];
+    var htmlParts = rows.map(function (item) {
       return item && item.html ? String(item.html) : '';
     }).filter(Boolean);
     if (htmlParts.length) return htmlParts.join('');
     if (isCodeProblem() || isMcqProblem() || isFileProblem()) return '';
-    var md = formatAnswerDisplay(answerDisplay);
-    if (!md || !window.RichEditor || typeof RichEditor.mdToHtml !== 'function') return '';
-    return RichEditor.mdToHtml(md);
+    // Fill-blank rows are labeled plain text. Joining them and running markdown
+    // collapses "Blank 1\nBlank 2" into one paragraph.
+    if (rows.some(function (item) { return item && item.label; })) return '';
+    var md = formatAnswerDisplay(rows);
+    if (!md) return '';
+    if (window.RichEditor && typeof RichEditor.mdToHtml === 'function') {
+      try { return RichEditor.mdToHtml(md); } catch (e) { return ''; }
+    }
+    return '';
+  }
+  function usesAnswerDisplayRows(answerDisplay, html) {
+    if (html || !answerDisplay || !answerDisplay.length) return false;
+    return answerDisplay.length > 1 || answerDisplay.some(function (item) {
+      return item && item.label;
+    });
+  }
+  function renderAnswerDisplayRows(el, answerDisplay) {
+    el.textContent = '';
+    el.classList.remove('result-source-md');
+    (answerDisplay || []).forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'result-source-row';
+      var value = item && item.value != null ? String(item.value) : '';
+      row.textContent = (item && item.label) ? (item.label + ': ' + value) : value;
+      el.appendChild(row);
+    });
   }
   function parseJsonResponse(response) {
     return response.text().then(function (text) {
@@ -1209,12 +1233,15 @@
     var readable = formatAnswerDisplay(answerDisplay);
     var display = readable || sourceText || '';
     if (!display && !html) return;
-    var el = submittedSourceHost(!!html);
+    var useRows = usesAnswerDisplayRows(answerDisplay, html);
+    var el = submittedSourceHost(!!html || useRows);
     if (!el) return;
     if (html) {
       el.innerHTML = html;
       el.classList.add('result-source-md', 'content-description');
       typesetSubmittedSource(el);
+    } else if (useRows) {
+      renderAnswerDisplayRows(el, answerDisplay);
     } else {
       el.textContent = display;
     }

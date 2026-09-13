@@ -10,6 +10,7 @@ from judge.models import (
     Judge,
     Language,
     Problem,
+    ProblemBlank,
     ProblemMCQConfig,
     ProblemMCQOption,
     ProblemTemplate,
@@ -250,6 +251,26 @@ class ProblemWorkspaceTestCase(TestCase):
         )
         self.assertContains(detail, '<table')
         self.assertContains(detail, 'result-source-md')
+
+    def test_fill_blank_result_shows_each_blank_on_its_own_row(self):
+        fb = create_problem(code='workspace-fillblank', is_public=True, submission_type='B')
+        ProblemBlank.objects.create(problem=fb, order=0, answers='Paris')
+        ProblemBlank.objects.create(problem=fb, order=1, answers='1789')
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=fb, language=Language.get_answer_language(),
+            result='AC', status='D', points=100, time=0, memory=0,
+        )
+        SubmissionSource.objects.create(
+            submission=submission,
+            source=json.dumps({'answers': ['submit', 'submit']}),
+        )
+        detail = self.client.get(
+            reverse('problem_detail', args=[fb.code]) + '?submission=%d' % submission.id,
+        )
+        self.assertContains(detail, 'class="result-source-row"', count=2)
+        self.assertContains(detail, 'Blank 1: submit')
+        self.assertContains(detail, 'Blank 2: submit')
+        self.assertNotContains(detail, 'Blank 1: submit Blank 2: submit')
 
     def test_workspace_submissions_list_returns_oj_style_html_rows(self):
         submission = Submission.objects.create(
