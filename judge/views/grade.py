@@ -10,6 +10,7 @@ from django.contrib.auth.views import redirect_to_login
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.translation import gettext as _
 from django.views.generic import TemplateView, View
 
@@ -125,7 +126,8 @@ class PracticeGradeSave(PracticeGradeAuthMixin, View):
             'note': submission.review_note,
             'released': grade.released,
             'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
-            'reviewed_at': submission.reviewed_at.strftime('%Y-%m-%d %H:%M') if submission.reviewed_at else None,
+            'reviewed_at': (timezone.localtime(submission.reviewed_at)
+                            .strftime('%Y-%m-%d %H:%M') if submission.reviewed_at else None),
         })
 
 

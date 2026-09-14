@@ -8,9 +8,23 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Class, Contest, ContestParticipation, ContestSubmission, Language, Submission
-from judge.models.tests.util import CommonDataMixin, create_contest, create_contest_participation, \
-    create_contest_problem, create_problem, create_user
+from judge.models import (
+    Class,
+    Contest,
+    ContestParticipation,
+    ContestSubmission,
+    Language,
+    Submission,
+    SubmissionManualGrade,
+)
+from judge.models.tests.util import (
+    CommonDataMixin,
+    create_contest,
+    create_contest_participation,
+    create_contest_problem,
+    create_problem,
+    create_user,
+)
 from judge.tasks import finalize_contest_results, unfinalize_contest_results
 
 
@@ -146,6 +160,94 @@ class SubmissionMaskingTest(ExamContestTestMixin, TestCase):
         sub = Submission.objects.get(id=sub.id)  # drop cached_property / reload contest_object
         self.assertFalse(sub.contest_results_hidden)
         self.assertTrue(sub.results_visible_to(self.users['normal']))
+
+
+class ReleasedGradeExamVisibilityTest(ExamContestTestMixin, TestCase):
+    """Release changes the eventual score, never the exam's visibility gate."""
+
+    def setUp(self):
+        now = timezone.now()
+        self.contest.start_time = now - timedelta(hours=1)
+        self.contest.end_time = now + timedelta(hours=1)
+        self.contest.is_visible = True
+        self.contest.results_finalized = False
+        self.contest.save(update_fields=['start_time', 'end_time', 'is_visible', 'results_finalized'])
+        self.mcq_problem.is_public = True
+        self.mcq_problem.save(update_fields=['is_public'])
+        self.submission = self._add_contest_submission(self.mcq_cp, points=40, minutes=0)
+        self.release_url = reverse('contest_grade_release', args=[self.contest.key])
+        self.ranking_url = reverse('contest_ranking', args=[self.contest.key])
+        self.submissions_url = reverse(
+            'contest_user_submissions',
+            args=[self.contest.key, self.users['normal'].username, self.mcq_problem.code],
+        )
+
+    def _student_client(self):
+        client = self.client_class()
+        client.force_login(self.users['normal'])
+        return client
+
+    def _release_manual_score(self, points=80):
+        SubmissionManualGrade.objects.create(
+            submission=self.submission, points=points, machine_points=40,
+        )
+        client = self.client_class()
+        client.force_login(self.editor)
+        response = client.post(self.release_url)
+        self.assertEqual(response.status_code, 200, response.content)
+
+    def _finalize_and_recompute(self):
+        Contest.objects.filter(id=self.contest.id).update(results_finalized=True)
+        self.participation = ContestParticipation.objects.get(id=self.participation.id)
+        self.participation.recompute_results()
+        self.participation.refresh_from_db()
+
+    def test_release_during_exam_stays_hidden_on_ranking_and_submissions(self):
+        self._release_manual_score(80)
+        self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 0)
+        self.assertTrue(self.participation.format_data[str(self.mcq_cp.id)]['hidden'])
+
+        client = self._student_client()
+        ranking = client.get(self.ranking_url)
+        self.assertEqual(ranking.status_code, 200)
+        self.assertContains(ranking, 'submitted-hidden')
+        self.assertNotContains(ranking, '>80<div class="solving-time">', html=False)
+
+        submissions = client.get(self.submissions_url)
+        self.assertEqual(submissions.status_code, 200)
+        self.assertContains(submissions, 'submission-hidden')
+        self.assertContains(submissions, 'Submitted')
+        self.assertNotContains(submissions, '80 / 100')
+
+    def test_finalized_exam_shows_released_manual_score_on_both_pages(self):
+        self._release_manual_score(80)
+        self._finalize_and_recompute()
+        self.assertEqual(self.participation.score, 80)
+
+        client = self._student_client()
+        ranking = client.get(self.ranking_url)
+        self.assertContains(ranking, '>80<div class="solving-time">', html=False)
+        self.assertNotContains(ranking, 'submitted-hidden')
+        submissions = client.get(self.submissions_url)
+        self.assertContains(submissions, '80 / 100')
+        self.assertNotContains(submissions, 'submission-hidden')
+
+    def test_finalized_exam_shows_machine_score_when_manual_is_unreleased(self):
+        SubmissionManualGrade.objects.create(
+            submission=self.submission, points=80, machine_points=40, released=False,
+        )
+        self.participation.recompute_results()
+        self._finalize_and_recompute()
+        self.assertEqual(self.participation.score, 40)
+
+        client = self._student_client()
+        ranking = client.get(self.ranking_url)
+        self.assertContains(ranking, '>40<div class="solving-time">', html=False)
+        self.assertNotContains(ranking, '>80<div class="solving-time">', html=False)
+        submissions = client.get(self.submissions_url)
+        self.assertContains(submissions, '40 / 100')
+        self.assertNotContains(submissions, '80 / 100')
 
 
 class DefaultFormatUnaffectedTest(CommonDataMixin, TestCase):

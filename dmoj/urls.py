@@ -266,7 +266,6 @@ urlpatterns = [
     path('contests/create/', contests.ContestCreate.as_view(), name='contest_create'),
     path('contests/delete/', contests.ContestBulkDelete.as_view(), name='contest_bulk_delete'),
     path('contests/<str:contest>/edit/', contests.ContestCreate.as_view(), name='contest_edit'),
-    path('contest-tz/', contests.ContestTZPreference.as_view(), name='contest_tz_preference'),
     path('contest-tags/create/', contests.ContestTagCreateView.as_view(), name='contest_tag_create'),
     path('contests/<str:contest>/seb/', contests.ContestSEBFileView.as_view(), name='contest_seb_upload'),
     path('contests/<str:contest>/finalize/', contests.ContestFinalizeView.as_view(), name='contest_finalize'),

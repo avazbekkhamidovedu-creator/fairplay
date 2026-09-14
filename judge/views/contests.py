@@ -7,7 +7,6 @@ from datetime import date, datetime, time, timedelta
 from functools import partial
 from itertools import chain
 from operator import attrgetter, itemgetter
-from zoneinfo import ZoneInfo
 
 import markdown
 from django import forms
@@ -77,15 +76,6 @@ __all__ = ['ContestList', 'ContestListV2', 'ContestCreate', 'ContestDetail', 'Co
            'ContestBatchAIGrade', 'ContestSEBConfig', 'SEBLaunchConfig', 'SEBLaunchToken', 'SEBQuit',
            'ContestTagCreateView', 'ContestSEBFileView',
            'ContestFinalizeView', 'ContestUnfinalizeView']
-
-
-def _valid_tz(name):
-    """Return ``name`` when it is a valid IANA timezone, else ''."""
-    try:
-        ZoneInfo(name)
-        return name
-    except (KeyError, ValueError):
-        return ''
 
 
 def _find_contest(request, key, private_check=True):
@@ -422,7 +412,7 @@ class ContestCreate(LoginRequiredMixin, View):
     # Scalar fields handled generically from the JSON payload.
     _bool_fields = (
         'is_visible', 'is_rated', 'use_clarifications', 'hide_problem_tags',
-        'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
+        'hide_problem_authors', 'allow_virtual_participation', 'allow_spectate', 'run_pretests_only',
         'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
         'show_short_display', 'is_private', 'is_organization_private',
         'limit_join_organizations', 'seb_required', 'allow_ai_hints',
@@ -1309,18 +1299,19 @@ class ContestCreate(LoginRequiredMixin, View):
         return Problem.get_visible_problems(user)
 
     @staticmethod
-    def _local_input(dt, tz):
-        """Format a stored UTC datetime in the given user timezone.
+    def _local_input(dt):
+        """Format a stored UTC datetime in the viewer's own timezone.
 
-        The editor stores UTC; this renders the value back in the *user's* own
-        timezone (not the site's), so a teacher who typed 10:00 in UTC+8 sees
-        10:00 again when reopening the form instead of the raw 02:00 UTC.
+        The editor stores UTC; ``timezone.localtime`` renders the value in the
+        zone the middleware activated for this request (the profile timezone),
+        so a teacher who typed 10:00 in their zone sees 10:00 again when
+        reopening the form instead of the raw UTC value.
         """
         if not dt:
             return ''
         if timezone.is_naive(dt):
             dt = timezone.make_aware(dt, timezone.utc)
-        return dt.astimezone(tz).strftime('%Y-%m-%dT%H:%M')
+        return timezone.localtime(dt).strftime('%Y-%m-%dT%H:%M')
 
     def _library_filter_context(self):
         """Filter metadata for the From-library panel (same controls as the workspace drawer)."""
@@ -1365,27 +1356,11 @@ class ContestCreate(LoginRequiredMixin, View):
         ``vis_mode`` = org / Course); edit mode overwrites them from the stored row.
         """
         contest = self.contest
-        # Temporary timezone for this editor, remembered per-browser-session so
-        # the choice survives page reloads / reopening the form, while the
-        # profile's saved timezone is never touched (a teacher abroad can plan
-        # an assignment in Beijing time without changing their account).
-        # Resolution order: ?tz= (explicit, also persists) > session > profile.
-        profile_tz_name = getattr(getattr(self.request, 'profile', None), 'timezone', '') \
+        # Times are shown and entered in the viewer's own profile timezone (the
+        # site's standard behaviour, set by TimezoneMiddleware); the stored value
+        # is UTC and is echoed back in that same zone via ``_local_input``.
+        user_tz_name = getattr(getattr(self.request, 'profile', None), 'timezone', '') \
             or settings.DEFAULT_USER_TIME_ZONE
-
-        user_tz_name = _valid_tz(self.request.GET.get('tz', '').strip()) \
-            or _valid_tz(self.request.session.get('contest_editor_tz', '')) \
-            or profile_tz_name
-        if not _valid_tz(user_tz_name):
-            user_tz_name = 'UTC'
-        # Remember an explicitly selected ?tz= for the rest of the session.
-        explicit_tz = _valid_tz(self.request.GET.get('tz', '').strip())
-        if explicit_tz and explicit_tz != self.request.session.get('contest_editor_tz'):
-            self.request.session['contest_editor_tz'] = explicit_tz
-        try:
-            user_tz = ZoneInfo(user_tz_name)
-        except (KeyError, ValueError):
-            user_tz = ZoneInfo('UTC')
         prefill = {
             'name': '', 'key': '', 'description': '', 'summary': '', 'og_image': '',
             'logo_override_image': '', 'access_code': '', 'problem_label_script': '',
@@ -1398,7 +1373,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'seb_browser_exam_keys': '', 'seb_config_keys': '', 'seb_quit_url': '',
             'is_visible': False, 'is_rated': False, 'use_clarifications': True,
             'hide_problem_tags': False, 'hide_problem_authors': False,
-            'allow_virtual_participation': True, 'run_pretests_only': False,
+            'allow_virtual_participation': True, 'allow_spectate': False, 'run_pretests_only': False,
             'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': False,
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False, 'seb_use_default': False,
@@ -1447,9 +1422,9 @@ class ContestCreate(LoginRequiredMixin, View):
                 'rating_ceiling': contest.rating_ceiling if contest.rating_ceiling is not None else '',
                 'performance_ceiling_override': (contest.performance_ceiling_override
                                                  if contest.performance_ceiling_override is not None else ''),
-                'start_time': self._local_input(contest.start_time, user_tz),
-                'end_time': self._local_input(contest.end_time, user_tz),
-                'locked_after': self._local_input(contest.locked_after, user_tz),
+                'start_time': self._local_input(contest.start_time),
+                'end_time': self._local_input(contest.end_time),
+                'locked_after': self._local_input(contest.locked_after),
                 'duration_hours': total // 3600 if total else 0,
                 'duration_minutes': (total % 3600) // 60 if total else 0,
                 'seb_browser_exam_keys': (contest.seb_browser_exam_keys
@@ -1541,7 +1516,6 @@ class ContestCreate(LoginRequiredMixin, View):
                          .order_by('-date')),
             'contest': contest,
             'user_timezone': user_tz_name,
-            'tz_options': self._tz_options(user_tz_name),
             'is_edit': contest is not None,
             # Fields hidden in the template AND skipped server-side, mirroring
             # ContestAdmin.get_readonly_fields (see _restricted_fields).
@@ -1566,49 +1540,6 @@ class ContestCreate(LoginRequiredMixin, View):
         }
         ctx.update(self._library_filter_context())
         return ctx
-
-    @staticmethod
-    def _tz_options(current):
-        """Curated timezone list for the temporary form-timezone selector.
-
-        Kept small on purpose — a sprawling optgroup tree is worse than a
-        focused set of zones teachers actually cross timezones between (the
-        site default + common CN/US/EU zones). ``current`` is placed first
-        (labelled "current") so the selector always shows the active zone.
-        """
-        zones = [
-            ('Asia/Shanghai', _('China (Beijing) UTC+8')),
-            ('America/New_York', _('US Eastern UTC-5')),
-            ('America/Chicago', _('US Central UTC-6')),
-            ('America/Denver', _('US Mountain UTC-7')),
-            ('America/Los_Angeles', _('US Pacific UTC-8')),
-            ('America/Toronto', _('Canada Eastern UTC-5')),
-            ('Europe/London', _('UK (London) UTC+0')),
-            ('Europe/Paris', _('France (Paris) UTC+1')),
-            ('Europe/Berlin', _('Germany (Berlin) UTC+1')),
-            ('Europe/Moscow', _('Russia (Moscow) UTC+3')),
-            ('UTC', _('UTC')),
-        ]
-        ordered = [(name, label) for name, label in zones if name != current]
-        if current:
-            ordered.insert(0, (current, _('%(tz)s (current)') % {'tz': current}))
-        return ordered
-
-
-class ContestTZPreference(LoginRequiredMixin, View):
-    """Persist the editor's temporary timezone to the session (AJAX, no reload).
-
-    The create/edit form switches timezone locally in JS; this endpoint stores
-    the choice so reopening the form later keeps the same wall-clock timezone,
-    without a full page round-trip that would discard unsaved input.
-    """
-
-    def post(self, request, *args, **kwargs):
-        tz = _valid_tz(request.POST.get('tz', '').strip())
-        if not tz:
-            return JsonResponse({'error': _('Invalid timezone.')}, status=400)
-        request.session['contest_editor_tz'] = tz
-        return JsonResponse({'ok': True, 'tz': tz})
 
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')
@@ -2657,7 +2588,8 @@ class ContestGradeSave(ContestMixin, DetailView):
             'note': submission.review_note,
             'released': grade.released,
             'reviewed_by': submission.reviewed_by.user.username if submission.reviewed_by else None,
-            'reviewed_at': submission.reviewed_at.strftime('%Y-%m-%d %H:%M') if submission.reviewed_at else None,
+            'reviewed_at': (timezone.localtime(submission.reviewed_at)
+                            .strftime('%Y-%m-%d %H:%M') if submission.reviewed_at else None),
         })
 
 
@@ -2765,6 +2697,8 @@ class ContestGradeRelease(ContestMixin, DetailView):
         updated = SubmissionManualGrade.objects.filter(
             submission__contest_object=self.object,
         ).update(released=True)
+        from judge.utils.contest_grade import sync_released_manual_grades
+        sync_released_manual_grades(self.object)
         return JsonResponse({'ok': True, 'released': True, 'count': updated})
 
 

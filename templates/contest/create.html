@@ -236,7 +236,6 @@
         .v2-left .form-row.stacked .field { width: 100%; }
         .v2-left .form-row.stacked .field input[type="datetime-local"],
         .v2-left .form-row.stacked .field select { max-width: 100%; }
-        .v2-left .form-row.stacked .tz-selector { max-width: 520px; }
 
         /* Validity: Range / Permanent sits on the same line as the label. */
         .v2-left .form-row.validity-row > .validity-head {
@@ -267,32 +266,6 @@
             text-decoration: none;
         }
         .pcv2 a.btn-soft i { color: inherit; }
-
-        /* Temporary timezone picker: lets a teacher view/enter Validity times
-           in a different zone than their account default, without changing
-           their profile. Only affects how this form echoes UTC back. */
-        .tz-selector {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            margin-top: 0.6rem;
-            padding-top: 0.6rem;
-            border-top: 1px dashed var(--oj-border, #ccc);
-            font-size: 12px;
-        }
-        .tz-selector .tz-label {
-            color: var(--muted);
-            display: inline-flex;
-            align-items: center;
-            gap: 0.3rem;
-            white-space: nowrap;
-        }
-        .tz-selector .tz-drop {
-            min-width: 220px;
-            max-width: 260px;
-            flex: 0 1 auto;
-        }
 
         /* SEB card: visually consistent with fieldset.module */
         .pcv2 .ac-card {
@@ -702,9 +675,8 @@
     <script src="{{ static('rich_editor.js') }}"></script>
     <script src="{{ static('markdown_preview.js') }}"></script>
     <script type="text/javascript">
-        // Timezone whose wall clock the teacher is currently editing. Drives the
-        // datetime-local -> UTC conversion on submit; defaults to the profile
-        // timezone, overridden by the temporary ?tz= picker next to Validity.
+        // Timezone whose wall clock the teacher is currently editing (their own
+        // profile timezone). Drives the datetime-local -> UTC conversion on submit.
         window.DMOJ_EDIT_TZ = {{ user_timezone|tojson }};
         // Edit-mode prefill snapshot used by the submit handler for the
         // "this triggers a rescore" warning (compare against current values).
@@ -725,46 +697,6 @@
             });
         }
 
-        // ── Temporary timezone picker (no page reload) ──────────────────────
-        // Switching the timezone must NOT reload the page (that would discard
-        // unsaved form input). Instead we: recompute the wall-clock values of
-        // every datetime-local field from their cached UTC instants, update the
-        // label, and persist the choice to the session via a tiny AJAX call.
-        function dkuojUtcToWallClock(iso, tz) {
-            // UTC ISO -> wall clock "YYYY-MM-DDTHH:MM" in the given IANA zone.
-            if (!iso) return '';
-            var d = new Date(iso);
-            if (isNaN(d)) return '';
-            var fmt = new Intl.DateTimeFormat('en-US', {
-                timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-                hour: '2-digit', minute: '2-digit', hour12: false,
-            });
-            var o = {};
-            fmt.formatToParts(d).forEach(function (x) { if (x.type !== 'literal') o[x.type] = x.value; });
-            var hh = (+o.hour) % 24;  // Intl may emit "24" for midnight
-            return o.year + '-' + o.month + '-' + o.day + 'T' + String(hh).padStart(2, '0') + ':' + o.minute;
-        }
-
-        window.onEditorTZChange = function (tz) {
-            if (!tz) return;
-            // Validate the zone name before touching anything.
-            try { Intl.DateTimeFormat('en-US', { timeZone: tz }); } catch (e) { return; }
-
-            ['id_start_time', 'id_end_time', 'id_locked_after'].forEach(function (id) {
-                var el = document.getElementById(id);
-                if (el && el.dataset.utc) el.value = dkuojUtcToWallClock(el.dataset.utc, tz);
-            });
-            window.DMOJ_EDIT_TZ = tz;
-
-            // Persist to the session without a reload (best-effort; a failed
-            // write only affects the next visit's default zone, not this save).
-            var form = document.getElementById('contest-form');
-            var token = form ? (form.querySelector('input[name="csrfmiddlewaretoken"]') || {}).value : '';
-            var fd = new FormData();
-            fd.append('tz', tz);
-            if (token) fd.append('csrfmiddlewaretoken', token);
-            fetch('{{ url("contest_tz_preference") }}', { method: 'POST', body: fd, credentials: 'same-origin' });
-        };
         document.addEventListener('DOMContentLoaded', function () {
             var form = document.getElementById('contest-form');
             if (!form) return;
@@ -814,7 +746,7 @@
                 // the user lacks change_contest_visibility; the server skips
                 // permission-gated fields either way).
                 ['is_rated', 'use_clarifications', 'hide_problem_tags',
-                 'hide_problem_authors', 'allow_virtual_participation', 'run_pretests_only',
+                 'hide_problem_authors', 'allow_virtual_participation', 'allow_spectate', 'run_pretests_only',
                  'rate_all', 'tester_see_submissions', 'tester_see_scoreboard',
                  'show_short_display', 'is_private', 'is_organization_private',
                  'limit_join_organizations', 'seb_required', 'allow_ai_hints',
@@ -950,12 +882,11 @@
 
                 // Dates: datetime-local is local wall-clock -> convert to UTC ISO before submitting.
                 // The backend TIME_ZONE=UTC; sending raw local time would store it as UTC and show 8h off later.
-                // NB: the wall clock the teacher edits is NOT the browser's local time when the
-                // temporary timezone picker is used — it is the *selected* timezone's wall clock.
-                // Interpreting it as browser-local would shift the stored instant by the offset
-                // difference (e.g. 12h when planning Beijing time from the US East Coast).
-                // (wallClockToUtcIso / toUtcIso live at the DOMContentLoaded scope below so the
-                //  date-cache init and the timezone picker can share them.)
+                // NB: the wall clock the teacher edits is NOT the browser's local time — it is
+                // the *profile timezone's* wall clock. Interpreting it as browser-local would shift
+                // the stored instant by the offset difference (e.g. 12h when the profile zone is
+                // Beijing time but the browser is on the US East Coast).
+                // (wallClockToUtcIso / toUtcIso live at the DOMContentLoaded scope below.)
 
                 // Permanent mode: the backend still requires start_time/end_time -- auto-fill "now -> +100 years"
                 var validityType = document.querySelector('input[name="validity_type"]:checked');
@@ -1019,13 +950,10 @@
                 });
             });
 
-            // --- UTC ↔ wall-clock helpers (shared by the submit handler, the
-            // date-cache init below and the timezone picker) ---
+            // --- UTC ↔ wall-clock helpers (used by the submit handler) ---
             // Defined at DOMContentLoaded scope, NOT inside the submit handler:
-            // the date-cache initialisation also calls wallClockToUtcIso(), and
-            // a function scoped inside the handler would throw ReferenceError
-            // here — killing the whole initialisation (which is exactly the bug
-            // that used to break saving on the deployed page).
+            // a function scoped inside the handler would be unavailable to any
+            // other initialisation, so we keep it at this outer scope.
             function wallClockToUtcIso(v, tz) {
                 var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v || '');
                 if (!m) return '';
@@ -1317,13 +1245,6 @@
                 return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
             }
 
-            // Cache the current wall-clock values as UTC instants so the timezone
-            // picker can re-render them in another zone without a page reload.
-            ['id_start_time', 'id_end_time', 'id_locked_after'].forEach(function (id) {
-                var el = document.getElementById(id);
-                if (el && el.value) el.dataset.utc = wallClockToUtcIso(el.value, window.DMOJ_EDIT_TZ);
-            });
-
             // --- Duration + validity ---
             var startInput = document.getElementById('id_start_time');
             var endInput = document.getElementById('id_end_time');
@@ -1453,11 +1374,9 @@
                 }
                 startInput.addEventListener('change', function () {
                     calcEnd();
-                    // start/end changed programmatically — refresh preview + cache
+                    // start/end changed programmatically — refresh preview + summary
                     syncPreview();
                     syncScoreSummary();
-                    if (startInput.value) startInput.dataset.utc = wallClockToUtcIso(startInput.value, window.DMOJ_EDIT_TZ);
-                    if (endInput.value) endInput.dataset.utc = wallClockToUtcIso(endInput.value, window.DMOJ_EDIT_TZ);
                 });
                 durH.addEventListener('input', function () { calcEnd(); syncPreview(); syncScoreSummary(); });
                 durM.addEventListener('input', function () { calcEnd(); syncPreview(); syncScoreSummary(); });
@@ -2904,17 +2823,6 @@
                                         </div>
                                     </div>
                                     <div class="dur-note" id="end-shorten-warning" style="display:none;margin-top:0.4rem;"></div>
-                                    <div class="tz-selector">
-                                        <span class="tz-label"><i class="fa fa-clock-o"></i> {{ _('Timezone') }}:</span>
-                                        <span class="oj-single-select tz-drop">
-                                            <select id="id_tmp_timezone" name="tmp_timezone" data-oj-select
-                                                    onchange="onEditorTZChange(this.value);">
-                                                {% for tz_name, tz_label in tz_options %}
-                                                    <option value="{{ tz_name }}"{% if tz_name == user_timezone %} selected{% endif %}>{{ tz_label }}</option>
-                                                {% endfor %}
-                                            </select>
-                                        </span>
-                                    </div>
                                 </div>
                             </div>
 
@@ -2943,7 +2851,13 @@
                             <div class="form-row form-row-check">
                                 <label>
                                     <input type="checkbox" id="id_allow_virtual_participation" name="allow_virtual_participation"{% if prefill.allow_virtual_participation %} checked{% endif %}>
-                                    {{ _('Allow virtual join') }}{{ tip(_('Allow users to join virtually after the assignment ends.')) }}
+                                    {{ _('Allow virtual join') }}{{ tip(_('Allow students to start a virtual participation after the assignment ends.')) }}
+                                </label>
+                            </div>
+                            <div class="form-row form-row-check">
+                                <label>
+                                    <input type="checkbox" id="id_allow_spectate" name="allow_spectate"{% if prefill.allow_spectate %} checked{% endif %}>
+                                    {{ _('Allow spectate') }}{{ tip(_('Allow students to spectate while the assignment is active. Spectator submissions do not count toward statistics or rankings.')) }}
                                 </label>
                             </div>
                             <div class="form-row form-row-check">

@@ -251,7 +251,16 @@ class Contest(models.Model):
     allow_virtual_participation = models.BooleanField(
         verbose_name=_('allow virtual join'),
         default=True,
-        help_text=_('Allow users to join virtually after the assignment ends.'),
+        help_text=_('Allow users to start a virtual participation after the assignment ends.'),
+    )
+    # Spectating is deliberately separate from virtual participation: virtual
+    # joins happen after the deadline, while spectating is an in-progress,
+    # non-scoring participation.
+    allow_spectate = models.BooleanField(
+        verbose_name=_('allow spectate'),
+        default=False,
+        help_text=_('Allow students to spectate while the assignment is active. Spectator submissions do not count '
+                    'toward statistics or rankings.'),
     )
     hide_sandbox_output = models.BooleanField(
         verbose_name=_('Hide IDE / Run Test output'),
@@ -652,9 +661,9 @@ class Contest(models.Model):
         if user.profile.id in self.editor_ids or user.profile.id in self.tester_ids:
             return True
 
-        # Virtual and spectator joins share the same switch: disabling virtual
-        # participation also disables spectating.
-        if not self.allow_virtual_participation:
+        # Spectating is opt-in for each assignment. Virtual participation uses
+        # a separate switch because it is only available after the deadline.
+        if not self.allow_spectate:
             return False
 
         if self.limit_join_organizations:
