@@ -239,6 +239,21 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertContains(response, 'data-file-upload-url')
         self.assertNotContains(response, 'data-image-upload-url')
 
+    def test_short_answer_workspace_embeds_answer_json_for_client_math(self):
+        short = create_problem(code='ws-mathsrc', is_public=True, submission_type='S')
+        md = 'Area is $$a^2+b^2$$.'
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=short, language=Language.get_answer_language(),
+            result='AC', status='D', points=100, time=0, memory=0,
+        )
+        SubmissionSource.objects.create(submission=submission, source=json.dumps({'text': md}))
+        detail = self.client.get(
+            reverse('problem_detail', args=[short.code]) + '?submission=%d' % submission.id,
+        )
+        self.assertContains(detail, 'id="workspace-answer-display"')
+        self.assertContains(detail, 'a^2+b^2')
+        self.assertContains(detail, 'vendor/katex.min.css')
+
     def test_short_answer_submitted_source_renders_markdown_table(self):
         short = create_problem(code='workspace-short', is_public=True, submission_type='S')
         md = '| A | B |\n| --- | --- |\n| 1 | 2 |'

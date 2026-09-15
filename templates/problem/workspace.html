@@ -124,6 +124,7 @@
      {% if workspace_submission and workspace_submission.ai_grade_url %}data-ai-grade-url="{{ workspace_submission.ai_grade_url }}"{% endif %}
      {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}data-file-upload-url="{{ url('editor_file_uploader') }}"{% endif %}>
   <script type="application/json" id="workspace-server-draft">{{ (workspace_server_draft or {})|tojson }}</script>
+  <script type="application/json" id="workspace-answer-display">{{ (workspace_submission.answer_display if workspace_submission else [])|tojson }}</script>
   <div class="ws-toolbar{% if workspace_in_contest %} has-leave{% endif %}">
     <div class="ws-toolbar-left">
       <button class="tool-btn icon-only" type="button" id="btn-overview" aria-expanded="false" title="{{ _('Problem set') }}" aria-label="{{ _('Problem set') }}">

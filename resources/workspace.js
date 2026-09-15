@@ -1170,6 +1170,14 @@
       MathJax.typesetPromise([el]).catch(function () {});
     }
   }
+  function bindSubmittedSourceDetails(block) {
+    var details = block && block.querySelector('details.result-source-details');
+    if (!details || details.dataset.mathBound === '1') return;
+    details.dataset.mathBound = '1';
+    details.addEventListener('toggle', function () {
+      if (details.open) typesetSubmittedSource($('#submitted-source'));
+    });
+  }
   function submittedSourceHost(wantHtml) {
     var el = $('#submitted-source');
     if (!el) return null;
@@ -1184,19 +1192,23 @@
   }
   function renderedAnswerHtml(answerDisplay) {
     var rows = answerDisplay || [];
-    var htmlParts = rows.map(function (item) {
-      return item && item.html ? String(item.html) : '';
-    }).filter(Boolean);
-    if (htmlParts.length) return htmlParts.join('');
     if (isCodeProblem() || isMcqProblem() || isFileProblem()) return '';
     // Fill-blank rows are labeled plain text. Joining them and running markdown
     // collapses "Blank 1\nBlank 2" into one paragraph.
     if (rows.some(function (item) { return item && item.label; })) return '';
     var md = formatAnswerDisplay(rows);
-    if (!md) return '';
-    if (window.RichEditor && typeof RichEditor.mdToHtml === 'function') {
-      try { return RichEditor.mdToHtml(md); } catch (e) { return ''; }
+    // Prefer Tiptap/KaTeX so $$math$$ matches the editor. Server HTML is MathJax
+    // delimiters (\[...\]) that sit inside a closed <details> and often never paint.
+    if (md && window.RichEditor && typeof RichEditor.mdToHtml === 'function') {
+      try {
+        var client = RichEditor.mdToHtml(md);
+        if (client) return client;
+      } catch (e) { /* fall through to server HTML */ }
     }
+    var htmlParts = rows.map(function (item) {
+      return item && item.html ? String(item.html) : '';
+    }).filter(Boolean);
+    if (htmlParts.length) return htmlParts.join('');
     return '';
   }
   function usesAnswerDisplayRows(answerDisplay, html) {
@@ -1250,8 +1262,19 @@
     if (summary) summary.textContent = gettext('Submitted source');
     var details = block.querySelector('details.result-source-details');
     if (details) details.open = false;
+    bindSubmittedSourceDetails(block);
     block.hidden = false;
   }
+  (function hydrateSubmittedSource() {
+    var node = $('#workspace-answer-display');
+    if (!node || !node.textContent) return;
+    var rows;
+    try { rows = JSON.parse(node.textContent); } catch (e) { return; }
+    if (!rows || !rows.length) return;
+    var sourceEl = $('#submitted-source');
+    var raw = sourceEl && sourceEl.dataset ? sourceEl.dataset.rawSource : '';
+    updateSubmittedSource(raw || '', rows);
+  })();
   function updateFileUploadResult(fileUpload) {
     var block = $('#workspace-result-file');
     if (!block) return;

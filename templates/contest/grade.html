@@ -965,15 +965,18 @@
                 // MCQ / fill-blank / short-answer: same rendered HTML the student
                 // saw in the rich editor, not a dark source dump or raw pipes.
                 if (s.answer_display && s.answer_display.length) {
-                    var htmlParts = s.answer_display.map(function (item) {
-                        return item && item.html ? String(item.html) : '';
-                    }).filter(Boolean);
-                    if (!htmlParts.length && s.problem_type === 'S') {
+                    var htmlParts = [];
+                    if (s.problem_type === 'S') {
                         var md = s.answer_display.map(function (item) {
                             return item && item.value != null ? String(item.value) : '';
                         }).filter(Boolean).join('\n\n');
                         var rendered = renderMarkdownAnswer(md);
                         if (rendered) htmlParts = [rendered];
+                    }
+                    if (!htmlParts.length) {
+                        htmlParts = s.answer_display.map(function (item) {
+                            return item && item.html ? String(item.html) : '';
+                        }).filter(Boolean);
                     }
                     if (htmlParts.length) {
                         return '<div class="gd-answer gd-answer-md content-description">' + htmlParts.join('') + '</div>';
