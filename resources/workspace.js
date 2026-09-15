@@ -736,11 +736,11 @@
 
   if (window.RichEditor && document.querySelector('[data-rich-mount="workspace-answer"]')) {
     RichEditor.configure({
-      imageUploadUrl: app.dataset.imageUploadUrl || '',
+      fileUploadUrl: app.dataset.fileUploadUrl || '',
       csrfToken: ($('[name=csrfmiddlewaretoken]') || {}).value || '',
       messages: {
-        uploadFailed: gettext('Image upload failed.'),
-        uploadFailedAuth: gettext('Image upload failed. Make sure you are signed in with upload permission.'),
+        fileUploadFailed: gettext('File upload failed.'),
+        fileUploadFailedAuth: gettext('File upload failed. Make sure you are signed in.'),
       },
       onChange: function () {
         var md = RichEditor.getMarkdown('workspace-answer');
@@ -1289,7 +1289,7 @@
     var scope = root || document;
     try {
       RichEditor.configure({
-        imageUploadUrl: app.dataset.imageUploadUrl || '',
+        fileUploadUrl: app.dataset.fileUploadUrl || '',
         csrfToken: csrfToken() || '',
       });
     } catch (err) { /* ignore */ }

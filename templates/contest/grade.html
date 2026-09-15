@@ -1244,6 +1244,13 @@
                     mount.innerHTML = '<textarea id="g-note" class="gd-note">' + esc(s.review_note || '') + '</textarea>';
                     return;
                 }
+                var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                if (RichEditor.configure) {
+                    RichEditor.configure({
+                        fileUploadUrl: {{ url('editor_file_uploader')|tojson }},
+                        csrfToken: csrfMeta ? csrfMeta.content : '',
+                    });
+                }
                 mount.innerHTML = '<div data-rich-mount="grading-review" data-toolbar="full" data-placeholder="{{ _('Write review comment...') }}"></div>';
                 // The rich editor is best-effort: if its mount/init throws (e.g. it
                 // was already initialized or failed to load), fall back to a plain

@@ -231,6 +231,14 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(detail, 'Raw submitted answer')
         self.assertContains(detail, 'id="workspace-result-comments"')
 
+    def test_short_answer_workspace_exposes_upload_urls_for_students(self):
+        short = create_problem(code='ws-shortup', is_public=True, submission_type='S')
+        response = self.client.get(reverse('problem_detail', args=[short.code]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse('editor_file_uploader'))
+        self.assertContains(response, 'data-file-upload-url')
+        self.assertNotContains(response, 'data-image-upload-url')
+
     def test_short_answer_submitted_source_renders_markdown_table(self):
         short = create_problem(code='workspace-short', is_public=True, submission_type='S')
         md = '| A | B |\n| --- | --- |\n| 1 | 2 |'

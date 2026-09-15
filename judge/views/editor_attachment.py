@@ -28,14 +28,9 @@ INLINE_IMAGE_TYPES = {
 
 
 def _can_upload_editor_attachment(user):
-    if not user.is_authenticated:
-        return False
-    if user.is_staff or user.is_superuser:
-        return True
-    return (
-        user.has_perm('judge.create_private_problem') or
-        user.has_perm('judge.edit_own_contest')
-    )
+    # Any signed-in user may insert images/files in the rich editor (short-answer
+    # students included). This is not the Django admin "editor attachment" perm.
+    return user.is_authenticated
 
 
 def is_inline_image_name(filename):

@@ -3,18 +3,14 @@ import { createTiptapEditor, createHeadlessEditor, parseMarkdownToHtml, serializ
 import { renumberBlankChips } from './extensions/blank.js';
 
 const config = {
-  imageUploadUrl: '',
   fileUploadUrl: '',
   searchUsersUrl: '',
   csrfToken: '',
   onChange: null,
   messages: {
-    uploadFailed: 'Image upload failed.',
-    uploadFailedAuth: 'Image upload failed. Make sure you are signed in with upload permission.',
     fileUploadFailed: 'File upload failed.',
-    fileUploadFailedAuth: 'File upload failed. Make sure you are signed in with upload permission.',
+    fileUploadFailedAuth: 'File upload failed. Make sure you are signed in.',
   },
-  imageInputId: 'img-file',
   fileInputId: 'rte-file',
 };
 
@@ -43,9 +39,7 @@ function getRteButtons() {
     ol: '<button type="button" data-cmd="ol" title="' + t('Ordered list (Ctrl+Shift+O)') + '"><i class="fa fa-list-ol"></i></button>',
     table: '<button type="button" data-cmd="table" title="' + t('Table') + '"><i class="fa fa-table"></i></button>',
     link: '<button type="button" data-cmd="link" title="' + t('Link (Ctrl+L)') + '"><i class="fa fa-link"></i></button>',
-    image: '<button type="button" data-cmd="image" title="' + t('Image') + '"' +
-      (config.fileUploadUrl ? ' style="display:none;"' : '') + '><i class="fa fa-image"></i></button>',
-    file: '<button type="button" data-cmd="file" title="' + t('Attach file') + '"' +
+    file: '<button type="button" data-cmd="file" title="' + t('Upload an image or file') + '"' +
       (config.fileUploadUrl ? '' : ' style="display:none;"') + '><i class="fa fa-paperclip"></i></button>',
     mention: '<button type="button" data-cmd="mention" title="' + t('Mention user (Ctrl+M)') + '"><i class="fa fa-at"></i></button>',
     help: '<button type="button" data-cmd="help" title="' + t('Markdown help') + '"><i class="fa fa-question-circle"></i></button>',
@@ -62,7 +56,7 @@ const RTE_TOOLBAR = [
   'code', 'codeblock', 'math', 'quote', 'sep',
   'ul', 'ol', 'table', 'sep',
   'alignLeft', 'alignCenter', 'alignRight', 'sep',
-  'link', 'image', 'file', 'mention', 'help', 'blank',
+  'link', 'file', 'mention', 'help', 'blank',
 ];
 
 function richEditorTpl(name, opts) {
@@ -184,7 +178,6 @@ function applyCmd(root, cmd) {
     case 'math': openMathPopover(root); return;
     case 'link': openLinkPopover(root); return;
     case 'mention': openMentionPopover(root); return;
-    case 'image': pickImage(root); return;
     case 'file': pickFile(root); return;
     case 'help': openHelpModal(); return;
     default: break;
@@ -281,6 +274,7 @@ function bindRoot(root) {
     placeholder,
     onMathClick: () => openMathPopover(root, true),
     onMentionTrigger: () => openMentionPopover(root),
+    onPaste: (event) => handleImagePaste(root, event),
     onUpdate: () => {
       if (!root.classList.contains('mode-markdown')) {
         flushMarkdown(root);
@@ -330,11 +324,14 @@ function bindRoot(root) {
 
   if (ta) {
     ta.addEventListener('input', () => notifyChange());
+    ta.addEventListener('paste', (e) => {
+      if (handleImagePaste(root, e)) e.preventDefault();
+    });
   }
 
   root.querySelectorAll('.rich-toolbar button[data-cmd]').forEach((btn) => {
     btn.addEventListener('mousedown', (e) => {
-      if (['link', 'mention', 'image', 'file', 'math', 'table'].indexOf(btn.dataset.cmd) !== -1) {
+      if (['link', 'mention', 'file', 'math', 'table'].indexOf(btn.dataset.cmd) !== -1) {
         e.preventDefault();
       }
     });
@@ -373,9 +370,10 @@ function syncUploadButtons(root) {
   const scope = root || document;
   (scope.matches && scope.matches('.rich-editor') ? [scope] : scope.querySelectorAll('.rich-editor')).forEach((el) => {
     const fileBtn = el.querySelector('[data-cmd="file"]');
-    const imgBtn = el.querySelector('[data-cmd="image"]');
-    if (fileBtn) fileBtn.style.display = config.fileUploadUrl ? '' : 'none';
-    if (imgBtn) imgBtn.style.display = config.fileUploadUrl ? 'none' : '';
+    if (fileBtn) {
+      fileBtn.style.display = config.fileUploadUrl ? '' : 'none';
+      fileBtn.setAttribute('title', t('Upload an image or file'));
+    }
   });
 }
 
@@ -893,8 +891,32 @@ function openHelpModal() {
 }
 
 /* ---- upload ---- */
-let pendingImgRoot = null;
 let pendingFileRoot = null;
+
+function clipboardImageFiles(event) {
+  const cd = event && (event.clipboardData || (event.originalEvent && event.originalEvent.clipboardData));
+  if (!cd) return [];
+  const out = [];
+  const add = (file) => {
+    if (file && file.type && file.type.indexOf('image/') === 0) out.push(file);
+  };
+  if (cd.files && cd.files.length) {
+    Array.from(cd.files).forEach(add);
+  }
+  if (!out.length && cd.items && cd.items.length) {
+    Array.from(cd.items).forEach((item) => {
+      if (item && item.kind === 'file' && typeof item.getAsFile === 'function') add(item.getAsFile());
+    });
+  }
+  return out;
+}
+
+function handleImagePaste(root, event) {
+  const files = clipboardImageFiles(event);
+  if (!files.length) return false;
+  files.forEach((file) => uploadEditorFile(root, file));
+  return true;
+}
 
 function ensureHiddenFileInput(id, accept, onChange) {
   let input = document.getElementById(id);
@@ -908,13 +930,6 @@ function ensureHiddenFileInput(id, accept, onChange) {
   }
   input.onchange = onChange;
   return input;
-}
-
-function pickImage(root) {
-  pendingImgRoot = root;
-  const input = ensureHiddenFileInput(config.imageInputId, 'image/*', onImagePicked);
-  input.value = '';
-  input.click();
 }
 
 function pickFile(root) {
@@ -943,45 +958,35 @@ function insertImageAt(root, url, alt) {
   notifyChange();
 }
 
-function onImagePicked(e) {
-  const file = e.target.files && e.target.files[0];
-  const root = pendingImgRoot;
-  pendingImgRoot = null;
-  if (!file || !root) return;
-  if (!config.imageUploadUrl) {
-    alert(config.messages.uploadFailed);
-    return;
+function insertFileLinkAt(root, url, name) {
+  const inst = getInstance(root.getAttribute('data-editor'));
+  const label = String(name || 'file').replace(/[\r\n[\]]/g, ' ').trim() || 'file';
+  if (root.classList.contains('mode-markdown')) {
+    const ta = root.querySelector('textarea');
+    const md = '[' + label + '](' + url + ')';
+    const s = ta.selectionStart;
+    ta.value = ta.value.slice(0, s) + md + ta.value.slice(ta.selectionEnd);
+    ta.dispatchEvent(new Event('input'));
+  } else if (inst) {
+    inst.chain().focus().insertContent({
+      type: 'text',
+      text: label,
+      marks: [{ type: 'link', attrs: { href: url } }],
+    }).run();
+    flushMarkdown(root);
   }
-  const fd = new FormData();
-  fd.append('markdown-image-upload', file);
-  fetch(config.imageUploadUrl, {
-    method: 'POST',
-    headers: { 'X-CSRFToken': config.csrfToken },
-    body: fd,
-  })
-    .then((r) => r.json().then((body) => ({ ok: r.ok, body })).catch(() => ({ ok: false, body: null })))
-    .then(({ ok, body }) => {
-      if (!ok || !body || body.status !== 200 || !body.link) {
-        alert(config.messages.uploadFailedAuth);
-        return;
-      }
-      insertImageAt(root, body.link, file.name || '');
-    })
-    .catch(() => alert(config.messages.uploadFailed));
+  notifyChange();
 }
 
-function onFilePicked(e) {
-  const file = e.target.files && e.target.files[0];
-  const root = pendingFileRoot;
-  pendingFileRoot = null;
-  if (!file || !root) return;
+function uploadEditorFile(root, file) {
+  if (!file || !root) return Promise.resolve();
   if (!config.fileUploadUrl) {
     alert(config.messages.fileUploadFailed);
-    return;
+    return Promise.resolve();
   }
   const fd = new FormData();
   fd.append('markdown-file-upload', file);
-  fetch(config.fileUploadUrl, {
+  return fetch(config.fileUploadUrl, {
     method: 'POST',
     headers: { 'X-CSRFToken': config.csrfToken },
     body: fd,
@@ -996,25 +1001,16 @@ function onFilePicked(e) {
         insertImageAt(root, body.link, body.name || file.name || '');
         return;
       }
-      const inst = getInstance(root.getAttribute('data-editor'));
-      const label = String(body.name || file.name || 'file').replace(/[\r\n[\]]/g, ' ').trim() || 'file';
-      if (root.classList.contains('mode-markdown')) {
-        const ta = root.querySelector('textarea');
-        const md = '[' + label + '](' + body.link + ')';
-        const s = ta.selectionStart;
-        ta.value = ta.value.slice(0, s) + md + ta.value.slice(ta.selectionEnd);
-        ta.dispatchEvent(new Event('input'));
-      } else if (inst) {
-        inst.chain().focus().insertContent({
-          type: 'text',
-          text: label,
-          marks: [{ type: 'link', attrs: { href: body.link } }],
-        }).run();
-        flushMarkdown(root);
-      }
-      notifyChange();
+      insertFileLinkAt(root, body.link, body.name || file.name || '');
     })
     .catch(() => alert(config.messages.fileUploadFailed));
+}
+
+function onFilePicked(e) {
+  const file = e.target.files && e.target.files[0];
+  const root = pendingFileRoot;
+  pendingFileRoot = null;
+  uploadEditorFile(root, file);
 }
 
 function escapeAttr(s) {
@@ -1026,12 +1022,10 @@ function escapeHtml(s) {
 
 function configure(opts) {
   if (!opts) return;
-  if (opts.imageUploadUrl != null) config.imageUploadUrl = opts.imageUploadUrl;
   if (opts.fileUploadUrl != null) config.fileUploadUrl = opts.fileUploadUrl;
   if (opts.searchUsersUrl != null) config.searchUsersUrl = opts.searchUsersUrl;
   if (opts.csrfToken != null) config.csrfToken = opts.csrfToken;
   if (opts.onChange != null) config.onChange = opts.onChange;
-  if (opts.imageInputId != null) config.imageInputId = opts.imageInputId;
   if (opts.fileInputId != null) config.fileInputId = opts.fileInputId;
   if (opts.messages) Object.assign(config.messages, opts.messages);
   if (typeof document !== 'undefined') syncUploadButtons(document);
@@ -1052,7 +1046,6 @@ const RichEditor = {
   setMarkdown,
   htmlToMd: serializeHtmlToMarkdown,
   mdToHtml: parseMarkdownToHtml,
-  onImagePicked,
   onFilePicked,
   _createHeadless: createHeadlessEditor,
   _instances: instances,

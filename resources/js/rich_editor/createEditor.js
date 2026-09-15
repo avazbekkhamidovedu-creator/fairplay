@@ -53,7 +53,7 @@ export function editorExtensions(opts = {}) {
 }
 
 export function createTiptapEditor({
-  element, placeholder, editable = true, onUpdate, onSelectionUpdate, onMathClick, onMentionTrigger,
+  element, placeholder, editable = true, onUpdate, onSelectionUpdate, onMathClick, onMentionTrigger, onPaste,
 }) {
   return new Editor({
     element,
@@ -75,6 +75,9 @@ export function createTiptapEditor({
           }
         }
         return false;
+      },
+      handlePaste(view, event) {
+        return typeof onPaste === 'function' ? !!onPaste(event) : false;
       },
     },
     onUpdate,

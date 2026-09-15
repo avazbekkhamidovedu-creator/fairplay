@@ -1250,11 +1250,10 @@
                 RichEditor.configure({
                     onChange: function () { syncPreview(); },
                     fileUploadUrl: {{ url('editor_file_uploader')|tojson }},
-                    imageUploadUrl: {{ url('martor_image_uploader')|tojson }},
                     csrfToken: csrfMeta ? csrfMeta.content : '',
                     messages: {
                         fileUploadFailed: {{ _('File upload failed.')|tojson }},
-                        fileUploadFailedAuth: {{ _('File upload failed. Make sure you are signed in with upload permission.')|tojson }},
+                        fileUploadFailedAuth: {{ _('File upload failed. Make sure you are signed in.')|tojson }},
                     },
                 });
             }

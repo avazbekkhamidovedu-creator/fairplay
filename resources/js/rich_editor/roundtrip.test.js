@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import RichEditor from './index.js';
 
 function mountTwo(doc) {
@@ -33,7 +33,8 @@ describe('RichEditor facade', () => {
   });
 
   afterEach(() => {
-    RichEditor.configure({ fileUploadUrl: '', searchUsersUrl: '', imageUploadUrl: '' });
+    vi.unstubAllGlobals();
+    RichEditor.configure({ fileUploadUrl: '', searchUsersUrl: '' });
     RichEditor._instances.forEach((ed) => ed.destroy && ed.destroy());
     RichEditor._instances.clear();
     document.body.innerHTML = '';
@@ -215,12 +216,45 @@ describe('RichEditor facade', () => {
     expect(document.querySelector('.code-block-lang-input')).toBeTruthy();
   });
 
-  it('hides the image button when file upload is configured', () => {
-    RichEditor.configure({ fileUploadUrl: '/upload-file', imageUploadUrl: '/upload-image' });
+  it('shows a file button that covers images and hides the old image button', () => {
+    RichEditor.configure({ fileUploadUrl: '/upload-file' });
     document.body.innerHTML = '<div data-rich-mount="stem"></div>';
     RichEditor.mount(document);
-    expect(document.querySelector('[data-cmd="file"]').style.display).not.toBe('none');
-    expect(document.querySelector('[data-cmd="image"]').style.display).toBe('none');
+    const fileBtn = document.querySelector('[data-cmd="file"]');
+    expect(fileBtn).toBeTruthy();
+    expect(fileBtn.style.display).not.toBe('none');
+    expect(fileBtn.getAttribute('title')).toMatch(/image/i);
+    expect(document.querySelector('[data-cmd="image"]')).toBeNull();
+  });
+
+  it('pastes a clipboard image through the file upload endpoint', async () => {
+    RichEditor.configure({ fileUploadUrl: '/upload-file', csrfToken: 'csrf' });
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 200, link: '/widgets/files/x', is_image: true, name: 'shot.png' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' });
+    const mdBtn = document.querySelector('[data-mode="markdown"]');
+    mdBtn.click();
+    const ta = document.querySelector('textarea');
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [file],
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }],
+      },
+    });
+    ta.dispatchEvent(event);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('/upload-file');
+    expect(opts.method).toBe('POST');
+    expect(opts.body.get('markdown-file-upload')).toBe(file);
+    await vi.waitFor(() => expect(ta.value).toContain('/widgets/files/x'));
+    vi.unstubAllGlobals();
   });
 
   it('renders mentions as profile links and keeps [user:] in markdown', () => {

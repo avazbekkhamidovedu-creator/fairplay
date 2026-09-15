@@ -89,14 +89,16 @@ class EditorAttachmentTest(CommonDataMixin, TestCase):
         self.assertEqual(download['Content-Type'], 'image/png')
         self.assertNotIn('attachment', download.get('Content-Disposition', '').lower())
 
-    def test_normal_user_cannot_upload(self):
+    def test_normal_user_can_upload(self):
         self.client.force_login(self.users['normal'])
         response = self.client.post(
             reverse('editor_file_uploader'),
             {'markdown-file-upload': _pdf()},
         )
-        self.assertEqual(response.status_code, 403)
-        self.assertFalse(EditorAttachment.objects.exists())
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertEqual(body['status'], 200)
+        self.assertTrue(EditorAttachment.objects.exists())
 
     def test_anonymous_upload_redirects(self):
         response = self.client.post(
@@ -114,6 +116,17 @@ class EditorAttachmentTest(CommonDataMixin, TestCase):
             )
         self.assertEqual(response.status_code, 400)
         self.assertFalse(EditorAttachment.objects.exists())
+
+    def test_normal_user_can_upload_martor_image(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.post(
+            reverse('martor_image_uploader'),
+            {'markdown-image-upload': _png()},
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertEqual(body['status'], 200)
+        self.assertTrue(body['link'])
 
     def test_create_v2_exposes_file_upload_url(self):
         self.client.force_login(self.users['creator'])
