@@ -6,6 +6,7 @@ import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import TextAlign from '@tiptap/extension-text-align';
 import Underline from '@tiptap/extension-underline';
+import katex from 'katex';
 import { SiteInlineMath, SiteBlockMath } from './extensions/math.js';
 import { SiteCodeBlock } from './extensions/codeBlock.js';
 import { Blank } from './extensions/blank.js';
@@ -97,9 +98,25 @@ export function createHeadlessEditor() {
 export function parseMarkdownToHtml(md) {
   const ed = createHeadlessEditor();
   ed.commands.setContent(md || '', { contentType: 'markdown' });
-  const html = ed.getHTML();
+  const html = fillKatex(ed.getHTML());
   ed.destroy();
   return html;
+}
+
+function fillKatex(html) {
+  if (!html || typeof document === 'undefined') return html || '';
+  const wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  wrap.querySelectorAll('[data-latex]').forEach((el) => {
+    const latex = el.getAttribute('data-latex') || '';
+    const display = el.getAttribute('data-type') === 'block-math';
+    try {
+      el.innerHTML = katex.renderToString(latex, { throwOnError: false, displayMode: display });
+    } catch (err) {
+      el.textContent = latex;
+    }
+  });
+  return wrap.innerHTML;
 }
 
 export function serializeHtmlToMarkdown(html) {

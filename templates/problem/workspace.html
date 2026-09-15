@@ -803,7 +803,7 @@
   {% if REQUIRE_JAX %}{% include "mathjax-load.html" %}{% endif %}
   {% if vote_perm.can_view() %}<script src="{{ static('libs/chart.js/Chart.js') }}"></script><script src="{{ static('problem-vote.js') }}"></script>{% endif %}
   {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
-    <script src="{{ static('rich_editor.js') }}"></script>
+    <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
   {% endif %}
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>

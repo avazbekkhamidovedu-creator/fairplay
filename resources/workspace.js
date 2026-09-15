@@ -1166,7 +1166,10 @@
     return box;
   }
   function typesetSubmittedSource(el) {
-    if (el && window.MathJax && typeof MathJax.typesetPromise === 'function') {
+    // KaTeX from RichEditor.mdToHtml is already painted. MathJax re-typeset
+    // of that tree can hide or double-render the formula.
+    if (!el || el.querySelector('.katex')) return;
+    if (window.MathJax && typeof MathJax.typesetPromise === 'function') {
       MathJax.typesetPromise([el]).catch(function () {});
     }
   }

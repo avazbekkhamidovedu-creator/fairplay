@@ -80,6 +80,31 @@ describe('RichEditor facade', () => {
     expect(out).toMatch(/\|/);
   });
 
+  it('mdToHtml paints dollar math with KaTeX', () => {
+    const html = RichEditor.mdToHtml('Area is $$a^2+b^2$$.');
+    expect(html).toMatch(/katex/);
+    expect(html).toMatch(/data-latex/);
+  });
+
+  it('escapes quotes in resized image markdown', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const inst = RichEditor._instances.get('stem');
+    inst.chain().focus().setImage({
+      src: 'https://example.com/x.png',
+      alt: 'foo" onerror="alert(1)',
+      width: '120px',
+    }).run();
+    const md = RichEditor.getMarkdown('stem');
+    const wrap = document.createElement('div');
+    wrap.innerHTML = md;
+    const img = wrap.querySelector('img');
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('onerror')).toBeNull();
+    expect(img.getAttribute('alt')).toBe('foo" onerror="alert(1)');
+    expect(md).toContain('&quot;');
+  });
+
   it('preserves site math delimiters', () => {
     document.body.innerHTML = '<div data-rich-mount="stem"></div>';
     RichEditor.mount(document);

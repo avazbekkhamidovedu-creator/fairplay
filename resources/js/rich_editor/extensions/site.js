@@ -109,7 +109,27 @@ function sizeFromEl(el, key) {
   v = String(v).trim();
   if (v === 'auto') return null;
   if (/^\d+$/.test(v)) v += 'px';
-  return v || null;
+  return cssSize(v) || null;
+}
+
+function cssSize(value) {
+  const s = String(value || '').trim();
+  if (/^-?\d+(\.\d+)?(px|em|rem|%)?$/i.test(s)) {
+    return /^\d+(\.\d+)?$/.test(s) ? `${s}px` : s;
+  }
+  return '';
+}
+
+function escapeAttr(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeMdAlt(value) {
+  return String(value == null ? '' : value).replace(/\\/g, '\\\\').replace(/]/g, '\\]');
 }
 
 export const SiteImage = Image.extend({
@@ -119,19 +139,27 @@ export const SiteImage = Image.extend({
       width: {
         default: null,
         parseHTML: (el) => sizeFromEl(el, 'width'),
-        renderHTML: (attrs) => (attrs.width ? { style: `width:${attrs.width};` } : {}),
+        renderHTML: (attrs) => {
+          const w = cssSize(attrs.width);
+          return w ? { style: `width:${w};` } : {};
+        },
       },
       height: {
         default: null,
         parseHTML: (el) => sizeFromEl(el, 'height'),
-        renderHTML: (attrs) => (attrs.height ? { style: `height:${attrs.height};` } : {}),
+        renderHTML: (attrs) => {
+          const h = cssSize(attrs.height);
+          return h ? { style: `height:${h};` } : {};
+        },
       },
     };
   },
   renderHTML({ node, HTMLAttributes }) {
     const styleParts = [];
-    if (node.attrs.width) styleParts.push('width:' + node.attrs.width);
-    if (node.attrs.height) styleParts.push('height:' + node.attrs.height);
+    const w = cssSize(node.attrs.width);
+    const h = cssSize(node.attrs.height);
+    if (w) styleParts.push('width:' + w);
+    if (h) styleParts.push('height:' + h);
     const attrs = mergeAttributes(this.options.HTMLAttributes, HTMLAttributes);
     if (styleParts.length) attrs.style = styleParts.join(';') + (attrs.style ? ';' + attrs.style : '');
     return ['img', attrs];
@@ -139,16 +167,16 @@ export const SiteImage = Image.extend({
   renderMarkdown: (node) => {
     const src = node.attrs?.src || '';
     const alt = node.attrs?.alt || '';
-    const w = node.attrs?.width;
-    const h = node.attrs?.height;
+    const w = cssSize(node.attrs?.width);
+    const h = cssSize(node.attrs?.height);
     if (w || h) {
       let style = '';
       if (w) style += `width:${w};`;
       if (h) style += `height:${h};`;
-      const altAttr = alt ? ` alt="${alt}"` : '';
-      return `<img src="${src}"${altAttr} style="${style}">`;
+      const altAttr = alt ? ` alt="${escapeAttr(alt)}"` : '';
+      return `<img src="${escapeAttr(src)}"${altAttr} style="${style}">`;
     }
-    return `![${alt}](${src})`;
+    return `![${escapeMdAlt(alt)}](${src})`;
   },
   addNodeView() {
     return ({ node, editor, getPos }) => {
