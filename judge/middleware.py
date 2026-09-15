@@ -120,6 +120,19 @@ def _seb_block_exempt(path, contest):
     return path in exempt_paths
 
 
+def _ended_window_workspace_redirect(request, contest):
+    """Send a GET of the solving page to the assignment once the window ends."""
+    if request.method != 'GET':
+        return None
+    try:
+        match = resolve(request.path_info)
+    except Resolver404:
+        return None
+    if match.url_name != 'problem_detail':
+        return None
+    return HttpResponseRedirect(reverse('contest_view', args=[contest.key]))
+
+
 class ContestMiddleware(object):
     def __init__(self, get_response):
         self.get_response = get_response
@@ -131,14 +144,17 @@ class ContestMiddleware(object):
             profile.update_contest()
             request.participation = profile.current_contest
             request.in_contest = request.participation is not None
-            # If the participation just ended naturally in a SEB-locked exam,
-            # send the student to the quit URL so SEB terminates the session.
-            if previous is not None and request.participation is None \
-                    and previous.ended and not previous.spectate:
+            # Participation just ended: SEB exams go to the quit URL; a GET of
+            # the solving page goes to the assignment detail.
+            if previous is not None and request.participation is None and previous.ended:
                 contest = previous.contest
-                if contest.seb_required and not contest.user_bypasses_seb(request.user) \
+                if not previous.spectate and contest.seb_required \
+                        and not contest.user_bypasses_seb(request.user) \
                         and not _seb_block_exempt(request.path, contest):
                     return HttpResponseRedirect(contest.seb_effective_quit_url or reverse('seb_quit'))
+                redirect = _ended_window_workspace_redirect(request, contest)
+                if redirect is not None:
+                    return redirect
         else:
             request.in_contest = False
             request.participation = None

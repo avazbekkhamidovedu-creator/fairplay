@@ -581,7 +581,8 @@
   if (nextBtn) nextBtn.addEventListener('click', function () { if (index >= 0 && index + 1 < items.length) location.assign(items[index + 1].href); });
 
   // Participation countdown: same seconds as #contest-time-remaining (time_remaining).
-  // Digits use count_down; this tick only turns the clock red at 10% and blocks Submit.
+  // Digits use count_down; this tick turns the clock red at 10%, blocks Submit,
+  // and sends the student to the assignment page when the window hits 0.
   var timerExpired = false;
   function setSubmitBlocked(blocked) {
     timerExpired = !!blocked;
@@ -666,19 +667,21 @@
     if (!timer) return;
     var label = timer.querySelector('.time-remaining');
     var warnAt = timerWarnAt;
+    var returnUrl = app.dataset.returnUrl || '';
     function expire() {
       timer.classList.add('expired');
       timer.classList.remove('warn');
       if (label) label.textContent = gettext('Time expired');
       setSubmitBlocked(true);
-      flushServerDraft({ beacon: false });
+      flushServerDraft();
+      if (returnUrl) window.location.assign(returnUrl);
     }
     if (timerInitial <= 0) {
       expire();
       return;
     }
     if (label && window.jQuery && typeof count_down === 'function') {
-      count_down(window.jQuery(label));
+      count_down(window.jQuery(label), returnUrl || undefined);
     }
     var tick = function () {
       var remaining = timerRemaining();
