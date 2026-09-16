@@ -643,7 +643,56 @@ class ProblemWorkspaceTestCase(TestCase):
         response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
         self.assertEqual(response.context['workspace_mode'], 'assignment')
         self.assertContains(response, 'data-context-id="%s"' % self.contest.key)
+        self.assertContains(response, 'data-return-url="%s"' % reverse('contest_view', args=[self.contest.key]))
         self.assertContains(response, 'id="workspace-submit-form"')
+
+    def test_expired_personal_window_leaves_the_workspace(self):
+        contest = create_contest(
+            key='wsended', name='Ended Window',
+            start_time=timezone.now() - timezone.timedelta(hours=2),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            time_limit=timezone.timedelta(minutes=1),
+            is_visible=True,
+            authors=('workspace-author',),
+        )
+        create_contest_problem(contest=contest, problem=self.problem, points=100, order=1)
+        participation = create_contest_participation(
+            contest=contest, user=self.user.profile,
+            real_start=timezone.now() - timezone.timedelta(hours=1),
+        )
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertRedirects(response, reverse('contest_view', args=[contest.key]))
+
+    def test_ended_assignment_leaves_the_workspace(self):
+        contest = create_contest(
+            key='wsclosed', name='Closed Assignment',
+            start_time=timezone.now() - timezone.timedelta(hours=2),
+            end_time=timezone.now() - timezone.timedelta(minutes=1),
+            is_visible=True,
+            authors=('workspace-author',),
+        )
+        create_contest_problem(contest=contest, problem=self.problem, points=100, order=1)
+        participation = create_contest_participation(contest=contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('problem_detail', args=[self.problem.code]))
+        self.assertRedirects(response, reverse('contest_view', args=[contest.key]))
+
+    def test_ended_assignment_does_not_bounce_other_pages(self):
+        contest = create_contest(
+            key='wshomeend', name='Home End Assignment',
+            start_time=timezone.now() - timezone.timedelta(hours=2),
+            end_time=timezone.now() - timezone.timedelta(minutes=1),
+            is_visible=True,
+            authors=('workspace-author',),
+        )
+        participation = create_contest_participation(contest=contest, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        response = self.client.get(reverse('home'))
+        self.assertEqual(response.status_code, 200)
 
     def test_assignment_toolbar_puts_leave_on_submit_row(self):
         participation = create_contest_participation(contest=self.contest, user=self.user.profile)

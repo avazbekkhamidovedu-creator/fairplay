@@ -95,7 +95,7 @@
             {% if request.participation.contest.seb_required and not request.participation.spectate and not request.participation.contest.user_bypasses_seb(request.user) %}
                 count_down($("#contest-time-remaining"), '{{ (request.participation.contest.seb_effective_quit_url or url('seb_quit'))|escapejs }}');
             {% else %}
-                count_down($("#contest-time-remaining"));
+                count_down($("#contest-time-remaining"), window.DKUOJ_CONTEST_TIMER_REDIRECT);
             {% endif %}
 
             var selected = null,
