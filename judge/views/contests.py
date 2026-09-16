@@ -928,14 +928,28 @@ class ContestCreate(LoginRequiredMixin, View):
         if contest.classes.exclude(organization_id__in=org_ids).exists():
             raise ValidationError(_('Selected classes must belong to selected organizations.'))
 
+    @staticmethod
+    def _contest_problem_points(raw_points, problem):
+        """Use the submitted score, or the library problem's own points."""
+        if raw_points not in (None, ''):
+            try:
+                return int(raw_points)
+            except (TypeError, ValueError):
+                pass
+        try:
+            return int(problem.points)
+        except (TypeError, ValueError):
+            return 100
+
     def _sync_problems(self, contest, payload):
         """Replace the contest's problem list with the submitted selection.
 
         Accepts either a list of ``{id, points, partial, is_pretested,
         max_submissions, output_prefix, hide_results, display_name}`` dicts
         (what the frontend sends) or a plain list of ids (points default to
-        100, partial on, not pretested, unlimited submissions, no display-name
-        override). Called on create (initial add) and on edit (full replace,
+        the library problem's own score, partial on, not pretested, unlimited
+        submissions, no display-name override). Called on create (initial add)
+        and on edit (full replace,
         mirroring the frontend's problem library). A missing/absent
         ``problems`` key is a no-op, so existing problems are preserved unless
         explicitly edited; an explicit empty list clears them.
@@ -981,7 +995,7 @@ class ContestCreate(LoginRequiredMixin, View):
         for item in problems:
             if isinstance(item, dict):
                 pid = item.get('id')
-                raw_points = item.get('points', 100)
+                raw_points = item.get('points')
                 raw_partial = item.get('partial')
                 raw_pretested = item.get('is_pretested')
                 raw_max_subs = item.get('max_submissions')
@@ -991,7 +1005,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 display_name_provided = 'display_name' in item
             else:
                 pid = item
-                raw_points = 100
+                raw_points = None
                 raw_partial = raw_pretested = None
                 raw_max_subs = None
                 raw_out_prefix = raw_hide_results = None
@@ -1004,10 +1018,7 @@ class ContestCreate(LoginRequiredMixin, View):
             if allowed_ids is not None and problem.id not in allowed_ids:
                 raise ValidationError(
                     _('You are not allowed to attach problem "%(code)s" to this assignment.') % {'code': problem.code})
-            try:
-                points = int(raw_points) if raw_points not in (None, '') else 100
-            except (TypeError, ValueError):
-                points = 100
+            points = self._contest_problem_points(raw_points, problem)
             # Per-problem options (admin-parity). Explicit booleans win; when
             # the payload omits them (plain id list) the model defaults apply.
             partial = bool(raw_partial) if raw_partial is not None else True

@@ -2738,7 +2738,7 @@
           try {
             window.opener.postMessage({
               kind: 'assignment-problem-created',
-              problem: { id: res.body.id, code: res.body.code, name: res.body.name || '', format: res.body.format || '' }
+              problem: { id: res.body.id, code: res.body.code, name: res.body.name || '', format: res.body.format || '', points: res.body.points }
             }, window.location.origin);
           } catch (e) { /* opener gone */ }
           if (action !== 'another' && action !== 'continue') {

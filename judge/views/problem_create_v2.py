@@ -357,6 +357,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 'id': problem.id,
                 'code': problem.code,
                 'name': problem.name,
+                'points': problem.points,
                 'redirect': reverse('problem_edit_v2', args=[problem.code]),
                 'message': _('This problem code is already saved. Opening the editor.'),
             })
@@ -390,6 +391,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             'code': problem.code,
             'name': problem.name,
             'format': problem.format_filter_code,
+            'points': problem.points,
             'redirect': redirect,
         }
         submitted_code = (payload.get('code') or '').strip()
