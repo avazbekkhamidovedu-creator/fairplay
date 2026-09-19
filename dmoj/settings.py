@@ -556,6 +556,11 @@ MARTOR_MARKDOWN_BASE_MENTION_URL = '/user/'
 MARTOR_UPLOAD_MEDIA_DIR = 'martor'
 MARTOR_UPLOAD_SAFE_EXTS = {'.jpg', '.png', '.gif'}
 
+# Student editor uploads (short-answer / comments). Instructors skip these.
+DMOJ_EDITOR_ATTACHMENT_DAILY_LIMIT = 40
+DMOJ_EDITOR_ATTACHMENT_RATE_LIMIT = 10
+DMOJ_EDITOR_ATTACHMENT_RATE_WINDOW_SECONDS = 60
+
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
@@ -612,6 +617,8 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'resources'),
 ]
 STATIC_URL = '/static/'
+# Bump (or set env) when shipped CSS/JS must invalidate browser cache.
+DMOJ_STATIC_VERSION = os.environ.get('DMOJ_STATIC_VERSION', '')
 
 # User uploads. Django's defaults are both empty, which makes MEDIA_ROOT resolve against
 # the server process CWD and leaves MEDIA_URL unusable as a URL prefix. Deployments that

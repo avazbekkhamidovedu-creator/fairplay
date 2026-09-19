@@ -1,6 +1,8 @@
 // Browser entry. `npm run build:editor` writes the gitignored IIFE at resources/rich_editor.js.
-import { createTiptapEditor, createHeadlessEditor, parseMarkdownToHtml, serializeHtmlToMarkdown } from './createEditor.js';
+import { createTiptapEditor, createHeadlessEditor, parseMarkdownToHtml, serializeHtmlToMarkdown, markdownWithBreaks, sanitizeEditorMarkdown } from './createEditor.js';
 import { renumberBlankChips } from './extensions/blank.js';
+import { hideVirtualKeyboard, loadMathLive } from './mathField.js';
+import { renderMathPalette } from './mathPalette.js';
 
 const config = {
   fileUploadUrl: '',
@@ -12,6 +14,7 @@ const config = {
     fileUploadFailedAuth: 'File upload failed. Make sure you are signed in.',
   },
   fileInputId: 'rte-file',
+  fileAccept: '',
 };
 
 const instances = new Map();
@@ -42,7 +45,7 @@ function getRteButtons() {
     file: '<button type="button" data-cmd="file" title="' + t('Upload an image or file') + '"' +
       (config.fileUploadUrl ? '' : ' style="display:none;"') + '><i class="fa fa-paperclip"></i></button>',
     mention: '<button type="button" data-cmd="mention" title="' + t('Mention user (Ctrl+M)') + '"><i class="fa fa-at"></i></button>',
-    help: '<button type="button" data-cmd="help" title="' + t('Markdown help') + '"><i class="fa fa-question-circle"></i></button>',
+    help: '<button type="button" data-cmd="help" title="' + t('Editor help') + '"><i class="fa fa-question-circle"></i></button>',
     alignLeft: '<button type="button" data-cmd="alignLeft" title="' + t('Align left') + '"><i class="fa fa-align-left"></i></button>',
     alignCenter: '<button type="button" data-cmd="alignCenter" title="' + t('Align center') + '"><i class="fa fa-align-center"></i></button>',
     alignRight: '<button type="button" data-cmd="alignRight" title="' + t('Align right') + '"><i class="fa fa-align-right"></i></button>',
@@ -63,8 +66,8 @@ function richEditorTpl(name, opts) {
   opts = opts || {};
   const buttons = getRteButtons();
   const bar = RTE_TOOLBAR.map((k) => buttons[k] || '').join('');
-  const placeholder = opts.placeholder || t('Enter content; $$math$$ supported…');
-  const mdPlaceholder = opts.mdPlaceholder || t('Markdown and $$math$$ supported…');
+  const placeholder = opts.placeholder || t('Enter content…');
+  const mdPlaceholder = opts.mdPlaceholder || t('Enter Markdown…');
   const compact = opts.compact ? ' compact' : '';
   return `<div class="rich-editor mode-rich${compact}" data-editor="${name}">
       <div class="rich-editor-toolbar-row">
@@ -94,15 +97,15 @@ function getMarkdown(name) {
   const root = findRoot(name);
   if (!inst || !root) return '';
   if (root.classList.contains('mode-markdown')) {
-    return (root.querySelector('textarea') || {}).value || '';
+    return sanitizeEditorMarkdown((root.querySelector('textarea') || {}).value || '');
   }
-  return inst.getMarkdown() || '';
+  return sanitizeEditorMarkdown(inst.getMarkdown() || '');
 }
 
 function applyMarkdownContent(inst, md) {
   if (!inst || inst.isDestroyed) return;
   try {
-    inst.commands.setContent(md || '', { contentType: 'markdown' });
+    inst.commands.setContent(markdownWithBreaks(md || ''), { contentType: 'markdown' });
   } catch (err) {
     if (!inst.isDestroyed) {
       try { inst.commands.setContent(md || ''); } catch (e) { /* ignore */ }
@@ -115,7 +118,7 @@ function setMarkdown(name, md) {
   const root = findRoot(name);
   if (!root) return;
   const ta = root.querySelector('textarea');
-  if (ta) ta.value = md || '';
+  if (ta) ta.value = sanitizeEditorMarkdown(md || '');
   // Hidden ProseMirror views break if we setContent while display/layout is off.
   if (inst && !root.classList.contains('mode-markdown')) {
     applyMarkdownContent(inst, md);
@@ -134,7 +137,7 @@ function flushMarkdown(root) {
   const inst = getInstance(name);
   const ta = root.querySelector('textarea');
   if (inst && ta && !root.classList.contains('mode-markdown')) {
-    ta.value = inst.getMarkdown() || '';
+    ta.value = sanitizeEditorMarkdown(inst.getMarkdown() || '');
   }
 }
 
@@ -142,15 +145,24 @@ function applyAlign(inst, align) {
   inst.chain().focus().setTextAlign(align).run();
 }
 
+function applyOverlayCmd(root, cmd) {
+  switch (cmd) {
+    case 'table': openTablePicker(root); return true;
+    case 'math': openMathPopover(root); return true;
+    case 'link': openLinkPopover(root); return true;
+    case 'mention': openMentionPopover(root); return true;
+    case 'file': pickFile(root); return true;
+    case 'help': openHelpModal(); return true;
+    default: return false;
+  }
+}
+
 function applyCmd(root, cmd) {
   const name = root.getAttribute('data-editor');
   const inst = getInstance(name);
   const isMd = root.classList.contains('mode-markdown');
   const ta = root.querySelector('textarea');
-  if (cmd === 'table') {
-    openTablePicker(root);
-    return;
-  }
+  if (applyOverlayCmd(root, cmd)) return;
   if (isMd && ta) {
     applyMarkdownShortcut(ta, cmd);
     ta.dispatchEvent(new Event('input'));
@@ -175,17 +187,76 @@ function applyCmd(root, cmd) {
     case 'alignCenter': applyAlign(inst, 'center'); break;
     case 'alignRight': applyAlign(inst, 'right'); break;
     case 'blank': inst.chain().focus().insertBlank().run(); break;
-    case 'math': openMathPopover(root); return;
-    case 'link': openLinkPopover(root); return;
-    case 'mention': openMentionPopover(root); return;
-    case 'file': pickFile(root); return;
-    case 'help': openHelpModal(); return;
     default: break;
   }
   flushMarkdown(root);
   renumberBlankChips(root);
   notifyChange();
   updateToolbarState(root);
+}
+
+const MD_ALIGN_RE = /^<(div|p)\s+[^>]*style="[^"]*text-align:\s*(center|right|left|justify)[^"]*"[^>]*>([\s\S]*?)<\/\1>$/i;
+
+function markdownLineSpan(ta) {
+  const v = ta.value;
+  let start = ta.selectionStart;
+  let end = ta.selectionEnd;
+  if (start === end) {
+    while (start > 0 && v[start - 1] !== '\n') start -= 1;
+    while (end < v.length && v[end] !== '\n') end += 1;
+  }
+  return { start, end, text: v.slice(start, end) };
+}
+
+function applyMarkdownAlign(ta, align) {
+  const { start, end, text } = markdownLineSpan(ta);
+  const lead = text.match(/^\s*/)?.[0] || '';
+  const tail = text.match(/\s*$/)?.[0] || '';
+  const body = text.slice(lead.length, text.length - tail.length);
+  const wrapped = body.match(MD_ALIGN_RE);
+  const inner = wrapped ? wrapped[3] : body;
+  const next = (!align || align === 'left')
+    ? inner
+    : `<div style="text-align:${align}">${inner}</div>`;
+  ta.value = vReplace(ta.value, start, end, lead + next + tail);
+  ta.selectionStart = start + lead.length;
+  ta.selectionEnd = start + lead.length + next.length;
+}
+
+function applyMarkdownHeading(ta, cmd) {
+  const { start, end, text } = markdownLineSpan(ta);
+  const lead = text.match(/^\s*/)?.[0] || '';
+  const tail = text.match(/\s*$/)?.[0] || '';
+  const body = text.slice(lead.length, text.length - tail.length);
+  const stripped = body.replace(/^#{1,6}\s+/, '');
+  let prefix = '';
+  if (cmd === 'h3') prefix = '# ';
+  else if (cmd === 'h4') prefix = '## ';
+  else if (cmd === 'h5') prefix = '### ';
+  const next = prefix + stripped;
+  ta.value = vReplace(ta.value, start, end, lead + next + tail);
+  ta.selectionStart = start + lead.length;
+  ta.selectionEnd = start + lead.length + next.length;
+}
+
+function applyMarkdownLinePrefix(ta, prefix, re) {
+  const { start, end, text } = markdownLineSpan(ta);
+  const lines = text.split('\n');
+  const targets = lines.filter((l) => l.trim());
+  const allOn = targets.length > 0 && targets.every((l) => re.test(l));
+  const next = lines.map((l) => {
+    if (!l.trim()) return l;
+    if (allOn) return l.replace(re, '');
+    if (re.test(l)) return l;
+    return prefix + l.replace(/^(#{1,6}\s+|>\s+|[-*+]\s+|\d+\.\s+)/, '');
+  }).join('\n');
+  ta.value = vReplace(ta.value, start, end, next);
+  ta.selectionStart = start;
+  ta.selectionEnd = start + next.length;
+}
+
+function vReplace(value, start, end, insert) {
+  return value.slice(0, start) + insert + value.slice(end);
 }
 
 function applyMarkdownShortcut(ta, cmd) {
@@ -203,11 +274,20 @@ function applyMarkdownShortcut(ta, cmd) {
     case 'highlight': wrap('<mark>', '</mark>', 'text'); break;
     case 'code': wrap('`', '`', 'code'); break;
     case 'codeblock': wrap('```\n', '\n```', 'code'); break;
-    case 'quote': wrap('> ', '', 'quote'); break;
+    case 'quote': applyMarkdownLinePrefix(ta, '> ', /^>\s+/); break;
     case 'math': wrap('$$', '$$', 'a^2 + b^2 = c^2'); break;
     case 'blank': wrap('{{blank}}', '', ''); break;
-    case 'ul': wrap('- ', '', 'item'); break;
-    case 'ol': wrap('1. ', '', 'item'); break;
+    case 'ul': applyMarkdownLinePrefix(ta, '- ', /^[-*+]\s+/); break;
+    case 'ol': applyMarkdownLinePrefix(ta, '1. ', /^\d+\.\s+/); break;
+    case 'p':
+    case 'h3':
+    case 'h4':
+    case 'h5':
+      applyMarkdownHeading(ta, cmd);
+      break;
+    case 'alignLeft': applyMarkdownAlign(ta, 'left'); break;
+    case 'alignCenter': applyMarkdownAlign(ta, 'center'); break;
+    case 'alignRight': applyMarkdownAlign(ta, 'right'); break;
     default: break;
   }
 }
@@ -267,7 +347,7 @@ function bindRoot(root) {
   const ta = root.querySelector('textarea');
   const placeholder = (mount && mount.getAttribute('data-placeholder'))
     || (root.querySelector('.rich-editor-body') && root.querySelector('.rich-editor-body').getAttribute('data-placeholder'))
-    || t('Enter content; $$math$$ supported…');
+    || t('Enter content…');
 
   const inst = createTiptapEditor({
     element: mount,
@@ -331,7 +411,7 @@ function bindRoot(root) {
 
   root.querySelectorAll('.rich-toolbar button[data-cmd]').forEach((btn) => {
     btn.addEventListener('mousedown', (e) => {
-      if (['link', 'mention', 'file', 'math', 'table'].indexOf(btn.dataset.cmd) !== -1) {
+      if (['link', 'mention', 'file', 'math', 'table', 'help'].indexOf(btn.dataset.cmd) !== -1) {
         e.preventDefault();
       }
     });
@@ -372,7 +452,12 @@ function syncUploadButtons(root) {
     const fileBtn = el.querySelector('[data-cmd="file"]');
     if (fileBtn) {
       fileBtn.style.display = config.fileUploadUrl ? '' : 'none';
-      fileBtn.setAttribute('title', t('Upload an image or file'));
+      fileBtn.setAttribute(
+        'title',
+        config.fileAccept && config.fileAccept.indexOf('image/') === 0
+          ? t('Upload an image')
+          : t('Upload an image or file'),
+      );
     }
   });
 }
@@ -392,6 +477,67 @@ function initEditors(scope) {
 }
 
 /* ---- overlays ---- */
+function helpBodyHtml() {
+  return `
+    <p>${t('Switch between Rich text and Markdown at any time. The toolbar works in both modes. Students see the same formatting as you.')}</p>
+    <h3>${t('Rich text')}</h3>
+    <ul>
+      <li>${t('Select text, then use the toolbar for headings, bold, italic, highlight, inline code, quotes, lists, and alignment.')}</li>
+      <li>${t('Press Enter for a new line. Leave a blank line when you want a new paragraph.')}</li>
+      <li>${t('In a code block, press Ctrl+Enter to leave the block.')}</li>
+    </ul>
+    <h3>${t('Equations')}</h3>
+    <ul>
+      <li>${t('Click the formula button, then click a symbol. Dashed boxes are slots you can type into.')}</li>
+      <li>${t('Click an existing formula in the document to edit it.')}</li>
+      <li>${t('Turn on “Directly edit LaTeX” only if you want to type raw LaTeX.')}</li>
+    </ul>
+    <h3>${t('Tables, images, links')}</h3>
+    <ul>
+      <li>${t('Insert a table, then use the cell menu to add or delete rows and columns.')}</li>
+      <li>${t('Use the paperclip to upload an image or file, or paste an image from the clipboard.')}</li>
+      <li>${t('Use the link button for a web link, or @ to mention a user.')}</li>
+    </ul>
+    <h3>${t('Fill-in blanks')}</h3>
+    <ul>
+      <li>${t('On fill-in problems, click the blank button. Chips are numbered automatically.')}</li>
+    </ul>
+    <h3>${t('Keyboard shortcuts')}</h3>
+    <table class="rte-help-table">
+      <thead><tr><th>${t('Action')}</th><th>${t('Shortcut')}</th></tr></thead>
+      <tbody>
+        <tr><td>${t('Bold')}</td><td><code>Ctrl+B</code></td></tr>
+        <tr><td>${t('Italic')}</td><td><code>Ctrl+I</code></td></tr>
+        <tr><td>${t('Quote')}</td><td><code>Ctrl+Q</code></td></tr>
+        <tr><td>${t('Unordered list')}</td><td><code>Ctrl+U</code></td></tr>
+        <tr><td>${t('Ordered list')}</td><td><code>Ctrl+Shift+O</code></td></tr>
+        <tr><td>${t('Link')}</td><td><code>Ctrl+L</code></td></tr>
+        <tr><td>${t('Mention')}</td><td><code>Ctrl+M</code></td></tr>
+        <tr><td>${t('Math')}</td><td><code>Ctrl+Alt+D</code></td></tr>
+        <tr><td>${t('Close dialog')}</td><td><code>Esc</code></td></tr>
+      </tbody>
+    </table>
+    <h3>Markdown</h3>
+    <p>${t('If you prefer typing markup, switch to the Markdown tab. These are the site-specific bits:')}</p>
+    <table class="rte-help-table">
+      <thead><tr><th>${t('Style')}</th><th>Markdown</th></tr></thead>
+      <tbody>
+        <tr><td>${t('Bold')}</td><td><code>**text**</code></td></tr>
+        <tr><td>${t('Italic')}</td><td><code>*text*</code></td></tr>
+        <tr><td>${t('Highlight')}</td><td><code>&lt;mark&gt;text&lt;/mark&gt;</code></td></tr>
+        <tr><td>${t('Inline code')}</td><td><code>\`code\`</code></td></tr>
+        <tr><td>${t('Equation')}</td><td><code>$$a^2+b^2=c^2$$</code></td></tr>
+        <tr><td>${t('Blank')}</td><td><code>{{blank}}</code></td></tr>
+        <tr><td>${t('Link')}</td><td><code>[text](https://…)</code></td></tr>
+        <tr><td>${t('Image')}</td><td><code>![alt](url)</code></td></tr>
+        <tr><td>${t('Mention')}</td><td><code>[user:name]</code></td></tr>
+        <tr><td>${t('Table')}</td><td><code>| Col 1 | Col 2 |</code></td></tr>
+      </tbody>
+    </table>
+    <p>${t('Problem statements use Markdown. Full syntax:')} <a href="https://commonmark.org/help/" target="_blank" rel="noopener">CommonMark</a>.</p>
+  `;
+}
+
 let overlays = null;
 function ensureOverlays() {
   if (overlays && overlays.root && overlays.root.isConnected) return overlays;
@@ -410,13 +556,37 @@ function ensureOverlays() {
       <ul class="rte-mention-results"></ul>
       <div class="rte-popover-actions"><button type="button" class="rte-btn-cancel">${t('Cancel')}</button><button type="button" class="rte-btn-ok">${t('Insert')}</button></div>
     </div>
-    <div id="rte-math-popover" class="rte-popover" hidden>
-      <label class="rte-field"><span>${t('LaTeX')}</span><input type="text" class="rte-math-input" placeholder="a^2 + b^2 = c^2"></label>
-      <div class="rte-popover-actions"><button type="button" class="rte-btn-cancel">${t('Cancel')}</button><button type="button" class="rte-btn-ok">${t('Insert')}</button></div>
+    <div id="rte-math-popover" class="rte-math-modal" hidden>
+      <div class="rte-math-dialog" role="dialog" aria-modal="true" aria-labelledby="rte-math-title">
+        <div class="rte-help-head">
+          <h2 id="rte-math-title">${t('Equation editor')}</h2>
+          <button type="button" class="rte-help-close" aria-label="${t('Close')}">×</button>
+        </div>
+        <div class="rte-math-body">
+          ${renderMathPalette()}
+          <div class="rte-math-field-wrap" hidden></div>
+          <textarea class="rte-math-input" rows="3" placeholder="a^2 + b^2 = c^2"></textarea>
+          <label class="rte-math-latex-row">
+            <input type="checkbox" class="rte-math-latex-check">
+            ${t('Directly edit LaTeX')}
+          </label>
+        </div>
+        <div class="rte-popover-actions">
+          <button type="button" class="rte-btn-cancel">${t('Cancel')}</button>
+          <button type="button" class="rte-btn-ok">${t('Insert')}</button>
+        </div>
+      </div>
     </div>
-    <div id="rte-help-popover" class="rte-popover rte-help" hidden>
-      <p>${t('Problem statements use Markdown. Full syntax:')} <a href="https://commonmark.org/help/" target="_blank" rel="noopener">CommonMark</a>.</p>
-      <button type="button" class="rte-btn-ok">${t('Close')}</button>
+    <div id="rte-help-modal" class="rte-help-modal" hidden>
+      <div class="rte-help-dialog" role="dialog" aria-modal="true" aria-labelledby="rte-help-title">
+        <div class="rte-help-head">
+          <h2 id="rte-help-title">${t('Editor help')}</h2>
+          <button type="button" class="rte-help-close" aria-label="${t('Close')}">×</button>
+        </div>
+        <div class="rte-help-body">
+          ${helpBodyHtml()}
+        </div>
+      </div>
     </div>
     <div id="rte-table-picker" class="rte-table-picker" hidden>
       <div class="rte-table-picker-grid"></div>
@@ -441,7 +611,7 @@ function ensureOverlays() {
     link: root.querySelector('#rte-link-popover'),
     mention: root.querySelector('#rte-mention-popover'),
     math: root.querySelector('#rte-math-popover'),
-    help: root.querySelector('#rte-help-popover'),
+    help: root.querySelector('#rte-help-modal'),
     tablePicker: root.querySelector('#rte-table-picker'),
     tableChrome: root.querySelector('#rte-table-cell-chrome'),
     tableMenu: root.querySelector('#rte-table-cell-menu'),
@@ -452,14 +622,53 @@ function ensureOverlays() {
   overlays.mention.querySelector('.rte-btn-cancel').addEventListener('click', closeOverlays);
   overlays.mention.querySelector('.rte-btn-ok').addEventListener('click', () => confirmMention());
   overlays.math.querySelector('.rte-btn-cancel').addEventListener('click', closeOverlays);
-  overlays.math.querySelector('.rte-btn-ok').addEventListener('click', confirmMath);
+  // mousedown: MathLive blur/keyboard-hide otherwise eats the click on Insert.
+  overlays.math.querySelector('.rte-btn-ok').addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    confirmMath();
+  });
+  overlays.math.querySelector('.rte-btn-ok').addEventListener('click', (e) => {
+    e.preventDefault();
+    confirmMath();
+  });
+  overlays.math.querySelector('.rte-help-close').addEventListener('click', closeOverlays);
+  overlays.math.addEventListener('click', (e) => {
+    if (e.target === overlays.math) closeOverlays();
+  });
+  overlays.math.querySelector('.rte-math-latex-check').addEventListener('change', (e) => {
+    setMathLatexMode(!!e.target.checked);
+  });
+  bindMathPalette(overlays.math);
   overlays.math.querySelector('.rte-math-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       confirmMath();
     }
   });
-  overlays.help.querySelector('.rte-btn-ok').addEventListener('click', closeOverlays);
+  overlays.math.querySelector('.rte-math-input').addEventListener('input', () => {
+    const mf = overlays.math.querySelector('math-field');
+    if (mf && !overlays.math.querySelector('.rte-math-latex-check').checked) {
+      mf.value = overlays.math.querySelector('.rte-math-input').value;
+    }
+  });
+  overlays.help.addEventListener('click', (e) => {
+    if (e.target === overlays.help) closeOverlays();
+  });
+  overlays.help.querySelector('.rte-help-close').addEventListener('click', closeOverlays);
+  if (!overlayEscapeBound) {
+    overlayEscapeBound = true;
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !overlays) return;
+      const open = (overlays.help && !overlays.help.hidden)
+        || (overlays.math && !overlays.math.hidden)
+        || (overlays.link && !overlays.link.hidden)
+        || (overlays.mention && !overlays.mention.hidden)
+        || (overlays.tablePicker && !overlays.tablePicker.hidden);
+      if (!open) return;
+      e.preventDefault();
+      closeOverlays();
+    });
+  }
   const mi = overlays.mention.querySelector('.rte-mention-input');
   let mentionTimer = null;
   mi.addEventListener('input', () => {
@@ -475,6 +684,7 @@ function ensureOverlays() {
 
 let overlayRoot = null;
 let savedInsertPos = null;
+let overlayEscapeBound = false;
 function hidePopovers() {
   const o = ensureOverlays();
   if (!o) return;
@@ -488,6 +698,7 @@ function hidePopovers() {
 
 function closeOverlays() {
   hidePopovers();
+  hideVirtualKeyboard();
   overlayRoot = null;
   savedInsertPos = null;
 }
@@ -514,6 +725,31 @@ function positionPopover(pop, root, cmd) {
 const TABLE_PICKER_MAX = 10;
 let tableChromeRoot = null;
 let tableOverlayBound = false;
+
+function fillEmptyTableHeaders(inst, cols) {
+  if (!inst) return;
+  const spots = [];
+  inst.state.doc.descendants((node, pos) => {
+    if (spots.length >= cols) return false;
+    if (node.type.name === 'tableHeader' && !String(node.textContent || '').trim()) {
+      spots.push(pos);
+    }
+    return undefined;
+  });
+  if (!spots.length) return;
+  inst.chain().command(({ tr }) => {
+    for (let i = spots.length - 1; i >= 0; i--) {
+      const pos = spots[i];
+      const header = tr.doc.nodeAt(pos);
+      const para = header && header.firstChild;
+      if (!para || !para.isTextblock) continue;
+      const from = pos + 2;
+      const to = from + para.content.size;
+      tr.insertText(t('Col') + ' ' + (i + 1), from, to);
+    }
+    return true;
+  }).run();
+}
 
 function buildPipeTableMd(rows, cols) {
   rows = Math.max(1, Math.min(TABLE_PICKER_MAX, rows | 0));
@@ -571,6 +807,7 @@ function insertTableAt(root, rows, cols) {
     ta.dispatchEvent(new Event('input'));
   } else if (inst) {
     inst.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
+    fillEmptyTableHeaders(inst, cols);
     flushMarkdown(root);
     syncTableCellChrome(root);
   }
@@ -836,12 +1073,174 @@ function confirmMention(username, label) {
   notifyChange();
 }
 
+function mathFieldEl() {
+  const o = ensureOverlays();
+  return o ? o.math.querySelector('math-field') : null;
+}
+
+function bindMathPalette(mathRoot) {
+  if (!mathRoot || mathRoot.dataset.paletteBound) return;
+  mathRoot.dataset.paletteBound = '1';
+  mathRoot.addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-math-tab]');
+    if (tab) {
+      e.preventDefault();
+      const id = tab.getAttribute('data-math-tab');
+      mathRoot.querySelectorAll('.rte-math-tab').forEach((b) => b.classList.toggle('is-active', b === tab));
+      mathRoot.querySelectorAll('[data-math-panel]').forEach((p) => {
+        p.hidden = p.getAttribute('data-math-panel') !== id;
+      });
+      return;
+    }
+    const key = e.target.closest('[data-math-tex]');
+    if (key) {
+      e.preventDefault();
+      insertMathSnippet(
+        key.getAttribute('data-math-tex') || '',
+        key.getAttribute('data-math-advanced') || '',
+      );
+    }
+  });
+}
+
+function toMathLiveInsert(latex) {
+  return String(latex || '')
+    .replace(/\\vec\{\\placeholder\{\}\}/g, '\\overrightarrow{#0}')
+    .replace(/\\(?:hat|widehat)\{\\placeholder\{\}\}/g, '\\overset{\\wedge}{#0}')
+    .replace(/\\placeholder\{\}/g, '#0');
+}
+
+function insertMathSnippet(latex, advanced) {
+  if (!latex) return;
+  const o = ensureOverlays();
+  if (!o) return;
+  const ta = o.math.querySelector('.rte-math-input');
+  const check = o.math.querySelector('.rte-math-latex-check');
+  const mf = mathFieldEl();
+  const forLatex = advanced || latex
+    .replace(/\\placeholder\{\}/g, '')
+    .replace(/#@|#\?|#0/g, '');
+  if (check && check.checked || !mf) {
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    ta.value = ta.value.slice(0, start) + forLatex + ta.value.slice(end);
+    ta.selectionStart = ta.selectionEnd = start + forLatex.length;
+    ta.dispatchEvent(new Event('input'));
+    ta.focus();
+    return;
+  }
+  const live = toMathLiveInsert(latex);
+  try {
+    if (typeof mf.insert === 'function') {
+      mf.insert(live, { focus: true, insertionMode: 'insert', selectionMode: 'placeholder' });
+    } else if (typeof mf.executeCommand === 'function') {
+      mf.executeCommand(['insert', live]);
+    } else {
+      mf.value = (mf.value || '') + forLatex;
+    }
+    try {
+      if (typeof mf.executeCommand === 'function') mf.executeCommand('moveToNextPlaceholder');
+    } catch (e) { /* optional */ }
+    ta.value = (typeof mf.getValue === 'function' ? mf.getValue('latex') : mf.value) || ta.value;
+    mf.focus();
+  } catch (e) {
+    ta.value = (ta.value || '') + forLatex;
+  }
+}
+
+function setMathLatexMode(on) {
+  const o = ensureOverlays();
+  if (!o) return;
+  const wrap = o.math.querySelector('.rte-math-field-wrap');
+  const ta = o.math.querySelector('.rte-math-input');
+  const mf = mathFieldEl();
+  const check = o.math.querySelector('.rte-math-latex-check');
+  if (check) check.checked = !!on;
+  hideVirtualKeyboard();
+  if (on) {
+    if (mf) ta.value = mf.value || ta.value;
+    if (wrap) wrap.hidden = true;
+    ta.hidden = false;
+    ta.focus();
+  } else if (mf) {
+    mf.value = ta.value;
+    if (wrap) wrap.hidden = false;
+    ta.hidden = true;
+    try { mf.focus(); } catch (e) { /* jsdom */ }
+  } else {
+    ta.hidden = false;
+  }
+}
+
+function normalizeMathLatex(raw) {
+  let s = String(raw || '').trim();
+  s = s.replace(/^\$\$([\s\S]*)\$\$$/, '$1').trim();
+  s = s.replace(/^\$([\s\S]*)\$$/, '$1').trim();
+  s = s.replace(/^\\\(([\s\S]*)\\\)$/, '$1').trim();
+  s = s.replace(/^\\\[([\s\S]*)\\\]$/, '$1').trim();
+  s = s.replace(/\\placeholder\[[^\]]*\]\{\}/g, '');
+  s = s.replace(/\\placeholder\{\}/g, '');
+  s = s.replace(/#\d/g, '');
+  s = s.replace(/\{\{\s*\}\}/g, '');
+  return s;
+}
+
+function currentMathLatex() {
+  const o = ensureOverlays();
+  if (!o) return '';
+  const check = o.math.querySelector('.rte-math-latex-check');
+  const ta = o.math.querySelector('.rte-math-input');
+  const mf = mathFieldEl();
+  if (check && check.checked) return (ta && ta.value) || '';
+  if (mf) {
+    let v = '';
+    try {
+      if (typeof mf.getValue === 'function') {
+        v = mf.getValue('latex-without-placeholders') || mf.getValue('latex') || '';
+      } else {
+        v = mf.value || '';
+      }
+    } catch (e) { v = mf.value || ''; }
+    if (v) return v;
+  }
+  return (ta && ta.value) || '';
+}
+
+function mountMathField(seed) {
+  const o = ensureOverlays();
+  if (!o) return Promise.resolve();
+  const wrap = o.math.querySelector('.rte-math-field-wrap');
+  const ta = o.math.querySelector('.rte-math-input');
+  hideVirtualKeyboard();
+  return loadMathLive().then((MFE) => {
+    if (!MFE || !wrap) {
+      ta.hidden = false;
+      return;
+    }
+    let mf = wrap.querySelector('math-field');
+    if (!mf) {
+      mf = new MFE();
+      mf.className = 'rte-math-field';
+      mf.setAttribute('smart-fence', 'on');
+      mf.mathVirtualKeyboardPolicy = 'manual';
+      mf.addEventListener('input', () => {
+        if (!o.math.querySelector('.rte-math-latex-check').checked) ta.value = mf.value;
+      });
+      wrap.appendChild(mf);
+    }
+    mf.mathVirtualKeyboardPolicy = 'manual';
+    mf.value = seed;
+    ta.value = seed;
+    setMathLatexMode(false);
+    hideVirtualKeyboard();
+  });
+}
+
 function openMathPopover(root) {
   const o = ensureOverlays();
   overlayRoot = root;
-  o.link.hidden = true;
-  o.mention.hidden = true;
-  if (o.tablePicker) o.tablePicker.hidden = true;
+  hidePopovers();
+  hideVirtualKeyboard();
   hideTableCellMenu();
   const inst = getInstance(root.getAttribute('data-editor'));
   let seed = 'a^2 + b^2 = c^2';
@@ -853,9 +1252,14 @@ function openMathPopover(root) {
       seed = node.attrs.latex;
     }
   }
-  o.math.querySelector('.rte-math-input').value = seed;
-  positionPopover(o.math, root, 'math');
-  o.math.querySelector('.rte-math-input').focus();
+  const ta = o.math.querySelector('.rte-math-input');
+  ta.value = seed;
+  o.math.querySelector('.rte-math-latex-check').checked = false;
+  o.math.hidden = false;
+  mountMathField(seed).then(() => {
+    if (o.math.hidden) return;
+    if (!mathFieldEl()) ta.focus();
+  });
 }
 
 function confirmMath() {
@@ -863,30 +1267,45 @@ function confirmMath() {
   if (!o || !overlayRoot) return;
   const root = overlayRoot;
   const pos = savedInsertPos;
-  const latex = (o.math.querySelector('.rte-math-input').value || '').trim() || 'a^2 + b^2 = c^2';
+  const latex = normalizeMathLatex(currentMathLatex()) || 'a^2 + b^2 = c^2';
   const inst = getInstance(root.getAttribute('data-editor'));
   closeOverlays();
   if (root.classList.contains('mode-markdown')) {
     const ta = root.querySelector('textarea');
+    if (!ta) return;
     const md = latex.includes('\n') ? ('$$\n' + latex + '\n$$') : ('$$' + latex + '$$');
     const s = ta.selectionStart;
     ta.value = ta.value.slice(0, s) + md + ta.value.slice(ta.selectionEnd);
     ta.dispatchEvent(new Event('input'));
-  } else if (inst) {
-    const node = { type: 'inlineMath', attrs: { latex, delim: 'dollar' } };
-    const opts = { pos: typeof pos === 'number' ? pos : undefined };
-    const ok = inst.chain().focus().insertInlineMath({ latex, ...opts }).run();
-    if (!ok) {
-      if (typeof pos === 'number') inst.chain().focus().insertContentAt(pos, node).run();
-      else inst.chain().focus().insertContent(node).run();
-    }
-    flushMarkdown(root);
+    notifyChange();
+    return;
   }
+  if (!inst) return;
+  const node = { type: 'inlineMath', attrs: { latex, delim: 'dollar' } };
+  const existing = typeof pos === 'number' ? inst.state.doc.nodeAt(pos) : null;
+  if (existing && (existing.type.name === 'inlineMath' || existing.type.name === 'blockMath')) {
+    inst.chain().focus().command(({ tr }) => {
+      tr.setNodeMarkup(pos, existing.type, { latex, delim: existing.attrs.delim || 'dollar' });
+      return true;
+    }).run();
+  } else {
+    const size = inst.state.doc.content.size;
+    const at = (typeof pos === 'number' && pos >= 0 && pos <= size) ? pos : size;
+    const ok = inst.chain().focus().insertContentAt(at, node).run();
+    if (!ok) inst.chain().focus().insertContent(node).run();
+  }
+  flushMarkdown(root);
   notifyChange();
 }
 
 function openHelpModal() {
   const o = ensureOverlays();
+  if (!o || !o.help) return;
+  if (!o.help.hidden) {
+    closeOverlays();
+    return;
+  }
+  hidePopovers();
   o.help.hidden = false;
 }
 
@@ -925,9 +1344,10 @@ function ensureHiddenFileInput(id, accept, onChange) {
     input.type = 'file';
     input.id = id;
     input.style.display = 'none';
-    if (accept) input.accept = accept;
     document.body.appendChild(input);
   }
+  if (accept) input.accept = accept;
+  else input.removeAttribute('accept');
   input.onchange = onChange;
   return input;
 }
@@ -938,7 +1358,7 @@ function pickFile(root) {
     return;
   }
   pendingFileRoot = root;
-  const input = ensureHiddenFileInput(config.fileInputId, '', onFilePicked);
+  const input = ensureHiddenFileInput(config.fileInputId, config.fileAccept || '', onFilePicked);
   input.value = '';
   input.click();
 }
@@ -1027,8 +1447,29 @@ function configure(opts) {
   if (opts.csrfToken != null) config.csrfToken = opts.csrfToken;
   if (opts.onChange != null) config.onChange = opts.onChange;
   if (opts.fileInputId != null) config.fileInputId = opts.fileInputId;
+  if (opts.fileAccept != null) config.fileAccept = opts.fileAccept;
   if (opts.messages) Object.assign(config.messages, opts.messages);
   if (typeof document !== 'undefined') syncUploadButtons(document);
+}
+
+function paintDisplay(el, md) {
+  if (!el) return '';
+  const html = parseMarkdownToHtml(md || '');
+  el.innerHTML = html || '';
+  el.classList.add('rte-display');
+  return html;
+}
+
+function paintTargets(scope) {
+  const root = scope || (typeof document === 'undefined' ? null : document);
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('script.rte-md-source').forEach((script) => {
+    const target = script.nextElementSibling;
+    if (!target) return;
+    let md = '';
+    try { md = JSON.parse(script.textContent || '""'); } catch (e) { md = script.textContent || ''; }
+    paintDisplay(target, md);
+  });
 }
 
 const RichEditor = {
@@ -1046,8 +1487,11 @@ const RichEditor = {
   setMarkdown,
   htmlToMd: serializeHtmlToMarkdown,
   mdToHtml: parseMarkdownToHtml,
+  paintDisplay,
+  paintTargets,
   onFilePicked,
   _createHeadless: createHeadlessEditor,
+  _toMathLiveInsert: toMathLiveInsert,
   _instances: instances,
 };
 

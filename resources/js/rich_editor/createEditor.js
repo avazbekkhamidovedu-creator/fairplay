@@ -1,6 +1,7 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
+import HardBreak from '@tiptap/extension-hard-break';
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -9,13 +10,50 @@ import Underline from '@tiptap/extension-underline';
 import katex from 'katex';
 import { SiteInlineMath, SiteBlockMath } from './extensions/math.js';
 import { SiteCodeBlock } from './extensions/codeBlock.js';
-import { Blank } from './extensions/blank.js';
+import { Blank, renumberBlankChips } from './extensions/blank.js';
 import { Mention } from './extensions/mention.js';
 import { SiteHeading, SiteParagraph, SiteImage, SiteHighlight } from './extensions/site.js';
 
+/** Strip the empty-paragraph marker TipTap used to emit into Markdown. */
+export function sanitizeEditorMarkdown(md) {
+  return String(md || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/^[ \t]*(?:&nbsp;|\u00a0)+[ \t]*$/gm, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    // Accidental extra cell paragraphs serialize as a trailing <br> before `|`.
+    .replace(/<br>(?=\s*\|)/g, '');
+}
+
+/** CommonMark collapses a single newline to a space. Teachers type Enter in
+ * Markdown mode and expect the preview / rich view to keep that line break
+ * (GFM "breaks"). Code fences, inline code, and math are left alone. */
+export function markdownWithBreaks(md) {
+  const src = sanitizeEditorMarkdown(md);
+  const held = [];
+  const parked = src.replace(
+    /```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|~[^~\n]+~|^(?:\|[^\n]*\|[ \t]*(?:\n|$))+/gm,
+    (m) => {
+      held.push(m);
+      return `\0C${held.length - 1}\0`;
+    },
+  );
+  const out = parked.replace(/([^\n])\n(?!\n)/g, '$1  \n');
+  return out.replace(/\0C(\d+)\0/g, (_, i) => held[+i]);
+}
+
+const SiteHardBreak = HardBreak.extend({
+  markdownTokenName: 'br',
+  parseMarkdown: () => ({ type: 'hardBreak' }),
+  renderMarkdown: () => '\n',
+});
+
 export function editorExtensions(opts = {}) {
   return [
-    Markdown,
+    Markdown.configure({
+      markedOptions: { gfm: true, breaks: true },
+    }),
     StarterKit.configure({
       strike: false,
       heading: false,
@@ -23,7 +61,9 @@ export function editorExtensions(opts = {}) {
       link: false,
       underline: false,
       codeBlock: false,
+      hardBreak: false,
     }),
+    SiteHardBreak,
     SiteCodeBlock,
     SiteParagraph,
     SiteHeading,
@@ -97,7 +137,7 @@ export function createHeadlessEditor() {
 
 export function parseMarkdownToHtml(md) {
   const ed = createHeadlessEditor();
-  ed.commands.setContent(md || '', { contentType: 'markdown' });
+  ed.commands.setContent(markdownWithBreaks(md || ''), { contentType: 'markdown' });
   const html = fillKatex(ed.getHTML());
   ed.destroy();
   return html;
@@ -116,13 +156,14 @@ function fillKatex(html) {
       el.textContent = latex;
     }
   });
+  renumberBlankChips(wrap);
   return wrap.innerHTML;
 }
 
 export function serializeHtmlToMarkdown(html) {
   const ed = createHeadlessEditor();
   ed.commands.setContent(html || '');
-  const md = ed.getMarkdown();
+  const md = sanitizeEditorMarkdown(ed.getMarkdown() || '');
   ed.destroy();
   return md;
 }

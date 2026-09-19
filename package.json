@@ -25,6 +25,7 @@
     "highlight.js": "^11.12.0",
     "katex": "^0.18.7",
     "lowlight": "^3.3.0",
+    "mathlive": "^0.110.0",
     "monaco-editor": "^0.52.0",
     "qu": "^0.1.0",
     "simplesets": "^1.2.0",

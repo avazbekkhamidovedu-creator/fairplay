@@ -737,6 +737,7 @@
   if (window.RichEditor && document.querySelector('[data-rich-mount="workspace-answer"]')) {
     RichEditor.configure({
       fileUploadUrl: app.dataset.fileUploadUrl || '',
+      fileAccept: app.dataset.fileAccept || 'image/*',
       csrfToken: ($('[name=csrfmiddlewaretoken]') || {}).value || '',
       messages: {
         fileUploadFailed: gettext('File upload failed.'),
@@ -1200,8 +1201,8 @@
     // collapses "Blank 1\nBlank 2" into one paragraph.
     if (rows.some(function (item) { return item && item.label; })) return '';
     var md = formatAnswerDisplay(rows);
-    // Prefer Tiptap/KaTeX so $$math$$ matches the editor. Server HTML is MathJax
-    // delimiters (\[...\]) that sit inside a closed <details> and often never paint.
+    // Prefer the same client renderer as the editor. Server HTML uses MathJax
+    // delimiters that sit inside a closed <details> and often never paint.
     if (md && window.RichEditor && typeof RichEditor.mdToHtml === 'function') {
       try {
         var client = RichEditor.mdToHtml(md);
@@ -1316,6 +1317,7 @@
     try {
       RichEditor.configure({
         fileUploadUrl: app.dataset.fileUploadUrl || '',
+        fileAccept: app.dataset.fileAccept || 'image/*',
         csrfToken: csrfToken() || '',
       });
     } catch (err) { /* ignore */ }

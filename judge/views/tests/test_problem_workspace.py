@@ -237,6 +237,7 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, reverse('editor_file_uploader'))
         self.assertContains(response, 'data-file-upload-url')
+        self.assertContains(response, 'data-file-accept="image/*"')
         self.assertNotContains(response, 'data-image-upload-url')
 
     def test_short_answer_workspace_embeds_answer_json_for_client_math(self):

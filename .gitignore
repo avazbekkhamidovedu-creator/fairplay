@@ -24,6 +24,8 @@ resources/rich_editor.js
 resources/vendor/katex.min.css
 resources/vendor/fonts/
 resources/vendor/katex-fonts/
+# Abandoned Vditor spike: never ship the 20MB+ dist tree.
+resources/vendor/vditor/
 resources/vars.scss
 sass_processed
 *.csv

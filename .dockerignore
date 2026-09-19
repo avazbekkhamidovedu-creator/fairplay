@@ -23,6 +23,7 @@ resources/rich_editor.css
 resources/vendor/katex.min.css
 resources/vendor/fonts
 resources/vendor/katex-fonts
+resources/vendor/vditor
 dmoj/local_settings.py
 bridge_logs
 *.sqlite3

@@ -7,28 +7,77 @@ import Paragraph from '@tiptap/extension-paragraph';
 const LEVEL_TO_TAG = { 1: 'h3', 2: 'h4', 3: 'h5' };
 const TAG_TO_LEVEL = { H1: 1, H2: 1, H3: 1, H4: 2, H5: 3, H6: 3 };
 
-const EMPTY_PARAGRAPH_MARKDOWN = '&nbsp;';
+const ALIGN_WRAP_RE = /^<(div|p)\s+[^>]*style="[^"]*text-align:\s*(center|right|left|justify)[^"]*"[^>]*>([\s\S]*?)<\/\1>/i;
+
+function wrapAlignedMarkdown(inner, align) {
+  if (!align || align === 'left' || align === 'start') return inner;
+  return `<div style="text-align:${align}">${inner}</div>`;
+}
 
 export const SiteParagraph = Paragraph.extend({
-  renderMarkdown: (node, helpers, ctx) => {
+  parseHTML() {
+    return [
+      { tag: 'p' },
+      {
+        tag: 'div',
+        getAttrs: (el) => {
+          if (typeof el === 'string' || !el.style) return false;
+          const align = el.style.textAlign;
+          if (!align || align === 'left' || align === 'start') return false;
+          return { textAlign: align };
+        },
+      },
+    ];
+  },
+  markdownTokenName: 'alignedBlock',
+  markdownTokenizer: {
+    name: 'alignedBlock',
+    level: 'block',
+    start: (src) => src.search(/<(?:div|p)\s+[^>]*text-align\s*:/i),
+    tokenize: (src, _tokens, helpers) => {
+      const m = src.match(ALIGN_WRAP_RE);
+      if (!m) return undefined;
+      const inner = m[3].replace(/^\n+|\n+$/g, '');
+      const blockInner = /\n/.test(inner) || /^#{1,6}\s/.test(inner);
+      return {
+        type: 'alignedBlock',
+        raw: m[0],
+        align: m[2].toLowerCase(),
+        blockInner,
+        tokens: blockInner
+          ? (helpers.blockTokens ? helpers.blockTokens(inner) : [])
+          : (helpers.inlineTokens ? helpers.inlineTokens(inner) : []),
+      };
+    },
+  },
+  parseMarkdown: (token, helpers) => {
+    const align = token.align || 'left';
+    if (token.blockInner) {
+      const kids = helpers.parseChildren(token.tokens || []) || [];
+      return kids.map((node) => {
+        if (node.type === 'paragraph' || node.type === 'heading') {
+          return { ...node, attrs: { ...(node.attrs || {}), textAlign: align } };
+        }
+        return node;
+      });
+    }
+    return helpers.createNode(
+      'paragraph',
+      { textAlign: align },
+      helpers.parseInline(token.tokens || []),
+    );
+  },
+  renderMarkdown: (node, helpers) => {
     // Do not append \n\n here. The document renderer already joins blocks
     // with \n\n; a second suffix doubles blank lines on every round-trip.
     const content = Array.isArray(node.content) ? node.content : [];
     let inner;
     if (content.length === 0) {
-      const previousContent = Array.isArray(ctx?.previousNode?.content)
-        ? ctx.previousNode.content
-        : [];
-      const previousEmpty = ctx?.previousNode?.type === 'paragraph' && previousContent.length === 0;
-      inner = previousEmpty ? EMPTY_PARAGRAPH_MARKDOWN : '';
+      inner = '';
     } else {
       inner = helpers.renderChildren(content);
     }
-    const align = node.attrs?.textAlign;
-    if (align && align !== 'left' && align !== 'start') {
-      return `<div style="text-align:${align}">${inner}</div>`;
-    }
-    return inner;
+    return wrapAlignedMarkdown(inner, node.attrs?.textAlign);
   },
 });
 
@@ -46,6 +95,10 @@ export const SiteHeading = Heading.extend({
       { tag: 'h6', attrs: { level: 3 } },
     ];
   },
+  renderMarkdown: (node, helpers) => wrapAlignedMarkdown(
+    `${'#'.repeat(node.attrs.level || 1)} ${helpers.renderChildren(node)}`,
+    node.attrs?.textAlign,
+  ),
   renderHTML({ node, HTMLAttributes }) {
     const tag = LEVEL_TO_TAG[node.attrs.level] || 'h3';
     return [tag, mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), 0];

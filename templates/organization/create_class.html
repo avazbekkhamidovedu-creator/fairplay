@@ -15,7 +15,7 @@
 
 {% block js_media %}
     {{ form.media.js }}
-    <script src="{{ static('rich_editor.js') }}"></script>
+    <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
     <script type="text/javascript">
         $(function () {
             $('#instructor-verification-btn').on('click', function () {

@@ -206,12 +206,12 @@ msgid "Enter answer"
 msgstr "请输入答案"
 
 #: problem create_v2 / rich_editor i18n
-msgid "Enter content; $$math$$ supported…"
-msgstr "请输入内容，支持 $$公式$$…"
+msgid "Enter content…"
+msgstr "请输入内容…"
 
 #: problem create_v2 / rich_editor i18n
-msgid "Enter option text ($$math$$ supported)"
-msgstr "请输入选项内容（支持 $$公式$$）"
+msgid "Enter option text…"
+msgstr "请输入选项内容…"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Expected answer"
@@ -324,8 +324,8 @@ msgid "Mark as sample/pretest"
 msgstr "设为样例/pretest"
 
 #: problem create_v2 / rich_editor i18n
-msgid "Markdown and $$math$$ supported…"
-msgstr "支持 Markdown 与 $$公式$$…"
+msgid "Enter Markdown…"
+msgstr "请输入 Markdown…"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Markdown help"
@@ -632,4 +632,136 @@ msgstr "加载提交列表失败。"
 #: resources/workspace.js
 msgid "Could not delete this problem."
 msgstr "无法删除该题目。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Action"
+msgstr "操作"
+
+#: resources/js/rich_editor help / math palette
+msgid "Arrows"
+msgstr "箭头"
+
+#: resources/js/rich_editor help / math palette
+msgid "Basic"
+msgstr "常用"
+
+#: resources/js/rich_editor help / math palette
+msgid "Blank"
+msgstr "填空"
+
+#: resources/js/rich_editor help / math palette
+msgid "Click an existing formula in the document to edit it."
+msgstr "已经写好的公式，点一下就能再改。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Click the formula button, then click a symbol. Dashed boxes are slots you can type into."
+msgstr "点公式按钮，再点符号。虚线方块是可以填内容的空位。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Close dialog"
+msgstr "关闭弹窗"
+
+#: resources/js/rich_editor help / math palette
+msgid "Delimiters"
+msgstr "括号"
+
+#: resources/js/rich_editor help / math palette
+msgid "Editor help"
+msgstr "编辑器说明"
+
+#: resources/js/rich_editor help / math palette
+msgid "Equation"
+msgstr "公式"
+
+#: resources/js/rich_editor help / math palette
+msgid "Equations"
+msgstr "公式"
+
+#: resources/js/rich_editor help / math palette
+msgid "Fill-in blanks"
+msgstr "填空"
+
+#: resources/js/rich_editor help / math palette
+msgid "Greek"
+msgstr "希腊字母"
+
+#: resources/js/rich_editor help / math palette
+msgid "If you prefer typing markup, switch to the Markdown tab. These are the site-specific bits:"
+msgstr "如果更习惯写标记，可切到 Markdown。下面是本站额外支持的写法："
+
+#: resources/js/rich_editor help / math palette
+msgid "In a code block, press Ctrl+Enter to leave the block."
+msgstr "在代码块里按 Ctrl+Enter 可以跳出代码块。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Insert a table, then use the cell menu to add or delete rows and columns."
+msgstr "插入表格后，用单元格菜单增删行和列。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Keyboard shortcuts"
+msgstr "快捷键"
+
+#: resources/js/rich_editor help / math palette
+msgid "Mention"
+msgstr "提及"
+
+#: resources/js/rich_editor help / math palette
+msgid "Misc"
+msgstr "其他"
+
+#: resources/js/rich_editor help / math palette
+msgid "On fill-in problems, click the blank button. Chips are numbered automatically."
+msgstr "出填空题时点空格按钮，空会自动编号。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Operators"
+msgstr "运算符"
+
+#: resources/js/rich_editor help / math palette
+msgid "Ordered list"
+msgstr "有序列表"
+
+#: resources/js/rich_editor help / math palette
+msgid "Press Enter for a new line. Leave a blank line when you want a new paragraph."
+msgstr "按 Enter 换行。需要新段落时，空一行再写。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Quote"
+msgstr "引用"
+
+#: resources/js/rich_editor help / math palette
+msgid "Relationships"
+msgstr "关系"
+
+#: resources/js/rich_editor help / math palette
+msgid "Select text, then use the toolbar for headings, bold, italic, highlight, inline code, quotes, lists, and alignment."
+msgstr "先选中文字，再用工具栏设置标题、加粗、斜体、高亮、行内代码、引用、列表和对齐。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Style"
+msgstr "效果"
+
+#: resources/js/rich_editor help / math palette
+msgid "Switch between Rich text and Markdown at any time. The toolbar works in both modes. Students see the same formatting as you."
+msgstr "可以随时在「富文本」和 Markdown 之间切换，工具栏两边都能用。学生看到的格式和你在编辑框里看到的一样。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Tables, images, links"
+msgstr "表格、图片、链接"
+
+#: resources/js/rich_editor help / math palette
+msgid "Turn on “Directly edit LaTeX” only if you want to type raw LaTeX."
+msgstr "只有需要手写 LaTeX 时，再勾选「直接编辑 LaTeX」。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Unordered list"
+msgstr "无序列表"
+
+#: resources/js/rich_editor help / math palette
+msgid "Use the link button for a web link, or @ to mention a user."
+msgstr "用链接按钮加网址，或用 @ 提及用户。"
+
+#: resources/js/rich_editor help / math palette
+msgid "Use the paperclip to upload an image or file, or paste an image from the clipboard."
+msgstr "点回形针上传图片或文件，也可以直接把图片粘贴进编辑框。"
 

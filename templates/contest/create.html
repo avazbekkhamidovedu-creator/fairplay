@@ -700,7 +700,7 @@
 {% endblock %}
 
 {% block js_media %}
-    <script src="{{ static('rich_editor.js') }}"></script>
+    <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
     <script src="{{ static('markdown_preview.js') }}"></script>
     <script type="text/javascript">
         // Timezone whose wall clock the teacher is currently editing. Drives the

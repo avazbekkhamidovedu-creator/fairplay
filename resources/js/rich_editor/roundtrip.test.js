@@ -34,7 +34,7 @@ describe('RichEditor facade', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    RichEditor.configure({ fileUploadUrl: '', searchUsersUrl: '' });
+    RichEditor.configure({ fileUploadUrl: '', searchUsersUrl: '', fileAccept: '' });
     RichEditor._instances.forEach((ed) => ed.destroy && ed.destroy());
     RichEditor._instances.clear();
     document.body.innerHTML = '';
@@ -80,10 +80,49 @@ describe('RichEditor facade', () => {
     expect(out).toMatch(/\|/);
   });
 
+  it('mdToHtml numbers blank chips like the editor', () => {
+    const html = RichEditor.mdToHtml('A {{blank}} and {{blank}} end');
+    expect(html).toMatch(/rte-blank/);
+    expect(html).toContain('(1)');
+    expect(html).toContain('(2)');
+    expect(html).not.toMatch(/pv-blankinput|<input/i);
+  });
+
   it('mdToHtml paints dollar math with KaTeX', () => {
     const html = RichEditor.mdToHtml('Area is $$a^2+b^2$$.');
     expect(html).toMatch(/katex/);
     expect(html).toMatch(/data-latex/);
+  });
+
+  it('keeps single newlines as line breaks in preview HTML', () => {
+    const html = RichEditor.mdToHtml('请说明进程\nhhhh\ngggg');
+    expect(html).toMatch(/进程[\s\S]*<br[\s\S]*hhhh[\s\S]*<br[\s\S]*gggg/i);
+  });
+
+  it('keeps single newlines after a blank-line paragraph split', () => {
+    const src = [
+      '请说明什么是进程及其通常包含的基本资源；进一步解释线程的含义，并比较线程与进程的主要区别',
+      '',
+      'hhhh',
+      'hh',
+      'h',
+      'hhhh',
+      'hhhh',
+      'hhhh',
+    ].join('\n');
+    const html = RichEditor.mdToHtml(src);
+    expect(html, html).not.toMatch(/hhhh hh/);
+    expect(html, html).toMatch(/hhhh[\s\S]*<br[\s\S]*hh/i);
+  });
+
+  it('does not emit or keep &nbsp; for empty paragraphs', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    RichEditor.setMarkdown('stem', 'hello\n\n\n\n\n\nworld');
+    const out = RichEditor.getMarkdown('stem');
+    expect(out).not.toContain('&nbsp;');
+    expect(out).not.toContain('\u00a0');
+    expect(RichEditor.mdToHtml('a\n\n&nbsp;\n\nb')).not.toContain('&nbsp;');
   });
 
   it('escapes quotes in resized image markdown', () => {
@@ -167,6 +206,78 @@ describe('RichEditor facade', () => {
     expect(RichEditor.getMarkdown('stem')).toContain('text-align:center');
   });
 
+  it('keeps alignment across markdown load and mode switches', async () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const src = '<div style="text-align:center">**keep**</div>';
+    RichEditor.setMarkdown('stem', src);
+    expect(RichEditor.getMarkdown('stem')).toContain('text-align:center');
+    expect(RichEditor.getMarkdown('stem')).toMatch(/keep/);
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-mode="markdown"]').click();
+    expect(RichEditor.getMarkdown('stem')).toContain('text-align:center');
+    root.querySelector('[data-mode="rich"]').click();
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(RichEditor.getMarkdown('stem')).toContain('text-align:center');
+    expect(RichEditor.getMarkdown('stem')).toMatch(/\*\*keep\*\*|keep/);
+  });
+
+  it('applies alignment from the toolbar in markdown mode', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-mode="markdown"]').click();
+    const ta = root.querySelector('.rich-editor-markdown textarea');
+    ta.value = 'middle';
+    ta.selectionStart = ta.selectionEnd = 0;
+    root.querySelector('[data-cmd="alignCenter"]').click();
+    expect(ta.value).toContain('text-align:center');
+    expect(ta.value).toContain('middle');
+    root.querySelector('[data-cmd="alignLeft"]').click();
+    expect(ta.value).not.toContain('text-align:');
+    expect(ta.value).toContain('middle');
+  });
+
+  it('applies headings and list prefixes from the toolbar in markdown mode', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-mode="markdown"]').click();
+    const ta = root.querySelector('.rich-editor-markdown textarea');
+    ta.value = 'Title';
+    ta.selectionStart = ta.selectionEnd = 0;
+    const head = root.querySelector('.rte-heading');
+    head.value = 'h3';
+    head.dispatchEvent(new Event('change'));
+    expect(ta.value).toMatch(/^# Title/);
+    head.value = 'h5';
+    head.dispatchEvent(new Event('change'));
+    expect(ta.value).toMatch(/^### Title/);
+    head.value = 'p';
+    head.dispatchEvent(new Event('change'));
+    expect(ta.value.trim()).toBe('Title');
+    ta.value = 'item';
+    ta.selectionStart = ta.selectionEnd = 0;
+    root.querySelector('[data-cmd="ul"]').click();
+    expect(ta.value).toMatch(/^- item/);
+    root.querySelector('[data-cmd="ul"]').click();
+    expect(ta.value.trim()).toBe('item');
+    root.querySelector('[data-cmd="ol"]').click();
+    expect(ta.value).toMatch(/^1\. item/);
+    root.querySelector('[data-cmd="quote"]').click();
+    expect(ta.value).toMatch(/^> item/);
+  });
+
+  it('paints stored markdown with the same mdToHtml path', () => {
+    document.body.innerHTML = '<script type="application/json" class="rte-md-source">"**hi** $$a^2$$"</script><div class="paint-target"></div>';
+    RichEditor.paintTargets();
+    const el = document.querySelector('.paint-target');
+    expect(el.classList.contains('rte-display')).toBe(true);
+    expect(el.innerHTML).toMatch(/hi/);
+    expect(el.innerHTML).toMatch(/katex|data-latex/);
+  });
+
   it('mode switch does not drop markdown', async () => {
     document.body.innerHTML = '<div data-rich-mount="stem"></div>';
     RichEditor.mount(document);
@@ -209,11 +320,71 @@ describe('RichEditor facade', () => {
     root.querySelector('[data-cmd="math"]').click();
     const input = document.querySelector('.rte-math-input');
     expect(input).toBeTruthy();
+    expect(document.querySelector('#rte-math-popover').hidden).toBe(false);
+    expect(document.querySelector('.rte-math-latex-check')).toBeTruthy();
+    expect(document.querySelector('.rte-math-tab.is-active')).toBeTruthy();
+    expect(document.querySelectorAll('.rte-math-key').length).toBeGreaterThan(8);
     input.value = 'E=mc^2';
     document.querySelector('#rte-math-popover .rte-btn-ok').click();
     const md = RichEditor.getMarkdown('stem');
     expect(md).toMatch(/\$\$E=mc\^2\$\$/);
     expect(md).not.toMatch(/\$\$\s*\n/);
+  });
+
+  it('inserts vector and hat as editable MathLive boxes', () => {
+    expect(RichEditor._toMathLiveInsert('\\vec{\\placeholder{}}')).toBe('\\overrightarrow{#0}');
+    expect(RichEditor._toMathLiveInsert('\\hat{\\placeholder{}}')).toBe('\\overset{\\wedge}{#0}');
+    expect(RichEditor._toMathLiveInsert('\\overline{\\placeholder{}}')).toBe('\\overline{#0}');
+    expect(RichEditor._toMathLiveInsert('\\frac{\\placeholder{}}{\\placeholder{}}')).toBe('\\frac{#0}{#0}');
+  });
+
+  it('inserts a palette symbol into the LaTeX box', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    document.querySelector('[data-cmd="math"]').click();
+    const input = document.querySelector('.rte-math-input');
+    input.value = '';
+    document.querySelector('[data-math-tex="\\\\pi"]').click();
+    expect(input.value).toContain('\\pi');
+    document.querySelector('#rte-math-popover .rte-btn-ok').click();
+    expect(RichEditor.getMarkdown('stem')).toMatch(/\\pi/);
+  });
+
+  it('ships the Canvas RCE Basic board', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    document.querySelector('[data-cmd="math"]').click();
+    const tex = [...document.querySelectorAll('[data-math-panel="basic"] [data-math-tex]')]
+      .map((el) => el.getAttribute('data-math-tex'));
+    expect(tex).toContain('\\binom{\\placeholder{}}{\\placeholder{}}');
+    expect(tex).toContain('\\therefore');
+    expect(tex).toContain('\\mathbb{N}');
+    expect(tex).toContain('\\vec{\\placeholder{}}');
+    expect(tex.length).toBeGreaterThan(30);
+    const face = (title) => document.querySelector(`[data-math-panel="basic"] [title="${title}"]`).innerHTML;
+    expect(face('Subscript')).toMatch(/katex/);
+    expect(face('Superscript')).toMatch(/katex/);
+    expect(face('Binomial Coefficient')).toMatch(/katex/);
+    expect(face('Subscript')).not.toBe(face('Superscript'));
+    expect(face('Definite Integral')).not.toBe(face('Indefinite Integral'));
+    expect(face('Vector (Notation)')).toMatch(/katex/);
+    expect(face('Fraction')).toMatch(/katex/);
+    expect(face('Bar')).toMatch(/katex/);
+    expect(face('Hat')).toMatch(/katex/);
+  });
+
+  it('toggles the math dialog to a LaTeX textarea', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    document.querySelector('[data-cmd="math"]').click();
+    const check = document.querySelector('.rte-math-latex-check');
+    const input = document.querySelector('.rte-math-input');
+    check.checked = true;
+    check.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(input.hidden).toBe(false);
+    input.value = 'x^{2}';
+    document.querySelector('#rte-math-popover .rte-btn-ok').click();
+    expect(RichEditor.getMarkdown('stem')).toMatch(/\$\$x\^\{2\}\$\$/);
   });
 
   it('keeps one-line math on one line across mode switches', async () => {
@@ -250,6 +421,50 @@ describe('RichEditor facade', () => {
     expect(fileBtn.style.display).not.toBe('none');
     expect(fileBtn.getAttribute('title')).toMatch(/image/i);
     expect(document.querySelector('[data-cmd="image"]')).toBeNull();
+  });
+
+  it('opens the help dialog in rich text and markdown', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-cmd="help"]').click();
+    const modal = document.querySelector('#rte-help-modal');
+    expect(modal).toBeTruthy();
+    expect(modal.hidden).toBe(false);
+    expect(modal.querySelector('.rte-help-dialog')).toBeTruthy();
+    expect(modal.textContent).toContain('Switch between Rich text and Markdown');
+    expect(modal.textContent).toContain('{{blank}}');
+    modal.querySelector('.rte-help-close').click();
+    expect(modal.hidden).toBe(true);
+    root.querySelector('[data-mode="markdown"]').click();
+    root.querySelector('[data-cmd="help"]').click();
+    expect(document.querySelector('#rte-help-modal').hidden).toBe(false);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.querySelector('#rte-help-modal').hidden).toBe(true);
+  });
+
+  it('inserts a markdown link from the toolbar in markdown mode', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-mode="markdown"]').click();
+    root.querySelector('[data-cmd="link"]').click();
+    const pop = document.querySelector('#rte-link-popover');
+    expect(pop.hidden).toBe(false);
+    pop.querySelector('.rte-link-text').value = 'Docs';
+    pop.querySelector('.rte-link-url').value = 'https://example.com';
+    pop.querySelector('.rte-btn-ok').click();
+    expect(root.querySelector('textarea').value).toContain('[Docs](https://example.com)');
+  });
+
+  it('restricts the paperclip to images when fileAccept is image/*', () => {
+    RichEditor.configure({ fileUploadUrl: '/upload-file', fileAccept: 'image/*' });
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const fileBtn = document.querySelector('[data-cmd="file"]');
+    expect(fileBtn.getAttribute('title')).toBe('Upload an image');
+    fileBtn.click();
+    expect(document.getElementById('rte-file').accept).toBe('image/*');
   });
 
   it('pastes a clipboard image through the file upload endpoint', async () => {
@@ -354,14 +569,14 @@ describe('RichEditor facade', () => {
     document.body.innerHTML = '<div data-rich-mount="stem"></div>';
     RichEditor.mount(document);
     const root = document.querySelector('[data-editor="stem"]');
-    const btn = root.querySelector('[data-cmd="math"]');
+    const btn = root.querySelector('[data-cmd="link"]');
     btn.getBoundingClientRect = () => ({
       top: 80, right: 200, bottom: 108, left: 160, width: 40, height: 28, x: 160, y: 80,
     });
     Object.defineProperty(window, 'scrollY', { configurable: true, value: 900 });
     Object.defineProperty(window, 'scrollX', { configurable: true, value: 40 });
     btn.click();
-    const pop = document.querySelector('#rte-math-popover');
+    const pop = document.querySelector('#rte-link-popover');
     expect(pop.hidden).toBe(false);
     expect(pop.style.position).toBe('fixed');
     expect(parseFloat(pop.style.top)).toBeCloseTo(114, 0);
@@ -389,9 +604,33 @@ describe('RichEditor facade', () => {
     expect(picker.querySelectorAll('.rte-table-picker-cell').length).toBe(100);
     picker.querySelector('[data-rows="2"][data-cols="3"]').click();
     expect(picker.hidden).toBe(true);
+    const inst = RichEditor._instances.get('stem');
+    inst.state.doc.descendants((node) => {
+      if (node.type.name === 'tableHeader') {
+        expect(node.childCount).toBe(1);
+      }
+    });
     const md = RichEditor.getMarkdown('stem');
     expect(pipeCols(md)).toBe(3);
     expect(pipeRows(md)).toBe(3);
+    expect(md).toMatch(/Col 1/);
+    expect(md).toMatch(/Col 2/);
+    expect(md).toMatch(/Col 3/);
+    expect(md).not.toMatch(/<br>/);
+  });
+
+  it('inserts the same Col N placeholders in markdown mode', () => {
+    document.body.innerHTML = '<div data-rich-mount="stem"></div>';
+    RichEditor.mount(document);
+    const root = document.querySelector('[data-editor="stem"]');
+    root.querySelector('[data-mode="markdown"]').click();
+    root.querySelector('[data-cmd="table"]').click();
+    document.querySelector('[data-rows="2"][data-cols="3"]').click();
+    const md = root.querySelector('textarea').value;
+    expect(md).toMatch(/Col 1/);
+    expect(md).toMatch(/Col 3/);
+    expect(pipeCols(md)).toBe(3);
+    expect(md).not.toMatch(/<br>/);
   });
 
   it('adds and deletes table rows and columns from the cell menu', () => {

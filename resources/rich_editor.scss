@@ -171,14 +171,19 @@
 }
 
 /* Match site content-description (markdown headings are demoted +2: #→h3) */
-.rich-editor-body h3 { font-size: 1.6em; margin: 0.5em 0 0.35em; font-weight: 700; }
-.rich-editor-body h4 {
+.rte-display {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.rich-editor-body h3, .rte-display h3 { font-size: 1.6em; margin: 0.5em 0 0.35em; font-weight: 700; }
+.rich-editor-body h4, .rte-display h4 {
   font-size: 1.35em; margin: 0.5em 0 0.35em; font-weight: 600;
   border-bottom: 1px solid rgba(0,0,0,0.08); padding-bottom: 0.25em;
 }
-.rich-editor-body h5 { font-size: 1.15em; margin: 0.45em 0 0.3em; font-weight: 600; }
-.rich-editor-body h1, .rich-editor-body h2 { font-size: 1.6em; margin: 0.5em 0 0.35em; font-weight: 700; }
-.rich-editor-body mark {
+.rich-editor-body h5, .rte-display h5 { font-size: 1.15em; margin: 0.45em 0 0.3em; font-weight: 600; }
+.rich-editor-body h1, .rich-editor-body h2,
+.rte-display h1, .rte-display h2 { font-size: 1.6em; margin: 0.5em 0 0.35em; font-weight: 700; }
+.rich-editor-body mark, .rte-display mark {
   background: var(--oj-warning-soft);
   color: inherit;
   padding: 0 2px;
@@ -187,20 +192,37 @@
   font-weight: inherit;
 }
 .rich-editor-body mark em,
-.rich-editor-body mark i {
+.rich-editor-body mark i,
+.rte-display mark em,
+.rte-display mark i {
   font-style: normal;
 }
-.rich-editor-body blockquote {
-  margin: 0.4em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--oj-accent); color: var(--oj-text-secondary); background: var(--oj-success-soft);
+.rich-editor-body blockquote,
+.rte-display blockquote,
+.content-description.rte-display blockquote,
+.pv-stem.content-description blockquote {
+  margin: 0.4em 0;
+  padding: 0.2em 0.8em;
+  border: 0;
+  border-left: 3px solid var(--oj-accent);
+  color: var(--oj-text-secondary);
+  background: var(--oj-accent-soft, rgba(41, 128, 185, 0.12));
 }
-.rich-editor-body code {
+.rich-editor-body blockquote p,
+.rte-display blockquote p,
+.content-description.rte-display blockquote p,
+.pv-stem.content-description blockquote p {
+  margin: 0.15em 0 !important;
+  padding: 0 !important;
+}
+.rich-editor-body code, .rte-display code {
   background: var(--oj-bg); padding: 0.1em 0.35em; border-radius: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.92em;
 }
-.rich-editor-body pre {
+.rich-editor-body pre, .rte-display pre {
   background: var(--oj-bg); padding: 0.55rem 0.75rem; border-radius: 4px; overflow: auto; margin: 0.5em 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.9em; line-height: 1.45;
 }
-.rich-editor-body pre code {
+.rich-editor-body pre code, .rte-display pre code {
   background: transparent; padding: 0; font-size: inherit;
 }
 .rich-editor-body .code-block {
@@ -270,11 +292,12 @@
   min-height: 2.4em;
   white-space: pre-wrap;
 }
-.rich-editor-body ul, .rich-editor-body ol {
+.rich-editor-body ul, .rich-editor-body ol,
+.rte-display ul, .rte-display ol {
   margin: 0.4em 0; padding-left: 1.6em;
 }
-.rich-editor-body li { margin: 0.15em 0; }
-.rich-editor-body img { max-width: 100%; cursor: pointer; vertical-align: middle; }
+.rich-editor-body li, .rte-display li { margin: 0.15em 0; }
+.rich-editor-body img, .rte-display img { max-width: 100%; cursor: pointer; vertical-align: middle; }
 .rich-editor-body a.rte-attachment {
   display: inline-flex;
   align-items: center;
@@ -295,12 +318,14 @@
 /* Match site .h-scrollable-table / .table (problem markdown renderer).
    Editor overrides: top/left align + min height so the caret tracks the cell.
    Size to content (not 100% / fixed columns); wrap only after hitting the editor width. */
-.rich-editor-body .h-scrollable-table {
+.rich-editor-body .h-scrollable-table,
+.rte-display .h-scrollable-table {
   overflow-x: auto;
   max-width: 100%;
   margin: 0.6em 0;
 }
-.rich-editor-body table.table {
+.rich-editor-body table.table,
+.rte-display table.table {
   border-spacing: 0;
   width: max-content;
   max-width: 100%;
@@ -310,7 +335,9 @@
   table-layout: auto;
 }
 .rich-editor-body table.table th,
-.rich-editor-body table.table td {
+.rich-editor-body table.table td,
+.rte-display table.table th,
+.rte-display table.table td {
   border: 1px solid var(--oj-border);
   padding: 0.45em 1.35em 0.45em 0.65em; /* right pad: room for corner handle */
   vertical-align: top;
@@ -324,12 +351,14 @@
   word-break: break-word;
   position: relative;
 }
-.rich-editor-body table.table th {
+.rich-editor-body table.table th,
+.rte-display table.table th {
   background: var(--oj-text-secondary);
   color: var(--oj-surface);
   font-weight: 600;
 }
-.rich-editor-body table.table td {
+.rich-editor-body table.table td,
+.rte-display table.table td {
   background: var(--oj-surface);
 }
 /* Keep cell content readable — only a light outline, not a full blue wash */
@@ -498,7 +527,9 @@
 }
 #rte-overlays .rte-popover,
 #rte-overlays .rte-table-picker,
-#rte-overlays .rte-table-cell-menu {
+#rte-overlays .rte-table-cell-menu,
+#rte-overlays .rte-help-modal,
+#rte-overlays .rte-math-modal {
   pointer-events: auto;
 }
 
@@ -587,12 +618,13 @@
   align-items: flex-start;
   justify-content: center;
   padding: 6vh 1rem 2rem;
+  pointer-events: auto;
 }
 .rte-help-modal[hidden] { display: none !important; }
 .rte-help-dialog {
   background: var(--oj-surface);
   border-radius: 8px;
-  width: min(720px, 100%);
+  width: min(800px, 100%);
   max-height: 80vh;
   overflow: auto;
   box-shadow: 0 12px 40px rgba(0,0,0,0.2);
@@ -620,8 +652,20 @@
   cursor: pointer;
   color: var(--oj-text-muted);
 }
-.rte-help-body { padding: 0.85rem 1.1rem 1.2rem; font-size: 13px; }
-.rte-help-table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+.rte-help-body { padding: 0.85rem 1.1rem 1.2rem; font-size: 13px; line-height: 1.55; }
+.rte-help-body h3 {
+  margin: 1.1rem 0 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+.rte-help-body h3:first-child { margin-top: 0.15rem; }
+.rte-help-body p { margin: 0.35rem 0 0.55rem; }
+.rte-help-body ul {
+  margin: 0 0 0.7rem;
+  padding-left: 1.2rem;
+}
+.rte-help-body li { margin: 0.2rem 0; }
+.rte-help-table { width: 100%; border-collapse: collapse; margin: 0.45rem 0 0.8rem; }
 .rte-help-table th, .rte-help-table td {
   border: 1px solid var(--oj-border);
   padding: 0.4rem 0.55rem;
@@ -656,6 +700,8 @@
   pointer-events: none;
 }
 
+.rich-editor-body .rte-blank,
+.rte-display .rte-blank,
 .rte-blank {
   display: inline-block;
   min-width: 2.4em;
@@ -684,6 +730,140 @@
   color: inherit;
   text-decoration: none;
 }
+.rte-math-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10060;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  pointer-events: auto;
+}
+.rte-math-modal[hidden] { display: none !important; }
+.rte-math-dialog {
+  background: var(--oj-surface);
+  border-radius: 8px;
+  width: min(640px, 100%);
+  max-height: min(90vh, 720px);
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+}
+.rte-math-body { padding: 0.75rem 1rem 0.35rem; overflow: auto; }
+.rte-math-palette { margin-bottom: 0.75rem; }
+.rte-math-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border-bottom: 1px solid var(--oj-border);
+  margin-bottom: 0.55rem;
+}
+.rte-math-tab {
+  border: 0;
+  background: transparent;
+  padding: 0.4rem 0.7rem;
+  font-size: 13px;
+  color: var(--oj-text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.rte-math-tab.is-active {
+  color: var(--oj-text);
+  font-weight: 600;
+  border-bottom-color: var(--oj-focus, #2a9d5c);
+}
+.rte-math-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.rte-math-keys[hidden] { display: none !important; }
+.rte-math-key {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.35rem;
+  border: 1px solid var(--oj-border);
+  border-radius: 4px;
+  background: var(--oj-bg, var(--oj-surface));
+  color: var(--oj-text);
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.rte-math-key--icon {
+  min-width: 2.2rem;
+  height: auto;
+  min-height: 2.15rem;
+  padding: 0.12rem 0.38rem;
+}
+.rte-math-key .katex {
+  font-size: 13.5px;
+  pointer-events: none;
+  line-height: 1;
+}
+.rte-math-key:hover { border-color: var(--oj-focus, #2a9d5c); }
+.rte-math-field-wrap {
+  min-height: 3.2rem;
+  margin-bottom: 0.55rem;
+}
+.rte-math-field-wrap[hidden] { display: none !important; }
+.rte-math-field {
+  display: block;
+  width: 100%;
+  min-height: 3.2rem;
+  font-size: 1.25rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--oj-border);
+  border-radius: 6px;
+  background: var(--oj-bg, var(--oj-surface));
+}
+.rte-math-field::part(virtual-keyboard-toggle),
+.rte-math-field::part(menu-toggle) { display: none; }
+.rte-math-latex-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 13px;
+  color: var(--oj-text-secondary);
+  margin: 0.35rem 0 0.15rem;
+  user-select: none;
+  cursor: pointer;
+}
+.rte-math-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--oj-border);
+  border-radius: 4px;
+  padding: 0.45rem 0.55rem;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--oj-text);
+  resize: vertical;
+}
+.rte-math-input[hidden] { display: none !important; }
+.rte-math-dialog .rte-popover-actions {
+  padding: 0.65rem 1rem 0.85rem;
+  margin: 0;
+  background: var(--oj-surface);
+  border-top: 1px solid var(--oj-surface-soft);
+}
+
+math-virtual-keyboard,
+.ML__keyboard {
+  display: none !important;
+  pointer-events: none !important;
+}
+
 .tiptap-mathematics-render {
   cursor: pointer;
   display: inline-block;

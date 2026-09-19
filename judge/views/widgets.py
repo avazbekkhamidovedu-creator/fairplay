@@ -9,7 +9,7 @@ from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, \
-    HttpResponseRedirect, JsonResponse
+    HttpResponseNotFound, HttpResponseRedirect, JsonResponse
 from django.utils.translation import gettext as _, ngettext
 from django.views.decorators.http import require_POST
 
@@ -216,6 +216,8 @@ def django_uploader(image):
 
 @login_required
 def martor_image_uploader(request):
+    if not request.user.is_staff:
+        return HttpResponseNotFound()
     if request.method != 'POST' or 'markdown-image-upload' not in request.FILES:
         return HttpResponseBadRequest('Invalid request')
 
