@@ -61,29 +61,48 @@ def _cache_incr(key, timeout):
         return 1
 
 
-def _student_rate_limited(user):
-    rate = int(getattr(settings, 'DMOJ_EDITOR_ATTACHMENT_RATE_LIMIT', 0) or 0)
-    window = int(getattr(settings, 'DMOJ_EDITOR_ATTACHMENT_RATE_WINDOW_SECONDS', 60) or 0)
-    if rate <= 0 or window <= 0:
-        return False
-    used = _cache_incr('editor_attach_rate:%s' % user.pk, window)
-    return used > rate
+def _cache_decr(key):
+    try:
+        cache.decr(key)
+    except ValueError:
+        pass
 
 
-def _consume_student_daily_quota(user):
-    limit = int(getattr(settings, 'DMOJ_EDITOR_ATTACHMENT_DAILY_LIMIT', 0) or 0)
-    if limit <= 0:
-        return True
-    day = timezone.now().strftime('%Y-%m-%d')
-    key = 'editor_attach_day:%s:%s' % (user.pk, day)
-    used = _cache_incr(key, 26 * 3600)
+def _reserve_counter(key, timeout, limit):
+    used = _cache_incr(key, timeout)
     if used > limit:
-        try:
-            cache.decr(key)
-        except ValueError:
-            pass
+        _cache_decr(key)
         return False
     return True
+
+
+def _reserve_student_upload_slots(user):
+    """Reserve rate/daily slots. Refund the reservation if the caller never saves."""
+    reserved = []
+    rate = int(getattr(settings, 'DMOJ_EDITOR_ATTACHMENT_RATE_LIMIT', 0) or 0)
+    window = int(getattr(settings, 'DMOJ_EDITOR_ATTACHMENT_RATE_WINDOW_SECONDS', 60) or 0)
+    if rate > 0 and window > 0:
+        key = 'editor_attach_rate:%s' % user.pk
+        if not _reserve_counter(key, window, rate):
+            return reserved, JsonResponse({
+                'status': 429,
+                'error': _('Too many uploads. Please wait and try again.'),
+            }, status=429)
+        reserved.append(key)
+
+    limit = int(getattr(settings, 'DMOJ_EDITOR_ATTACHMENT_DAILY_LIMIT', 0) or 0)
+    if limit > 0:
+        day = timezone.now().strftime('%Y-%m-%d')
+        key = 'editor_attach_day:%s:%s' % (user.pk, day)
+        if not _reserve_counter(key, 26 * 3600, limit):
+            for reserved_key in reserved:
+                _cache_decr(reserved_key)
+            return [], JsonResponse({
+                'status': 429,
+                'error': _('Daily upload limit reached.'),
+            }, status=429)
+        reserved.append(key)
+    return reserved, None
 
 
 @login_required
@@ -115,16 +134,11 @@ def editor_file_uploader(request):
         }, status=403)
 
     student_upload = not _can_upload_editor_files(request.user)
-    if student_upload and _student_rate_limited(request.user):
-        return JsonResponse({
-            'status': 429,
-            'error': _('Too many uploads. Please wait and try again.'),
-        }, status=429)
-    if student_upload and not _consume_student_daily_quota(request.user):
-        return JsonResponse({
-            'status': 429,
-            'error': _('Daily upload limit reached.'),
-        }, status=429)
+    reserved = []
+    if student_upload:
+        reserved, denied = _reserve_student_upload_slots(request.user)
+        if denied is not None:
+            return denied
 
     profile = getattr(request, 'profile', None)
     attachment = EditorAttachment(uploaded_by=profile, original_name=original_name, size=upload.size)
@@ -133,10 +147,16 @@ def editor_file_uploader(request):
         attachment.size = upload.size
         attachment.save()
     except StorageUnavailableError:
+        for key in reserved:
+            _cache_decr(key)
         return JsonResponse({
             'status': 503,
             'error': _('The file store is temporarily unavailable. Please try again later.'),
         }, status=503)
+    except Exception:
+        for key in reserved:
+            _cache_decr(key)
+        raise
 
     url = request.build_absolute_uri(reverse('editor_file_download', args=[attachment.uuid]))
     return JsonResponse({

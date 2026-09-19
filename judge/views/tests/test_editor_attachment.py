@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from judge.models import EditorAttachment, StoredFileRecord
 from judge.models.tests.util import CommonDataMixin, create_user
+from judge.storage import StorageUnavailableError
 from judge.storage.resilient import ResilientStorage, generate_editor_attachment_key
 
 
@@ -150,6 +151,30 @@ class EditorAttachmentTest(CommonDataMixin, TestCase):
             {'markdown-file-upload': _png('two.png')},
         )
         self.assertEqual(second.status_code, 429, second.content)
+
+    @override_settings(
+        CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
+        DMOJ_EDITOR_ATTACHMENT_DAILY_LIMIT=1,
+        DMOJ_EDITOR_ATTACHMENT_RATE_LIMIT=1,
+        DMOJ_EDITOR_ATTACHMENT_RATE_WINDOW_SECONDS=60,
+    )
+    def test_failed_store_does_not_consume_student_quota(self):
+        self.client.force_login(self.users['normal'])
+        storage = EditorAttachment._meta.get_field('file').storage
+        with mock.patch.object(storage, 'save', side_effect=StorageUnavailableError):
+            failed = self.client.post(
+                reverse('editor_file_uploader'),
+                {'markdown-file-upload': _png('fail.png')},
+            )
+        self.assertEqual(failed.status_code, 503, failed.content)
+        self.assertFalse(EditorAttachment.objects.exists())
+
+        retry = self.client.post(
+            reverse('editor_file_uploader'),
+            {'markdown-file-upload': _png('ok.png')},
+        )
+        self.assertEqual(retry.status_code, 200, retry.content)
+        self.assertEqual(EditorAttachment.objects.count(), 1)
 
     def test_instructor_quota_does_not_apply_to_staff(self):
         self.client.force_login(self.users['superuser'])
