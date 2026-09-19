@@ -91,6 +91,7 @@
   {% endif %}
   {% if workspace_in_contest %}
     {% include "contest/media-js.html" %}
+    <script>window.DKUOJ_CONTEST_TIMER_REDIRECT = '{{ workspace_return_url|escapejs }}';</script>
   {% endif %}
 {% endblock %}
 {% block body %}
@@ -110,6 +111,7 @@
      data-timer-seconds="{{ workspace_timer_seconds|default(0) }}"
      data-timer-window-seconds="{{ workspace_timer_window_seconds|default(0) }}"
      data-show-timer="{{ '1' if workspace_show_timer else '0' }}"
+     data-return-url="{{ workspace_return_url }}"
      {% if workspace_participation_id %}data-participation-id="{{ workspace_participation_id }}"{% endif %}
      {% if workspace_manual_submit_notice %}data-manual-submit-notice="1"{% endif %}
      {% if workspace_submission %}data-submission-id="{{ workspace_submission.id }}" data-submission-graded="{{ '1' if workspace_submission.is_graded else '0' }}"{% if not workspace_submission.results_hidden %} data-submission-result="{{ workspace_submission.result or '' }}"{% endif %}{% if workspace_submission.status_url %} data-status-url="{{ workspace_submission.status_url }}"{% endif %}{% if workspace_submission.id_secret %} data-sub-channel="sub_{{ workspace_submission.id_secret }}"{% endif %}{% endif %}

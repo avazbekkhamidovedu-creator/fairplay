@@ -166,7 +166,7 @@ class SimpleContestCreationForm(ContestForm):
             'key', 'name', 'authors', 'curators', 'testers', 'tester_see_submissions', 'tester_see_scoreboard',
             'spectators', 'is_visible', 'use_clarifications', 'hide_problem_tags', 'hide_problem_authors',
             'show_short_display', 'run_pretests_only', 'locked_after', 'scoreboard_visibility', 'points_precision',
-            'allow_virtual_participation', 'start_time', 'end_time', 'time_limit',
+            'allow_virtual_participation', 'allow_spectate', 'start_time', 'end_time', 'time_limit',
             'description', 'og_image',
             'logo_override_image', 'tags', 'summary', 'format_name', 'format_config', 'problem_label_script',
             'is_rated', 'rate_all', 'rating_floor', 'rating_ceiling', 'performance_ceiling_override',
@@ -182,7 +182,7 @@ class SimpleContestCreationForm(ContestForm):
             'key', 'authors', 'curators', 'testers', 'tester_see_submissions', 'tester_see_scoreboard',
             'spectators', 'is_visible', 'use_clarifications', 'hide_problem_tags', 'hide_problem_authors',
             'show_short_display', 'run_pretests_only', 'locked_after', 'scoreboard_visibility', 'points_precision',
-            'allow_virtual_participation', 'time_limit', 'description', 'og_image',
+            'allow_virtual_participation', 'allow_spectate', 'time_limit', 'description', 'og_image',
             'logo_override_image', 'tags',
             'summary', 'format_name', 'format_config', 'problem_label_script', 'is_rated', 'rate_all',
             'rating_floor', 'rating_ceiling', 'performance_ceiling_override', 'rate_exclude', 'access_code',
@@ -225,6 +225,7 @@ class SimpleContestCreationForm(ContestForm):
         cleaned_data['scoreboard_visibility'] = Contest.SCOREBOARD_VISIBLE
         cleaned_data['points_precision'] = Contest._meta.get_field('points_precision').default
         cleaned_data['allow_virtual_participation'] = True
+        cleaned_data['allow_spectate'] = False
         cleaned_data['time_limit'] = None
         cleaned_data['og_image'] = ''
         cleaned_data['logo_override_image'] = ''
@@ -258,7 +259,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
             'fields': (
                 'is_visible', 'use_clarifications', 'hide_problem_tags', 'hide_problem_authors',
                 'show_short_display', 'run_pretests_only', 'locked_after', 'scoreboard_visibility',
-                'points_precision', 'allow_virtual_participation', 'hide_sandbox_output',
+                'points_precision', 'allow_virtual_participation', 'allow_spectate', 'hide_sandbox_output',
             ),
         }),
         (_('Advanced Details'), {
@@ -297,7 +298,8 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                            'tester_see_scoreboard', 'spectators')}),
         (_('Settings'), {'fields': ('is_visible', 'use_clarifications', 'hide_problem_tags', 'hide_problem_authors',
                                     'show_short_display', 'run_pretests_only', 'locked_after', 'scoreboard_visibility',
-                                    'points_precision', 'allow_virtual_participation', 'hide_sandbox_output')}),
+                                    'points_precision', 'allow_virtual_participation', 'allow_spectate',
+                                    'hide_sandbox_output')}),
         (_('Scheduling'), {'fields': ('start_time', 'end_time', 'time_limit')}),
         (_('Details'), {'fields': ('description', 'og_image', 'logo_override_image', 'tags', 'summary')}),
         (_('Format'), {'fields': ('format_name', 'format_config', 'problem_label_script')}),
@@ -363,6 +365,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
                 'scoreboard_visibility': Contest.SCOREBOARD_VISIBLE,
                 'points_precision': str(Contest._meta.get_field('points_precision').default),
                 'allow_virtual_participation': True,
+                'allow_spectate': False,
                 'hide_sandbox_output': False,
                 'time_limit': '',
                 'description': '',
@@ -412,6 +415,7 @@ class ContestAdmin(NoBatchDeleteMixin, SortableAdminBase, VersionAdmin):
         obj.scoreboard_visibility = Contest.SCOREBOARD_VISIBLE
         obj.points_precision = Contest._meta.get_field('points_precision').default
         obj.allow_virtual_participation = True
+        obj.allow_spectate = False
         obj.hide_sandbox_output = False
         obj.time_limit = None
         obj.og_image = ''

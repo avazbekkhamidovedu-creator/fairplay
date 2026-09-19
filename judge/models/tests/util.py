@@ -210,6 +210,9 @@ class CreateContest(CreateModel):
             'start_time': _now - timezone.timedelta(days=100),
             'end_time': _now + timezone.timedelta(days=100),
             'scoreboard_visibility': Contest.SCOREBOARD_VISIBLE,
+            # Preserve legacy test fixtures unless a test is specifically
+            # exercising the new opt-in assignment setting.
+            'allow_spectate': True,
         }
 
 

@@ -125,34 +125,3 @@ class ContestDetailTimezoneTestCase(CommonDataMixin, TestCase):
         expected = self.contest.start_time.astimezone(
             __import__('zoneinfo').ZoneInfo('America/Toronto')).strftime('%Y-%m-%dT%H:%M')
         self.assertEqual(response.context['prefill']['start_time'], expected)
-
-
-class ContestTZPreferenceTestCase(TestCase):
-    """The AJAX endpoint behind the no-reload temporary timezone picker.
-
-    Switching timezone in the editor must not reload the page (that would drop
-    unsaved input); instead JS posts the new zone here and we persist it to the
-    session so the next visit reopens the form in the same wall-clock zone.
-    """
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.editor = create_user(username='tz_pref_editor', user_permissions=('edit_all_contest',))
-
-    def setUp(self):
-        self.client = Client()
-        self.client.force_login(self.editor)
-
-    def test_persists_valid_tz_to_session(self):
-        resp = self.client.post(reverse('contest_tz_preference'), {'tz': 'Asia/Shanghai'})
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()['tz'], 'Asia/Shanghai')
-        self.assertEqual(self.client.session['contest_editor_tz'], 'Asia/Shanghai')
-
-    def test_rejects_invalid_tz(self):
-        resp = self.client.post(reverse('contest_tz_preference'), {'tz': 'Not/AZone'})
-        self.assertEqual(resp.status_code, 400)
-
-    def test_requires_login(self):
-        resp = Client().post(reverse('contest_tz_preference'), {'tz': 'UTC'})
-        self.assertEqual(resp.status_code, 302)

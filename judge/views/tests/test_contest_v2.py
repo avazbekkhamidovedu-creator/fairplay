@@ -761,9 +761,11 @@ class ContestListV2ActionsTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_list')).content.decode()
         row = _assignment_row_html(html, self.ongoing.key)
         self.assertIn('js-del-assignment', row)
-        self.assertIn('assignment-select', row)
         self.assertIn('fa-trash', row)
-        self.assertIn('bulk-delete-btn', html)
+        self.assertNotIn('assignment-select', row)
+        self.assertNotIn('id="bulk-delete-btn"', html)
+        self.assertNotIn('select-all-assignments', html)
+        self.assertNotIn('cl-list--selectable', html)
         self.assertIn(reverse('contest_bulk_delete'), html)
         manage = row[row.index('class="cl-manage-actions"'):row.index('class="cl-join-actions"')]
         self.assertLess(manage.index('fa-trash'), manage.index('fa-pencil'))
@@ -775,6 +777,15 @@ class ContestListV2ActionsTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_list')).content.decode()
         row = _assignment_row_html(html, self.upcoming.key)
         self.assertIn('>Remind<', row)
+
+    def test_ongoing_spectate_path_is_labelled_spectate_not_virtual(self):
+        """Editors may spectate, but cannot join as live participants."""
+        self.client.force_login(self.users['superuser'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+        row = _assignment_row_html(html, self.ongoing.key)
+        join_actions = row[row.index('class="cl-join-actions"'):]
+        self.assertIn('>Spectate</button>', join_actions)
+        self.assertNotIn('>Virtual</button>', join_actions)
 
     def test_past_virtual_join_stays_in_join_slot(self):
         self.client.force_login(self.users['normal_user'])

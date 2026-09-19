@@ -53,36 +53,6 @@
         accent-color: var(--oj-accent);
     }
 
-    .toolbar .bulk-delete-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-
-    .toolbar .bulk-delete-btn:not(:disabled):hover {
-        border-color: var(--oj-danger);
-        color: var(--oj-danger) !important;
-    }
-
-    .toolbar .bulk-delete-btn .fa {
-        color: inherit;
-    }
-
-    .toolbar .bulk-select-all {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        height: var(--oj-control-height);
-        padding: 0 8px;
-        cursor: pointer;
-
-        input[type="checkbox"] {
-            width: 15px;
-            height: 15px;
-            margin: 0;
-            accent-color: var(--oj-accent);
-            cursor: pointer;
-        }
-    }
 }
 
 /* Layout switch (inline segmented control) */
@@ -179,23 +149,6 @@
     }
 }
 
-.cl-list--selectable .cl-row {
-    grid-template-columns: 1.75rem minmax(0, 1fr) auto;
-}
-
-.cl-select {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    input[type="checkbox"] {
-        width: 15px;
-        height: 15px;
-        margin: 0;
-        accent-color: var(--oj-accent);
-        cursor: pointer;
-    }
-}
 
 /* Border radius on first/last rows within a section */
 .cl-list > .cl-row:first-child {
@@ -595,14 +548,6 @@
 @media (max-width: 720px) {
     .cl-row {
         grid-template-columns: 1fr;
-    }
-
-    .cl-list--selectable .cl-row {
-        grid-template-columns: 1.75rem minmax(0, 1fr);
-    }
-
-    .cl-list--selectable .cl-row > :not(.cl-select) {
-        grid-column: 2;
     }
 
     .cl-trailing {

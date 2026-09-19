@@ -98,7 +98,7 @@
                     <form action="{{ url('contest_join', contest.key) }}" method="post"
                           class="contest-join-pseudotab unselectable button">
                         {% csrf_token %}
-                        <input type="submit" value="{{ _('Spectate contest') }}" class="contest-join">
+                        <input type="submit" value="{{ _('Spectate assignment') }}" class="contest-join">
                     </form>
                 {% else %}
                     <form action="{{ url('contest_join', contest.key) }}" method="post"

@@ -100,6 +100,14 @@ class ContestEditorHelperTestCase(TestCase):
             ContestCreate._queue_rescore('somekey')
         mock_task.s.assert_called_once_with('somekey')
 
+    def test_contest_problem_points_defaults_to_library_score(self):
+        problem = create_problem('helper-pts', is_public=True, points=25)
+        self.assertEqual(ContestCreate._contest_problem_points(None, problem), 25)
+        self.assertEqual(ContestCreate._contest_problem_points('', problem), 25)
+        self.assertEqual(ContestCreate._contest_problem_points('bogus', problem), 25)
+        self.assertEqual(ContestCreate._contest_problem_points(40, problem), 40)
+        self.assertEqual(ContestCreate._contest_problem_points('40', problem), 40)
+
 
 class ContestEditViewTestCase(CommonDataMixin, TestCase):
     """Edit mode: access control, prefill, in-place update, key rename, M2M."""
@@ -152,7 +160,7 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
             'description': 'updated description',
             'is_visible': True, 'is_rated': False, 'use_clarifications': True,
             'hide_problem_tags': False, 'hide_problem_authors': False,
-            'allow_virtual_participation': True, 'run_pretests_only': True,
+            'allow_virtual_participation': True, 'allow_spectate': False, 'run_pretests_only': True,
             'rate_all': False, 'tester_see_submissions': False, 'tester_see_scoreboard': True,
             'show_short_display': False, 'is_private': False, 'is_organization_private': False,
             'limit_join_organizations': False, 'seb_required': False,
@@ -251,112 +259,27 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertRegex(html, r'id="id_hide_sandbox_output"[^>]*checked')
         self.assertNotIn('lock_non_code_part', html)
 
-    def test_get_tmp_timezone_overrides_echo(self):
-        """?tz=... only changes how stored UTC is echoed back, not the saved profile tz."""
+    def test_get_echoes_using_profile_timezone(self):
+        """The editor's Validity fields echo stored UTC in the profile timezone."""
         self.client.force_login(self.editor)
         profile = self.editor.profile
         profile.timezone = 'America/Toronto'
         profile.save()
-
-        # Sanity: without ?tz= the echo uses the profile zone (America/Toronto).
-        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
-        self.assertEqual(response.context['user_timezone'], 'America/Toronto')
         from zoneinfo import ZoneInfo
         start_utc = self.contest.start_time
+        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
+        self.assertEqual(response.context['user_timezone'], 'America/Toronto')
         self.assertEqual(response.context['prefill']['start_time'],
                          start_utc.astimezone(ZoneInfo('America/Toronto')).strftime('%Y-%m-%dT%H:%M'))
 
-        # ?tz=Asia/Shanghai → echo shifts to UTC+8 but profile stays Toronto.
-        response = self.client.get(
-            reverse('contest_edit', args=['editablecontest']) + '?tz=Asia/Shanghai')
-        self.assertEqual(response.context['user_timezone'], 'Asia/Shanghai')
-        self.assertEqual(response.context['prefill']['start_time'],
-                         start_utc.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%dT%H:%M'))
-        profile.refresh_from_db()
-        self.assertEqual(profile.timezone, 'America/Toronto')
-
-    def test_get_tmp_timezone_invalid_falls_back_to_profile(self):
-        self.client.force_login(self.editor)
-        profile = self.editor.profile
-        profile.timezone = 'America/Toronto'
-        profile.save()
-        response = self.client.get(
-            reverse('contest_edit', args=['editablecontest']) + '?tz=Not/AZone')
-        self.assertEqual(response.context['user_timezone'], 'America/Toronto')
-
-    def test_get_tz_options_contains_curated_zones_and_current(self):
-        self.client.force_login(self.editor)
-        profile = self.editor.profile
-        profile.timezone = 'Asia/Shanghai'
-        profile.save()
-        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
-        names = [name for name, _ in response.context['tz_options']]
-        self.assertIn('Asia/Shanghai', names)          # current first
-        self.assertIn('America/New_York', names)
-        self.assertEqual(names[0], 'Asia/Shanghai')    # current labelled & first
-        self.assertTrue(names[0] == 'Asia/Shanghai')
-
-    def test_tmp_timezone_persists_across_requests_in_session(self):
-        """Choosing ?tz= once must stick for the rest of the session, so a
-        teacher does not have to re-pick the zone every time they reopen the
-        form — while the profile timezone stays untouched."""
-        self.client.force_login(self.editor)
-        profile = self.editor.profile
-        profile.timezone = 'America/Toronto'
-        profile.save()
-
-        # First visit with an explicit zone → stored in session.
-        response = self.client.get(
-            reverse('contest_edit', args=['editablecontest']) + '?tz=Asia/Shanghai')
-        self.assertEqual(response.context['user_timezone'], 'Asia/Shanghai')
-
-        # Second visit WITHOUT ?tz= → the session choice is still in effect.
-        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
-        self.assertEqual(response.context['user_timezone'], 'Asia/Shanghai')
-
-        # Explicit ?tz= still overrides the remembered one.
-        response = self.client.get(
-            reverse('contest_edit', args=['editablecontest']) + '?tz=Europe/Paris')
-        self.assertEqual(response.context['user_timezone'], 'Europe/Paris')
-        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
-        self.assertEqual(response.context['user_timezone'], 'Europe/Paris')
-
-        # Profile was never modified.
-        profile.refresh_from_db()
-        self.assertEqual(profile.timezone, 'America/Toronto')
-
-    def test_tmp_timezone_session_ignores_invalid_value(self):
-        """A bad zone in the session must not crash the page — fall back to
-        the profile timezone."""
-        self.client.force_login(self.editor)
-        profile = self.editor.profile
-        profile.timezone = 'America/Toronto'
-        profile.save()
-        session = self.client.session
-        session['contest_editor_tz'] = 'Not/AZone'
-        session.save()
-        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
-        self.assertEqual(response.context['user_timezone'], 'America/Toronto')
-
-    def test_tmp_timezone_session_not_set_for_anonymous_flow(self):
-        """No ?tz= and no remembered zone → profile timezone (default)."""
-        self.client.force_login(self.editor)
-        profile = self.editor.profile
-        profile.timezone = 'America/Chicago'
-        profile.save()
-        response = self.client.get(reverse('contest_edit', args=['editablecontest']))
-        self.assertEqual(response.context['user_timezone'], 'America/Chicago')
-
-    def test_post_wall_clock_in_selected_tz_roundtrips(self):
+    def test_post_wall_clock_in_profile_timezone_roundtrips(self):
         """Regression: a teacher editing in a non-browser timezone must be able
         to set a wall-clock time that is stored as the matching UTC instant.
 
-        Frontend contract: when the temporary timezone picker shows
-        Asia/Shanghai, the datetime-local input ``2026-08-04T22:56`` is sent as
-        ``2026-08-04T14:56:00.000Z`` (22:56 CST = 14:56 UTC). The backend must
-        store that instant, and echoing back in Asia/Shanghai must reproduce
-        22:56. Before the fix the browser-local timezone leaked into the
-        conversion, so the stored instant was 12h off.
+        Frontend contract: the datetime-local input ``2026-08-04T22:56`` (in the
+        profile timezone, here Asia/Shanghai) is sent as ``2026-08-04T14:56:00.000Z``
+        (22:56 CST = 14:56 UTC). The backend must store that instant, and echoing
+        back in the profile timezone must reproduce 22:56.
         """
         self.client.force_login(self.editor)
         profile = self.editor.profile
@@ -1079,6 +1002,8 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('data-format="single"', lib)
         self.assertIn('data-format="truefalse"', lib)
         self.assertIn('data-format="multiple"', lib)
+        self.assertIn('data-points="%s"' % int(code.points), lib)
+        self.assertIn('function defaultCpPoints', lib)
         self.assertIn('cp-opt-partial', lib)
         self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-pretested', lib)
         self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-out-prefix', lib)
@@ -1171,7 +1096,8 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertGreater(advanced.count('class="oj-tip"'), 10)
         basic = before[before.find('Basic information'):]
         self.assertIn('The assignment format module to use.', basic)
-        self.assertIn('Allow users to join virtually after the assignment ends.', basic)
+        self.assertIn('Allow students to start a virtual participation after the assignment ends.', basic)
+        self.assertIn('Spectator submissions do not count toward statistics or rankings.', basic)
         self.assertIn('A JSON object to serve as the configuration for the chosen assignment format module.', advanced)
 
     def test_advanced_fields_round_trip(self):
@@ -1180,6 +1106,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
             format_name='icpc',
             format_config='{"penalty": 20}',
             allow_virtual_participation=False,
+            allow_spectate=True,
             use_clarifications=False,
             hide_problem_tags=True,
             show_short_display=True,
@@ -1196,6 +1123,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(contest.format_name, 'icpc')
         self.assertEqual(contest.format_config, {'penalty': 20})
         self.assertFalse(contest.allow_virtual_participation)
+        self.assertTrue(contest.allow_spectate)
         self.assertFalse(contest.use_clarifications)
         self.assertTrue(contest.hide_problem_tags)
         self.assertTrue(contest.show_short_display)
@@ -1212,6 +1140,7 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         prefill = edit.context['prefill']
         self.assertEqual(prefill['format_name'], 'icpc')
         self.assertFalse(prefill['allow_virtual_participation'])
+        self.assertTrue(prefill['allow_spectate'])
         self.assertFalse(prefill['use_clarifications'])
         self.assertTrue(prefill['hide_problem_tags'])
         self.assertTrue(prefill['show_short_display'])
@@ -1224,9 +1153,11 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         before, advanced = html.split('class="advanced-hidden"', 1)
         self.assertIn('id="id_format_name"', before)
         self.assertIn('id="id_allow_virtual_participation"', before)
+        self.assertIn('id="id_allow_spectate"', before)
         self.assertNotIn('id="id_format_config"', before)
         self.assertNotIn('id="id_format_name"', advanced)
         self.assertNotIn('id="id_allow_virtual_participation"', advanced)
+        self.assertNotIn('id="id_allow_spectate"', advanced)
         self.assertIn('id="id_format_config"', advanced)
         self.assertNotIn('name="cheat_level"', html)
 
@@ -1731,13 +1662,29 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertEqual(cp.order, 1)
 
     def test_create_with_problem_ids_backward_compatible(self):
-        # The legacy plain-id list (points default to 100) must still work.
-        problem = create_problem('problems-legacy-test', is_public=True)
+        # The legacy plain-id list keeps the library problem's own score.
+        problem = create_problem('problems-legacy-test', is_public=True, points=25)
         response = self._post(name='Legacy Prob', key='legacyprob', problem_ids=[problem.id])
         self.assertEqual(response.status_code, 200)
         contest = Contest.objects.get(key='legacyprob')
         cp = contest.contest_problems.get()
-        self.assertEqual(cp.points, 100)
+        self.assertEqual(cp.points, 25)
+
+    def test_create_omitted_points_uses_problem_points(self):
+        problem = create_problem('omit-pts', is_public=True, points=7)
+        response = self._post(name='Omit Pts', key='omitpts', problems=[{'id': problem.id}])
+        self.assertEqual(response.status_code, 200, response.content)
+        contest = Contest.objects.get(key='omitpts')
+        self.assertEqual(contest.contest_problems.get().points, 7)
+
+    def test_library_rows_carry_problem_points(self):
+        problem = create_problem('lib-pts-25', is_public=True, points=25)
+        html = self.client.get(reverse('contest_create')).content.decode()
+        marker = 'data-pid="%s"' % problem.id
+        start = html.find(marker)
+        self.assertNotEqual(start, -1, marker)
+        row = html[start:html.find('</tr>', start)]
+        self.assertIn('data-points="25"', row)
 
     # NOTE: attaching a *hidden* problem is only possible for trusted editors
     # (edit_all_contest / see_private_problem). Curators are blocked from it —

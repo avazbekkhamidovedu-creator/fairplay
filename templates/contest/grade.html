@@ -899,9 +899,9 @@
                 if (s.manual_points != null && s.manual_points !== s.machine_points) {
                     bits += '<span class="badge badge-manual" title="{{ _('Manual grade differs from the machine score') }}">manual</span>';
                 }
-                // "release" tag: the score is visible to the student — either no
-                // manual override (machine score always shown) or a released one.
-                if (s.manual_points == null || s.released) {
+                // "release" describes a concrete published manual grade. A
+                // machine-only submission has no manual release state.
+                if (s.manual_points != null && s.released) {
                     bits += '<span class="badge badge-released" title="{{ _('Released to student') }}">release</span>';
                 }
                 if (s.virtual) bits += '<span class="badge badge-hidden">V</span>';

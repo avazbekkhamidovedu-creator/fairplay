@@ -269,9 +269,9 @@ class ContestGradeScorePropagationTestCase(GradeTestBase):
     The grade page reads ``Submission.points``, and the score students actually
     see (ranking / per-problem cells / participation.score) is computed by the
     contest format from ``ContestSubmission.points`` via
-    ``participation.recompute_results()``. Saving a manual grade must therefore
-    update both — this was a gap (only ``Submission.points`` was written) and
-    is the contract locked here.
+    ``participation.recompute_results()``. A manual grade must therefore only
+    reach the contest score once it is *released* — before that the machine
+    score stands, so saving an override never leaks it through the scoreboard.
     """
 
     @classmethod
@@ -291,33 +291,29 @@ class ContestGradeScorePropagationTestCase(GradeTestBase):
         self.assertEqual(
             SubmissionManualGrade.objects.get(submission=self.submission).points, 90.0)
 
-    def test_manual_grade_updates_contest_submission_points(self):
-        # Regression: the teacher's override used to die on the base row only;
-        # the student-facing ContestSubmission.points stayed on the machine score.
+    def test_manual_grade_keeps_machine_contest_score_until_release(self):
+        # The override lives in SubmissionManualGrade; ContestSubmission.points
+        # (what the ranking reads) must stay on the machine score until release.
         response = self._client(self.curator).post(
             self.save_url, {'submission': str(self.submission.id), 'score': '90'})
         self.assertEqual(response.status_code, 200, response.content)
         self.contest_submission.refresh_from_db()
+        self.assertEqual(self.contest_submission.points, 50.0)
+        self._client(self.curator).post(self.release_url)
+        self.contest_submission.refresh_from_db()
         self.assertEqual(self.contest_submission.points, 90.0)
 
-    def test_manual_grade_recomputes_participation_score(self):
-        # recompute_results() folds the manual grade into participation.score,
-        # which is what the scoreboard / ranking display.
+    def test_release_recomputes_participation_score(self):
+        # participation.score (scoreboard/ranking) shows machine until the
+        # manual grade is released, then folds in the released override.
         response = self._client(self.curator).post(
             self.save_url, {'submission': str(self.submission.id), 'score': '90'})
         self.assertEqual(response.status_code, 200, response.content)
         self.participation.refresh_from_db()
+        self.assertEqual(self.participation.score, 50.0)
+        self._client(self.curator).post(self.release_url)
+        self.participation.refresh_from_db()
         self.assertEqual(self.participation.score, 90.0)
-
-    def test_manual_grade_propagates_to_contest_score(self):
-        # End-to-end contract for "manual grade must be visible to students":
-        # the format's per-problem score for the student's live participation
-        # reflects the manual grade.
-        response = self._client(self.curator).post(
-            self.save_url, {'submission': str(self.submission.id), 'score': '90'})
-        self.assertEqual(response.status_code, 200, response.content)
-        self.contest_submission.refresh_from_db()
-        self.assertEqual(self.contest_submission.points, 90.0)
 
 
 class ContestGradeRejudgeInteractionTestCase(GradeTestBase):
@@ -328,11 +324,12 @@ class ContestGradeRejudgeInteractionTestCase(GradeTestBase):
     def setUpTestData(cls):
         super().setUpTestData()
 
-    def test_rejudge_machine_score_does_not_wipe_manual_grade(self):
-        # Teacher overrides the score to 90...
+    def test_rejudge_machine_score_does_not_wipe_released_manual_grade(self):
+        # Teacher overrides the score to 90 and releases it...
         response = self._client(self.curator).post(
             self.save_url, {'submission': str(self.submission.id), 'score': '90'})
         self.assertEqual(response.status_code, 200, response.content)
+        self._client(self.curator).post(self.release_url)
         # ...then the judge finishes a rejudge: machine points recompute to 60.
         self.submission.case_points = 60
         self.submission.case_total = 100
@@ -342,11 +339,31 @@ class ContestGradeRejudgeInteractionTestCase(GradeTestBase):
         self.submission.update_contest()
         self.submission.refresh_from_db()
         self.contest_submission.refresh_from_db()
-        # The base machine score is recomputed to 60, but the manual override
-        # (90) still wins for the actual contest score — a rejudge must not
-        # wipe the teacher's grade.
+        # The base machine score is recomputed to 60, but the released manual
+        # override (90) still wins for the actual contest score — a rejudge
+        # must not wipe a released grade.
         self.assertEqual(self.submission.points, 60.0)
         self.assertEqual(self.contest_submission.points, 90.0)
+
+    def test_rejudge_keeps_machine_score_for_unreleased_manual_grade(self):
+        # An unreleased override must NOT survive a rejudge as the contest
+        # score: the machine score (60) stands until the teacher releases.
+        self._client(self.curator).post(
+            self.save_url, {'submission': str(self.submission.id), 'score': '90'})
+        self.submission.case_points = 60
+        self.submission.case_total = 100
+        self.submission.save(update_fields=['case_points', 'case_total'])
+        self.submission.points = round(60 / 100 * 100, 1)
+        self.submission.save(update_fields=['points'])
+        self.submission.update_contest()
+        self.submission.refresh_from_db()
+        self.contest_submission.refresh_from_db()
+        self.assertEqual(self.submission.points, 60.0)
+        self.assertEqual(self.contest_submission.points, 60.0)
+        # The teacher's grade record survives regardless.
+        grade = SubmissionManualGrade.objects.get(submission=self.submission)
+        self.assertEqual(grade.points, 90.0)
+        self.assertFalse(grade.released)
 
 
 class ContestGradeReleaseVariantTestCase(GradeTestBase):
@@ -398,6 +415,36 @@ class ContestGradeReleaseVariantTestCase(GradeTestBase):
         my_grade.refresh_from_db()
         self.assertTrue(other_grade.released)
         self.assertFalse(my_grade.released)
+
+    def test_release_batch_loads_affected_participations_once(self):
+        """Release All must not query ContestParticipation once per student."""
+        classmate = create_user(username='gradevar_release_classmate')
+        other_part = create_contest_participation(contest=self.contest, user=classmate.profile)
+        other_sub = Submission.objects.create(
+            user=classmate.profile, problem=self.problem,
+            language=Language.objects.get(key='PY3'), result='WA', status='D',
+            contest_object=self.contest, points=25.0, case_total=100,
+        )
+        ContestSubmission.objects.create(
+            submission=other_sub, problem=self.contest_problem,
+            participation=other_part, points=25.0,
+        )
+        SubmissionManualGrade.objects.create(
+            submission=other_sub, points=70.0, machine_points=25.0,
+        )
+        self._save_grade('77')
+
+        manager = ContestParticipation.objects
+        with mock.patch.object(manager, 'in_bulk', wraps=manager.in_bulk) as in_bulk:
+            response = self._client(self.curator).post(self.release_url)
+
+        self.assertEqual(response.status_code, 200)
+        in_bulk.assert_called_once()
+        self.assertEqual(set(in_bulk.call_args.args[0]), {self.participation.id, other_part.id})
+        self.participation.refresh_from_db()
+        other_part.refresh_from_db()
+        self.assertEqual(self.participation.score, 77.0)
+        self.assertEqual(other_part.score, 70.0)
 
     def test_release_anonymous_is_401(self):
         response = Client().post(self.release_url)
