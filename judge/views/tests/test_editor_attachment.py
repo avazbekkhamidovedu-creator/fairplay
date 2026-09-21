@@ -1,14 +1,16 @@
 import tempfile
 from unittest import mock
 
+from django.core.cache import cache
 from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from judge.models import EditorAttachment, StoredFileRecord
 from judge.models.tests.util import CommonDataMixin, create_user
+from judge.storage import StorageUnavailableError
 from judge.storage.resilient import ResilientStorage, generate_editor_attachment_key
 
 
@@ -39,6 +41,7 @@ class EditorAttachmentTest(CommonDataMixin, TestCase):
 
     def setUp(self):
         super().setUp()
+        cache.clear()
         self._tmp = tempfile.TemporaryDirectory()
         storage = ResilientStorage(primary=FileSystemStorage(location=self._tmp.name), backup=None)
         self._patch = mock.patch.object(EditorAttachment._meta.get_field('file'), 'storage', storage)
@@ -89,14 +92,104 @@ class EditorAttachmentTest(CommonDataMixin, TestCase):
         self.assertEqual(download['Content-Type'], 'image/png')
         self.assertNotIn('attachment', download.get('Content-Disposition', '').lower())
 
-    def test_normal_user_cannot_upload(self):
+    def test_normal_user_can_upload_image(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.post(
+            reverse('editor_file_uploader'),
+            {'markdown-file-upload': _png()},
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertEqual(body['status'], 200)
+        self.assertTrue(body['is_image'])
+        self.assertTrue(EditorAttachment.objects.exists())
+
+    def test_normal_user_cannot_upload_pdf(self):
         self.client.force_login(self.users['normal'])
         response = self.client.post(
             reverse('editor_file_uploader'),
             {'markdown-file-upload': _pdf()},
         )
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 403, response.content)
         self.assertFalse(EditorAttachment.objects.exists())
+
+    @override_settings(
+        CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
+        DMOJ_EDITOR_ATTACHMENT_DAILY_LIMIT=1,
+        DMOJ_EDITOR_ATTACHMENT_RATE_LIMIT=10,
+        DMOJ_EDITOR_ATTACHMENT_RATE_WINDOW_SECONDS=60,
+    )
+    def test_normal_user_hits_daily_quota(self):
+        self.client.force_login(self.users['normal'])
+        first = self.client.post(
+            reverse('editor_file_uploader'),
+            {'markdown-file-upload': _png('one.png')},
+        )
+        self.assertEqual(first.status_code, 200, first.content)
+        second = self.client.post(
+            reverse('editor_file_uploader'),
+            {'markdown-file-upload': _png('two.png')},
+        )
+        self.assertEqual(second.status_code, 429, second.content)
+        self.assertEqual(EditorAttachment.objects.count(), 1)
+
+    @override_settings(
+        CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
+        DMOJ_EDITOR_ATTACHMENT_DAILY_LIMIT=40,
+        DMOJ_EDITOR_ATTACHMENT_RATE_LIMIT=1,
+        DMOJ_EDITOR_ATTACHMENT_RATE_WINDOW_SECONDS=60,
+    )
+    def test_normal_user_hits_rate_limit(self):
+        self.client.force_login(self.users['normal'])
+        first = self.client.post(
+            reverse('editor_file_uploader'),
+            {'markdown-file-upload': _png('one.png')},
+        )
+        self.assertEqual(first.status_code, 200, first.content)
+        second = self.client.post(
+            reverse('editor_file_uploader'),
+            {'markdown-file-upload': _png('two.png')},
+        )
+        self.assertEqual(second.status_code, 429, second.content)
+
+    @override_settings(
+        CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
+        DMOJ_EDITOR_ATTACHMENT_DAILY_LIMIT=1,
+        DMOJ_EDITOR_ATTACHMENT_RATE_LIMIT=1,
+        DMOJ_EDITOR_ATTACHMENT_RATE_WINDOW_SECONDS=60,
+    )
+    def test_failed_store_does_not_consume_student_quota(self):
+        self.client.force_login(self.users['normal'])
+        storage = EditorAttachment._meta.get_field('file').storage
+        with mock.patch.object(storage, 'save', side_effect=StorageUnavailableError):
+            failed = self.client.post(
+                reverse('editor_file_uploader'),
+                {'markdown-file-upload': _png('fail.png')},
+            )
+        self.assertEqual(failed.status_code, 503, failed.content)
+        self.assertFalse(EditorAttachment.objects.exists())
+
+        retry = self.client.post(
+            reverse('editor_file_uploader'),
+            {'markdown-file-upload': _png('ok.png')},
+        )
+        self.assertEqual(retry.status_code, 200, retry.content)
+        self.assertEqual(EditorAttachment.objects.count(), 1)
+
+    def test_instructor_quota_does_not_apply_to_staff(self):
+        self.client.force_login(self.users['superuser'])
+        with override_settings(
+            DMOJ_EDITOR_ATTACHMENT_DAILY_LIMIT=1,
+            DMOJ_EDITOR_ATTACHMENT_RATE_LIMIT=1,
+            DMOJ_EDITOR_ATTACHMENT_RATE_WINDOW_SECONDS=60,
+        ):
+            for name in ('a.png', 'b.png'):
+                response = self.client.post(
+                    reverse('editor_file_uploader'),
+                    {'markdown-file-upload': _png(name)},
+                )
+                self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(EditorAttachment.objects.count(), 2)
 
     def test_anonymous_upload_redirects(self):
         response = self.client.post(
@@ -114,6 +207,14 @@ class EditorAttachmentTest(CommonDataMixin, TestCase):
             )
         self.assertEqual(response.status_code, 400)
         self.assertFalse(EditorAttachment.objects.exists())
+
+    def test_normal_user_cannot_upload_martor_image(self):
+        self.client.force_login(self.users['normal'])
+        response = self.client.post(
+            reverse('martor_image_uploader'),
+            {'markdown-image-upload': _png()},
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_create_v2_exposes_file_upload_url(self):
         self.client.force_login(self.users['creator'])

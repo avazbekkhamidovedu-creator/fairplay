@@ -8,8 +8,8 @@ from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.db.models import Q
-from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, HttpResponseNotFound, \
-    HttpResponseRedirect, JsonResponse
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, \
+    HttpResponseNotFound, HttpResponseRedirect, JsonResponse
 from django.utils.translation import gettext as _, ngettext
 from django.views.decorators.http import require_POST
 

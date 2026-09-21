@@ -10,6 +10,7 @@ from judge.models import (
     Judge,
     Language,
     Problem,
+    ProblemBlank,
     ProblemMCQConfig,
     ProblemMCQOption,
     ProblemTemplate,
@@ -230,6 +231,30 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(detail, 'Raw submitted answer')
         self.assertContains(detail, 'id="workspace-result-comments"')
 
+    def test_short_answer_workspace_exposes_upload_urls_for_students(self):
+        short = create_problem(code='ws-shortup', is_public=True, submission_type='S')
+        response = self.client.get(reverse('problem_detail', args=[short.code]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse('editor_file_uploader'))
+        self.assertContains(response, 'data-file-upload-url')
+        self.assertContains(response, 'data-file-accept="image/*"')
+        self.assertNotContains(response, 'data-image-upload-url')
+
+    def test_short_answer_workspace_embeds_answer_json_for_client_math(self):
+        short = create_problem(code='ws-mathsrc', is_public=True, submission_type='S')
+        md = 'Area is $$a^2+b^2$$.'
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=short, language=Language.get_answer_language(),
+            result='AC', status='D', points=100, time=0, memory=0,
+        )
+        SubmissionSource.objects.create(submission=submission, source=json.dumps({'text': md}))
+        detail = self.client.get(
+            reverse('problem_detail', args=[short.code]) + '?submission=%d' % submission.id,
+        )
+        self.assertContains(detail, 'id="workspace-answer-display"')
+        self.assertContains(detail, 'a^2+b^2')
+        self.assertContains(detail, 'vendor/katex.min.css')
+
     def test_short_answer_submitted_source_renders_markdown_table(self):
         short = create_problem(code='workspace-short', is_public=True, submission_type='S')
         md = '| A | B |\n| --- | --- |\n| 1 | 2 |'
@@ -250,6 +275,26 @@ class ProblemWorkspaceTestCase(TestCase):
         )
         self.assertContains(detail, '<table')
         self.assertContains(detail, 'result-source-md')
+
+    def test_fill_blank_result_shows_each_blank_on_its_own_row(self):
+        fb = create_problem(code='workspace-fillblank', is_public=True, submission_type='B')
+        ProblemBlank.objects.create(problem=fb, order=0, answers='Paris')
+        ProblemBlank.objects.create(problem=fb, order=1, answers='1789')
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=fb, language=Language.get_answer_language(),
+            result='AC', status='D', points=100, time=0, memory=0,
+        )
+        SubmissionSource.objects.create(
+            submission=submission,
+            source=json.dumps({'answers': ['submit', 'submit']}),
+        )
+        detail = self.client.get(
+            reverse('problem_detail', args=[fb.code]) + '?submission=%d' % submission.id,
+        )
+        self.assertContains(detail, 'class="result-source-row"', count=2)
+        self.assertContains(detail, 'Blank 1: submit')
+        self.assertContains(detail, 'Blank 2: submit')
+        self.assertNotContains(detail, 'Blank 1: submit Blank 2: submit')
 
     def test_workspace_submissions_list_returns_oj_style_html_rows(self):
         submission = Submission.objects.create(

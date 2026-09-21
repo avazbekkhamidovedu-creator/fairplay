@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
     {# Same pattern as base.html DARK_STYLE_CSS: rebuild page styles with vars-dark. #}
     <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="{{ static('vendor/katex.min.css') }}">
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
     <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
 
@@ -672,7 +673,7 @@
 {% endblock %}
 
 {% block js_media %}
-    <script src="{{ static('rich_editor.js') }}"></script>
+    <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
     <script src="{{ static('markdown_preview.js') }}"></script>
     <script type="text/javascript">
         // Timezone whose wall clock the teacher is currently editing (their own
@@ -1177,11 +1178,10 @@
                 RichEditor.configure({
                     onChange: function () { syncPreview(); },
                     fileUploadUrl: {{ url('editor_file_uploader')|tojson }},
-                    imageUploadUrl: {{ url('martor_image_uploader')|tojson }},
                     csrfToken: csrfMeta ? csrfMeta.content : '',
                     messages: {
                         fileUploadFailed: {{ _('File upload failed.')|tojson }},
-                        fileUploadFailedAuth: {{ _('File upload failed. Make sure you are signed in with upload permission.')|tojson }},
+                        fileUploadFailedAuth: {{ _('File upload failed. Make sure you are signed in.')|tojson }},
                     },
                 });
             }

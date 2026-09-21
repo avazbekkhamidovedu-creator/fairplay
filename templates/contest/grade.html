@@ -7,6 +7,7 @@
 {% block title_ruler %}{% endblock %}
 
 {% block media %}
+    <link rel="stylesheet" href="{{ static('vendor/katex.min.css') }}">
     <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
     <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
     <style>
@@ -425,34 +426,43 @@
             font-size: 13.5px;
             word-break: break-word;
         }
-        .gd-source-card { padding: 0; overflow: hidden; background: #111827 !important; }
+        .gd-source-card {
+            padding: 0;
+            overflow: hidden;
+            background: var(--oj-surface, #fff) !important;
+            border: 1px solid var(--oj-border, #d8dee6);
+        }
         .gd-source-card .source-code {
             margin: 0;
             max-height: none;
             padding: 0.8rem 0.9rem;
-            color: #e5e7eb;
+            color: var(--oj-text, #222);
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            font-size: 12px;
+            font-size: 13px;
             white-space: pre-wrap;
             overflow: auto;
+            background: transparent;
         }
         .gd-upload { padding: 0.6rem 0.8rem; }
-        /* Readable answer rows for MCQ / fill-blank / short-answer submissions
-           (rendered instead of the raw JSON payload). */
-        .gd-answer { padding: 0.7rem 0.9rem; background: #111827; }
+        /* Same surface as the student rich editor — not a dark source dump. */
+        .gd-answer {
+            padding: 0.7rem 0.9rem;
+            background: var(--oj-surface, #fff);
+            color: var(--oj-text, #222);
+        }
         .gd-answer-row {
             display: flex;
             gap: 0.5rem;
             padding: 0.3rem 0;
-            color: #e5e7eb;
+            color: var(--oj-text, #222);
             font-size: 13px;
             line-height: 1.5;
-            border-bottom: 1px solid #1f2937;
+            border-bottom: 1px solid var(--oj-border, #eee);
         }
         .gd-answer-row:last-child { border-bottom: none; }
         .gd-answer-label {
             flex-shrink: 0;
-            color: #9ca3af;
+            color: var(--oj-text-muted, #666);
             font-weight: 600;
             min-width: 3.5rem;
         }
@@ -461,14 +471,16 @@
             font-family: inherit;
             white-space: normal;
             overflow: auto;
-            color: #e5e7eb;
+            color: var(--oj-text, #222);
+            line-height: 1.6;
         }
         .gd-answer-md table.table {
             width: max-content;
             max-width: 100%;
             table-layout: auto;
-            margin-left: 0;
-            margin-right: 0;
+            margin: 0.4em 0;
+            border-collapse: collapse;
+            font-size: 0.95em;
         }
         .gd-answer-md table.table th,
         .gd-answer-md table.table td {
@@ -476,6 +488,15 @@
             white-space: normal;
             overflow-wrap: break-word;
             word-break: break-word;
+            border: 1px solid var(--oj-border, #ccc);
+            padding: 0.45em 0.65em;
+            vertical-align: top;
+            text-align: left;
+        }
+        .gd-answer-md table.table th {
+            background: var(--oj-text-secondary, #5a5a5a);
+            color: var(--oj-surface, #fff);
+            font-weight: 600;
         }
 
         /* ── Right pane: result (top) + grading (bottom) ─────────────────── */
@@ -927,6 +948,13 @@
                 $('#btn-next').prop('disabled', idx < 0 || idx >= filteredRows.length - 1);
             }
 
+            function renderMarkdownAnswer(md) {
+                if (!md) return '';
+                if (window.RichEditor && typeof RichEditor.mdToHtml === 'function') {
+                    try { return RichEditor.mdToHtml(md); } catch (e) { return ''; }
+                }
+                return '';
+            }
             function renderAnswerSource(s) {
                 if (s.upload && s.upload.download_url) {
                     return '<div class="gd-upload"><a class="btn" href="' + esc(s.upload.download_url) + '" download>' +
@@ -934,13 +962,22 @@
                         (s.upload.size != null ? ' <span class="muted">' + (s.upload.size / 1024).toFixed(1) + ' KB</span>' : '') +
                         '</div>';
                 }
-                // MCQ / fill-blank / short-answer: show the human-readable answer
-                // rows (same rendering as the student workspace), not the raw JSON
-                // payload stored in SubmissionSource.
+                // MCQ / fill-blank / short-answer: same rendered HTML the student
+                // saw in the rich editor, not a dark source dump or raw pipes.
                 if (s.answer_display && s.answer_display.length) {
-                    var htmlParts = s.answer_display.map(function (item) {
-                        return item && item.html ? String(item.html) : '';
-                    }).filter(Boolean);
+                    var htmlParts = [];
+                    if (s.problem_type === 'S') {
+                        var md = s.answer_display.map(function (item) {
+                            return item && item.value != null ? String(item.value) : '';
+                        }).filter(Boolean).join('\n\n');
+                        var rendered = renderMarkdownAnswer(md);
+                        if (rendered) htmlParts = [rendered];
+                    }
+                    if (!htmlParts.length) {
+                        htmlParts = s.answer_display.map(function (item) {
+                            return item && item.html ? String(item.html) : '';
+                        }).filter(Boolean);
+                    }
                     if (htmlParts.length) {
                         return '<div class="gd-answer gd-answer-md content-description">' + htmlParts.join('') + '</div>';
                     }
@@ -1209,6 +1246,13 @@
                 if (!window.RichEditor) {
                     mount.innerHTML = '<textarea id="g-note" class="gd-note">' + esc(s.review_note || '') + '</textarea>';
                     return;
+                }
+                var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                if (RichEditor.configure) {
+                    RichEditor.configure({
+                        fileUploadUrl: {{ url('editor_file_uploader')|tojson }},
+                        csrfToken: csrfMeta ? csrfMeta.content : '',
+                    });
                 }
                 mount.innerHTML = '<div data-rich-mount="grading-review" data-toolbar="full" data-placeholder="{{ _('Write review comment...') }}"></div>';
                 // The rich editor is best-effort: if its mount/init throws (e.g. it
@@ -1715,5 +1759,5 @@
 {% endblock %}
 
 {% block bodyend %}
-    <script src="{{ static('rich_editor.js') }}"></script>
+    <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}

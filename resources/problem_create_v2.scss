@@ -838,7 +838,7 @@ fieldset.module .form-content { padding: 1rem; }
 .pv-option-body > :first-child { margin-top: 0; }
 .pv-option-body > :last-child { margin-bottom: 0; }
 .pv-option-body blockquote {
-  margin: 0.35em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--oj-accent); color: var(--oj-text-secondary); background: var(--oj-success-soft);
+  margin: 0.35em 0; padding: 0.2em 0.8em; border-left: 3px solid var(--oj-accent); color: var(--oj-text-secondary); background: var(--oj-accent-soft, var(--pcv2-accent-soft));
 }
 .pv-option-body pre {
   background: var(--oj-bg); padding: 0.45rem 0.65rem; border-radius: 4px; overflow: auto; font-size: 12px; margin: 0.35em 0;
@@ -1070,9 +1070,19 @@ a.btn-soft:focus {
 .pv-stem.content-description mark i {
   font-style: normal;
 }
-.pv-stem blockquote {
-  margin: 0.4em 0; padding: 0.2em 0.8em;
-  border-left: 3px solid var(--oj-accent); color: var(--oj-text-secondary); background: var(--pcv2-accent-soft);
+.pv-stem blockquote,
+.pv-stem.content-description blockquote {
+  margin: 0.4em 0;
+  padding: 0.2em 0.8em;
+  border: 0;
+  border-left: 3px solid var(--oj-accent);
+  color: var(--oj-text-secondary);
+  background: var(--oj-accent-soft, var(--pcv2-accent-soft));
+}
+.pv-stem blockquote p,
+.pv-stem.content-description blockquote p {
+  margin: 0.15em 0 !important;
+  padding: 0 !important;
 }
 
 @media (max-width: 600px) {

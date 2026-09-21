@@ -67,10 +67,7 @@
     .ws-title-actions .row-action:hover { opacity: 0.75; }
     .ws-title-actions .row-action.row-action-danger { color: var(--oj-danger) !important; }
   </style>
-  {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
-    <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
-    <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
-  {% endif %}
+  {% include "rte_display_css.html" %}
 {% endblock %}
 {% block js_media %}
   {% if enable_comments %}
@@ -123,8 +120,9 @@
      data-event-poll="{{ EVENT_DAEMON_POLL_LOCATION }}"
      {% if ai_hints_possible %}data-ai-hints-possible="1" data-ai-hints-remaining="{{ ai_hints_remaining }}"{% if workspace_submission %} data-ai-hint-url="{{ url('submission_ai_hint', workspace_submission.id) }}"{% endif %}{% endif %}
      {% if workspace_submission and workspace_submission.ai_grade_url %}data-ai-grade-url="{{ workspace_submission.ai_grade_url }}"{% endif %}
-     {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}data-image-upload-url="{{ url('martor_image_uploader') }}"{% endif %}>
+     {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}data-file-upload-url="{{ url('editor_file_uploader') }}" data-file-accept="image/*"{% endif %}>
   <script type="application/json" id="workspace-server-draft">{{ (workspace_server_draft or {})|tojson }}</script>
+  <script type="application/json" id="workspace-answer-display">{{ (workspace_submission.answer_display if workspace_submission else [])|tojson }}</script>
   <div class="ws-toolbar{% if workspace_in_contest %} has-leave{% endif %}">
     <div class="ws-toolbar-left">
       <button class="tool-btn icon-only" type="button" id="btn-overview" aria-expanded="false" title="{{ _('Problem set') }}" aria-label="{{ _('Problem set') }}">
@@ -516,7 +514,11 @@
             </div>
           </section>
 
-          <div class="content-description">{{ description|markdown(problem.markdown_style, MATH_ENGINE)|reference|str|safe }}</div>
+          <script type="application/json" class="rte-md-source">{{ description|tojson }}</script>
+          <div class="content-description rte-display"></div>
+          <noscript>
+            <div class="content-description">{{ description|markdown(problem.markdown_style, MATH_ENGINE)|reference|str|safe }}</div>
+          </noscript>
           {% with license=problem.license %}{% if license %}<p class="ws-license"><a href="{{ url('license', license.key) }}">{{ license.display or license.name }}</a></p>{% endif %}{% endwith %}
         </div>
         <div class="ws-tab-panel" id="panel-ai">
@@ -623,7 +625,7 @@
                 {% if workspace_is_code %}
                 <pre class="result-source" id="submitted-source">{% if workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</pre>
                 {% else %}
-                <div class="result-source result-source-md content-description" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.html %}{{ item.html|safe }}{% else %}{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}{% endif %}
+                <div class="result-source{% if workspace_submission and workspace_submission.answer_display and workspace_submission.answer_display[0].html %} result-source-md content-description{% endif %}" id="submitted-source">{% if workspace_submission and workspace_submission.answer_display %}{% for item in workspace_submission.answer_display %}{% if item.html %}<div class="result-source-md content-description">{{ item.html|safe }}</div>{% else %}<div class="result-source-row">{% if item.label %}{{ item.label }}: {% endif %}{{ item.value }}</div>{% endif %}
 {% endfor %}{% elif workspace_submission and workspace_submission.source %}{{ workspace_submission.source }}{% endif %}</div>
                 {% endif %}
               </details>
@@ -731,7 +733,7 @@
                 <div class="ws-short-answer">
                   {{ form.answer.errors }}
                   <div data-rich-mount="workspace-answer"
-                       data-placeholder="{{ _('Enter your answer; $$math$$ supported…') }}"></div>
+                       data-placeholder="{{ _('Enter your answer…') }}"></div>
                   <textarea name="answer" id="id_answer" class="ws-answer-hidden" hidden>{{ form.answer.value()|default('', true) }}</textarea>
                 </div>
               {% elif problem.submission_type == 'F' %}
@@ -802,10 +804,7 @@
 {% block bodyend %}
   {% if REQUIRE_JAX %}{% include "mathjax-load.html" %}{% endif %}
   {% if vote_perm.can_view() %}<script src="{{ static('libs/chart.js/Chart.js') }}"></script><script src="{{ static('problem-vote.js') }}"></script>{% endif %}
-  {% if (not workspace_is_code and problem.submission_type == 'S') or enable_comments %}
-    <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="RichEditor.onImagePicked(event)">
-    <script src="{{ static('rich_editor.js') }}"></script>
-  {% endif %}
+  {% include "rte_display_js.html" %}
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}

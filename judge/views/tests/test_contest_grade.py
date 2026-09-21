@@ -789,6 +789,7 @@ class ContestGradeWorkspaceLayoutTestCase(GradeTestBase):
         html = self._page_html()
         self.assertIn('rich_editor.css', html)
         self.assertIn('rich_editor.js', html)
+        self.assertIn('vendor/katex.min.css', html)
 
     def test_script_block_and_json_vars_present(self):
         """The single inline script block still carries the |tojson payloads the

@@ -739,11 +739,12 @@
 
   if (window.RichEditor && document.querySelector('[data-rich-mount="workspace-answer"]')) {
     RichEditor.configure({
-      imageUploadUrl: app.dataset.imageUploadUrl || '',
+      fileUploadUrl: app.dataset.fileUploadUrl || '',
+      fileAccept: app.dataset.fileAccept || 'image/*',
       csrfToken: ($('[name=csrfmiddlewaretoken]') || {}).value || '',
       messages: {
-        uploadFailed: gettext('Image upload failed.'),
-        uploadFailedAuth: gettext('Image upload failed. Make sure you are signed in with upload permission.'),
+        fileUploadFailed: gettext('File upload failed.'),
+        fileUploadFailedAuth: gettext('File upload failed. Make sure you are signed in.'),
       },
       onChange: function () {
         var md = RichEditor.getMarkdown('workspace-answer');
@@ -1169,9 +1170,20 @@
     return box;
   }
   function typesetSubmittedSource(el) {
-    if (el && window.MathJax && typeof MathJax.typesetPromise === 'function') {
+    // KaTeX from RichEditor.mdToHtml is already painted. MathJax re-typeset
+    // of that tree can hide or double-render the formula.
+    if (!el || el.querySelector('.katex')) return;
+    if (window.MathJax && typeof MathJax.typesetPromise === 'function') {
       MathJax.typesetPromise([el]).catch(function () {});
     }
+  }
+  function bindSubmittedSourceDetails(block) {
+    var details = block && block.querySelector('details.result-source-details');
+    if (!details || details.dataset.mathBound === '1') return;
+    details.dataset.mathBound = '1';
+    details.addEventListener('toggle', function () {
+      if (details.open) typesetSubmittedSource($('#submitted-source'));
+    });
   }
   function submittedSourceHost(wantHtml) {
     var el = $('#submitted-source');
@@ -1186,14 +1198,42 @@
     return el;
   }
   function renderedAnswerHtml(answerDisplay) {
-    var htmlParts = (answerDisplay || []).map(function (item) {
+    var rows = answerDisplay || [];
+    if (isCodeProblem() || isMcqProblem() || isFileProblem()) return '';
+    // Fill-blank rows are labeled plain text. Joining them and running markdown
+    // collapses "Blank 1\nBlank 2" into one paragraph.
+    if (rows.some(function (item) { return item && item.label; })) return '';
+    var md = formatAnswerDisplay(rows);
+    // Prefer the same client renderer as the editor. Server HTML uses MathJax
+    // delimiters that sit inside a closed <details> and often never paint.
+    if (md && window.RichEditor && typeof RichEditor.mdToHtml === 'function') {
+      try {
+        var client = RichEditor.mdToHtml(md);
+        if (client) return client;
+      } catch (e) { /* fall through to server HTML */ }
+    }
+    var htmlParts = rows.map(function (item) {
       return item && item.html ? String(item.html) : '';
     }).filter(Boolean);
     if (htmlParts.length) return htmlParts.join('');
-    if (isCodeProblem() || isMcqProblem() || isFileProblem()) return '';
-    var md = formatAnswerDisplay(answerDisplay);
-    if (!md || !window.RichEditor || typeof RichEditor.mdToHtml !== 'function') return '';
-    return RichEditor.mdToHtml(md);
+    return '';
+  }
+  function usesAnswerDisplayRows(answerDisplay, html) {
+    if (html || !answerDisplay || !answerDisplay.length) return false;
+    return answerDisplay.length > 1 || answerDisplay.some(function (item) {
+      return item && item.label;
+    });
+  }
+  function renderAnswerDisplayRows(el, answerDisplay) {
+    el.textContent = '';
+    el.classList.remove('result-source-md');
+    (answerDisplay || []).forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'result-source-row';
+      var value = item && item.value != null ? String(item.value) : '';
+      row.textContent = (item && item.label) ? (item.label + ': ' + value) : value;
+      el.appendChild(row);
+    });
   }
   function parseJsonResponse(response) {
     return response.text().then(function (text) {
@@ -1212,12 +1252,15 @@
     var readable = formatAnswerDisplay(answerDisplay);
     var display = readable || sourceText || '';
     if (!display && !html) return;
-    var el = submittedSourceHost(!!html);
+    var useRows = usesAnswerDisplayRows(answerDisplay, html);
+    var el = submittedSourceHost(!!html || useRows);
     if (!el) return;
     if (html) {
       el.innerHTML = html;
       el.classList.add('result-source-md', 'content-description');
       typesetSubmittedSource(el);
+    } else if (useRows) {
+      renderAnswerDisplayRows(el, answerDisplay);
     } else {
       el.textContent = display;
     }
@@ -1226,8 +1269,19 @@
     if (summary) summary.textContent = gettext('Submitted source');
     var details = block.querySelector('details.result-source-details');
     if (details) details.open = false;
+    bindSubmittedSourceDetails(block);
     block.hidden = false;
   }
+  (function hydrateSubmittedSource() {
+    var node = $('#workspace-answer-display');
+    if (!node || !node.textContent) return;
+    var rows;
+    try { rows = JSON.parse(node.textContent); } catch (e) { return; }
+    if (!rows || !rows.length) return;
+    var sourceEl = $('#submitted-source');
+    var raw = sourceEl && sourceEl.dataset ? sourceEl.dataset.rawSource : '';
+    updateSubmittedSource(raw || '', rows);
+  })();
   function updateFileUploadResult(fileUpload) {
     var block = $('#workspace-result-file');
     if (!block) return;
@@ -1265,7 +1319,8 @@
     var scope = root || document;
     try {
       RichEditor.configure({
-        imageUploadUrl: app.dataset.imageUploadUrl || '',
+        fileUploadUrl: app.dataset.fileUploadUrl || '',
+        fileAccept: app.dataset.fileAccept || 'image/*',
         csrfToken: csrfToken() || '',
       });
     } catch (err) { /* ignore */ }

@@ -1,6 +1,7 @@
 {% extends "common-content.html" %}
 {% block content_media %}
     {% include "comments/media-css.html" %}
+    {% include "rte_display_css.html" %}
     {# Ensure ACE/editor CSS is available on problem page too #}
     {% if form %}{{ form.media.css }}{% endif %}
     <style>
@@ -67,6 +68,7 @@
 
 {% block content_js_media %}
     {% include "comments/media-js.html" %}
+    {% include "rte_display_js.html" %}
 
     {% if vote_perm.can_view() %}
         <script src="{{ static('libs/chart.js/Chart.js') }}" type="text/javascript"></script>
@@ -651,9 +653,11 @@
 {% endblock %}
 
 {% block description %}
-    {% cache 86400 'problem_html' problem.id MATH_ENGINE LANGUAGE_CODE %}
+    <script type="application/json" class="rte-md-source">{{ description|tojson }}</script>
+    <div class="rte-display"></div>
+    <noscript>
         {{ description|markdown(problem.markdown_style, MATH_ENGINE)|reference|str|safe }}
-    {% endcache %}
+    </noscript>
 
     {% with license=problem.license %}
         {% if license %}

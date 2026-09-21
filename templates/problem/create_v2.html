@@ -13,6 +13,7 @@
 
 {% block media %}
   <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="stylesheet" href="{{ static('vendor/katex.min.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
   <link rel="stylesheet" href="{{ static('rich_editor.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
   <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
   {# Same pattern as base.html DARK_STYLE_CSS: rebuild page styles with vars-dark. #}
@@ -34,7 +35,7 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="{{ static('jszip.min.js') }}"></script>
-  <script src="{{ static('rich_editor.js') }}"></script>
+  <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
   <script src="{{ static('markdown_preview.js') }}"></script>
 
   <!-- Page-local layout tweaks; colours come from --oj-* / problem_create_v2.css -->
@@ -455,7 +456,7 @@
               <!-- Prompt / main statement -->
               <div class="stem-block">
                 <label class="block-label" id="stem-label">{{ _('Description') }} <span class="req">*</span></label>
-                <div data-rich-mount="stem" data-toolbar="full" data-placeholder="{{ _('Enter the problem statement; ~x^2~ or $$x^2$$ math supported…') }}"></div>
+                <div data-rich-mount="stem" data-toolbar="full" data-placeholder="{{ _('Enter the problem statement…') }}"></div>
               </div>
 
               <!-- Single-choice / multiple-choice -->
@@ -896,7 +897,6 @@
     </div><!-- /.v2-split -->
 
     <div id="save-toast"></div>
-    <input type="file" id="img-file" accept="image/*" style="display:none;" onchange="RichEditor.onImagePicked(event)">
   </main>
 
   <!-- Problem-type selection / creation dialog (reused from add.html). -->
@@ -942,7 +942,6 @@
     const AI_DECOMPOSE_URL = '{{ ai_decompose_url }}';
     const PROBLEM_PREVIEW_URL = '{{ problem_preview_url }}';
     const PROBLEM_PREVIEW_BATCH_URL = '{{ problem_preview_batch_url }}';
-    const IMAGE_UPLOAD_URL = '{{ image_upload_url }}';
     const FILE_UPLOAD_URL = '{{ file_upload_url }}';
     const SEARCH_USERS_URL = '{{ search_users_url }}';
     const PROFILE_SELECT2_URL = '{{ profile_select2_url }}';
@@ -1327,11 +1326,11 @@
       renderPreview();
     }
 
-    /* RichEditor / MarkdownPreview loaded from static JS; see resources/rich_editor.js */
+    /* RichEditor / MarkdownPreview: source in resources/js/rich_editor/ */
 
     /* ---------- Options (rich text / Markdown) ---------- */
     function optionEditorTpl(name) {
-      return RichEditor.html(name, { compact: true, placeholder: gettext('Enter option text ($$math$$ supported)') });
+      return RichEditor.html(name, { compact: true, placeholder: gettext('Enter option text…') });
     }
     function getOptionText(row) {
       const ed = row.querySelector('.rich-editor');
@@ -1961,10 +1960,9 @@
       renderPreview();
     }
 
-    /* ---------- Preview (all content goes through the server-side Markdown pipeline) ---------- */
-    const PREVIEW_DEBOUNCE_MS = 350;
+    /* ---------- Preview: same TipTap/KaTeX HTML as the rich editor ---------- */
+    const PREVIEW_DEBOUNCE_MS = 80;
     let _previewTimer = null;
-    let _previewToken = 0;
     const _previewHtml = Object.create(null); // key -> last rendered HTML
 
     MarkdownPreview.configure({
@@ -1972,6 +1970,13 @@
       batchUrl: PROBLEM_PREVIEW_BATCH_URL,
       csrfToken: CSRF_TOKEN,
     });
+
+    function htmlFromEditor(md) {
+      if (window.RichEditor && typeof RichEditor.mdToHtml === 'function') {
+        try { return RichEditor.mdToHtml(md || ''); } catch (e) { /* fall through */ }
+      }
+      return '';
+    }
 
     function collectPreviewMarkdown() {
       const parts = [];
@@ -1998,12 +2003,7 @@
     function paintPreviewFromCache() {
       const pv = document.getElementById('preview-body');
       let stem = _previewHtml['stem'] || '';
-      let blankCount = 0;
-      if (currentType === 'blank') {
-        stem = stem.replace(/\{\{\s*blank\s*\}\}/g, () =>
-          `<input class="pv-blankinput pv-blank-inline" disabled placeholder="${++blankCount}">`);
-      }
-      let html = `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">' + gettext('Statement preview…') + '</span>'}</div>`;
+      let html = `<div class="pv-stem content-description rte-display">${stem || '<span style="color:#bbb;">' + gettext('Statement preview…') + '</span>'}</div>`;
       if (currentType === 'single' || currentType === 'multiple') {
         html += renderOptsPreviewFromCache('#options', currentType === 'multiple', 'opt-');
       } else if (currentType === 'truefalse') {
@@ -2025,7 +2025,6 @@
         html += `<div class="pv-answerlabel">${gettext('Students upload a file here.')}` +
                 `${bits.length ? ' ' + escapeHtml(bits.join(' · ')) : ''}</div>`;
       } else if (currentType === 'blank') {
-        if (blankCount === 0) html += `<input class="pv-blankinput" placeholder="${gettext('Enter answer')}" disabled>`;
         const ans = [...document.querySelectorAll('#blank-answers .blank-answer')]
           .map(t => t.value.split('\n').map(s => s.trim()).filter(Boolean).join(' / ')).filter(Boolean);
         html += `<div class="pv-answerlabel">${gettext('Answer:')} ${ans.length ? ans.join('; ') : '—'}</div>`;
@@ -2035,7 +2034,6 @@
         html += `<div class="pv-answerlabel" style="color:var(--muted);">${gettext('Other type: statement only; manual grading.')}</div>`;
       }
       pv.innerHTML = html;
-      typesetPreviewMath(pv);
     }
 
     /** Wait for async MathJax load, then typeset preview (no-Mathoid path). */
@@ -2078,7 +2076,7 @@
         const score = w.querySelector('.sq-score input').value;
         const stem = _previewHtml['sub-stem-' + id] || '';
         h += `<div class="pv-sub"><div class="pv-sub-t">${i + 1}. <span class="pv-badge">${TYPE_META[type].title}</span> <span style="float:right;color:var(--muted);font-size:12px;">${interpolate(gettext('%s pts'), [score])}</span></div>`;
-        h += `<div class="pv-stem content-description">${stem || '<span style="color:#bbb;">' + gettext('Sub-stem…') + '</span>'}</div>`;
+        h += `<div class="pv-stem content-description rte-display">${stem || '<span style="color:#bbb;">' + gettext('Sub-stem…') + '</span>'}</div>`;
         if (type === 'single' || type === 'multiple') {
           h += renderOptsPreviewFromCache('#sub-opts-' + id, type === 'multiple', 'sub-' + id + '-opt-');
         } else if (type === 'truefalse') {
@@ -2086,7 +2084,7 @@
           h += `<div class="pv-options"><div class="pv-option"><span class="mk ${v === 'true' ? 'on' : ''}"></span>${gettext('True')}</div><div class="pv-option"><span class="mk ${v === 'false' ? 'on' : ''}"></span>${gettext('False')}</div></div>`;
         } else if (type === 'blank') {
           const a = w.querySelector('.sub-blank').value;
-          h += `<input class="pv-blankinput" placeholder="${gettext('Enter answer')}" disabled><div class="pv-answerlabel">${gettext('Answer:')} ${a || '—'}</div>`;
+          h += `<div class="pv-answerlabel">${gettext('Answer:')} ${a || '—'}</div>`;
         } else if (type === 'short') {
           h += `<div class="pv-answerbox"></div>`;
         }
@@ -2096,19 +2094,12 @@
     }
 
     function renderPreview() {
-      // Immediate paint from cache (markers / non-md UI), then debounce server fetch.
-      paintPreviewFromCache();
       clearTimeout(_previewTimer);
-      const token = ++_previewToken;
       _previewTimer = setTimeout(() => {
-        const parts = collectPreviewMarkdown();
-        MarkdownPreview.renderKeyed(parts)
-          .then(results => {
-            if (token !== _previewToken) return;
-            results.forEach(r => { _previewHtml[r.key] = r.html; });
-            paintPreviewFromCache();
-          })
-          .catch(() => {});
+        collectPreviewMarkdown().forEach((part) => {
+          _previewHtml[part.key] = htmlFromEditor(part.md);
+        });
+        paintPreviewFromCache();
       }, PREVIEW_DEBOUNCE_MS);
     }
 
@@ -2577,7 +2568,14 @@
     });
     function resetForm() {
       document.getElementById('f-name').value = '';
-      document.querySelectorAll('.rich-editor').forEach(ed => { const r = ed.querySelector('.rich-editor-body'); if (r) r.innerHTML = ''; const ta = ed.querySelector('textarea'); if (ta) ta.value = ''; });
+      document.querySelectorAll('.rich-editor[data-editor]').forEach((ed) => {
+        const name = ed.getAttribute('data-editor');
+        if (window.RichEditor && name) RichEditor.setMarkdown(name, '');
+        else {
+          const ta = ed.querySelector('textarea');
+          if (ta) ta.value = '';
+        }
+      });
       document.getElementById('options').innerHTML = '';
       document.getElementById('blank-answers').innerHTML = '';
       { const t = document.getElementById('f-blank-trim'); if (t) t.checked = true;
@@ -2905,16 +2903,13 @@
     }
 
     RichEditor.configure({
-      imageUploadUrl: IMAGE_UPLOAD_URL,
       fileUploadUrl: FILE_UPLOAD_URL,
       searchUsersUrl: SEARCH_USERS_URL,
       csrfToken: CSRF_TOKEN,
       onChange: renderPreview,
       messages: {
-        uploadFailed: '{{ _("Image upload failed.") }}',
-        uploadFailedAuth: '{{ _("Image upload failed. Make sure you are signed in with upload permission.") }}',
         fileUploadFailed: '{{ _("File upload failed.") }}',
-        fileUploadFailedAuth: '{{ _("File upload failed. Make sure you are signed in with upload permission.") }}',
+        fileUploadFailedAuth: '{{ _("File upload failed. Make sure you are signed in.") }}',
       },
     });
     RichEditor.mount();

@@ -44,6 +44,17 @@
     state.inflight.clear();
   }
 
+  // Stale servers may leave [user:] tokens in HTML. Match problem-page get_user().
+  const USER_REF_RE = /\[(r?user):(\w+)\]/g;
+
+  function decorateUserRefs(html) {
+    const src = html == null ? '' : String(html);
+    if (src.indexOf('[user:') < 0 && src.indexOf('[ruser:') < 0) return src;
+    return src.replace(USER_REF_RE, (_, _kind, name) => (
+      '<span class="rating rate-none user"><a href="/user/' + name + '">' + name + '</a></span>'
+    ));
+  }
+
   function render(md) {
     const key = md == null ? '' : String(md);
     if (state.cache.has(key)) return Promise.resolve(state.cache.get(key));
@@ -66,7 +77,7 @@
         return r.text();
       })
       .then(html => {
-        const out = html || '';
+        const out = decorateUserRefs(html || '');
         state.cache.set(key, out);
         state.inflight.delete(key);
         return out;
@@ -114,7 +125,7 @@
     const finishLocal = (htmlList) => {
       pendingIdx.forEach((idx, j) => {
         const md = pendingPayload[j]._md;
-        const html = htmlList[j] || '';
+        const html = decorateUserRefs(htmlList[j] || '');
         state.cache.set(md, html);
         results[idx] = { key: pendingPayload[j].key, html: html };
       });

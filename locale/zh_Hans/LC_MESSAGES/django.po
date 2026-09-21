@@ -6743,8 +6743,12 @@ msgid "Enter the answer explanation…"
 msgstr "请输入答案解析…"
 
 #: problem create_v2 / rich_editor i18n
-msgid "Enter the problem statement; $x^2$ math supported…"
-msgstr "请输入题目内容，支持 $x^2$ 数学公式…"
+msgid "Enter the problem statement…"
+msgstr "请输入题目内容…"
+
+#: templates/problem/workspace.html
+msgid "Enter your answer…"
+msgstr "请输入答案…"
 
 #: problem create_v2 / rich_editor i18n
 msgid "Enter the reference answer…"
@@ -7427,8 +7431,8 @@ msgid "Answer cannot be empty."
 msgstr "答案不能为空。"
 
 #: templates/comments/list.html
-msgid "Write a comment; $$math$$ supported…"
-msgstr "撰写评论；支持 $$math$$…"
+msgid "Write a comment…"
+msgstr "撰写评论…"
 
 #: templates/contest/list-v2.html
 msgid "Group by"

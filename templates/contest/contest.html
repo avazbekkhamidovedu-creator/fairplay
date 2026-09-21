@@ -9,6 +9,7 @@
 {% endblock %}
 
 {% block content_js_media %}
+    {% include "rte_display_js.html" %}
     <script type="text/javascript">
         $(document).ready(function () {
             $('.time-remaining').each(function () {
@@ -88,6 +89,7 @@
 
 {% block content_media %}
     {% include "comments/media-css.html" %}
+    {% include "rte_display_css.html" %}
 
     {# Contest detail redesign — reference design on --oj-* tokens (dark-mode aware) #}
     <style>
@@ -386,13 +388,15 @@
     </div>
 
     <div class="content-description">
-        {% cache 3600 'contest_html' contest.id MATH_ENGINE %}
-            {% if contest.description %}
-                {{ contest.description|markdown('contest', MATH_ENGINE)|reference|str|safe }}
-            {% else %}
-                <p style="margin:0;color:var(--oj-text-muted);font-style:italic;">{{ _('No description.') }}</p>
-            {% endif %}
-        {% endcache %}
+        {% if contest.description %}
+        <script type="application/json" class="rte-md-source">{{ contest.description|tojson }}</script>
+        <div class="rte-display"></div>
+        <noscript>
+            {{ contest.description|markdown('contest', MATH_ENGINE)|reference|str|safe }}
+        </noscript>
+        {% else %}
+            <p style="margin:0;color:var(--oj-text-muted);font-style:italic;">{{ _('No description.') }}</p>
+        {% endif %}
     </div>
 
     <div style="display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between;">

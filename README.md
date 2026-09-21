@@ -60,6 +60,19 @@ New commands and UI enhancements to simplify management:
 - [ ] **Auto Rejudging**: Automatically rejudge submissions when a problem is pretested during the contest.
 - [ ] **NetID Login**: Let students login to the website using their NetID.
 
+## Rich text editor
+
+Problem statements, comments, and contest notes use the Tiptap-based `RichEditor` (Markdown is still what we store). Edit `resources/js/rich_editor/` only. The IIFE at `resources/rich_editor.js` and KaTeX files under `resources/vendor/` are build outputs (gitignored, same as `make_style.sh` CSS).
+
+```bash
+npm ci
+npm run build:editor   # writes resources/rich_editor.js and vendor/katex*
+npm run test:editor    # Markdown dialect round-trips
+./make_style.sh        # after changing resources/rich_editor.scss
+```
+
+CI (`styles` job) and the Docker `styles` stage run the same editor build.
+
 ## Installation
 
 Check out the install documentation at [docs.dmoj.ca](https://docs.dmoj.ca/#/site/installation) and my blog post at [squirrelstar.com](http://squirrelstar.com/posts/deploy-dmoj-for-cs-course/).
