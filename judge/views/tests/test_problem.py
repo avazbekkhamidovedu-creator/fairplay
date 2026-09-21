@@ -667,6 +667,25 @@ class ProblemListAuthorFilterTestCase(ProblemListTestBase):
         self.assertContains(response, 'staff_problem_edit_own')
         self.assertRegex(html, r'class="col-author">\s*—\s*</td>')
 
+    def test_instructor_author_column_and_selected_option_use_real_name(self):
+        self._assign_authors()
+        own = self.users['staff_problem_edit_own']
+        own.first_name = '张三'
+        own.save(update_fields=['first_name'])
+        self.client.force_login(own)
+        listed = self.client.get(reverse('problem_list'))
+        self.assertContains(listed, '张三 (staff_problem_edit_own)')
+        selected = self.client.get(reverse('problem_list'), {
+            'author': str(own.profile.id),
+            'filtered': '1',
+        })
+        html = selected.content.decode()
+        self.assertRegex(
+            html,
+            r'<option value="%s" selected>\s*张三 \(staff_problem_edit_own\)\s*</option>' % own.profile.id,
+        )
+        self.assertIn('张三 (staff_problem_edit_own)', html)
+
     def test_see_private_problem_perm_can_filter(self):
         self._assign_authors()
         own_id = self.users['staff_problem_edit_own'].profile.id

@@ -504,21 +504,26 @@ ul.problem-list {
         }
     }
 
+    /* One equal-width column per filter. Shrink together instead of wrapping
+       into uneven last rows (e.g. 3+2). Mobile stacks as 1-per-row, still even. */
     .filter-controls {
-        display: flex;
-        flex-wrap: nowrap;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(0, 1fr);
         align-items: center;
-        gap: 8px 12px;
+        gap: 8px 10px;
         flex: 1;
         min-width: 0;
     }
 
     .filter-group {
-        display: inline-flex;
+        display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
         flex-wrap: nowrap;
-        flex: 0 0 auto;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
     }
 
     .filter-group-label {
@@ -532,6 +537,7 @@ ul.problem-list {
     #filter-format,
     #filter-difficulty,
     #filter-course,
+    #filter-author,
     #filter-knowledge,
     #status-filter {
         visibility: hidden;
@@ -541,19 +547,60 @@ ul.problem-list {
         box-sizing: border-box;
     }
 
-    #filter-format { width: 140px; }
-    #filter-difficulty { width: 120px; }
-    #filter-course { width: 150px; }
+    #filter-format,
+    #filter-difficulty,
+    #filter-course,
+    #filter-author,
+    #status-filter {
+        width: 100%;
+    }
     #filter-knowledge { width: clamp(280px, 48%, 560px); max-width: 100%; }
-    #status-filter { width: 100px; }
+
+    .filter-group .select2-container,
+    .filter-group .multi-select,
+    .filter-group select.select,
+    .filter-group .ac-range {
+        flex: 1 1 0;
+        min-width: 0 !important;
+        width: 100% !important;
+        max-width: 100%;
+    }
+
+    .filter-controls .multi-select,
+    .filter-controls .multi-select-trigger {
+        min-width: 0;
+    }
+
+    .filter-group-author {
+        min-width: 0;
+    }
+
+    .filter-group-author .select2-container {
+        width: 100% !important;
+        max-width: 100%;
+        min-width: 0 !important;
+    }
 
     .ac-range {
         display: flex;
         align-items: center;
         gap: 6px;
+        min-width: 0;
 
         .input-num {
-            width: 56px;
+            width: 100%;
+            min-width: 0;
+            max-width: 56px;
+            flex: 1 1 0;
+            -moz-appearance: textfield;
+            appearance: textfield;
+
+            &::-webkit-inner-spin-button,
+            &::-webkit-outer-spin-button {
+                -webkit-appearance: none;
+                appearance: none;
+                margin: 0;
+            }
         }
     }
 
@@ -768,9 +815,10 @@ ul.problem-list {
         gap: 4px;
     }
 
-    /* Select2 local multi-selects: compact fixed width so Filters stay one row. */
+    /* Select2 fills its equal grid cell; do not lock a content-based width. */
     .filter-controls .select2-container {
-        flex: 0 0 auto;
+        flex: 1 1 0;
+        min-width: 0 !important;
     }
 
     .filter-controls .select2-container .select2-selection--multiple {
@@ -781,7 +829,7 @@ ul.problem-list {
 
     .filter-controls .select,
     .filter-controls .select2-container--dmoj .select2-selection--single {
-        min-width: 100px;
+        min-width: 0;
         height: var(--oj-control-height);
         box-sizing: border-box;
     }
@@ -1589,9 +1637,14 @@ ul.problem-list {
             align-items: stretch;
         }
 
-        .filter-row-conditions,
+        .filter-row-conditions {
+            flex-wrap: nowrap;
+        }
+
         .filter-controls {
-            flex-wrap: wrap;
+            grid-auto-flow: row;
+            grid-template-columns: minmax(0, 1fr);
+            grid-auto-columns: unset;
         }
 
         .filter-label {
@@ -1619,11 +1672,14 @@ ul.problem-list {
 .problem-list-redesign {
     .problem-table {
         .col-author {
-            width: 140px;
+            width: 180px;
+            min-width: 120px;
         }
 
         td.col-author {
             text-align: left;
+            white-space: normal;
+            word-break: break-word;
         }
     }
 }

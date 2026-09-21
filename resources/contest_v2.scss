@@ -24,16 +24,54 @@
 
     max-width: none;
 
-    /* Limit all filter dropdown controls so they align with the Organization trigger */
-    .filter-group .multi-select,
-    .filter-group select.select {
-        width: 200px;
+    /* Filter dropdowns share one equal-width row (see problem-list-redesign). */
+    .filter-row-conditions {
+        flex-wrap: nowrap;
+    }
+
+    .filter-controls {
+        min-width: 0;
+    }
+
+    .filter-group {
+        min-width: 0;
         max-width: 100%;
-        flex: 0 1 200px;
+        width: 100%;
+    }
+
+    .filter-group .multi-select,
+    .filter-group select.select,
+    .filter-group .select2-container {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100%;
+        flex: 1 1 0;
+    }
+
+    #filter-author {
+        visibility: hidden;
+        height: var(--oj-control-height);
+        max-height: var(--oj-control-height);
+        overflow: hidden;
+        box-sizing: border-box;
+        width: 100%;
+    }
+
+    .filter-group-author {
+        min-width: 0;
+    }
+
+    .filter-group-author .select2-container {
+        width: 100% !important;
+        max-width: 100%;
+        min-width: 0 !important;
+        flex: 1 1 0;
     }
 
     .filter-group .multi-select-trigger {
         width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
     }
 
     /* Sort menu width matches its trigger button */
@@ -149,6 +187,10 @@
     }
 }
 
+.cl-row--with-author {
+    grid-template-columns: minmax(0, 1fr) minmax(6.5rem, 11rem) auto;
+}
+
 
 /* Border radius on first/last rows within a section */
 .cl-list > .cl-row:first-child {
@@ -229,6 +271,24 @@
     gap: 0.75rem;
     white-space: nowrap;
     min-width: 0;
+}
+
+.cl-authors {
+    min-width: 0;
+    text-align: left;
+    font-size: 13px;
+    color: var(--oj-text);
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.35;
+
+    .lbl {
+        display: block;
+        margin-top: 0.15rem;
+        font-size: 10px;
+        color: var(--oj-dim-label);
+        font-weight: 400;
+    }
 }
 
 .cl-users {
@@ -546,7 +606,8 @@
 /* ── Responsive ────────────────────────────────────────────────────────────── */
 
 @media (max-width: 720px) {
-    .cl-row {
+    .cl-row,
+    .cl-row--with-author {
         grid-template-columns: 1fr;
     }
 
@@ -556,11 +617,13 @@
         white-space: normal;
     }
 
+    .cl-authors,
     .cl-users,
     .cl-actions {
         text-align: left;
         justify-content: flex-start;
         width: auto;
+        max-width: none;
     }
 }
 

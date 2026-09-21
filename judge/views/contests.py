@@ -236,7 +236,7 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         queryset = super().get_queryset().prefetch_related(
             'tags',
             'organizations',
-            'authors',
+            'authors__user',
             'curators',
             'testers',
             'spectators',
@@ -328,6 +328,7 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         context['tags'] = ContestTag.objects.filter(contests__in=visible_contests).distinct()
         can_see_authors = self._can_see_assignment_authors()
         context['can_see_problem_authors'] = can_see_authors
+        selected_authors = []
         if can_see_authors:
             context['contest_authors'] = (
                 Profile.objects.filter(authored_contests__in=visible_contests)
@@ -335,8 +336,25 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
                 .distinct()
                 .order_by('user__username')
             )
+            for raw in self.request.GET.getlist('author'):
+                for part in str(raw).split(','):
+                    part = part.strip()
+                    if part.isdigit():
+                        selected_authors.append(int(part))
+            if selected_authors:
+                author_map = {
+                    profile.id: profile
+                    for profile in Profile.objects.filter(pk__in=selected_authors).select_related('user')
+                }
+                context['selected_author_profiles'] = [
+                    author_map[pk] for pk in selected_authors if pk in author_map
+                ]
+            else:
+                context['selected_author_profiles'] = []
         else:
             context['contest_authors'] = Profile.objects.none()
+            context['selected_author_profiles'] = []
+        context['selected_authors'] = selected_authors
         context['total_count'] = self._total_count(active, present, future)
         context['sort_by'] = self.order
         context['group'] = self.group

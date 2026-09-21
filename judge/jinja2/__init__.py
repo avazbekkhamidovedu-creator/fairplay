@@ -11,6 +11,7 @@ from judge.impersonation import can_impersonate_user
 from judge.user_translations import gettext
 from judge.utils.assignment_harvest import assignment_harvest_enabled
 from judge.utils.problems import participation_submit_progress
+from judge.utils.user_search import profile_choice_label
 from . import (camo, datetime, filesize, format, gravatar, language, markdown, rating, reference, render, social,
                spaceless, submission, timedelta)
 from . import registry
@@ -27,6 +28,7 @@ registry.function('user_trans', gettext)
 registry.function('can_impersonate_user', can_impersonate_user)
 registry.function('participation_submit_progress', participation_submit_progress)
 registry.function('assignment_harvest_enabled', assignment_harvest_enabled)
+registry.function('profile_choice_label', profile_choice_label)
 
 
 @registry.function

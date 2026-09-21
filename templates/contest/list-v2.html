@@ -77,10 +77,55 @@
             window.refreshOrgLabel = function() { refreshMultiLabel('org-multi-select', 'org-multi-label'); };
             window.refreshClassLabel = function() { refreshMultiLabel('class-multi-select', 'class-multi-label'); };
             window.refreshTagLabel = function() { refreshMultiLabel('tag-multi-select', 'tag-multi-label'); };
-            window.refreshAuthorLabel = function() {
-                if (!document.getElementById('author-multi-label')) return;
-                refreshMultiLabel('author-multi-select', 'author-multi-label');
-            };
+
+            var suppressAuthorChange = false;
+
+            function authorSelect() {
+                return document.getElementById('filter-author');
+            }
+
+            function selectedAuthorIds() {
+                var el = authorSelect();
+                if (!el) return [];
+                if (window.jQuery) {
+                    var val = jQuery(el).val() || [];
+                    return (Array.isArray(val) ? val : [val]).map(String).filter(Boolean);
+                }
+                return Array.from(el.selectedOptions).map(function(o) { return String(o.value); });
+            }
+
+            function selectedAuthorChips() {
+                var el = authorSelect();
+                if (!el) return [];
+                if (window.jQuery && jQuery(el).data('select2')) {
+                    return (jQuery(el).select2('data') || []).map(function(d) {
+                        return { id: String(d.id), text: d.text };
+                    });
+                }
+                return Array.from(el.selectedOptions).map(function(o) {
+                    return { id: String(o.value), text: (o.textContent || '').trim() || String(o.value) };
+                });
+            }
+
+            function clearAuthorFilter() {
+                var el = authorSelect();
+                if (!el) return;
+                suppressAuthorChange = true;
+                if (window.jQuery) {
+                    jQuery(el).val(null).trigger('change');
+                } else {
+                    Array.from(el.options).forEach(function(o) { o.selected = false; });
+                }
+                suppressAuthorChange = false;
+            }
+
+            function removeAuthorValue(value) {
+                var el = authorSelect();
+                if (!el || !window.jQuery) return;
+                var cur = jQuery(el).val() || [];
+                if (!Array.isArray(cur)) cur = [cur];
+                jQuery(el).val(cur.filter(function(v) { return String(v) !== String(value); })).trigger('change');
+            }
 
             // Course → Class cascade: selected courses show the union of their
             // classes; with no course selected, every class stays listed.
@@ -149,7 +194,7 @@
                     orgs: checkedValues('#org-multi-select'),
                     classes: checkedValues('#class-multi-select'),
                     tags: checkedValues('#tag-multi-select'),
-                    authors: document.getElementById('author-multi-select') ? checkedValues('#author-multi-select') : [],
+                    authors: selectedAuthorIds(),
                     keywords: state.keywords.slice(),
                     time: timeRadio ? timeRadio.value : ''
                 };
@@ -285,10 +330,8 @@
                 st.classes.forEach(function(v) { addChip('class', v, v); });
                 st.tags.forEach(function(v) { addChip('tag', v, v); });
                 if (st.time) addChip('time', st.time, timeLabels[st.time] || st.time);
-                (st.authors || []).forEach(function(v) {
-                    var input = document.querySelector('#author-multi-select input[value="' + v + '"]');
-                    var span = input && input.parentNode.querySelector('span');
-                    addChip('author', v, (span && span.textContent.trim()) || v);
+                selectedAuthorChips().forEach(function(item) {
+                    addChip('author', item.id, item.text || item.id);
                 });
                 st.keywords.forEach(function(term) { addChip('search', term, term); });
                 var placeholder = list.querySelector('.chip-placeholder');
@@ -317,16 +360,17 @@
                             c.checked = (c.value === '');
                         });
                         refreshStatusLabel();
+                    } else if (field === 'author') {
+                        removeAuthorValue(value);
+                        return;
                     } else {
                         var rootId = field === 'org' ? 'org-multi-select'
-                            : (field === 'class' ? 'class-multi-select'
-                            : (field === 'author' ? 'author-multi-select' : 'tag-multi-select'));
+                            : (field === 'class' ? 'class-multi-select' : 'tag-multi-select');
                         document.querySelectorAll('#' + rootId + ' input[type=checkbox]').forEach(function(cb) {
                             if (cb.value === value) cb.checked = false;
                         });
                         if (field === 'org') refreshOrgLabel();
                         else if (field === 'class') refreshClassLabel();
-                        else if (field === 'author') refreshAuthorLabel();
                         else refreshTagLabel();
                     }
                     applyClientFilter();
@@ -347,7 +391,7 @@
                 refreshOrgLabel();
                 refreshClassLabel();
                 refreshTagLabel();
-                refreshAuthorLabel();
+                clearAuthorFilter();
                 state = { org: [], cls: [], tags: [], keywords: [], order: state.order, group: state.group };
                 applyClientFilter();
             };
@@ -404,13 +448,40 @@
                 });
                 refreshTagLabel();
             {% endif %}
-            {% if can_see_problem_authors and request.GET.author %}
-                var authorVals = '{{ request.GET.author|escapejs }}'.split(',');
-                authorVals.forEach(function(v) {
-                    var cb = document.querySelector('#author-multi-select input[value="' + v + '"]');
-                    if (cb) cb.checked = true;
+            {% if can_see_problem_authors %}
+            if (window.jQuery && jQuery.fn.select2 && authorSelect()) {
+                function escapeRegExp(string) {
+                    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                }
+                function idAndTextMatcher(params, data) {
+                    if (jQuery.trim(params.term) === '') return data;
+                    var regex = new RegExp(escapeRegExp(params.term), 'i');
+                    return data.text.search(regex) >= 0 || String(data.id).search(regex) >= 0 ? data : null;
+                }
+                jQuery('#filter-author').select2({
+                    theme: '{{ DMOJ_SELECT2_THEME }}',
+                    multiple: true,
+                    width: '100%',
+                    placeholder: {{ _('All authors')|htmltojs }},
+                    matcher: idAndTextMatcher,
+                    templateSelection: function (data) {
+                        return data.text || data.id;
+                    },
+                    ajax: {
+                        url: '{{ url('author_filter_select2') }}',
+                        dataType: 'json',
+                        delay: 250,
+                        data: function (params) {
+                            return { term: params.term || '' };
+                        },
+                        processResults: function (data) {
+                            return { results: data.results || [], pagination: { more: !!data.more } };
+                        },
+                    },
+                }).on('change', function () {
+                    if (!suppressAuthorChange) applyClientFilter();
                 });
-                refreshAuthorLabel();
+            }
             {% endif %}
 
             // ── Pagination preserves filter params ──
@@ -519,7 +590,7 @@
         {% set org_names = contest.organizations.all()|map(attribute='name')|join(',') %}
         {% set class_names = contest.classes.all()|map(attribute='name')|join(',') %}
         {% set tag_names = contest.tags.all()|map(attribute='name')|join(',') %}
-        <article class="cl-row" data-key="{{ contest.key }}" data-status="{{ status }}"
+        <article class="cl-row{% if can_see_problem_authors %} cl-row--with-author{% endif %}" data-key="{{ contest.key }}" data-status="{{ status }}"
                  data-orgs="{{ org_names }}" data-classes="{{ class_names }}" data-tags="{{ tag_names }}"
                  {% if can_see_problem_authors %}data-authors="{{ contest.authors.all()|map(attribute='id')|join(',') }}" {% endif %}
                  data-search="{{ contest.name }} {{ contest.key }}">
@@ -578,6 +649,16 @@
                     {% endif %}
                 </div>
             </div>
+            {% if can_see_problem_authors %}
+            <div class="cl-authors">
+                {% if contest.authors.all() %}
+                    {{ link_users(contest.authors.all(), named=True) }}
+                {% else %}
+                    —
+                {% endif %}
+                <span class="lbl">{{ _('Author') }}</span>
+            </div>
+            {% endif %}
             <div class="cl-trailing">
                 <div class="cl-users">
                     {% if status == 'upcoming' %}
@@ -765,22 +846,13 @@
                     </div>
 
                     {% if can_see_problem_authors %}
-                    <div class="filter-group">
+                    <div class="filter-group filter-group-author">
                         <span class="filter-group-label">{{ _('Author') }}</span>
-                        <div class="multi-select" id="author-multi-select">
-                            <button type="button" class="multi-select-trigger" onclick="toggleMenu('author-multi-select')">
-                                <span id="author-multi-label" class="multi-select-text multi-select-label-empty" data-empty-label="{{ _('All authors') }}">{{ _('All authors') }}</span>
-                                <span class="multi-select-caret">▾</span>
-                            </button>
-                            <div class="multi-select-menu" hidden>
-                                {% for author in contest_authors %}
-                                    <label class="multi-select-option">
-                                        <input type="checkbox" value="{{ author.id }}" onchange="refreshAuthorLabel(); applyClientFilter();">
-                                        <span>{{ author.username }}</span>
-                                    </label>
-                                {% endfor %}
-                            </div>
-                        </div>
+                        <select id="filter-author" multiple data-placeholder="{{ _('All authors') }}">
+                            {% for profile in selected_author_profiles %}
+                                <option value="{{ profile.id }}" selected>{{ profile_choice_label(profile) }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                     {% endif %}
                 </div>
