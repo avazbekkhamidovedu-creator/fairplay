@@ -2,7 +2,8 @@ from django.test import TestCase
 
 from judge.models.tests.util import create_user
 from judge.utils.user_search import (
-    format_user_label, profile_choice_label, profile_choice_payload, profile_person_name,
+    format_user_label, profile_author_label, profile_choice_label, profile_choice_payload,
+    profile_person_name,
 )
 
 
@@ -32,3 +33,10 @@ class UserSearchLabelTest(TestCase):
         user.profile.save(update_fields=['username_display_override'])
         user.profile.refresh_from_db()
         self.assertEqual(profile_choice_label(user.profile), 'Ada (alice)')
+
+    def test_profile_author_label_uses_real_name_or_name_and_id(self):
+        named = create_user(username='alice', first_name='张三')
+        self.assertEqual(profile_author_label(named.profile), '张三 (alice)')
+
+        unnamed = create_user(username='bobnet')
+        self.assertEqual(profile_author_label(unnamed.profile), 'bobnet')

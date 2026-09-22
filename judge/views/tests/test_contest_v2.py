@@ -160,6 +160,9 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
 
     def test_teacher_sees_assignment_author_filter(self):
         """Teachers get an author filter built from visible contest authors."""
+        author = self.users['superuser']
+        author.first_name = '张三'
+        author.save(update_fields=['first_name'])
         self.client.force_login(self.users['staff_problem_edit_own'])
         response = self.client.get(reverse('contest_list'))
         self.assertEqual(response.status_code, 200)
@@ -167,8 +170,27 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         authors = list(response.context['contest_authors'])
         self.assertTrue(any(a.user.username == 'superuser' for a in authors))
         html = response.content.decode()
-        self.assertIn('id="author-multi-select"', html)
-        self.assertIn('data-authors="%s"' % self.users['superuser'].profile.id, html)
+        self.assertIn('id="filter-author"', html)
+        self.assertIn('data-authors="%s"' % author.profile.id, html)
+        self.assertIn('张三 (superuser)', html)
+        self.assertIn('cl-authors', html)
+        self.assertNotIn('id="author-multi-select"', html)
+
+    def test_teacher_selected_author_keeps_real_name(self):
+        """A selected author option/chip must keep the real name, not just the id."""
+        author = self.users['superuser']
+        author.first_name = '张三'
+        author.save(update_fields=['first_name'])
+        self.client.force_login(self.users['staff_problem_edit_own'])
+        response = self.client.get(reverse('contest_list'), {'author': str(author.profile.id)})
+        self.assertEqual(response.status_code, 200)
+        profiles = list(response.context['selected_author_profiles'])
+        self.assertEqual([profile.id for profile in profiles], [author.profile.id])
+        html = response.content.decode()
+        self.assertRegex(
+            html,
+            r'<option value="%s" selected>\s*张三 \(superuser\)\s*</option>' % author.profile.id,
+        )
 
     def test_student_hides_assignment_author_filter(self):
         """Students do not see the author filter; a URL author param is ignored."""
@@ -177,9 +199,12 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.context['can_see_problem_authors'])
         self.assertEqual(list(response.context['contest_authors']), [])
+        self.assertEqual(list(response.context['selected_author_profiles']), [])
         html = response.content.decode()
+        self.assertNotIn('id="filter-author"', html)
         self.assertNotIn('id="author-multi-select"', html)
         self.assertNotIn('data-authors=', html)
+        self.assertNotIn('cl-authors', html)
 
 
 class ContestCreateViewTestCase(CommonDataMixin, TestCase):

@@ -12,6 +12,7 @@ from lxml.html import Element
 from judge import lxml_tree
 from judge.models import Contest, Problem, Profile
 from judge.ratings import rating_class, rating_progress
+from judge.utils.user_search import profile_author_label
 from . import registry
 
 rereference = re.compile(r'\[(r?user):(\w+)\]')
@@ -140,25 +141,33 @@ def item_title(item):
     return '<Unknown>'
 
 
-@registry.function
-def link_user(user):
+def _resolve_link_user(user):
     if isinstance(user, Profile):
-        user, profile = user.user, user
-    elif isinstance(user, AbstractUser):
-        profile = user.profile
-    elif type(user).__name__ == 'ContestRankingProfile':
-        user, profile = user.user, user
-    else:
-        raise ValueError('Expected profile or user, got %s' % (type(user),))
+        return user.user, user
+    if isinstance(user, AbstractUser):
+        return user, user.profile
+    if type(user).__name__ == 'ContestRankingProfile':
+        return user.user, user
+    raise ValueError('Expected profile or user, got %s' % (type(user),))
+
+
+def _link_user_html(user, profile, label):
     return mark_safe(f'<span class="{profile.css_class}">'
                      f'<a href="{escape(reverse("user_page", args=[user.username]))}">'
-                     f'{escape(profile.display_name)}</a></span>')
+                     f'{escape(label)}</a></span>')
+
+
+@registry.function
+def link_user(user, named=False):
+    user, profile = _resolve_link_user(user)
+    label = profile_author_label(profile) if named else profile.display_name
+    return _link_user_html(user, profile, label)
 
 
 @registry.function
 @registry.render_with('user/link-list.html')
-def link_users(users):
-    return {'users': users}
+def link_users(users, named=False):
+    return {'users': users, 'named': named}
 
 
 @registry.function

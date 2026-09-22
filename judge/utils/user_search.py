@@ -29,14 +29,27 @@ def profile_person_name(first_name='', last_name='', display_override='', userna
     return (username or '').strip()
 
 
-def profile_choice_label(profile):
-    """Select2 / chip label for a Profile: ``Name (username)``."""
+def _profile_name_parts(profile):
     user = getattr(profile, 'user', None)
     username = user.username if user is not None else getattr(profile, 'username', '') or str(profile)
     first = getattr(user, 'first_name', '') if user is not None else ''
     last = getattr(user, 'last_name', '') if user is not None else ''
     override = getattr(profile, 'username_display_override', '') or ''
-    return format_user_label(profile_person_name(first, last, override, username), username)
+    return profile_person_name(first, last, override, username), username
+
+
+def profile_choice_label(profile):
+    """Select2 / chip label for a Profile: ``Name (username)``."""
+    name, username = _profile_name_parts(profile)
+    return format_user_label(name, username)
+
+
+def profile_author_label(profile):
+    """List-column label: real name, or ``Name (username)`` when they differ."""
+    name, username = _profile_name_parts(profile)
+    if not name or name == username:
+        return username
+    return format_user_label(name, username)
 
 
 def profile_choice_payload(profile):

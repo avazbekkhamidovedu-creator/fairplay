@@ -57,12 +57,12 @@
             box-sizing: border-box;
             vertical-align: middle;
         }
-        #filter-format { width: 140px; }
-        #filter-difficulty { width: 120px; }
-        #filter-course { width: 150px; }
-        #filter-author { width: 180px; }
+        #filter-format { width: 100%; }
+        #filter-difficulty { width: 100%; }
+        #filter-course { width: 100%; }
+        #filter-author { width: 100%; }
         #filter-knowledge { width: clamp(280px, 48%, 560px); max-width: 100%; }
-        #status-filter { width: 100px; }
+        #status-filter { width: 100%; }
     </style>
     {% include "problem/add-problem-menu-assets.html" %}
     <style>
@@ -169,11 +169,11 @@
                 }
 
                 // Original OJ local multi-select (same pattern as submission list).
-                // Fixed widths keep Filters on one tidy row (avoid width:100% stacking).
+                // Width 100% fills equal grid cells so every filter on the row is the same size.
                 var select2Opts = {
                     theme: '{{ DMOJ_SELECT2_THEME }}',
                     multiple: true,
-                    width: '140px',
+                    width: '100%',
                     matcher: idAndTextMatcher,
                 };
                 var $filterSelects = $('#filter-format, #filter-difficulty, #filter-course, #filter-author, #filter-knowledge');
@@ -182,16 +182,19 @@
                 })).css({visibility: 'visible'});
                 $('#filter-difficulty').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All difficulties')|htmltojs }},
-                    width: '120px',
+                    width: '100%',
                 })).css({visibility: 'visible'});
                 $('#filter-course').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All courses')|htmltojs }},
-                    width: '150px',
+                    width: '100%',
                 })).css({visibility: 'visible'});
                 {% if can_see_problem_authors %}
                 $('#filter-author').select2($.extend({}, select2Opts, {
                     placeholder: {{ _('All authors')|htmltojs }},
-                    width: '180px',
+                    width: '100%',
+                    templateSelection: function (data) {
+                        return data.text || data.id;
+                    },
                     ajax: {
                         url: '{{ url('author_filter_select2') }}',
                         dataType: 'json',
@@ -216,7 +219,7 @@
                 $('#status-filter').select2({
                     theme: '{{ DMOJ_SELECT2_THEME }}',
                     minimumResultsForSearch: Infinity,
-                    width: '100px',
+                    width: '100%',
                 }).css({visibility: 'visible'});
 
                 var kpExpanded = false;
@@ -601,11 +604,11 @@
                         </div>
 
                         {% if can_see_problem_authors %}
-                            <div class="filter-group">
-                                <span class="filter-group-label">{{ _('Authors') }}</span>
-                                <select id="filter-author" name="author" multiple>
+                            <div class="filter-group filter-group-author">
+                                <span class="filter-group-label">{{ _('Author') }}</span>
+                                <select id="filter-author" name="author" multiple data-placeholder="{{ _('All authors') }}">
                                     {% for profile in selected_author_profiles %}
-                                        <option value="{{ profile.id }}" selected>{{ profile.display_name }}</option>
+                                        <option value="{{ profile.id }}" selected>{{ profile_choice_label(profile) }}</option>
                                     {% endfor %}
                                 </select>
                             </div>
@@ -700,7 +703,7 @@
                             <span class="chip">{{ org.name }}<button type="button" data-field="course" data-value="{{ org.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endif %}{% endfor %}
                         {% for profile in selected_author_profiles %}
-                            <span class="chip">{{ profile.display_name }}<button type="button" data-field="author" data-value="{{ profile.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
+                            <span class="chip">{{ profile_choice_label(profile) }}<button type="button" data-field="author" data-value="{{ profile.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
                         {% endfor %}
                         {% for type in knowledge_types %}{% if type.id in selected_knowledge_types %}
                             <span class="chip">{{ user_trans(type.full_name) }}<button type="button" data-field="type" data-value="{{ type.id }}" aria-label="{{ _('Remove') }}">&times;</button></span>
@@ -855,7 +858,7 @@
                                 {% if can_see_problem_authors %}
                                     <td class="col-author">
                                         {% if problem.authors.all() %}
-                                            {{ link_users(problem.authors.all()) }}
+                                            {{ link_users(problem.authors.all(), named=True) }}
                                         {% else %}
                                             —
                                         {% endif %}
