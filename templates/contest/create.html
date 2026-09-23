@@ -15,9 +15,7 @@
     <link rel="stylesheet" href="{{ static('problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}">
     {# Same pattern as base.html DARK_STYLE_CSS: rebuild page styles with vars-dark. #}
     <link rel="stylesheet" href="{{ static('dark/problem_create_v2.css') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}" media="(prefers-color-scheme: dark)">
-    <link rel="stylesheet" href="{{ static('vendor/katex.min.css') }}">
-    <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
-    <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
+    {% include "rte_display_css.html" %}
 
     <!-- Page-local layout tweaks; colours come from --oj-* / problem_create_v2.css tokens -->
     <style>
@@ -673,7 +671,7 @@
 {% endblock %}
 
 {% block js_media %}
-    <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+    {% include "rte_display_js.html" %}
     <script src="{{ static('markdown_preview.js') }}"></script>
     <script type="text/javascript">
         // Timezone whose wall clock the teacher is currently editing (their own

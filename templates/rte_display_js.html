@@ -1,4 +1,6 @@
-<script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+{% compress js %}
+<script src="{{ static('rich_editor.js') }}"></script>
+{% endcompress %}
 <script>
   function rtePaintTargets() {
     if (window.RichEditor && typeof RichEditor.paintTargets === 'function') {
