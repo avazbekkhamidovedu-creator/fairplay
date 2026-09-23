@@ -2,7 +2,9 @@
 
 {% block media %}
     {{ form.media.css }}
-    {% include "rte_display_css.html" %}
+    <link rel="stylesheet" href="{{ static('vendor/katex.min.css') }}">
+    <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
+    <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
     <style>
         .course-redesign .course-form .rich-editor {
             height: 360px;
@@ -13,7 +15,7 @@
 
 {% block js_media %}
     {{ form.media.js }}
-    {% include "rte_display_js.html" %}
+    <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
     <script type="text/javascript">
         $(function () {
             $('#instructor-verification-btn').on('click', function () {

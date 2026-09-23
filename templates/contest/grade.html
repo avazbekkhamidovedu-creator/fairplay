@@ -7,7 +7,9 @@
 {% block title_ruler %}{% endblock %}
 
 {% block media %}
-    {% include "rte_display_css.html" %}
+    <link rel="stylesheet" href="{{ static('vendor/katex.min.css') }}">
+    <link rel="stylesheet" href="{{ static('rich_editor.css') }}">
+    <link rel="stylesheet" href="{{ static('dark/rich_editor.css') }}" media="(prefers-color-scheme: dark)">
     <style>
         /* Grade workspace — same visual language as the problem workspace (workspace.scss).
            Self-contained: reuses --oj-* tokens (with fallbacks) and ws-* class names so the
@@ -1757,5 +1759,5 @@
 {% endblock %}
 
 {% block bodyend %}
-    {% include "rte_display_js.html" %}
+    <script src="{{ static('rich_editor.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
 {% endblock %}
