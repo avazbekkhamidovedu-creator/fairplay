@@ -862,8 +862,9 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
                     'file_upload': get_workspace_file_upload(selected_submission),
                     'results_hidden': results_hidden,
                     'is_graded': selected_submission.is_graded,
-                    'released': workspace_manual_released(selected_submission),
-                    'review_note_html': workspace_review_note_html(selected_submission),
+                    # Score and 评语 stay masked with the exam result until finalize.
+                    'released': False if results_hidden else workspace_manual_released(selected_submission),
+                    'review_note_html': '' if results_hidden else workspace_review_note_html(selected_submission),
                     'id_secret': selected_submission.id_secret,
                     'status_url': reverse(
                         'problem_workspace_submission_status',
@@ -2739,8 +2740,8 @@ class ProblemWorkspaceSubmissionStatus(LoginRequiredMixin, ProblemMixin, SingleO
             'answer_display': answer_display,
             'file_upload': get_workspace_file_upload(submission),
             'comments_html': comments_html,
-            'released': workspace_manual_released(submission),
-            'review_note_html': workspace_review_note_html(submission),
+            'released': False if hidden else workspace_manual_released(submission),
+            'review_note_html': '' if hidden else workspace_review_note_html(submission),
             'id_secret': submission.id_secret,
             'status_url': reverse(
                 'problem_workspace_submission_status',

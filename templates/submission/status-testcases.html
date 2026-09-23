@@ -309,6 +309,13 @@
 {% endif %}
 
 
+{% if review_note_html %}
+<div class="ws-review-note">
+    <div class="ws-review-note-label">{{ _('Teacher feedback') }}</div>
+    <div class="ws-review-note-body">{{ review_note_html|safe }}</div>
+</div>
+{% endif %}
+
 {# --- MathJax typesetting for expanded AI feedback rows --- #}
 {% if submission.problem.submission_type in ('B', 'S') %}
 <script>

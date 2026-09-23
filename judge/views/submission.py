@@ -315,6 +315,11 @@ class SubmissionStatus(SubmissionCommentMixin, SubmissionDetailBase):
 
         attach_student_display_score(submission)
         context['grade_desk_url'] = grade_desk_url(submission, self.request.user)
+        from judge.views.problem import workspace_review_note_html
+        context['review_note_html'] = (
+            '' if not submission.results_visible_to(self.request.user)
+            else workspace_review_note_html(submission)
+        )
 
         return context
 
