@@ -11,7 +11,9 @@
         window.MONACO_VS_URL = '{{ static("libs/monaco/vs") }}';
     </script>
     <script type="text/javascript" src="{{ static('libs/monaco/vs/loader.js') }}"></script>
-    <script src="{{ static('ide_run_result.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+    {% compress js %}
+    <script src="{{ static('ide_run_result.js') }}"></script>
+    {% endcompress %}
     {% if REQUIRE_JAX %}
         {% include "mathjax-load.html" %}
     {% endif %}

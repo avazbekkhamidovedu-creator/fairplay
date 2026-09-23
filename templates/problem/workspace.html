@@ -808,6 +808,8 @@
   {% if workspace_submission and not workspace_submission.is_graded and not workspace_is_file %}
     <script type="text/javascript" src="{{ static('event.js') }}"></script>
   {% endif %}
-  <script src="{{ static('ide_run_result.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
-  <script src="{{ static('workspace.js') }}{% if DMOJ_STATIC_VERSION %}?v={{ DMOJ_STATIC_VERSION }}{% endif %}"></script>
+  {% compress js %}
+  <script src="{{ static('ide_run_result.js') }}"></script>
+  <script src="{{ static('workspace.js') }}"></script>
+  {% endcompress %}
 {% endblock %}
