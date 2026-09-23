@@ -1231,6 +1231,29 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertIn('problem tag', response.json()['error'].lower())
         self.assertFalse(Problem.objects.filter(name='No type').exists())
 
+    def test_create_omitting_problem_types_key_is_rejected(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'Omitted tag key',
+            'description': 'no problemTypes key',
+            'points': 5,
+            'group_id': self.group.id,
+            'difficulty': 'medium',
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn('problem tag', response.json()['error'].lower())
+        self.assertFalse(Problem.objects.filter(name='Omitted tag key').exists())
+
     def test_edit_explicit_empty_problem_types_is_rejected(self):
         knowledge = ProblemType.objects.create(name='dp-tag', full_name='Dynamic Programming')
         self.client.force_login(self.users['creator'])
