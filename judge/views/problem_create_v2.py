@@ -756,7 +756,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         payloads that only send ``difficulty`` do not wipe knowledge tags:
 
         - key missing → keep existing knowledge types; only update difficulty
-        - key present (including ``[]``) → replace knowledge types from payload
+        - key present → replace knowledge types from payload; an empty list is rejected
         - ``difficulty`` omitted/invalid → keep any existing easy/medium/hard row
         """
         reserved = _reserved_auto_labels()
@@ -776,6 +776,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     continue
                 seen.add(ptype.pk)
                 resolved.append(ptype)
+            # The editor always sends this key. Difficulty is stored separately,
+            # so a payload with no knowledge tag must not save.
+            if not resolved:
+                raise ValueError(_('Please select a problem tag.'))
         else:
             for ptype in problem.types.all():
                 if ptype.pk in seen:

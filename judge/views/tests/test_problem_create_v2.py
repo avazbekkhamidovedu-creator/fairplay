@@ -1207,7 +1207,31 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(problem.difficulty, 'hard')
         self.assertIn(knowledge, list(problem.types.all()))
 
-    def test_edit_explicit_empty_problem_types_clears_knowledge_tags(self):
+    def test_create_without_problem_type_is_rejected(self):
+        self.client.force_login(self.users['creator'])
+        payload = {
+            'type': 'single',
+            'name': 'No type',
+            'description': 'missing tag',
+            'points': 5,
+            'group_id': self.group.id,
+            'difficulty': 'medium',
+            'problemTypes': [],
+            'options': [
+                {'text': 'A', 'correct': True},
+                {'text': 'B', 'correct': False},
+            ],
+        }
+        response = self.client.post(
+            reverse('problem_create_v2'),
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn('problem tag', response.json()['error'].lower())
+        self.assertFalse(Problem.objects.filter(name='No type').exists())
+
+    def test_edit_explicit_empty_problem_types_is_rejected(self):
         knowledge = ProblemType.objects.create(name='dp-tag', full_name='Dynamic Programming')
         self.client.force_login(self.users['creator'])
         create_payload = {
@@ -1250,11 +1274,12 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
             data=json.dumps(edit_payload),
             content_type='application/json',
         )
-        self.assertEqual(edit_resp.status_code, 200, edit_resp.content)
+        self.assertEqual(edit_resp.status_code, 400, edit_resp.content)
+        self.assertIn('problem tag', edit_resp.json()['error'].lower())
         problem = Problem.objects.get(code=code)
         problem.__dict__.pop('difficulty', None)
         self.assertEqual(problem.difficulty, 'medium')
-        self.assertNotIn(knowledge, list(problem.types.all()))
+        self.assertIn(knowledge, list(problem.types.all()))
 
     def test_edit_code_keeps_testcases_when_payload_omits_them(self):
         self.client.force_login(self.users['staff_adder'])
@@ -1888,6 +1913,7 @@ class ProblemCreateV2CapitalizedDifficultyTestCase(CommonDataMixin, TestCase):
         })
         ProblemType.objects.create(name='Easy', full_name='Easy')
         ProblemType.objects.create(name='Hard', full_name='Hard')
+        ProblemType.objects.create(name='impl', full_name='Implementation')
 
     def _save_programming(self, name, difficulty):
         return self.client.post(
@@ -1900,7 +1926,7 @@ class ProblemCreateV2CapitalizedDifficultyTestCase(CommonDataMixin, TestCase):
                 'is_public': True,
                 'group_id': self.group.id,
                 'difficulty': difficulty,
-                'problemTypes': [],
+                'problemTypes': ['Implementation'],
                 'testcases': [
                     {'input': '1\n', 'output': '1\n', 'points': 10, 'pretest': False},
                 ],
