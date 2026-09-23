@@ -96,6 +96,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('problem_create_v2'))
         self.assertContains(response, 'Public visible')
         self.assertNotContains(response, 'publicly visible')
+        self.assertNotRegex(response.content.decode(), r'id="f-public"[^>]*checked')
         self.assertContains(response, 'Editorial')
         self.assertContains(response, 'data-rich-mount="editorial"')
         self.assertNotContains(response, 'data-rich-mount="explain"')

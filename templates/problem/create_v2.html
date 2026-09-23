@@ -335,7 +335,7 @@
           <div class="form-row">
             <label>{{ _('Public visible') }}</label>
             <div class="field">
-              <input type="checkbox" id="f-public" {% if can_change_public %}checked{% else %}disabled{% endif %}>
+              <input type="checkbox" id="f-public"{% if not can_change_public %} disabled{% endif %}>
             </div>
           </div>
           <div class="form-row">
