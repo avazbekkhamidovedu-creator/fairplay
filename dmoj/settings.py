@@ -617,8 +617,7 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'resources'),
 ]
 STATIC_URL = '/static/'
-# Templates no longer append ?v=. Files inside {% compress %} are served from
-# /static/CACHE/ with a content hash, so this value is unused by page HTML.
+# Bump (or set env) when shipped CSS/JS must invalidate browser cache.
 DMOJ_STATIC_VERSION = os.environ.get('DMOJ_STATIC_VERSION', '')
 
 # User uploads. Django's defaults are both empty, which makes MEDIA_ROOT resolve against
