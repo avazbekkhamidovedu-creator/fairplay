@@ -390,6 +390,48 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.curators.count(), 0)
 
+    def test_post_clears_private_contestants_with_empty_list(self):
+        # The editor must POST [] after the teacher removes every Private
+        # assignee. An omitted key keeps the stored rows.
+        self.client.force_login(self.editor)
+        assignee_id = self.normal.profile.id
+        payload = self._full_payload(vis_mode='private', private_contestants=[assignee_id])
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertTrue(self.contest.is_private)
+        self.assertEqual(list(self.contest.private_contestants.values_list('id', flat=True)), [assignee_id])
+
+        payload = self._full_payload(vis_mode='private', private_contestants=[])
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.private_contestants.count(), 0)
+
+    def test_post_omitted_private_contestants_keeps_existing(self):
+        self.client.force_login(self.editor)
+        assignee_id = self.normal.profile.id
+        payload = self._full_payload(vis_mode='private', private_contestants=[assignee_id])
+        self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        payload = self._full_payload(vis_mode='private')
+        del payload['private_contestants']
+        response = self.client.post(
+            reverse('contest_edit', args=['editablecontest']),
+            data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.contest.refresh_from_db()
+        self.assertEqual(list(self.contest.private_contestants.values_list('id', flat=True)), [assignee_id])
+
     def test_post_denied_for_user_without_permission(self):
         self.client.force_login(self.normal)
         response = self.client.post(

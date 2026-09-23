@@ -768,21 +768,18 @@
                     data.ai_grading_auto_delay_minutes = parseInt(data.ai_grading_auto_delay_minutes, 10);
                 }
 
-                // Course / Class are always submitted when the widgets exist
-                // (including []) so clearing them on edit actually persists.
-                // Other M2M fields omit an empty list so an untouched widget
-                // does not wipe stored rows.
-                ['organizations', 'classes'].forEach(function(f) {
+                // M2M widgets that are on the page are always submitted, including
+                // []. The server only replaces a relation when the key is present,
+                // so omitting an empty list leaves the stored rows — clearing every
+                // Private assignee (or any other multi-select) would not persist.
+                // A widget that is not rendered (permission-gated) is omitted, and
+                // the stored rows stay.
+                ['organizations', 'classes', 'tags', 'private_contestants', 'curators',
+                 'testers', 'spectators', 'rate_exclude', 'view_contest_scoreboard',
+                 'view_contest_submissions', 'banned_users', 'authors',
+                 'join_organizations'].forEach(function(f) {
                     if (!form.querySelector('[name="' + f + '"]')) return;
                     data[f] = fd.getAll(f).filter(function(v) { return v !== ''; });
-                });
-                // Multi-select (select2 + native multiple) M2M fields — filter empty
-                ['tags', 'private_contestants', 'curators', 'testers', 'spectators',
-                 'rate_exclude', 'view_contest_scoreboard', 'view_contest_submissions',
-                 'banned_users', 'authors', 'join_organizations'].forEach(function(f) {
-                    var vals = fd.getAll(f).filter(function(v) { return v !== ''; });
-                    if (vals.length) data[f] = vals;
-                    else delete data[f];
                 });
                 // format_config is JSON text; empty string stores None. Always
                 // send it when blank so switching ICPC → exam/default actually
