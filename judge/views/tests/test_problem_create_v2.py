@@ -77,6 +77,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         html = response.content.decode()
         self.assertNotRegex(html, r'name="qtype" value="programming"[^>]*disabled')
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'Instructor code',
             'description': 'print hello',
@@ -138,6 +139,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         org = create_organization(name='Unrelated Course')
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': 'Org scoped',
             'description': 'Any course is allowed.',
@@ -164,6 +166,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_private_cannot_make_fully_public_without_course(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': 'Fully public',
             'description': 'Needs change_public_visibility.',
@@ -191,6 +194,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         )
         self.client.force_login(staff)
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'No org',
             'description': 'Staff cannot assign courses.',
@@ -211,6 +215,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_mcq_via_json(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': 'HTTP vs TCP',
             'description': 'Which is connection-oriented?',
@@ -249,6 +254,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_own_code_already_saved_opens_editor(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': 'Retry save',
             'description': 'Same code twice.',
@@ -284,6 +290,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         create_problem(code='p000000', name='Other problem', authors=('superuser',))
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': 'Collision',
             'description': 'Series taken.',
@@ -314,6 +321,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         create_problem(code='myquiz', name='Taken custom', authors=('superuser',))
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': 'Dup custom',
             'description': 'Custom taken.',
@@ -338,6 +346,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_multiple_choice_defaults_to_proportional_scoring(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'multiple',
             'name': 'Pick two',
             'description': 'Select all that apply.',
@@ -365,6 +374,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_multiple_choice_underselect_scoring(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'multiple',
             'name': 'Underselect',
             'description': 'Select all that apply.',
@@ -395,6 +405,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_code_with_testcases(self):
         self.client.force_login(self.users['staff_adder'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'A Plus B',
             'description': 'Read two integers.',
@@ -423,6 +434,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_code_notifies_judges_after_commit(self, update_problems):
         self.client.force_login(self.users['staff_adder'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'Judge Notify',
             'description': 'Read two integers.',
@@ -444,6 +456,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_rejects_unimplemented_type(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'compound',
             'name': 'Compound',
             'description': 'Not implemented yet',
@@ -469,6 +482,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
             display='CC BY-SA 4.0', text='license text',
         )
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': 'Advanced wired',
             'description': 'Authors and license should persist.',
@@ -523,6 +537,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         """Partial edit payloads must not wipe Advanced solution/translations."""
         self.client.force_login(self.users['creator'])
         create_payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': 'Keep advanced',
             'description': 'Has solution and translation.',
@@ -585,6 +600,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         create_resp = self.client.post(
             reverse('problem_create_v2'),
             data=json.dumps({
+                'problemTypes': ['Graph Theory'],
                 'type': 'single',
                 'name': 'Author ownership',
                 'description': 'Keep authors stable on edit.',
@@ -634,6 +650,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         resp = self.client.post(
             reverse('problem_create_v2'),
             data=json.dumps({
+                'problemTypes': ['Graph Theory'],
                 'type': 'single',
                 'name': 'No full markup',
                 'description': 'Should stay False.',
@@ -656,6 +673,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         resp = self.client.post(
             reverse('problem_create_v2'),
             data=json.dumps({
+                'problemTypes': ['Graph Theory'],
                 'type': 'single',
                 'name': 'Bad translation lang',
                 'description': 'Should 400.',
@@ -681,6 +699,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         resp = self.client.post(
             reverse('problem_create_v2'),
             data=json.dumps({
+                'problemTypes': ['Graph Theory'],
                 'type': 'programming',
                 'name': 'Limits and templates',
                 'description': 'Wire advanced inlines.',
@@ -722,6 +741,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         create_resp = self.client.post(
             reverse('problem_create_v2'),
             data=json.dumps({
+                'problemTypes': ['Graph Theory'],
                 'type': 'single',
                 'name': 'Clarify me',
                 'description': 'Has clarifications.',
@@ -816,6 +836,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_truefalse_as_mcq(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'truefalse', 'name': 'Sky is blue', 'description': 'Is the sky blue?',
             'points': 2, 'group_id': self.group.id, 'tfAnswer': 'true',
         }
@@ -832,6 +853,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_fill_blank(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'blank', 'name': 'Capital', 'description': 'Capital of France is {{blank}}.',
             'points': 3, 'group_id': self.group.id, 'blanks': ['Paris\nparis'],
         }
@@ -850,6 +872,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_fill_blank_persists_per_blank_points(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'blank', 'name': 'Weighted blanks', 'description': 'Two blanks.',
             'points': 10, 'partial': True, 'group_id': self.group.id,
             'blanks': [
@@ -873,6 +896,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         # when no LLM is configured (see judge/question_types/fill_blank.py).
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'blank', 'name': 'Essay blank', 'description': 'Define recursion: {{blank}}',
             'points': 4, 'group_id': self.group.id, 'blanks': ['a function calling itself'],
             'ai': True, 'rubric': 'accept any answer mentioning self-reference',
@@ -888,6 +912,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_short_answer(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'short', 'name': 'Explain TCP', 'description': 'Explain TCP handshake.',
             'points': 5, 'group_id': self.group.id, 'shortAnswer': 'SYN, SYN-ACK, ACK', 'rubric': 'mention 3 steps',
         }
@@ -904,6 +929,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_short_answer_can_enable_ai_grading(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'short', 'name': 'Explain TCP', 'description': 'Explain TCP handshake.',
             'points': 5, 'group_id': self.group.id, 'shortAnswer': 'SYN, SYN-ACK, ACK',
             'ai': True, 'rubric': 'mention 3 steps',
@@ -920,6 +946,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_file_upload(self):
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'file', 'name': 'Submit your report', 'description': 'Upload a PDF report.',
             'points': 20, 'group_id': self.group.id,
             'fileExtensions': 'pdf', 'fileMaxSizeMb': 10, 'fileInstructions': 'One PDF, no zip.',
@@ -939,6 +966,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         """_build_edit_data must hand back MB so a resave does not shrink the limit each time."""
         self.client.force_login(self.users['creator'])
         response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'problemTypes': ['Graph Theory'],
             'type': 'file', 'name': 'Round trip', 'description': 'x', 'points': 5,
             'group_id': self.group.id, 'fileExtensions': 'pdf', 'fileMaxSizeMb': 7,
         }), content_type='application/json')
@@ -963,6 +991,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_create_file_upload_rejects_non_positive_size(self):
         self.client.force_login(self.users['creator'])
         response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
+            'problemTypes': ['Graph Theory'],
             'type': 'file', 'name': 'Bad cap', 'description': 'x', 'points': 5,
             'group_id': self.group.id, 'fileMaxSizeMb': 0,
         }), content_type='application/json')
@@ -974,6 +1003,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         # End-to-end grading is covered by judge/views/tests/test_fill_blank.py.
         self.client.force_login(self.users['creator'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'blank', 'name': 'Math', 'description': '1+1={{blank}}, 2+2={{blank}}',
             'points': 2, 'group_id': self.group.id, 'blanks': ['2\ntwo', '4\nfour'],
         }
@@ -1307,6 +1337,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
     def test_edit_code_keeps_testcases_when_payload_omits_them(self):
         self.client.force_login(self.users['staff_adder'])
         create_payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'Keep Cases',
             'description': 'has cases',
@@ -1350,6 +1381,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         response = self.client.post(
             reverse('problem_create_v2'),
             data=json.dumps({
+                'problemTypes': ['Graph Theory'],
                 'type': 'single',
                 'name': 'Logged create',
                 'description': 'Statement text.',
@@ -1375,6 +1407,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         create_resp = self.client.post(
             reverse('problem_create_v2'),
             data=json.dumps({
+                'problemTypes': ['Graph Theory'],
                 'type': 'single',
                 'name': 'Before edit',
                 'description': 'Original statement.',
@@ -1423,6 +1456,7 @@ class ProblemCreateV2ViewTestCase(CommonDataMixin, TestCase):
         create_resp = self.client.post(
             reverse('problem_create_v2'),
             data=json.dumps({
+                'problemTypes': ['Graph Theory'],
                 'type': 'single',
                 'name': 'Reasoned edit',
                 'description': 'Original.',
@@ -1489,6 +1523,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
     def _make_code_problem(self):
         self.client.force_login(self.users['staff_adder'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'Zip Bridge',
             'description': 'bridge',
@@ -1606,6 +1641,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             zf.writestr('notes.md', 'ignore\n')
         buf.seek(0)
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'Manual match',
             'description': 'user picks files',
@@ -1642,6 +1678,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         buf.seek(0)
 
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'Multipart Zip',
             'description': 'zip upload',
@@ -1685,6 +1722,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
             zf.writestr('only.in', '1\n')
         buf.seek(0)
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'Zip only',
             'description': 'x',
@@ -1709,6 +1747,7 @@ class ProblemCreateV2TestcaseZipBridgeTestCase(CommonDataMixin, TestCase):
         self.assertIsNotNone(lang)
         self.client.force_login(self.users['staff_adder'])
         payload = {
+            'problemTypes': ['Graph Theory'],
             'type': 'programming',
             'name': 'Harnessed',
             'description': 'with harness',
@@ -2004,6 +2043,7 @@ class ProblemCreateV2SaveRedirectTestCase(CommonDataMixin, TestCase):
 
     def _create_payload(self, name='Save redirect problem'):
         return {
+            'problemTypes': ['Graph Theory'],
             'type': 'single',
             'name': name,
             'description': 'After save, Edit must still work.',

@@ -72,6 +72,7 @@ class FileUploadAuthoringTestCase(FileUploadBase):
         response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
             'type': 'file', 'name': 'Upload PDF', 'description': 'Upload your report',
             'points': 10, 'group_id': default_problem_group().id,
+            'problemTypes': ['Graph Theory'],
             'fileExtensions': '.PDF, zip', 'fileMaxSizeMb': 5, 'fileInstructions': 'PDF only',
         }), content_type='application/json')
         self.assertEqual(response.status_code, 200)
@@ -89,7 +90,8 @@ class FileUploadAuthoringTestCase(FileUploadBase):
         self.client.force_login(self.users['creator'])
         response = self.client.post(reverse('problem_create_v2'), data=json.dumps({
             'type': 'file', 'name': 'No cap', 'description': 'x',
-            'points': 10, 'group_id': default_problem_group().id, 'fileMaxSizeMb': 0,
+            'points': 10, 'group_id': default_problem_group().id,
+            'problemTypes': ['Graph Theory'], 'fileMaxSizeMb': 0,
         }), content_type='application/json')
         self.assertEqual(response.status_code, 400)
         self.assertFalse(Problem.objects.filter(name='No cap').exists())
