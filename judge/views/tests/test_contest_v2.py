@@ -71,6 +71,36 @@ class ContestListV2ViewTestCase(CommonDataMixin, TestCase):
         response = self.client.get(reverse('contest_list'))
         self.assertEqual(response.status_code, 200)
 
+    def test_hidden_badge_shows_for_any_time_status(self):
+        now = timezone.now()
+        hidden_ongoing = create_contest(
+            key='hidden_ongoing',
+            name='Hidden Ongoing',
+            start_time=now - timedelta(days=1),
+            end_time=now + timedelta(days=1),
+            is_visible=False,
+            authors=('superuser',),
+        )
+        hidden_future = create_contest(
+            key='hidden_future',
+            name='Hidden Future',
+            start_time=now + timedelta(days=2),
+            end_time=now + timedelta(days=3),
+            is_visible=False,
+            authors=('superuser',),
+        )
+        self.client.force_login(self.users['superuser'])
+        html = self.client.get(reverse('contest_list')).content.decode()
+
+        def row(key):
+            start = html.index('data-key="%s"' % key)
+            end = html.index('</article>', start)
+            return html[start:end]
+
+        self.assertIn('fa-eye-slash', row(hidden_ongoing.key))
+        self.assertIn('fa-eye-slash', row(hidden_future.key))
+        self.assertNotIn('fa-eye-slash', row(self.ongoing_contest.key))
+
     def test_template(self):
         response = self.client.get(reverse('contest_list'))
         self.assertTemplateUsed(response, 'contest/list-v2.html')

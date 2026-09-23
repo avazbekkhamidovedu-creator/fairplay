@@ -622,7 +622,7 @@
                     {% if contest.time_limit %}
                         <span class="badge badge-duration" title="{{ _('Each student gets %(time)s from the moment they start; the assignment still closes at its end time.', time=contest.time_limit|timedelta('localized-no-seconds')) }}"><i class="fa fa-hourglass-half"></i> {{ _('Time limited') }} · {{ contest.time_limit|timedelta('localized-no-seconds') }}</span>
                     {% endif %}
-                    {% if status == 'past' and not contest.is_visible %}
+                    {% if not contest.is_visible %}
                         <span class="badge badge-st-past"><i class="fa fa-eye-slash"></i> {{ _('hidden') }}</span>
                     {% endif %}
                     {% for tag in contest.tags.all() %}
