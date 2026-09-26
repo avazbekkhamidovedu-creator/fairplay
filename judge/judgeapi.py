@@ -25,7 +25,8 @@ def _post_update_submission(submission, done=False):
 
 def judge_request(packet, reply=True):
     sock = socket.create_connection(settings.BRIDGED_DJANGO_CONNECT or
-                                    settings.BRIDGED_DJANGO_ADDRESS[0])
+                                    settings.BRIDGED_DJANGO_ADDRESS[0],
+                                    timeout=settings.BRIDGED_DJANGO_TIMEOUT)
 
     output = json.dumps(packet, separators=(',', ':'))
     output = zlib.compress(output.encode('utf-8'))
