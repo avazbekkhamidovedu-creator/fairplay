@@ -84,6 +84,8 @@ class ZlibPacketHandler(metaclass=RequestHandlerMeta):
 
         while remainder:
             data = self.request.recv(remainder)
+            if not data:
+                raise Disconnect()
             remainder -= len(data)
             buffer.append(data)
         self._on_packet(b''.join(buffer))

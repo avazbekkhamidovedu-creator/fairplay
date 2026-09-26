@@ -1302,3 +1302,46 @@ class FillBlankPromptTests(StdlibTestCase):
         user_content = messages[1]['content']
         self.assertIn('1. Blank 1', user_content)
         self.assertIn('2. Blank 2', user_content)
+
+
+class _EOFSocket:
+    """Fake socket that serves the given bytes, then returns b'' (EOF) forever."""
+
+    def __init__(self, data):
+        self.data = data
+        self.eof_reads = 0
+
+    def recv(self, n):
+        if not self.data:
+            self.eof_reads += 1
+            if self.eof_reads > 100:
+                raise AssertionError('recv() called repeatedly after EOF (busy loop)')
+            return b''
+        chunk, self.data = self.data[:n], self.data[n:]
+        return chunk
+
+
+class BridgePacketEOFTests(StdlibTestCase):
+    def make_handler(self, data):
+        from judge.bridge.base_handler import ZlibPacketHandler
+
+        # Bypass RequestHandlerMeta.__call__, which would run handle() immediately.
+        handler = ZlibPacketHandler.__new__(ZlibPacketHandler)
+        handler.__init__(_EOFSocket(data), ('203.0.113.1', 12345), mock.Mock(server_address=('0.0.0.0', 9999)))
+        handler.on_packet = mock.Mock()
+        return handler
+
+    def test_read_sized_packet_disconnects_on_eof(self):
+        from judge.bridge.base_handler import Disconnect
+
+        handler = self.make_handler(b'abc')
+        with self.assertRaises(Disconnect):
+            handler.read_sized_packet(256)
+        handler.on_packet.assert_not_called()
+
+    def test_handle_returns_on_truncated_packet(self):
+        # 4-byte length header (256 bytes, under MAX_ALLOWED_PACKET_SIZE) followed by a partial body, then EOF.
+        handler = self.make_handler(b'\x00\x00\x01\x00abc')
+        handler.handle()
+        handler.on_packet.assert_not_called()
+        self.assertLessEqual(handler.request.eof_reads, 1)
