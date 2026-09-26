@@ -52,8 +52,14 @@ services:
   bridge:
     <<: *app
     command: ["bridge"]
+    # Judges connect here (BRIDGED_JUDGE_ADDRESS). Never publish on 0.0.0.0: the
+    # judge protocol is unauthenticated until handshake and must not face the
+    # network. All judges run on this host:
     ports:
-      - "9999:9999"                  # host/remote judges connect here (BRIDGED_JUDGE_ADDRESS)
+      - "127.0.0.1:9999:9999"        # host judges (supervisor) -> localhost:9999
+      - "172.17.0.1:9999:9999"       # judge containers -> host.docker.internal (docker0 gateway)
+    # Cap a runaway bridge so it is restarted alone instead of OOMing the host.
+    mem_limit: 1g
 
   wsevent:
     image: ${WSEVENT_IMAGE}
