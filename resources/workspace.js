@@ -897,6 +897,42 @@
     span.textContent = code || '?';
     parent.appendChild(span);
   }
+  function appendScoreLine(parent, status) {
+    if (!parent || !status || status.points == null) return;
+    var score = document.createElement('p');
+    var scoreLabel = document.createElement('b');
+    scoreLabel.textContent = gettext('Score') + ':';
+    score.appendChild(scoreLabel);
+    score.appendChild(document.createTextNode(
+      ' ' + formatScorePart(status.points) + ' / ' + formatScorePart(status.points_total)
+    ));
+    parent.appendChild(score);
+  }
+  function appendTeacherFeedback(parent, status) {
+    if (!parent || !status || status.results_hidden) return;
+    if (status.released) {
+      var tag = document.createElement('div');
+      tag.className = 'ws-released-tag';
+      tag.textContent = gettext('Released');
+      parent.appendChild(tag);
+    }
+    if (status.review_note_html) {
+      var note = document.createElement('div');
+      note.className = 'ws-review-note';
+      var noteLabel = document.createElement('div');
+      noteLabel.className = 'ws-review-note-label';
+      noteLabel.textContent = gettext('Teacher feedback');
+      var noteBody = document.createElement('div');
+      noteBody.className = 'ws-review-note-body';
+      noteBody.innerHTML = status.review_note_html; // bleach-sanitized server-side
+      note.appendChild(noteLabel);
+      note.appendChild(noteBody);
+      parent.appendChild(note);
+    }
+  }
+  function showReleasedOrTeacherScore(status) {
+    return !!(status && (status.released || status.show_ai_scores));
+  }
   function renderFileUploadStatus(status) {
     ensureResultStructure();
     var main = $('#workspace-result-main');
@@ -907,24 +943,27 @@
     var heading = document.createElement('h3');
     heading.textContent = gettext('File submitted');
     wrap.appendChild(heading);
+    var showScore = !status.results_hidden && status.points != null && (status.released || status.is_graded);
     if (status.results_hidden) {
       var hiddenMsg = document.createElement('p');
       hiddenMsg.textContent = gettext('Your submission has been received. Results for this problem are hidden until the contest is finalized.');
       wrap.appendChild(hiddenMsg);
+      main.appendChild(wrap);
+    } else if (showScore) {
+      appendScoreLine(wrap, status);
+      main.appendChild(wrap);
+      appendTeacherFeedback(main, status);
     } else if (status.is_graded === false || status.is_graded == null) {
       var waiting = document.createElement('p');
       waiting.className = 'file-awaiting-grading';
       waiting.textContent = gettext('Awaiting grading');
       wrap.appendChild(waiting);
+      main.appendChild(wrap);
     } else {
-      var score = document.createElement('p');
-      var scoreLabel = document.createElement('b');
-      scoreLabel.textContent = gettext('Score') + ': ';
-      score.appendChild(scoreLabel);
-      score.appendChild(document.createTextNode(status.points == null ? '-' : String(status.points)));
-      wrap.appendChild(score);
+      appendScoreLine(wrap, status);
+      main.appendChild(wrap);
+      appendTeacherFeedback(main, status);
     }
-    main.appendChild(wrap);
     updateFileUploadResult(status.file_upload);
   }
   function renderFormalStatus(status) {
@@ -960,7 +999,9 @@
       wrap.appendChild(savedHeading);
       wrap.appendChild(savedMsg);
       ensureAiGradeButton(wrap, status);
+      if (showReleasedOrTeacherScore(status)) appendScoreLine(wrap, status);
       main.appendChild(wrap);
+      appendTeacherFeedback(main, status);
       updateSubmittedSource(status.source, status.answer_display);
       updateFileUploadResult(status.file_upload);
       updateAiGradeSection(status);
@@ -975,7 +1016,9 @@
       );
       wrap.appendChild(offHeading);
       wrap.appendChild(offMsg);
+      if (showReleasedOrTeacherScore(status)) appendScoreLine(wrap, status);
       main.appendChild(wrap);
+      appendTeacherFeedback(main, status);
       updateSubmittedSource(status.source, status.answer_display);
       updateFileUploadResult(status.file_upload);
       updateAiGradeSection(status);
@@ -988,8 +1031,7 @@
     label.textContent = gettext('Result') + ': ';
     line.appendChild(label);
     appendResultCode(line, status.result || status.status, resultClassFromStatus(status));
-    var showScores = status.show_ai_scores === true || isCodeProblem() || isMcqProblem();
-    if (status.points != null && showScores && !isMcqProblem()) {
+    if (isCodeProblem() && status.points != null) {
       line.appendChild(document.createTextNode(' · ' + status.points));
     }
     wrap.appendChild(heading);
@@ -998,40 +1040,11 @@
       var detail = document.createElement('p');
       detail.textContent = gettext('Resources') + ': ' + (status.time || 0) + 's, ' + (status.memory || 0) + 'KB';
       wrap.appendChild(detail);
-    } else if (isMcqProblem()) {
-      var score = document.createElement('p');
-      var scoreLabel = document.createElement('b');
-      scoreLabel.textContent = gettext('Score') + ':';
-      score.appendChild(scoreLabel);
-      score.appendChild(document.createTextNode(
-        ' ' + formatScorePart(status.points) + ' / ' + formatScorePart(status.points_total)
-      ));
-      wrap.appendChild(score);
-    } else if (showScores && status.points != null) {
-      var score = document.createElement('p');
-      score.textContent = gettext('Score') + ': ' + status.points;
-      wrap.appendChild(score);
+    } else if (isMcqProblem() || showReleasedOrTeacherScore(status)) {
+      appendScoreLine(wrap, status);
     }
     main.appendChild(wrap);
-    if (status.released) {
-      var tag = document.createElement('div');
-      tag.className = 'ws-released-tag';
-      tag.textContent = gettext('Released');
-      main.appendChild(tag);
-    }
-    if (status.review_note_html) {
-      var note = document.createElement('div');
-      note.className = 'ws-review-note';
-      var noteLabel = document.createElement('div');
-      noteLabel.className = 'ws-review-note-label';
-      noteLabel.textContent = gettext('Teacher feedback');
-      var noteBody = document.createElement('div');
-      noteBody.className = 'ws-review-note-body';
-      noteBody.innerHTML = status.review_note_html; // bleach-sanitized server-side
-      note.appendChild(noteLabel);
-      note.appendChild(noteBody);
-      main.appendChild(note);
-    }
+    appendTeacherFeedback(main, status);
     updateSubmittedSource(status.source, status.answer_display);
     updateFileUploadResult(status.file_upload);
     updateAiGradeSection(status);

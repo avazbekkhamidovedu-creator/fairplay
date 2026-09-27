@@ -552,10 +552,12 @@
                     <h3>{{ _('File submitted') }}</h3>
                     {% if workspace_submission.results_hidden %}
                       <p>{{ _('Your submission has been received. Results for this problem are hidden until the contest is finalized.') }}</p>
+                    {% elif workspace_submission.points is not none and (workspace_submission.released or workspace_submission.is_graded) %}
+                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points|floatformat(-3) }} / {{ workspace_submission.points_total|floatformat(-3) }}</p>
                     {% elif not workspace_submission.is_graded %}
                       <p class="file-awaiting-grading">{{ _('Awaiting grading') }}</p>
-                    {% else %}
-                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points }}</p>
+                    {% elif workspace_submission.points is not none %}
+                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points|floatformat(-3) }} / {{ workspace_submission.points_total|floatformat(-3) }}</p>
                     {% endif %}
                   {% elif workspace_submission.results_hidden %}
                     <h3>{{ _('Results hidden') }}</h3>
@@ -566,9 +568,15 @@
                     <p style="margin-top:0.75rem;">
                       <button type="button" class="tool-btn ai-grade-btn" id="ai-grade-btn">{{ _('View AI Feedback') }}</button>
                     </p>
+                    {% if workspace_submission.points is not none and (workspace_submission.released or workspace_submission.show_ai_scores) %}
+                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points|floatformat(-3) }} / {{ workspace_submission.points_total|floatformat(-3) }}</p>
+                    {% endif %}
                   {% elif not workspace_is_code and workspace_submission.result == 'IR' and not workspace_submission.problem_has_ai_grading %}
                     <h3>{{ _('Answer saved') }}</h3>
                     <p>{{ _('Your answer has been saved.') }}</p>
+                    {% if workspace_submission.points is not none and (workspace_submission.released or workspace_submission.show_ai_scores) %}
+                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points|floatformat(-3) }} / {{ workspace_submission.points_total|floatformat(-3) }}</p>
+                    {% endif %}
                   {% else %}
                     <h3>{% if workspace_is_code %}{{ _('Execution results') }}{% else %}{{ _('Judging results') }}{% endif %}</h3>
                     <p>
@@ -577,14 +585,12 @@
                             title="{{ workspace_submission.long_status or workspace_submission.result or '' }}">
                         {{ workspace_submission.result or workspace_submission.status or '?' }}
                       </span>
-                      {% if workspace_is_code and workspace_submission.points is not none %} · {{ workspace_submission.points }}{% elif workspace_submission.show_ai_scores and not workspace_is_mcq and workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}
+                      {% if workspace_is_code and workspace_submission.points is not none %} · {{ workspace_submission.points }}{% endif %}
                     </p>
                     {% if workspace_is_code %}
                       <p><b>{{ _('Resources') }}:</b> {{ workspace_submission.time|default(0) }}s, {{ workspace_submission.memory|default(0) }}KB</p>
-                    {% elif workspace_is_mcq %}
+                    {% elif workspace_submission.points is not none and (workspace_is_mcq or workspace_submission.released or workspace_submission.show_ai_scores) %}
                       <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points|floatformat(-3) }} / {{ workspace_submission.points_total|floatformat(-3) }}</p>
-                    {% elif workspace_submission.show_ai_scores and workspace_submission.points is not none %}
-                      <p><b>{{ _('Score') }}:</b> {{ workspace_submission.points }}</p>
                     {% endif %}
                     {% if workspace_is_code and workspace_submission.can_trigger_ai_grade %}
                       <p style="margin-top:0.75rem;">

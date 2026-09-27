@@ -15,6 +15,7 @@ from judge.models import (
     ProblemMCQOption,
     ProblemTemplate,
     Submission,
+    SubmissionManualGrade,
     SubmissionSource,
     SubmissionTestCase,
 )
@@ -1152,6 +1153,98 @@ class ProblemWorkspaceTestCase(TestCase):
         })
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content.decode(), 'print("language-default")\n')
+
+    def _released_exam_submission(self, problem, *, result, note, manual_points, machine_points, finalized):
+        exam = create_contest(
+            key='wsrel-%s' % problem.code[:12], name='Release exam',
+            format_name='exam', is_visible=True,
+            start_time=timezone.now() - timezone.timedelta(hours=1),
+            end_time=timezone.now() + timezone.timedelta(hours=2),
+            authors=('workspace-author',),
+            results_finalized=finalized,
+        )
+        contest_problem = create_contest_problem(contest=exam, problem=problem, points=10, order=1)
+        participation = create_contest_participation(contest=exam, user=self.user.profile)
+        self.user.profile.current_contest = participation
+        self.user.profile.save()
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=problem, language=Language.get_answer_language(),
+            result=result, status='QU' if result == 'QU' else 'D',
+            points=machine_points, contest_object=exam, time=0, memory=0,
+            review_note=note,
+        )
+        ContestSubmission.objects.create(
+            submission=submission, problem=contest_problem, participation=participation,
+            points=manual_points,
+        )
+        SubmissionManualGrade.objects.create(
+            submission=submission, points=manual_points, machine_points=machine_points, released=True,
+        )
+        return submission
+
+    def test_exam_hides_released_score_and_note_until_finalize(self):
+        short = create_problem(code='ws-rel-short', is_public=True, submission_type='S', points=10)
+        note = 'Check the units before simplifying.'
+        hidden = self._released_exam_submission(
+            short, result='IR', note=note, manual_points=8, machine_points=0, finalized=False,
+        )
+        status = self.client.get(reverse(
+            'problem_workspace_submission_status', args=[short.code, hidden.id],
+        ))
+        self.assertIsNone(status.json()['points'])
+        self.assertEqual(status.json()['review_note_html'], '')
+        self.assertFalse(status.json()['released'])
+        page = self.client.get(reverse('problem_detail', args=[short.code]) + '?submission=%d' % hidden.id)
+        self.assertContains(page, 'Results hidden')
+        self.assertNotContains(page, note)
+        self.assertNotContains(page, 'Teacher feedback')
+
+    def test_finalized_short_answer_shows_released_score_and_note(self):
+        short = create_problem(code='ws-rel-short2', is_public=True, submission_type='S', points=10)
+        note = 'Check the units before simplifying.'
+        submission = self._released_exam_submission(
+            short, result='IR', note=note, manual_points=8, machine_points=0, finalized=True,
+        )
+        status = self.client.get(reverse(
+            'problem_workspace_submission_status', args=[short.code, submission.id],
+        ))
+        body = status.json()
+        self.assertEqual(body['points'], 8)
+        self.assertEqual(body['points_total'], 10)
+        self.assertTrue(body['released'])
+        self.assertIn('units', body['review_note_html'])
+        page = self.client.get(reverse('problem_detail', args=[short.code]) + '?submission=%d' % submission.id)
+        self.assertContains(page, 'Answer saved')
+        self.assertContains(page, 'Score:')
+        self.assertContains(page, '8 / 10')
+        self.assertContains(page, 'Teacher feedback')
+        self.assertContains(page, note)
+
+    def test_finalized_file_shows_released_score_before_judge_status(self):
+        upload = create_problem(code='ws-rel-file', is_public=True, submission_type='F', points=10)
+        note = 'Cite the data table.'
+        submission = self._released_exam_submission(
+            upload, result='QU', note=note, manual_points=7, machine_points=0, finalized=True,
+        )
+        page = self.client.get(reverse('problem_detail', args=[upload.code]) + '?submission=%d' % submission.id)
+        self.assertContains(page, '7 / 10')
+        self.assertContains(page, note)
+        self.assertNotContains(page, 'Awaiting grading')
+
+    def test_code_result_html_includes_released_note(self):
+        submission = Submission.objects.create(
+            user=self.user.profile, problem=self.problem, language=self.language,
+            result='WA', status='D', points=40, time=0.1, memory=128,
+            review_note='Handle the empty list.',
+        )
+        SubmissionManualGrade.objects.create(
+            submission=submission, points=55, machine_points=40, released=True,
+        )
+        response = self.client.get(reverse('submission_testcases_query'), {'id': submission.id})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Teacher feedback')
+        self.assertContains(response, 'Handle the empty list.')
+        self.assertContains(response, '55')
 
 
 class ProblemWorkspaceActionsTestCase(TestCase):
