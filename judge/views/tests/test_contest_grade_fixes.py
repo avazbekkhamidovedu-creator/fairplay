@@ -357,7 +357,7 @@ class RequireManualReviewRetiredTestCase(GradeTestBase):
         client.force_login(editor)
         payload = {
             'type': 'blank', 'name': 'Review me', 'description': 'Q {{blank}}',
-            'points': 4, 'blanks': ['ans'],
+            'points': 4, 'blanks': ['ans'], 'problemTypes': ['Graph Theory'],
             'ai': True, 'aiReview': True, 'rubric': 'any',
         }
         response = client.post(reverse('problem_create_v2'), data=json.dumps(payload),
@@ -377,6 +377,7 @@ class RequireManualReviewRetiredTestCase(GradeTestBase):
         payload = {
             'type': 'short', 'name': 'Review short', 'description': 'Explain X.',
             'points': 4, 'shortAnswer': 'the answer', 'aiReview': True,
+            'problemTypes': ['Graph Theory'],
         }
         response = client.post(reverse('problem_create_v2'), data=json.dumps(payload),
                                content_type='application/json')

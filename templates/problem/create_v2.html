@@ -335,7 +335,7 @@
           <div class="form-row">
             <label>{{ _('Public visible') }}</label>
             <div class="field">
-              <input type="checkbox" id="f-public" {% if can_change_public %}checked{% else %}disabled{% endif %}>
+              <input type="checkbox" id="f-public"{% if not can_change_public %} disabled{% endif %}>
             </div>
           </div>
           <div class="form-row">
@@ -355,11 +355,11 @@
             </div>
           </div>
           <div class="form-row">
-            <label>{{ _('Problem type') }} <span class="req">*</span></label>
+            <label>{{ _('Problem tags') }} <span class="req">*</span></label>
             <div class="field">
               <div class="ptype-tags" id="f-types">
-                <button type="button" class="inline-add-btn ptype-add" title="{{ _('Select from existing types / create new') }}" onclick="openTypeModal()">+</button>
-                <button type="button" class="inline-add-btn ptype-ai" id="ptype-ai-btn" title="{{ _('AI recommends type tags from the statement') }}" onclick="runAIProblemTypeInline()">🤖 AI</button>
+                <button type="button" class="inline-add-btn ptype-add" title="{{ _('Select from existing tags / create new') }}" onclick="openTypeModal()">+</button>
+                <button type="button" class="inline-add-btn ptype-ai" id="ptype-ai-btn" title="{{ _('AI recommends problem tags from the statement') }}" onclick="runAIProblemTypeInline()">🤖 AI</button>
               </div>
             </div>
           </div>
@@ -903,13 +903,13 @@
   <div class="qtype-modal hidden" id="ptype-modal">
     <div class="qtype-box" style="width:480px;">
       <div class="qtype-head">
-        <h2>{{ _("Select problem type") }}</h2>
+        <h2>{{ _("Select problem tags") }}</h2>
         <button type="button" onclick="closeTypeModal()">×</button>
       </div>
       <div style="padding:1rem 1.25rem;">
         <div id="ptype-options" style="display:flex;flex-direction:column;gap:0.4rem;max-height:260px;overflow:auto;"></div>
         <div id="ptype-new-form" style="display:none;margin-top:0.75rem;padding-top:0.75rem;border-top:1px dashed var(--admin-border);">
-          <div style="font-weight:600;font-size:13px;margin-bottom:0.5rem;">{{ _("New problem type") }}</div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:0.5rem;">{{ _("New problem tag") }}</div>
           <div style="display:flex;flex-direction:column;gap:0.5rem;">
             <label style="font-size:12px;">{{ _("Category ID / name (fill one; the other defaults to the same value)") }}
               <input type="text" id="nt-name" maxlength="100" placeholder="{{ _('e.g. dp or Dynamic Programming') }}" style="width:100%;padding:0.4rem;margin-top:2px;border:1px solid #aaa;border-radius:4px;">
@@ -922,7 +922,7 @@
             <div id="ptype-ai-result" style="font-size:12px;color:var(--muted);"></div>
           </div>
         </div>
-        <button type="button" class="btn-add-option" style="width:100%;margin-top:0.75rem;" id="ptype-new-btn" onclick="toggleNewTypeForm(true)">+ {{ _('New problem type') }}</button>
+        <button type="button" class="btn-add-option" style="width:100%;margin-top:0.75rem;" id="ptype-new-btn" onclick="toggleNewTypeForm(true)">+ {{ _('New problem tag') }}</button>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:0.5rem;padding:0.75rem 1.25rem;border-top:1px solid var(--admin-border);">
         <button type="button" class="btn" onclick="closeTypeModal()">{{ _('Cancel') }}</button>
@@ -1016,7 +1016,6 @@
       currentDifficulty = level;
       const radio = document.querySelector('#difficulty input[value="' + level + '"]');
       if (radio) radio.checked = true;
-      setDifficultyTag(DIFF_LABEL[level]);
     }
     // Call the backend AI difficulty assessor; it falls back to heuristics when not configured.
     function runAIDifficulty() {
@@ -1050,7 +1049,6 @@
         currentDifficulty = level;
         const radio = document.querySelector('#difficulty input[value="' + level + '"]');
         if (radio) radio.checked = true;
-        setDifficultyTag(body.label || DIFF_LABEL[level]);
         res.textContent = '';
         const wrap = document.createElement('span');
         wrap.className = 'diff-ai-result';
@@ -1129,7 +1127,7 @@
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
         body: JSON.stringify({ name: raw.length <= 20 ? raw : '', full_name: raw }),
       }).then(r => r.json().then(body => ({ ok: r.ok, body }))).then(({ ok, body }) => {
-        if (!ok) { showToast(body.error || '{{ _("Failed to create problem type") }}', false); return; }
+        if (!ok) { showToast(body.error || '{{ _("Failed to create problem tag") }}', false); return; }
         pushServerType(body.type);
         renderTypeOptions();
         const box = document.getElementById('f-types');
@@ -1139,7 +1137,7 @@
         box.insertBefore(el, box.querySelector('.ptype-add'));
         document.getElementById('nt-name').value = '';
         toggleNewTypeForm(false);
-        showToast('{{ _("Problem type created") }}', true);
+        showToast('{{ _("Problem tag created") }}', true);
       }).catch(() => showToast('{{ _("Network error") }}', false));
     }
     /* ---------- Inline organization / problem-group creation ---------- */
@@ -1270,23 +1268,6 @@
       });
       closeTypeModal();
     }
-    function setDifficultyTag(label) {
-      const box = document.getElementById('f-types');
-      box.querySelectorAll('.ptype-tag.auto-diff').forEach(t => t.remove());
-      const el = document.createElement('span');
-      el.className = 'ptype-tag auto auto-diff';
-      fillPtypeTag(el, label, { meta: gettext('Difficulty') });
-      box.insertBefore(el, box.querySelector('.ptype-add'));
-    }
-    function setTypeTag(tag) {
-      const box = document.getElementById('f-types');
-      box.querySelectorAll('.ptype-tag.auto-type').forEach(t => t.remove());
-      const el = document.createElement('span');
-      el.className = 'ptype-tag auto auto-type';
-      fillPtypeTag(el, tag, { meta: gettext('Type') });
-      box.insertBefore(el, box.firstChild);
-    }
-
     function toggleAdvanced() {
       const cm = document.getElementById('content-main');
       cm.classList.toggle('advanced-visible');
@@ -1299,8 +1280,6 @@
     /* ---------- Question-type switching: select the type directly, without broad categories. ---------- */
     function selectType(type) {
       currentType = type;
-      const meta = TYPE_META[type];
-      setTypeTag(meta.tag);
 
       document.getElementById('stem-label').firstChild.textContent = (type === 'compound') ? (gettext('Main stem') + ' ') : (gettext('Description') + ' ');
 
@@ -2492,6 +2471,7 @@
     const UNSUPPORTED_TYPES = ['compound', 'other'];
     function validate(d) {
       if (!d.name) return '{{ _("Please enter a problem name.") }}';
+      if (!d.problemTypes || !d.problemTypes.length) return '{{ _("Please select a problem tag.") }}';
       if (UNSUPPORTED_TYPES.includes(d.type)) {
         return '{{ _("This question type is under development and cannot be saved yet.") }}';
       }
@@ -2537,6 +2517,7 @@
     }
     function validateForImportFormatting(d) {
       if (!d.name) return '{{ _("Please enter a problem name.") }}';
+      if (!d.problemTypes || !d.problemTypes.length) return '{{ _("Please select a problem tag.") }}';
       if (UNSUPPORTED_TYPES.includes(d.type)) {
         return '{{ _("This question type is under development and cannot be formatted yet.") }}';
       }
@@ -2811,7 +2792,7 @@
         const dr = document.querySelector(`input[name="difficulty"][value="${d.difficulty}"]`);
         if (dr) { dr.checked = true; setDifficulty(d.difficulty); }
       }
-      // Knowledge only; type/difficulty auto chips were already inserted by selectType/setDifficulty.
+      // Knowledge tags only. Difficulty and question type stay on their own controls.
       const autoLabels = new Set([
         ...Object.values(TYPE_META).map(m => m.tag),
         ...Object.values(DIFF_LABEL),

@@ -432,6 +432,7 @@ class CodeConfigRoundTripTestCase(CommonDataMixin, TestCase):
             'description': 'Write a function.',
             'points': 10,
             'group_id': self.group.id,
+            'problemTypes': ['Graph Theory'],
             'time_limit': 1,
             'memory_limit': 256,
             'ai': True,

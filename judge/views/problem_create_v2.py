@@ -749,19 +749,23 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
 
         return ProblemType.objects.create(name=code, full_name=label[:100])
 
-    def _attach_types(self, problem, payload):
+    def _attach_types(self, problem, payload, is_create=False):
         """Persist knowledge tags + standard difficulty; drop auto type/difficulty chips.
 
         Distinguishes omitted vs explicit ``problemTypes`` so partial/legacy
         payloads that only send ``difficulty`` do not wipe knowledge tags:
 
-        - key missing → keep existing knowledge types; only update difficulty
-        - key present (including ``[]``) → replace knowledge types from payload
+        - key missing on edit → keep existing knowledge types; only update difficulty
+        - key missing on create → reject; a new problem has no tags to keep
+        - key present → replace knowledge types from payload; an empty list is rejected
         - ``difficulty`` omitted/invalid → keep any existing easy/medium/hard row
         """
         reserved = _reserved_auto_labels()
         resolved = []
         seen = set()
+
+        if 'problemTypes' not in payload and is_create:
+            raise ValueError(_('Please select a problem tag.'))
 
         if 'problemTypes' in payload:
             labels = [n for n in (payload.get('problemTypes') or []) if n and str(n).strip()]
@@ -776,6 +780,10 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                     continue
                 seen.add(ptype.pk)
                 resolved.append(ptype)
+            # The editor always sends this key. Difficulty is stored separately,
+            # so a payload with no knowledge tag must not save.
+            if not resolved:
+                raise ValueError(_('Please select a problem tag.'))
         else:
             for ptype in problem.types.all():
                 if ptype.pk in seen:
@@ -1165,7 +1173,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            self._attach_types(problem, payload)
+            self._attach_types(problem, payload, is_create=is_create)
             self._attach_languages(problem, payload)
             self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
@@ -1479,7 +1487,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            self._attach_types(problem, payload)
+            self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
@@ -1529,7 +1537,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            self._attach_types(problem, payload)
+            self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
@@ -1566,7 +1574,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            self._attach_types(problem, payload)
+            self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
@@ -1612,7 +1620,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            self._attach_types(problem, payload)
+            self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
@@ -1671,7 +1679,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload)
             problem.save()
 
-            self._attach_types(problem, payload)
+            self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
             problem.is_organization_private = problem.organizations.exists()
             problem.save(update_fields=['is_organization_private'])
