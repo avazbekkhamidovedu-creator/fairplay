@@ -30,9 +30,12 @@ import subprocess
 import tempfile
 from datetime import timedelta
 from unittest import mock, skipUnless
+from urllib.parse import parse_qs, urlsplit
+from uuid import UUID
 
 from django.contrib.auth.models import Permission  # noqa: F401 (documented in module docstring)
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import transaction
 from django.http import HttpResponseForbidden
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
@@ -125,6 +128,191 @@ class GradeTestBase(TestCase):
         if user is not None:
             client.force_login(user)
         return client
+
+
+class ContestGradeFinalizeTestCase(GradeTestBase):
+    """Finalize visibility and endpoints share the assignment change permission."""
+
+    def test_button_visibility_matches_change_permission(self):
+        for user, visible in ((self.superuser, True), (self.edit_all, False),
+                              (self.author, True), (self.curator, True),
+                              (self.curator_no_perm, False)):
+            with self.subTest(user=user.username):
+                response = self._client(user).get(self.grade_url)
+                self.assertEqual(response.status_code, 200)
+                if visible:
+                    self.assertContains(response, 'id="btn-finalize"')
+                else:
+                    self.assertNotContains(response, 'id="btn-finalize"')
+                    self.assertNotContains(response, "$('#btn-finalize').on")
+
+    def test_finalize_button_is_next_to_release_and_uses_existing_endpoint(self):
+        response = self._client(self.author).get(self.grade_url)
+        html = response.content.decode()
+        toolbar = re.search(r'<div class="ws-toolbar-center">(.*?)</div>', html, re.S).group(1)
+        self.assertLess(toolbar.index('id="btn-release"'), toolbar.index('id="btn-finalize"'))
+        self.assertIn('Finalize</button>', toolbar)
+        self.assertIn('$.post(%s)' % json.dumps(reverse('contest_finalize', args=[self.contest.key])), html)
+
+    def test_finalized_assignment_shows_unfinalize(self):
+        self.contest.results_finalized = True
+        self.contest.save(update_fields=['results_finalized'])
+        response = self._client(self.curator).get(self.grade_url)
+        self.assertContains(response, 'Unfinalize</button>')
+        self.assertContains(response, '$.post(%s)' % json.dumps(
+            reverse('contest_unfinalize', args=[self.contest.key])))
+
+    def test_revoking_edit_own_hides_button_but_preserves_grade_access(self):
+        self.author.user_permissions.remove(Permission.objects.get(codename='edit_own_contest'))
+        response = self._client(self.author).get(self.grade_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'id="btn-finalize"')
+
+    def test_practice_grade_has_no_finalize_button(self):
+        response = self._client(self.superuser).get(reverse('practice_grade'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="btn-release"')
+        self.assertNotContains(response, 'id="btn-finalize"')
+        self.assertNotContains(response, "$('#btn-finalize').on")
+
+    def test_endpoints_queue_correct_task_for_author_and_curator(self):
+        for action in ('finalize', 'unfinalize'):
+            for user in (self.author, self.curator, self.superuser):
+                with self.subTest(action=action, user=user.username), mock.patch(
+                    'judge.tasks.%s_contest_results' % action,
+                ) as task:
+                    task_id = 'f1d94257-a28c-426f-9946-3b0b5e53a922'
+                    task.s.return_value.freeze.return_value.id = task_id
+                    with self.captureOnCommitCallbacks(execute=True):
+                        response = self._client(user).post(reverse(
+                            'contest_%s' % action, args=[self.contest.key]))
+                        task.s.return_value.delay.assert_not_called()
+                    self.assertEqual(response.status_code, 200)
+                    self.assertTrue(response.json()['ok'])
+                    self.assertEqual(response.json()['task_id'], task_id)
+                    status_url = urlsplit(response.json()['status_url'])
+                    self.assertEqual(status_url.path, reverse('task_status', args=[task_id]))
+                    self.assertEqual(parse_qs(status_url.query), {'redirect': [self.grade_url]})
+                    task.s.assert_called_once_with(self.contest.key)
+                    task.s.return_value.freeze.assert_called_once_with()
+                    task.s.return_value.delay.assert_called_once_with()
+
+    def test_endpoints_reject_users_without_change_permission(self):
+        for action in ('finalize', 'unfinalize'):
+            for user in (self.edit_all, self.curator_no_perm, self.edit_own_outsider,
+                         self.tester, self.spectator, self.org_admin, self.student):
+                with self.subTest(action=action, user=user.username), mock.patch(
+                    'judge.tasks.%s_contest_results' % action,
+                ) as task:
+                    with self.captureOnCommitCallbacks(execute=True):
+                        response = self._client(user).post(reverse(
+                            'contest_%s' % action, args=[self.contest.key]))
+                    self.assertEqual(response.status_code, 403)
+                    task.s.assert_not_called()
+
+    def test_anonymous_is_redirected_without_queueing(self):
+        for action in ('finalize', 'unfinalize'):
+            with self.subTest(action=action), mock.patch('judge.tasks.%s_contest_results' % action) as task:
+                response = Client().post(reverse('contest_%s' % action, args=[self.contest.key]))
+                self.assertEqual(response.status_code, 302)
+                self.assertIn('next=', response.url)
+                task.s.assert_not_called()
+
+    def test_get_and_missing_contest_do_not_queue(self):
+        client = self._client(self.author)
+        for action in ('finalize', 'unfinalize'):
+            with self.subTest(action=action), mock.patch('judge.tasks.%s_contest_results' % action) as task:
+                response = client.get(reverse('contest_%s' % action, args=[self.contest.key]))
+                self.assertEqual(response.status_code, 405)
+                response = client.post(reverse('contest_%s' % action, args=['missing-finalize-contest']))
+                self.assertEqual(response.status_code, 404)
+                task.s.assert_not_called()
+
+    @override_settings(CSRF_FAILURE_VIEW='judge.views.tests.test_contest_grade._csrf_failure_plain')
+    def test_finalize_endpoints_enforce_csrf(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.author)
+        page = client.get(self.grade_url)
+        self.assertEqual(page.status_code, 200)
+        token = client.cookies['csrftoken'].value
+        for action in ('finalize', 'unfinalize'):
+            with self.subTest(action=action), mock.patch('judge.tasks.%s_contest_results' % action) as task:
+                task.s.return_value.freeze.return_value.id = 'f1d94257-a28c-426f-9946-3b0b5e53a922'
+                url = reverse('contest_%s' % action, args=[self.contest.key])
+                self.assertEqual(client.post(url).status_code, 403)
+                task.s.assert_not_called()
+                with self.captureOnCommitCallbacks(execute=True):
+                    self.assertEqual(client.post(url, HTTP_X_CSRFTOKEN=token).status_code, 200)
+                task.s.return_value.delay.assert_called_once_with()
+
+    def test_rollback_discards_queued_task(self):
+        for action in ('finalize', 'unfinalize'):
+            with self.subTest(action=action), mock.patch('judge.tasks.%s_contest_results' % action) as task:
+                task.s.return_value.freeze.return_value.id = 'f1d94257-a28c-426f-9946-3b0b5e53a922'
+                with self.captureOnCommitCallbacks(execute=True) as callbacks:
+                    with transaction.atomic():
+                        response = self._client(self.author).post(reverse(
+                            'contest_%s' % action, args=[self.contest.key]))
+                        self.assertEqual(response.status_code, 200)
+                        transaction.set_rollback(True)
+                self.assertEqual(callbacks, [])
+                task.s.return_value.delay.assert_not_called()
+
+    def test_real_signature_preserves_returned_id_when_published(self):
+        for action in ('finalize', 'unfinalize'):
+            with self.subTest(action=action), mock.patch(
+                'judge.tasks.%s_contest_results.apply_async' % action,
+            ) as publish:
+                with self.captureOnCommitCallbacks(execute=True):
+                    response = self._client(self.author).post(reverse(
+                        'contest_%s' % action, args=[self.contest.key]))
+                    publish.assert_not_called()
+                self.assertEqual(response.status_code, 200)
+                task_id = response.json()['task_id']
+                self.assertEqual(str(UUID(task_id)), task_id)
+                publish.assert_called_once()
+                self.assertEqual(publish.call_args.args[0], (self.contest.key,))
+                self.assertEqual(publish.call_args.kwargs['task_id'], task_id)
+
+    def test_status_api_reports_the_returned_task(self):
+        with mock.patch('judge.tasks.finalize_contest_results.apply_async'):
+            response = self._client(self.author).post(reverse('contest_finalize', args=[self.contest.key]))
+        task_id = response.json()['task_id']
+        for state, result, expected in (
+            ('PENDING', None, {'code': 'WORKING'}),
+            ('PROGRESS', {'done': 1, 'total': 2, 'stage': 'Rejudging'},
+             {'code': 'PROGRESS', 'done': 1, 'total': 2, 'stage': 'Rejudging'}),
+            ('SUCCESS', 2, {'code': 'SUCCESS'}),
+            ('FAILURE', RuntimeError('judge offline'), {'code': 'FAILURE', 'error': 'judge offline'}),
+        ):
+            with self.subTest(state=state), mock.patch('judge.views.tasks.AsyncResult') as async_result:
+                async_result.return_value.state = state
+                async_result.return_value.result = result
+                status = self._client(self.author).get(reverse('task_status_ajax'), {'id': task_id})
+                self.assertEqual(status.status_code, 200)
+                self.assertEqual(status.json(), expected)
+                async_result.assert_called_once_with(task_id)
+                if state == 'SUCCESS':
+                    progress_page = self._client(self.author).get(response.json()['status_url'])
+                    self.assertRedirects(progress_page, self.grade_url)
+
+    @skipUnless(shutil.which('node'), 'node executable not available on this host')
+    def test_finalize_polling_in_both_directions(self):
+        for finalized in (False, True):
+            with self.subTest(finalized=finalized):
+                self.contest.results_finalized = finalized
+                self.contest.save(update_fields=['results_finalized'])
+                html = self._client(self.curator).get(self.grade_url).content.decode()
+                script = 'var finalizeFollowup = null;' + html.split(
+                    'var finalizeFollowup = null;', 1,
+                )[1].split("$('#btn-release')", 1)[0]
+                proc = subprocess.run(
+                    ['node', os.path.join(os.path.dirname(__file__), 'finalize_button_check.js'),
+                     reverse('contest_unfinalize' if finalized else 'contest_finalize', args=[self.contest.key]),
+                     reverse('task_status_ajax')],
+                    input=script, capture_output=True, text=True,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
 class ContestGradePermissionMatrixTestCase(GradeTestBase):

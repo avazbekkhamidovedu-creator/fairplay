@@ -52,7 +52,7 @@ from judge.models import Contest, ContestMoss, ContestParticipation, ContestProb
 from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
-from judge.utils.celery import redirect_to_task_status
+from judge.utils.celery import redirect_to_task_status, task_status_url
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
     user_completed_ids
@@ -1714,8 +1714,14 @@ class ContestFinalizeView(LoginRequiredMixin, View):
             return JsonResponse({'error': _('Permission denied.')}, status=403)
         from judge.tasks import finalize_contest_results, unfinalize_contest_results
         task = finalize_contest_results if self.finalize else unfinalize_contest_results
-        transaction.on_commit(task.s(contest.key).delay)
-        return JsonResponse({'ok': True})
+        signature = task.s(contest.key)
+        result = signature.freeze()
+        transaction.on_commit(signature.delay)
+        return JsonResponse({
+            'ok': True,
+            'task_id': result.id,
+            'status_url': task_status_url(result, redirect=reverse('contest_grade', args=[contest.key])),
+        })
 
     @property
     def finalize(self):

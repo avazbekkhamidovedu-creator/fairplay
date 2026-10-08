@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% set can_finalize = contest and contest.is_changeable_by(request.user) %}
+
 {% block title %}{{ _('Grade') }} — {{ grade_home_label }}{% endblock %}
 {% block html_class %}workspace-page{% endblock %}
 {% block body_class %}workspace-page{% endblock %}
@@ -95,7 +97,14 @@
             grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
             align-items: center;
         }
-        .ws-toolbar-center { justify-self: center; }
+        .ws-toolbar-center {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: .4rem;
+            justify-self: center;
+        }
         .ws-toolbar.has-leave .grade-actions { justify-self: end; margin-left: 0; }
         .ws-app .ws-toolbar button.release-btn.tool-btn {
             border-color: var(--oj-success, #2e7d32);
@@ -1438,6 +1447,73 @@
             // ── Toolbar: Save grading / Release All / Rejudge ────────────────
             $('#btn-save-current').on('click', saveCurrent);
 
+            {% if can_finalize %}
+            var finalizeFollowup = null;
+            $('#btn-finalize').on('click', function () {
+                if (finalizeFollowup) {
+                    finalizeFollowup();
+                    return;
+                }
+                var confirmMessage = {{ (_('Unfinalize results? Hidden problem results will be hidden again and standings recalculated.') if contest.results_finalized else _('Finalize results? Hidden problem results will be revealed and the latest submissions rejudged.'))|tojson }};
+                if (!confirm(confirmMessage)) return;
+                var $btn = $(this).prop('disabled', true);
+                var queued = false;
+                $.post({{ url('contest_unfinalize' if contest.results_finalized else 'contest_finalize', contest.key)|tojson }}).done(function (res) {
+                    if (!res.ok) {
+                        window.showToast(res.error || {{ _('Failed to queue result update')|tojson }}, 'error');
+                        return;
+                    }
+                    queued = true;
+                    $btn.text({{ _('Queued')|tojson }});
+                    finalizeFollowup = function () { window.location.href = res.status_url; };
+                    var polls = 0;
+                    var failures = 0;
+                    function showProgressLink() {
+                        $btn.text({{ _('Check progress')|tojson }}).prop('disabled', false);
+                        window.showToast({{ _('Result update is still pending. Check progress for its current status.')|tojson }}, 'info');
+                    }
+                    function pollFinalize() {
+                        polls++;
+                        $.ajax({
+                            url: {{ url('task_status_ajax')|tojson }},
+                            data: {id: res.task_id},
+                            dataType: 'json',
+                            timeout: 10000
+                        }).done(function (status) {
+                            failures = 0;
+                            if (status.code === 'SUCCESS') {
+                                window.location.reload();
+                            } else if (status.code === 'FAILURE') {
+                                // A failed task may already have changed the contest.
+                                // Reload its actual state before offering another action.
+                                finalizeFollowup = function () { window.location.reload(); };
+                                $btn.text({{ _('Refresh')|tojson }}).prop('disabled', false);
+                                window.showToast({{ _('Result update failed. Refresh this page before retrying.')|tojson }}, 'error');
+                            } else if (polls >= 120) {
+                                showProgressLink();
+                            } else {
+                                if (status.code === 'PROGRESS') $btn.text({{ _('Processing')|tojson }});
+                                setTimeout(pollFinalize, 2000);
+                            }
+                        }).fail(function () {
+                            failures++;
+                            if (failures >= 5 || polls >= 120) {
+                                showProgressLink();
+                            } else {
+                                setTimeout(pollFinalize, 2000);
+                            }
+                        });
+                    }
+                    // Defer the first poll so the POST's always handler runs first.
+                    setTimeout(pollFinalize, 0);
+                }).fail(function (xhr) {
+                    window.showToast((xhr.responseJSON && xhr.responseJSON.error) || {{ _('Failed to queue result update')|tojson }}, 'error');
+                }).always(function () {
+                    $btn.prop('disabled', queued);
+                });
+            });
+            {% endif %}
+
             $('#btn-release').on('click', function () {
                 if (!confirm({{ _('Release all manual grades to students? Students will then see the adjusted scores and teacher feedback.')|htmltojs }})) {
                     return;
@@ -1634,6 +1710,9 @@
             </div>
             <div class="ws-toolbar-center">
                 <button type="button" class="tool-btn release-btn" id="btn-release" title="{{ _('Reveal every saved manual grade to students') }}"><i class="fa fa-flag-checkered"></i> {{ _('Release All') }}</button>
+                {% if can_finalize %}
+                <button type="button" class="tool-btn" id="btn-finalize" title="{{ _('Hide finalized problem results and recalculate standings') if contest.results_finalized else _('Reveal hidden problem results and rejudge the latest submissions') }}"><i class="fa {{ 'fa-undo' if contest.results_finalized else 'fa-check-circle' }}"></i> {{ _('Unfinalize') if contest.results_finalized else _('Finalize') }}</button>
+                {% endif %}
             </div>
             <div class="grade-actions">
                 {% if grade_ai_batch %}
