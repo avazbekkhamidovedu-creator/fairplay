@@ -10,3 +10,5 @@ venv/
 .build/
 .DS_Store
 server/data/
+e2e/shots/
+*.rdb
