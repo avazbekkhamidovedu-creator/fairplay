@@ -180,7 +180,12 @@ def contest_grade_queryset(contest):
 
 
 def build_grade_payload(submissions, final_ids):
-    """JSON-serializable rows for the grade workspace drawer."""
+    """JSON-serializable rows for the grade workspace drawer.
+
+    Display dates use the viewer's profile timezone activated by
+    TimezoneMiddleware. Keep the aware model dates intact: final submission
+    selection compares absolute instants, not these formatted strings.
+    """
     from judge.question_types import get_grader
     from judge.views.problem import get_workspace_answer_display
 
