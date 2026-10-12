@@ -2181,13 +2181,26 @@ class ContestEditorNewEndpointsTestCase(CommonDataMixin, TestCase):
 
     # ── finalize / unfinalize ───────────────────────────────────────────────
 
-    def test_finalize_denied_for_curator(self):
+    def test_finalize_allowed_for_curator(self):
         self.client.force_login(self.curator)
         response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(json.loads(response.content)['ok'])
+
+    def test_unfinalize_allowed_for_curator(self):
+        self.client.force_login(self.curator)
+        response = self.client.post(reverse('contest_unfinalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(json.loads(response.content)['ok'])
 
     def test_finalize_denied_for_normal_user(self):
         self.client.force_login(self.normal)
+        response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
+        self.assertEqual(response.status_code, 403)
+
+    def test_finalize_denied_for_edit_own_outsider(self):
+        outsider = create_user(username='endpoints_own_outsider', user_permissions=('edit_own_contest',))
+        self.client.force_login(outsider)
         response = self.client.post(reverse('contest_finalize', args=['endpointcontest']))
         self.assertEqual(response.status_code, 403)
 

@@ -52,7 +52,7 @@ from judge.models import Contest, ContestMoss, ContestParticipation, ContestProb
 from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
-from judge.utils.celery import redirect_to_task_status
+from judge.utils.celery import redirect_to_task_status, task_status_url
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
     user_completed_ids
@@ -1698,9 +1698,11 @@ class ContestSEBFileView(LoginRequiredMixin, View):
 class ContestFinalizeView(LoginRequiredMixin, View):
     """Finalize (or un-finalize) an exam-style contest from the editor.
 
-    Only full editors may trigger this (``judge.edit_all_contest``): finalizing
-    reveals hidden problem results, rejudges latest submissions and recomputes
-    the standings, so it must not be reachable by mere curators. The heavy work
+    Same gate as editing the assignment (``Contest.is_changeable_by``):
+    ``judge.edit_own_contest`` plus author or curator membership. Someone with
+    ``edit_all_contest`` still needs ``edit_own_contest``, matching the editor
+    and the admin finalize action. Finalizing reveals hidden problem results,
+    rejudges latest submissions and recomputes the standings. The heavy work
     runs as a celery task via ``transaction.on_commit``, exactly like the admin.
     """
 
@@ -1708,14 +1710,18 @@ class ContestFinalizeView(LoginRequiredMixin, View):
         contest = get_object_or_404(Contest, key=kwargs['contest'])
         if not request.user.is_authenticated:
             return JsonResponse({'error': _('Not authenticated.')}, status=401)
-        if not contest.is_editable_by(request.user):
-            return JsonResponse({'error': _('Permission denied.')}, status=403)
-        if not request.user.has_perm('judge.edit_all_contest'):
+        if not contest.is_changeable_by(request.user):
             return JsonResponse({'error': _('Permission denied.')}, status=403)
         from judge.tasks import finalize_contest_results, unfinalize_contest_results
         task = finalize_contest_results if self.finalize else unfinalize_contest_results
-        transaction.on_commit(task.s(contest.key).delay)
-        return JsonResponse({'ok': True})
+        signature = task.s(contest.key)
+        result = signature.freeze()
+        transaction.on_commit(signature.delay)
+        return JsonResponse({
+            'ok': True,
+            'task_id': result.id,
+            'status_url': task_status_url(result, redirect=reverse('contest_grade', args=[contest.key])),
+        })
 
     @property
     def finalize(self):

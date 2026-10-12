@@ -3513,7 +3513,7 @@
                         {% if not contest %}
                         <button type="submit" class="btn" data-action="another">{{ _('Save and add another') }}</button>
                         {% endif %}
-                        {% if contest and perms.judge.edit_all_contest %}
+                        {% if contest and perms.judge.edit_own_contest %}
                             {% if contest.results_finalized %}
                             <button type="button" class="btn" id="unfinalize-btn">{{ _('Un-finalize results') }}</button>
                             {% else %}
