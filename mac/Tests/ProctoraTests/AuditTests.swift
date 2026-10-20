@@ -53,10 +53,12 @@ import Carbon.HIToolbox
     @Test func devCodeNeverWorksInReleaseBuilds() {
         #expect(!Config.isDevBuild)
         #expect(!OfflineExit.devCodeMatches("0000"))
-        OfflineExit.reset()
-        #expect(OfflineExit.check("0000") != .ok)
-        #expect(OfflineExit.check("00-00") != .ok)
-        OfflineExit.reset()
+        OfflineExitTestLock.run {
+            OfflineExit.reset()
+            #expect(OfflineExit.check("0000") != .ok)
+            #expect(OfflineExit.check("00-00") != .ok)
+            OfflineExit.reset()
+        }
     }
 
     @Test func hexDecoding() {
@@ -186,4 +188,11 @@ import Carbon.HIToolbox
         #expect(SystemChecks.looksVirtual(hvFlag: 0, model: "MacBookPro18,3", cpuFeatures: "", platformText: "Parallels Software"))
         #expect(!SystemChecks.looksVirtual(hvFlag: 0, model: "MacBookPro18,3", cpuFeatures: "FPU VME SSE", platformText: "Apple Inc. Mac14,2"))
     }
+}
+
+/// OfflineExit keeps one shared lockout counter and challenge (one dialog per app). Tests
+/// run in parallel, so the tests that reset it take turns.
+enum OfflineExitTestLock {
+    private static let lock = NSLock()
+    static func run(_ body: () -> Void) { lock.lock(); defer { lock.unlock() }; body() }
 }

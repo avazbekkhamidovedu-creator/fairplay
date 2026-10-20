@@ -88,7 +88,7 @@ import AppKit
         #expect(!s.setExam(attemptId: "a_1", token: "", session: "sess-12345678"))
     }
 
-    @Test func offlineCodeLocksOutAfterFiveWrong() {
+    @Test func offlineCodeLocksOutAfterFiveWrong() { OfflineExitTestLock.run {
         OfflineExit.reset(); defer { OfflineExit.reset() }
         let key = Data((0..<32).map { UInt8($0) })
         let right = OfflineExit.expectedCode(for: OfflineExit.challenge, key: key)
@@ -99,7 +99,7 @@ import AppKit
         #expect(OfflineExit.check(right, key: key, now: t0.addingTimeInterval(60)) == .tooMany)
         #expect(OfflineExit.check(right, key: key, now: t0.addingTimeInterval(OfflineExit.waitAfterWrong + 1)) == .ok)
         #expect(OfflineExit.check(right, key: nil, now: t0.addingTimeInterval(OfflineExit.waitAfterWrong + 1)) == .unavailable)
-    }
+    } }
 }
 
 @Suite struct AppPolicyTests {
