@@ -257,6 +257,55 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
 
     def get_queryset(self):
         queryset = self._get_queryset().order_by(self.order, 'key').filter(end_time__lt=self._now)
+        if self.server_paged:
+            queryset = self._apply_url_filters(queryset)
+        return queryset
+
+    # Past assignments are rendered in full and filtered in the browser while there are at most
+    # this many of them (a teacher's own courses). Beyond that (an administrator sees every
+    # assignment of the university: 1,500 rows and 4.7 MB on the teacher-scale seed) the past
+    # section is paged on the server, the ongoing and upcoming sections show at most one page
+    # (with a note counting the rest), and the same filters run in SQL; the page reloads when a
+    # filter changes. Override with CLASSROOM_CONTEST_LIST_PAGE_SIZE.
+    PAST_PAGE_SIZE = 50
+
+    def get_paginate_by(self, queryset):
+        return self.past_page_size if self.server_paged else None
+
+    @cached_property
+    def past_page_size(self):
+        return getattr(settings, 'CLASSROOM_CONTEST_LIST_PAGE_SIZE', self.PAST_PAGE_SIZE)
+
+    @cached_property
+    def server_paged(self):
+        return self._get_queryset().filter(end_time__lt=self._now).values('id').count() > self.past_page_size
+
+    def _url_list(self, name):
+        return [part.strip() for raw in self.request.GET.getlist(name) for part in str(raw).split(',')
+                if part.strip()]
+
+    def _apply_url_filters(self, queryset, past=True):
+        """The client-side filters of list-v2.html, in SQL, for a server-paged list."""
+        time_filter = self.time_filter
+        if time_filter and (time_filter != 'past') == past:
+            return queryset.none()
+        orgs = self._url_list('org')
+        if orgs:
+            queryset = queryset.filter(Exists(Contest.organizations.through.objects.filter(
+                contest=OuterRef('pk'), organization__name__in=orgs)))
+        classes = self._url_list('class')
+        if classes:
+            queryset = queryset.filter(Exists(Contest.classes.through.objects.filter(
+                contest=OuterRef('pk'), **{'class__name__in': classes})))
+        for tag in self._url_list('tag'):  # every selected tag
+            queryset = queryset.filter(Exists(Contest.tags.through.objects.filter(
+                contest=OuterRef('pk'), contesttag__name=tag)))
+        authors = [int(a) for a in self._url_list('author') if a.isdigit()]
+        if authors and self._can_see_assignment_authors():
+            queryset = queryset.filter(Exists(Contest.authors.through.objects.filter(
+                contest=OuterRef('pk'), profile_id__in=authors)))
+        for term in (t.strip() for t in self.request.GET.getlist('search') if t.strip()):
+            queryset = queryset.filter(Q(name__icontains=term) | Q(key__icontains=term))
         return queryset
 
     def _can_see_assignment_authors(self):
@@ -270,38 +319,37 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         finished = set()
         active = []
 
-        # All contests are rendered; filtering is applied client-side.
-        ongoing_future = self._get_queryset().exclude(end_time__lt=self._now)
-        present_all, future_all = [], []
-        for contest in ongoing_future:
-            if contest.start_time > self._now:
-                future_all.append(contest)
-            else:
-                present_all.append(contest)
-
-        if self.request.user.is_authenticated:
-            present_ids = [c.id for c in present_all]
-            for participation in (
-                ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=present_ids)
-                .select_related('contest')
-                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators',
-                                  'contest__organizations', 'contest__classes')
-                .annotate(key=F('contest__key'))
-            ):
-                if participation.ended:
-                    finished.add(participation.contest.key)
+        if self.server_paged:
+            active, present, future, finished, unlisted = self._paged_sections()
+        else:
+            unlisted = 0
+            # All contests are rendered; filtering is applied client-side.
+            ongoing_future = self._get_queryset().exclude(end_time__lt=self._now)
+            present_all, future_all = [], []
+            for contest in ongoing_future:
+                if contest.start_time > self._now:
+                    future_all.append(contest)
                 else:
-                    active.append(participation)
-                    present_all.remove(participation.contest)
+                    present_all.append(contest)
 
-        active.sort(key=attrgetter('end_time', 'key'))
-        present_all.sort(key=attrgetter('end_time', 'key'))
-        future_all.sort(key=attrgetter('start_time'))
+            if self.request.user.is_authenticated:
+                present_ids = [c.id for c in present_all]
+                for participation in self._participations(present_ids):
+                    if participation.ended:
+                        finished.add(participation.contest.key)
+                    else:
+                        active.append(participation)
+                        present_all.remove(participation.contest)
 
-        # All sections are rendered server-side; the status filter is applied
-        # client-side for instant switching.
-        present = present_all
-        future = future_all
+            active.sort(key=attrgetter('end_time', 'key'))
+            present_all.sort(key=attrgetter('end_time', 'key'))
+            future_all.sort(key=attrgetter('start_time'))
+
+            # All sections are rendered server-side; the status filter is applied
+            # client-side for instant switching.
+            present = present_all
+            future = future_all
+        context['unlisted_count'] = unlisted
 
         context['active_participations'] = active
         context['current_contests'] = present
@@ -355,6 +403,7 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
             context['contest_authors'] = Profile.objects.none()
             context['selected_author_profiles'] = []
         context['selected_authors'] = selected_authors
+        context['server_paged'] = self.server_paged
         context['total_count'] = self._total_count(active, present, future)
         context['sort_by'] = self.order
         context['group'] = self.group
@@ -368,9 +417,45 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         context.update(self.get_sort_paginate_context())
         return context
 
+    def _participations(self, contest_ids):
+        return (ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=contest_ids)
+                .select_related('contest')
+                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators',
+                                  'contest__organizations', 'contest__classes', 'contest__tags')
+                .annotate(key=F('contest__key')))
+
+    def _paged_sections(self):
+        """Ongoing and upcoming sections of a server-paged list: URL filters in SQL, at most one
+        page each. Returns ``(active, present, future, finished, unlisted)``, where ``unlisted``
+        counts the matching ongoing/upcoming assignments beyond the page."""
+        size = self.past_page_size
+        base = self._apply_url_filters(self._get_queryset().exclude(end_time__lt=self._now), past=False)
+        present_qs = base.filter(start_time__lte=self._now)
+        future_qs = base.filter(start_time__gt=self._now)
+        active, finished, active_ids = [], set(), []
+        if self.request.user.is_authenticated:
+            for participation in self._participations(present_qs.values('id')):
+                if participation.ended:
+                    finished.add(participation.contest.key)
+                else:
+                    active.append(participation)
+                    active_ids.append(participation.contest_id)
+        active.sort(key=attrgetter('end_time', 'key'))
+        present_qs = present_qs.exclude(id__in=active_ids)
+        present = list(present_qs.order_by('end_time', 'key')[:size])
+        future = list(future_qs.order_by('start_time', 'key')[:size])
+        unlisted = 0
+        if len(present) == size:
+            unlisted += present_qs.values('id').count() - size
+        if len(future) == size:
+            unlisted += future_qs.values('id').count() - size
+        self._unlisted = unlisted
+        return active, present, future, finished, unlisted
+
     def _total_count(self, active, present, future):
         """Number of assignments matching the (server-side) filters."""
-        return len(active) + len(present) + len(future) + self.get_queryset().values('id').count()
+        return (len(active) + len(present) + len(future) + getattr(self, '_unlisted', 0) +
+                self.get_queryset().values('id').count())
 
     def _get_course_groups(self, context):
         """Group the displayed assignments by their first organization (course).

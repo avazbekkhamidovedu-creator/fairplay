@@ -9,12 +9,12 @@ from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import (Class, Contest, ContestParticipation, ContestProblem, ContestSubmission, Language,
+from judge.models import (Class, Contest, ContestParticipation, ContestProblem, ContestSubmission, ContestTag, Language,
                           Organization, ProblemMCQConfig, ProblemType, Profile, Submission, SubmissionSource)
 from judge.models.notification import ensure_instructors_group
 from judge.models.tests.util import create_contest, create_problem, create_user
@@ -401,3 +401,65 @@ class CoursePageCatalogTest(TestCase):
     def test_catalog_needs_login(self):
         response = self.client.get(reverse('organization_instructor_apply_catalog'))
         self.assertEqual(response.status_code, 302)
+
+
+@override_settings(CLASSROOM_CONTEST_LIST_PAGE_SIZE=5)
+class AssignmentListPagingTest(TestCase):
+    """The assignment list stops rendering every assignment once there are more than a page.
+
+    Before: an administrator got all 1,500 assignments of the seed in one 4.7 MB page. Now a
+    list with more past assignments than a page is paged on the server, with the list's filters
+    applied in SQL; ongoing and upcoming show one page each plus a count of the rest. Small lists
+    (a teacher's own courses) render in full and filter in the browser as before.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        now = timezone.now()
+        cls.admin = create_user(username='al_admin', is_superuser=True)
+        cls.teacher = create_user(username='al_teacher')
+        cls.teacher.groups.add(ensure_instructors_group())
+        homework = ContestTag.objects.create(name='homework', color='#000000')
+        exam = ContestTag.objects.create(name='exam', color='#000000')
+        cls.course = Organization.objects.create(name='AL course', slug='al-course', short_name='AL', is_open=False)
+        for i in range(12):
+            contest = create_contest(key='alpast%02d' % i, name='Past %02d' % i, is_visible=i < 2,
+                                     start_time=now - timedelta(days=30 + i), end_time=now - timedelta(days=29 + i))
+            contest.tags.add(exam if i % 3 == 0 else homework)
+            if i < 2:
+                contest.authors.add(cls.teacher.profile)
+        for i in range(8):
+            create_contest(key='alnext%02d' % i, name='Next %02d' % i, is_visible=True,
+                           start_time=now + timedelta(days=1 + i), end_time=now + timedelta(days=2 + i))
+
+    def rows(self, user, query=''):
+        self.client.force_login(user)
+        html = self.client.get(reverse('contest_list') + '?group=status' + query).content.decode()
+        return [m.split('"')[0] for m in html.split('class="cl-row')[1:] for m in [m.split('data-key="', 1)[1]]], html
+
+    def test_large_list_is_paged(self):
+        keys, html = self.rows(self.admin)
+        self.assertEqual(len([k for k in keys if k.startswith('alpast')]), 5)
+        self.assertEqual(len([k for k in keys if k.startswith('alnext')]), 5)
+        self.assertIn('3 more ongoing or upcoming assignments match', html)
+        self.assertIn('Page 1 of 3', html)
+        self.assertIn('var SERVER_PAGED = true', html)
+        keys, _ = self.rows(self.admin, '&page=3')
+        self.assertEqual(sorted(k for k in keys if k.startswith('alpast')), ['alpast10', 'alpast11'])
+
+    def test_filters_run_on_the_server_when_paged(self):
+        keys, html = self.rows(self.admin, '&tag=exam')
+        self.assertEqual(sorted(k for k in keys if k.startswith('alpast')),
+                         ['alpast00', 'alpast03', 'alpast06', 'alpast09'])
+        self.assertNotIn('Page 1 of', html)
+        keys, _ = self.rows(self.admin, '&search=Past%2011')
+        self.assertEqual([k for k in keys if k.startswith('alpast')], ['alpast11'])
+        keys, _ = self.rows(self.admin, '&time=upcoming')
+        self.assertEqual(len(keys), 5)
+        self.assertTrue(all(k.startswith('alnext') for k in keys))
+
+    def test_small_list_renders_in_full(self):
+        keys, html = self.rows(self.teacher)
+        self.assertIn('var SERVER_PAGED = false', html)
+        self.assertEqual(sorted(k for k in keys if k.startswith('alpast')), ['alpast00', 'alpast01'])
+        self.assertEqual(len([k for k in keys if k.startswith('alnext')]), 8)

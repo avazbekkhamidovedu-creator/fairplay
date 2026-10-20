@@ -235,7 +235,22 @@
                 return m ? parseInt(m[1], 10) : 0;
             })();
 
+            // Large lists (an administrator's) page the past section on the server, which also
+            // applies the filters; there a filter change reloads instead of filtering in place.
+            var SERVER_PAGED = {{ 'true' if server_paged else 'false' }};
+            var serverParams = null;
+            // The address bar mirrors the filters; a server page number stays in it.
+            function listUrl(query) {
+                var pageNo = new URLSearchParams(location.search).get('page');
+                if (SERVER_PAGED && pageNo) query = (query ? query + '&' : '') + 'page=' + encodeURIComponent(pageNo);
+                return location.pathname + (query ? '?' + query : '') + location.hash;
+            }
+
             window.applyClientFilter = function() {
+                if (SERVER_PAGED && serverParams !== null && currentParams().toString() !== serverParams) {
+                    applyFilters();
+                    return;
+                }
                 var st = clientState();
                 var filtering = st.orgs.length || st.classes.length || st.tags.length ||
                     (st.authors && st.authors.length) || st.keywords.length || st.time !== '';
@@ -280,7 +295,7 @@
                     if (countEl) countEl.textContent = serverTotal + ' ' + countSuffix;
                     if (emptyEl) emptyEl.hidden = true;
                     var q2 = currentParams().toString();
-                    history.replaceState(null, '', location.pathname + (q2 ? '?' + q2 : ''));
+                    history.replaceState(null, '', listUrl(q2));
                     renderActiveFilters();
                     return;
                 }
@@ -292,11 +307,11 @@
                     sec.style.display = hasVisible ? '' : 'none';
                 });
 
-                if (countEl) countEl.textContent = visible + ' ' + countSuffix;
+                if (countEl) countEl.textContent = (SERVER_PAGED ? serverTotal : visible) + ' ' + countSuffix;
                 if (emptyEl) emptyEl.hidden = !(visible === 0);
 
                 var q = currentParams().toString();
-                history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
+                history.replaceState(null, '', listUrl(q));
                 renderActiveFilters();
             };
 
@@ -495,6 +510,7 @@
             });
 
             // ── Apply the filters from the URL on first load ──
+            serverParams = currentParams().toString();
             applyClientFilter();
 
             // Assignment delete: per-row confirmation modal, then POST.
@@ -907,6 +923,11 @@
     </form>
 
     {# ── Contest List ── #}
+    {% if unlisted_count %}
+        <div class="cl-paged-note" style="margin:0.5rem 0;color:var(--muted, #666);font-size:13px;">
+            {{ _('%(count)d more ongoing or upcoming assignments match. Use the filters or search to narrow the list.', count=unlisted_count) }}
+        </div>
+    {% endif %}
     <div class="cl-list" id="contest-list">
         {% if group == 'course' %}
             {% if course_groups %}
