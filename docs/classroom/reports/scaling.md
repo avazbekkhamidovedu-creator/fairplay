@@ -128,6 +128,23 @@ teachers ≈ 60 req/s; a 300-student exam ≈ 45 req/s (`load-test.md`). With 2x
 - Re-run both load tests on the real hardware before the first big exam:
   `scripts/loadtest/run.sh` (students) and `scripts/loadtest/run_teachers.sh` (teachers).
 
+## Load tests on a MacBook (2026-10-20)
+
+Run with `scripts/loadtest/laptop.sh` inside a Colima VM on the owner's Mac (Apple silicon,
+8 cores, 16 GB; VM: 6 CPUs, 8 GB, native arm64). App, MariaDB, Redis and Locust share the VM.
+gunicorn gthread 12 workers x 4 threads, DEBUG off, `CONN_MAX_AGE=60`.
+
+| Test | Users | Requests | Failures | req/s | p50 | p95 | p99 |
+|---|---|---|---|---|---|---|---|
+| Students: exam (`locustfile.py`) | 300 + 1 teacher | 14,304 | **0** | 39.7 | 0.15 s | 1.6 s | 3.0 s |
+| Teachers (`locust_teachers.py`) | 500 | 15,006 | **0** | 41.7 | 1.7 s | 15 s | 23 s |
+
+The 300-student exam runs comfortably: workspace p50 0.36 s, submit 0.33 s, draft autosave
+0.13 s (the 2-CPU box had p95 5 s). 500 teachers at once still saturate 6 CPUs at ~42 req/s
+(they ask for ~60), so requests queue, but none failed: 1,001 question creates, 1,860 question
+saves, 259 assignment creates, 240 assignment edits, 714 grade saves. This matches the sizing
+above (about 7–12 req/s per core depending on what shares the machine).
+
 ## Also fixed while testing
 
 - A teacher saving their own assignment without themselves in Authors (or an empty list) locked
