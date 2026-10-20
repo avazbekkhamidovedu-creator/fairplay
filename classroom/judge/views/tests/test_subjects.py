@@ -151,7 +151,8 @@ class ProblemCreateSubjectTestCase(SubjectsDataMixin, TestCase):
     def test_without_context_mixed_teacher_gets_union_and_per_course_caps(self):
         response = self.get_create(self.mixed)
         self.assertTrue(response.context['can_create_code'])
-        caps = json.loads(response.context['org_question_caps_json'])
+        data = json.loads(response.context['org_question_cap_sets_json'])
+        caps = {org: data['sets'][index] for org, index in data['orgs'].items()}
         self.assertIn('question_programming', caps[str(self.cs.pk)])
         self.assertNotIn('question_programming', caps[str(self.bio.pk)])
 

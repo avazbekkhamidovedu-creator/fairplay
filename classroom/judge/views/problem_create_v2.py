@@ -246,10 +246,17 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         context['can_create_code'] = context.get('can_create_code', False) and 'question_programming' in caps
         context['create_type_caps_json'] = script_json(CREATE_V2_TYPE_CAPS)
         org_ids = [o['id'] for o in context.get('organizations') or []]
-        context['org_question_caps_json'] = script_json({
-            str(pk): caps_list for pk, caps_list in course_question_caps(
-                list(Organization.objects.filter(pk__in=org_ids))).items()
-        })
+        # Each distinct capability list once, and each course points at its list: the lists depend
+        # only on the course subject, and repeating them per course was 40 KB for an administrator
+        # offered 150 courses. The page expands this back to {course id: capabilities}.
+        cap_sets, set_index, org_sets = [], {}, {}
+        for pk, caps_list in course_question_caps(list(Organization.objects.filter(pk__in=org_ids))).items():
+            key = tuple(caps_list)
+            if key not in set_index:
+                set_index[key] = len(cap_sets)
+                cap_sets.append(caps_list)
+            org_sets[str(pk)] = set_index[key]
+        context['org_question_cap_sets_json'] = script_json({'sets': cap_sets, 'orgs': org_sets})
         context['preselect_organization_ids_json'] = script_json(context['preselect_organization_ids'])
 
     def get_context(self, request):

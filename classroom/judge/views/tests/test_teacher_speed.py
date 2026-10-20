@@ -5,6 +5,7 @@ submissions; scripts/loadtest/seed_teachers.py) these pages must not get slower 
 Each test pins one fix: either the SQL shape that MariaDB cannot run fast (joins of every role
 table), or a query count / response size that must not grow with the number of rows.
 """
+import json
 from datetime import timedelta
 
 from django.contrib.auth.models import Permission, User
@@ -517,3 +518,27 @@ class AdminSubmissionChangelistTest(TestCase):
         self.assertTrue(submission_queries)
         for sql in submission_queries:
             self.assertNotIn('JOIN `judge_problem_authors`', sql)
+
+
+class ProblemEditorCapsTest(TestCase):
+    """The problem editor sends each course's question-type capabilities once per distinct list.
+
+    Before: the full list was repeated for every offered course (40 KB for an administrator
+    offered 150 courses).
+    """
+
+    def test_courses_share_capability_lists(self):
+        admin = create_user(username='pe_admin', is_superuser=True)
+        for i in range(20):
+            Organization.objects.create(name='PE course %d' % i, slug='pe-%d' % i, short_name='PE%d' % i,
+                                        subject='math' if i % 2 else 'cs')
+        self.client.force_login(admin)
+        response = self.client.get(reverse('problem_create_v2'))
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.context['org_question_cap_sets_json'])
+        self.assertEqual(len(data['orgs']), 20)
+        self.assertEqual(len(data['sets']), 2)
+        math_caps = data['sets'][data['orgs'][str(Organization.objects.get(slug='pe-1').pk)]]
+        cs_caps = data['sets'][data['orgs'][str(Organization.objects.get(slug='pe-0').pk)]]
+        self.assertNotIn('question_programming', math_caps)
+        self.assertIn('question_programming', cs_caps)

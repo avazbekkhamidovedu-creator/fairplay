@@ -975,7 +975,11 @@
     const EDIT_DATA = {{ edit_data_json|safe }};
     {# Subject registry: question type -> capability, and each offered course's capabilities. #}
     const CREATE_TYPE_CAPS = {{ create_type_caps_json|default('{}')|safe }};
-    const ORG_QUESTION_CAPS = {{ org_question_caps_json|default('{}')|safe }};
+    const ORG_QUESTION_CAPS = (function (data) {
+      const out = {};
+      Object.keys(data.orgs || {}).forEach(function (id) { out[id] = (data.sets || [])[data.orgs[id]]; });
+      return out;
+    })({{ org_question_cap_sets_json|default('{}')|safe }});
     const PRESELECT_ORG_IDS = {{ preselect_organization_ids_json|default('[]')|safe }};
     const SUBJECT_NOT_IN_COURSE_MSG = {{ _('This question type is not available in the course "{course}". Its subject does not include it.')|htmltojs }};
     // Courses a problem is already in may keep its existing type (the server applies the same rule).
