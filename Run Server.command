@@ -6,7 +6,8 @@ for c in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 pytho
   if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then PY="$c"; break; fi
 done
 [ -n "$PY" ] || { echo "Python 3.10+ not found. Install it from python.org"; read -n1; exit 1; }
-if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import sys" 2>/dev/null; then
+# A .venv copied from another computer can run Python but have no pip: rebuild it then.
+if [ ! -x .venv/bin/python ] || ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
   echo "==> First run: creating Python environment with $PY ..."
   rm -rf .venv 2>/dev/null; "$PY" -m venv .venv || { echo "venv failed"; read -n1; exit 1; }
   .venv/bin/python -m pip install -q --upgrade pip
