@@ -18,3 +18,7 @@ logs/
 mac/FairPlay.app/
 fairplay-windows.tgz
 windows/
+# iPad app: release settings written by ios/configure-release.sh (2026-10-20)
+ios/FairPlay/FairPlayBuild.plist
+ios/FairPlayCore/.build/
+ios/**/xcuserdata/
