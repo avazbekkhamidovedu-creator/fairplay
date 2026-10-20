@@ -31,14 +31,15 @@
         </form>
     </div>
 </div>
-<script type="application/json" id="instructor-apply-catalog-data">{{ instructor_apply_catalog|default([])|tojson }}</script>
 <script type="text/javascript">
 (function () {
-    var catalogEl = document.getElementById('instructor-apply-catalog-data');
     var modal = document.getElementById('instructor-verification-modal');
-    if (!catalogEl || !modal) return;
-    var catalog = [];
-    try { catalog = JSON.parse(catalogEl.textContent || '[]'); } catch (e) { catalog = []; }
+    if (!modal) return;
+    // Every course and class of the site: fetched when the class-instructor form opens, not
+    // inlined into each course page (it grows with the whole catalog).
+    var CATALOG_URL = {{ url('organization_instructor_apply_catalog')|tojson }};
+    var catalog = null;
+    var catalogWaiters = [];
     var orgSelect = document.getElementById('iv-organization');
     var classSelect = document.getElementById('iv-class');
     var kindInput = document.getElementById('iv-kind');
@@ -64,7 +65,7 @@
         placeholder.textContent = {{ _('Select a class…')|tojson }};
         classSelect.appendChild(placeholder);
         var org = null;
-        for (var i = 0; i < catalog.length; i++) {
+        for (var i = 0; i < (catalog || []).length; i++) {
             if (String(catalog[i].id) === String(orgId)) { org = catalog[i]; break; }
         }
         if (!org || !org.classes || !org.classes.length) {
@@ -81,13 +82,30 @@
         classSelect.disabled = false;
     }
 
-    if (!orgSelect.options.length || orgSelect.options.length === 1) {
+    function fillCourses() {
+        if (orgSelect.options.length > 1) return;
         catalog.forEach(function (org) {
             var opt = document.createElement('option');
             opt.value = org.id;
             opt.textContent = org.short_name + (org.name && org.name !== org.short_name ? ' — ' + org.name : '');
             orgSelect.appendChild(opt);
         });
+    }
+
+    function withCatalog(callback) {
+        if (catalog !== null) { callback(); return; }
+        catalogWaiters.push(callback);
+        if (catalogWaiters.length > 1) return;
+        fetch(CATALOG_URL, {credentials: 'same-origin', headers: {'Accept': 'application/json'}})
+            .then(function (r) { return r.ok ? r.json() : {courses: []}; })
+            .catch(function () { return {courses: []}; })
+            .then(function (data) {
+                catalog = (data && data.courses) || [];
+                fillCourses();
+                var waiting = catalogWaiters;
+                catalogWaiters = [];
+                waiting.forEach(function (fn) { fn(); });
+            });
     }
 
     orgSelect.addEventListener('change', function () {
@@ -99,6 +117,7 @@
         modal.setAttribute('data-mode', mode);
         kindInput.value = mode;
         if (mode === 'class_instructor') {
+            withCatalog(function () {});
             titleEl.textContent = copy.classTitle;
             helpEl.textContent = copy.classHelp;
             reasonEl.placeholder = copy.classPlaceholder;
@@ -124,8 +143,10 @@
         var mode = modal.getAttribute('data-mode') || 'teacher';
         setMode(mode);
         if (mode === 'class_instructor' && orgId) {
-            orgSelect.value = String(orgId);
-            fillClasses(orgId, classId);
+            withCatalog(function () {
+                orgSelect.value = String(orgId);
+                fillClasses(orgId, classId);
+            });
         }
     }
 

@@ -75,10 +75,18 @@ def attach_contest_problem_display_names(submissions, language_code):
     if pairs:
         contest_ids = {cid for cid, _ in pairs}
         problem_ids = {pid for _, pid in pairs}
-        for cp in ContestProblem.objects.filter(
+        contest_problems = list(ContestProblem.objects.filter(
             contest_id__in=contest_ids, problem_id__in=problem_ids,
-        ).select_related('problem'):
+        ).select_related('problem'))
+        # One translation query for the page, not one per assignment question.
+        Problem.prime_translated_names([cp.problem for cp in contest_problems], language_code)
+        for cp in contest_problems:
             name_map[(cp.contest_id, cp.problem_id)] = contest_problem_display_name(cp, language_code)
+    untranslated = [s.problem for s in submissions
+                    if (s.contest_object_id, s.problem_id) not in name_map and
+                    getattr(s.problem, '_i18n_name', None) is None and getattr(s.problem, '_trans', None) is None]
+    if untranslated:
+        Problem.prime_translated_names(untranslated, language_code)
     for submission in submissions:
         key = (submission.contest_object_id, submission.problem_id)
         if submission.contest_object_id and key in name_map:
@@ -89,12 +97,14 @@ def attach_contest_problem_display_names(submissions, language_code):
 
 
 def submission_related(queryset):
+    # ai_points is read for every row by the student display score (machine_assignment_points).
     return queryset.select_related('user__user', 'problem', 'language') \
         .only('id', 'user__user__username', 'user__display_rank', 'user__rating', 'problem__name',
               'problem__code', 'problem__is_public', 'problem__submission_type', 'problem__points',
               'language__short_name', 'language__key', 'date', 'time', 'memory',
               'points', 'result', 'status', 'case_points', 'case_total', 'current_testcase', 'contest_object',
-              'locked_after', 'problem__submission_source_visibility_mode', 'user__username_display_override') \
+              'locked_after', 'problem__submission_source_visibility_mode', 'user__username_display_override',
+              'ai_points') \
         .prefetch_related('contest_object__authors', 'contest_object__curators',
                           'manual_grade', 'contest__problem')
 
@@ -675,10 +685,15 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
             # ``?status=AC`` would reveal a hidden exam answer's verdict.
             queryset = visible_results(queryset, self.request.user).filter(result__in=self.selected_statuses)
 
+        # Filters by code / username / key are resolved to ids first: the list is a STRAIGHT_JOIN
+        # driven by judge_submission, so filtering on a joined column made MariaDB walk every
+        # submission by id instead of using the (problem / user / contest_object ...) indexes.
         if self.filter_problems:
-            queryset = queryset.filter(problem__code__in=self.filter_problems)
+            queryset = queryset.filter(problem_id__in=list(
+                Problem.objects.filter(code__in=self.filter_problems).values_list('id', flat=True)))
         if self.filter_users:
-            queryset = queryset.filter(user__user__username__in=self.filter_users)
+            queryset = queryset.filter(user_id__in=list(
+                Profile.objects.filter(user__username__in=self.filter_users).values_list('id', flat=True)))
         if self.filter_contests:
             include_practice = '__none__' in self.filter_contests
             contest_keys = [key for key in self.filter_contests if key != '__none__']
@@ -686,7 +701,8 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
             if include_practice:
                 contest_q |= Q(contest_object__isnull=True)
             if contest_keys:
-                contest_q |= Q(contest_object__key__in=contest_keys)
+                contest_q |= Q(contest_object_id__in=list(
+                    Contest.objects.filter(key__in=contest_keys).values_list('id', flat=True)))
             queryset = queryset.filter(contest_q)
 
         # Filter out IDE practice submissions except when viewing the idepractice problem page

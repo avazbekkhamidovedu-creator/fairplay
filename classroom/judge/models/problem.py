@@ -473,6 +473,26 @@ class Problem(models.Model):
             return True
         return False
 
+    @classmethod
+    def editable_ids_among(cls, user, problems):
+        """Ids of ``problems`` that ``is_editable_by(user)``, with one query instead of one per problem."""
+        problems = list(problems)
+        if not problems or not user.is_authenticated or not user.has_perm('judge.edit_own_problem'):
+            return set()
+        if user.has_perm('judge.edit_all_problem'):
+            return {p.id for p in problems}
+        editable = set()
+        if user.has_perm('judge.edit_public_problem'):
+            editable = {p.id for p in problems if p.is_public}
+        ids = [p.id for p in problems]
+        profile_id = user.profile.id
+        editable.update(
+            cls.authors.through.objects.filter(problem_id__in=ids, profile_id=profile_id)
+            .values_list('problem_id', flat=True)
+            .union(cls.curators.through.objects.filter(problem_id__in=ids, profile_id=profile_id)
+                   .values_list('problem_id', flat=True)))
+        return editable
+
     def is_viewable_by_org_admin(self, user):
         """Check if user is org admin of any organization this problem belongs to."""
         if not user.is_authenticated:

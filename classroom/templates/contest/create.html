@@ -1841,6 +1841,32 @@
                 syncAutoGradeAfterEnd();
             }
 
+            // select2 AJAX source for the course / class pickers (contest_editor_options).
+            var EDITOR_OPTIONS_URLS = {
+                courses: {{ url('contest_editor_options', 'courses')|tojson }},
+                classes: {{ url('contest_editor_options', 'classes')|tojson }},
+            };
+            var EDITOR_CONTEST = {{ (contest.key if contest else '')|tojson }};
+            function editorOptionsAjax(kind, extra) {
+                return {
+                    url: EDITOR_OPTIONS_URLS[kind],
+                    dataType: 'json',
+                    delay: 250,
+                    data: function (params) {
+                        var d = {term: params.term || '', page: params.page || 1};
+                        if (EDITOR_CONTEST) d.contest = EDITOR_CONTEST;
+                        if (extra) {
+                            var more = extra();
+                            Object.keys(more).forEach(function (k) { d[k] = more[k]; });
+                        }
+                        return d;
+                    },
+                    processResults: function (data) {
+                        return {results: data.results || [], pagination: {more: !!data.more}};
+                    },
+                };
+            }
+
             // --- From library button + enhanced bank (filters/sort/pagination) ---
             var libBtn = document.getElementById('cp-from-library');
             var slideover = document.getElementById('problem-library');
@@ -2042,8 +2068,13 @@
                 // Library pagination state. Picked ids survive filter/page re-renders.
                 var libPage = 0, libPageSize = 10, libSortKey = null, libSortDesc = false;
                 var libPicked = new Set();
+                // Rows on other pages are not in the DOM, so remember what "+ Add" needs for each pick.
+                var libPickedMeta = {};
                 var libLastSlice = [];
                 var libLastTotal = 0;
+                var libRequestSeq = 0;
+                var LIB_URL = {{ url('contest_problem_library')|tojson }};
+                var LIB_CONTEST = {{ (contest.key if contest else '')|tojson }};
 
                 function libRowCheck(row) {
                     return row ? row.querySelector('.lib-row-check') : null;
@@ -2059,8 +2090,16 @@
                         return;
                     }
                     row.classList.toggle('picked', !!picked);
-                    if (picked) libPicked.add(pid);
-                    else libPicked.delete(pid);
+                    if (picked) {
+                        libPicked.add(pid);
+                        libPickedMeta[pid] = {
+                            id: pid, code: row.dataset.code || '', name: row.dataset.name || '',
+                            format: row.dataset.format || '', points: row.dataset.points || '',
+                        };
+                    } else {
+                        libPicked.delete(pid);
+                        delete libPickedMeta[pid];
+                    }
                     var cb = libRowCheck(row);
                     if (cb) { cb.checked = !!picked; cb.disabled = false; }
                 }
@@ -2110,79 +2149,107 @@
                         acMax: acMax,
                     };
                 }
-                function libMatches(row, f) {
-                    var name = (row.dataset.name || '').toLowerCase();
-                    var code = (row.dataset.code || '').toLowerCase();
-                    if (f.q && name.indexOf(f.q) === -1 && code.indexOf(f.q) === -1) return false;
-                    if (f.formats.length) {
-                        var stype = row.dataset.stype || '';
-                        var fmt = row.dataset.format || '';
-                        var formatOk = f.formats.some(function (v) { return v === stype || v === fmt; });
-                        if (!formatOk) return false;
+                function libQueryString() {
+                    var f = collectLibFilters();
+                    var params = new URLSearchParams();
+                    if (f.q) params.set('q', f.q);
+                    f.formats.forEach(function (v) { params.append('format', v); });
+                    f.diffs.forEach(function (v) { params.append('diff', v); });
+                    f.courses.forEach(function (v) { params.append('course', v); });
+                    f.authors.forEach(function (v) { params.append('author', v); });
+                    f.tags.forEach(function (v) { params.append('tag', v); });
+                    if (f.status) params.set('status', f.status);
+                    if (f.acMin !== null) params.set('ac_min', f.acMin);
+                    if (f.acMax !== null) params.set('ac_max', f.acMax);
+                    if (libSortKey) {
+                        params.set('sort', libSortKey);
+                        if (libSortDesc) params.set('desc', '1');
                     }
-                    if (f.diffs.length && f.diffs.indexOf(row.dataset.diff || 'none') === -1) return false;
-                    if (f.courses.length) {
-                        var orgIds = (row.dataset.orgIds || '').split(',').filter(Boolean);
-                        var courseOk = f.courses.some(function (v) {
-                            return orgIds.indexOf(v) !== -1;
-                        });
-                        if (!courseOk) return false;
-                    }
-                    if (f.authors.length) {
-                        var authorIds = (row.dataset.authorIds || '').split(/[\s,]+/).filter(Boolean);
-                        var authorOk = f.authors.some(function (v) { return authorIds.indexOf(v) !== -1; });
-                        if (!authorOk) return false;
-                    }
-                    if (f.tags.length) {
-                        var kids = (row.dataset.knowledge || '').split(/[;,]/).filter(Boolean);
-                        var tagOk = f.tags.some(function (id) { return kids.indexOf(id) !== -1; });
-                        if (!tagOk) return false;
-                    }
-                    if (f.status === 'solved' && row.dataset.status !== 'solved') return false;
-                    if (f.status === 'unsolved' && row.dataset.status === 'solved') return false;
-                    var ac = parseFloat(row.dataset.ac || '0');
-                    if (f.acMin !== null && ac < f.acMin) return false;
-                    if (f.acMax !== null && ac > f.acMax) return false;
-                    return true;
+                    params.set('page', libPage);
+                    params.set('page_size', libPageSize);
+                    if (LIB_CONTEST) params.set('contest', LIB_CONTEST);
+                    return params.toString();
                 }
+                function libChips(labels, cls) {
+                    if (!labels || !labels.length) return '<span class="tag-placeholder">&mdash;</span>';
+                    return labels.map(function (label) {
+                        return '<span class="' + cls + '">' + escapeHtml(label) + '</span>';
+                    }).join(' ');
+                }
+                // One library row from the JSON endpoint; same attributes the server used to render.
+                function libRowElement(p) {
+                    var tr = document.createElement('tr');
+                    tr.setAttribute('data-pid', p.id);
+                    tr.setAttribute('data-code', p.code);
+                    tr.setAttribute('data-name', p.name);
+                    tr.setAttribute('data-points', p.points);
+                    tr.setAttribute('data-org-ids', (p.org_ids || []).join(','));
+                    {% if can_see_problem_authors %}
+                    tr.setAttribute('data-author-ids', (p.author_ids || []).join(','));
+                    {% endif %}
+                    tr.setAttribute('data-format', p.format);
+                    tr.setAttribute('data-stype', p.stype);
+                    tr.setAttribute('data-knowledge', (p.knowledge || []).join(';'));
+                    tr.setAttribute('data-diff', p.diff || 'none');
+                    tr.setAttribute('data-ac', p.ac);
+                    tr.setAttribute('data-public', p.public ? '1' : '0');
+                    tr.setAttribute('data-status', p.status);
+                    var ac = Number(p.ac || 0).toFixed(1);
+                    var courses = (p.org_names || []).length
+                        ? escapeHtml(p.org_names.join(', '))
+                        : '<span class="num">' + {{ _('Public')|htmltojs }} + '</span>';
+                    var diff = p.diff && p.diff !== 'none'
+                        ? '<span class="difficulty-badge diff-' + escapeHtml(p.diff) + '">' + escapeHtml(p.diff_label) + '</span>'
+                        : '<span class="diff-placeholder">&mdash;</span>';
+                    tr.innerHTML =
+                        '<td class="col-check"><input type="checkbox" class="lib-row-check"></td>' +
+                        '<td class="ptitle col-name">' + escapeHtml(p.name) + '</td>' +
+                        '<td class="col-course">' + courses + '</td>' +
+                        '<td class="col-type">' + libChips(p.format_types, 'type-tag') + '</td>' +
+                        '<td class="col-tags">' + libChips(p.knowledge_types, 'tag-badge') + '</td>' +
+                        '<td class="col-diff">' + diff + '</td>' +
+                        '<td class="col-ac"><div class="ac-cell"><div class="ac-bar"><div class="ac-bar-fill" style="width: ' +
+                        ac + '%"></div></div><span class="ac-text">' + ac + '%</span></div></td>';
+                    return tr;
+                }
+                function libMessageRow(text) {
+                    return '<tr class="lib-placeholder"><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted);">' +
+                        escapeHtml(text) + '</td></tr>';
+                }
+                // Filters, sorting and paging run on the server (contest_problem_library), so the
+                // page does not carry the whole question bank.
                 function renderLib() {
                     var tbody = document.getElementById('lib-results');
                     if (!tbody) return;
+                    var seq = ++libRequestSeq;
+                    fetch(LIB_URL + '?' + libQueryString(), {
+                        credentials: 'same-origin', headers: {'Accept': 'application/json'},
+                    }).then(function (r) {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.json();
+                    }).then(function (data) {
+                        if (seq !== libRequestSeq) return;  // a newer filter change won
+                        drawLib(tbody, data);
+                    }).catch(function () {
+                        if (seq !== libRequestSeq) return;
+                        tbody.innerHTML = libMessageRow({{ _('Could not load problems. Try again.')|htmltojs }});
+                    });
+                }
+                function drawLib(tbody, data) {
                     // "Added" ids are marked and disabled.
                     var added = (document.getElementById('problem-ids').value || '').split(',').filter(Boolean);
-                    var rows = Array.prototype.filter.call(tbody.querySelectorAll('tr[data-pid]'), function (row) {
-                        return !row.classList.contains('lib-added');
-                    });
-                    var f = collectLibFilters();
-                    var matched = rows.filter(function (row) { return libMatches(row, f); });
-                    // Sorting.
-                    if (libSortKey) {
-                        matched.sort(function (a, b) {
-                            var va, vb;
-                            if (libSortKey === 'name') { va = (a.dataset.name || ''); vb = (b.dataset.name || ''); }
-                            else if (libSortKey === 'diff') { va = (a.dataset.diff || 'none'); vb = (b.dataset.diff || 'none'); }
-                            else if (libSortKey === 'ac') { va = parseFloat(a.dataset.ac || '0'); vb = parseFloat(b.dataset.ac || '0'); }
-                            else if (libSortKey === 'type') { va = (a.dataset.stype || ''); vb = (b.dataset.stype || ''); }
-                            else { va = parseInt(a.dataset.pid, 10); vb = parseInt(b.dataset.pid, 10); }
-                            if (va < vb) return libSortDesc ? 1 : -1;
-                            if (va > vb) return libSortDesc ? -1 : 1;
-                            return 0;
-                        });
-                    }
-                    var total = matched.length;
-                    var pages = Math.max(1, Math.ceil(total / libPageSize));
-                    if (libPage >= pages) libPage = pages - 1;
-                    // Hide everything, show the current page slice.
-                    rows.forEach(function (row) { row.style.display = 'none'; });
-                    var slice = matched.slice(libPage * libPageSize, (libPage + 1) * libPageSize);
+                    var pages = Math.max(1, data.pages || 1);
+                    libPage = data.page || 0;
+                    tbody.innerHTML = '';
+                    var slice = (data.rows || []).map(libRowElement);
                     slice.forEach(function (row) {
+                        tbody.appendChild(row);
                         var isAdded = added.indexOf(row.dataset.pid) !== -1;
-                        row.style.display = '';
                         if (isAdded) {
                             libPicked.delete(String(row.dataset.pid));
-                            row.classList.remove('picked');
+                            delete libPickedMeta[String(row.dataset.pid)];
                             var nameCell = row.querySelector('.ptitle');
-                            if (nameCell && !row.querySelector('.added-flag')) {
+                            if (nameCell) {
                                 var flag = document.createElement('span');
                                 flag.className = 'added-flag';
                                 flag.textContent = ' · ' + {{ _('added')|htmltojs }};
@@ -2192,14 +2259,12 @@
                             var addedCb = libRowCheck(row);
                             if (addedCb) { addedCb.checked = false; addedCb.disabled = true; }
                         } else {
-                            var flagEl = row.querySelector('.added-flag');
-                            if (flagEl) flagEl.remove();
-                            row.classList.remove('added');
                             setLibRowPicked(row, libPicked.has(String(row.dataset.pid)));
                         }
                     });
+                    if (!slice.length) tbody.innerHTML = libMessageRow({{ _('No problems available.')|htmltojs }});
                     libLastSlice = slice;
-                    libLastTotal = total;
+                    libLastTotal = data.total || 0;
                     refreshLibSelectionUi();
                     var pager = document.getElementById('lib-pager');
                     if (pager) {
@@ -2226,9 +2291,10 @@
                     ['lib-filter-format', 'lib-filter-difficulty', 'lib-filter-course', 'lib-filter-knowledge'].forEach(function (id) {
                         var el = document.getElementById(id);
                         if (!el) return;
-                        jQuery(el).select2(jQuery.extend({}, multiOpts, {
-                            placeholder: el.getAttribute('data-placeholder') || '',
-                        })).on('change', function () { libPage = 0; renderLib(); });
+                        var extra = {placeholder: el.getAttribute('data-placeholder') || ''};
+                        if (id === 'lib-filter-course') extra.ajax = editorOptionsAjax('courses');
+                        jQuery(el).select2(jQuery.extend({}, multiOpts, extra))
+                            .on('change', function () { libPage = 0; renderLib(); });
                     });
                     var authorEl = document.getElementById('lib-filter-author');
                     if (authorEl) {
@@ -2265,7 +2331,11 @@
                     if (el) el.addEventListener('change', function () { libPage = 0; renderLib(); });
                 });
                 var libSearch = document.getElementById('lib-search');
-                if (libSearch) libSearch.addEventListener('input', function () { libPage = 0; renderLib(); });
+                var libSearchTimer = null;
+                if (libSearch) libSearch.addEventListener('input', function () {
+                    clearTimeout(libSearchTimer);
+                    libSearchTimer = setTimeout(function () { libPage = 0; renderLib(); }, 250);
+                });
                 slideover.querySelector('.so-table thead').addEventListener('click', function (e) {
                     if (e.target.closest('input[type="checkbox"]')) return;
                     var th = e.target.closest('th[data-sort]');
@@ -2303,7 +2373,8 @@
 
                 // +Add button: add picked problems to contest (at insert position).
                 slideover.querySelector('.so-foot .btn-primary').addEventListener('click', function() {
-                    var picked = slideover.querySelectorAll('#lib-results tr.picked:not(.added)');
+                    var picked = Array.from(libPicked).map(function (pid) { return libPickedMeta[pid]; })
+                        .filter(Boolean);
                     if (!picked.length) return showToast({{ _("No problems selected.")|htmltojs }});
 
                     var cpList = document.querySelector('.cp-list');
@@ -2312,10 +2383,17 @@
                     var existingIds = (hiddenIds.value || '').split(',').filter(Boolean);
                     var newRows = [];
 
-                    picked.forEach(function(row) {
-                        var pid = row.dataset.pid;
+                    picked.forEach(function(meta) {
+                        var pid = String(meta.id);
                         if (existingIds.includes(pid)) return;
                         existingIds.push(pid);
+                        // libRowHtml reads dataset like a library row.
+                        var row = document.createElement('div');
+                        row.dataset.pid = pid;
+                        row.dataset.code = meta.code;
+                        row.dataset.name = meta.name;
+                        row.dataset.format = meta.format;
+                        row.dataset.points = meta.points;
                         newRows.push(row);
                     });
                     if (!newRows.length) return showToast({{ _("All selected problems are already added.")|htmltojs }});
@@ -2334,9 +2412,13 @@
                     }
                     newRows.forEach(function (row) {
                         libPicked.delete(String(row.dataset.pid));
-                        row.classList.remove('picked');
-                        var cb = libRowCheck(row);
-                        if (cb) { cb.checked = false; cb.disabled = true; }
+                        delete libPickedMeta[String(row.dataset.pid)];
+                        var shown = slideover.querySelector('#lib-results tr[data-pid="' + row.dataset.pid + '"]');
+                        if (shown) {
+                            shown.classList.remove('picked');
+                            var cb = libRowCheck(shown);
+                            if (cb) { cb.checked = false; cb.disabled = true; }
+                        }
                         var r = document.createElement('div');
                         r.className = 'cp-row';
                         r.dataset.pid = row.dataset.pid;
@@ -2494,77 +2576,71 @@
             }
 
             // --- Course + Class: multi-select (original M2M) with org→class cascade ---
-            // Class options carry data-org. With no course selected the class
-            // list is empty (same as class_select2 without ?organizations=).
-            // Option labels are written with textContent, never innerHTML.
+            // Courses and classes are searched on the server (contest_editor_options); only the
+            // stored ones are in the page. With no course selected the class search is empty
+            // (same as class_select2 without ?organizations=). Labels go through select2's escaping.
             var orgSel = document.getElementById('id_organizations');
             var classSel = document.getElementById('id_classes');
-            if (orgSel && classSel) {
-                var select2Theme = '{{ DMOJ_SELECT2_THEME }}';
-                var classCatalog = [];
+            var joinSel = document.getElementById('id_join_organizations');
+            var select2Theme = '{{ DMOJ_SELECT2_THEME }}';
+            function selectedOrgIds() {
+                if (!orgSel) return [];
+                if (window.jQuery && jQuery(orgSel).data('select2')) {
+                    var v = jQuery(orgSel).val() || [];
+                    return (Array.isArray(v) ? v : [v]).map(String).filter(Boolean);
+                }
+                return Array.from(orgSel.selectedOptions).map(function (o) { return o.value; }).filter(Boolean);
+            }
+            function dropClassesOutsideOrgs() {
+                if (!classSel) return;
+                var orgs = selectedOrgIds();
+                var changed = false;
                 Array.from(classSel.options).forEach(function (opt) {
-                    if (!opt.value) return;
-                    classCatalog.push({
-                        id: opt.value,
-                        org: opt.getAttribute('data-org') || '',
-                        name: opt.textContent,
-                        selected: !!opt.selected,
-                    });
+                    if (orgs.indexOf(opt.getAttribute('data-org') || '') === -1) {
+                        opt.remove();
+                        changed = true;
+                    }
                 });
-                function selectedOrgIds() {
-                    if (window.jQuery && jQuery(orgSel).data('select2')) {
-                        var v = jQuery(orgSel).val() || [];
-                        return (Array.isArray(v) ? v : [v]).map(String).filter(Boolean);
-                    }
-                    return Array.from(orgSel.selectedOptions).map(function (o) { return o.value; }).filter(Boolean);
-                }
-                function selectedClassIds() {
-                    return Array.from(classSel.selectedOptions).map(function (o) { return o.value; });
-                }
-                function classSelect2Opts() {
-                    return {
-                        theme: select2Theme,
-                        width: '100%',
-                        placeholder: classSel.getAttribute('data-placeholder') || '',
-                        allowClear: true,
-                        closeOnSelect: false,
-                    };
-                }
-                function rebuildClassOptions() {
-                    var orgs = selectedOrgIds();
-                    var keep = {};
-                    selectedClassIds().forEach(function (id) { keep[id] = true; });
-                    var $cls = (window.jQuery && jQuery.fn.select2) ? jQuery(classSel) : null;
-                    var hadSelect2 = !!( $cls && $cls.data('select2') );
-                    if (hadSelect2) $cls.select2('destroy');
-                    while (classSel.firstChild) classSel.removeChild(classSel.firstChild);
-                    classCatalog.forEach(function (item) {
-                        if (orgs.indexOf(item.org) === -1) return;
-                        var opt = document.createElement('option');
-                        opt.value = item.id;
-                        opt.setAttribute('data-org', item.org);
-                        opt.textContent = item.name;
-                        if (keep[item.id] || item.selected) opt.selected = true;
-                        classSel.appendChild(opt);
-                    });
-                    classCatalog.forEach(function (item) { item.selected = false; });
-                    if (hadSelect2 || ($cls && jQuery.fn.select2)) {
-                        $cls.select2(classSelect2Opts());
-                    }
-                }
-                if (window.jQuery && jQuery.fn.select2) {
+                if (changed && window.jQuery && jQuery(classSel).data('select2')) jQuery(classSel).trigger('change');
+            }
+            if (window.jQuery && jQuery.fn.select2) {
+                if (orgSel && classSel) {
                     jQuery(orgSel).select2({
                         theme: select2Theme,
                         width: '100%',
                         placeholder: orgSel.getAttribute('data-placeholder') || '',
                         allowClear: true,
                         closeOnSelect: false,
+                        ajax: editorOptionsAjax('courses'),
                     });
-                    jQuery(orgSel).on('change', rebuildClassOptions);
-                } else {
-                    orgSel.addEventListener('change', rebuildClassOptions);
+                    jQuery(orgSel).on('change', dropClassesOutsideOrgs);
+                    jQuery(classSel).select2({
+                        theme: select2Theme,
+                        width: '100%',
+                        placeholder: classSel.getAttribute('data-placeholder') || '',
+                        allowClear: true,
+                        closeOnSelect: false,
+                        ajax: editorOptionsAjax('classes', function () {
+                            return {organizations: selectedOrgIds().join(',')};
+                        }),
+                    }).on('select2:select', function (e) {
+                        var d = e.params && e.params.data;
+                        if (!d) return;
+                        var opt = classSel.querySelector('option[value="' + String(d.id) + '"]');
+                        if (opt && d.org != null) opt.setAttribute('data-org', String(d.org));
+                    });
                 }
-                rebuildClassOptions();
+                if (joinSel) {
+                    jQuery(joinSel).select2({
+                        theme: select2Theme,
+                        width: '100%',
+                        allowClear: true,
+                        closeOnSelect: false,
+                        ajax: editorOptionsAjax('courses'),
+                    });
+                }
+            } else if (orgSel) {
+                orgSel.addEventListener('change', dropClassesOutsideOrgs);
             }
 
             // --- Description RichEditor (③) ---
@@ -2908,9 +2984,9 @@
                                         <select id="id_organizations" name="organizations" multiple
                                                 data-placeholder="{{ _('Select courses…') }}"
                                                 style="width:100%;max-width:500px;">
-                                            {% set prefill_org_ids = (prefill.organizations or []) | map(attribute=0) | list %}
-                                            {% for org in organizations %}
-                                                <option value="{{ org.id }}"{% if org.id in prefill_org_ids %} selected{% endif %}>{{ org.name }}</option>
+                                            {# Only the stored courses; the others are searched (contest_editor_options). #}
+                                            {% for org_id, org_name in prefill.organizations or [] %}
+                                                <option value="{{ org_id }}" selected>{{ org_name }}</option>
                                             {% endfor %}
                                         </select>
                                         <div class="vis-mute-note" id="org-mute-note"></div>
@@ -2927,10 +3003,10 @@
                                         <select id="id_classes" name="classes" multiple
                                                 data-placeholder="{{ _('Select course first') }}"
                                                 style="width:100%;max-width:500px;">
-                                            {% set prefill_class_ids = (prefill.classes or []) | map(attribute=0) | list %}
+                                            {# Only the stored classes; the others are searched within the chosen courses.
+                                               data-org drives the course→class cascade (see JS above). #}
                                             {% for cls in classes %}
-                                                {# data-org drives the client-side org→class cascade (see JS above). #}
-                                                <option value="{{ cls.id }}" data-org="{{ cls.organization_id }}"{% if cls.id in prefill_class_ids %} selected{% endif %}>{{ cls.name }}</option>
+                                                <option value="{{ cls.id }}" data-org="{{ cls.organization_id }}" selected>{{ cls.name }}</option>
                                             {% endfor %}
                                         </select>
                                         <div class="vis-mute-note" id="class-mute-note"></div>
@@ -3313,10 +3389,9 @@
                                             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.4rem;">
                                                 <input type="checkbox" id="id_limit_join_organizations" name="limit_join_organizations"{% if prefill.limit_join_organizations %} checked{% endif %}> {{ _('limit organizations that can join') }}
                                             </label>
-                                            <select id="id_join_organizations" name="join_organizations" multiple data-oj-select style="width:100%;max-width:500px;">
-                                                {% set join_org_ids = (prefill.join_organizations or []) | map(attribute=0) | list %}
-                                                {% for org in organizations %}
-                                                    <option value="{{ org.id }}"{% if org.id in join_org_ids %} selected{% endif %}>{{ org.name }}</option>
+                                            <select id="id_join_organizations" name="join_organizations" multiple style="width:100%;max-width:500px;">
+                                                {% for org_id, org_name in prefill.join_organizations or [] %}
+                                                    <option value="{{ org_id }}" selected>{{ org_name }}</option>
                                                 {% endfor %}
                                             </select>
                                             <div class="vis-mute-note" id="join-mute-note"></div>
@@ -3473,11 +3548,7 @@
                             </div>
                             <div class="filter-block">
                                 <label class="filter-label" for="lib-filter-course">{{ _('Course') }}</label>
-                                <select id="lib-filter-course" multiple data-placeholder="{{ _('All courses') }}">
-                                    {% for org in organizations %}
-                                        <option value="{{ org.id }}">{{ org.name }}</option>
-                                    {% endfor %}
-                                </select>
+                                <select id="lib-filter-course" multiple data-placeholder="{{ _('All courses') }}"></select>
                             </div>
                             {% if can_see_problem_authors %}
                             <div class="filter-block">
@@ -3527,55 +3598,8 @@
                             </tr>
                         </thead>
                         <tbody id="lib-results">
-                            {% for problem in problems %}
-                            <tr data-pid="{{ problem.id }}" data-code="{{ problem.code }}" data-name="{{ problem.name }}"
-                                data-points="{{ problem.points|int }}"
-                                data-org-ids="{% for o in problem.organizations.all() %}{{ o.id }}{% if not loop.last %},{% endif %}{% endfor %}"
-                                {% if can_see_problem_authors %}data-author-ids="{% for a in problem.authors.all() %}{{ a.id }}{% if not loop.last %},{% endif %}{% endfor %}"{% endif %}
-                                data-format="{{ problem.format_filter_code }}"
-                                data-stype="{{ problem.submission_type }}"
-                                data-knowledge="{{ problem.knowledge_type_ids|join(';') }}"
-                                data-diff="{{ problem.difficulty or 'none' }}"
-                                data-ac="{{ problem.ac_rate|round(1) }}"
-                                data-public="{{ '1' if problem.is_public and not problem.is_organization_private else '0' }}"
-                                data-status="{% if problem.id in lib_completed_ids %}solved{% else %}unsolved{% endif %}">
-                                <td class="col-check"><input type="checkbox" class="lib-row-check"></td>
-                                <td class="ptitle col-name">{{ problem.name }}</td>
-                                <td class="col-course">{% for o in problem.organizations.all() %}{{ o.name }}{% if not loop.last %}, {% endif %}{% else %}<span class="num">{{ _('Public') }}</span>{% endfor %}</td>
-                                <td class="col-type">
-                                    {% for type in problem.format_types_list %}
-                                        <span class="type-tag">{{ type }}</span>
-                                    {% else %}
-                                        <span class="tag-placeholder">&mdash;</span>
-                                    {% endfor %}
-                                </td>
-                                <td class="col-tags">
-                                    {% for type in problem.knowledge_types_list %}
-                                        <span class="tag-badge">{{ type }}</span>
-                                    {% else %}
-                                        <span class="tag-placeholder">&mdash;</span>
-                                    {% endfor %}
-                                </td>
-                                <td class="col-diff">
-                                    {% if problem.difficulty %}
-                                        <span class="difficulty-badge diff-{{ problem.difficulty }}">{{ problem.difficulty_label }}</span>
-                                    {% else %}
-                                        <span class="diff-placeholder">&mdash;</span>
-                                    {% endif %}
-                                </td>
-                                <td class="col-ac">
-                                    <div class="ac-cell">
-                                        <div class="ac-bar">
-                                            <div class="ac-bar-fill" style="width: {{ '%.1f'|format(problem.ac_rate) }}%"></div>
-                                        </div>
-                                        <span class="ac-text">{{ '%.1f'|format(problem.ac_rate) }}%</span>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                            {% if not problems %}
-                            <tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('No problems available.') }}</td></tr>
-                            {% endif %}
+                            {# Rows come one page at a time from contest_problem_library (renderLib below). #}
+                            <tr class="lib-placeholder"><td colspan="7" style="text-align:center;padding:2rem;color:var(--muted);">{{ _('Loading…') }}</td></tr>
                         </tbody>
                     </table>
                 </div>

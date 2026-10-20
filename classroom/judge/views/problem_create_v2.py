@@ -52,6 +52,7 @@ from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.question_types.mcq import sync_mcq_options
 from judge.subjects import (CREATE_V2_TYPE_CAPS, capability_for_question_type, course_question_caps,
                             ensure_question_type_allowed, features_for, infer_subject_key)
+from judge.utils.course_roles import teaching_q
 from judge.utils.db_retry import retry_on_deadlock
 from judge.utils.edit_conflict import (EditConflict, check_edit_base, problem_conflict_message,
                                        problem_edit_fingerprint)
@@ -189,11 +190,10 @@ def assignable_organizations(user, problem=None):
         return Organization.objects.none()
     if user.has_perm('judge.edit_all_organization'):
         return Organization.objects.all()
-    profile = user.profile
-    q = Q(admins=profile) | Q(instructors=profile) | Q(**{'class__admins': profile})
+    q = teaching_q(user.profile)
     if problem is not None and problem.pk is not None:
         q |= Q(id__in=problem.organizations.values('id'))
-    return Organization.objects.filter(q).distinct()
+    return Organization.objects.filter(q)
 
 
 def _normalized_text(value):
@@ -276,10 +276,17 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         context['can_create_code'] = context.get('can_create_code', False) and 'question_programming' in caps
         context['create_type_caps_json'] = script_json(CREATE_V2_TYPE_CAPS)
         org_ids = [o['id'] for o in context.get('organizations') or []]
-        context['org_question_caps_json'] = script_json({
-            str(pk): caps_list for pk, caps_list in course_question_caps(
-                list(Organization.objects.filter(pk__in=org_ids))).items()
-        })
+        # Each distinct capability list once, and each course points at its list: the lists depend
+        # only on the course subject, and repeating them per course was 40 KB for an administrator
+        # offered 150 courses. The page expands this back to {course id: capabilities}.
+        cap_sets, set_index, org_sets = [], {}, {}
+        for pk, caps_list in course_question_caps(list(Organization.objects.filter(pk__in=org_ids))).items():
+            key = tuple(caps_list)
+            if key not in set_index:
+                set_index[key] = len(cap_sets)
+                cap_sets.append(caps_list)
+            org_sets[str(pk)] = set_index[key]
+        context['org_question_cap_sets_json'] = script_json({'sets': cap_sets, 'orgs': org_sets})
         context['preselect_organization_ids_json'] = script_json(context['preselect_organization_ids'])
 
     def get_context(self, request):

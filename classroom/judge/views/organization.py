@@ -12,7 +12,7 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
 from django.forms import Form, modelformset_factory
-from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedirect
+from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
@@ -32,6 +32,7 @@ from judge.subjects import prefix_labels
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, notify_instructor_verification,
 )
+from judge.utils.course_roles import courses_q
 from judge.utils.db_retry import retry_on_deadlock
 from judge.utils.import_export import process_user_csv
 from judge.utils.organization_membership import sync_class_members_to_organization
@@ -148,10 +149,8 @@ def orgs_reviewable_by(profile):
     """Courses with join requests this profile may review (course admin or class instructor)."""
     if profile is None:
         return Organization.objects.none()
-    # Reverse FK uses related_query_name 'class' in lookups, related_name 'classes' on instances.
-    return Organization.objects.filter(
-        Q(admins=profile) | Q(class__admins=profile),
-    ).distinct()
+    # One indexed subquery per role instead of joining both role tables (judge/utils/course_roles.py).
+    return Organization.objects.filter(courses_q(profile, ('admin', 'class_admin')))
 
 
 def user_can_edit_all_organizations(user):
@@ -403,8 +402,17 @@ def course_inbox_chrome_context(request):
         'can_apply_teacher': request.user.is_authenticated and not is_site_teacher and not pending_teacher_apply,
         'pending_teacher_apply': pending_teacher_apply,
         'admin_email': admin_email or getattr(settings, 'SITE_ADMIN_EMAIL', '') or 'admin@example.com',
-        'instructor_apply_catalog': instructor_apply_catalog() if request.user.is_authenticated else [],
+        # The Apply-as-class-instructor modal fetches every course and class from
+        # InstructorApplyCatalogView when it opens; inlining it put the whole university's
+        # catalog (30 KB at 150 courses, growing with every course) into each course page.
     }
+
+
+class InstructorApplyCatalogView(LoginRequiredMixin, View):
+    """Courses and active classes for the Apply-as-instructor modal (loaded when it opens)."""
+
+    def get(self, request, *args, **kwargs):
+        return JsonResponse({'courses': instructor_apply_catalog()})
 
 
 def grant_site_teacher_role(profile):

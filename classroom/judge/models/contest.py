@@ -2,7 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models, transaction
-from django.db.models import CASCADE, Q
+from django.db.models import CASCADE, Exists, OuterRef, Q
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.functional import cached_property
@@ -16,6 +16,7 @@ from judge.models.problem import Problem
 from judge.models.profile import Class, Organization, Profile
 from judge.models.submission import Submission
 from judge.ratings import rate_contest
+from judge.utils.course_roles import teaching_q
 from judge.utils.unique_ids import next_prefixed_id
 
 __all__ = [
@@ -274,8 +275,9 @@ class Contest(models.Model):
 
         ``spread`` > 0 picks among the first few free ids (retry after losing a race).
         """
+        # Only ids that can collide with the series: not every key on the site.
         return next_prefixed_id(
-            cls.objects.values_list('key', flat=True),
+            cls.objects.filter(key__startswith='c').values_list('key', flat=True),
             'c',
             fallback_prefix='contest',
             spread=spread,
@@ -415,6 +417,10 @@ class Contest(models.Model):
 
     @cached_property
     def editor_ids(self):
+        # Lists prefetch authors and curators; use them instead of one query per row.
+        prefetched = getattr(self, '_prefetched_objects_cache', {})
+        if 'authors' in prefetched and 'curators' in prefetched:
+            return {p.id for p in prefetched['authors']} | {p.id for p in prefetched['curators']}
         return self.author_ids.union(
             Contest.curators.through.objects.filter(contest=self).values_list('profile_id', flat=True))
 
@@ -723,36 +729,50 @@ class Contest(models.Model):
 
         queryset = cls.objects.defer('description')
         if not (user.has_perm('judge.see_private_contest') or user.has_perm('judge.edit_all_contest')):
+            # Every role test is an EXISTS on its own link table. Joining all of them at once
+            # (Q(authors=...) | Q(classes__in=...) | ...) made MariaDB build the product of every
+            # contest's authors, curators, classes and courses: 3+ s per page at 1,500 assignments.
+            profile = user.profile
+            contest_orgs = Contest.organizations.through.objects.filter(contest=OuterRef('pk'))
+            contest_classes = Contest.classes.through.objects.filter(contest=OuterRef('pk'))
+
+            def linked(through):
+                return Exists(through.objects.filter(contest=OuterRef('pk'), profile=profile))
+
+            user_orgs = Profile.organizations.through.objects.filter(profile=profile).values('organization_id')
+            user_classes = Class.members.through.objects.filter(profile=profile).values('class_id')
+            admin_orgs = Organization.admins.through.objects.filter(profile=profile).values('organization_id')
+            teaching_orgs = Organization.objects.filter(teaching_q(profile)).values('id')
+            private_contestant = linked(Contest.private_contestants.through)
             # For org-private contests:
             # - If classes are set, only class members can see
             # - If no classes, org members can see
-            org_only_check = Q(is_organization_private=True, classes__isnull=True,
-                               organizations__in=user.profile.organizations.all())
-            class_check = Q(is_organization_private=True,
-                            classes__in=user.profile.classes.all())
+            org_only_check = Q(is_organization_private=True) & ~Exists(contest_classes) & \
+                Exists(contest_orgs.filter(organization_id__in=user_orgs))
+            class_check = Q(is_organization_private=True) & Exists(contest_classes.filter(class_id__in=user_classes))
             org_check = org_only_check | class_check
             q = Q(is_visible=True)
             q &= (
-                Q(view_contest_scoreboard=user.profile) |
+                linked(Contest.view_contest_scoreboard.through) |
                 Q(is_organization_private=False, is_private=False) |
-                Q(is_organization_private=False, is_private=True, private_contestants=user.profile) |
+                (Q(is_organization_private=False, is_private=True) & private_contestant) |
                 (Q(is_organization_private=True, is_private=False) & org_check) |
-                (Q(is_organization_private=True, is_private=True, private_contestants=user.profile) & org_check)
+                (Q(is_organization_private=True, is_private=True) & private_contestant & org_check)
             )
 
-            q |= Q(authors=user.profile)
-            q |= Q(curators=user.profile)
-            q |= Q(testers=user.profile)
-            q |= Q(spectators=user.profile)
+            q |= linked(Contest.authors.through)
+            q |= linked(Contest.curators.through)
+            q |= linked(Contest.testers.through)
+            q |= linked(Contest.spectators.through)
             # Org admins can see org-private contests
-            q |= Q(is_organization_private=True, organizations__admins=user.profile)
-            teaching_orgs = Organization.objects.filter(
-                Q(instructors=user.profile) | Q(admins=user.profile) | Q(class__admins=user.profile),
-            ).distinct()
+            q |= Q(is_organization_private=True) & Exists(contest_orgs.filter(organization_id__in=admin_orgs))
             # Hidden (unpublished) assignments: course admins only, see access_check.
-            q |= Q(is_organization_private=True, is_visible=True, organizations__in=teaching_orgs)
-            q |= Q(is_organization_private=True, is_visible=True, classes__organization__in=teaching_orgs)
-            q |= Q(is_organization_private=True, classes__organization__admins=user.profile)
+            q |= Q(is_organization_private=True, is_visible=True) & \
+                Exists(contest_orgs.filter(organization_id__in=teaching_orgs))
+            q |= Q(is_organization_private=True, is_visible=True) & \
+                Exists(contest_classes.filter(class__organization_id__in=teaching_orgs))
+            q |= Q(is_organization_private=True) & \
+                Exists(contest_classes.filter(class__organization_id__in=admin_orgs))
             queryset = queryset.filter(q)
         return queryset.distinct()
 

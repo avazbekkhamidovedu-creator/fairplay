@@ -235,8 +235,28 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         tf = self.request.GET.get('time', '')
         return tf if tf in self.time_filters else ''
 
+    @cached_property
+    def _visible_ids(self):
+        """The ids of the assignments this user may see, worked out once per request.
+
+        The visibility rule is a set of per-row EXISTS checks over every assignment of the site;
+        the list, its counts and the four filter-option queries used to evaluate it again each
+        time. Users who see everything (``see_private_contest`` / ``edit_all_contest``) and
+        anonymous visitors have no per-row checks, so they keep the plain queryset (``None``).
+        """
+        user = self.request.user
+        if not user.is_authenticated or user.has_perm('judge.see_private_contest') or \
+                user.has_perm('judge.edit_all_contest'):
+            return None
+        return list(super().get_queryset().values_list('id', flat=True))
+
+    def _visible_queryset(self):
+        if self._visible_ids is None:
+            return super().get_queryset()
+        return Contest.objects.filter(id__in=self._visible_ids).defer('description')
+
     def _get_queryset(self):
-        queryset = super().get_queryset().prefetch_related(
+        queryset = self._visible_queryset().prefetch_related(
             'tags',
             'organizations',
             'authors__user',
@@ -261,6 +281,55 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
 
     def get_queryset(self):
         queryset = self._get_queryset().order_by(self.order, 'key').filter(end_time__lt=self._now)
+        if self.server_paged:
+            queryset = self._apply_url_filters(queryset)
+        return queryset
+
+    # Past assignments are rendered in full and filtered in the browser while there are at most
+    # this many of them (a teacher's own courses). Beyond that (an administrator sees every
+    # assignment of the university: 1,500 rows and 4.7 MB on the teacher-scale seed) the past
+    # section is paged on the server, the ongoing and upcoming sections show at most one page
+    # (with a note counting the rest), and the same filters run in SQL; the page reloads when a
+    # filter changes. Override with CLASSROOM_CONTEST_LIST_PAGE_SIZE.
+    PAST_PAGE_SIZE = 50
+
+    def get_paginate_by(self, queryset):
+        return self.past_page_size if self.server_paged else None
+
+    @cached_property
+    def past_page_size(self):
+        return getattr(settings, 'CLASSROOM_CONTEST_LIST_PAGE_SIZE', self.PAST_PAGE_SIZE)
+
+    @cached_property
+    def server_paged(self):
+        return self._get_queryset().filter(end_time__lt=self._now).values('id').count() > self.past_page_size
+
+    def _url_list(self, name):
+        return [part.strip() for raw in self.request.GET.getlist(name) for part in str(raw).split(',')
+                if part.strip()]
+
+    def _apply_url_filters(self, queryset, past=True):
+        """The client-side filters of list-v2.html, in SQL, for a server-paged list."""
+        time_filter = self.time_filter
+        if time_filter and (time_filter != 'past') == past:
+            return queryset.none()
+        orgs = self._url_list('org')
+        if orgs:
+            queryset = queryset.filter(Exists(Contest.organizations.through.objects.filter(
+                contest=OuterRef('pk'), organization__name__in=orgs)))
+        classes = self._url_list('class')
+        if classes:
+            queryset = queryset.filter(Exists(Contest.classes.through.objects.filter(
+                contest=OuterRef('pk'), **{'class__name__in': classes})))
+        for tag in self._url_list('tag'):  # every selected tag
+            queryset = queryset.filter(Exists(Contest.tags.through.objects.filter(
+                contest=OuterRef('pk'), contesttag__name=tag)))
+        authors = [int(a) for a in self._url_list('author') if a.isdigit()]
+        if authors and self._can_see_assignment_authors():
+            queryset = queryset.filter(Exists(Contest.authors.through.objects.filter(
+                contest=OuterRef('pk'), profile_id__in=authors)))
+        for term in (t.strip() for t in self.request.GET.getlist('search') if t.strip()):
+            queryset = queryset.filter(Q(name__icontains=term) | Q(key__icontains=term))
         return queryset
 
     def _can_see_assignment_authors(self):
@@ -274,38 +343,37 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         finished = set()
         active = []
 
-        # All contests are rendered; filtering is applied client-side.
-        ongoing_future = self._get_queryset().exclude(end_time__lt=self._now)
-        present_all, future_all = [], []
-        for contest in ongoing_future:
-            if contest.start_time > self._now:
-                future_all.append(contest)
-            else:
-                present_all.append(contest)
-
-        if self.request.user.is_authenticated:
-            present_ids = [c.id for c in present_all]
-            for participation in (
-                ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=present_ids)
-                .select_related('contest')
-                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators',
-                                  'contest__organizations', 'contest__classes')
-                .annotate(key=F('contest__key'))
-            ):
-                if participation.ended:
-                    finished.add(participation.contest.key)
+        if self.server_paged:
+            active, present, future, finished, unlisted = self._paged_sections()
+        else:
+            unlisted = 0
+            # All contests are rendered; filtering is applied client-side.
+            ongoing_future = self._get_queryset().exclude(end_time__lt=self._now)
+            present_all, future_all = [], []
+            for contest in ongoing_future:
+                if contest.start_time > self._now:
+                    future_all.append(contest)
                 else:
-                    active.append(participation)
-                    present_all.remove(participation.contest)
+                    present_all.append(contest)
 
-        active.sort(key=attrgetter('end_time', 'key'))
-        present_all.sort(key=attrgetter('end_time', 'key'))
-        future_all.sort(key=attrgetter('start_time'))
+            if self.request.user.is_authenticated:
+                present_ids = [c.id for c in present_all]
+                for participation in self._participations(present_ids):
+                    if participation.ended:
+                        finished.add(participation.contest.key)
+                    else:
+                        active.append(participation)
+                        present_all.remove(participation.contest)
 
-        # All sections are rendered server-side; the status filter is applied
-        # client-side for instant switching.
-        present = present_all
-        future = future_all
+            active.sort(key=attrgetter('end_time', 'key'))
+            present_all.sort(key=attrgetter('end_time', 'key'))
+            future_all.sort(key=attrgetter('start_time'))
+
+            # All sections are rendered server-side; the status filter is applied
+            # client-side for instant switching.
+            present = present_all
+            future = future_all
+        context['unlisted_count'] = unlisted
 
         context['active_participations'] = active
         context['current_contests'] = present
@@ -359,6 +427,7 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
             context['contest_authors'] = Profile.objects.none()
             context['selected_author_profiles'] = []
         context['selected_authors'] = selected_authors
+        context['server_paged'] = self.server_paged
         context['total_count'] = self._total_count(active, present, future)
         context['sort_by'] = self.order
         context['group'] = self.group
@@ -372,9 +441,45 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         context.update(self.get_sort_paginate_context())
         return context
 
+    def _participations(self, contest_ids):
+        return (ContestParticipation.objects.filter(virtual=0, user=self.request.profile, contest_id__in=contest_ids)
+                .select_related('contest')
+                .prefetch_related('contest__authors', 'contest__curators', 'contest__testers', 'contest__spectators',
+                                  'contest__organizations', 'contest__classes', 'contest__tags')
+                .annotate(key=F('contest__key')))
+
+    def _paged_sections(self):
+        """Ongoing and upcoming sections of a server-paged list: URL filters in SQL, at most one
+        page each. Returns ``(active, present, future, finished, unlisted)``, where ``unlisted``
+        counts the matching ongoing/upcoming assignments beyond the page."""
+        size = self.past_page_size
+        base = self._apply_url_filters(self._get_queryset().exclude(end_time__lt=self._now), past=False)
+        present_qs = base.filter(start_time__lte=self._now)
+        future_qs = base.filter(start_time__gt=self._now)
+        active, finished, active_ids = [], set(), []
+        if self.request.user.is_authenticated:
+            for participation in self._participations(present_qs.values('id')):
+                if participation.ended:
+                    finished.add(participation.contest.key)
+                else:
+                    active.append(participation)
+                    active_ids.append(participation.contest_id)
+        active.sort(key=attrgetter('end_time', 'key'))
+        present_qs = present_qs.exclude(id__in=active_ids)
+        present = list(present_qs.order_by('end_time', 'key')[:size])
+        future = list(future_qs.order_by('start_time', 'key')[:size])
+        unlisted = 0
+        if len(present) == size:
+            unlisted += present_qs.values('id').count() - size
+        if len(future) == size:
+            unlisted += future_qs.values('id').count() - size
+        self._unlisted = unlisted
+        return active, present, future, finished, unlisted
+
     def _total_count(self, active, present, future):
         """Number of assignments matching the (server-side) filters."""
-        return len(active) + len(present) + len(future) + self.get_queryset().values('id').count()
+        return (len(active) + len(present) + len(future) + getattr(self, '_unlisted', 0) +
+                self.get_queryset().values('id').count())
 
     def _get_course_groups(self, context):
         """Group the displayed assignments by their first organization (course).
@@ -1293,9 +1398,7 @@ class ContestCreate(LoginRequiredMixin, View):
         ``edit_own_contest`` from attaching — and thereby leaking — a
         colleague's hidden problem through a contest that students can see.
         """
-        if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.see_private_problem'):
-            return Problem.objects.all()
-        return Problem.get_visible_problems(user)
+        return problems_attachable_by(user)
 
     @staticmethod
     def _local_input(dt):
@@ -1335,7 +1438,6 @@ class ContestCreate(LoginRequiredMixin, View):
         ]
         from judge.views.problem import user_can_see_problem_author_metadata
 
-        profile = getattr(self.request, 'profile', None)
         return {
             'lib_format_types': format_types,
             'lib_knowledge_types': knowledge_types,
@@ -1344,7 +1446,6 @@ class ContestCreate(LoginRequiredMixin, View):
                 ('medium', str(_('Medium'))),
                 ('hard', str(_('Hard'))),
             ],
-            'lib_completed_ids': user_completed_ids(profile) if profile is not None else set(),
             'can_see_problem_authors': user_can_see_problem_author_metadata(self.request.user),
         }
 
@@ -1491,17 +1592,13 @@ class ContestCreate(LoginRequiredMixin, View):
             'title': _('Edit Assignment') if contest else _('Add Assignment'),
             'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
             'now': timezone.now(),
-            'organizations': Organization.objects.all(),
-            'classes': Class.objects.all(),
+            # Only the stored classes (the pickers search the rest via ContestEditorOptionsView;
+            # rendering every course and class grew with each new term).
+            'classes': Class.objects.filter(id__in=[c[0] for c in prefill['classes']]),
             'tags': ContestTag.objects.all(),
             'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
-            # Only problems this editor may attach — see _visible_problems_for.
-            # select_related/prefetch_related feed the library columns (types /
-            # difficulty / orgs / MCQ format) without N+1 queries on a large bank.
-            'problems': (self._visible_problems_for(self.request.user)
-                         .select_related('mcq_config')
-                         .prefetch_related('types', 'organizations', 'authors__user')
-                         .order_by('-date')),
+            # The "Add from library" rows are not rendered here: the panel loads them a page at a
+            # time from ContestProblemLibraryView (same problems: problems_attachable_by).
             'contest': contest,
             # Subject registry: code-only settings (IDE output, pretests) follow the assignment's
             # courses when editing, else the editor's own courses (judge/subjects/).
@@ -1525,6 +1622,238 @@ class ContestCreate(LoginRequiredMixin, View):
         }
         ctx.update(self._library_filter_context())
         return ctx
+
+
+def contest_editor_allowed(request):
+    """Who may use the assignment editor's AJAX helpers: whoever may open the editor (create, or
+    ``?contest=<key>`` of an assignment they may change)."""
+    if Contest.can_be_added_by(request.user):
+        return True
+    key = request.GET.get('contest')
+    if key:
+        contest = Contest.objects.filter(key=key).first()
+        return contest is not None and contest.is_changeable_by(request.user)
+    return False
+
+
+class ContestEditorOptionsView(LoginRequiredMixin, View):
+    """Course and class choices for the assignment editor's pickers, in select2's format.
+
+    The editor offered every course and every class of the site, rendered into the page
+    (``Organization.objects.all()`` / ``Class.objects.all()``, about 70 KB at 150 courses and
+    growing every term). It now renders the stored choices only and searches the same sets here.
+    ``classes`` needs ``organizations=<id,id>``; without it there is nothing to choose, as before.
+    """
+    PAGE_SIZE = 20
+
+    def get(self, request, kind):
+        if not contest_editor_allowed(request):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        term = (request.GET.get('term') or '').strip()
+        try:
+            page = max(int(request.GET.get('page') or 1), 1)
+        except ValueError:
+            page = 1
+        if kind == 'courses':
+            queryset = Organization.objects.filter(name__icontains=term).only('id', 'name')
+            label = (lambda org: {'id': org.id, 'text': org.name})
+        elif kind == 'classes':
+            org_ids = [int(x) for x in (request.GET.get('organizations') or '').split(',') if x.strip().isdigit()]
+            queryset = (Class.objects.filter(organization_id__in=org_ids, name__icontains=term)
+                        .only('id', 'name', 'organization_id'))
+            label = (lambda cls: {'id': cls.id, 'text': cls.name, 'org': cls.organization_id})
+        else:
+            raise Http404()
+        rows = list(queryset[(page - 1) * self.PAGE_SIZE:page * self.PAGE_SIZE + 1])
+        return JsonResponse({'results': [label(row) for row in rows[:self.PAGE_SIZE]],
+                             'more': len(rows) > self.PAGE_SIZE})
+
+
+def problems_attachable_by(user):
+    """Problems the assignment editor may attach (see ``ContestCreate._visible_problems_for``)."""
+    if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.see_private_problem'):
+        return Problem.objects.all()
+    return Problem.get_visible_problems(user)
+
+
+class ContestProblemLibraryView(LoginRequiredMixin, View):
+    """One page of the assignment editor's "Add from library" table, as JSON.
+
+    The editor used to render every problem the teacher may attach into the page and filter,
+    sort and page them in the browser: 155 KB for a typical instructor and 11.8 MB (6,000 rows)
+    for an administrator on the teacher-scale seed. The same filters, sorts and page size now run
+    here on the same set of problems (``problems_attachable_by``), so a page costs the same
+    whatever the size of the bank.
+
+    Query parameters (all optional): ``q`` (code or name contains), ``format`` (submission type or
+    single/multiple/truefalse), ``diff`` (easy/medium/hard/none), ``course``, ``author`` (only for
+    viewers allowed to see problem authors), ``tag`` (knowledge ProblemType ids), ``status``
+    (solved/unsolved), ``ac_min``/``ac_max``, ``sort`` (name/type/diff/ac), ``desc`` (1),
+    ``page`` (0-based), ``page_size`` (1-50, default 10), ``contest`` (key, for editors of that
+    assignment who may not create new ones).
+    """
+    PAGE_SIZE = 10
+    MAX_PAGE_SIZE = 50
+    MCQ_FORMATS = {
+        'single': Q(mcq_config__multiple_select=False, mcq_config__is_true_false=False),
+        'multiple': Q(mcq_config__multiple_select=True, mcq_config__is_true_false=False),
+        'truefalse': Q(mcq_config__is_true_false=True),
+    }
+    DIFFICULTY_ORDER = ('easy', 'medium', 'hard')
+
+    @staticmethod
+    def _ints(values):
+        out = []
+        for value in values:
+            for part in str(value).split(','):
+                part = part.strip()
+                if part.isdigit():
+                    out.append(int(part))
+        return out
+
+    @staticmethod
+    def _float(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    def _allowed(self, request):
+        return contest_editor_allowed(request)
+
+    @classmethod
+    def _difficulty_type_ids(cls):
+        """ProblemType ids per canonical difficulty, matched like ``Problem.difficulty`` does."""
+        from judge.models import ProblemType
+        ids = {name: set() for name in cls.DIFFICULTY_ORDER}
+        for problem_type in ProblemType.objects.only('id', 'name', 'full_name'):
+            canon = (Problem.canonical_difficulty_name(problem_type.name) or
+                     Problem.canonical_difficulty_name(problem_type.full_name))
+            if canon in ids:
+                ids[canon].add(problem_type.id)
+        return ids
+
+    @staticmethod
+    def _has_type(type_ids):
+        if not type_ids:
+            return Q(pk__in=[])
+        return Q(Exists(Problem.types.through.objects.filter(problem=OuterRef('pk'),
+                                                             problemtype_id__in=type_ids)))
+
+    def get(self, request, *args, **kwargs):
+        from judge.views.problem import user_can_see_problem_author_metadata
+        if not self._allowed(request):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        get = request.GET
+        user = request.user
+        profile = request.profile
+        can_see_authors = user_can_see_problem_author_metadata(user)
+        queryset = problems_attachable_by(user)
+
+        term = (get.get('q') or '').strip()
+        if term:
+            queryset = queryset.filter(Q(name__icontains=term) | Q(code__icontains=term))
+        formats = [f for f in get.getlist('format') if f]
+        if formats:
+            format_q = Q(submission_type__in=[f for f in formats if len(f) == 1])
+            for name in formats:
+                if name in self.MCQ_FORMATS:
+                    format_q |= Q(submission_type=ProblemSubmissionType.MCQ) & self.MCQ_FORMATS[name]
+            queryset = queryset.filter(format_q)
+
+        difficulty_ids = self._difficulty_type_ids()
+        # A problem's difficulty is its easiest difficulty tag (Problem.difficulty).
+        level_q = {}
+        earlier = set()
+        for name in self.DIFFICULTY_ORDER:
+            level_q[name] = self._has_type(difficulty_ids[name]) & ~self._has_type(earlier)
+            earlier |= difficulty_ids[name]
+        level_q['none'] = ~self._has_type(earlier)
+        diffs = [d for d in get.getlist('diff') if d in level_q]
+        if diffs:
+            diff_q = Q()
+            for name in diffs:
+                diff_q |= level_q[name]
+            queryset = queryset.filter(diff_q)
+
+        courses = self._ints(get.getlist('course'))
+        if courses:
+            queryset = queryset.filter(Exists(Problem.organizations.through.objects.filter(
+                problem=OuterRef('pk'), organization_id__in=courses)))
+        authors = self._ints(get.getlist('author')) if can_see_authors else []
+        if authors:
+            queryset = queryset.filter(Exists(Problem.authors.through.objects.filter(
+                problem=OuterRef('pk'), profile_id__in=authors)))
+        tags = self._ints(get.getlist('tag'))
+        if tags:
+            queryset = queryset.filter(self._has_type(tags))
+        completed = user_completed_ids(profile) if profile is not None else set()
+        status = get.get('status')
+        if status == 'solved':
+            queryset = queryset.filter(id__in=completed)
+        elif status == 'unsolved' and completed:
+            queryset = queryset.exclude(id__in=completed)
+        ac_min, ac_max = self._float(get.get('ac_min')), self._float(get.get('ac_max'))
+        if ac_min is not None:
+            queryset = queryset.filter(ac_rate__gte=ac_min)
+        if ac_max is not None:
+            queryset = queryset.filter(ac_rate__lte=ac_max)
+
+        desc = get.get('desc') == '1'
+        sort = get.get('sort')
+        if sort == 'diff':
+            queryset = queryset.annotate(diff_rank=Case(
+                *[When(level_q[name], then=Value(i)) for i, name in enumerate(self.DIFFICULTY_ORDER)],
+                default=Value(len(self.DIFFICULTY_ORDER)), output_field=IntegerField()))
+            order = ['diff_rank']
+        else:
+            order = {'name': ['name'], 'type': ['submission_type'], 'ac': ['ac_rate']}.get(sort)
+        if order:
+            order = [('-' + f if desc else f) for f in order] + ['-date', '-id']
+        else:
+            order = ['-date', '-id']
+        queryset = queryset.order_by(*order)
+
+        try:
+            page_size = min(max(int(get.get('page_size') or self.PAGE_SIZE), 1), self.MAX_PAGE_SIZE)
+        except ValueError:
+            page_size = self.PAGE_SIZE
+        total = queryset.count()
+        pages = max(1, -(-total // page_size))
+        try:
+            page = min(max(int(get.get('page') or 0), 0), pages - 1)
+        except ValueError:
+            page = 0
+        prefetch = ['types', 'organizations']
+        if can_see_authors:
+            prefetch.append('authors')
+        rows = []
+        for problem in (queryset.select_related('mcq_config').prefetch_related(*prefetch)
+                        [page * page_size:(page + 1) * page_size]):
+            organizations = list(problem.organizations.all())
+            row = {
+                'id': problem.id,
+                'code': problem.code,
+                'name': problem.name,
+                'points': int(problem.points),
+                'org_ids': [o.id for o in organizations],
+                'org_names': [o.name for o in organizations],
+                'format': problem.format_filter_code,
+                'stype': problem.submission_type,
+                'format_types': [str(label) for label in problem.format_types_list],
+                'knowledge': problem.knowledge_type_ids,
+                'knowledge_types': [str(label) for label in problem.knowledge_types_list],
+                'diff': problem.difficulty or 'none',
+                'diff_label': problem.difficulty_label or '',
+                'ac': round(problem.ac_rate, 1),
+                'public': bool(problem.is_public and not problem.is_organization_private),
+                'status': 'solved' if problem.id in completed else 'unsolved',
+            }
+            if can_see_authors:
+                row['author_ids'] = [a.id for a in problem.authors.all()]
+            rows.append(row)
+        return JsonResponse({'rows': rows, 'total': total, 'page': page, 'pages': pages, 'page_size': page_size})
 
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')
@@ -2297,6 +2626,7 @@ class ContestStats(TitleMixin, ContestMixin, DetailView):
             self.object.contest_problems.order_by('order').select_related('problem'),
         )
         lang = self.request.LANGUAGE_CODE
+        Problem.prime_translated_names([cp.problem for cp in contest_problems], lang)
         order_to_name = {
             cp.order: contest_problem_display_name(cp, lang) for cp in contest_problems
         }
@@ -2399,6 +2729,7 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
         if math_engine == 'auto':
             math_engine = getattr(settings, 'MATHOID_DEFAULT_TYPE', 'jax')
         problems = list(contest.contest_problems.order_by('order').select_related('problem'))
+        Problem.prime_translated_names([cp.problem for cp in problems], self.request.LANGUAGE_CODE)
         context['grade_problems'] = [
             {
                 'code': cp.problem.code,

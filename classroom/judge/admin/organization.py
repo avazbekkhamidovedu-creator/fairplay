@@ -45,8 +45,13 @@ class ClassAdmin(VersionAdmin):
         return queryset
 
     def has_add_permission(self, request):
-        return (request.user.has_perm('judge.add_class') and
+        # The admin asks this for every page (navigation sidebar); answer once per request.
+        cached = getattr(request, '_class_admin_can_add', None)
+        if cached is None:
+            cached = request._class_admin_can_add = (
+                request.user.has_perm('judge.add_class') and
                 Organization.objects.filter(admins__id=request.profile.id).exists())
+        return cached
 
     def has_change_permission(self, request, obj=None):
         if not request.user.has_perm('judge.change_class'):

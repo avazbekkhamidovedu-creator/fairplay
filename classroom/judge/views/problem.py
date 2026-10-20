@@ -1560,10 +1560,8 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         editable_ids = set()
         if can_manage and not self.in_contest:
             page_problems = context.get('problems') or []
-            if user.has_perm('judge.edit_all_problem'):
-                editable_ids = {p.id for p in page_problems}
-            else:
-                editable_ids = {p.id for p in page_problems if p.is_editable_by(user)}
+            # Same answer as is_editable_by per row, in one query for the page.
+            editable_ids = Problem.editable_ids_among(user, page_problems)
         context['can_manage_problems'] = can_manage and not self.in_contest
         context['editable_problem_ids'] = editable_ids
         # Clone entry on the list (detail page already has it). Org admins without the

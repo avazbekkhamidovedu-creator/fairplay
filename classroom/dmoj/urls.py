@@ -260,6 +260,9 @@ urlpatterns = [
     path('contests/', paged_list_view(contests.ContestListV2, 'contest_list')),
     path('contests/legacy/', paged_list_view(contests.ContestList, 'contest_list_legacy')),
     path('contests/create/', contests.ContestCreate.as_view(), name='contest_create'),
+    path('contests/library/', contests.ContestProblemLibraryView.as_view(), name='contest_problem_library'),
+    path('contests/editor-options/<str:kind>/', contests.ContestEditorOptionsView.as_view(),
+         name='contest_editor_options'),
     path('contests/delete/', contests.ContestBulkDelete.as_view(), name='contest_bulk_delete'),
     path('contests/<str:contest>/edit/', contests.ContestCreate.as_view(), name='contest_edit'),
     path('contest-tags/create/', contests.ContestTagCreateView.as_view(), name='contest_tag_create'),
@@ -328,6 +331,8 @@ urlpatterns = [
          name='organization_instructor_requests'),
     path('organizations/instructor-verification/', organization.InstructorVerificationSubmitView.as_view(),
          name='organization_instructor_verification'),
+    path('organizations/instructor-apply-catalog/', organization.InstructorApplyCatalogView.as_view(),
+         name='organization_instructor_apply_catalog'),
     # Legacy teacher-* URLs redirect to instructor-*.
     path('organizations/teacher-requests/',
          RedirectView.as_view(pattern_name='organization_join_requests', permanent=False)),

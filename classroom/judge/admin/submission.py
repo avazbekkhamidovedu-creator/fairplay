@@ -5,7 +5,6 @@ from django.conf import settings
 from django.contrib import admin, messages
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
-from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.urls import path, reverse
@@ -15,7 +14,7 @@ from django.utils.translation import gettext, gettext_lazy as _, ngettext, pgett
 from django.views.decorators.http import require_POST
 from reversion.admin import VersionAdmin
 
-from judge.models import ContestParticipation, ContestProblem, ContestSubmission, Profile, Submission, \
+from judge.models import ContestParticipation, ContestProblem, ContestSubmission, Problem, Profile, Submission, \
     SubmissionSource, SubmissionTestCase
 from judge.utils.raw_sql import use_straight_join
 from judge.widgets import AdminAceWidget
@@ -140,13 +139,26 @@ class SubmissionAdmin(VersionAdmin):
     def get_queryset(self, request):
         queryset = Submission.objects.select_related('problem', 'user__user', 'language').only(
             'problem__code', 'problem__name', 'user__user__username', 'language__name',
-            'time', 'memory', 'points', 'status', 'result',
+            # locked_after: read per row by the changelist (one query per row when deferred).
+            'time', 'memory', 'points', 'status', 'result', 'locked_after',
         )
         use_straight_join(queryset)
         if not request.user.has_perm('judge.edit_all_problem'):
-            id = request.profile.id
-            queryset = queryset.filter(Q(problem__authors__id=id) | Q(problem__curators__id=id)).distinct()
+            queryset = queryset.filter(problem_id__in=self._own_problem_ids(request))
         return queryset
+
+    @staticmethod
+    def _own_problem_ids(request):
+        """Problems the user authors or curates, as a literal id list.
+
+        Joining both role tables under the STRAIGHT_JOIN (plus DISTINCT) walked every submission
+        on the site (1.2 s at 150,000 submissions). Same rows, and no duplicates to remove.
+        """
+        profile_id = request.profile.id
+        return list(
+            Problem.authors.through.objects.filter(profile_id=profile_id).values_list('problem_id', flat=True)
+            .union(Problem.curators.through.objects.filter(profile_id=profile_id)
+                   .values_list('problem_id', flat=True)))
 
     def has_add_permission(self, request):
         return False
@@ -174,8 +186,7 @@ class SubmissionAdmin(VersionAdmin):
                               level=messages.ERROR)
             return
         if not request.user.has_perm('judge.edit_all_problem'):
-            id = request.profile.id
-            queryset = queryset.filter(Q(problem__authors__id=id) | Q(problem__curators__id=id))
+            queryset = queryset.filter(problem_id__in=self._own_problem_ids(request))
         judged = len(queryset)
         for model in queryset:
             model.judge(rejudge=True, batch_rejudge=True, rejudge_user=request.user)

@@ -1033,11 +1033,13 @@ class ContestTestCase(CommonDataMixin, TestCase):
         self.assertRegex(second, r'^c\d{6}$')
         self.assertNotEqual(second, first)
 
-    @patch('judge.models.contest.Contest.objects.values_list')
-    def test_generate_unique_key_uses_one_existing_key_query(self, values_list):
-        values_list.return_value = ['c000000', 'c000002']
+    @patch('judge.models.contest.Contest.objects.filter')
+    def test_generate_unique_key_uses_one_existing_key_query(self, key_filter):
+        # One query, and only for keys of the series (not every key on the site).
+        key_filter.return_value.values_list.return_value = ['c000000', 'c000002']
         self.assertEqual(Contest.generate_unique_key(), 'c000001')
-        values_list.assert_called_once_with('key', flat=True)
+        key_filter.assert_called_once_with(key__startswith='c')
+        key_filter.return_value.values_list.assert_called_once_with('key', flat=True)
 
 
 class P1ContestAccessTestCase(CommonDataMixin, TestCase):
