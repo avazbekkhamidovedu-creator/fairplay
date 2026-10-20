@@ -7,6 +7,7 @@ Virtual participations are never final.
 from __future__ import annotations
 
 from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.urls import reverse
 from django.utils import timezone
 
@@ -370,9 +371,28 @@ def attach_student_display_scores(submissions):
     return submissions
 
 
+def _locked_manual_grade(submission):
+    return SubmissionManualGrade.objects.select_for_update().filter(submission=submission).first()
+
+
 def apply_manual_grade(profile, submission, score, note=None):
-    """Persist a manual override for ``submission``. Returns ``(grade, score, total)``."""
+    """Persist a manual override for ``submission``. Returns ``(grade, score, total)``.
+
+    Runs in one transaction holding the grade row lock: two graders (or a double click) saving
+    the same submission go one after the other instead of both inserting (unique error), and
+    Release All waits for an in-flight save, so the released flag read here is current and
+    the ranking always ends up with the grade that was saved last.
+    """
+    with transaction.atomic():
+        return _apply_manual_grade(profile, submission, score, note)
+
+
+def _apply_manual_grade(profile, submission, score, note):
+    existing = _locked_manual_grade(submission)
     contest_submission = submission.contest_or_none
+    if contest_submission is not None:
+        # Read after taking the lock: Release All may have folded a grade into it meanwhile.
+        contest_submission.refresh_from_db(fields=['points'])
     total = grade_points_total(submission)
     if contest_submission is not None:
         machine_points = contest_submission.points
@@ -380,17 +400,23 @@ def apply_manual_grade(profile, submission, score, note=None):
         machine_points = submission.points
     score = min(max(score, 0), total)
 
-    existing = SubmissionManualGrade.objects.filter(submission=submission).first()
+    if existing is None:
+        try:
+            with transaction.atomic():
+                grade = SubmissionManualGrade.objects.create(
+                    submission=submission, points=score, machine_points=machine_points,
+                )
+        except IntegrityError:
+            # Another grader created it a moment ago: update theirs (last save wins, no 500).
+            existing = _locked_manual_grade(submission)
+            if existing is None:
+                raise
     if existing is not None:
         if existing.machine_points is None:
             existing.machine_points = machine_points
         existing.points = score
         existing.save(update_fields=['points', 'machine_points'])
         grade = existing
-    else:
-        grade = SubmissionManualGrade.objects.create(
-            submission=submission, points=score, machine_points=machine_points,
-        )
 
     if note is not None:
         submission.review_note = note
@@ -421,8 +447,21 @@ def sync_released_manual_grades(contest):
     CSV exports reflect the release. Practice submissions have no
     ``ContestSubmission`` row and are ignored here.
     """
+    with transaction.atomic():
+        _sync_released_manual_grades(contest)
+
+
+def _sync_released_manual_grades(contest):
+    # Lock the released grades (only those rows, in pk order) while folding them in: a grade
+    # save that lands meanwhile waits, then sees ``released`` and writes its own (newer)
+    # score; without the lock this loop could write an older score over it.
+    ids = list(SubmissionManualGrade.objects
+               .filter(submission__contest_object=contest, released=True, points__isnull=False)
+               .values_list('pk', flat=True))
+    list(SubmissionManualGrade.objects.select_for_update().filter(pk__in=ids).order_by('pk')
+         .values_list('pk', flat=True))
     grades = (SubmissionManualGrade.objects
-              .filter(submission__contest_object=contest, released=True, points__isnull=False)
+              .filter(pk__in=ids, released=True, points__isnull=False)
               .select_related('submission__contest__participation'))
     participation_ids = set()
     for grade in grades:

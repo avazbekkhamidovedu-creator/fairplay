@@ -14,7 +14,7 @@ from django.utils import timezone
 from django.utils.translation import gettext as _
 
 from judge.models import Problem, ProblemGroup, ProblemType, Solution
-from judge.utils.unique_ids import next_prefixed_id
+from judge.utils.unique_ids import next_prefixed_id, save_with_unique_id
 
 # Scalar / FK attnames compared when building an admin CHANGE message. FK ids map back to
 # the model field (``group_id`` → ``group``) so the log shows the same verbose names as
@@ -32,12 +32,23 @@ _PROBLEM_LOG_M2M = (
 )
 
 
-def generate_problem_code():
+def generate_problem_code(spread=0):
     return next_prefixed_id(
         Problem.objects.values_list('code', flat=True),
         'p',
         fallback_prefix='mcq',
+        spread=spread,
     )
+
+
+def save_new_problem(problem, *, regenerate=True):
+    """INSERT a new problem, taking the next free ``p######`` code if its code was taken meanwhile.
+
+    ``regenerate=False`` for a code the teacher typed: a collision then raises
+    ``UniqueIdTaken`` instead of silently renaming the problem.
+    """
+    return save_with_unique_id(problem, 'code', lambda attempt: generate_problem_code(spread=attempt),
+                               regenerate=regenerate)
 
 
 def default_problem_group():

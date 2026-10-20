@@ -697,7 +697,10 @@ class Problem(models.Model):
             self.ac_rate = 100.0 * ac_queryset.count() / submissions
         else:
             self.ac_rate = 0
-        self.save()
+        # Only the two stats columns. This runs after every judged/graded submission with a
+        # Problem instance loaded earlier; a full save would write back its stale name,
+        # statement, points, ... over a teacher's edit saved in the meantime.
+        self.save(update_fields=['user_count', 'ac_rate'])
 
     update_stats.alters_data = True
 

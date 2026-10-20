@@ -269,12 +269,16 @@ class Contest(models.Model):
     )
 
     @classmethod
-    def generate_unique_key(cls):
-        """Next unused assignment/contest id in the clone/admin series ``c000000``."""
+    def generate_unique_key(cls, spread=0):
+        """Next unused assignment/contest id in the clone/admin series ``c000000``.
+
+        ``spread`` > 0 picks among the first few free ids (retry after losing a race).
+        """
         return next_prefixed_id(
             cls.objects.values_list('key', flat=True),
             'c',
             fallback_prefix='contest',
+            spread=spread,
         )
 
     @cached_property
@@ -430,7 +434,9 @@ class Contest(models.Model):
 
     def update_user_count(self):
         self.user_count = self.users.filter(virtual=0).count()
-        self.save()
+        # Only this column: students join while a teacher edits the assignment, and a full save
+        # of this (request-old) instance would revert the teacher's saved changes.
+        self.save(update_fields=['user_count'])
 
     update_user_count.alters_data = True
 
@@ -800,6 +806,15 @@ class ContestParticipation(models.Model):
 
     def recompute_results(self):
         with transaction.atomic():
+            # One recompute per participation at a time. Grading saves, Release All and the judge
+            # recompute the same student concurrently; unserialized, a recompute that read the
+            # submission points before another grade landed could write its stale total last.
+            # Holding the row lock, each one reads what the previous one committed.
+            list(ContestParticipation.objects.select_for_update().filter(pk=self.pk).values_list('pk', flat=True))
+            # The formats save the whole row: take the column that other code sets on its own
+            # from the database, so it is not written back stale.
+            if self.pk is not None:
+                self.refresh_from_db(fields=['harvest_scheduled_task_id'])
             self.contest.format.update_participation(self)
             if self.is_disqualified:
                 self.score = -9999

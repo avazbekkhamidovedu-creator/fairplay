@@ -17,7 +17,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
-from django.db import IntegrityError, transaction
+from django.db import transaction
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -36,10 +36,12 @@ from judge.models import Language, Problem, ProblemBlank, ProblemData, ProblemFi
 from judge.subjects import question_type_refusal
 from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
     store_docx_image
-from judge.utils.problem_create import apply_simple_problem_defaults, default_problem_type, log_problem_admin_entry
+from judge.utils.problem_create import (apply_simple_problem_defaults, default_problem_type, log_problem_admin_entry,
+                                        save_new_problem)
 from judge.utils.problem_data import ProblemDataCompiler
 from judge.utils.safe_json import script_json
 from judge.utils.simple_xlsx import validate_xlsx_upload
+from judge.utils.unique_ids import UniqueIdTaken
 from judge.views.problem_create_v2 import ProblemCreateV2View, assignable_organizations
 
 
@@ -831,6 +833,9 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         completed = False
         try:
             with transaction.atomic():
+                # Lock and re-read the row: a second click or a concurrent "Create all" waits
+                # here and then sees created_problem set, instead of creating a duplicate.
+                item = draft.items.select_for_update().get(pk=item.pk)
                 problem = _create_problem(request, item, created_data_directories=created_data_directories)
                 item.created_problem = problem
                 item.save(update_fields=['created_problem', 'updated_at'])
@@ -912,7 +917,7 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
             confirm=data.get('confirm_unrecognized_configurations') == '1',
         )
         item.formatting_error = _review_message(item)
-        item.save()
+        _save_item_row(item)
 
     @staticmethod
     def _parse_editor_request(request):
@@ -1050,7 +1055,7 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         )
         item.editor_data = payload
         item.formatting_error = _review_message(item)
-        item.save()
+        _save_item_row(item)
 
     def _format(self, item):
         payload = _format_with_llm(item)
@@ -1078,7 +1083,7 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
         item.formatting_error = _review_message(item)
         # Formatting changes the legacy import fields, so rebuild the unified-editor payload on reload.
         item.editor_data = {}
-        item.save()
+        _save_item_row(item)
         return _item_payload(item)
 
 
@@ -1685,6 +1690,18 @@ def _discard_test_data_zip_on_commit(item):
     transaction.on_commit(discard)
 
 
+def _save_item_row(item):
+    """Save a teacher's draft edits without writing back ``created_problem``.
+
+    The item was loaded at the start of the request; a full save would put back the
+    ``created_problem`` it had then, so a draft save racing a Create click (or a second click)
+    could clear the link and let the item be created twice.
+    """
+    fields = [field.name for field in ProblemImportItem._meta.concrete_fields
+              if field.name not in ('id', 'draft', 'created_problem')]
+    item.save(update_fields=fields)
+
+
 def _create_problem(request, item, promoted_images=None, created_data_directories=None):
     if item.created_problem_id:
         return item.created_problem
@@ -1851,19 +1868,10 @@ def _apply_editor_testcase_configuration(problem, payload):
 
 def _save_problem_with_unique_code(problem):
     """Retry only a generated-code collision before any problem side effects are written."""
-    for attempt in range(3):
-        try:
-            # The caller may already be atomic; a savepoint keeps that transaction usable after a collision.
-            with transaction.atomic():
-                problem.save()
-            return
-        except IntegrityError:
-            if not Problem.objects.filter(code=problem.code).exists():
-                raise
-            if attempt == 2:
-                raise ValueError('Could not allocate a unique problem code. Please try creating the problem again.')
-            problem.code = ''
-            apply_simple_problem_defaults(problem)
+    try:
+        save_new_problem(problem)
+    except UniqueIdTaken:
+        raise ValueError('Could not allocate a unique problem code. Please try creating the problem again.')
 
 
 def _edit_url(problem):

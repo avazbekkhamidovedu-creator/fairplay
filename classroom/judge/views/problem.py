@@ -73,7 +73,7 @@ from judge.utils.assignment_harvest import (
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
-from judge.utils.problem_create import generate_problem_code
+from judge.utils.problem_create import generate_problem_code, save_new_problem
 from judge.utils.problems import (
     assignment_problem_stats,
     contest_attempted_ids,
@@ -91,6 +91,7 @@ from judge.utils.result_visibility import (contest_problem_hides_results, proble
 from judge.utils.strings import safe_float_or_none, safe_int_or_none
 from judge.utils.submission_create import create_submission
 from judge.utils.tickets import own_ticket_filter
+from judge.utils.unique_ids import UniqueIdTaken, is_series_id
 from judge.utils.views import QueryStringSortMixin, SingleObjectFormView, TitleMixin, add_file_response, generic_message
 
 recjk = re.compile(
@@ -2330,9 +2331,17 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         problem.user_count = 0
         problem.code = new_code
 
+        requested = (self.request.POST.get('code') or '').strip()
         with revisions.create_revision(atomic=True):
-            # Save new problem
-            problem.save()
+            # Save new problem. The form checked the code is free, but another clone can take
+            # it before this INSERT: a suggested p###### code moves on to the next free one.
+            try:
+                save_new_problem(problem, regenerate=is_series_id(requested or new_code, 'p'))
+            except UniqueIdTaken:
+                form.add_error('code', _('Problem code "%(code)s" already exists. Choose a different code.') % {
+                    'code': new_code})
+                return self.form_invalid(form)
+            new_code = problem.code
             problem.authors.add(self.request.profile)
             problem.allowed_languages.set(languages)
             problem.organizations.set(organizations)
@@ -2366,7 +2375,6 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_user(self.request.user)
             revisions.set_comment(_('Cloned problem from %s') % old_code)
 
-        requested = (self.request.POST.get('code') or '').strip()
         if requested and requested != problem.code:
             messages.info(self.request, _('Saved with code %(new)s because %(old)s was already in use.') % {
                 'new': problem.code,

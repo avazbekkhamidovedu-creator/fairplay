@@ -8,6 +8,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
 from django.core.cache.utils import make_template_fragment_key
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
 from django.forms import Form, modelformset_factory
 from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedirect
@@ -33,6 +34,7 @@ from judge.utils.admin_notify import (
 from judge.utils.import_export import process_user_csv
 from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.utils.ranker import ranker
+from judge.utils.unique_ids import UniqueIdTaken, save_with_unique_id
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, TitleMixin, generic_message
 
 __all__ = ['OrganizationList', 'OrganizationHome', 'OrganizationUsers', 'OrganizationMembershipChange',
@@ -74,6 +76,25 @@ def unique_class_slug(organization, base):
         candidate = ('%s-%d' % (slug, n))[:128]
         n += 1
     return candidate
+
+
+def save_class_with_unique_name(form, class_obj):
+    """Save ``class_obj``; if another teacher took its name a moment ago, handle it.
+
+    Class names are unique site-wide and the form only checked the name was free. A name
+    generated from year/session/instructor moves on to the next free "<name> N"; a name the
+    teacher typed raises ``UniqueIdTaken`` for the view to show as a form error.
+    """
+    from judge.forms import uniquify_class_name
+    base = getattr(form, 'name_base', class_obj.name)
+    save_with_unique_id(
+        class_obj, 'name', lambda attempt: uniquify_class_name(base, class_obj),
+        regenerate=bool(getattr(form, 'name_generated', False)),
+    )
+
+
+def _class_name_taken(form, name):
+    form.add_error('name', _('A class with this name already exists. Class names must be unique across the site.'))
 
 
 def plain_text_summary(text, max_len=160):
@@ -2105,16 +2126,22 @@ class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form):
-        new_class = form.save(commit=False)
-        new_class.organization = self.object
-        new_class.slug = unique_class_slug(self.object, new_class.name)
-        if new_class.is_active is None:
-            new_class.is_active = True
-        new_class.save()
-        form.save_m2m()
-        new_class.admins.add(self.request.profile)
-        csv_result = apply_class_member_csv(form, new_class, self.object)
-        sync_class_members_to_organization(new_class)
+        # All or nothing: a failure while linking members must not leave a half-made class.
+        try:
+            with transaction.atomic():
+                new_class = form.save(commit=False)
+                new_class.organization = self.object
+                new_class.slug = unique_class_slug(self.object, new_class.name)
+                if new_class.is_active is None:
+                    new_class.is_active = True
+                save_class_with_unique_name(form, new_class)
+                form.save_m2m()
+                new_class.admins.add(self.request.profile)
+                csv_result = apply_class_member_csv(form, new_class, self.object)
+                sync_class_members_to_organization(new_class)
+        except UniqueIdTaken as taken:
+            _class_name_taken(form, taken.value)
+            return self.form_invalid(form)
         messages.success(self.request, _('Class "%s" created successfully.') % new_class.name)
         _flash_class_csv_import_result(self.request, csv_result)
         return HttpResponseRedirect(new_class.get_absolute_url())
@@ -2157,17 +2184,24 @@ class EditClass(LoginRequiredMixin, TitleMixin, FormView):
         return context
 
     def form_valid(self, form):
-        previous_admin_ids = set(self.object.admins.values_list('id', flat=True))
-        form.save()
-        # HeavySelect2 often omits admins on submit (empty POST → clears M2M). If the
-        # class previously had administrators and the submit cleared them all, restore.
-        submitted_admins = form.cleaned_data.get('admins')
-        if previous_admin_ids and (submitted_admins is None or not submitted_admins.exists()):
-            self.object.admins.add(*previous_admin_ids)
-        # The editor who just saved must remain able to edit.
-        self.object.admins.add(self.request.profile)
-        csv_result = apply_class_member_csv(form, self.object, self.object.organization)
-        sync_class_members_to_organization(self.object)
+        try:
+            with transaction.atomic():
+                previous_admin_ids = set(self.object.admins.values_list('id', flat=True))
+                class_obj = form.save(commit=False)
+                save_class_with_unique_name(form, class_obj)
+                form.save_m2m()
+                # HeavySelect2 often omits admins on submit (empty POST → clears M2M). If the
+                # class previously had administrators and the submit cleared them all, restore.
+                submitted_admins = form.cleaned_data.get('admins')
+                if previous_admin_ids and (submitted_admins is None or not submitted_admins.exists()):
+                    self.object.admins.add(*previous_admin_ids)
+                # The editor who just saved must remain able to edit.
+                self.object.admins.add(self.request.profile)
+                csv_result = apply_class_member_csv(form, self.object, self.object.organization)
+                sync_class_members_to_organization(self.object)
+        except UniqueIdTaken as taken:
+            _class_name_taken(form, taken.value)
+            return self.form_invalid(form)
         messages.success(self.request, _('Class "%s" updated.') % self.object.name)
         _flash_class_csv_import_result(self.request, csv_result)
         return HttpResponseRedirect(self.object.get_absolute_url())
@@ -2247,6 +2281,20 @@ class ClassMaterialActionView(LoginRequiredMixin, View):
         if parent:
             redirect_url += '&folder=%d' % parent.id
 
+        if action in ('upload', 'mkdir'):
+            # Lock the target folder while adding to it: a co-teacher deleting that folder at
+            # the same moment either waits for this (and deletes the new items with it) or wins,
+            # and then we report it instead of failing on the missing parent row.
+            with transaction.atomic():
+                if parent is not None:
+                    parent = ClassMaterial.objects.select_for_update().filter(pk=parent.pk).first()
+                    if parent is None:
+                        messages.error(request, _('This folder was deleted. Nothing was added.'))
+                        return HttpResponseRedirect(class_obj.get_absolute_url() + '?tab=materials')
+                return self._add_materials(request, class_obj, parent, action, redirect_url)
+        return self._other_action(request, class_obj, action, redirect_url)
+
+    def _add_materials(self, request, class_obj, parent, action, redirect_url):
         if action == 'upload':
             files = request.FILES.getlist('files') or (
                 [request.FILES['file']] if 'file' in request.FILES else []
@@ -2306,7 +2354,10 @@ class ClassMaterialActionView(LoginRequiredMixin, View):
                 uploaded_by=request.profile,
             )
             messages.success(request, _('Folder "%s" created.') % name)
-        elif action == 'delete':
+        return HttpResponseRedirect(redirect_url)
+
+    def _other_action(self, request, class_obj, action, redirect_url):
+        if action == 'delete':
             ids = []
             for raw in request.POST.getlist('material_ids'):
                 try:

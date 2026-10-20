@@ -474,7 +474,8 @@ class Profile(models.Model):
 
     def remove_contest(self):
         self.current_contest = None
-        self.save()
+        # Only this column, so a stale instance cannot revert the user's other profile edits.
+        self.save(update_fields=['current_contest'])
 
     remove_contest.alters_data = True
 

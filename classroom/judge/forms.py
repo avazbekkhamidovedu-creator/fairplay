@@ -592,6 +592,9 @@ class ClassSiteForm(ModelForm):
                 _('Select an academic year, session, and instructor, or enter a class name.'),
             )
             return cleaned
+        # CreateClass / EditClass read these when the INSERT/UPDATE loses a race for the name.
+        self.name_generated = generated
+        self.name_base = name
         if generated:
             name = uniquify_class_name(name, self.instance)
         else:
@@ -605,6 +608,15 @@ class ClassSiteForm(ModelForm):
                 return cleaned
         cleaned['name'] = name
         return cleaned
+
+    def _get_validation_exclusions(self):
+        # The name is checked in clean() and then enforced by the database when the class is
+        # saved (CreateClass / EditClass take the next free generated name or report a typed
+        # one). Re-checking it in the model validation only turns a race into a confusing
+        # "already exists" error for a name the teacher did not choose.
+        exclude = super()._get_validation_exclusions()
+        exclude.add('name')
+        return exclude
 
 
 class ClassAssignmentsForm(Form):

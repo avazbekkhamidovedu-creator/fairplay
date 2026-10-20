@@ -20,13 +20,15 @@ the classic admin test_data page. Responses are JSON ``{ok, redirect}`` or ``{er
 import json
 import os
 import re
+import time
 from datetime import datetime
 from zipfile import BadZipfile, ZipFile
 
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.cache import cache
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import render
@@ -50,11 +52,13 @@ from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.question_types.mcq import sync_mcq_options
 from judge.subjects import (CREATE_V2_TYPE_CAPS, capability_for_question_type, course_question_caps,
                             ensure_question_type_allowed, features_for, infer_subject_key)
+from judge.utils.edit_conflict import (EditConflict, check_edit_base, problem_conflict_message,
+                                       problem_edit_fingerprint)
 from judge.utils.problem_create import (apply_simple_problem_defaults, default_problem_group, default_problem_type,
                                         generate_problem_code, log_problem_admin_entry,
-                                        problem_admin_changed_fields, problem_admin_snapshot)
+                                        problem_admin_changed_fields, problem_admin_snapshot, save_new_problem)
 from judge.utils.safe_json import script_json
-from judge.utils.unique_ids import wants_auto_series
+from judge.utils.unique_ids import UniqueIdTaken, wants_auto_series
 from judge.utils.user_search import profile_choice_payload, profile_choice_payloads
 
 # Types the redesigned page offers but the backend cannot grade/store yet.
@@ -67,6 +71,30 @@ class ProblemAlreadySaved(Exception):
     def __init__(self, problem):
         self.problem = problem
         super().__init__(problem.code)
+
+
+# A new-problem page sends a random ``create_token`` with its save. The first request with a
+# token claims it in the shared cache; a repeat (double click, network retry) waits for that
+# save and answers "already saved" instead of creating a duplicate. Two tabs have different
+# tokens, so the second tab gets a new code instead of being mistaken for a retry.
+_CREATE_TOKEN_PENDING_SECONDS = 180
+_CREATE_TOKEN_DONE_SECONDS = 24 * 3600
+_CREATE_TOKEN_WAIT_SECONDS = 20
+
+
+def _get_or_create_problem_type(name, full_name):
+    """``ProblemType`` by unique ``name``; a concurrent creator's row is reused, never a 500."""
+    existing = ProblemType.objects.filter(name=name).first()
+    if existing is not None:
+        return existing
+    try:
+        with transaction.atomic():
+            return ProblemType.objects.create(name=name, full_name=full_name)
+    except IntegrityError:
+        existing = ProblemType.objects.filter(name=name).first()
+        if existing is None:
+            raise
+        return existing
 
 
 # Difficulty ProblemType.full_name defaults when attaching the standard easy/medium/hard row.
@@ -199,6 +227,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             context['organizations'] = list(
                 assignable_organizations(request.user, problem).order_by('name').values('id', 'name'))
             context['edit_data_json'] = script_json(self._build_edit_data(problem))
+            context['edit_base'] = problem_edit_fingerprint(problem)
             context['test_data_url'] = reverse('problem_data', args=[problem.code])
             context['edit_detail_url'] = reverse('problem_detail', args=[problem.code])
             if (
@@ -385,12 +414,79 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             except PermissionError as e:
                 return JsonResponse({'error': str(e)}, status=403)
 
+        token_key = self._create_token_key(request, payload) if existing is None else None
+        if token_key is not None and not cache.add(token_key, 0, _CREATE_TOKEN_PENDING_SECONDS):
+            return self._repeated_create_response(token_key)
+        try:
+            response = self._save_request(request, payload, zip_upload, qtype, name, existing)
+        except BaseException:
+            if token_key is not None:
+                cache.delete(token_key)
+            raise
+        if token_key is not None:
+            problem_id = getattr(response, 'problem_id', None)
+            if problem_id:
+                cache.set(token_key, problem_id, _CREATE_TOKEN_DONE_SECONDS)
+            else:
+                cache.delete(token_key)
+        return response
+
+    @staticmethod
+    def _create_token_value(payload):
+        token = payload.get('create_token')
+        if not isinstance(token, str):
+            return ''
+        token = token.strip()
+        return token if re.fullmatch(r'[A-Za-z0-9_-]{8,64}', token) else ''
+
+    def _create_token_key(self, request, payload):
+        token = self._create_token_value(payload)
+        if not token:
+            return None
+        return 'problem-create-token:%d:%s' % (request.user.id, token)
+
+    def _repeated_create_response(self, token_key):
+        """A second request with the same create token: report the first one's problem."""
+        deadline = time.monotonic() + _CREATE_TOKEN_WAIT_SECONDS
+        while True:
+            problem_id = cache.get(token_key)
+            if problem_id:
+                problem = Problem.objects.filter(pk=problem_id).first()
+                if problem is not None:
+                    return JsonResponse({
+                        'ok': True,
+                        'already_saved': True,
+                        'id': problem.id,
+                        'code': problem.code,
+                        'name': problem.name,
+                        'points': problem.points,
+                        'redirect': reverse('problem_edit_v2', args=[problem.code]),
+                        'message': _('This problem was already saved. Opening the editor.'),
+                    })
+            if problem_id is None or time.monotonic() >= deadline:
+                break
+            time.sleep(0.2)
+        return JsonResponse({'error': _('This problem is still being saved. Wait a moment and check your '
+                                        'problem list before saving again.')}, status=409)
+
+    def _lock_for_edit(self, problem, payload):
+        """Lock the problem row for this save and refuse it if someone saved since the page opened."""
+        locked = Problem.objects.select_for_update().get(pk=problem.pk)
+        check_edit_base(payload.get('edit_base'), lambda: problem_edit_fingerprint(locked))
+        return locked
+
+    def _save_request(self, request, payload, zip_upload, qtype, name, existing):
         before = problem_admin_snapshot(existing) if existing is not None else None
         try:
             # Subject registry: e.g. no programming problems in a Biology course (judge/subjects/).
             self._check_subject_allows(request, payload, qtype, existing)
             # Mirror classic VersionAdmin: store an optional edit-reason comment on the revision.
             with revisions.create_revision(atomic=True):
+                if existing is not None:
+                    # Serializes two saves of the same problem (two tabs / two teachers): without
+                    # the lock their delete-and-recreate of options/blanks/cases interleave and
+                    # deadlock or mix. The stale-page check turns a lost update into a 409.
+                    existing = self._lock_for_edit(existing, payload)
                 if qtype == 'programming':
                     problem = self._create_code(request, payload, name, problem=existing,
                                                 zip_upload=zip_upload)
@@ -427,6 +523,8 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 'redirect': reverse('problem_edit_v2', args=[problem.code]),
                 'message': _('This problem code is already saved. Opening the editor.'),
             })
+        except EditConflict:
+            return JsonResponse({'error': problem_conflict_message(), 'conflict': True}, status=409)
         except PermissionError as e:
             return JsonResponse({'error': str(e)}, status=403)
         except ValueError as e:
@@ -468,7 +566,9 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
                 'new': problem.code,
                 'old': submitted_code,
             }
-        return JsonResponse(body)
+        response = JsonResponse(body)
+        response.problem_id = problem.id
+        return response
 
     def _check_subject_allows(self, request, payload, qtype, problem=None):
         """Refuse a question type that a course it is attached to does not offer (PermissionError).
@@ -884,7 +984,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             else:
                 return None
 
-        return ProblemType.objects.create(name=code, full_name=label[:100])
+        return _get_or_create_problem_type(code, label[:100])
 
     def _attach_types(self, problem, payload, is_create=False):
         """Persist knowledge tags + standard difficulty; drop auto type/difficulty chips.
@@ -1265,7 +1365,11 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         existing = Problem.objects.filter(code=code).first()
         if existing is None:
             return code
-        if request.profile and existing.authors.filter(id=request.profile.id).exists():
+        # Without a create token (older pages, API callers) a code this user already authored
+        # means "retry of my earlier save". With a token, repeats are caught by the token and an
+        # own code is another tab's problem: treat it like anyone else's.
+        if (not self._create_token_value(payload) and request.profile
+                and existing.authors.filter(id=request.profile.id).exists()):
             raise ProblemAlreadySaved(existing)
         if wants_auto_series(payload.get('code_auto'), code, 'p'):
             return generate_problem_code()
@@ -1274,6 +1378,33 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
     def _init_problem_defaults(self, problem, payload, request, is_create):
         preferred = self._preferred_create_code(payload, request) if is_create else None
         apply_simple_problem_defaults(problem, preferred_code=preferred)
+
+    def _save_problem(self, problem, payload, request, is_create):
+        """Save the problem row; a new one survives another teacher taking its code first.
+
+        The free-code check and the INSERT are separate steps, so teachers who opened the add
+        page together (same suggested code) or saved in the same instant collide on the unique
+        code. A suggested/auto code moves on to the next free one; a typed code is reported.
+        """
+        if not is_create:
+            problem.save()
+            return
+        submitted = (payload.get('code') or '').strip()
+        auto = not submitted or wants_auto_series(payload.get('code_auto'), submitted, 'p')
+        has_token = bool(self._create_token_value(payload))
+
+        def regenerate(taken):
+            if not has_token and request.profile:
+                own = Problem.objects.filter(code=taken, authors=request.profile).first()
+                if own is not None:
+                    raise ProblemAlreadySaved(own)
+            return auto
+
+        try:
+            save_new_problem(problem, regenerate=regenerate)
+        except UniqueIdTaken as e:
+            raise ValueError(_('Problem code "%(code)s" already exists. Choose a different code.') % {
+                'code': e.value})
 
     def _create_code(self, request, payload, name, problem=None, zip_upload=None):
         user = request.user
@@ -1308,7 +1439,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.group = self._resolve_group(payload)
             self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload, problem=problem)
-            problem.save()
+            self._save_problem(problem, payload, request, is_create)
 
             self._attach_types(problem, payload, is_create=is_create)
             self._attach_languages(problem, payload)
@@ -1623,7 +1754,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.group = self._resolve_group(payload)
             self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload, problem=problem)
-            problem.save()
+            self._save_problem(problem, payload, request, is_create)
 
             self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
@@ -1675,7 +1806,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.group = self._resolve_group(payload)
             self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload, problem=problem)
-            problem.save()
+            self._save_problem(problem, payload, request, is_create)
 
             self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
@@ -1715,7 +1846,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.group = self._resolve_group(payload)
             self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload, problem=problem)
-            problem.save()
+            self._save_problem(problem, payload, request, is_create)
 
             self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
@@ -1761,7 +1892,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.group = self._resolve_group(payload)
             self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload, problem=problem)
-            problem.save()
+            self._save_problem(problem, payload, request, is_create)
 
             self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
@@ -1820,7 +1951,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
             problem.group = self._resolve_group(payload)
             self._init_problem_defaults(problem, payload, request, is_create)
             problem.is_public = self._resolve_public(user, bool(payload.get('is_public')), payload, problem=problem)
-            problem.save()
+            self._save_problem(problem, payload, request, is_create)
 
             self._attach_types(problem, payload, is_create=is_create)
             self._attach_orgs(problem, payload, user)
@@ -1922,7 +2053,12 @@ class ProblemCreateV2ProblemTypeView(LoginRequiredMixin, View):
         if ProblemType.objects.filter(name=name).exists():
             return JsonResponse({'error': _('This category ID already exists.')}, status=400)
 
-        ptype = ProblemType.objects.create(name=name, full_name=full_name)
+        try:
+            with transaction.atomic():
+                ptype = ProblemType.objects.create(name=name, full_name=full_name)
+        except IntegrityError:
+            # Another teacher created the same ID a moment ago: same answer as the check above.
+            return JsonResponse({'error': _('This category ID already exists.')}, status=400)
         return JsonResponse({'ok': True, 'type': {'name': ptype.name, 'full': ptype.full_name}})
 
 
@@ -1961,8 +2097,26 @@ class ProblemCreateV2ProblemGroupView(LoginRequiredMixin, View):
             else:
                 return JsonResponse({'error': _('This group already exists.')}, status=400)
 
-        group = ProblemGroup.objects.create(name=name, full_name=full_name)
+        group = self._create_group(name, full_name)
+        if group is None:
+            return JsonResponse({'error': _('This group already exists.')}, status=400)
         return JsonResponse({'ok': True, 'group': {'id': group.id, 'full': group.full_name or group.name}})
+
+    @staticmethod
+    def _create_group(name, full_name):
+        """INSERT the group; if a concurrent request took ``name``, try the next ``-N`` suffix."""
+        base = name[:16]
+        candidates = [name] + ['%s-%d' % (base, i) for i in range(2, 100)]
+        for candidate in candidates:
+            if candidate != name and ProblemGroup.objects.filter(name=candidate).exists():
+                continue
+            try:
+                with transaction.atomic():
+                    return ProblemGroup.objects.create(name=candidate, full_name=full_name)
+            except IntegrityError:
+                if not ProblemGroup.objects.filter(name=candidate).exists():
+                    raise
+        return None
 
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')

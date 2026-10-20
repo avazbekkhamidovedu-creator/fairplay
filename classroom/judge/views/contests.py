@@ -50,6 +50,8 @@ from judge.models.profile import Class, Organization
 from judge.subjects import has_feature
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
+from judge.utils.edit_conflict import (EditConflict, check_edit_base, contest_conflict_message,
+                                       contest_edit_fingerprint)
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
     user_completed_ids
@@ -57,6 +59,7 @@ from judge.utils.ranker import ranker
 from judge.utils.result_visibility import visible_results
 from judge.utils.safe_json import script_json
 from judge.utils.stats import get_bar_chart, get_pie_chart
+from judge.utils.unique_ids import UniqueIdTaken, is_series_id, save_with_unique_id
 from judge.utils.user_search import profile_choice_label
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
@@ -410,8 +413,9 @@ class _ContestKeyConflict(Exception):
 
 
 # Bounded retries when reserving an auto key; a duplicate INSERT means another
-# creator won the id and we should try the next free one.
-_KEY_RESERVATION_ATTEMPTS = 5
+# creator won the id and we should try the next free one. Retries spread over the
+# first few free ids so a crowd creating at the same second does not keep colliding.
+_KEY_RESERVATION_ATTEMPTS = 10
 
 
 class ContestCreate(LoginRequiredMixin, View):
@@ -1079,6 +1083,8 @@ class ContestCreate(LoginRequiredMixin, View):
         is logged and reported generically so internal details never reach
         the browser.
         """
+        if isinstance(exception, EditConflict):
+            return JsonResponse({'error': contest_conflict_message(), 'conflict': True}, status=409)
         if isinstance(exception, ValidationError):
             # Django's ValidationError can carry dicts / lists of messages
             # (e.g. from full_clean()); flatten them into one readable line.
@@ -1140,13 +1146,16 @@ class ContestCreate(LoginRequiredMixin, View):
         as ``_ContestKeyConflict``. Later integrity errors (problem list, M2M)
         propagate unchanged so they are not reported as ID issues.
         """
-        for _attempt in range(_KEY_RESERVATION_ATTEMPTS):
-            candidate = key or Contest.generate_unique_key()
+        for attempt in range(_KEY_RESERVATION_ATTEMPTS):
+            candidate = key or Contest.generate_unique_key(spread=attempt)
             try:
                 with transaction.atomic():
                     contest = Contest(key=candidate)
                     self._apply_payload(contest, payload)
-                    contest.full_clean()
+                    # Key uniqueness is decided by the INSERT below (the only atomic check);
+                    # validate_unique() here would report a key another teacher took a moment
+                    # ago as a 400 instead of retrying with the next free one.
+                    contest.full_clean(validate_unique=False)
                     try:
                         contest.save()
                     except IntegrityError:
@@ -1164,9 +1173,17 @@ class ContestCreate(LoginRequiredMixin, View):
 
     def _update(self, request, payload):
         """Update an existing contest row (and optionally its key) in place."""
-        contest = self.contest
         try:
             with transaction.atomic():
+                # Lock the row for this save: two saves of one assignment (two tabs, two
+                # teachers) run one after the other instead of interleaving their problem-list
+                # upserts (duplicate ContestProblem rows). Reloading it also keeps this save from
+                # writing back stale copies of columns other requests changed since dispatch
+                # (finalize state, user count, scheduled task ids). A page opened before the
+                # last save gets a 409 instead of silently overwriting it.
+                contest = Contest.objects.select_for_update().get(pk=self.contest.pk)
+                check_edit_base(payload.get('edit_base'), lambda: contest_edit_fingerprint(contest))
+                self.contest = contest
                 # Renaming the key (the URL slug) needs a uniqueness check that
                 # excludes this very contest.
                 new_key = payload.get('key') or contest.key
@@ -1492,6 +1509,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'has_participants': bool(contest is not None and contest.users.exclude(
                 virtual=ContestParticipation.SPECTATE).exists()),
             'prefill': prefill,
+            'edit_base': contest_edit_fingerprint(contest) if contest is not None else '',
         }
         ctx.update(self._library_filter_context())
         return ctx
@@ -1851,8 +1869,17 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         # be revealed (and folded into the scoreboard) before it has even started.
         contest.results_finalized = False
         contest.key = form.cleaned_data['key']
+        requested = (self.request.POST.get('key') or '').strip()
         with revisions.create_revision(atomic=True):
-            contest.save()
+            try:
+                # The form checked the key is free, but another clone can take it before this
+                # INSERT: a suggested c###### key moves on to the next free one.
+                save_with_unique_id(contest, 'key', lambda attempt: Contest.generate_unique_key(spread=attempt),
+                                    regenerate=is_series_id(requested or contest.key, 'c'))
+            except UniqueIdTaken:
+                form.add_error('key', _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {
+                    'key': contest.key})
+                return self.form_invalid(form)
             contest.tags.set(tags)
             contest.organizations.set(organizations)
             contest.classes.set(classes)
@@ -1869,7 +1896,6 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
             revisions.set_user(self.request.user)
             revisions.set_comment(_('Cloned contest from %s') % old_key)
 
-        requested = (self.request.POST.get('key') or '').strip()
         if requested and requested != contest.key:
             messages.info(self.request, _('Saved with ID %(new)s because %(old)s was already in use.') % {
                 'new': contest.key,
@@ -2042,10 +2068,17 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                 if requires_access_code:
                     raise ContestAccessDenied()
 
-                participation = ContestParticipation.objects.create(
-                    contest=contest, user=profile, virtual=participation_type,
-                    real_start=timezone.now(),
-                )
+                try:
+                    with transaction.atomic():
+                        participation = ContestParticipation.objects.create(
+                            contest=contest, user=profile, virtual=participation_type,
+                            real_start=timezone.now(),
+                        )
+                except IntegrityError:
+                    # Double click / second tab: the other request created it a moment ago.
+                    participation = ContestParticipation.objects.get(
+                        contest=contest, user=profile, virtual=participation_type,
+                    )
             else:
                 if requires_access_code:
                     raise ContestAccessDenied()
@@ -2057,7 +2090,9 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                     )[0]
 
         profile.current_contest = participation
-        profile.save()
+        # Only this column: a full save would write back every other profile field as loaded at
+        # the start of this request.
+        profile.save(update_fields=['current_contest'])
         contest._updating_stats_only = True
         contest.update_user_count()
         # With a personal time limit this student's deadline only exists once they have started,
@@ -2548,11 +2583,14 @@ class ContestGradeRelease(ContestMixin, DetailView):
         raise Http404()
 
     def post(self, request, *args, **kwargs):
-        updated = SubmissionManualGrade.objects.filter(
-            submission__contest_object=self.object,
-        ).update(released=True)
         from judge.utils.contest_grade import sync_released_manual_grades
-        sync_released_manual_grades(self.object)
+        # One transaction: a concurrent grade save either finishes before the release (and is
+        # released with its new score) or waits and sees ``released`` (see apply_manual_grade).
+        with transaction.atomic():
+            updated = SubmissionManualGrade.objects.filter(
+                submission__contest_object=self.object,
+            ).update(released=True)
+            sync_released_manual_grades(self.object)
         return JsonResponse({'ok': True, 'released': True, 'count': updated})
 
 
