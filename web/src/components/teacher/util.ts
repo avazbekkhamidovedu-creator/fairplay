@@ -100,6 +100,13 @@ export function eventLabel(type: string): string {
     offline_exit_code_issued: "You gave an offline exit code",
     offline_key_requested_twice: "Offline exit key asked for twice",
     event_limit_reached: "Too many events (later ones dropped)",
+    // S1-S6 (2026-10-20)
+    sealed_submit: "Handed in from answers sealed offline (please check)",
+    resume_requested: "Came back after FairPlay closed (waits for you)",
+    resume_approved: "You let the student continue",
+    swap_requested: "Asked to continue on another computer",
+    swap_approved: "You moved the exam to another computer",
+    weak_lock: "Not using the strongest lock",
   };
   if (known[type]) return known[type];
   // Types only the server may write, or unknown ones, posted by the page or app (audit S-06).

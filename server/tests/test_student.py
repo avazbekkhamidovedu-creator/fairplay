@@ -207,7 +207,8 @@ def test_live_endpoint(client, teacher, alice, bob, live_exam):
     assert set(s) == {"attempt_id", "username", "name", "status", "started_at", "submitted_at",
                       "deadline_at", "answered", "question_count", "current_question", "locked",
                       "last_heartbeat_at", "online", "event_count", "last_event", "needs_look",
-                      "app_online", "last_app_signal_at", "app_checks", "client", "entries", "late"}
+                      "app_online", "last_app_signal_at", "app_checks", "client", "entries", "late",
+                      "sealed_pending"}   # S1-S6 (2026-10-20)
     assert s["name"] == "Alice Chen" and s["status"] == "in_progress"
     assert s["answered"] == 2 and s["question_count"] == 3
     # audit #2: the page's self-reported "locked" no longer counts (signed app beats only)

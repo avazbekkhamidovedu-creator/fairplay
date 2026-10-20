@@ -67,6 +67,9 @@ SERVER_EVENT_TYPES = frozenset({
     "device_bound", "late_submission", "offline_key_requested_twice",
     "offline_exit_code_issued", "event_limit_reached", "off_console", "secure_input_other_app",
     "network_changed",
+    # S1-S6 (2026-10-20)
+    "sealed_submit", "resume_requested", "resume_approved", "swap_requested", "swap_approved",
+    "weak_lock",
 })
 
 
@@ -117,6 +120,39 @@ def offline_key(server_secret: str, aid: str, session: str) -> bytes:
 
 def offline_key_message(aid: str, session: str, device_id: str, ts: int) -> str:
     return f"offkey|{aid}|{session}|{device_id}|{ts}"
+
+
+class Seal:
+    """S5: a sealed hand-in written by the app when the submit at time-up failed.
+    payload = "attempt_id|session|device_id|client_seq|sealed_at|answers_sha256"."""
+
+    def __init__(self, aid: str, session: str, device_id: str, client_seq: int, sealed_at, sha: str):
+        self.aid, self.session, self.device_id = aid, session, device_id
+        self.client_seq, self.sealed_at, self.sha = client_seq, sealed_at, sha
+
+
+def parse_seal(payload: str) -> Seal | None:
+    from .timeutil import parse_iso
+    parts = payload.split("|")
+    if len(parts) != 6:
+        return None
+    aid, session, device_id, seq, sealed_at, sha = parts
+    if not (AppSafe.token(aid, 1, 64) and AppSafe.token(session, 1, 128)
+            and AppSafe.token(device_id, 1, 64) and seq.isascii() and seq.isdigit()
+            and len(seq) <= 19 and len(sha) == 64 and all(c in "0123456789abcdef" for c in sha)):
+        return None
+    try:
+        when = parse_iso(sealed_at)
+    except ValueError:
+        return None
+    return Seal(aid, session, device_id, int(seq), when, sha)
+
+
+def seal_proof(server_secret: str, aid: str, session: str, payload: str) -> str:
+    """HMAC with the attempt's offline key for the session named in the payload: still
+    verifiable after that session was rotated away (the key is derived, never stored)."""
+    return hmac.new(offline_key(server_secret, aid, session), payload.encode(),
+                    hashlib.sha256).hexdigest()
 
 
 def handin_message(aid: str, session: str, status: str, nonce: str) -> str:

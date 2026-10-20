@@ -56,7 +56,11 @@ export function setToken(role: Role, token: string): void {
   } catch {
     /* storage unavailable */
   }
+  // S5: right after a student signs in, an app holding sealed answers gets the new token.
+  if (role === "student") bridge.offerSealedToken(token);
 }
+
+bridge.setSealedTokenSource(() => getToken("student"));
 
 /**
  * Account id inside a token ("<uid>:<role>:<exp>:<ver>:<kid>" base64url, then "." signature).

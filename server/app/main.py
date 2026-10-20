@@ -20,6 +20,7 @@ from .routes_gradebook import gradebook_router, grading_router
 from .routes_insights import router as insights_router  # slice 6 F/G
 from .routes_lms import router as lms_router
 from .routes_practice import router as practice_router, student_router as practice_student_router
+from .routes_sealed import router as sealed_router
 from .routes_student import router as student_router
 from .routes_teacher import router as teacher_router
 from .seed import refuse_public_demo_logins, seed, seed_demo_class
@@ -99,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(classes_student_router)
     app.include_router(teacher_router)
     app.include_router(student_router)
+    app.include_router(sealed_router)            # S5: sealed offline hand-in
     app.include_router(grading_router)
     app.include_router(gradebook_router)
     if settings.feature("lms"):

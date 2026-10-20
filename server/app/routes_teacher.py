@@ -358,6 +358,7 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
         h = json.loads(hb[aid]) if aid in hb else None
         b = json.loads(ab[aid]) if aid in ab else None
         app_online = bool(b) and now - b["t"] <= APP_ONLINE_WINDOW_S
+        checks = ac.parse_checks(b.get("checks", "")) if b else {}
         if answered is None:            # rows saved before S-10: count once from the answers
             answers = old_answers.get(aid) or {}
             answered = sum(1 for q in qids if is_answered(answers.get(q)))
@@ -380,6 +381,8 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
             "last_event": evl.get(aid),
             "needs_look": aid in needs_look,
             "late": bool(late),
+            # S5: the app holds sealed answers for this student not uploaded yet (beat sealed=1)
+            "sealed_pending": checks.get("sealed") == "1",
         })
     counts = {"writing": 0, "submitted": 0, "offline": 0, "needs_look": 0}
     for st in students:
@@ -492,6 +495,7 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
             "auto_submitted": a.auto_submitted,
             # Audit S-02: handed in after time; answers sent after time are shown, not graded.
             "late": bool(a.late), "late_answers": a.late_answers or {},
+            "late_sealed": bool(a.late_sealed),    # S5: sealed offline after the time was up
             "score": None if external else num(score), "total_points": num(total),
             "percent": None if external else pct,
             "submitted_at": iso(a.submitted_at), "receipt": a.receipt,

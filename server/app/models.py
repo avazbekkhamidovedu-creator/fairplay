@@ -122,6 +122,11 @@ class Attempt(Base):
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     entries: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     client: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # S5 (2026-10-20): handed in from answers the app sealed offline at time-up. late_sealed =
+    # sealed after deadline + grace (the sealed answers went to late_answers). sealed_proof
+    # makes a repeated upload of the same seal return the same receipt.
+    late_sealed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    sealed_proof: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class IntegrityEvent(Base):

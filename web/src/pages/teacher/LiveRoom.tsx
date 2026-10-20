@@ -375,6 +375,7 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
                         <span className="t-seat-name">{s.name}</span>
                         <span className="t-seat-sub">{seatSub(s, st)}</span>
                       </Link>
+                      <SeatBadges student={s} />
                       {s.status === "in_progress" && s.client !== "browser" && (
                         <MoveDevice examId={exam.id} student={s} onMoved={load} />
                       )}
@@ -519,6 +520,22 @@ function FlagCard({ examId, flag, onDone }: { examId: string; flag: LiveFlag; on
   );
 }
 
+
+/** S3-S6: what needs the invigilator at this seat, as short badges. */
+export function SeatBadges({ student: s }: { student: LiveStudent }) {
+  const badges: string[] = [];
+  if (s.sealed_pending) badges.push("submission pending on this student's computer");
+  if (badges.length === 0) return null;
+  return (
+    <span className="t-seat-action" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {badges.map((b) => (
+        <span key={b} className="t-small" style={{ color: "var(--warn)", fontWeight: 600 }}>
+          {b}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 /** S1: each student's latest FairPlay device check (Readiness page "Run check"). */
 export function DeviceReadiness({ examId }: { examId: string }) {

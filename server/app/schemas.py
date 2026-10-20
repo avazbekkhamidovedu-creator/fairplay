@@ -500,3 +500,14 @@ class DeviceCheckIn(BaseModel):
         if not v:
             raise ValueError("platform must not be empty")
         return v
+
+
+# ---------------------------------------------------------------- S5: sealed offline submit
+class SealedSubmitIn(BaseModel):
+    """The app's sealed file, as written at time-up (routes_student.sealed_submit):
+    payload = "attempt_id|session|device_id|client_seq|sealed_at|answers_sha256",
+    proof = hex HMAC-SHA256(offline key of attempt + session, payload)."""
+    model_config = ConfigDict(extra="ignore")
+    payload: str = Field(min_length=1, max_length=1000)
+    answers_json: str = Field(max_length=7_000_000)
+    proof: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]+$")

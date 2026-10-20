@@ -26,7 +26,9 @@ export type NativeMessage =
   | { type: "attestationFailed"; nonce: string; reason: string }
   | { type: "preflight"; problems: string[]; checks?: DeviceCheck[]; platform?: string; app_version?: string; os_version?: string }
   /** Review 2026-10-14: the app could not open the website exam (e.g. "bad_session"). */
-  | { type: "externalFailed"; reason: string };
+  | { type: "externalFailed"; reason: string }
+  /** S5: the app wrote the sealed answers file. */
+  | { type: "sealed"; attempt_id: string; ok: boolean };
 
 /** The attempt the app is locking for: it sends its own signed beats with these. */
 export interface ExamSessionParams {
@@ -78,7 +80,17 @@ type OutMessage =
   | { action: "hello" }
   | { action: "flushEvents" }
   | { action: "preflight" }
-  | ({ action: "openExternal" } & OpenExternalParams);
+  | ({ action: "openExternal" } & OpenExternalParams)
+  | ({ action: "seal" } & SealParams)
+  | { action: "sealedToken"; token: string };
+
+/** S5: what the app seals when the submit at time-up failed. answers_json is the exact
+ *  string the app hashes (SHA-256 of its UTF-8 bytes). */
+export interface SealParams {
+  attempt_id: string;
+  answers_json: string;
+  client_seq: number;
+}
 
 interface ProctoraHandler {
   postMessage(msg: OutMessage): void;
@@ -171,6 +183,7 @@ function onWindowEvent(e: Event) {
   if (detail.type === "state") {
     locked = !!detail.locked;
     nativeState = stateOf(detail);
+    offerSealedToken(tokenSource());
   }
   else if (detail.type === "locked") locked = true;
   else if (detail.type === "unlocked" || detail.type === "lockFailed") locked = false;
@@ -408,6 +421,51 @@ export function preflightReport(timeoutMs = 3000): Promise<PreflightReport | nul
   });
 }
 
+/**
+ * S5: seal the answers on this computer because the hand-in at time-up failed. The app
+ * signs them with the attempt's offline key, keeps the file and uploads it once online
+ * (POST .../sealed-submit). Resolves true when the app says the file is written; false
+ * outside the app, for an app that doesn't know "seal", or on {ok:false}.
+ */
+export function seal(params: SealParams, timeoutMs = 8000): Promise<boolean> {
+  install();
+  if (!isNative()) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      off();
+      resolve(ok);
+    };
+    const off = onNative((msg) => {
+      if (msg.type === "sealed" && msg.attempt_id === params.attempt_id) finish(msg.ok === true);
+    });
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    post({ action: "seal", attempt_id: params.attempt_id, answers_json: params.answers_json, client_seq: params.client_seq });
+  });
+}
+
+// S5: student tokens last 8 h, so at its next launch the app may hold sealed answers but no
+// valid token. When the app says sealed_pending and a student is signed in, the page hands
+// it the token once per page load; the app then uploads its sealed files with it.
+let tokenSource: () => string | null = () => null;
+let sealedTokenSent = false;
+
+/** client.ts registers how to read the student token (bridge can't import client.ts). */
+export function setSealedTokenSource(source: () => string | null): void {
+  tokenSource = source;
+}
+
+/** Send {action:"sealedToken"} if the app holds sealed answers; true when sent. */
+export function offerSealedToken(token: string | null): boolean {
+  if (sealedTokenSent || !token || !getNativeState()?.sealed_pending) return false;
+  sealedTokenSent = true;
+  post({ action: "sealedToken", token });
+  return true;
+}
+
 /** Test helper: pretend the host set this nonce at load (null = none). */
 export function _setNonceForTests(nonce: string | null): void {
   expectedNonce = nonce;
@@ -417,5 +475,6 @@ export function _setNonceForTests(nonce: string | null): void {
 export function _resetBridgeForTests(): void {
   locked = false;
   nativeState = null;
+  sealedTokenSent = false;
   listeners.clear();
 }

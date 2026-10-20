@@ -154,6 +154,8 @@ export interface LiveStudent {
   app_checks?: string;
   client?: "app" | "browser";
   entries?: number;
+  /** S5: the app holds sealed answers for this student that are not uploaded yet. */
+  sealed_pending?: boolean;
 }
 
 export interface LiveFlag {

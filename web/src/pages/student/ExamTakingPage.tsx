@@ -28,6 +28,7 @@ import {
 } from "../../lib/offline";
 import { ReenterExam, isSessionConflict } from "../../components/student/ReenterExam";
 import { PreflightProblems } from "../../components/student/Preflight";
+import { TimeUpOffline } from "../../components/student/TimeUpOffline";
 import { CODE_LENGTH, StartCodeBoxes, emptyCode } from "../../components/student/StartCodeBoxes";
 import { QuestionImages } from "../../components/QuestionImages";
 import "../../styles/student.css";
@@ -94,6 +95,8 @@ function ExamTakingInner() {
   const [now, setNow] = useState(Date.now());
   const [locked, setLocked] = useState(bridge.isLocked());
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // S5: the automatic hand-in failed (offline): offer retry / seal / help.
+  const [timeUpProblem, setTimeUpProblem] = useState(false);
   const [marked, setMarked] = useState<Set<string>>(() => readMarks(attemptId));
 
   const queueRef = useRef<AnswerQueue | null>(null);
@@ -245,6 +248,7 @@ function ExamTakingInner() {
               : "Submitting failed.";
         if (!final && (auto || e instanceof NetworkError)) {
           setSubmitError(`${msg} Trying again…`);
+          if (auto) setTimeUpProblem(true);
           submitRetryRef.current = setTimeout(() => void doSubmit(auto), SUBMIT_RETRY_MS);
         } else {
           setSubmitError(msg);
@@ -256,6 +260,14 @@ function ExamTakingInner() {
   );
   const doSubmitRef = useRef(doSubmit);
   doSubmitRef.current = doSubmit;
+
+  // S5: "Submit later from this computer": the app seals exactly these answers.
+  const sealAnswers = useCallback(async (): Promise<boolean> => {
+    const q = queueRef.current;
+    const aid = realAidRef.current;
+    if (!q || !aid) return false;     // an offline start that never reached the server has no key
+    return bridge.seal({ attempt_id: aid, answers_json: JSON.stringify(q.getAnswers()), client_seq: q.getClientSeq() });
+  }, []);
 
   // ----- load attempt (from start navigation or GET for resume) -----
 
@@ -580,8 +592,10 @@ function ExamTakingInner() {
   const answeredCount = questions.length - unanswered.length;
   const markedCount = questions.filter((qq) => marked.has(qq.id)).length;
   const isMarked = q ? marked.has(q.id) : false;
-  const showExam = phase === "exam" || (phase === "submitting" && phaseBeforeSubmit.current === "exam");
-  const showReview = phase === "review" || (phase === "submitting" && phaseBeforeSubmit.current !== "exam");
+  const timeUpPanel = phase === "submitting" && timeUpProblem;
+  const showExam = phase === "exam" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam");
+  const showReview =
+    phase === "review" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current !== "exam");
   const typeLabel = q?.type === "essay" ? " · Essay" : "";
 
   const isLast = current === questions.length - 1;
@@ -804,7 +818,11 @@ function ExamTakingInner() {
         />
       )}
 
-      {phase === "submitting" && phaseBeforeSubmit.current === "exam" && (
+      {timeUpPanel && (
+        <TimeUpOffline message={submitError} onRetry={() => void doSubmit(true)} onSeal={sealAnswers} />
+      )}
+
+      {phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam" && (
         <div className="stu-toast" role="status">
           {submitError ?? "Time is up. Submitting your answers…"}
         </div>
