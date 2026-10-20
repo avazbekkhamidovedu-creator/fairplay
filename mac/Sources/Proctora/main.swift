@@ -38,8 +38,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DebugLog.log("app", "last run ended while LOCKED (killed, crashed or Mac restarted)")
         }
 
+        Net.onUpgradeRequired = { [weak wc] minimum in wc?.showUpdateRequired(minimum: minimum) }
         wc.start()
         NSApp.activate(ignoringOtherApps: true)
+        // Plan M4: answers sealed offline last time go to the server before anything else.
+        if Sealed.hasPending {
+            DebugLog.log("sealed", "\(Sealed.pending().count) sealed answer file(s) waiting: uploading")
+            Sealed.uploadAll()
+        }
 
         print("""
         ------------------------------------------------------------

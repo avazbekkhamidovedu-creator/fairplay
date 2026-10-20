@@ -33,6 +33,9 @@ final class AppSession {
     var onStatus: ((String) -> Void)?
 
     private var beatTimer: Timer?
+    /// Plan M3: "pending" while the teacher hasn't approved a resume yet (log only; the
+    /// page shows the waiting screen and stays locked).
+    private var lastApproval: String?
     private var lastTs: Int64 = 0
 
     private init() {
@@ -194,14 +197,46 @@ final class AppSession {
         if ts <= lastTs { ts = lastTs + 1 }
         lastTs = ts
         let locked = LockdownController.shared.isLocked
-        let checks = String((checksProvider?() ?? "").prefix(200))
+        var summary = checksProvider?() ?? ""
+        // Plan M4: the teacher sees "submission pending on this computer".
+        if Sealed.hasPending { summary += summary.isEmpty ? "sealed=1" : ",sealed=1" }
+        let checks = String(summary.prefix(200))
         let msg = AppSession.beatMessage(aid: exam.attemptId, session: exam.session, deviceId: deviceId, ts: ts, locked: locked, checks: checks)
         let body: [String: Any] = ["session": exam.session, "device_id": deviceId, "ts": NSNumber(value: ts),
                                    "locked": locked, "checks": checks, "signature": AppSession.sign(msg)]
         Net.request("POST", path: "api/student/attempts/\(exam.attemptId)/app-beat", token: exam.token,
                     appSession: exam.session, body: body) { [weak self] status, json in
+            guard let self else { return }
+            if status == 409 {
+                // Plan M3: the session was rotated away (teacher approved a swap or released
+                // the device). Ask the signed hand-in check; only "moved"/"submitted" unlocks.
+                self.onStatus?("session_gone")
+                return
+            }
             guard status == 200, let st = json?["status"] as? String else { return }
-            self?.onStatus?(st)
+            if let a = json?["approval"] as? String, a != self.lastApproval {
+                self.lastApproval = a
+                DebugLog.log("exam", "resume approval: \(a)")
+            }
+            self.onStatus?(st)
+        }
+    }
+
+    // MARK: - Sealed answers (plan M4)
+
+    /// Bridge "seal": the hand-in at time-up failed; freeze the answers on this Mac.
+    func seal(attemptId: String, answersJSON: String, clientSeq: Int64) -> Result<URL, Sealed.SealError> {
+        do {
+            let url = try Sealed.seal(attemptId: attemptId, answersJSON: answersJSON, clientSeq: clientSeq,
+                                      exam: exam, offlineKey: offlineKey, deviceId: deviceId)
+            DebugLog.log("sealed", "answers sealed for \(attemptId)")
+            beat()
+            return .success(url)
+        } catch let e as Sealed.SealError {
+            DebugLog.log("sealed", "seal FAILED for \(attemptId): \(e.rawValue)")
+            return .failure(e)
+        } catch {
+            return .failure(.writeFailed)
         }
     }
 

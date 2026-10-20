@@ -51,6 +51,10 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate {
 
 /// All native requests to the exam server go through here.
 enum Net {
+    /// 426 Upgrade Required from the server (plan M5): this build is older than the
+    /// server's minimum. Set by the window controller; runs on the main thread.
+    static var onUpgradeRequired: ((String) -> Void)?
+
     static let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 15
@@ -71,7 +75,10 @@ enum Net {
         var req = URLRequest(url: url, timeoutInterval: 15)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if !token.isEmpty { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        // Plan S2/M5 (2026-10-20): the server gates old app versions and sends its clock.
+        req.setValue(Config.version, forHTTPHeaderField: "X-FairPlay-Version")
+        req.setValue("mac", forHTTPHeaderField: "X-FairPlay-Platform")
         if let appSession, !appSession.isEmpty {
             req.setValue(appSession, forHTTPHeaderField: "X-FairPlay-Session")
         }
@@ -81,7 +88,9 @@ enum Net {
         }
         let started = Date()
         session.dataTask(with: req) { data, response, error in
-            let status = (response as? HTTPURLResponse)?.statusCode
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode
+            if let t = http?.value(forHTTPHeaderField: "X-Server-Time") { ServerClock.shared.update(serverTime: t) }
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             // Beats every 5 s: only log them when they fail.
             if !(path.hasSuffix("/app-beat") && status == 200) {
@@ -90,7 +99,10 @@ enum Net {
             }
             var json: [String: Any]?
             if let data { json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] }
-            DispatchQueue.main.async { completion(status, json) }
+            DispatchQueue.main.async {
+                if status == 426 { Net.onUpgradeRequired?((json?["min_app_version"] as? String) ?? "") }
+                completion(status, json)
+            }
         }.resume()
     }
 }

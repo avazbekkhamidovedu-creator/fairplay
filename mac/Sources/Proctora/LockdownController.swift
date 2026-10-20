@@ -374,20 +374,23 @@ final class LockdownController {
 
     /// Audit M-11: the checks that can't be fixed from INSIDE the lock, run before it (the
     /// student can still open System Settings). Changes nothing; returns problems to show.
-    func preflight() -> [String] {
-        var out: [String] = []
+    func preflight() -> [String] { preflightProblems().map { $0.message } }
+
+    /// Plan M2 (2026-10-20): the same problems with a stable id for "Check this Mac".
+    func preflightProblems() -> [(id: String, message: String)] {
+        var out: [(id: String, message: String)] = []
         if !EventTap.isTrusted {
-            out.append("Turn on FairPlay in System Settings > Privacy & Security > Accessibility.")
+            out.append(("accessibility", "Turn on FairPlay in System Settings > Privacy & Security > Accessibility."))
         }
         if SystemChecks.isVirtualMachine() {
-            out.append("FairPlay cannot be used in a virtual machine. Use the Mac itself.")
+            out.append(("vm", "FairPlay cannot be used in a virtual machine. Use the Mac itself."))
         }
         let d = SystemChecks.displays()
         if d.online > 1 || NSScreen.screens.count > 1 || d.mirrored {
-            out.append("Only one screen is allowed. Unplug other displays and turn off mirroring, AirPlay and Sidecar.")
+            out.append(("displays", "Only one screen is allowed. Unplug other displays and turn off mirroring, AirPlay and Sidecar."))
         }
         if !SystemChecks.sessionIsOnConsole() {
-            out.append("This Mac is being used remotely. The exam only works at the Mac itself.")
+            out.append(("remote", "This Mac is being used remotely. The exam only works at the Mac itself."))
         }
         let f = SystemChecks.scanProcesses(lockedAt: nil)
         var services = Set(f.deniedProcs.filter { $0.uid != getuid() }.map { LockdownController.friendlyName($0.name) })
@@ -397,12 +400,16 @@ final class LockdownController {
             services.insert(name)
         }
         for name in services.sorted() {
-            out.append("Turn off \(name) in System Settings > General > Sharing.")
+            out.append(("blocked_apps", "Turn off \(name) in System Settings > General > Sharing."))
         }
         if let id = SystemChecks.currentInputSourceID(), !SystemChecks.currentInputSourceIsApple() {
-            out.append("Switch to an Apple keyboard (e.g. ABC or Pinyin - Simplified); \(id) is not allowed.")
+            out.append(("input_source", "Switch to an Apple keyboard (e.g. ABC or Pinyin - Simplified); \(id) is not allowed."))
         }
-        DebugLog.log("check", out.isEmpty ? "preflight OK" : "preflight problems: " + out.joined(separator: " || "))
+        // Plan M5: a clock far from the server's breaks deadlines and sealed answers.
+        if let off = ServerClock.shared.offset, !ServerClock.skewOK(off) {
+            out.append(("clock", "Set your Mac's date and time to automatic (System Settings > General > Date & Time)."))
+        }
+        DebugLog.log("check", out.isEmpty ? "preflight OK" : "preflight problems: " + out.map { $0.message }.joined(separator: " || "))
         return out
     }
 

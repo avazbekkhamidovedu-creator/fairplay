@@ -261,7 +261,21 @@ final class MainWindowController: NSWindowController, LockSurface,
             }
         case "preflight":
             // Audit M-11: before locking, list what must be fixed outside the lock.
-            send(["type": "preflight", "problems": LockdownController.shared.preflight()])
+            // Plan M2: plus the full "Check this Mac" rows (server, clock, version, disk...).
+            runPreflight()
+        case "seal":
+            let aid = (body["attempt_id"] as? String) ?? ""
+            let seq = (body["client_seq"] as? NSNumber)?.int64Value ?? -1
+            switch AppSession.shared.seal(attemptId: aid, answersJSON: (body["answers_json"] as? String) ?? "",
+                                          clientSeq: seq) {
+            case .success: send(["type": "sealed", "attempt_id": aid, "ok": true])
+            case .failure(let e): send(["type": "sealed", "attempt_id": aid, "ok": false, "reason": e.rawValue])
+            }
+        case "sealedToken":
+            // Plan M4: a fresh token from a signed-in page for sealed files from an earlier run.
+            if let token = body["token"] as? String, !token.isEmpty, token.count < 4000, Sealed.hasPending {
+                Sealed.uploadAll(token: token)
+            }
         case "unlock":
             requestUnlock()
         default:
@@ -315,13 +329,24 @@ final class MainWindowController: NSWindowController, LockSurface,
         if status == "submitted", LockdownController.shared.isLocked, !external.isActive {
             requestUnlockOnce()
         }
+        // Plan M3: our session is gone (exam moved to another computer). The signed hand-in
+        // check decides; at most once every 10 s.
+        if status == "session_gone", LockdownController.shared.isLocked,
+           Date().timeIntervalSince(lastGoneCheck) > 10 {
+            lastGoneCheck = Date()
+            requestUnlockOnce()
+        }
     }
+    private var lastGoneCheck = Date.distantPast
 
     func sendState() {
         send(["type": "state",
               "locked": LockdownController.shared.isLocked,
               "trusted": EventTap.isTrusted,
-              "version": Config.version])
+              "version": Config.version,
+              "app_version": Config.version,
+              "platform": "mac",
+              "sealed_pending": Sealed.hasPending])
     }
 
     /// Review 2026-10-14: integrity events wait here until a page that forwards them to the
@@ -496,6 +521,65 @@ final class MainWindowController: NSWindowController, LockSurface,
         <p style="font-size:13px">\(server.absoluteString)</p>
         <button onclick="location.href='\(target)'">Try again now</button>
         </div><script>setTimeout(function(){ location.href='\(target)'; }, 3000);</script></body></html>
+        """
+        loadOwnHTML(html)
+    }
+
+    /// Plan M2: the lock problems plus server reachability, clock, minimum version, disk,
+    /// battery and VPN. Answers within ~2.5 s (the page waits 3 s) even when offline.
+    private func runPreflight() {
+        let problems = LockdownController.shared.preflightProblems()
+        var answered = false
+        let finish: (Bool, String?) -> Void = { [weak self] reached, minimum in
+            guard let self, !answered else { return }
+            answered = true
+            var blocking = problems
+            if let minimum, !AppVersion.meets(Config.version, minimum: minimum) {
+                blocking.append(("app_version", "Update FairPlay: this is version \(Config.version), the exam needs \(minimum) or newer."))
+            }
+            if let off = ServerClock.shared.offset, !ServerClock.skewOK(off),
+               !blocking.contains(where: { $0.id == "clock" }) {
+                blocking.append(("clock", "Set your Mac's date and time to automatic (System Settings > General > Date & Time)."))
+            }
+            let rows = Readiness.rows(problems: blocking, serverReached: reached, minVersion: minimum,
+                                      clockOffset: reached ? ServerClock.shared.offset : nil,
+                                      freeBytes: Readiness.freeBytes(), battery: Readiness.battery(),
+                                      vpn: Readiness.vpnInterfaces(), accessibility: EventTap.isTrusted)
+            self.send(["type": "preflight", "problems": blocking.map { $0.message },
+                       "checks": rows.map { $0.dict }, "platform": "mac",
+                       "app_version": Config.version, "os_version": Readiness.macOSVersion])
+        }
+        Net.request("GET", path: "api/app/version", token: "", appSession: nil, body: nil) { status, json in
+            if status == 200 {
+                finish(true, json?["mac"] as? String)
+            } else if status != nil {
+                // An older server without /api/app/version: reachable, no minimum.
+                finish(true, nil)
+            } else {
+                finish(false, nil)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { finish(false, nil) }
+    }
+
+    /// Plan M5: the server refuses this build (426). Never while locked: the exam in
+    /// progress continues and the next start shows this screen.
+    func showUpdateRequired(minimum: String) {
+        DebugLog.log("app", "server requires FairPlay \(minimum) or newer (this is \(Config.version))")
+        guard !LockdownController.shared.isLocked else { return }
+        let safe = minimum.filter { $0.isNumber || $0 == "." }
+        let html = """
+        <!doctype html><html><head><meta charset="utf-8"><style>
+        body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+        font:16px -apple-system,system-ui,sans-serif;background:#f4f5f8;color:#111827}
+        .card{background:#fff;border-radius:14px;padding:32px 36px;max-width:460px;
+        box-shadow:0 2px 12px rgba(0,0,0,.08)}h1{font-size:22px;margin:0 0 10px}
+        p{color:#4b5563;line-height:1.5}
+        </style></head><body><div class="card">
+        <h1>Update FairPlay</h1>
+        <p>This is FairPlay \(Config.version). Your exams need version \(safe.isEmpty ? "a newer one" : safe) or newer.</p>
+        <p>Download the new version from your course page or ask your teacher, then open FairPlay again.</p>
+        </div></body></html>
         """
         loadOwnHTML(html)
     }
