@@ -65,3 +65,4 @@ resources/libs/ace/
 
 # FairPlay favicons and app icons are tracked (generated from the brand mark).
 !resources/icons/*.png
+scripts/loadtest/teacher_load.json
