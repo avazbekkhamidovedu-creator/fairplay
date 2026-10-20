@@ -49,11 +49,28 @@ class _AtomicShim:
 
 
 @contextmanager
-def rival_committed_before(module, make_rival, nth=1):
-    """Another request commits ``make_rival()`` just before ``module`` opens its ``nth`` atomic block."""
+def rival_committed_before(module, make_rival, nth=1, insert_model=None):
+    """Another request commits ``make_rival()`` just before ``module`` opens its ``nth`` atomic block.
+
+    ``insert_model``: also fire right before the first INSERT of that model if the atomic block
+    never came (code without the savepoint, i.e. before the fix), so the race is still replayed.
+    """
     state = {'entered': 0, 'fired': False}
     with mock.patch('%s.transaction' % module, _AtomicShim(nth, make_rival, state)):
-        yield state
+        if insert_model is None:
+            yield state
+            return
+        original = insert_model.save
+
+        def save(self, *args, **kwargs):
+            if not state['fired'] and self.pk is None:
+                state['fired'] = True
+                rival = make_rival()
+                type(rival).objects.bulk_create([rival])
+            return original(self, *args, **kwargs)
+
+        with mock.patch.object(insert_model, 'save', save):
+            yield state
 
 
 UNIQUE_IDS = 'judge.utils.unique_ids'
@@ -146,8 +163,9 @@ class ProblemCreateRaceTestCase(CommonDataMixin, TestCase):
         def rival():
             return ProblemType(name='race-recursion', full_name='Race Recursion')
 
-        with rival_committed_before(CREATE_V2, rival, nth=2):
+        with rival_committed_before(CREATE_V2, rival, nth=2, insert_model=ProblemType) as state:
             response = self._post(mcq_payload(problemTypes=['Race Recursion'], create_token='tab-tag-token'))
+        self.assertTrue(state['fired'])
         self.assertEqual(response.status_code, 200, response.content)
         problem = Problem.objects.get(code=response.json()['code'])
         self.assertEqual(ProblemType.objects.filter(full_name='Race Recursion').count(), 1)
@@ -391,8 +409,9 @@ class ContestRaceTestCase(CommonDataMixin, TestCase):
             return ContestParticipation(contest=contest, user=student.profile, virtual=0, real_start=timezone.now())
 
         self.client.force_login(student)
-        with rival_committed_before('judge.views.contests', rival):
+        with rival_committed_before('judge.views.contests', rival, insert_model=ContestParticipation) as state:
             response = self.client.post(reverse('contest_join', args=['doublejoin']))
+        self.assertTrue(state['fired'])
         self.assertEqual(response.status_code, 302)
         self.assertEqual(ContestParticipation.objects.filter(contest=contest, user=student.profile).count(), 1)
         student.profile.refresh_from_db()
