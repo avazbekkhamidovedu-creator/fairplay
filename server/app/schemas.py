@@ -252,6 +252,8 @@ class ExamIn(BaseModel):
     allowed_apps: list[str] = Field(default_factory=list, max_length=20)
     # S3 (2026-10-20): coming back after FairPlay closed needs the teacher's OK
     resume_needs_approval: bool = True
+    # S6: require the strongest lock (beats must say sep=1, else weak_lock is flagged)
+    require_strong_lock: bool = False
 
     @field_validator("allowed_apps")
     @classmethod

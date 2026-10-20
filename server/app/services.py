@@ -108,7 +108,8 @@ def exam_out(e: Exam, pending_grading: int = 0) -> dict:
 
 def lock_settings(e: Exam) -> dict:
     """S3 / S6 exam settings (teacher view and the student-side exam cache)."""
-    return {"resume_needs_approval": e.resume_needs_approval is not False}
+    return {"resume_needs_approval": e.resume_needs_approval is not False,
+            "require_strong_lock": bool(e.require_strong_lock)}
 
 
 def external_fields(e: Exam) -> dict:

@@ -80,6 +80,10 @@ class Exam(Base):
     # until the teacher approves (routes_student._resume). On by default.
     resume_needs_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,
                                                         server_default=true())
+    # S6: only the strongest lock counts (Windows: separate exam desktop; Mac: Apple's
+    # assessment mode, not built yet). A beat without sep=1 is flagged weak_lock once.
+    require_strong_lock: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                      server_default=false())
 
 
 class Attempt(Base):

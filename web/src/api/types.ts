@@ -93,6 +93,8 @@ export interface Exam {
   allowed_apps?: string[];
   /** S3: a student coming back after FairPlay closed waits for the teacher (default true). */
   resume_needs_approval?: boolean;
+  /** S6: only the strongest lock counts (default false). */
+  require_strong_lock?: boolean;
 }
 
 /** 2026-10-14: an app a teacher may allow (GET /api/exams/allowed-apps). */
@@ -130,6 +132,7 @@ export interface ExamInput {
   external_points?: number;
   allowed_apps?: string[];
   resume_needs_approval?: boolean;
+  require_strong_lock?: boolean;
 }
 
 export interface LiveStudent {
@@ -164,6 +167,8 @@ export interface LiveStudent {
   pending_since?: string | null;
   /** S4: asked from another computer to continue there ("Approve swap"). */
   swap_requested?: boolean;
+  /** S6: the exam requires the strongest lock and this computer's app doesn't use it. */
+  weak_lock?: boolean;
 }
 
 /** S3: null = never had to wait. */

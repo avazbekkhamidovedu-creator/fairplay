@@ -6,6 +6,8 @@ import { setToken } from "../api/client";
 import type { Exam, LiveStudent } from "../api/types";
 import { draftFromExam, toExamInput } from "../pages/teacher/examDraft";
 import { SeatBadges } from "../pages/teacher/LiveRoom";
+import { ExamEditor } from "../pages/teacher/ExamEditor";
+import { MemoryRouter } from "react-router-dom";
 
 function student(over: Partial<LiveStudent> = {}): LiveStudent {
   return {
@@ -49,6 +51,39 @@ describe("live room S3-S6", () => {
 });
 
 describe("exam settings S3 / S6", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("weak lock badge", () => {
+    render(<SeatBadges examId="e_1" student={student({ weak_lock: true })} onChanged={vi.fn()} />);
+    expect(screen.getByText("Not using the strongest lock")).toBeInTheDocument();
+  });
+
+  it("strongest lock defaults off and round-trips", () => {
+    const d = draftFromExam();
+    expect(d.strongLock).toBe(false);
+    expect(toExamInput(d).require_strong_lock).toBe(false);
+    const on = draftFromExam({ title: "x", duration_min: 5, questions: [], require_strong_lock: true } as unknown as Exam);
+    expect(toExamInput(on).require_strong_lock).toBe(true);
+  });
+
+  it("the editor shows both toggles under More settings", async () => {
+    setToken("teacher", "T");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    render(
+      <MemoryRouter>
+        <ExamEditor onSaved={vi.fn()} cancelTo="/teacher" />
+      </MemoryRouter>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /More settings/ }));
+    const resume = screen.getByLabelText("Teacher approves a student coming back after FairPlay closed");
+    const strong = screen.getByLabelText("Require the strongest lock");
+    expect(resume).toHaveAttribute("aria-checked", "true");
+    expect(strong).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/Mac: needs Apple assessment mode, not available yet/)).toBeInTheDocument();
+    await userEvent.click(strong);
+    expect(strong).toHaveAttribute("aria-checked", "true");
+  });
+
   it("resume approval defaults on and round-trips", () => {
     const d = draftFromExam();
     expect(d.resumeNeedsApproval).toBe(true);

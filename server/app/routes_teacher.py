@@ -66,7 +66,7 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
     e.updated_at = utcnow()
     # Optional slice-2 fields: on PUT, a field the client did not send keeps its value.
     for f in ("course", "room", "scheduled_at", "shuffle_questions", "class_id", "allowed_apps",
-              "resume_needs_approval"):
+              "resume_needs_approval", "require_strong_lock"):
         if creating or f in body.model_fields_set:
             setattr(e, f, getattr(body, f))
     # Slice 3: mode and its fields always come from the body (already normalised by
@@ -450,6 +450,9 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
             "pending_since": iso(pending_since) if pending else None,
             # S4: asked from another computer; "Approve swap" moves the exam there
             "swap_requested": status == "in_progress" and swap_at is not None and swap_dev != device,
+            # S6: the exam requires the strongest lock and the latest beat lacks sep=1
+            "weak_lock": bool(e.require_strong_lock) and status == "in_progress" and bool(b)
+            and checks.get("sep") != "1",
         })
     counts = {"writing": 0, "submitted": 0, "offline": 0, "needs_look": 0}
     for st in students:

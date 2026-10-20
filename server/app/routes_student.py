@@ -538,6 +538,8 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
             and await ac.once_per(store, f"secin:{aid}", ac.FLAG_REPEAT_S):
         await ac.add_event(session, store, aid, exam_id, "secure_input_other_app",
                            "another app holds secure keyboard input (it may see keys)")
+    if meta["status"] == "in_progress":
+        await _check_strong_lock(session, store, aid, exam_id, checks)
     if last and meta["status"] == "in_progress" and now - last["t"] > ac.APP_GAP_S:
         await ac.add_event(session, store, aid, exam_id, "app_gap",
                            f"no signal from the app for {int(now - last['t'])} s")
@@ -563,6 +565,19 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     return {"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
             "deadline_at": meta["deadline_at"], "min_app_version": min_version,
             "approval": meta.get("approval")}   # S3
+
+
+async def _check_strong_lock(session: AsyncSession, store, aid: str, exam_id: str,
+                             checks: dict[str, str]) -> None:
+    """S6: the exam requires the strongest lock and this beat doesn't say sep=1 (Windows:
+    separate exam desktop; the Mac never sends it yet): flag weak_lock once per attempt."""
+    if checks.get("sep") == "1":
+        return
+    exam = await get_exam_cached(store, session, exam_id)     # cache hit on the hot path
+    if exam and exam.get("require_strong_lock") \
+            and await ac.once_per(store, f"weak:{aid}", LIVE_TTL):
+        await ac.add_event(session, store, aid, exam_id, "weak_lock",
+                           "this computer is not using the strongest lock the exam requires")
 
 
 @router.get("/attempts/{aid}/handin")

@@ -62,6 +62,8 @@ export interface DraftExam {
   allowedApps: string[];
   /** S3: the teacher approves a student coming back after FairPlay closed (default on). */
   resumeNeedsApproval: boolean;
+  /** S6: require the strongest lock (default off). */
+  strongLock: boolean;
 }
 
 export type QuestionErrors = Partial<
@@ -179,6 +181,7 @@ export function draftFromExam(exam?: Exam): DraftExam {
       delivery: "computer",
       allowedApps: [],
       resumeNeedsApproval: true,
+      strongLock: false,
     };
   const sched = splitSchedule(exam.scheduled_at);
   return {
@@ -195,6 +198,7 @@ export function draftFromExam(exam?: Exam): DraftExam {
     delivery: exam.delivery ?? (exam.mode === "external" ? "website" : "computer"),
     allowedApps: [...(exam.allowed_apps ?? [])],
     resumeNeedsApproval: exam.resume_needs_approval !== false,
+    strongLock: exam.require_strong_lock === true,
     questions: exam.questions.map((q) => ({
       key: newKey(),
       type: q.type,
@@ -368,6 +372,7 @@ export function toExamInput(d: DraftExam): ExamInput {
     delivery: d.external.mode === "external" ? "website" : d.delivery === "paper" ? "paper" : "computer",
     allowed_apps: d.delivery === "paper" && d.external.mode !== "external" ? [] : [...d.allowedApps],
     resume_needs_approval: d.resumeNeedsApproval,
+    require_strong_lock: d.strongLock,
   };
 }
 

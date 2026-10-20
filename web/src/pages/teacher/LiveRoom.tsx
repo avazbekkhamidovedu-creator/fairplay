@@ -530,6 +530,7 @@ export function SeatBadges({ examId, student: s, onChanged }: { examId: string; 
   if (s.sealed_pending) badges.push("submission pending on this student's computer");
   if (writing && s.approval === "pending") badges.push("Waiting for approval");
   if (writing && s.swap_requested) badges.push("Wants to continue on another computer");
+  if (writing && s.weak_lock) badges.push("Not using the strongest lock");
   if (badges.length === 0) return null;
 
   async function act(fn: () => Promise<unknown>) {
