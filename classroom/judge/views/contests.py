@@ -1197,9 +1197,16 @@ class ContestCreate(LoginRequiredMixin, View):
                     if isinstance(values, str):
                         values = [values] if values else []
                     try:
-                        contest.authors.set([int(v) for v in values if str(v)])
+                        author_ids = {int(v) for v in values if str(v)}
                     except (TypeError, ValueError):
                         raise ValidationError(_('Invalid value for "authors".'))
+                    # A teacher who edits their own assignment stays an author: dropping themselves
+                    # from the list (or saving an empty list) would lock them out of it with a 403.
+                    # Site staff who edit every assignment can still change the list freely.
+                    if (not request.user.has_perm('judge.edit_all_contest') and
+                            contest.authors.filter(id=request.profile.id).exists()):
+                        author_ids.add(request.profile.id)
+                    contest.authors.set(author_ids)
                 self._sync_problems(contest, payload)
                 contest_id = contest.pk
                 contest_key = contest.key

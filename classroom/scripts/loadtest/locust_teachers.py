@@ -99,7 +99,7 @@ class Teacher(FastHttpUser):
         hw = self.info['homework']
         self.get('/contests/', 'GET /contests/')
         self.get('/problems/?search=Question', 'GET /problems/?search')
-        self.get('/organization/%d' % self.info['course'], 'GET /organization/[id]')
+        self.get('/organization/%d-ltt-c%s' % (self.info['course'], self.username[3:]), 'GET /organization/[id]')
         self.get('/contest/%s' % hw, 'GET /contest/[key]')
         self.get('/submissions/?contest=%s' % hw, 'GET /submissions/?contest')
 

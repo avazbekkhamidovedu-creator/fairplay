@@ -39,6 +39,7 @@ import logging
 import requests
 from django.conf import settings
 from django.contrib.auth.password_validation import CommonPasswordValidator
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext as _
 
@@ -48,6 +49,10 @@ log = logging.getLogger(__name__)
 
 API_ENDPOINT = 'https://api.pwnedpasswords.com/range/{}'
 REQUEST_TIMEOUT = 2.0  # 2 seconds
+# After a failed call (blocked or down, e.g. from mainland China), skip the check for a while:
+# every login would otherwise hold a server thread for the full timeout.
+UNREACHABLE_CACHE_KEY = 'pwned_passwords_unreachable'
+UNREACHABLE_BACKOFF = 600  # seconds
 
 
 def _get_pwned(prefix):
@@ -55,6 +60,8 @@ def _get_pwned(prefix):
     Fetches a dict of all hash suffixes from Pwned Passwords for a
     given SHA-1 prefix.
     """
+    if cache.get(UNREACHABLE_CACHE_KEY):
+        return None
     try:
         response = requests.get(
             url=API_ENDPOINT.format(prefix),
@@ -68,6 +75,7 @@ def _get_pwned(prefix):
     except requests.RequestException:
         # Gracefully handle timeouts and HTTP error response codes.
         log.warning('Skipped Pwned Passwords check due to error', exc_info=True)
+        cache.set(UNREACHABLE_CACHE_KEY, True, getattr(settings, 'PWNED_PASSWORDS_BACKOFF', UNREACHABLE_BACKOFF))
         return None
 
     results = {}
