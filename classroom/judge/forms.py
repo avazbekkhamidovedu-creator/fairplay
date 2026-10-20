@@ -440,8 +440,12 @@ def suggested_class_name_legacy(organization, academic_year='', term_session='')
     return ' '.join(parts)
 
 
-def uniquify_class_name(name, instance=None):
-    """Append 2, 3, … when *name* is already taken."""
+def uniquify_class_name(name, instance=None, skip=0):
+    """Append 2, 3, … when *name* is already taken.
+
+    ``skip`` passes over that many free names first: a retry after losing the race for the
+    first free one spreads out instead of colliding with everyone else again.
+    """
     candidate = name
     suffix = 2
     while True:
@@ -449,7 +453,9 @@ def uniquify_class_name(name, instance=None):
         if instance is not None and instance.pk:
             qs = qs.exclude(pk=instance.pk)
         if not qs.exists():
-            return candidate
+            if not skip:
+                return candidate
+            skip -= 1
         candidate = '%s %d' % (name, suffix)
         suffix += 1
 
@@ -592,6 +598,9 @@ class ClassSiteForm(ModelForm):
                 _('Select an academic year, session, and instructor, or enter a class name.'),
             )
             return cleaned
+        # CreateClass / EditClass read these when the INSERT/UPDATE loses a race for the name.
+        self.name_generated = generated
+        self.name_base = name
         if generated:
             name = uniquify_class_name(name, self.instance)
         else:
@@ -605,6 +614,15 @@ class ClassSiteForm(ModelForm):
                 return cleaned
         cleaned['name'] = name
         return cleaned
+
+    def _get_validation_exclusions(self):
+        # The name is checked in clean() and then enforced by the database when the class is
+        # saved (CreateClass / EditClass take the next free generated name or report a typed
+        # one). Re-checking it in the model validation only turns a race into a confusing
+        # "already exists" error for a name the teacher did not choose.
+        exclude = super()._get_validation_exclusions()
+        exclude.add('name')
+        return exclude
 
 
 class ClassAssignmentsForm(Form):

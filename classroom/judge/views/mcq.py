@@ -23,7 +23,9 @@ from django.views.generic import View
 from judge.models import Class, Language, Organization, Problem, ProblemMCQConfig, ProblemMCQOption, \
     ProblemSubmissionType
 from judge.question_types.mcq import selected_option_ids
-from judge.utils.problem_create import ScopedProblemFormMixin, apply_simple_problem_defaults, default_problem_type
+from judge.utils.db_retry import retry_on_deadlock
+from judge.utils.problem_create import (ScopedProblemFormMixin, apply_simple_problem_defaults, default_problem_type,
+                                        save_new_problem)
 from judge.utils.simple_xlsx import build_xlsx_workbook, read_xlsx_rows
 from judge.widgets import HeavySelect2MultipleWidget, MartorWidget
 
@@ -411,7 +413,8 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
                 is_public=is_public,
             )
             apply_simple_problem_defaults(problem)
-            problem.save()
+            # The generated code can be taken by a concurrent creator; take the next free one.
+            save_new_problem(problem)
             problem.organizations.set(organizations)
             problem.classes.set(classes)
             if organizations or classes:
@@ -477,6 +480,7 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
         problem_form, config_form, formset = self.build_forms(problem)
         return self.render(request, problem, problem_form, config_form, formset)
 
+    @retry_on_deadlock
     def post(self, request, *args, **kwargs):
         if self.kwargs.get('problem') is None and request.FILES.get('excel_file') is not None:
             return self.batch_create_excel(request)
@@ -493,7 +497,10 @@ class ProblemMCQEditView(LoginRequiredMixin, View):
                 if creating:
                     problem.submission_type = ProblemSubmissionType.MCQ
                     apply_simple_problem_defaults(problem)
-                problem.save()
+                    # The generated code can be taken by a concurrent creator; take the next free one.
+                    save_new_problem(problem)
+                else:
+                    problem.save()
                 problem_form.save_m2m()
                 if creating:
                     problem.types.add(default_problem_type())

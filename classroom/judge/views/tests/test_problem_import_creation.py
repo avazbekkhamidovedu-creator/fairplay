@@ -1,11 +1,10 @@
-from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest import mock
 
-from django.db import IntegrityError
 from django.test import SimpleTestCase
 
 from judge.utils.problem_create import generate_problem_code
+from judge.utils.unique_ids import UniqueIdTaken
 from judge.views.problem_import import _delete_problem_data_directories, _save_problem_with_unique_code
 
 
@@ -17,25 +16,18 @@ class ProblemImportCreationTestCase(SimpleTestCase):
         self.assertEqual(generate_problem_code(), 'p000001')
         values_list.assert_called_once_with('code', flat=True)
 
-    @mock.patch('judge.views.problem_import.apply_simple_problem_defaults')
-    @mock.patch('judge.views.problem_import.Problem.objects.filter')
-    @mock.patch('judge.views.problem_import.transaction.atomic')
-    def test_retries_generated_code_collision_before_problem_side_effects(self, atomic, problem_filter, defaults):
+    @mock.patch('judge.views.problem_import.save_new_problem')
+    def test_saves_through_the_retrying_unique_code_helper(self, save_new_problem):
+        # The retry itself (savepoint, next free code) is covered with a real collision in
+        # judge.views.tests.test_teacher_concurrency.SaveWithUniqueIdTestCase.
         problem = SimpleNamespace(code='p000000')
-        problem.save = mock.Mock(side_effect=[IntegrityError(), None])
-        atomic.side_effect = lambda: nullcontext()
-        problem_filter.return_value.exists.return_value = True
-
-        def assign_next_code(instance):
-            instance.code = 'p000001'
-
-        defaults.side_effect = assign_next_code
-
         _save_problem_with_unique_code(problem)
+        save_new_problem.assert_called_once_with(problem)
 
-        self.assertEqual(problem.code, 'p000001')
-        self.assertEqual(problem.save.call_count, 2)
-        defaults.assert_called_once_with(problem)
+    @mock.patch('judge.views.problem_import.save_new_problem', side_effect=UniqueIdTaken('p000009'))
+    def test_exhausted_code_retries_report_a_readable_error(self, save_new_problem):
+        with self.assertRaisesMessage(ValueError, 'Could not allocate a unique problem code'):
+            _save_problem_with_unique_code(SimpleNamespace(code='p000009'))
 
     @mock.patch('judge.views.problem_import.shutil.rmtree')
     @mock.patch('judge.views.problem_import.os.path.isdir', return_value=True)

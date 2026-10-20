@@ -687,6 +687,9 @@
             format_config: {{ prefill.format_config|tojson }},
         };
         window.DMOJ_IS_EDIT = {{ 'true' if contest else 'false' }};
+        // Fingerprint of the assignment when this page was rendered: the server refuses (409) a
+        // save when someone else saved it in between, instead of silently overwriting them.
+        window.DMOJ_EDIT_BASE = {{ (edit_base or '')|tojson }};
 
         // HTML-escape a string for safe interpolation into innerHTML. Problem
         // names come from the database (teachers can create/import them with
@@ -824,6 +827,8 @@
                 if (!window.DMOJ_IS_EDIT) {
                     var keyEl = document.getElementById('id_key');
                     if (keyEl) data.key_auto = keyEl.dataset.autoGen === '1';
+                } else if (window.DMOJ_EDIT_BASE) {
+                    data.edit_base = window.DMOJ_EDIT_BASE;
                 }
 
                 // Target-score sanity check (pure UX, not a model field): warn

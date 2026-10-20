@@ -960,6 +960,14 @@
     const CAN_CREATE_MCQ = {{ 'true' if can_create_mcq else 'false' }};
     const CAN_CREATE_FILE = {{ 'true' if can_create_file else 'false' }};
     const EDIT_CODE = '{{ edit_code }}';
+    // Fingerprint of the problem when this page was rendered: the server refuses (409) a save
+    // when someone else saved the problem in between, instead of silently overwriting them.
+    const EDIT_BASE = '{{ edit_base or '' }}';
+    // One token per page load: a repeated save (double click, retry) is answered with the
+    // problem the first save created instead of creating a duplicate.
+    const CREATE_TOKEN = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID().replace(/-/g, '')
+      : (Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     const TEST_DATA_URL = '{{ test_data_url }}';
     (function initProblemCodePrefill() {
       const codeInputEl = document.getElementById('f-code');
@@ -2661,7 +2669,12 @@
             data.confirm_question_type || data.confirm_data_load || data.confirm_unrecognized_configurations
           );
         }
-        if (EDIT_CODE) data.edit_code = EDIT_CODE;
+        if (EDIT_CODE) {
+          data.edit_code = EDIT_CODE;
+          if (EDIT_BASE) data.edit_base = EDIT_BASE;
+        } else if (!IMPORT_EDITOR_MODE) {
+          data.create_token = CREATE_TOKEN;
+        }
         var err = IMPORT_EDITOR_MODE && (action === 'save' || action === 'format')
           ? validateForImportFormatting(data)
           : validate(data);
