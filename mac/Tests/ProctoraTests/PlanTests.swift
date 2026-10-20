@@ -112,10 +112,12 @@ import Foundation
     }
 
     @Test func batteryRule() {
+        typealias B = Readiness.Battery
         #expect(Readiness.batteryOK(nil))
-        #expect(Readiness.batteryOK(.init(percent: 20, charging: true)))
-        #expect(Readiness.batteryOK(.init(percent: 50, charging: false)))
-        #expect(!Readiness.batteryOK(.init(percent: 49, charging: false)))
+        #expect(Readiness.batteryOK(B(percent: 20, charging: true)))
+        #expect(Readiness.batteryOK(B(percent: 50, charging: false)))
+        let low = Readiness.batteryOK(B(percent: 49, charging: false))
+        #expect(low == false)
     }
 
     @Test func rowsMergeProblemsByIdAndKeepInfoRowsNonBlocking() {
