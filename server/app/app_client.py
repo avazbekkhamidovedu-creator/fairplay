@@ -35,6 +35,10 @@ APP_PROOF_DETAIL = "The FairPlay app could not be verified. Quit and reopen it, 
 OTHER_DEVICE_DETAIL = ("This exam is already open on another computer. "
                        "Ask the invigilator to move it to this one.")
 SESSION_DETAIL = "This exam was opened somewhere else. Ask the invigilator for help."
+# S4: start on a second computer while the attempt is bound elsewhere (409 detail object).
+SWAP_NEEDED = {"code": "swap_needed", "message": OTHER_DEVICE_DETAIL}
+SWAP_TOO_LATE_DETAIL = "Finish on the computer you started on"
+SWAP_FINAL_SAVE_S = 120
 # Gaps in the app's own signal that the teacher should see (app killed, Mac asleep, cable).
 APP_GAP_S = 20
 NO_APP_SIGNAL_S = 45

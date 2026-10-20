@@ -162,6 +162,8 @@ export interface LiveStudent {
   /** S3: came back after FairPlay closed; "pending" waits for Approve. */
   approval?: Approval;
   pending_since?: string | null;
+  /** S4: asked from another computer to continue there ("Approve swap"). */
+  swap_requested?: boolean;
 }
 
 /** S3: null = never had to wait. */

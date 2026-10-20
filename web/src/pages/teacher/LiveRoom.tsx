@@ -529,6 +529,7 @@ export function SeatBadges({ examId, student: s, onChanged }: { examId: string; 
   const badges: string[] = [];
   if (s.sealed_pending) badges.push("submission pending on this student's computer");
   if (writing && s.approval === "pending") badges.push("Waiting for approval");
+  if (writing && s.swap_requested) badges.push("Wants to continue on another computer");
   if (badges.length === 0) return null;
 
   async function act(fn: () => Promise<unknown>) {
@@ -556,6 +557,13 @@ export function SeatBadges({ examId, student: s, onChanged }: { examId: string; 
           title="FairPlay closed on this computer and was opened again. Check the student, then let them continue."
           onClick={() => void act(() => teacherApi.approveResume(examId, s.attempt_id))}>
           {busy ? "…" : "Approve"}
+        </button>
+      )}
+      {writing && s.swap_requested && (
+        <button type="button" className="t-mini-link" disabled={busy} aria-label={`Approve swap for ${s.name}`}
+          title="Only if you checked the student: the exam moves to the other computer, this one stops."
+          onClick={() => void act(() => teacherApi.approveSwap(examId, s.attempt_id))}>
+          {busy ? "…" : "Approve swap"}
         </button>
       )}
       {error && <span className="t-small" style={{ color: "var(--warn)" }}>{error}</span>}

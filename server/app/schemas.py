@@ -504,6 +504,12 @@ class DeviceCheckIn(BaseModel):
         return v
 
 
+# ---------------------------------------------------------------- S4: device swap
+class SwapRequestIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    device_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9-]+$")
+
+
 # ---------------------------------------------------------------- S5: sealed offline submit
 class SealedSubmitIn(BaseModel):
     """The app's sealed file, as written at time-up (routes_student.sealed_submit):

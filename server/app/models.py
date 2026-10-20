@@ -136,6 +136,12 @@ class Attempt(Base):
     pending_resume: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
                                                  server_default=false())
     pending_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # S4: the student asked to continue on another computer (swap_device_id); once the
+    # teacher approves, the old session may still send one final save for 120 s.
+    swap_device_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    swap_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    swap_old_session: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    swap_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class IntegrityEvent(Base):

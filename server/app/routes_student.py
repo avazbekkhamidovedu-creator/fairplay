@@ -18,7 +18,7 @@ from . import app_client as ac
 from .access import member_of_exam, require_member
 from .app_version import check_app_version
 from .schemas import (AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn, HeartbeatIn,
-                      OfflineKeyIn, StartIn)
+                      OfflineKeyIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
 from .services import (LIVE_TTL, attempt_view, cache_attempt, find_attempt, get_attempt_meta,
                        get_exam_cached, new_id, new_receipt, new_session_id)
@@ -47,6 +47,7 @@ ANSWER_WRITES_PER_MIN = 240
 SUBMIT_RETRIES = 3
 OFFLINE_KEY_ASKS = 10
 DEVICE_CHECKS_PER_MIN = 30
+SWAP_REQUESTS_PER_MIN = 10
 
 
 async def take_code_try(store, lock_key: str, count_key: str, limit: int, window_s: int,
@@ -232,7 +233,8 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
         if await ac.once_per(store, f"secdev:{a.id}", 60):   # one flag a minute, not per try
             await ac.add_event(session, store, a.id, exam_id, "second_device",
                                f"start refused from {'device ' + device_id[:8] if device_id else 'a browser'}")
-        raise HTTPException(409, ac.OTHER_DEVICE_DETAIL)
+        # S4: an object detail, so the page can offer "ask to continue here" (swap-request)
+        raise HTTPException(409, ac.SWAP_NEEDED)
     if device_id is None:
         # Browser demo mode (FAIRPLAY_REQUIRE_APP=0) on an unbound attempt: keep the session
         # so a second tab does not break the first one.
@@ -252,6 +254,8 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
     ask = not first_bind and exam.get("resume_needs_approval", True) and not a.pending_resume
     if ask:
         a.pending_resume, a.pending_since = True, now
+    if first_bind:
+        a.swap_requested_at = None        # S4: whichever computer binds, the request is done
     await session.commit()
     await store.set(f"entry:{a.id}", "1", REENTRY_QUIET_S)
     if first_bind:
@@ -318,10 +322,15 @@ async def save_answers(aid: str, body: AnswersIn, request: Request,
     # Slow path: find out why nothing was updated.
     row = (await session.execute(
         select(Attempt.student_id, Attempt.status, Attempt.deadline_at, Attempt.client_seq,
-               Attempt.exam_id, Attempt.session_id)
+               Attempt.exam_id, Attempt.session_id, Attempt.swap_old_session,
+               Attempt.swap_approved_at)
         .where(Attempt.id == aid))).first()
     if row is None or row.student_id != p.user_id:
         raise HTTPException(404, "Attempt not found")
+    if given and given == row.swap_old_session:
+        saved = await _final_save_after_swap(session, store, aid, row, answers, now)
+        if saved is not None:
+            return {"saved": True, "client_seq": body.client_seq, "server_time": iso(now), "merged": saved}
     await ac.check_session(request, session, get_store(), aid,
                            {"exam_id": row.exam_id, "session_id": row.session_id})
     if row.status == "submitted":
@@ -329,6 +338,39 @@ async def save_answers(aid: str, body: AnswersIn, request: Request,
     if now >= row.deadline_at:
         raise HTTPException(409, "Time is up")
     return {"saved": False, "client_seq": row.client_seq, "server_time": iso(now)}
+
+
+async def _final_save_after_swap(session: AsyncSession, store, aid: str, row, answers: dict,
+                                 now) -> int | None:
+    """S4: the computer the exam was moved away from may send ONE last save within
+    SWAP_FINAL_SAVE_S of the approval (what it typed since its last save). It only fills
+    questions the new computer has not changed since the approval (snapshot taken then).
+    Returns how many answers were merged, or None (window over / used / not in progress)."""
+    if row.status != "in_progress" or row.swap_approved_at is None \
+            or (now - row.swap_approved_at).total_seconds() > ac.SWAP_FINAL_SAVE_S \
+            or now >= row.deadline_at + LATE_GRACE:
+        return None
+    raw = await store.getdel(f"swapbase:{aid}")     # single use
+    if raw is None:
+        return None
+    base = json.loads(raw)
+    for _ in range(SUBMIT_RETRIES):
+        cur = (await session.execute(select(Attempt.answers, Attempt.client_seq)
+                                     .where(Attempt.id == aid))).first()
+        current = dict(cur.answers or {})
+        merged = {k: v for k, v in answers.items() if current.get(k) == base.get(k) and current.get(k) != v}
+        if not merged:
+            return 0
+        current.update(merged)
+        # Only if the new computer saved nothing in between (client_seq unchanged).
+        res = await session.execute(
+            update(Attempt).where(Attempt.id == aid, Attempt.status == "in_progress",
+                                  Attempt.client_seq == cur.client_seq)
+            .values(answers=current, answered=count_answered(current), updated_at=now))
+        await session.commit()
+        if res.rowcount == 1:
+            return len(merged)
+    return None
 
 
 async def _known_answers(store, session: AsyncSession, aid: str, answers: dict) -> dict:
@@ -623,6 +665,30 @@ async def offline_key(aid: str, body: OfflineKeyIn, request: Request,
         out["proof"] = ac.sign(settings.app_keys[0],
                                ac.offkey_response_message(aid, body.session, key_hex, body.ts))
     return out
+
+
+# ---------------------------------------------------------------- S4: device swap
+@router.post("/attempts/{aid}/swap-request", status_code=202)
+async def swap_request(aid: str, body: SwapRequestIn, p: Principal = Depends(require_student),
+                       session: AsyncSession = Depends(get_session)):
+    """The student's laptop broke: from the other computer (start answered 409
+    swap_needed) ask the teacher to move the exam here. That computer keeps calling start
+    every 5 s and binds once the teacher approved (POST .../approve-swap)."""
+    store = get_store()
+    if await store.incr(f"swaprate:{aid}", 60) > SWAP_REQUESTS_PER_MIN:
+        raise HTTPException(429, "Too many tries, wait a minute")
+    a = await _own_attempt(session, aid, p)
+    if a.status != "in_progress":
+        raise HTTPException(409, "Attempt already submitted")
+    now = utcnow()
+    if now > a.deadline_at + LATE_GRACE:
+        raise HTTPException(409, ac.SWAP_TOO_LATE_DETAIL)
+    a.swap_device_id, a.swap_requested_at = body.device_id, now
+    await session.commit()
+    if await ac.once_per(store, f"swapreq:{aid}:{body.device_id}", 60):
+        await ac.add_event(session, store, aid, a.exam_id, "swap_requested",
+                           f"wants to continue on device {body.device_id[:8]}")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- S1: device check

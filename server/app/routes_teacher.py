@@ -296,6 +296,37 @@ async def release_device(exam_id: str, aid: str, p: Principal = Depends(require_
     return {"ok": True}
 
 
+@router.post("/{exam_id}/attempts/{aid}/approve-swap")
+async def approve_swap(exam_id: str, aid: str, p: Principal = Depends(require_teacher),
+                       session: AsyncSession = Depends(get_session)):
+    """S4: move the exam to the computer the student asked from. Like release-device (the
+    next start from any FairPlay app binds it), but the old computer may send one final
+    save for SWAP_FINAL_SAVE_S, and its hand-in check answers "moved"."""
+    _, a = await _exam_attempt(session, exam_id, aid, p)
+    if a.status != "in_progress":
+        raise HTTPException(409, "Attempt already submitted")
+    now = utcnow()
+    if now > a.deadline_at + LATE_GRACE:
+        raise HTTPException(409, ac.SWAP_TOO_LATE_DETAIL)
+    target = a.swap_device_id
+    a.swap_old_session, a.swap_approved_at = a.session_id, now
+    a.swap_requested_at = None
+    a.device_id = None
+    a.session_id = new_session_id()   # nobody holds this one: the old device is cut off
+    a.updated_at = now
+    await session.commit()
+    store = get_store()
+    # The answers as of now: the old computer's final save only fills what the new one
+    # has not changed since (routes_student._final_save_after_swap).
+    await store.set(f"swapbase:{aid}", json.dumps(a.answers or {}), ac.SWAP_FINAL_SAVE_S + 10)
+    await store.delete(attempt_key(aid), f"abt:{aid}")
+    await store.hdel(f"ab:{exam_id}", aid)
+    await ac.add_event(session, store, aid, exam_id, "swap_approved",
+                       "teacher moved this exam to another computer"
+                       + (f" (device {target[:8]})" if target else ""))
+    return {"ok": True}
+
+
 @router.post("/{exam_id}/attempts/{aid}/approve-resume")
 async def approve_resume(exam_id: str, aid: str, p: Principal = Depends(require_teacher),
                          session: AsyncSession = Depends(get_session)):
@@ -359,7 +390,8 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
         select(Attempt.id, Attempt.status, Attempt.started_at, Attempt.submitted_at,
                Attempt.deadline_at, Attempt.answered, User.username, User.name,
                Attempt.client, Attempt.entries, Attempt.late, Attempt.pending_resume,
-               Attempt.pending_since)
+               Attempt.pending_since, Attempt.swap_requested_at, Attempt.swap_device_id,
+               Attempt.device_id)
         .join(User, User.id == Attempt.student_id)
         .where(Attempt.exam_id == exam_id)
         .order_by(User.name, User.username))).all()
@@ -384,7 +416,7 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
     old_answers = dict((await session.execute(
         select(Attempt.id, Attempt.answers).where(Attempt.id.in_(legacy)))).all()) if legacy else {}
     for (aid, status, started, submitted, deadline, answered, username, name, client, entries, late,
-         pending, pending_since) in rows:
+         pending, pending_since, swap_at, swap_dev, device) in rows:
         h = json.loads(hb[aid]) if aid in hb else None
         b = json.loads(ab[aid]) if aid in ab else None
         app_online = bool(b) and now - b["t"] <= APP_ONLINE_WINDOW_S
@@ -416,6 +448,8 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
             # S3: came back after FairPlay closed; waits for "Approve"
             "approval": "pending" if pending else ("approved" if pending_since else None),
             "pending_since": iso(pending_since) if pending else None,
+            # S4: asked from another computer; "Approve swap" moves the exam there
+            "swap_requested": status == "in_progress" and swap_at is not None and swap_dev != device,
         })
     counts = {"writing": 0, "submitted": 0, "offline": 0, "needs_look": 0}
     for st in students:
