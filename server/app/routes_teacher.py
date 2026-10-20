@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
 from .grading import exam_questions, auto_points, external_question, grade_attempt, is_answered, num, percent, word_count
-from .models import Attempt, Exam, IntegrityEvent, User
+from .models import Attempt, ClassMember, DeviceCheck, Exam, IntegrityEvent, User
 from .schemas import QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitIn, ReleaseIn, ReviewIn
 from .security import Principal, require_teacher
 from .services import (attempt_key, exam_delivery, exam_out, exam_out_full, invalidate_exam,
@@ -290,6 +290,36 @@ async def release_device(exam_id: str, aid: str, p: Principal = Depends(require_
     await ac.add_event(session, store, aid, exam_id, "device_released",
                        "teacher allowed this exam to move to another computer")
     return {"ok": True}
+
+
+@router.get("/{exam_id}/readiness")
+async def readiness(exam_id: str, p: Principal = Depends(require_teacher),
+                    session: AsyncSession = Depends(get_session)):
+    """S1: each student's latest FairPlay device check. The roster is the exam's class;
+    an exam without one lists the students who have attempts."""
+    e = await _own_exam(session, exam_id, p)
+    if e.class_id is not None:
+        roster = select(User.id, User.name).join(ClassMember, ClassMember.user_id == User.id) \
+            .where(ClassMember.class_id == e.class_id)
+    else:
+        roster = select(User.id, User.name).join(Attempt, Attempt.student_id == User.id) \
+            .where(Attempt.exam_id == exam_id)
+    students = (await session.execute(roster.order_by(User.name, User.id))).all()
+    checks = (await session.execute(
+        select(DeviceCheck).where(DeviceCheck.student_id.in_([sid for sid, _ in students]))
+        .order_by(DeviceCheck.checked_at))).scalars().all() if students else []
+    latest = {c.student_id: c for c in checks}      # ordered by time: the newest wins
+    return [_readiness_row(sid, name, latest.get(sid)) for sid, name in students]
+
+
+def _readiness_row(sid: int, name: str, c: DeviceCheck | None) -> dict:
+    if c is None:
+        return {"student_id": sid, "name": name, "platform": None, "app_version": None,
+                "os_version": None, "ok": None, "failed": None, "checked_at": None}
+    failed = [str(x.get("id")) for x in c.checks or [] if not x.get("info") and not x.get("ok")]
+    return {"student_id": sid, "name": name, "platform": c.platform, "app_version": c.app_version,
+            "os_version": c.os_version, "ok": not failed, "failed": failed,
+            "checked_at": iso(c.checked_at)}
 
 
 @router.get("/{exam_id}/live")

@@ -206,3 +206,19 @@ class ClassMember(Base):
                                           index=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class DeviceCheck(Base):
+    """S1 (2026-10-20): the latest device check a student's FairPlay app ran, one row per
+    (student, platform). The teacher's readiness list reads it before the exam."""
+    __tablename__ = "device_checks"
+    __table_args__ = (UniqueConstraint("student_id", "platform", name="uq_device_check_student_platform"),)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    platform: Mapped[str] = mapped_column(String(300), nullable=False)
+    app_version: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    os_version: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    # [{id, ok, message, info}] as sent (validated by schemas.DeviceCheckIn)
+    checks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    exam_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

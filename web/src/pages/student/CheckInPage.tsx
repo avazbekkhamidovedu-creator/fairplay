@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { examName, isToday, plural, shortDate, shortTime } from "../../components/student/format";
-import { ReadinessChecks, readinessOk, useReadiness } from "../../components/student/Readiness";
+import { DeviceCheckRun, ReadinessChecks, readinessOk, useReadiness } from "../../components/student/Readiness";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { CheckIcon } from "../../components/student/icons";
 import "../../styles/student.css";
@@ -75,6 +75,7 @@ export default function CheckInPage() {
             <h2 id="c1-h">Laptop check</h2>
           </div>
           <ReadinessChecks readiness={readiness} />
+          <DeviceCheckRun examId={exam.id} />
           <p className="stu-hint" style={{ marginTop: "auto", lineHeight: 1.5 }}>
             Other apps will close when the exam starts. Save your work in them now.
           </p>

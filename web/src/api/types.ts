@@ -964,3 +964,25 @@ export interface StudentClass {
   teacher: string;
   joined_at?: string;
 }
+
+// ---------- S1 (2026-10-20): device check ----------
+
+export interface DeviceCheckInput {
+  platform: string;
+  app_version: string;
+  os_version: string;
+  checks: { id: string; ok: boolean; message: string; info?: boolean }[];
+  exam_id?: string | null;
+}
+
+/** GET /api/exams/{id}/readiness: one per student; null fields = never checked. */
+export interface ReadinessRow {
+  student_id: number;
+  name: string;
+  platform: string | null;
+  app_version: string | null;
+  os_version: string | null;
+  ok: boolean | null;
+  failed: string[] | null;
+  checked_at: string | null;
+}

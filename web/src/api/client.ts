@@ -1,5 +1,7 @@
 import type { AllowedAppOption,
   AnswerMap,
+  DeviceCheckInput,
+  ReadinessRow,
   AttemptView,
   EventsResponse,
   Exam,
@@ -266,6 +268,8 @@ export const teacherApi = {
   releaseDevice: (examId: string, aid: string) =>
     request<{ ok: boolean }>("teacher", "POST", `/api/exams/${enc(examId)}/attempts/${enc(aid)}/release-device`),
   live: (id: string) => request<LiveRoom>("teacher", "GET", `/api/exams/${enc(id)}/live`),
+  /** S1: each student's latest FairPlay device check. */
+  readiness: (id: string) => request<ReadinessRow[]>("teacher", "GET", `/api/exams/${enc(id)}/readiness`),
   /** 8-digit exit code for one student's locked Mac that cannot reach the server
    *  (the Mac shows a Mac code). Only works on that Mac's current session; logged. */
   offlineExit: (id: string, aid: string, macCode: string) =>
@@ -355,6 +359,9 @@ export const studentApi = {
       client_seq: clientSeq,
     }),
   grades: () => request<StudentGradeSummary[]>("student", "GET", "/api/student/grades"),
+  /** S1: store this computer's device check so the teacher sees it before the exam. */
+  deviceCheck: (body: DeviceCheckInput) =>
+    request<{ ok: boolean; saved_at: string }>("student", "POST", "/api/student/device-check", body),
   feedback: (examId: string) =>
     request<StudentFeedback>("student", "GET", `/api/student/grades/${enc(examId)}`),
 };

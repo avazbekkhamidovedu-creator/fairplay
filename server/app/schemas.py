@@ -469,3 +469,34 @@ class CommentIn(BaseModel):
 
 class ReleaseIn(BaseModel):
     force: bool = False
+
+
+# ---------------------------------------------------------------- S1: device check
+MAX_DEVICE_CHECKS = 40
+DEVICE_TEXT = 300
+
+
+class DeviceCheckItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(min_length=1, max_length=DEVICE_TEXT)
+    ok: bool
+    message: str = Field(default="", max_length=DEVICE_TEXT)
+    # informational rows (VPN, battery) never block
+    info: bool = False
+
+
+class DeviceCheckIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    platform: str = Field(min_length=1, max_length=DEVICE_TEXT)
+    app_version: str = Field(default="", max_length=DEVICE_TEXT)
+    os_version: str = Field(default="", max_length=DEVICE_TEXT)
+    checks: list[DeviceCheckItem] = Field(default_factory=list, max_length=MAX_DEVICE_CHECKS)
+    exam_id: str | None = Field(default=None, max_length=DEVICE_TEXT)
+
+    @field_validator("platform")
+    @classmethod
+    def _platform(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("platform must not be empty")
+        return v

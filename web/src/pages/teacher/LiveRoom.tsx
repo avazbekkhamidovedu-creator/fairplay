@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { NetworkError, teacherApi } from "../../api/client";
-import type { Exam, LiveFlag, LiveRoom as LiveRoomData, LiveStudent } from "../../api/types";
+import type { Exam, LiveFlag, LiveRoom as LiveRoomData, LiveStudent, ReadinessRow } from "../../api/types";
 import { errorText, eventLabel, plural } from "../../components/teacher/util";
 import { clockOffset, formatClock, formatCountdown } from "../../lib/timer";
 
@@ -384,6 +384,7 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
               </ul>
             )}
           </div>
+          <DeviceReadiness examId={exam.id} />
         </section>
 
         <FlagsPanel examId={exam.id} flags={flags} onReviewed={load} />
@@ -518,6 +519,63 @@ function FlagCard({ examId, flag, onDone }: { examId: string; flag: LiveFlag; on
   );
 }
 
+
+/** S1: each student's latest FairPlay device check (Readiness page "Run check"). */
+export function DeviceReadiness({ examId }: { examId: string }) {
+  const [rows, setRows] = useState<ReadinessRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      setRows(await teacherApi.readiness(examId));
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, [examId]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  const notReady = (rows ?? []).filter((r) => r.ok !== true).length;
+  return (
+    <section className="t-card" aria-labelledby="ready-h" data-testid="device-readiness">
+      <div className="t-card-head">
+        <h2 id="ready-h">Device readiness</h2>
+        <button type="button" className="t-mini-link" onClick={() => void load()}>
+          refresh
+        </button>
+      </div>
+      {error && <span className="t-inline-error">{error}</span>}
+      {rows === null && !error ? (
+        <div className="t-empty">Loading…</div>
+      ) : rows && rows.length === 0 ? (
+        <div className="t-empty">No students in this exam's class yet.</div>
+      ) : (
+        <>
+          <span className="t-small t-muted">
+            {notReady === 0 ? "Every student's computer passed its check." : `${plural(notReady, "student")} not ready or not checked yet.`}
+          </span>
+          <ul className="t-ready-list" style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
+            {(rows ?? []).map((r) => (
+              <li key={r.student_id}>
+                <strong>{r.name}</strong>
+                {" · "}
+                {r.checked_at == null
+                  ? "not checked yet"
+                  : r.ok
+                    ? `ready (${platformName(r.platform)} ${r.app_version ?? ""}, ${formatClock(r.checked_at)})`
+                    : `needs a fix: ${(r.failed ?? []).join(", ")} (${formatClock(r.checked_at)})`}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function platformName(p: string | null): string {
+  return p === "mac" ? "Mac" : p === "windows" ? "Windows" : p ?? "";
+}
 
 export const SECRET_SHOW_MS = 20_000;
 

@@ -24,7 +24,7 @@ export type NativeMessage =
   | { type: "event"; event: IntegrityEvent }
   | { type: "attestation"; nonce: string; device_id: string; signature: string; version: string; build: string }
   | { type: "attestationFailed"; nonce: string; reason: string }
-  | { type: "preflight"; problems: string[] }
+  | { type: "preflight"; problems: string[]; checks?: DeviceCheck[]; platform?: string; app_version?: string; os_version?: string }
   /** Review 2026-10-14: the app could not open the website exam (e.g. "bad_session"). */
   | { type: "externalFailed"; reason: string };
 
@@ -343,22 +343,67 @@ export function requestLock(timeoutMs = 10000, exam?: Partial<ExamSessionParams>
  * that doesn't know "preflight", resolves [] after the timeout (the lock's own checks
  * still run).
  */
-export function preflight(timeoutMs = 3000): Promise<string[]> {
+export async function preflight(timeoutMs = 3000): Promise<string[]> {
+  return (await preflightReport(timeoutMs))?.problems ?? [];
+}
+
+/** S1: one row of the app's device check. `info` rows (VPN, battery) never block. */
+export interface DeviceCheck {
+  id: string;
+  ok: boolean;
+  message: string;
+  info?: boolean;
+}
+
+export interface PreflightReport {
+  problems: string[];
+  /** [] from older apps and Windows builds that only send `problems`. */
+  checks: DeviceCheck[];
+  platform: string;
+  app_version: string;
+  os_version: string;
+}
+
+const text = (v: unknown, max = 300): string => (typeof v === "string" ? v.slice(0, max) : "");
+
+/** Read the app's "preflight" answer defensively (it crosses a trust boundary). */
+export function parsePreflight(msg: Record<string, unknown>): PreflightReport {
+  const checks: DeviceCheck[] = [];
+  for (const c of Array.isArray(msg.checks) ? msg.checks.slice(0, 40) : []) {
+    if (!c || typeof c !== "object") continue;
+    const r = c as Record<string, unknown>;
+    const id = text(r.id);
+    if (!id) continue;
+    const row: DeviceCheck = { id, ok: r.ok === true, message: text(r.message) };
+    if (r.info === true) row.info = true;
+    checks.push(row);
+  }
+  return {
+    problems: Array.isArray(msg.problems) ? msg.problems.map(String) : [],
+    checks,
+    platform: text(msg.platform) || nativePlatform() || "",
+    app_version: text(msg.app_version),
+    os_version: text(msg.os_version),
+  };
+}
+
+/** S1: the whole preflight answer (null outside the app or when it doesn't answer). */
+export function preflightReport(timeoutMs = 3000): Promise<PreflightReport | null> {
   install();
-  if (!isNative()) return Promise.resolve([]);
+  if (!isNative()) return Promise.resolve(null);
   return new Promise((resolve) => {
     let done = false;
-    const finish = (p: string[]) => {
+    const finish = (r: PreflightReport | null) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       off();
-      resolve(p);
+      resolve(r);
     };
     const off = onNative((msg) => {
-      if (msg.type === "preflight") finish(Array.isArray(msg.problems) ? msg.problems.map(String) : []);
+      if (msg.type === "preflight") finish(parsePreflight(msg as unknown as Record<string, unknown>));
     });
-    const timer = setTimeout(() => finish([]), timeoutMs);
+    const timer = setTimeout(() => finish(null), timeoutMs);
     post({ action: "preflight" });
   });
 }

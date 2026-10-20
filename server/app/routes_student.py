@@ -13,11 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
 from .grading import exam_questions, grade_attempt, is_answered, num, percent
-from .models import Attempt, Exam, IntegrityEvent
+from .models import Attempt, DeviceCheck, Exam, IntegrityEvent
 from . import app_client as ac
 from .access import member_of_exam, require_member
 from .app_version import check_app_version
-from .schemas import AnswersIn, AppBeatIn, EventsIn, ExitCodeIn, HeartbeatIn, OfflineKeyIn, StartIn
+from .schemas import (AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn, HeartbeatIn,
+                      OfflineKeyIn, StartIn)
 from .security import Principal, require_student
 from .services import (LIVE_TTL, attempt_view, cache_attempt, find_attempt, get_attempt_meta,
                        get_exam_cached, new_id, new_receipt, new_session_id)
@@ -45,6 +46,7 @@ CHALLENGES_PER_MIN = 30
 ANSWER_WRITES_PER_MIN = 240
 SUBMIT_RETRIES = 3
 OFFLINE_KEY_ASKS = 10
+DEVICE_CHECKS_PER_MIN = 30
 
 
 async def take_code_try(store, lock_key: str, count_key: str, limit: int, window_s: int,
@@ -605,6 +607,34 @@ async def offline_key(aid: str, body: OfflineKeyIn, request: Request,
         out["proof"] = ac.sign(settings.app_keys[0],
                                ac.offkey_response_message(aid, body.session, key_hex, body.ts))
     return out
+
+
+# ---------------------------------------------------------------- S1: device check
+@router.post("/device-check")
+async def device_check(body: DeviceCheckIn, p: Principal = Depends(require_student),
+                       session: AsyncSession = Depends(get_session)):
+    """The Readiness page's "Run check": keeps the latest report per (student, platform)
+    so the teacher sees before the exam who still has a problem to fix."""
+    if await get_store().incr(f"devchk:{p.user_id}", 60) > DEVICE_CHECKS_PER_MIN:
+        raise HTTPException(429, "Checking too often, wait a minute")
+    now = utcnow()
+    values = {"app_version": body.app_version, "os_version": body.os_version,
+              "checks": [c.model_dump() for c in body.checks], "exam_id": body.exam_id,
+              "checked_at": now}
+    for _ in range(2):     # a parallel first check may insert the row first: update it then
+        row = (await session.execute(select(DeviceCheck).where(
+            DeviceCheck.student_id == p.user_id, DeviceCheck.platform == body.platform))).scalar_one_or_none()
+        if row is None:
+            session.add(DeviceCheck(student_id=p.user_id, platform=body.platform, **values))
+        else:
+            for k, v in values.items():
+                setattr(row, k, v)
+        try:
+            await session.commit()
+            break
+        except IntegrityError:
+            await session.rollback()
+    return {"ok": True, "saved_at": iso(now)}
 
 
 # ---------------------------------------------------------------- slice 2: grades
