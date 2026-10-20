@@ -9,6 +9,12 @@
 #   ta_wang  teaching assistant of class CS101-001
 #   ab101 .. ab105  students
 #
+# To share it with a link (no account needed), in a second terminal:
+#   brew install cloudflared            # once
+#   cloudflared tunnel --url http://localhost:8000
+# and open the https://<random>.trycloudflare.com address it prints. The link works while
+# both commands run; it is public, so stop the tunnel when you are done.
+#
 # Stop with Ctrl+C. `docker compose -f docker-compose.local.yml down -v` also deletes the data.
 # This is for looking around locally only (DEBUG on, demo passwords). Production uses
 # docker-compose.yml with its own database and settings (see docs/deploy.md).
@@ -42,7 +48,9 @@ services:
       CLASSROOM_DB_HOST: db
       CLASSROOM_REDIS_URL: redis://redis:6379
       CLASSROOM_DEBUG: "1"
-      CLASSROOM_ALLOWED_HOSTS: "localhost,127.0.0.1"
+      # .trycloudflare.com: lets a Cloudflare quick tunnel show this site to others (see above).
+      CLASSROOM_ALLOWED_HOSTS: "localhost,127.0.0.1,.trycloudflare.com"
+      CLASSROOM_CSRF_TRUSTED_ORIGINS: "https://*.trycloudflare.com"
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

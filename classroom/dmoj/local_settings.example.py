@@ -42,6 +42,8 @@ SECRET_KEY = _secret_key()
 # DEBUG is for local development only. Never deploy with this file.
 DEBUG = _env('CLASSROOM_DEBUG', '1') == '1'
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]'] + [h for h in _env('CLASSROOM_ALLOWED_HOSTS', '').split(',') if h]
+# Extra origins allowed to POST forms, e.g. a Cloudflare quick tunnel: https://*.trycloudflare.com
+CSRF_TRUSTED_ORIGINS = [o for o in _env('CLASSROOM_CSRF_TRUSTED_ORIGINS', '').split(',') if o]
 
 DATABASES = {
     'default': {
