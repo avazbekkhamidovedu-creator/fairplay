@@ -8,7 +8,10 @@ name: release-mac
 
 on:
   push:
+    branches: ["**"]
     tags: ["v*"]
+    # Changing RELEASE_VERSION on a branch releases v<that version> (the tag is created here).
+    paths: ["RELEASE_VERSION"]
   workflow_dispatch:
 
 permissions:
@@ -26,6 +29,12 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then TAG="$GITHUB_REF_NAME"; else TAG="v$(tr -d ' \n' < RELEASE_VERSION)"; fi
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad version $TAG"; exit 1; }
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
 
       - name: Build (release, universal)
         env:
@@ -46,16 +55,17 @@ jobs:
         run: ditto -c -k --sequesterRsrc --keepParent mac/FairPlay.app FairPlay-Mac.zip
 
       - name: GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "FairPlay $GITHUB_REF_NAME" --notes-file RELEASES.md
-          gh release upload "$GITHUB_REF_NAME" FairPlay-Mac.zip --clobber
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "FairPlay $TAG" --notes-file RELEASES.md || \
+            gh release view "$TAG" >/dev/null   # created meanwhile by another job
+          gh release upload "$TAG" FairPlay-Mac.zip --clobber
 
       - name: Keep the zip (manual runs)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        if: github.event_name != 'push'
         uses: actions/upload-artifact@v4
         with:
           name: FairPlay-Mac
