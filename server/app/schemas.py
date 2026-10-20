@@ -250,6 +250,10 @@ class ExamIn(BaseModel):
     class_id: int | None = Field(default=None, ge=1)
     # 2026-10-14: apps allowed during the exam (allowed_apps.CATALOG keys); [] = none.
     allowed_apps: list[str] = Field(default_factory=list, max_length=20)
+    # S3 (2026-10-20): coming back after FairPlay closed needs the teacher's OK
+    resume_needs_approval: bool = True
+    # S6: require the strongest lock (beats must say sep=1, else weak_lock is flagged)
+    require_strong_lock: bool = False
 
     @field_validator("allowed_apps")
     @classmethod
@@ -469,3 +473,51 @@ class CommentIn(BaseModel):
 
 class ReleaseIn(BaseModel):
     force: bool = False
+
+
+# ---------------------------------------------------------------- S1: device check
+MAX_DEVICE_CHECKS = 40
+DEVICE_TEXT = 300
+
+
+class DeviceCheckItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(min_length=1, max_length=DEVICE_TEXT)
+    ok: bool
+    message: str = Field(default="", max_length=DEVICE_TEXT)
+    # informational rows (VPN, battery) never block
+    info: bool = False
+
+
+class DeviceCheckIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    platform: str = Field(min_length=1, max_length=DEVICE_TEXT)
+    app_version: str = Field(default="", max_length=DEVICE_TEXT)
+    os_version: str = Field(default="", max_length=DEVICE_TEXT)
+    checks: list[DeviceCheckItem] = Field(default_factory=list, max_length=MAX_DEVICE_CHECKS)
+    exam_id: str | None = Field(default=None, max_length=DEVICE_TEXT)
+
+    @field_validator("platform")
+    @classmethod
+    def _platform(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("platform must not be empty")
+        return v
+
+
+# ---------------------------------------------------------------- S4: device swap
+class SwapRequestIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    device_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9-]+$")
+
+
+# ---------------------------------------------------------------- S5: sealed offline submit
+class SealedSubmitIn(BaseModel):
+    """The app's sealed file, as written at time-up (routes_student.sealed_submit):
+    payload = "attempt_id|session|device_id|client_seq|sealed_at|answers_sha256",
+    proof = hex HMAC-SHA256(offline key of attempt + session, payload)."""
+    model_config = ConfigDict(extra="ignore")
+    payload: str = Field(min_length=1, max_length=1000)
+    answers_json: str = Field(max_length=7_000_000)
+    proof: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]+$")

@@ -1,8 +1,22 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, NetworkError, studentApi } from "../../api/client";
+import { ApiError, NetworkError, SwapNeededError, studentApi } from "../../api/client";
 import { CODE_LENGTH, StartCodeBoxes, emptyCode, type StartCodeBoxesHandle } from "./StartCodeBoxes";
 import { PackageLockedError, WrongCodeError, startOffline, storedPackage } from "../../lib/offline";
+
+/** S4: how often a computer waiting for the teacher's "Approve swap" tries to start. */
+export const SWAP_RETRY_MS = 5000;
+
+/** S4: ask the teacher to move this student's attempt to this computer. False when this
+ *  computer can't take over (a browser has no app device id) or the attempt is unknown. */
+export async function requestSwap(examId: string, err: SwapNeededError): Promise<boolean> {
+  if (!err.deviceId) return false;
+  const exams = await studentApi.listExams();
+  const aid = exams.find((e) => e.id === examId)?.attempt?.attempt_id;
+  if (!aid) return false;
+  await studentApi.swapRequest(aid, err.deviceId);
+  return true;
+}
 
 /** Turns a start error into a clear sentence for the student. */
 export function startErrorMessage(err: unknown): string {
@@ -47,6 +61,17 @@ export function StartCodeForm({
   const [digits, setDigits] = useState<string[]>(emptyCode);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // S4: asked the teacher to move the exam here; start is retried every SWAP_RETRY_MS.
+  const [waitingSwap, setWaitingSwap] = useState(false);
+  const swapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+      if (swapTimer.current) clearTimeout(swapTimer.current);
+    },
+    [],
+  );
   const boxes = useRef<StartCodeBoxesHandle>(null);
   const startBtn = useRef<HTMLButtonElement>(null);
   const code = digits.join("");
@@ -56,6 +81,26 @@ export function StartCodeForm({
   useEffect(() => {
     if (autoFocus) boxes.current?.focus(0);
   }, [autoFocus]);
+
+  function retryAfterSwap(startCode: string) {
+    swapTimer.current = setTimeout(async () => {
+      if (!mounted.current) return;
+      try {
+        const attempt = await studentApi.start(examId, startCode);
+        if (!mounted.current) return;
+        navigate(`/student/exam/${encodeURIComponent(attempt.attempt_id)}`, { state: { attempt } });
+      } catch (err) {
+        if (!mounted.current) return;
+        if (err instanceof SwapNeededError || err instanceof NetworkError) {
+          retryAfterSwap(startCode);      // not approved yet (or a Wi-Fi blip): keep waiting
+          return;
+        }
+        setWaitingSwap(false);
+        setBusy(false);
+        setError(startErrorMessage(err));
+      }
+    }, SWAP_RETRY_MS);
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -82,6 +127,11 @@ export function StartCodeForm({
       }
       navigate(`/student/exam/${encodeURIComponent(attempt.attempt_id)}`, { state: { attempt } });
     } catch (err) {
+      if (err instanceof SwapNeededError && (await requestSwap(examId, err).catch(() => false))) {
+        setWaitingSwap(true);
+        retryAfterSwap(code);
+        return;
+      }
       setBusy(false);
       setError(startErrorMessage(err));
       if (err instanceof ApiError && err.status === 409) {
@@ -114,9 +164,15 @@ export function StartCodeForm({
           {error}
         </div>
       )}
+      {waitingSwap && (
+        <div className="stu-alert warn" role="status" data-testid="swap-waiting">
+          This exam is open on another computer. Your teacher was asked to move it here. Raise your hand; this
+          page continues by itself once they approve.
+        </div>
+      )}
       <div className="stu-row">
         <button ref={startBtn} type="submit" className="stu-btn primary lg" style={{ flex: "1 1 160px" }} disabled={busy}>
-          {busy ? "Checking…" : "Start exam"}
+          {waitingSwap ? "Waiting for your teacher…" : busy ? "Checking…" : "Start exam"}
         </button>
         {onCancel && (
           <button type="button" className="stu-btn lg" onClick={onCancel} disabled={busy}>

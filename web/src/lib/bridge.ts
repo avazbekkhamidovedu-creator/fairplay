@@ -3,8 +3,19 @@
 
 import type { IntegrityEvent } from "../api/types";
 
+/** What the app's "state" message says. app_version / platform (S2) and sealed_pending
+ *  (S5) are missing from older app builds. */
+export interface NativeState {
+  locked: boolean;
+  trusted: boolean;
+  version: string;
+  app_version?: string;
+  platform?: string;
+  sealed_pending?: boolean;
+}
+
 export type NativeMessage =
-  | { type: "state"; locked: boolean; trusted: boolean; version: string }
+  | ({ type: "state" } & NativeState)
   | { type: "locked" }
   | { type: "lockFailed"; reason: string }
   | { type: "unlocked" }
@@ -13,9 +24,11 @@ export type NativeMessage =
   | { type: "event"; event: IntegrityEvent }
   | { type: "attestation"; nonce: string; device_id: string; signature: string; version: string; build: string }
   | { type: "attestationFailed"; nonce: string; reason: string }
-  | { type: "preflight"; problems: string[] }
+  | { type: "preflight"; problems: string[]; checks?: DeviceCheck[]; platform?: string; app_version?: string; os_version?: string }
   /** Review 2026-10-14: the app could not open the website exam (e.g. "bad_session"). */
-  | { type: "externalFailed"; reason: string };
+  | { type: "externalFailed"; reason: string }
+  /** S5: the app wrote the sealed answers file. */
+  | { type: "sealed"; attempt_id: string; ok: boolean };
 
 /** The attempt the app is locking for: it sends its own signed beats with these. */
 export interface ExamSessionParams {
@@ -67,7 +80,17 @@ type OutMessage =
   | { action: "hello" }
   | { action: "flushEvents" }
   | { action: "preflight" }
-  | ({ action: "openExternal" } & OpenExternalParams);
+  | ({ action: "openExternal" } & OpenExternalParams)
+  | ({ action: "seal" } & SealParams)
+  | { action: "sealedToken"; token: string };
+
+/** S5: what the app seals when the submit at time-up failed. answers_json is the exact
+ *  string the app hashes (SHA-256 of its UTF-8 bytes). */
+export interface SealParams {
+  attempt_id: string;
+  answers_json: string;
+  client_seq: number;
+}
 
 interface ProctoraHandler {
   postMessage(msg: OutMessage): void;
@@ -150,7 +173,7 @@ if (typeof window !== "undefined") {
 // Last known lock state, kept up to date from native messages.
 let locked = false;
 // Last "state" message from native (null until the Mac app answers "hello").
-let nativeState: { locked: boolean; trusted: boolean; version: string } | null = null;
+let nativeState: NativeState | null = null;
 const listeners = new Set<(msg: NativeMessage) => void>();
 
 function onWindowEvent(e: Event) {
@@ -159,11 +182,20 @@ function onWindowEvent(e: Event) {
   if (expectedNonce !== null && detail.bridge_nonce !== expectedNonce) return;   // audit W-10
   if (detail.type === "state") {
     locked = !!detail.locked;
-    nativeState = { locked: !!detail.locked, trusted: !!detail.trusted, version: String(detail.version ?? "") };
+    nativeState = stateOf(detail);
+    offerSealedToken(tokenSource());
   }
   else if (detail.type === "locked") locked = true;
   else if (detail.type === "unlocked" || detail.type === "lockFailed") locked = false;
   listeners.forEach((l) => l(detail));
+}
+
+function stateOf(d: NativeState): NativeState {
+  const out: NativeState = { locked: !!d.locked, trusted: !!d.trusted, version: String(d.version ?? "") };
+  if (typeof d.app_version === "string" && d.app_version) out.app_version = d.app_version;
+  if (typeof d.platform === "string" && d.platform) out.platform = d.platform;
+  if (typeof d.sealed_pending === "boolean") out.sealed_pending = d.sealed_pending;
+  return out;
 }
 
 let installed = false;
@@ -185,8 +217,16 @@ export function isLocked(): boolean {
 }
 
 /** Last state the Mac app reported (null outside the app or before it answered). */
-export function getNativeState(): { locked: boolean; trusted: boolean; version: string } | null {
+export function getNativeState(): NativeState | null {
   return isNative() ? nativeState : null;
+}
+
+/** S2: X-FairPlay-Version / X-FairPlay-Platform for every /api request, once the app has
+ *  reported both in its "state" message ({} in a browser or before that). */
+export function appHeaders(): Record<string, string> {
+  const st = getNativeState();
+  if (!st?.app_version || !st.platform) return {};
+  return { "X-FairPlay-Version": st.app_version, "X-FairPlay-Platform": st.platform };
 }
 
 export function hello(): void {
@@ -316,24 +356,114 @@ export function requestLock(timeoutMs = 10000, exam?: Partial<ExamSessionParams>
  * that doesn't know "preflight", resolves [] after the timeout (the lock's own checks
  * still run).
  */
-export function preflight(timeoutMs = 3000): Promise<string[]> {
+export async function preflight(timeoutMs = 3000): Promise<string[]> {
+  return (await preflightReport(timeoutMs))?.problems ?? [];
+}
+
+/** S1: one row of the app's device check. `info` rows (VPN, battery) never block. */
+export interface DeviceCheck {
+  id: string;
+  ok: boolean;
+  message: string;
+  info?: boolean;
+}
+
+export interface PreflightReport {
+  problems: string[];
+  /** [] from older apps and Windows builds that only send `problems`. */
+  checks: DeviceCheck[];
+  platform: string;
+  app_version: string;
+  os_version: string;
+}
+
+const text = (v: unknown, max = 300): string => (typeof v === "string" ? v.slice(0, max) : "");
+
+/** Read the app's "preflight" answer defensively (it crosses a trust boundary). */
+export function parsePreflight(msg: Record<string, unknown>): PreflightReport {
+  const checks: DeviceCheck[] = [];
+  for (const c of Array.isArray(msg.checks) ? msg.checks.slice(0, 40) : []) {
+    if (!c || typeof c !== "object") continue;
+    const r = c as Record<string, unknown>;
+    const id = text(r.id);
+    if (!id) continue;
+    const row: DeviceCheck = { id, ok: r.ok === true, message: text(r.message) };
+    if (r.info === true) row.info = true;
+    checks.push(row);
+  }
+  return {
+    problems: Array.isArray(msg.problems) ? msg.problems.map(String) : [],
+    checks,
+    platform: text(msg.platform) || nativePlatform() || "",
+    app_version: text(msg.app_version),
+    os_version: text(msg.os_version),
+  };
+}
+
+/** S1: the whole preflight answer (null outside the app or when it doesn't answer). */
+export function preflightReport(timeoutMs = 3000): Promise<PreflightReport | null> {
   install();
-  if (!isNative()) return Promise.resolve([]);
+  if (!isNative()) return Promise.resolve(null);
   return new Promise((resolve) => {
     let done = false;
-    const finish = (p: string[]) => {
+    const finish = (r: PreflightReport | null) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       off();
-      resolve(p);
+      resolve(r);
     };
     const off = onNative((msg) => {
-      if (msg.type === "preflight") finish(Array.isArray(msg.problems) ? msg.problems.map(String) : []);
+      if (msg.type === "preflight") finish(parsePreflight(msg as unknown as Record<string, unknown>));
     });
-    const timer = setTimeout(() => finish([]), timeoutMs);
+    const timer = setTimeout(() => finish(null), timeoutMs);
     post({ action: "preflight" });
   });
+}
+
+/**
+ * S5: seal the answers on this computer because the hand-in at time-up failed. The app
+ * signs them with the attempt's offline key, keeps the file and uploads it once online
+ * (POST .../sealed-submit). Resolves true when the app says the file is written; false
+ * outside the app, for an app that doesn't know "seal", or on {ok:false}.
+ */
+export function seal(params: SealParams, timeoutMs = 8000): Promise<boolean> {
+  install();
+  if (!isNative()) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      off();
+      resolve(ok);
+    };
+    const off = onNative((msg) => {
+      if (msg.type === "sealed" && msg.attempt_id === params.attempt_id) finish(msg.ok === true);
+    });
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    post({ action: "seal", attempt_id: params.attempt_id, answers_json: params.answers_json, client_seq: params.client_seq });
+  });
+}
+
+// S5: student tokens last 8 h, so at its next launch the app may hold sealed answers but no
+// valid token. When the app says sealed_pending and a student is signed in, the page hands
+// it the token once per page load; the app then uploads its sealed files with it.
+let tokenSource: () => string | null = () => null;
+let sealedTokenSent = false;
+
+/** client.ts registers how to read the student token (bridge can't import client.ts). */
+export function setSealedTokenSource(source: () => string | null): void {
+  tokenSource = source;
+}
+
+/** Send {action:"sealedToken"} if the app holds sealed answers; true when sent. */
+export function offerSealedToken(token: string | null): boolean {
+  if (sealedTokenSent || !token || !getNativeState()?.sealed_pending) return false;
+  sealedTokenSent = true;
+  post({ action: "sealedToken", token });
+  return true;
 }
 
 /** Test helper: pretend the host set this nonce at load (null = none). */
@@ -345,5 +475,6 @@ export function _setNonceForTests(nonce: string | null): void {
 export function _resetBridgeForTests(): void {
   locked = false;
   nativeState = null;
+  sealedTokenSent = false;
   listeners.clear();
 }

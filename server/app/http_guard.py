@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 
+from .timeutil import iso, utcnow
+
 MB = 1024 * 1024
 SCAN_UPLOAD = re.compile(r"^/api/exams/[^/]+/scans$")
 LIMITS = (                      # (path test, max body bytes); first match wins
@@ -48,6 +50,7 @@ class GuardMiddleware:
             if too_big:
                 return await _reject(send, limit)
         https = scope.get("scheme") == "https"
+        api = path.startswith("/api/")
 
         seen = 0
         stopped = False
@@ -67,6 +70,8 @@ class GuardMiddleware:
                     extra.append((b"content-security-policy", CSP.encode()))
                 if https:
                     extra.append((b"strict-transport-security", b"max-age=31536000; includeSubDomains"))
+                if api:   # S2: the apps check their clock against this (and seal with it)
+                    extra.append((b"x-server-time", iso(utcnow()).encode()))
                 h += [(k, v) for k, v in extra if k not in names]
                 msg = {**msg, "headers": h}
             await send(msg)

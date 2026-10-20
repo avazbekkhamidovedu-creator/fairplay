@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
+import { studentApi } from "../../api/client";
 import * as bridge from "../../lib/bridge";
 import { AlertIcon, CheckIcon, DotsIcon } from "./icons";
 
 export interface Readiness {
-  /** Running inside the FairPlay Mac app. */
+  /** Running inside the FairPlay app (Mac or Windows). */
   native: boolean;
+  /** Which app: "mac" | "windows" (null in a browser). */
+  platform: "mac" | "windows" | null;
   /** Accessibility (lock) permission: true / false, or null while unknown. */
   trusted: boolean | null;
 }
@@ -21,17 +24,19 @@ export function useReadiness(): Readiness {
     return off;
   }, []);
   const native = bridge.isNative();
-  return { native, trusted: native && state ? state.trusted : null };
+  return { native, platform: bridge.nativePlatform(), trusted: native && state ? state.trusted : null };
 }
 
-type Tone = "ok" | "warn" | "wait";
+type Tone = "ok" | "warn" | "wait" | "info";
+
+const SR_PREFIX: Record<Tone, string> = { ok: "Ready: ", warn: "Needs attention: ", wait: "Checking: ", info: "Note: " };
 
 function CheckRow({ tone, title, detail }: { tone: Tone; title: string; detail?: string }) {
   return (
     <li className={`stu-check${tone === "ok" ? " ok" : tone === "warn" ? " warn" : ""}`}>
       {tone === "ok" ? <CheckIcon /> : tone === "warn" ? <AlertIcon /> : <DotsIcon />}
       <span>
-        <span className="sr-only">{tone === "ok" ? "Ready: " : tone === "warn" ? "Needs attention: " : "Checking: "}</span>
+        <span className="sr-only">{SR_PREFIX[tone]}</span>
         {title}
         {detail && <span className="stu-check-detail">{detail}</span>}
       </span>
@@ -41,19 +46,20 @@ function CheckRow({ tone, title, detail }: { tone: Tone; title: string; detail?:
 
 /** The checks list. Only shows checks we can actually verify from the web page. */
 export function ReadinessChecks({ readiness }: { readiness: Readiness }) {
-  const { native, trusted } = readiness;
+  const { native, trusted, platform } = readiness;
+  const app = platform === "windows" ? "FairPlay Windows app" : platform === "mac" ? "FairPlay Mac app" : "FairPlay app";
   return (
     <ul className="stu-checks" aria-label="Laptop checks">
       {native ? (
-        <CheckRow tone="ok" title="Running in the FairPlay Mac app" />
+        <CheckRow tone="ok" title={`Running in the ${app}`} />
       ) : (
         <CheckRow
           tone="warn"
-          title="Not running in the FairPlay Mac app"
-          detail="You are in a normal browser. Use the FairPlay Mac app for real exams."
+          title="Not running in the FairPlay app"
+          detail="You are in a normal browser. Use the FairPlay app for real exams."
         />
       )}
-      {native &&
+      {native && platform !== "windows" &&
         (trusted === true ? (
           <CheckRow tone="ok" title="Lock permission granted" />
         ) : trusted === false ? (
@@ -70,5 +76,81 @@ export function ReadinessChecks({ readiness }: { readiness: Readiness }) {
 }
 
 export function readinessOk(r: Readiness): boolean {
-  return r.native && r.trusted === true;
+  // The Windows app has no separate lock permission to grant.
+  return r.native && (r.platform === "windows" || r.trusted === true);
+}
+
+type RunState =
+  | { kind: "idle" }
+  | { kind: "running" }
+  | { kind: "done"; report: bridge.PreflightReport; saved: boolean }
+  | { kind: "noAnswer" };
+
+/** S1: run the app's device check on demand, show every row and store the result for the
+ *  teacher (POST /api/student/device-check). Only inside the app. */
+export function DeviceCheckRun({ examId = null }: { examId?: string | null }) {
+  const [state, setState] = useState<RunState>({ kind: "idle" });
+  if (!bridge.isNative()) return null;
+
+  async function run() {
+    setState({ kind: "running" });
+    const report = await bridge.preflightReport();
+    if (!report) {
+      setState({ kind: "noAnswer" });
+      return;
+    }
+    let saved = false;
+    try {
+      await studentApi.deviceCheck({
+        platform: report.platform,
+        app_version: report.app_version,
+        os_version: report.os_version,
+        checks: report.checks,
+        exam_id: examId,
+      });
+      saved = true;
+    } catch {
+      /* offline: the rows still help the student; the teacher sees the next check */
+    }
+    setState({ kind: "done", report, saved });
+  }
+
+  return (
+    <div className="stu-device-check" data-testid="device-check">
+      <button type="button" className="stu-btn" onClick={() => void run()} disabled={state.kind === "running"}>
+        {state.kind === "running" ? "Checking…" : state.kind === "done" ? "Check again" : "Run check"}
+      </button>
+      {state.kind === "noAnswer" && (
+        <p className="stu-hint" role="status">
+          This version of FairPlay cannot run the full check. The exam still checks before it locks.
+        </p>
+      )}
+      {state.kind === "done" && <DeviceCheckRows report={state.report} saved={state.saved} />}
+    </div>
+  );
+}
+
+export function DeviceCheckRows({ report, saved }: { report: bridge.PreflightReport; saved: boolean }) {
+  // Older apps and Windows builds send only `problems`: show those as rows.
+  const rows = report.checks.length
+    ? report.checks
+    : report.problems.map((p, i) => ({ id: `problem_${i}`, ok: false, message: p, info: false }));
+  return (
+    <>
+      <ul className="stu-checks" aria-label="Device check results">
+        {rows.length === 0 && <CheckRow tone="ok" title="Everything looks ready" />}
+        {rows.map((c) => (
+          <CheckRow
+            key={c.id}
+            tone={c.ok ? "ok" : c.info ? "info" : "warn"}
+            title={c.message || c.id}
+            detail={c.info && !c.ok ? "Just so you know: this does not stop the exam." : undefined}
+          />
+        ))}
+      </ul>
+      <p className="stu-hint" role="status">
+        {saved ? "Your teacher can see this check." : "Could not send this check to your teacher. Try again when online."}
+      </p>
+    </>
+  );
 }

@@ -28,6 +28,7 @@ import {
 } from "../../lib/offline";
 import { ReenterExam, isSessionConflict } from "../../components/student/ReenterExam";
 import { PreflightProblems } from "../../components/student/Preflight";
+import { TimeUpOffline } from "../../components/student/TimeUpOffline";
 import { CODE_LENGTH, StartCodeBoxes, emptyCode } from "../../components/student/StartCodeBoxes";
 import { QuestionImages } from "../../components/QuestionImages";
 import "../../styles/student.css";
@@ -94,6 +95,10 @@ function ExamTakingInner() {
   const [now, setNow] = useState(Date.now());
   const [locked, setLocked] = useState(bridge.isLocked());
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // S5: the automatic hand-in failed (offline): offer retry / seal / help.
+  const [timeUpProblem, setTimeUpProblem] = useState(false);
+  // S3: back after FairPlay closed; the teacher must approve before questions show again.
+  const [waiting, setWaiting] = useState(false);
   const [marked, setMarked] = useState<Set<string>>(() => readMarks(attemptId));
 
   const queueRef = useRef<AnswerQueue | null>(null);
@@ -245,6 +250,7 @@ function ExamTakingInner() {
               : "Submitting failed.";
         if (!final && (auto || e instanceof NetworkError)) {
           setSubmitError(`${msg} Trying again…`);
+          if (auto) setTimeUpProblem(true);
           submitRetryRef.current = setTimeout(() => void doSubmit(auto), SUBMIT_RETRY_MS);
         } else {
           setSubmitError(msg);
@@ -256,6 +262,14 @@ function ExamTakingInner() {
   );
   const doSubmitRef = useRef(doSubmit);
   doSubmitRef.current = doSubmit;
+
+  // S5: "Submit later from this computer": the app seals exactly these answers.
+  const sealAnswers = useCallback(async (): Promise<boolean> => {
+    const q = queueRef.current;
+    const aid = realAidRef.current;
+    if (!q || !aid) return false;     // an offline start that never reached the server has no key
+    return bridge.seal({ attempt_id: aid, answers_json: JSON.stringify(q.getAnswers()), client_seq: q.getClientSeq() });
+  }, []);
 
   // ----- load attempt (from start navigation or GET for resume) -----
 
@@ -302,6 +316,7 @@ function ExamTakingInner() {
         queue.init(a.answers);
         setAnswers(queue.getAnswers());
         appsRef.current = a.allowed_apps;   // 2026-10-14: handed to the app with "lock"
+        setWaiting(a.needs_approval === true || a.approval === "pending");
         setAttempt(a);
         setDeadline(a.deadline_at);
         setOffset(clockOffset(a.server_time));
@@ -435,6 +450,7 @@ function ExamTakingInner() {
         const res = await call((aid) => studentApi.heartbeat(aid, currentRef.current, bridge.isLocked()));
         setOffset(clockOffset(res.server_time));
         if (res.deadline_at) setDeadline(res.deadline_at);
+        if (res.approval !== undefined) setWaiting(res.approval === "pending");
         if (res.status === "submitted") {
           // closed by the teacher (or submitted elsewhere): finish and unlock
           if (!submittingRef.current) void doSubmitRef.current(true);
@@ -461,10 +477,12 @@ function ExamTakingInner() {
   const remaining = deadline ? remainingMs(deadline, offset, now) : Infinity;
   useEffect(() => {
     if (!attempt || !deadline) return;
+    // S3: while waiting for the teacher the time is given back on approval: don't hand in.
+    if (waiting) return;
     if (remaining <= 0 && (phase === "exam" || phase === "review" || phase === "lockFailed" || phase === "preflight")) {
       void doSubmit(true);
     }
-  }, [remaining, phase, attempt, deadline, doSubmit]);
+  }, [remaining, phase, attempt, deadline, doSubmit, waiting]);
 
   // ----- answering -----
 
@@ -580,8 +598,12 @@ function ExamTakingInner() {
   const answeredCount = questions.length - unanswered.length;
   const markedCount = questions.filter((qq) => marked.has(qq.id)).length;
   const isMarked = q ? marked.has(q.id) : false;
-  const showExam = phase === "exam" || (phase === "submitting" && phaseBeforeSubmit.current === "exam");
-  const showReview = phase === "review" || (phase === "submitting" && phaseBeforeSubmit.current !== "exam");
+  const timeUpPanel = phase === "submitting" && timeUpProblem;
+  const waitPanel = waiting && (phase === "exam" || phase === "review");
+  const showExam =
+    !waitPanel && (phase === "exam" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam"));
+  const showReview =
+    !waitPanel && (phase === "review" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current !== "exam"));
   const typeLabel = q?.type === "essay" ? " · Essay" : "";
 
   const isLast = current === questions.length - 1;
@@ -804,7 +826,25 @@ function ExamTakingInner() {
         />
       )}
 
-      {phase === "submitting" && phaseBeforeSubmit.current === "exam" && (
+      {waitPanel && (
+        <main className="stu-center" data-testid="wait-for-teacher">
+          <div className="stu-card" style={{ gap: 12, maxWidth: 560 }} role="status">
+            <h1 style={{ margin: 0, fontSize: 22 }}>Wait for your teacher</h1>
+            <p style={{ margin: 0 }}>
+              FairPlay was closed during the exam. Raise your hand: your teacher lets you continue from the live room.
+            </p>
+            <p className="stu-muted" style={{ margin: 0 }}>
+              Your answers are saved. The time you wait is given back (up to 15 minutes).
+            </p>
+          </div>
+        </main>
+      )}
+
+      {timeUpPanel && (
+        <TimeUpOffline message={submitError} onRetry={() => void doSubmit(true)} onSeal={sealAnswers} />
+      )}
+
+      {phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam" && (
         <div className="stu-toast" role="status">
           {submitError ?? "Time is up. Submitting your answers…"}
         </div>

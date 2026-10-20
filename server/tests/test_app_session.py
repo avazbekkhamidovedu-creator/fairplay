@@ -98,7 +98,7 @@ def test_session_binding_and_second_device(app_client, exam):
     assert app_client.post(f"/api/student/attempts/{aid}/submit", headers=h2, json={}).status_code == 409
     # helper with another Mac running FairPlay: refused and flagged
     r = start(app_client, h2, exam, device=DEV_B)
-    assert r.status_code == 409 and "another computer" in r.json()["detail"]
+    assert r.status_code == 409 and "another computer" in r.json()["detail"]["message"]   # S4 object
     ev = events(app_client, t, exam)
     assert "foreign_session" in ev and "second_device" in ev
     # the real session still works

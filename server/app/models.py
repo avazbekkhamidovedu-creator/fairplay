@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer,
-                        String, Text, UniqueConstraint, false, text)
+                        String, Text, UniqueConstraint, false, text, true)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -76,6 +76,14 @@ class Exam(Base):
     # Audit 2026-10-12: per-exam invigilator code (emergency exit in the app), checked by
     # the server with an attempt limit. New on every open.
     invigilator_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # S3 (2026-10-20): a student coming back after FairPlay closed (crash, force quit) waits
+    # until the teacher approves (routes_student._resume). On by default.
+    resume_needs_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,
+                                                        server_default=true())
+    # S6: only the strongest lock counts (Windows: separate exam desktop; Mac: Apple's
+    # assessment mode, not built yet). A beat without sep=1 is flagged weak_lock once.
+    require_strong_lock: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                      server_default=false())
 
 
 class Attempt(Base):
@@ -122,6 +130,22 @@ class Attempt(Base):
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     entries: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     client: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # S5 (2026-10-20): handed in from answers the app sealed offline at time-up. late_sealed =
+    # sealed after deadline + grace (the sealed answers went to late_answers). sealed_proof
+    # makes a repeated upload of the same seal return the same receipt.
+    late_sealed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    sealed_proof: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # S3: waiting for the teacher after a new app run resumed this attempt. pending_since
+    # stays set after approval (approval = "approved"); the wait is added to the deadline.
+    pending_resume: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                 server_default=false())
+    pending_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # S4: the student asked to continue on another computer (swap_device_id); once the
+    # teacher approves, the old session may still send one final save for 120 s.
+    swap_device_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    swap_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    swap_old_session: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    swap_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class IntegrityEvent(Base):
@@ -206,3 +230,19 @@ class ClassMember(Base):
                                           index=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class DeviceCheck(Base):
+    """S1 (2026-10-20): the latest device check a student's FairPlay app ran, one row per
+    (student, platform). The teacher's readiness list reads it before the exam."""
+    __tablename__ = "device_checks"
+    __table_args__ = (UniqueConstraint("student_id", "platform", name="uq_device_check_student_platform"),)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    platform: Mapped[str] = mapped_column(String(300), nullable=False)
+    app_version: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    os_version: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    # [{id, ok, message, info}] as sent (validated by schemas.DeviceCheckIn)
+    checks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    exam_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

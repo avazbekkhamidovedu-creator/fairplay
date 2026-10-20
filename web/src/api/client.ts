@@ -1,5 +1,7 @@
 import type { AllowedAppOption,
   AnswerMap,
+  DeviceCheckInput,
+  ReadinessRow,
   AttemptView,
   EventsResponse,
   Exam,
@@ -54,7 +56,11 @@ export function setToken(role: Role, token: string): void {
   } catch {
     /* storage unavailable */
   }
+  // S5: right after a student signs in, an app holding sealed answers gets the new token.
+  if (role === "student") bridge.offerSealedToken(token);
 }
+
+bridge.setSealedTokenSource(() => getToken("student"));
 
 /**
  * Account id inside a token ("<uid>:<role>:<exp>:<ver>:<kid>" base64url, then "." signature).
@@ -90,13 +96,49 @@ export function clearToken(role: Role): void {
 
 export class ApiError extends Error {
   status: number;
+  /** Always text: an object detail {code, message} (S4 "swap_needed") gives its message. */
   detail: string;
-  constructor(status: number, detail: string) {
+  /** S4: machine-readable reason from an object detail ("swap_needed", "already_submitted"). */
+  code: string | null;
+  /** S2: on 426, the oldest app version the server accepts. */
+  minAppVersion: string | null;
+  constructor(status: number, detail: string, code: string | null = null, minAppVersion: string | null = null) {
     super(detail);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.code = code;
+    this.minAppVersion = minAppVersion;
   }
+}
+
+/** S4: start refused because the attempt is bound to another computer (409 swap_needed).
+ *  deviceId = this computer's app device id (null in a browser: it can't take over). */
+export class SwapNeededError extends ApiError {
+  deviceId: string | null;
+  constructor(detail: string, deviceId: string | null) {
+    super(409, detail, "swap_needed");
+    this.name = "SwapNeededError";
+    this.deviceId = deviceId;
+  }
+}
+
+/** S2: an app older than the server's minimum (426). App.tsx shows the update screen. */
+export const UPGRADE_EVENT = "fairplay-upgrade-required";
+
+function errorOf(status: number, body: unknown, fallback: string): ApiError {
+  const b = body && typeof body === "object" ? (body as { detail?: unknown; min_app_version?: unknown }) : {};
+  const d = b.detail;
+  const code = d && typeof d === "object" && !Array.isArray(d) && typeof (d as { code?: unknown }).code === "string"
+    ? (d as { code: string }).code
+    : null;
+  const min = typeof b.min_app_version === "string" ? b.min_app_version : null;
+  return new ApiError(status, detailOf(body, fallback), code, min);
+}
+
+/** Every /api request carries the app's version and platform once the bridge knows them. */
+function withAppHeaders(headers: Record<string, string>): Record<string, string> {
+  return { ...headers, ...bridge.appHeaders() };
 }
 
 /** Network failure (offline, server down). Callers treat it as "try again later". */
@@ -126,6 +168,11 @@ function detailOf(body: unknown, fallback: string): string {
   if (body && typeof body === "object" && "detail" in body) {
     const d = (body as { detail: unknown }).detail;
     if (typeof d === "string") return d;
+    // S4: {"code": "swap_needed", "message": "..."} (code only: use the fallback)
+    if (d && typeof d === "object" && !Array.isArray(d)) {
+      const m = (d as { message?: unknown }).message;
+      return typeof m === "string" && m ? m : fallback;
+    }
     if (Array.isArray(d) && d.length > 0) {
       // FastAPI 422 validation list
       return d
@@ -157,7 +204,7 @@ export async function request<T>(
   try {
     res = await fetch(path, {
       method,
-      headers,
+      headers: withAppHeaders(headers),
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
@@ -181,9 +228,19 @@ export async function request<T>(
       clearToken(role);
       onUnauthorized(role);
     }
-    throw new ApiError(res.status, detailOf(data, res.statusText || `Error ${res.status}`));
+    const err = errorOf(res.status, data, res.statusText || `Error ${res.status}`);
+    if (res.status === 426) announceUpgrade(err.minAppVersion);
+    throw err;
   }
   return data as T;
+}
+
+function announceUpgrade(minVersion: string | null): void {
+  try {
+    window.dispatchEvent(new CustomEvent(UPGRADE_EVENT, { detail: { min_app_version: minVersion } }));
+  } catch {
+    /* no window (tests outside jsdom) */
+  }
 }
 
 const enc = encodeURIComponent;
@@ -226,6 +283,15 @@ export const teacherApi = {
   releaseDevice: (examId: string, aid: string) =>
     request<{ ok: boolean }>("teacher", "POST", `/api/exams/${enc(examId)}/attempts/${enc(aid)}/release-device`),
   live: (id: string) => request<LiveRoom>("teacher", "GET", `/api/exams/${enc(id)}/live`),
+  /** S4: move the attempt to the computer the student asked from (like releaseDevice). */
+  approveSwap: (examId: string, aid: string) =>
+    request<{ ok: boolean }>("teacher", "POST", `/api/exams/${enc(examId)}/attempts/${enc(aid)}/approve-swap`),
+  /** S3: let a student who came back after FairPlay closed continue (waiting time given back, max 15 min). */
+  approveResume: (examId: string, aid: string) =>
+    request<{ ok: boolean; minutes_added: number; deadline_at: string }>(
+      "teacher", "POST", `/api/exams/${enc(examId)}/attempts/${enc(aid)}/approve-resume`),
+  /** S1: each student's latest FairPlay device check. */
+  readiness: (id: string) => request<ReadinessRow[]>("teacher", "GET", `/api/exams/${enc(id)}/readiness`),
   /** 8-digit exit code for one student's locked Mac that cannot reach the server
    *  (the Mac shows a Mac code). Only works on that Mac's current session; logged. */
   offlineExit: (id: string, aid: string, macCode: string) =>
@@ -278,12 +344,23 @@ export const teacherApi = {
 async function startAttempt(examId: string, startCode: string, offlineStartedAt?: string): Promise<AttemptView> {
   const body: Record<string, unknown> = { start_code: startCode };
   if (offlineStartedAt) body.offline_started_at = offlineStartedAt;
+  let deviceId: string | null = null;
   if (bridge.isNative()) {
     const ch = await request<{ nonce: string }>("student", "GET", `/api/student/exams/${enc(examId)}/challenge`);
     const proof = await bridge.attest(ch.nonce);
-    if (proof) body.client = proof;
+    if (proof) {
+      body.client = proof;
+      deviceId = proof.device_id;
+    }
   }
-  const view = await request<AttemptView>("student", "POST", `/api/student/exams/${enc(examId)}/start`, body);
+  let view: AttemptView;
+  try {
+    view = await request<AttemptView>("student", "POST", `/api/student/exams/${enc(examId)}/start`, body);
+  } catch (e) {
+    // S4: bound to another computer; this one can ask to take over (swap-request).
+    if (e instanceof ApiError && e.code === "swap_needed") throw new SwapNeededError(e.detail, deviceId);
+    throw e;
+  }
   if (view.session) {
     setAttemptSession(view.attempt_id, view.session);
     const token = getToken("student");
@@ -315,6 +392,12 @@ export const studentApi = {
       client_seq: clientSeq,
     }),
   grades: () => request<StudentGradeSummary[]>("student", "GET", "/api/student/grades"),
+  /** S4: ask the teacher to move the attempt to this computer (202). */
+  swapRequest: (aid: string, deviceId: string) =>
+    request<{ ok: boolean }>("student", "POST", `/api/student/attempts/${enc(aid)}/swap-request`, { device_id: deviceId }),
+  /** S1: store this computer's device check so the teacher sees it before the exam. */
+  deviceCheck: (body: DeviceCheckInput) =>
+    request<{ ok: boolean; saved_at: string }>("student", "POST", "/api/student/device-check", body),
   feedback: (examId: string) =>
     request<StudentFeedback>("student", "GET", `/api/student/grades/${enc(examId)}`),
 };

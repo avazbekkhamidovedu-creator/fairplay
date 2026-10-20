@@ -598,3 +598,56 @@ App → page: new `attestation`, `attestationFailed`, `unlockPending {"reason": 
 - **Classes:** `term` (free text, ≤80, e.g. "Fall 2026 · Section 2") on create/`PUT`; responses add `term` and `teacher_name`. Student `GET /api/student/classes` adds `term`. Invite link: `/student/join/<code>` (signed out: code kept for this tab, joined right after sign-in).
 - **Grades:** `GET /api/gradebook` and `/api/gradebook.csv` take `class_id` (the class's members are listed even before any exam); `GET /api/grading` rows add `class_id`.
 - **Exams:** saving needs no class; opening still does (the editor asks). Question `topics` are optional; a question without one is stored under the course (lower-case) or `general`.
+
+## S1–S6 (2026-10-20) — as implemented (server + web)
+
+Spec: `docs/contract-s1-s6-2026-10-20.md`. Everything below is live on the server and the web page; the Mac side is M2–M5.
+
+### Headers and version gate (S2)
+- Every `/api/*` response (errors too) carries `X-Server-Time: 2026-10-20T10:00:00.000Z` (UTC, ms, `Z`).
+- Requests from the apps carry `X-FairPlay-Version: 0.5` and `X-FairPlay-Platform: mac|windows`. The page adds both to every `/api` request once the bridge `state` message has reported `app_version` and `platform`.
+- Env `MIN_APP_VERSION_MAC`, `MIN_APP_VERSION_WINDOWS` (default `""` = no minimum). Numeric compare by dot parts: `0.10 > 0.9`, `1.0 == 1.0.0`; a non-numeric part counts by its leading digits.
+- `POST /api/student/exams/{id}/start` and `POST /api/student/attempts/{aid}/app-beat`: with the platform header and a version below that platform's minimum (or no version header) → `426 {"detail": "Update FairPlay to continue", "min_app_version": "<min>"}`. No platform header = no gate. Both responses add `server_time` and `min_app_version` (string or null, for the request's platform).
+- `GET /api/app/version` (no auth) → `{"mac": "<min>"|null, "windows": "<min>"|null, "server_time"}`. `/api/health` is never gated.
+- Web: a 426 anywhere shows a full-page **Update FairPlay** screen with the minimum version.
+
+### Device check (S1)
+- Bridge: page `{action:"preflight"}` → app `{type:"preflight", problems:[...], checks:[{id, ok, message, info?}], platform, app_version, os_version}`. `problems` stays (older pages, Windows). `info: true` rows never block. The page reads at most 40 checks, strings cut at 300 chars.
+- `POST /api/student/device-check` (student) `{platform, app_version, os_version, checks:[{id, ok, message, info?}], exam_id?}` → `{ok: true, saved_at}`. At most 40 checks, strings at most 300 chars (422 otherwise), 30 per minute. Keeps the latest report per (student, platform).
+- `GET /api/exams/{exam_id}/readiness` (owner teacher) → one row per student of the exam's class (no class: students with attempts): `{student_id, name, platform, app_version, os_version, ok, failed: [ids], checked_at}`; `ok` = every non-info check ok; all of those null when never checked. The newest report of the student wins when there are several platforms.
+- Web: Readiness card "Run check" (inside the app only) shows every row and posts it; the text names the Mac or Windows app; the live room has a **Device readiness** list.
+
+### Resume after FairPlay closed (S3)
+- Exam `resume_needs_approval` (default **true**; editor: "Teacher approves a student coming back after FairPlay closed"). Attempt `pending_resume`, `pending_since`.
+- Which start asks: the start that resumes an in-progress attempt on its **bound computer** more than 15 s (`REENTRY_QUIET_S`) after the previous start — the `re_entry` branch of `_resume`, where the session rotates (a new app run). Not: a page reload (it only GETs the attempt with its kept session), a double click within 15 s, a browser start, the first bind on another computer (after release-device / approve-swap).
+- Then: event `resume_requested`, start response `"needs_approval": true` (always present, false otherwise). `GET /attempts/{aid}`, `POST .../heartbeat` and `POST .../app-beat` return `"approval": "pending"` (later `"approved"`; `null` if it never had to wait). Answer PUTs still work. The page shows "Wait for your teacher" and does not auto-submit while waiting.
+- `POST /api/exams/{id}/attempts/{aid}/approve-resume` (teacher) → `{ok, minutes_added, deadline_at}`: clears pending, adds the time waited to `deadline_at` (max 15 min), event `resume_approved` (not a flag). 409 when nothing is pending.
+- Live room student: `approval`, `pending_since`; badge "Waiting for approval" + **Approve**.
+
+### Device swap (S4)
+- Start on a second computer while bound elsewhere → `409 {"detail": {"code": "swap_needed", "message": "This exam is already open on another computer. Ask the invigilator to move it to this one."}}` (+ `second_device`, max 1/min). The web client reads any object detail as its `message` (`ApiError.detail`) plus `ApiError.code`.
+- `POST /api/student/attempts/{aid}/swap-request {"device_id"}` (owner) → `202 {"ok": true}`, event `swap_requested` (max 1/min per device). 10 per minute.
+- `POST /api/exams/{id}/attempts/{aid}/approve-swap` (teacher) → `{"ok": true}`: like release-device (device unbound, new session nobody holds, caches cleared) and keeps `swap_old_session`, `swap_approved_at`; event `swap_approved` (not a flag). The new computer keeps calling start every 5 s (the page does this from the start form) and binds normally (`device_bound`).
+- Old computer: beats / saves / events get the session error. `GET .../handin` answers `"moved"` signed with the session that request sent (`handin|aid|<its session>|moved|nonce`) — also after release-device.
+- For 120 s after approval ONE `PUT .../answers` with the old session is accepted: it only fills questions the new computer has not changed since the approval; the reply adds `"merged": n`. A second one, or after 120 s, gets the session error.
+- After `deadline_at + 60 s` both swap-request and approve-swap → `409 "Finish on the computer you started on"`.
+- Live room student: `swap_requested`; badge "Wants to continue on another computer" + **Approve swap** ("move computer" = release-device stays).
+
+### Sealed offline submit (S5)
+- Bridge page → app `{action:"seal", attempt_id, answers_json, client_seq}` when the submit at time-up fails; app → page `{type:"sealed", attempt_id, ok}`. `answers_json` is `JSON.stringify(answers)` exactly as sent.
+- Sealed file (app): `{payload, answers_json, proof}`, `payload = attempt_id|session|device_id|client_seq|sealed_at|answers_sha256`, `sealed_at` ISO UTC with ms and `Z`, `answers_sha256` lowercase hex SHA-256 of the UTF-8 bytes, `proof` = lowercase hex HMAC-SHA256(offline key = `HMAC-SHA256(server secret, "offline-exit-key|<aid>|<session>")`, payload).
+- `POST /api/student/attempts/{aid}/sealed-submit` (Bearer only; no `X-FairPlay-Session` needed and a stale one is ignored) body `{payload, answers_json, proof}` → `{ok: true, receipt, late_sealed}`:
+  - 422: payload not 6 parts / bad fields / other attempt id / SHA-256 mismatch / answers not a valid answer map / `sealed_at` not between `started_at` and now + 2 min. 403: proof does not verify. 404: not the student's attempt. 429: more than 20 a minute.
+  - In progress: `sealed_at <= deadline_at + 60 s` → the sealed answers are graded; later → graded stays what was saved in time, the sealed answers that differ go to `late_answers`, `late` and `late_sealed` set. `submitted_at = min(sealed_at, now)`. Then submitted.
+  - Same seal again → same receipt. Already submitted otherwise: answers equal → 200 with the existing receipt; different → `409 {"detail": {"code": "already_submitted"}}`, the differing sealed answers are added to `late_answers` (never graded) and a `sealed_submit` event says so.
+  - Event `sealed_submit` (device id, sealed_at, in time or not) for every seal, once per seal: always in the teacher's review list (the key is on the student's computer).
+- Beat checks `sealed=1` → live room `sealed_pending` ("submission pending on this student's computer"). Results attempts add `late_sealed`.
+- Token for the upload: state `sealed_pending: true` and a signed-in student → the page posts `{action:"sealedToken", token}` once per page load (also right after sign-in).
+- Page at time-up when the submit fails (offline / 5xx): **Try again now**, **Submit later from this computer** (seal → "Your answers are sealed on this computer. Ask the invigilator to end the exam" + offline exit steps), **Ask the teacher for help** (offline exit steps: the app shows its Mac code / PC code; the page never sees it). Automatic retries continue meanwhile.
+
+### Strongest lock (S6)
+- Exam `require_strong_lock` (default false; editor "Require the strongest lock (Windows: separate exam desktop. Mac: needs Apple assessment mode, not available yet)").
+- Beat checks may carry `sep=0|1`. Setting on and a beat without `sep=1` → event `weak_lock` once per attempt; live room student `weak_lock` (latest beat) and a badge. The Mac sends no `sep` yet: Mac students show as weak.
+
+### New event types (server-written, refused from clients as `client_*`)
+`sealed_submit`, `resume_requested`, `resume_approved`*, `swap_requested`, `swap_approved`*, `weak_lock` (* bookkeeping, not flags).

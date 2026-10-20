@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { NetworkError, teacherApi } from "../../api/client";
-import type { Exam, LiveFlag, LiveRoom as LiveRoomData, LiveStudent } from "../../api/types";
+import type { Exam, LiveFlag, LiveRoom as LiveRoomData, LiveStudent, ReadinessRow } from "../../api/types";
 import { errorText, eventLabel, plural } from "../../components/teacher/util";
 import { clockOffset, formatClock, formatCountdown } from "../../lib/timer";
 
@@ -375,6 +375,7 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
                         <span className="t-seat-name">{s.name}</span>
                         <span className="t-seat-sub">{seatSub(s, st)}</span>
                       </Link>
+                      <SeatBadges examId={exam.id} student={s} onChanged={load} />
                       {s.status === "in_progress" && s.client !== "browser" && (
                         <MoveDevice examId={exam.id} student={s} onMoved={load} />
                       )}
@@ -384,6 +385,7 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
               </ul>
             )}
           </div>
+          <DeviceReadiness examId={exam.id} />
         </section>
 
         <FlagsPanel examId={exam.id} flags={flags} onReviewed={load} />
@@ -518,6 +520,114 @@ function FlagCard({ examId, flag, onDone }: { examId: string; flag: LiveFlag; on
   );
 }
 
+
+/** S3-S6: what needs the invigilator at this seat, as short badges (+ the button for it). */
+export function SeatBadges({ examId, student: s, onChanged }: { examId: string; student: LiveStudent; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const writing = s.status === "in_progress";
+  const badges: string[] = [];
+  if (s.sealed_pending) badges.push("submission pending on this student's computer");
+  if (writing && s.approval === "pending") badges.push("Waiting for approval");
+  if (writing && s.swap_requested) badges.push("Wants to continue on another computer");
+  if (writing && s.weak_lock) badges.push("Not using the strongest lock");
+  if (badges.length === 0) return null;
+
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="t-seat-action" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {badges.map((b) => (
+        <span key={b} className="t-small" style={{ color: "var(--warn)", fontWeight: 600 }}>
+          {b}
+        </span>
+      ))}
+      {writing && s.approval === "pending" && (
+        <button type="button" className="t-mini-link" disabled={busy} aria-label={`Approve ${s.name} to continue`}
+          title="FairPlay closed on this computer and was opened again. Check the student, then let them continue."
+          onClick={() => void act(() => teacherApi.approveResume(examId, s.attempt_id))}>
+          {busy ? "…" : "Approve"}
+        </button>
+      )}
+      {writing && s.swap_requested && (
+        <button type="button" className="t-mini-link" disabled={busy} aria-label={`Approve swap for ${s.name}`}
+          title="Only if you checked the student: the exam moves to the other computer, this one stops."
+          onClick={() => void act(() => teacherApi.approveSwap(examId, s.attempt_id))}>
+          {busy ? "…" : "Approve swap"}
+        </button>
+      )}
+      {error && <span className="t-small" style={{ color: "var(--warn)" }}>{error}</span>}
+    </span>
+  );
+}
+
+/** S1: each student's latest FairPlay device check (Readiness page "Run check"). */
+export function DeviceReadiness({ examId }: { examId: string }) {
+  const [rows, setRows] = useState<ReadinessRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      setRows(await teacherApi.readiness(examId));
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, [examId]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  const notReady = (rows ?? []).filter((r) => r.ok !== true).length;
+  return (
+    <section className="t-card" aria-labelledby="ready-h" data-testid="device-readiness">
+      <div className="t-card-head">
+        <h2 id="ready-h">Device readiness</h2>
+        <button type="button" className="t-mini-link" onClick={() => void load()}>
+          refresh
+        </button>
+      </div>
+      {error && <span className="t-inline-error">{error}</span>}
+      {rows === null && !error ? (
+        <div className="t-empty">Loading…</div>
+      ) : rows && rows.length === 0 ? (
+        <div className="t-empty">No students in this exam's class yet.</div>
+      ) : (
+        <>
+          <span className="t-small t-muted">
+            {notReady === 0 ? "Every student's computer passed its check." : `${plural(notReady, "student")} not ready or not checked yet.`}
+          </span>
+          <ul className="t-ready-list" style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
+            {(rows ?? []).map((r) => (
+              <li key={r.student_id}>
+                <strong>{r.name}</strong>
+                {" · "}
+                {r.checked_at == null
+                  ? "not checked yet"
+                  : r.ok
+                    ? `ready (${platformName(r.platform)} ${r.app_version ?? ""}, ${formatClock(r.checked_at)})`
+                    : `needs a fix: ${(r.failed ?? []).join(", ")} (${formatClock(r.checked_at)})`}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function platformName(p: string | null): string {
+  return p === "mac" ? "Mac" : p === "windows" ? "Windows" : p ?? "";
+}
 
 export const SECRET_SHOW_MS = 20_000;
 

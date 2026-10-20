@@ -298,6 +298,38 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
               </span>
               <Switch id="exam-shuffle" checked={draft.shuffle} onChange={(v) => set({ shuffle: v })} describedBy="exam-shuffle-sub" />
             </div>
+            <div className="t-setting">
+              <span className="t-setting-text">
+                <label className="t-setting-title" htmlFor="exam-resume">
+                  Teacher approves a student coming back after FairPlay closed
+                </label>
+                <span className="t-setting-sub" id="exam-resume-sub">
+                  They wait for your Approve in the live room; the waiting time is given back (up to 15 min)
+                </span>
+              </span>
+              <Switch
+                id="exam-resume"
+                checked={draft.resumeNeedsApproval}
+                onChange={(v) => set({ resumeNeedsApproval: v })}
+                describedBy="exam-resume-sub"
+              />
+            </div>
+            <div className="t-setting">
+              <span className="t-setting-text">
+                <label className="t-setting-title" htmlFor="exam-strong-lock">
+                  Require the strongest lock
+                </label>
+                <span className="t-setting-sub" id="exam-strong-lock-sub">
+                  Windows: separate exam desktop. Mac: needs Apple assessment mode, not available yet
+                </span>
+              </span>
+              <Switch
+                id="exam-strong-lock"
+                checked={draft.strongLock}
+                onChange={(v) => set({ strongLock: v })}
+                describedBy="exam-strong-lock-sub"
+              />
+            </div>
             <div className="t-grid-2">
               <div className="t-field">
                 <label htmlFor="exam-course">Course code (optional)</label>

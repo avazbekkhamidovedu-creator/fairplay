@@ -86,6 +86,17 @@ class Settings:
         "FAIRPLAY_UPLOADS_DIR",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "uploads")))
 
+    # S2 (2026-10-20): oldest app version allowed to start or keep beating, per platform.
+    # "" = no minimum. Compared numerically by dot-separated parts (app_version.py).
+    min_app_version_mac: str = field(default_factory=lambda: os.environ.get("MIN_APP_VERSION_MAC", "").strip())
+    min_app_version_windows: str = field(
+        default_factory=lambda: os.environ.get("MIN_APP_VERSION_WINDOWS", "").strip())
+
+    def min_app_version(self, platform: str | None) -> str | None:
+        v = {"mac": self.min_app_version_mac, "windows": self.min_app_version_windows}.get(
+            (platform or "").strip().lower(), "")
+        return v or None
+
     def feature(self, name: str) -> bool:
         return name in self.features
 

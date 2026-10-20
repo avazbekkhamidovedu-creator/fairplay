@@ -91,6 +91,10 @@ export interface Exam {
   finish_url_contains?: string | null;
   /** 2026-10-14: apps allowed during the exam (catalog keys); everything else is closed. */
   allowed_apps?: string[];
+  /** S3: a student coming back after FairPlay closed waits for the teacher (default true). */
+  resume_needs_approval?: boolean;
+  /** S6: only the strongest lock counts (default false). */
+  require_strong_lock?: boolean;
 }
 
 /** 2026-10-14: an app a teacher may allow (GET /api/exams/allowed-apps). */
@@ -127,6 +131,8 @@ export interface ExamInput {
   /** slice 4: total points of an exam held on another website (default 100). */
   external_points?: number;
   allowed_apps?: string[];
+  resume_needs_approval?: boolean;
+  require_strong_lock?: boolean;
 }
 
 export interface LiveStudent {
@@ -154,7 +160,19 @@ export interface LiveStudent {
   app_checks?: string;
   client?: "app" | "browser";
   entries?: number;
+  /** S5: the app holds sealed answers for this student that are not uploaded yet. */
+  sealed_pending?: boolean;
+  /** S3: came back after FairPlay closed; "pending" waits for Approve. */
+  approval?: Approval;
+  pending_since?: string | null;
+  /** S4: asked from another computer to continue there ("Approve swap"). */
+  swap_requested?: boolean;
+  /** S6: the exam requires the strongest lock and this computer's app doesn't use it. */
+  weak_lock?: boolean;
 }
+
+/** S3: null = never had to wait. */
+export type Approval = "pending" | "approved" | null;
 
 export interface LiveFlag {
   event_id: number;
@@ -434,6 +452,12 @@ export interface AttemptView {
   session?: string;
   /** 2026-10-14: apps the locked computer keeps open (everything else is closed). */
   allowed_apps?: AllowedApp[];
+  /** S3: "pending" -> show "Wait for your teacher" instead of the questions. */
+  approval?: Approval;
+  /** S3: only in the POST start response: this start must wait for the teacher. */
+  needs_approval?: boolean;
+  /** S2: only in the POST start response. */
+  min_app_version?: string | null;
 }
 
 export interface SaveAnswersResponse {
@@ -447,6 +471,8 @@ export interface HeartbeatResponse {
   status: AttemptStatus;
   server_time: string;
   deadline_at: string;
+  /** S3 */
+  approval?: Approval;
 }
 
 export interface EventsResponse {
@@ -963,4 +989,26 @@ export interface StudentClass {
   term?: string;
   teacher: string;
   joined_at?: string;
+}
+
+// ---------- S1 (2026-10-20): device check ----------
+
+export interface DeviceCheckInput {
+  platform: string;
+  app_version: string;
+  os_version: string;
+  checks: { id: string; ok: boolean; message: string; info?: boolean }[];
+  exam_id?: string | null;
+}
+
+/** GET /api/exams/{id}/readiness: one per student; null fields = never checked. */
+export interface ReadinessRow {
+  student_id: number;
+  name: string;
+  platform: string | null;
+  app_version: string | null;
+  os_version: string | null;
+  ok: boolean | null;
+  failed: string[] | null;
+  checked_at: string | null;
 }

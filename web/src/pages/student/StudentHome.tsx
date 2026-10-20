@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { firstName, examName, plural, shortTime, isToday, shortDate } from "../../components/student/format";
-import { ReadinessChecks, useReadiness } from "../../components/student/Readiness";
+import { DeviceCheckRun, ReadinessChecks, useReadiness } from "../../components/student/Readiness";
 import { JoinClass } from "../../components/student/JoinClass";
 import { PastExamRow } from "../../components/student/ResultRow";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
@@ -75,6 +75,7 @@ export default function StudentHome() {
               <section className="stu-card stu-ready" aria-labelledby="ready-h">
                 <h2 id="ready-h">Are you ready?</h2>
                 <ReadinessChecks readiness={readiness} />
+                <DeviceCheckRun />
                 <p className="stu-hint">Other apps will close when the exam starts. Save your work in them now.</p>
               </section>
             </div>
