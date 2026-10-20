@@ -90,6 +90,10 @@ async def refuse_public_demo_logins(db: Database, settings: Settings) -> None:
 async def seed(db: Database, settings: Settings) -> None:
     await upgrade_external_exams(db)
     wanted = [(u, pw, n, r) for u, pw, n, r in SEED_USERS] if settings.demo_logins else []
+    demo_names = {u for u, *_ in SEED_USERS}
+    # Accounts from FAIRPLAY_INITIAL_USERS: created once, never overwritten (a changed
+    # password stays changed). Demo names are refused so they can't carry a public password.
+    wanted += [(u, pw, n, r) for u, pw, n, r in settings.initial_users if u not in demo_names]
     lt_hash = None
     if settings.seed_loadtest_users > 0:
         # Same password for every load-test user: hash once to keep startup fast.

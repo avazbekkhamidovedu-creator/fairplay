@@ -17,6 +17,30 @@ DEV_APP_KEY = "fairplay-dev-app-key-not-secret"
 OPTIONAL_FEATURES = ("scan", "lms", "practice")
 
 
+def async_db_url(url: str) -> str:
+    """Hosts such as Render hand out "postgres://" / "postgresql://"; the server talks to
+    Postgres through asyncpg, so name that driver (2026-10-20)."""
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+asyncpg://" + url[len(prefix):]
+    return url
+
+
+def initial_users(text: str) -> list[tuple[str, str, str, str]]:
+    """FAIRPLAY_INITIAL_USERS: "username:password:Full Name:role;..." (role teacher or
+    student). Accounts for a server without the demo seed, kept in the host's secret
+    environment. Malformed entries are skipped (and logged by the caller)."""
+    out = []
+    for item in (text or "").split(";"):
+        parts = [p.strip() for p in item.split(":")]
+        if len(parts) != 4:
+            continue
+        username, password, name, role = parts
+        if username and len(password) >= 8 and name and role in ("teacher", "student"):
+            out.append((username, password, name, role))
+    return out
+
+
 def _flag(name: str, default: bool) -> bool:
     v = os.environ.get(name)
     if v is None or v.strip() == "":
@@ -37,8 +61,8 @@ def _int(name: str, default: int) -> int:
 
 @dataclass
 class Settings:
-    database_url: str = field(default_factory=lambda: os.environ.get(
-        "DATABASE_URL", "sqlite+aiosqlite:///./data/proctora.db"))
+    database_url: str = field(default_factory=lambda: async_db_url(os.environ.get(
+        "DATABASE_URL", "sqlite+aiosqlite:///./data/proctora.db")))
     redis_url: str | None = field(default_factory=lambda: os.environ.get("REDIS_URL") or None)
     # Token/LMS sealing secret. Empty -> resolved at startup by check_secure(): a random
     # secret persisted under data/ in dev (FAIRPLAY_DEV=1), otherwise the server refuses to start.
@@ -63,6 +87,8 @@ class Settings:
     # Audit 2026-10-12 S-01: the demo logins (teacher/teacher123, alice/alice123 ...) exist
     # only on a dev server (FAIRPLAY_DEV=1) or when asked for explicitly (tests, a demo box).
     seed_demo: bool = field(default_factory=lambda: _flag("FAIRPLAY_SEED_DEMO", False))
+    # 2026-10-20: real accounts for a hosted test server (see initial_users).
+    initial_users: list = field(default_factory=lambda: initial_users(os.environ.get("FAIRPLAY_INITIAL_USERS", "")))
     # Audit S-08: without Redis every worker has its own memory store (exam-cache
     # invalidation, nonces, lockouts, beat replay guard all break with >1 process). A real
     # server needs REDIS_URL, or must say it runs one process (FAIRPLAY_SINGLE_PROCESS=1).
