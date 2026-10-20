@@ -5,6 +5,11 @@
    check `typeof MathJax.typesetPromise === 'function'` keep working unchanged. #}
 <script type="text/javascript">
     (function () {
+        // MathJax itself may already be on the page (another loader, e.g. martor's preview, got
+        // there first): never load it a second time, it cannot be loaded twice.
+        function realMathJax() {
+            return !!(window.MathJax && window.MathJax.version);
+        }
         var config = window.MathJax || {};
         var src = {{ static('libs/mathjax/es5/tex-chtml.js')|tojson }};
         var MATH = /\\\(|\\\[|\$\$|\\begin\{|~[^~\n]+~/;
@@ -38,6 +43,13 @@
         }
 
         function load() {
+            if (!loading && realMathJax()) {
+                var started = window.MathJax.startup && window.MathJax.startup.promise;
+                loading = started || Promise.resolve();
+            }
+            if (!loading && window.dkuojMathJaxLoading && !window.dkuojMathJaxLoading.fromStub) {
+                loading = Promise.resolve(window.dkuojMathJaxLoading);
+            }
             if (!loading) {
                 loading = new Promise(function (resolve, reject) {
                     var real = {};
@@ -58,6 +70,14 @@
             return loading;
         }
 
+        // Shared with martor-mathjax.js, which waits on this instead of loading its own copy.
+        window.dkuojMathJaxLoading = window.dkuojMathJaxLoading ||
+            {fromStub: true, then: function (ok, fail) { return load().then(ok, fail); }};
+        if (realMathJax()) {
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', typesetPage);
+            else typesetPage();
+            return;
+        }
         var stub = {};
         for (var key in config) if (Object.prototype.hasOwnProperty.call(config, key)) stub[key] = config[key];
         stub.typesetPromise = function (elements) {
