@@ -12,6 +12,7 @@ from .http_guard import GuardMiddleware, SignPrivateUploads
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
+from .app_version import UpgradeRequired, upgrade_required_handler
 from .config import Settings
 from .db import Database, set_db
 from .routes_auth import router as auth_router
@@ -24,6 +25,7 @@ from .routes_teacher import router as teacher_router
 from .seed import refuse_public_demo_logins, seed, seed_demo_class
 from .routes_classes import student_router as classes_student_router, teacher_router as classes_teacher_router
 from .store import make_store, set_store
+from .timeutil import iso, utcnow
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 log = logging.getLogger("proctora")
@@ -80,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         detail = [{k: e[k] for k in ("type", "loc", "msg") if k in e} for e in exc.errors()]
         return JSONResponse({"detail": detail}, status_code=422)
     app.state.settings = settings
+    app.add_exception_handler(UpgradeRequired, upgrade_required_handler)   # S2: 426
     app.add_middleware(SignPrivateUploads)     # audit L-18: expiring links to scan images
     app.add_middleware(GuardMiddleware)        # audit L-04 / S-16: size limits + headers
     # Audit #12: no wildcard CORS. The UI is served by this server (same origin); other
@@ -121,6 +124,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # demo_logins: the login page may show the demo passwords (dev / demo servers only).
         # features: optional parts switched on (FAIRPLAY_FEATURES); the UI hides the rest.
         return {"ok": True, "demo_logins": settings.demo_logins, "features": list(settings.features)}
+
+    @app.get("/api/app/version")
+    async def app_version():
+        # S2: no auth, so an app can tell "update first" before the student signs in.
+        return {"mac": settings.min_app_version("mac"),
+                "windows": settings.min_app_version("windows"), "server_time": iso(utcnow())}
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
                    include_in_schema=False)

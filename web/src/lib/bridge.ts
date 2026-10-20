@@ -3,8 +3,19 @@
 
 import type { IntegrityEvent } from "../api/types";
 
+/** What the app's "state" message says. app_version / platform (S2) and sealed_pending
+ *  (S5) are missing from older app builds. */
+export interface NativeState {
+  locked: boolean;
+  trusted: boolean;
+  version: string;
+  app_version?: string;
+  platform?: string;
+  sealed_pending?: boolean;
+}
+
 export type NativeMessage =
-  | { type: "state"; locked: boolean; trusted: boolean; version: string }
+  | ({ type: "state" } & NativeState)
   | { type: "locked" }
   | { type: "lockFailed"; reason: string }
   | { type: "unlocked" }
@@ -150,7 +161,7 @@ if (typeof window !== "undefined") {
 // Last known lock state, kept up to date from native messages.
 let locked = false;
 // Last "state" message from native (null until the Mac app answers "hello").
-let nativeState: { locked: boolean; trusted: boolean; version: string } | null = null;
+let nativeState: NativeState | null = null;
 const listeners = new Set<(msg: NativeMessage) => void>();
 
 function onWindowEvent(e: Event) {
@@ -159,11 +170,19 @@ function onWindowEvent(e: Event) {
   if (expectedNonce !== null && detail.bridge_nonce !== expectedNonce) return;   // audit W-10
   if (detail.type === "state") {
     locked = !!detail.locked;
-    nativeState = { locked: !!detail.locked, trusted: !!detail.trusted, version: String(detail.version ?? "") };
+    nativeState = stateOf(detail);
   }
   else if (detail.type === "locked") locked = true;
   else if (detail.type === "unlocked" || detail.type === "lockFailed") locked = false;
   listeners.forEach((l) => l(detail));
+}
+
+function stateOf(d: NativeState): NativeState {
+  const out: NativeState = { locked: !!d.locked, trusted: !!d.trusted, version: String(d.version ?? "") };
+  if (typeof d.app_version === "string" && d.app_version) out.app_version = d.app_version;
+  if (typeof d.platform === "string" && d.platform) out.platform = d.platform;
+  if (typeof d.sealed_pending === "boolean") out.sealed_pending = d.sealed_pending;
+  return out;
 }
 
 let installed = false;
@@ -185,8 +204,16 @@ export function isLocked(): boolean {
 }
 
 /** Last state the Mac app reported (null outside the app or before it answered). */
-export function getNativeState(): { locked: boolean; trusted: boolean; version: string } | null {
+export function getNativeState(): NativeState | null {
   return isNative() ? nativeState : null;
+}
+
+/** S2: X-FairPlay-Version / X-FairPlay-Platform for every /api request, once the app has
+ *  reported both in its "state" message ({} in a browser or before that). */
+export function appHeaders(): Record<string, string> {
+  const st = getNativeState();
+  if (!st?.app_version || !st.platform) return {};
+  return { "X-FairPlay-Version": st.app_version, "X-FairPlay-Platform": st.platform };
 }
 
 export function hello(): void {

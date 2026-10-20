@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { setUnauthorizedHandler } from "./api/client";
 import { hello } from "./lib/bridge";
+import { UpdateRequired, useUpgradeRequired } from "./components/UpdateRequired";
 import TeacherRoutes from "./pages/teacher/routes";
 import StudentRoutes from "./pages/student/routes";
 
@@ -14,6 +15,8 @@ export default function App() {
     // Native bridge: announce ourselves; the Mac app answers with its state.
     hello();
   }, []);
+  const upgradeTo = useUpgradeRequired();
+  if (upgradeTo !== null) return <UpdateRequired minVersion={upgradeTo} />;
 
   return (
     <Routes>

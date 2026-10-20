@@ -16,6 +16,7 @@ from .grading import exam_questions, grade_attempt, is_answered, num, percent
 from .models import Attempt, Exam, IntegrityEvent
 from . import app_client as ac
 from .access import member_of_exam, require_member
+from .app_version import check_app_version
 from .schemas import AnswersIn, AppBeatIn, EventsIn, ExitCodeIn, HeartbeatIn, OfflineKeyIn, StartIn
 from .security import Principal, require_student
 from .services import (LIVE_TTL, attempt_view, cache_attempt, find_attempt, get_attempt_meta,
@@ -141,6 +142,7 @@ async def start(exam_id: str, body: StartIn, request: Request,
                 session: AsyncSession = Depends(get_session)):
     store = get_store()
     settings = ac.settings_of(request)
+    min_version = check_app_version(request, settings)   # S2: 426 for an outdated app
     exam = await get_exam_cached(store, session, exam_id)
     if exam is None or exam.get("delivery") == "paper":  # slice 6: paper is never started
         raise HTTPException(404, "Exam not found")
@@ -208,7 +210,7 @@ async def start(exam_id: str, body: StartIn, request: Request,
     else:
         await _resume(session, store, a, device_id, exam_id)
     await cache_attempt(store, a)
-    return {**attempt_view(a, exam, now), "session": a.session_id}
+    return {**attempt_view(a, exam, now), "session": a.session_id, "min_app_version": min_version}
 
 
 async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | None,
@@ -447,6 +449,7 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     in the live room. A gap in these beats is flagged (app killed / Mac asleep)."""
     store = get_store()
     settings = ac.settings_of(request)
+    min_version = check_app_version(request, settings)   # S2: 426 for an outdated app
     meta = await get_attempt_meta(store, session, aid)
     if meta is None or meta["student_id"] != p.user_id:
         raise HTTPException(404, "Attempt not found")
@@ -499,7 +502,7 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     await store.set(f"abt:{aid}", json.dumps(entry), LIVE_TTL)
     await store.hset(f"ab:{exam_id}", aid, json.dumps(entry), LIVE_TTL)
     return {"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
-            "deadline_at": meta["deadline_at"]}
+            "deadline_at": meta["deadline_at"], "min_app_version": min_version}
 
 
 @router.get("/attempts/{aid}/handin")

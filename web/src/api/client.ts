@@ -90,13 +90,38 @@ export function clearToken(role: Role): void {
 
 export class ApiError extends Error {
   status: number;
+  /** Always text: an object detail {code, message} (S4 "swap_needed") gives its message. */
   detail: string;
-  constructor(status: number, detail: string) {
+  /** S4: machine-readable reason from an object detail ("swap_needed", "already_submitted"). */
+  code: string | null;
+  /** S2: on 426, the oldest app version the server accepts. */
+  minAppVersion: string | null;
+  constructor(status: number, detail: string, code: string | null = null, minAppVersion: string | null = null) {
     super(detail);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.code = code;
+    this.minAppVersion = minAppVersion;
   }
+}
+
+/** S2: an app older than the server's minimum (426). App.tsx shows the update screen. */
+export const UPGRADE_EVENT = "fairplay-upgrade-required";
+
+function errorOf(status: number, body: unknown, fallback: string): ApiError {
+  const b = body && typeof body === "object" ? (body as { detail?: unknown; min_app_version?: unknown }) : {};
+  const d = b.detail;
+  const code = d && typeof d === "object" && !Array.isArray(d) && typeof (d as { code?: unknown }).code === "string"
+    ? (d as { code: string }).code
+    : null;
+  const min = typeof b.min_app_version === "string" ? b.min_app_version : null;
+  return new ApiError(status, detailOf(body, fallback), code, min);
+}
+
+/** Every /api request carries the app's version and platform once the bridge knows them. */
+function withAppHeaders(headers: Record<string, string>): Record<string, string> {
+  return { ...headers, ...bridge.appHeaders() };
 }
 
 /** Network failure (offline, server down). Callers treat it as "try again later". */
@@ -126,6 +151,11 @@ function detailOf(body: unknown, fallback: string): string {
   if (body && typeof body === "object" && "detail" in body) {
     const d = (body as { detail: unknown }).detail;
     if (typeof d === "string") return d;
+    // S4: {"code": "swap_needed", "message": "..."} (code only: use the fallback)
+    if (d && typeof d === "object" && !Array.isArray(d)) {
+      const m = (d as { message?: unknown }).message;
+      return typeof m === "string" && m ? m : fallback;
+    }
     if (Array.isArray(d) && d.length > 0) {
       // FastAPI 422 validation list
       return d
@@ -157,7 +187,7 @@ export async function request<T>(
   try {
     res = await fetch(path, {
       method,
-      headers,
+      headers: withAppHeaders(headers),
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
@@ -181,9 +211,19 @@ export async function request<T>(
       clearToken(role);
       onUnauthorized(role);
     }
-    throw new ApiError(res.status, detailOf(data, res.statusText || `Error ${res.status}`));
+    const err = errorOf(res.status, data, res.statusText || `Error ${res.status}`);
+    if (res.status === 426) announceUpgrade(err.minAppVersion);
+    throw err;
   }
   return data as T;
+}
+
+function announceUpgrade(minVersion: string | null): void {
+  try {
+    window.dispatchEvent(new CustomEvent(UPGRADE_EVENT, { detail: { min_app_version: minVersion } }));
+  } catch {
+    /* no window (tests outside jsdom) */
+  }
 }
 
 const enc = encodeURIComponent;
