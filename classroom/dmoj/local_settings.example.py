@@ -65,6 +65,13 @@ DATABASES = {
 }
 
 _REDIS_URL = _env('CLASSROOM_REDIS_URL', 'redis://127.0.0.1:6379')
+# A URL that already names a database (redis://host:6379/11) uses that one for the cache and the
+# next one for Celery; otherwise the cache is /0 and Celery /1.
+_redis_base, _, _redis_db = _REDIS_URL.rstrip('/').rpartition('/')
+if _redis_db.isdigit() and _redis_base.count('/') >= 2:
+    _REDIS_CACHE_URL, _REDIS_CELERY_URL = _REDIS_URL, '%s/%d' % (_redis_base, int(_redis_db) + 1)
+else:
+    _REDIS_CACHE_URL, _REDIS_CELERY_URL = _REDIS_URL + '/0', _REDIS_URL + '/1'
 
 if _TESTING and _env('CLASSROOM_TEST_CACHE', 'locmem') != 'redis':
     # Same as upstream CI: tests expect a private in-process cache.
@@ -73,14 +80,14 @@ else:
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-            'LOCATION': _REDIS_URL + '/0',
+            'LOCATION': _REDIS_CACHE_URL,
         },
     }
 
 # Celery broker for dev. No worker runs unless started (scripts/dev-server.sh --celery);
 # tests do not need a broker.
-CELERY_BROKER_URL = _REDIS_URL + '/1'
-CELERY_RESULT_BACKEND = _REDIS_URL + '/1'
+CELERY_BROKER_URL = _REDIS_CELERY_URL
+CELERY_RESULT_BACKEND = _REDIS_CELERY_URL
 
 # Static files / compressor (same as .ci.settings.py).
 COMPRESS_OUTPUT_DIR = 'cache'
