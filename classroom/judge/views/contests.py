@@ -50,6 +50,7 @@ from judge.models.profile import Class, Organization
 from judge.subjects import has_feature
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status
+from judge.utils.db_retry import is_deadlock, retry_on_deadlock
 from judge.utils.edit_conflict import (EditConflict, check_edit_base, contest_conflict_message,
                                        contest_edit_fingerprint)
 from judge.utils.opengraph import generate_opengraph
@@ -1136,6 +1137,7 @@ class ContestCreate(LoginRequiredMixin, View):
         transaction.on_commit(lambda cid=contest_id: reschedule_assignment_harvest(cid))
         return self._action_response(payload, contest.key)
 
+    @retry_on_deadlock
     def _save_new_contest(self, request, payload, key):
         """Insert one contest row and its related data.
 
@@ -1171,6 +1173,7 @@ class ContestCreate(LoginRequiredMixin, View):
             return contest
         raise _ContestKeyConflict
 
+    @retry_on_deadlock
     def _update(self, request, payload):
         """Update an existing contest row (and optionally its key) in place."""
         try:
@@ -1229,6 +1232,8 @@ class ContestCreate(LoginRequiredMixin, View):
             transaction.on_commit(lambda cid=contest_id: reschedule_assignment_harvest(cid))
             return self._action_response(payload, contest_key)
         except Exception as e:
+            if is_deadlock(e):
+                raise  # rolled back as a whole: @retry_on_deadlock runs the save again
             return self._error_response(e)
 
     @staticmethod
@@ -1847,6 +1852,11 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         initial['key'] = Contest.generate_unique_key()
         return initial
 
+    def _reload_source(self, form):
+        # The failed attempt turned self.object into the (rolled back) copy.
+        self.object = self.get_object()
+
+    @retry_on_deadlock(before_retry=_reload_source)
     def form_valid(self, form):
         contest = self.object
 
@@ -2583,14 +2593,8 @@ class ContestGradeRelease(ContestMixin, DetailView):
         raise Http404()
 
     def post(self, request, *args, **kwargs):
-        from judge.utils.contest_grade import sync_released_manual_grades
-        # One transaction: a concurrent grade save either finishes before the release (and is
-        # released with its new score) or waits and sees ``released`` (see apply_manual_grade).
-        with transaction.atomic():
-            updated = SubmissionManualGrade.objects.filter(
-                submission__contest_object=self.object,
-            ).update(released=True)
-            sync_released_manual_grades(self.object)
+        from judge.utils.contest_grade import release_manual_grades
+        updated = release_manual_grades(self.object)
         return JsonResponse({'ok': True, 'released': True, 'count': updated})
 
 

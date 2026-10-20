@@ -70,6 +70,7 @@ from judge.utils.assets import ace_url
 from judge.utils.assignment_harvest import (
     assignment_harvest_enabled, participation_is_harvestable, user_bypasses_assignment_rules,
 )
+from judge.utils.db_retry import retry_on_deadlock
 from judge.utils.diggpaginator import DiggPaginator
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
@@ -2279,6 +2280,11 @@ class ProblemClone(ProblemMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         initial['code'] = generate_problem_code()
         return initial
 
+    def _reload_source(self, form):
+        # The failed attempt turned self.object into the (rolled back) copy.
+        self.object = self.get_object()
+
+    @retry_on_deadlock(before_retry=_reload_source)
     def form_valid(self, form):
         problem = self.object
 

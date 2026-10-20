@@ -34,6 +34,7 @@ from judge.models import Language, Problem, ProblemBlank, ProblemData, ProblemFi
     ProblemImportImage, ProblemImportItem, ProblemMCQConfig, ProblemMCQOption, ProblemShortAnswerConfig, \
     ProblemSubmissionType, ProblemTestCase, ProblemType, Solution, problem_data_storage
 from judge.subjects import question_type_refusal
+from judge.utils.db_retry import retry_on_deadlock
 from judge.utils.excel_embedded_documents import image_placeholder, read_xlsx_rows_with_embedded_files, \
     store_docx_image
 from judge.utils.problem_create import (apply_simple_problem_defaults, default_problem_type, log_problem_admin_entry,
@@ -799,6 +800,7 @@ class ProblemImportImageView(LoginRequiredMixin, View):
 
 class ProblemImportItemActionView(LoginRequiredMixin, View):
     """Save, format, or create one preview item without exposing draft ownership."""
+    @retry_on_deadlock
     def post(self, request, draft, item, action):
         draft = _draft_for(request, draft)
         item = get_object_or_404(draft.items, pk=item)
@@ -1089,6 +1091,7 @@ class ProblemImportItemActionView(LoginRequiredMixin, View):
 
 class ProblemImportCreateAllView(LoginRequiredMixin, View):
     """Create every remaining reviewed item as one all-or-nothing database operation."""
+    @retry_on_deadlock
     def post(self, request, draft):
         draft = _draft_for(request, draft)
         promoted_images = []

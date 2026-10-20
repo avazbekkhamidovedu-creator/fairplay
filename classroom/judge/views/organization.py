@@ -1,3 +1,4 @@
+import random
 import re
 from operator import attrgetter
 
@@ -31,6 +32,7 @@ from judge.subjects import prefix_labels
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, notify_instructor_verification,
 )
+from judge.utils.db_retry import retry_on_deadlock
 from judge.utils.import_export import process_user_csv
 from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.utils.ranker import ranker
@@ -88,7 +90,7 @@ def save_class_with_unique_name(form, class_obj):
     from judge.forms import uniquify_class_name
     base = getattr(form, 'name_base', class_obj.name)
     save_with_unique_id(
-        class_obj, 'name', lambda attempt: uniquify_class_name(base, class_obj),
+        class_obj, 'name', lambda attempt: uniquify_class_name(base, class_obj, skip=random.randrange(attempt * 4)),
         regenerate=bool(getattr(form, 'name_generated', False)),
     )
 
@@ -2125,20 +2127,30 @@ class CreateClass(LoginRequiredMixin, OrganizationMixin, FormView):
                                    _('You do not have permission to create classes for this organization.'), status=403)
         return super().dispatch(request, *args, **kwargs)
 
-    def form_valid(self, form):
+    def _forget_insert(self, form):
+        # The rolled back attempt may have given the instance a primary key.
+        form.instance.pk = None
+        form.instance._state.adding = True
+
+    @retry_on_deadlock(before_retry=_forget_insert)
+    def _save_new_class(self, form):
         # All or nothing: a failure while linking members must not leave a half-made class.
+        with transaction.atomic():
+            new_class = form.save(commit=False)
+            new_class.organization = self.object
+            new_class.slug = unique_class_slug(self.object, new_class.name)
+            if new_class.is_active is None:
+                new_class.is_active = True
+            save_class_with_unique_name(form, new_class)
+            form.save_m2m()
+            new_class.admins.add(self.request.profile)
+            csv_result = apply_class_member_csv(form, new_class, self.object)
+            sync_class_members_to_organization(new_class)
+        return new_class, csv_result
+
+    def form_valid(self, form):
         try:
-            with transaction.atomic():
-                new_class = form.save(commit=False)
-                new_class.organization = self.object
-                new_class.slug = unique_class_slug(self.object, new_class.name)
-                if new_class.is_active is None:
-                    new_class.is_active = True
-                save_class_with_unique_name(form, new_class)
-                form.save_m2m()
-                new_class.admins.add(self.request.profile)
-                csv_result = apply_class_member_csv(form, new_class, self.object)
-                sync_class_members_to_organization(new_class)
+            new_class, csv_result = self._save_new_class(form)
         except UniqueIdTaken as taken:
             _class_name_taken(form, taken.value)
             return self.form_invalid(form)
@@ -2183,22 +2195,27 @@ class EditClass(LoginRequiredMixin, TitleMixin, FormView):
         context.update(course_inbox_chrome_context(self.request))
         return context
 
+    @retry_on_deadlock
+    def _save_class(self, form):
+        with transaction.atomic():
+            previous_admin_ids = set(self.object.admins.values_list('id', flat=True))
+            class_obj = form.save(commit=False)
+            save_class_with_unique_name(form, class_obj)
+            form.save_m2m()
+            # HeavySelect2 often omits admins on submit (empty POST → clears M2M). If the
+            # class previously had administrators and the submit cleared them all, restore.
+            submitted_admins = form.cleaned_data.get('admins')
+            if previous_admin_ids and (submitted_admins is None or not submitted_admins.exists()):
+                self.object.admins.add(*previous_admin_ids)
+            # The editor who just saved must remain able to edit.
+            self.object.admins.add(self.request.profile)
+            csv_result = apply_class_member_csv(form, self.object, self.object.organization)
+            sync_class_members_to_organization(self.object)
+        return csv_result
+
     def form_valid(self, form):
         try:
-            with transaction.atomic():
-                previous_admin_ids = set(self.object.admins.values_list('id', flat=True))
-                class_obj = form.save(commit=False)
-                save_class_with_unique_name(form, class_obj)
-                form.save_m2m()
-                # HeavySelect2 often omits admins on submit (empty POST → clears M2M). If the
-                # class previously had administrators and the submit cleared them all, restore.
-                submitted_admins = form.cleaned_data.get('admins')
-                if previous_admin_ids and (submitted_admins is None or not submitted_admins.exists()):
-                    self.object.admins.add(*previous_admin_ids)
-                # The editor who just saved must remain able to edit.
-                self.object.admins.add(self.request.profile)
-                csv_result = apply_class_member_csv(form, self.object, self.object.organization)
-                sync_class_members_to_organization(self.object)
+            csv_result = self._save_class(form)
         except UniqueIdTaken as taken:
             _class_name_taken(form, taken.value)
             return self.form_invalid(form)

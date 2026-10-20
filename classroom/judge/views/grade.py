@@ -186,8 +186,11 @@ class PracticeGradeRelease(PracticeGradeAuthMixin, View):
         raise Http404()
 
     def post(self, request, *args, **kwargs):
-        updated = SubmissionManualGrade.objects.filter(
+        # Update by primary key: an UPDATE whose WHERE reads judge_submission takes shared locks
+        # on those rows, which deadlocks against a grade save (submission row, then grade row).
+        grade_ids = list(SubmissionManualGrade.objects.filter(
             submission__contest_object__isnull=True,
             submission__problem__in=Problem.get_editable_problems(request.user),
-        ).update(released=True)
+        ).order_by('pk').values_list('pk', flat=True))
+        updated = SubmissionManualGrade.objects.filter(pk__in=grade_ids).update(released=True)
         return JsonResponse({'ok': True, 'released': True, 'count': updated})

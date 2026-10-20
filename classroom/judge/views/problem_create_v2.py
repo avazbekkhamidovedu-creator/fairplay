@@ -52,6 +52,7 @@ from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.question_types.mcq import sync_mcq_options
 from judge.subjects import (CREATE_V2_TYPE_CAPS, capability_for_question_type, course_question_caps,
                             ensure_question_type_allowed, features_for, infer_subject_key)
+from judge.utils.db_retry import retry_on_deadlock
 from judge.utils.edit_conflict import (EditConflict, check_edit_base, problem_conflict_message,
                                        problem_edit_fingerprint)
 from judge.utils.problem_create import (apply_simple_problem_defaults, default_problem_group, default_problem_type,
@@ -475,6 +476,7 @@ class ProblemCreateV2View(LoginRequiredMixin, View):
         check_edit_base(payload.get('edit_base'), lambda: problem_edit_fingerprint(locked))
         return locked
 
+    @retry_on_deadlock
     def _save_request(self, request, payload, zip_upload, qtype, name, existing):
         before = problem_admin_snapshot(existing) if existing is not None else None
         try:

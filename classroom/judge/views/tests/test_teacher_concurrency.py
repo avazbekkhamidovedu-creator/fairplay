@@ -16,9 +16,9 @@ from datetime import timedelta
 from unittest import mock
 
 from django.contrib.messages import get_messages
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.shortcuts import get_object_or_404
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -27,6 +27,7 @@ from judge.models import (Class, ClassMaterial, Contest, ContestParticipation, C
                           Language, Problem, ProblemGroup, ProblemType, Submission, SubmissionManualGrade)
 from judge.models.question import ProblemImportDraft, ProblemImportItem
 from judge.models.tests.util import CommonDataMixin, create_contest, create_problem, create_user
+from judge.utils.db_retry import retry_on_deadlock
 from judge.utils.edit_conflict import contest_edit_fingerprint, problem_edit_fingerprint
 from judge.utils.problem_create import default_problem_group, save_new_problem
 from judge.utils.unique_ids import UniqueIdTaken, save_with_unique_id
@@ -118,6 +119,66 @@ class SaveWithUniqueIdTestCase(TestCase):
         with mock.patch.object(Problem, 'save', side_effect=IntegrityError('fk')):
             with self.assertRaises(IntegrityError):
                 save_with_unique_id(problem, 'code', lambda attempt: 'unused')
+
+
+class RetryOnDeadlockTestCase(SimpleTestCase):
+    """InnoDB error 1213 rolls back the whole transaction; the outermost caller runs it again."""
+
+    def _deadlock(self):
+        return OperationalError(1213, 'Deadlock found when trying to get lock; try restarting transaction')
+
+    @mock.patch('judge.utils.db_retry.time.sleep')
+    @mock.patch('judge.utils.db_retry.connection')
+    def test_deadlock_victim_is_run_again(self, conn, sleep):
+        conn.in_atomic_block = False
+        calls, resets = [], []
+        deadlock = self._deadlock()
+
+        @retry_on_deadlock(before_retry=lambda value: resets.append(value))
+        def save(value):
+            calls.append(value)
+            if len(calls) == 1:
+                raise deadlock
+            return 'saved'
+
+        self.assertEqual(save('x'), 'saved')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(resets, ['x'])
+
+    @mock.patch('judge.utils.db_retry.time.sleep')
+    @mock.patch('judge.utils.db_retry.connection')
+    def test_other_errors_and_inner_blocks_are_not_retried(self, conn, sleep):
+        conn.in_atomic_block = False
+        failing = mock.Mock(side_effect=OperationalError(2006, 'gone away'))
+        with self.assertRaises(OperationalError):
+            retry_on_deadlock(failing)()
+        self.assertEqual(failing.call_count, 1)
+
+        conn.in_atomic_block = True  # the transaction belongs to an outer caller
+        inner = mock.Mock(side_effect=self._deadlock())
+        with self.assertRaises(OperationalError):
+            retry_on_deadlock(inner)()
+        self.assertEqual(inner.call_count, 1)
+
+    @mock.patch('judge.utils.db_retry.time.sleep')
+    @mock.patch('judge.utils.db_retry.connection')
+    def test_gives_up_after_the_last_attempt(self, conn, sleep):
+        conn.in_atomic_block = False
+        always = mock.Mock(side_effect=self._deadlock())
+        with self.assertRaises(OperationalError):
+            retry_on_deadlock(always, attempts=3)()
+        self.assertEqual(always.call_count, 3)
+
+    def test_write_paths_are_wrapped(self):
+        from judge.utils import contest_grade
+        from judge.views import contests, organization, problem, problem_create_v2, problem_import
+        for func in (problem_create_v2.ProblemCreateV2View._save_request, contests.ContestCreate._update,
+                     contests.ContestCreate._save_new_contest, contests.ContestClone.form_valid,
+                     problem.ProblemClone.form_valid, organization.CreateClass._save_new_class,
+                     organization.EditClass._save_class, contest_grade.apply_manual_grade,
+                     contest_grade.release_manual_grades, problem_import.ProblemImportCreateAllView.post,
+                     problem_import.ProblemImportItemActionView.post):
+            self.assertTrue(hasattr(func, '__wrapped__'), func.__qualname__)
 
 
 class ProblemCreateRaceTestCase(CommonDataMixin, TestCase):
@@ -478,6 +539,32 @@ class GradeRaceTestCase(TestCase):
         from judge.utils.contest_grade import apply_manual_grade
         apply_manual_grade(self.author.profile, submission, 90)
         self.assertEqual(ContestSubmission.objects.get(pk=self.contest_submission.pk).points, 90)
+
+    def _lock_order(self, queries):
+        order = []
+        for query in queries:
+            sql = query['sql']
+            if 'FOR UPDATE' not in sql:
+                continue
+            table = 'grade' if 'FROM `judge_submissionmanualgrade`' in sql else (
+                'submission' if 'FROM `judge_submission`' in sql else None)
+            if table and table not in order:
+                order.append(table)
+        return order
+
+    def test_save_and_release_lock_in_the_same_order(self):
+        # A save locks the submission, then its grade; Release All must do the same or the two
+        # deadlock (seen under load as HTTP 500 "Deadlock found").
+        with CaptureQueriesContext(connection) as save_queries:
+            self.client.post(reverse('contest_grade_save', args=['racegrade']),
+                             {'submission': self.submission.id, 'score': '40'})
+        with CaptureQueriesContext(connection) as release_queries:
+            self.client.post(reverse('contest_grade_release', args=['racegrade']))
+        self.assertEqual(self._lock_order(save_queries), ['submission', 'grade'])
+        self.assertEqual(self._lock_order(release_queries), ['submission', 'grade'])
+        self.assertFalse(any(q['sql'].startswith('UPDATE') and 'judge_submissionmanualgrade' in q['sql']
+                             and 'judge_submission`' in q['sql'].split('WHERE', 1)[-1]
+                             for q in release_queries))
 
     def test_release_all_is_atomic_and_locks_grades(self):
         SubmissionManualGrade.objects.create(submission=self.submission, points=70, machine_points=50.0)
