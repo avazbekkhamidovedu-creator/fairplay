@@ -20,6 +20,7 @@ from django.utils.translation import gettext as _
 from judge.subjects.base import (CREATE_V2_TYPE_CAPS, SUBMISSION_TYPE_CAPS, all_features, get_pack, get_subject,
                                  sorted_sections, subject_features)
 from judge.subjects.definitions import DEFAULT_SUBJECT
+from judge.utils.course_roles import ROLES, courses_q, teaching_q
 
 _USER_CACHE_ATTR = '_subject_features_cache'
 
@@ -80,8 +81,8 @@ def user_course_subject_keys(user):
     profile = getattr(user, 'profile', None)
     if profile is None:
         return frozenset()
-    q = (Q(member=profile) | Q(admins=profile) | Q(instructors=profile) |
-         Q(**{'class__admins': profile}) | Q(**{'class__members': profile}))
+    # One indexed subquery per role, not a join of every role table (see judge/utils/course_roles.py).
+    q = courses_q(profile, ROLES)
     return frozenset(Organization.objects.filter(q).values_list('subject', flat=True).distinct())
 
 
@@ -222,9 +223,7 @@ def teaching_courses(user, limit=12):
     if user is None or not getattr(user, 'is_authenticated', False) or getattr(user, 'profile', None) is None:
         return []
     profile = user.profile
-    q = Q(admins=profile) | Q(instructors=profile) | Q(**{'class__admins': profile})
-    ids = Organization.objects.filter(q).values('id').distinct()
-    return list(Organization.objects.filter(id__in=ids).order_by('name')[:limit])
+    return list(Organization.objects.filter(teaching_q(profile)).order_by('name')[:limit])
 
 
 def sections_for(user, place, course=None, is_teacher=None):

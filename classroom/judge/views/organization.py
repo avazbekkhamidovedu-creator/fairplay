@@ -30,6 +30,7 @@ from judge.subjects import prefix_labels
 from judge.utils.admin_notify import (
     notify_class_join, notify_course_join, notify_instructor_verification,
 )
+from judge.utils.course_roles import courses_q
 from judge.utils.import_export import process_user_csv
 from judge.utils.organization_membership import sync_class_members_to_organization
 from judge.utils.ranker import ranker
@@ -125,10 +126,8 @@ def orgs_reviewable_by(profile):
     """Courses with join requests this profile may review (course admin or class instructor)."""
     if profile is None:
         return Organization.objects.none()
-    # Reverse FK uses related_query_name 'class' in lookups, related_name 'classes' on instances.
-    return Organization.objects.filter(
-        Q(admins=profile) | Q(class__admins=profile),
-    ).distinct()
+    # One indexed subquery per role instead of joining both role tables (judge/utils/course_roles.py).
+    return Organization.objects.filter(courses_q(profile, ('admin', 'class_admin')))
 
 
 def user_can_edit_all_organizations(user):

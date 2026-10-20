@@ -50,6 +50,7 @@ from judge.models.question import GRADE_AI, GRADE_EXACT
 from judge.question_types.mcq import sync_mcq_options
 from judge.subjects import (CREATE_V2_TYPE_CAPS, capability_for_question_type, course_question_caps,
                             ensure_question_type_allowed, features_for, infer_subject_key)
+from judge.utils.course_roles import teaching_q
 from judge.utils.problem_create import (apply_simple_problem_defaults, default_problem_group, default_problem_type,
                                         generate_problem_code, log_problem_admin_entry,
                                         problem_admin_changed_fields, problem_admin_snapshot)
@@ -160,11 +161,10 @@ def assignable_organizations(user, problem=None):
         return Organization.objects.none()
     if user.has_perm('judge.edit_all_organization'):
         return Organization.objects.all()
-    profile = user.profile
-    q = Q(admins=profile) | Q(instructors=profile) | Q(**{'class__admins': profile})
+    q = teaching_q(user.profile)
     if problem is not None and problem.pk is not None:
         q |= Q(id__in=problem.organizations.values('id'))
-    return Organization.objects.filter(q).distinct()
+    return Organization.objects.filter(q)
 
 
 def _normalized_text(value):
