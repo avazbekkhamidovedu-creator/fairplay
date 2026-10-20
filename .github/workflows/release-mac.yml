@@ -1,0 +1,63 @@
+name: release-mac
+
+# Tag vX.Y.Z -> universal (Apple Silicon + Intel) release build of the Mac app pointed at the
+# exam server, attached to the GitHub release of that tag as FairPlay-Mac.zip.
+#
+# Needs the repository secret FAIRPLAY_APP_KEY (same value as the server's FAIRPLAY_APP_KEY).
+# Not Developer ID signed yet (ad-hoc): students use "Open Anyway" once (see RELEASES.md).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FAIRPLAY_BUILD: release
+  FAIRPLAY_SERVER: https://exam.speakupai.uz
+  # SHA-256 of the root CAs Render (and any Let's Encrypt server) chains to:
+  # ISRG Root X1, ISRG Root X2, GTS Root R1, GTS Root R3, GTS Root R4.
+  FAIRPLAY_PINS: "lrzsBiZJdvN0YHeazyjFp8/oo8Cq4RqP/O4FwL3fCMY=,aXKbjhWobvwXelevtxcd/GSt0owvyozxUH40RTzLFHA=,2UdDKr3nt/qQ/C5rWRAbEoDg4cfk5A+jxoh//1en9M8=,NNinPuII2bzbDZVlIJNLTkDmlIJZbotvc8hCawEKb0g=,NJ36QFjF4mMSOzmK55VXPE4TE8g/5o+TVWzV6AMbPH0="
+
+jobs:
+  mac:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (release, universal)
+        env:
+          FAIRPLAY_APP_KEY: ${{ secrets.FAIRPLAY_APP_KEY }}
+        run: |
+          if [ ${#FAIRPLAY_APP_KEY} -lt 32 ]; then
+            echo "::error::Set the repository secret FAIRPLAY_APP_KEY (same value as the server)"; exit 1
+          fi
+          xcodebuild -version
+          bash mac/build.sh
+          lipo -info mac/FairPlay.app/Contents/MacOS/Proctora
+          lipo -info mac/FairPlay.app/Contents/MacOS/Proctora | grep -q arm64
+          lipo -info mac/FairPlay.app/Contents/MacOS/Proctora | grep -q x86_64
+          codesign --verify --deep --strict mac/FairPlay.app
+          plutil -extract ServerURL raw mac/FairPlay.app/Contents/Resources/FairPlayBuild.plist
+
+      - name: Zip
+        run: ditto -c -k --sequesterRsrc --keepParent mac/FairPlay.app FairPlay-Mac.zip
+
+      - name: GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "FairPlay $GITHUB_REF_NAME" --notes-file RELEASES.md
+          gh release upload "$GITHUB_REF_NAME" FairPlay-Mac.zip --clobber
+
+      - name: Keep the zip (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: FairPlay-Mac
+          path: FairPlay-Mac.zip
+          retention-days: 14

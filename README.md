@@ -1,5 +1,17 @@
 # FairPlay
 
+## Download (students)
+
+| Computer | Download |
+|---|---|
+| Mac (Apple Silicon or Intel) | [FairPlay-Mac.zip](https://github.com/khamidov17/fairplay/releases/latest/download/FairPlay-Mac.zip) |
+| Windows 10/11 | [FairPlay-Windows-Setup.exe](https://github.com/khamidov17/fairplay/releases/latest/download/FairPlay-Windows-Setup.exe) |
+
+Install steps (the apps are not signed yet, so macOS and Windows ask once): [RELEASES.md](RELEASES.md).
+Releases are built by `.github/workflows/release-mac.yml` (and the Windows repo's `release.yml`)
+when a `vX.Y.Z` tag is pushed; both need the repository secret `FAIRPLAY_APP_KEY`.
+
+
 Secure exams for universities: teacher web dashboard, student apps that lock the device (Mac, iPad; Windows in fairplay-windows), and a scalable API.
 
 ```
