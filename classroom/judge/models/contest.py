@@ -412,6 +412,10 @@ class Contest(models.Model):
 
     @cached_property
     def editor_ids(self):
+        # Lists prefetch authors and curators; use them instead of one query per row.
+        prefetched = getattr(self, '_prefetched_objects_cache', {})
+        if 'authors' in prefetched and 'curators' in prefetched:
+            return {p.id for p in prefetched['authors']} | {p.id for p in prefetched['curators']}
         return self.author_ids.union(
             Contest.curators.through.objects.filter(contest=self).values_list('profile_id', flat=True))
 

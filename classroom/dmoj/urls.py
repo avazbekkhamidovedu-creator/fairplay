@@ -329,6 +329,8 @@ urlpatterns = [
          name='organization_instructor_requests'),
     path('organizations/instructor-verification/', organization.InstructorVerificationSubmitView.as_view(),
          name='organization_instructor_verification'),
+    path('organizations/instructor-apply-catalog/', organization.InstructorApplyCatalogView.as_view(),
+         name='organization_instructor_apply_catalog'),
     # Legacy teacher-* URLs redirect to instructor-*.
     path('organizations/teacher-requests/',
          RedirectView.as_view(pattern_name='organization_join_requests', permanent=False)),

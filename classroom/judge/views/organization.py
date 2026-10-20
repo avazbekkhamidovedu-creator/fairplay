@@ -10,7 +10,7 @@ from django.core.cache.utils import make_template_fragment_key
 from django.core.exceptions import PermissionDenied
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
 from django.forms import Form, modelformset_factory
-from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedirect
+from django.http import Http404, HttpResponsePermanentRedirect, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
@@ -379,8 +379,17 @@ def course_inbox_chrome_context(request):
         'can_apply_teacher': request.user.is_authenticated and not is_site_teacher and not pending_teacher_apply,
         'pending_teacher_apply': pending_teacher_apply,
         'admin_email': admin_email or getattr(settings, 'SITE_ADMIN_EMAIL', '') or 'admin@example.com',
-        'instructor_apply_catalog': instructor_apply_catalog() if request.user.is_authenticated else [],
+        # The Apply-as-class-instructor modal fetches every course and class from
+        # InstructorApplyCatalogView when it opens; inlining it put the whole university's
+        # catalog (30 KB at 150 courses, growing with every course) into each course page.
     }
+
+
+class InstructorApplyCatalogView(LoginRequiredMixin, View):
+    """Courses and active classes for the Apply-as-instructor modal (loaded when it opens)."""
+
+    def get(self, request, *args, **kwargs):
+        return JsonResponse({'courses': instructor_apply_catalog()})
 
 
 def grant_site_teacher_role(profile):

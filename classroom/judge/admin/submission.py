@@ -140,7 +140,8 @@ class SubmissionAdmin(VersionAdmin):
     def get_queryset(self, request):
         queryset = Submission.objects.select_related('problem', 'user__user', 'language').only(
             'problem__code', 'problem__name', 'user__user__username', 'language__name',
-            'time', 'memory', 'points', 'status', 'result',
+            # locked_after: read per row by the changelist (one query per row when deferred).
+            'time', 'memory', 'points', 'status', 'result', 'locked_after',
         )
         use_straight_join(queryset)
         if not request.user.has_perm('judge.edit_all_problem'):

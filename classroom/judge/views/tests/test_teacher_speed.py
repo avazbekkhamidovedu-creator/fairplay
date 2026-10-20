@@ -14,10 +14,12 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Class, Contest, Organization, ProblemMCQConfig, ProblemType
+from judge.models import (Class, Contest, ContestParticipation, ContestProblem, ContestSubmission, Language,
+                          Organization, ProblemMCQConfig, ProblemType, Profile, Submission, SubmissionSource)
 from judge.models.notification import ensure_instructors_group
 from judge.models.tests.util import create_contest, create_problem, create_user
 from judge.subjects.access import teaching_courses, user_course_subject_keys
+from judge.utils.contest_grade import practice_grade_queryset
 
 
 def role_joins(sql):
@@ -250,3 +252,152 @@ class AssignmentEditorLibraryTest(TestCase):
         data = self.library(page_size=3, page=1)
         self.assertEqual((data['total'], data['pages'], data['page'], len(data['rows'])), (4, 2, 1, 1))
         self.assertEqual(self.library(page_size=3, page=99)['page'], 1)
+
+
+class TeacherListQueryCountTest(TestCase):
+    """Lists a teacher opens cost the same number of queries for 3 rows as for 15.
+
+    Before: submission lists ran ~2 queries per row (assignment editors, deferred ai_points) plus
+    one translation per question; the problem list one editor query per row; the assignment list
+    one editor query per row; the leaderboard two per row (deferred first/last name).
+    """
+    fixtures = ['language_small.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        now = timezone.now()
+        cls.teacher = create_user(username='qc_teacher')
+        cls.teacher.groups.add(ensure_instructors_group())
+        cls.course = Organization.objects.create(name='QC course', slug='qc-course', short_name='QC', is_open=False)
+        cls.course.admins.add(cls.teacher.profile)
+        cls.contest = create_contest(key='qcassign', name='QC assignment', is_visible=True,
+                                     start_time=now - timedelta(days=2), end_time=now - timedelta(days=1),
+                                     authors=('qc_teacher',), organizations=('QC course',))
+        cls.language = Language.get_answer_language()
+        cls.n = 0
+
+    def add_rows(self, count):
+        for _ in range(count):
+            n = type(self).n = type(self).n + 1
+            problem = create_problem('qc-p%02d' % n, name='QC problem %d' % n, submission_type='S', is_public=True,
+                                     points=5, authors=('qc_teacher',))
+            cp = ContestProblem.objects.create(contest=self.contest, problem=problem, points=5, order=n)
+            student = create_user(username='qc_s%02d' % n, first_name='First', last_name='Last%d' % n)
+            participation = ContestParticipation.objects.create(contest=self.contest, user=student.profile)
+            sub = Submission.objects.create(user=student.profile, problem=problem, language=self.language,
+                                            status='D', result='AC', points=5, case_points=5, case_total=5,
+                                            contest_object=self.contest)
+            SubmissionSource.objects.create(submission=sub, source='{"text": "x"}')
+            ContestSubmission.objects.create(submission=sub, problem=cp, participation=participation, points=5)
+            create_contest(key='qcextra%02d' % n, is_visible=True, authors=('qc_teacher',),
+                           start_time=timezone.now() - timedelta(days=3), end_time=timezone.now() - timedelta(days=2))
+            Profile.objects.filter(id=student.profile.id).update(performance_points=n)
+
+    def queries(self, url):
+        self.client.get(url)
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, url)
+        return len(ctx)
+
+    def assert_flat(self, url):
+        self.add_rows(3)
+        before = self.queries(url)
+        self.add_rows(12)
+        self.assertEqual(self.queries(url), before, url)
+
+    def setUp(self):
+        self.client.force_login(self.teacher)
+
+    def test_assignment_submissions(self):
+        self.assert_flat(reverse('all_submissions') + '?contest=qcassign')
+
+    def test_all_submissions(self):
+        self.assert_flat(reverse('all_submissions'))
+
+    def test_problem_list(self):
+        self.assert_flat(reverse('problem_list'))
+
+    def test_assignment_list(self):
+        self.assert_flat(reverse('contest_list'))
+
+    def test_leaderboard(self):
+        self.assert_flat(reverse('user_list'))
+
+    def test_contest_stats(self):
+        self.assert_flat(reverse('contest_stats', args=['qcassign']))
+
+
+class PracticeGradeScopeTest(TestCase):
+    """The practice grade desk finds a teacher's rows through the problem index.
+
+    Before: the editable problems were a subquery, and MariaDB walked every submission by date
+    probing each one (200+ ms at 150,000 submissions). Now they are a literal id list; the rows
+    in scope are the same.
+    """
+    fixtures = ['language_small.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.teacher = create_user(username='pg_teacher')
+        cls.teacher.groups.add(ensure_instructors_group())
+        cls.admin = create_user(username='pg_admin', is_superuser=True)
+        cls.student = create_user(username='pg_student')
+        language = Language.get_answer_language()
+        mine = create_problem('pg-mine', is_public=True, authors=('pg_teacher',))
+        curated = create_problem('pg-curated', is_public=True, curators=('pg_teacher',))
+        other = create_problem('pg-other', is_public=True)
+        contest = create_contest(key='pgcontest')
+        cls.subs = {}
+        for name, problem, in_contest in (('mine', mine, False), ('curated', curated, False),
+                                          ('other', other, False), ('assignment', mine, True)):
+            cls.subs[name] = Submission.objects.create(
+                user=cls.student.profile, problem=problem, language=language, status='D', result='AC',
+                contest_object=contest if in_contest else None)
+
+    def ids(self, user):
+        return {s.id for s in practice_grade_queryset(user)}
+
+    def test_scope(self):
+        self.assertEqual(self.ids(self.teacher), {self.subs['mine'].id, self.subs['curated'].id})
+        self.assertEqual(self.ids(self.admin), {self.subs['mine'].id, self.subs['curated'].id, self.subs['other'].id})
+        self.assertEqual(self.ids(self.student), set())
+
+    def test_problems_are_literal_ids(self):
+        sql = str(practice_grade_queryset(self.teacher).query)
+        self.assertNotIn('judge_problem_authors', sql)
+        self.assertNotIn('judge_problem_curators', sql)
+
+
+class CoursePageCatalogTest(TestCase):
+    """The Apply-as-instructor catalog (every course and class) is fetched, not inlined.
+
+    Before: each course, class and course-list page carried it, half of a course page on the
+    teacher-scale seed (30 KB at 150 courses) and growing with every course.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_user(username='cat_student')
+        cls.course = Organization.objects.create(name='Cat course', slug='cat-course', short_name='CAT',
+                                                 is_open=True)
+        cls.course.members.add(cls.user.profile)
+
+    def test_course_page_does_not_grow_with_other_courses(self):
+        self.client.force_login(self.user)
+        url = self.course.get_absolute_url()
+        self.client.get(url)
+        size = len(self.client.get(url).content)
+        for i in range(25):
+            org = Organization.objects.create(name='Other course number %d' % i, slug='other-%d' % i,
+                                              short_name='OC%d' % i, is_open=True)
+            Class.objects.create(organization=org, name='Other class %d' % i, slug='other-class-%d' % i)
+        self.assertLess(len(self.client.get(url).content) - size, 200)
+        data = self.client.get(reverse('organization_instructor_apply_catalog')).json()
+        self.assertEqual(len(data['courses']), 26)
+        other = [c for c in data['courses'] if c['short_name'] == 'OC3'][0]
+        self.assertEqual([k['name'] for k in other['classes']], ['Other class 3'])
+
+    def test_catalog_needs_login(self):
+        response = self.client.get(reverse('organization_instructor_apply_catalog'))
+        self.assertEqual(response.status_code, 302)

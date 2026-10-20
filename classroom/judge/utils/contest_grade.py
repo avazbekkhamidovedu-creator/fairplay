@@ -7,6 +7,7 @@ Virtual participations are never final.
 from __future__ import annotations
 
 from django.conf import settings
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
@@ -121,9 +122,25 @@ PRACTICE_GRADE_PAGE_SIZE = 300
 # Everything ``build_grade_payload`` reads per row, so the desk costs a fixed number of
 # queries instead of ~3 per submission (source, contest problem, MCQ options / blanks).
 GRADE_ROW_SELECT = ('user__user', 'problem', 'language', 'reviewed_by__user', 'contest__participation',
-                    'contest__problem', 'source')
+                    'contest__problem', 'source', 'upload')
 GRADE_ROW_PREFETCH = ('test_cases', 'problem__fill_blank_config', 'problem__short_answer_config',
                       'problem__mcq_options', 'problem__blanks', 'manual_grade')
+
+
+def _practice_problem_q(user):
+    """``Problem.get_editable_problems(user)`` as a filter on ``Submission``.
+
+    With the problems as a subquery MariaDB walked the whole submission table by date and
+    probed every row (200+ ms at 150,000 submissions for an instructor with ~25 practice rows).
+    The ids of the problems a teacher may edit are a short list, and with it the
+    (problem, ...) index finds their submissions directly. ``edit_all_problem`` covers every
+    problem, so it needs no filter at all.
+    """
+    if not user.has_perm('judge.edit_own_problem'):
+        return Q(pk__in=[])
+    if user.has_perm('judge.edit_all_problem'):
+        return Q()
+    return Q(problem_id__in=list(Problem.get_editable_problems(user).values_list('id', flat=True).distinct()))
 
 
 def practice_grade_queryset(user):
@@ -133,12 +150,11 @@ def practice_grade_queryset(user):
     submission id through it, so it must stay unbounded. The rendered page uses
     ``practice_grade_page`` instead.
     """
-    problems = Problem.get_editable_problems(user)
     return (Submission.objects
-            .filter(contest_object__isnull=True, problem__in=problems)
+            .filter(_practice_problem_q(user), contest_object__isnull=True)
             .select_related(*GRADE_ROW_SELECT)
             .prefetch_related(*GRADE_ROW_PREFETCH)
-            .order_by('-date'))
+            .order_by('-date', '-id'))
 
 
 def practice_grade_page(user, pinned_id=None, limit=None):
@@ -156,7 +172,11 @@ def practice_grade_page(user, pinned_id=None, limit=None):
     if limit is None:
         limit = getattr(settings, 'DMOJ_PRACTICE_GRADE_PAGE_SIZE', PRACTICE_GRADE_PAGE_SIZE)
     scope = practice_grade_queryset(user)
-    window = list(scope[:limit + 1])
+    # Pick the window by id on the bare table first: sorting the fully joined rows made
+    # MariaDB start from auth_user and filesort (400 ms for an administrator).
+    window_ids = list(scope.select_related(None).prefetch_related(None)
+                      .values_list('id', flat=True)[:limit + 1])
+    window = list(scope.filter(id__in=window_ids))
     truncated = len(window) > limit
     if truncated:
         window = window[:limit]

@@ -2429,6 +2429,7 @@ class ContestStats(TitleMixin, ContestMixin, DetailView):
             self.object.contest_problems.order_by('order').select_related('problem'),
         )
         lang = self.request.LANGUAGE_CODE
+        Problem.prime_translated_names([cp.problem for cp in contest_problems], lang)
         order_to_name = {
             cp.order: contest_problem_display_name(cp, lang) for cp in contest_problems
         }
@@ -2531,6 +2532,7 @@ class ContestGrade(TitleMixin, ContestMixin, DetailView):
         if math_engine == 'auto':
             math_engine = getattr(settings, 'MATHOID_DEFAULT_TYPE', 'jax')
         problems = list(contest.contest_problems.order_by('order').select_related('problem'))
+        Problem.prime_translated_names([cp.problem for cp in problems], self.request.LANGUAGE_CODE)
         context['grade_problems'] = [
             {
                 'code': cp.problem.code,
