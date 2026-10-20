@@ -212,6 +212,7 @@ class AssignmentEditorLibraryTest(TestCase):
         self.assertLess(size_after - size, 200)
 
     def test_library_query_count_is_flat(self):
+        self.library()  # first request warms per-process caches and records last_access
         with CaptureQueriesContext(connection) as ctx:
             self.library()
         before = len(ctx)
