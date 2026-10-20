@@ -91,6 +91,8 @@ export interface Exam {
   finish_url_contains?: string | null;
   /** 2026-10-14: apps allowed during the exam (catalog keys); everything else is closed. */
   allowed_apps?: string[];
+  /** S3: a student coming back after FairPlay closed waits for the teacher (default true). */
+  resume_needs_approval?: boolean;
 }
 
 /** 2026-10-14: an app a teacher may allow (GET /api/exams/allowed-apps). */
@@ -127,6 +129,7 @@ export interface ExamInput {
   /** slice 4: total points of an exam held on another website (default 100). */
   external_points?: number;
   allowed_apps?: string[];
+  resume_needs_approval?: boolean;
 }
 
 export interface LiveStudent {
@@ -156,7 +159,13 @@ export interface LiveStudent {
   entries?: number;
   /** S5: the app holds sealed answers for this student that are not uploaded yet. */
   sealed_pending?: boolean;
+  /** S3: came back after FairPlay closed; "pending" waits for Approve. */
+  approval?: Approval;
+  pending_since?: string | null;
 }
+
+/** S3: null = never had to wait. */
+export type Approval = "pending" | "approved" | null;
 
 export interface LiveFlag {
   event_id: number;
@@ -436,6 +445,12 @@ export interface AttemptView {
   session?: string;
   /** 2026-10-14: apps the locked computer keeps open (everything else is closed). */
   allowed_apps?: AllowedApp[];
+  /** S3: "pending" -> show "Wait for your teacher" instead of the questions. */
+  approval?: Approval;
+  /** S3: only in the POST start response: this start must wait for the teacher. */
+  needs_approval?: boolean;
+  /** S2: only in the POST start response. */
+  min_app_version?: string | null;
 }
 
 export interface SaveAnswersResponse {
@@ -449,6 +464,8 @@ export interface HeartbeatResponse {
   status: AttemptStatus;
   server_time: string;
   deadline_at: string;
+  /** S3 */
+  approval?: Approval;
 }
 
 export interface EventsResponse {

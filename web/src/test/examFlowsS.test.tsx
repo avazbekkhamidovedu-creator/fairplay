@@ -100,4 +100,25 @@ describe("exam page S3 / S5", () => {
     expect(JSON.parse(seal.answers_json)).toEqual({ q1: 1 });
     expect(typeof seal.client_seq).toBe("number");
   });
+
+  it("back after FairPlay closed: waits for the teacher, then shows the questions", async () => {
+    nativeApp();
+    api.getAttempt.mockResolvedValue(view({ approval: "pending" }));
+    let approve: (v: unknown) => void = () => undefined;
+    api.heartbeat.mockImplementation(() => new Promise((resolve) => (approve = resolve)));
+    renderExam();
+    expect(await screen.findByTestId("wait-for-teacher")).toHaveTextContent("Wait for your teacher");
+    expect(screen.queryByText("2+2?")).toBeNull();
+    approve({ ok: true, status: "in_progress", server_time: new Date().toISOString(), deadline_at: view().deadline_at, approval: "approved" });
+    expect(await screen.findByText("2+2?")).toBeInTheDocument();
+    expect(screen.queryByTestId("wait-for-teacher")).toBeNull();
+  });
+
+  it("the start response's needs_approval also makes the page wait", async () => {
+    nativeApp();
+    api.getAttempt.mockResolvedValue(view({ needs_approval: true, approval: "pending" }));
+    api.heartbeat.mockImplementation(() => new Promise(() => undefined));
+    renderExam();
+    expect(await screen.findByTestId("wait-for-teacher")).toBeInTheDocument();
+  });
 });

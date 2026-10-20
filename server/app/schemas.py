@@ -250,6 +250,8 @@ class ExamIn(BaseModel):
     class_id: int | None = Field(default=None, ge=1)
     # 2026-10-14: apps allowed during the exam (allowed_apps.CATALOG keys); [] = none.
     allowed_apps: list[str] = Field(default_factory=list, max_length=20)
+    # S3 (2026-10-20): coming back after FairPlay closed needs the teacher's OK
+    resume_needs_approval: bool = True
 
     @field_validator("allowed_apps")
     @classmethod

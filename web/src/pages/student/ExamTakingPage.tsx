@@ -97,6 +97,8 @@ function ExamTakingInner() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   // S5: the automatic hand-in failed (offline): offer retry / seal / help.
   const [timeUpProblem, setTimeUpProblem] = useState(false);
+  // S3: back after FairPlay closed; the teacher must approve before questions show again.
+  const [waiting, setWaiting] = useState(false);
   const [marked, setMarked] = useState<Set<string>>(() => readMarks(attemptId));
 
   const queueRef = useRef<AnswerQueue | null>(null);
@@ -314,6 +316,7 @@ function ExamTakingInner() {
         queue.init(a.answers);
         setAnswers(queue.getAnswers());
         appsRef.current = a.allowed_apps;   // 2026-10-14: handed to the app with "lock"
+        setWaiting(a.needs_approval === true || a.approval === "pending");
         setAttempt(a);
         setDeadline(a.deadline_at);
         setOffset(clockOffset(a.server_time));
@@ -447,6 +450,7 @@ function ExamTakingInner() {
         const res = await call((aid) => studentApi.heartbeat(aid, currentRef.current, bridge.isLocked()));
         setOffset(clockOffset(res.server_time));
         if (res.deadline_at) setDeadline(res.deadline_at);
+        if (res.approval !== undefined) setWaiting(res.approval === "pending");
         if (res.status === "submitted") {
           // closed by the teacher (or submitted elsewhere): finish and unlock
           if (!submittingRef.current) void doSubmitRef.current(true);
@@ -473,10 +477,12 @@ function ExamTakingInner() {
   const remaining = deadline ? remainingMs(deadline, offset, now) : Infinity;
   useEffect(() => {
     if (!attempt || !deadline) return;
+    // S3: while waiting for the teacher the time is given back on approval: don't hand in.
+    if (waiting) return;
     if (remaining <= 0 && (phase === "exam" || phase === "review" || phase === "lockFailed" || phase === "preflight")) {
       void doSubmit(true);
     }
-  }, [remaining, phase, attempt, deadline, doSubmit]);
+  }, [remaining, phase, attempt, deadline, doSubmit, waiting]);
 
   // ----- answering -----
 
@@ -593,9 +599,11 @@ function ExamTakingInner() {
   const markedCount = questions.filter((qq) => marked.has(qq.id)).length;
   const isMarked = q ? marked.has(q.id) : false;
   const timeUpPanel = phase === "submitting" && timeUpProblem;
-  const showExam = phase === "exam" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam");
+  const waitPanel = waiting && (phase === "exam" || phase === "review");
+  const showExam =
+    !waitPanel && (phase === "exam" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam"));
   const showReview =
-    phase === "review" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current !== "exam");
+    !waitPanel && (phase === "review" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current !== "exam"));
   const typeLabel = q?.type === "essay" ? " · Essay" : "";
 
   const isLast = current === questions.length - 1;
@@ -816,6 +824,20 @@ function ExamTakingInner() {
           submitting={phase === "submitting"}
           error={submitError}
         />
+      )}
+
+      {waitPanel && (
+        <main className="stu-center" data-testid="wait-for-teacher">
+          <div className="stu-card" style={{ gap: 12, maxWidth: 560 }} role="status">
+            <h1 style={{ margin: 0, fontSize: 22 }}>Wait for your teacher</h1>
+            <p style={{ margin: 0 }}>
+              FairPlay was closed during the exam. Raise your hand: your teacher lets you continue from the live room.
+            </p>
+            <p className="stu-muted" style={{ margin: 0 }}>
+              Your answers are saved. The time you wait is given back (up to 15 minutes).
+            </p>
+          </div>
+        </main>
       )}
 
       {timeUpPanel && (

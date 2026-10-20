@@ -272,6 +272,10 @@ export const teacherApi = {
   releaseDevice: (examId: string, aid: string) =>
     request<{ ok: boolean }>("teacher", "POST", `/api/exams/${enc(examId)}/attempts/${enc(aid)}/release-device`),
   live: (id: string) => request<LiveRoom>("teacher", "GET", `/api/exams/${enc(id)}/live`),
+  /** S3: let a student who came back after FairPlay closed continue (waiting time given back, max 15 min). */
+  approveResume: (examId: string, aid: string) =>
+    request<{ ok: boolean; minutes_added: number; deadline_at: string }>(
+      "teacher", "POST", `/api/exams/${enc(examId)}/attempts/${enc(aid)}/approve-resume`),
   /** S1: each student's latest FairPlay device check. */
   readiness: (id: string) => request<ReadinessRow[]>("teacher", "GET", `/api/exams/${enc(id)}/readiness`),
   /** 8-digit exit code for one student's locked Mac that cannot reach the server

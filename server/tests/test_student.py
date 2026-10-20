@@ -46,7 +46,8 @@ def test_start_wrong_then_right_and_resume(client, alice, live_exam):
     assert set(a) == {"attempt_id", "exam_id", "title", "duration_min", "started_at", "deadline_at",
                       "server_time", "questions", "answers", "status", "course",
                       "mode", "external_url", "allowed_domains", "finish_url_contains", "session",
-                      "allowed_apps", "min_app_version"}   # S2
+                      "allowed_apps", "min_app_version",     # S2
+                      "approval", "needs_approval"}          # S3
     assert a["status"] == "in_progress" and a["answers"] == {} and a["title"] == "Midterm"
     for q in a["questions"]:
         for secret in ("correct_index", "answer_number", "tolerance", "accepted_answers"):
@@ -208,7 +209,7 @@ def test_live_endpoint(client, teacher, alice, bob, live_exam):
                       "deadline_at", "answered", "question_count", "current_question", "locked",
                       "last_heartbeat_at", "online", "event_count", "last_event", "needs_look",
                       "app_online", "last_app_signal_at", "app_checks", "client", "entries", "late",
-                      "sealed_pending"}   # S1-S6 (2026-10-20)
+                      "sealed_pending", "approval", "pending_since"}   # S1-S6 (2026-10-20)
     assert s["name"] == "Alice Chen" and s["status"] == "in_progress"
     assert s["answered"] == 2 and s["question_count"] == 3
     # audit #2: the page's self-reported "locked" no longer counts (signed app beats only)

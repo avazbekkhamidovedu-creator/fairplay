@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer,
-                        String, Text, UniqueConstraint, false, text)
+                        String, Text, UniqueConstraint, false, text, true)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -76,6 +76,10 @@ class Exam(Base):
     # Audit 2026-10-12: per-exam invigilator code (emergency exit in the app), checked by
     # the server with an attempt limit. New on every open.
     invigilator_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # S3 (2026-10-20): a student coming back after FairPlay closed (crash, force quit) waits
+    # until the teacher approves (routes_student._resume). On by default.
+    resume_needs_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,
+                                                        server_default=true())
 
 
 class Attempt(Base):
@@ -127,6 +131,11 @@ class Attempt(Base):
     # makes a repeated upload of the same seal return the same receipt.
     late_sealed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     sealed_proof: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # S3: waiting for the teacher after a new app run resumed this attempt. pending_since
+    # stays set after approval (approval = "approved"); the wait is added to the deadline.
+    pending_resume: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                 server_default=false())
+    pending_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class IntegrityEvent(Base):

@@ -102,7 +102,13 @@ def exam_out(e: Exam, pending_grading: int = 0) -> dict:
         "delivery": exam_delivery(e),  # slice 6
         "class_id": e.class_id,        # audit S-03
         "allowed_apps": list(e.allowed_apps or []),   # 2026-10-14
+        **lock_settings(e),                           # S3 / S6
     }
+
+
+def lock_settings(e: Exam) -> dict:
+    """S3 / S6 exam settings (teacher view and the student-side exam cache)."""
+    return {"resume_needs_approval": e.resume_needs_approval is not False}
 
 
 def external_fields(e: Exam) -> dict:
@@ -191,6 +197,7 @@ async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> 
         "delivery": exam_delivery(e),  # slice 6: paper exams are never started in the app
         "scheduled_at": iso(e.scheduled_at),
         "allowed_apps": list(e.allowed_apps or []),   # 2026-10-14
+        **lock_settings(e),                           # S3 / S6: read by start and app-beat
         "questions": [student_question(q) for q in e.questions or []],
         **external_fields(e),
     }
@@ -208,7 +215,16 @@ def attempt_key(aid: str) -> str:
 def attempt_meta(a: Attempt) -> dict:
     return {"exam_id": a.exam_id, "student_id": a.student_id, "status": a.status,
             "deadline_at": iso(a.deadline_at), "session_id": a.session_id,
-            "device_id": a.device_id, "started_at": iso(a.started_at)}
+            "device_id": a.device_id, "started_at": iso(a.started_at),
+            "approval": approval_of(a)}
+
+
+def approval_of(a: Attempt) -> str | None:
+    """S3: "pending" while the teacher has not let a resumed attempt continue, "approved"
+    after that, None if it never had to wait."""
+    if a.pending_resume:
+        return "pending"
+    return "approved" if a.pending_since is not None else None
 
 
 async def cache_attempt(store: Store, a: Attempt) -> None:
@@ -219,7 +235,7 @@ async def get_attempt_meta(store: Store, session: AsyncSession, aid: str) -> dic
     raw = await store.get(attempt_key(aid))
     if raw:
         meta = json.loads(raw)
-        if "session_id" in meta:  # entries cached before the audit fixes lack it
+        if "approval" in meta:  # entries cached before S3 (or the audit fixes) lack it
             return meta
     a = await session.get(Attempt, aid)
     if a is None:
@@ -262,6 +278,7 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         "finish_url_contains": exam.get("finish_url_contains") if external else None,
         # 2026-10-14: apps the app keeps open while locked (everything else is closed)
         "allowed_apps": _student_apps(exam.get("allowed_apps")),
+        "approval": approval_of(a),    # S3: "pending" -> the page shows "Wait for your teacher"
     }
 
 

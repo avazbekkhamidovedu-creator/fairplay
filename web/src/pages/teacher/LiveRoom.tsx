@@ -375,7 +375,7 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
                         <span className="t-seat-name">{s.name}</span>
                         <span className="t-seat-sub">{seatSub(s, st)}</span>
                       </Link>
-                      <SeatBadges student={s} />
+                      <SeatBadges examId={exam.id} student={s} onChanged={load} />
                       {s.status === "in_progress" && s.client !== "browser" && (
                         <MoveDevice examId={exam.id} student={s} onMoved={load} />
                       )}
@@ -521,11 +521,29 @@ function FlagCard({ examId, flag, onDone }: { examId: string; flag: LiveFlag; on
 }
 
 
-/** S3-S6: what needs the invigilator at this seat, as short badges. */
-export function SeatBadges({ student: s }: { student: LiveStudent }) {
+/** S3-S6: what needs the invigilator at this seat, as short badges (+ the button for it). */
+export function SeatBadges({ examId, student: s, onChanged }: { examId: string; student: LiveStudent; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const writing = s.status === "in_progress";
   const badges: string[] = [];
   if (s.sealed_pending) badges.push("submission pending on this student's computer");
+  if (writing && s.approval === "pending") badges.push("Waiting for approval");
   if (badges.length === 0) return null;
+
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <span className="t-seat-action" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {badges.map((b) => (
@@ -533,6 +551,14 @@ export function SeatBadges({ student: s }: { student: LiveStudent }) {
           {b}
         </span>
       ))}
+      {writing && s.approval === "pending" && (
+        <button type="button" className="t-mini-link" disabled={busy} aria-label={`Approve ${s.name} to continue`}
+          title="FairPlay closed on this computer and was opened again. Check the student, then let them continue."
+          onClick={() => void act(() => teacherApi.approveResume(examId, s.attempt_id))}>
+          {busy ? "…" : "Approve"}
+        </button>
+      )}
+      {error && <span className="t-small" style={{ color: "var(--warn)" }}>{error}</span>}
     </span>
   );
 }

@@ -210,16 +210,24 @@ async def start(exam_id: str, body: StartIn, request: Request,
         # (client "browser" -- only possible with FAIRPLAY_REQUIRE_APP=0 -- shows in the live room)
         await store.set(f"entry:{a.id}", "1", REENTRY_QUIET_S)
     else:
-        await _resume(session, store, a, device_id, exam_id)
+        await _resume(session, store, a, device_id, exam)
     await cache_attempt(store, a)
-    return {**attempt_view(a, exam, now), "session": a.session_id, "min_app_version": min_version}
+    return {**attempt_view(a, exam, now), "session": a.session_id, "min_app_version": min_version,
+            "needs_approval": bool(a.pending_resume)}     # S3
 
 
 async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | None,
-                  exam_id: str) -> None:
+                  exam: dict) -> None:
     """Start on an existing attempt (audit #3, #6): another device is refused and flagged;
     the same device gets a fresh session (the old one stops working) and is flagged as a
-    re-entry, unless it is a double click."""
+    re-entry, unless it is a double click.
+
+    S3: the re-entry case is the "new app run" (FairPlay crashed / was quit and was opened
+    again on the bound computer, more than REENTRY_QUIET_S after the last start). Only that
+    case waits for the teacher (exam setting resume_needs_approval). A page reload never
+    gets here: the page keeps its session and only GETs the attempt. A double click, a
+    browser start, and the first bind on a new computer (after release / swap) don't wait."""
+    exam_id = exam["id"]
     if a.device_id and device_id != a.device_id:
         if await ac.once_per(store, f"secdev:{a.id}", 60):   # one flag a minute, not per try
             await ac.add_event(session, store, a.id, exam_id, "second_device",
@@ -235,11 +243,15 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
     if await store.get(f"entry:{a.id}") and a.device_id == device_id:
         return  # double click within REENTRY_QUIET_S: same session
     first_bind = a.device_id is None
+    now = utcnow()
     a.device_id = device_id
     a.session_id = new_session_id()
     a.entries = (a.entries or 0) + 1
     a.client = "app"
-    a.updated_at = utcnow()
+    a.updated_at = now
+    ask = not first_bind and exam.get("resume_needs_approval", True) and not a.pending_resume
+    if ask:
+        a.pending_resume, a.pending_since = True, now
     await session.commit()
     await store.set(f"entry:{a.id}", "1", REENTRY_QUIET_S)
     if first_bind:
@@ -248,6 +260,9 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
     else:
         await ac.add_event(session, store, a.id, exam_id, "re_entry",
                            f"started again on the same computer (entry {a.entries})")
+    if ask:
+        await ac.add_event(session, store, a.id, exam_id, "resume_requested",
+                           "FairPlay was opened again during the exam; the student waits for your OK")
 
 
 def _meta_of(a: Attempt) -> dict:
@@ -346,7 +361,7 @@ async def heartbeat(aid: str, body: HeartbeatIn, request: Request,
                      json.dumps({"t": now, "cq": body.current_question}), LIVE_TTL)
     await ac.note_js_heartbeat(request, session, store, aid, meta)
     return {"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
-            "deadline_at": meta["deadline_at"]}
+            "deadline_at": meta["deadline_at"], "approval": meta.get("approval")}   # S3
 
 
 @router.post("/attempts/{aid}/events")
@@ -504,7 +519,8 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     await store.set(f"abt:{aid}", json.dumps(entry), LIVE_TTL)
     await store.hset(f"ab:{exam_id}", aid, json.dumps(entry), LIVE_TTL)
     return {"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
-            "deadline_at": meta["deadline_at"], "min_app_version": min_version}
+            "deadline_at": meta["deadline_at"], "min_app_version": min_version,
+            "approval": meta.get("approval")}   # S3
 
 
 @router.get("/attempts/{aid}/handin")
