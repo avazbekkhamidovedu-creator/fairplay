@@ -161,6 +161,10 @@ async def start(exam_id: str, body: StartIn, request: Request,
                 settings, ac.start_message(body.client.nonce, body.client.device_id),
                 body.client.signature):
             raise HTTPException(403, ac.APP_PROOF_DETAIL)
+        # iPad review M6 (2026-10-20): dev builds (soft lock, fixed exit code, inspector)
+        # only ever take exams on a FAIRPLAY_DEV=1 server.
+        if body.client.build == "dev" and not settings.dev:
+            raise HTTPException(403, ac.APP_PROOF_DETAIL)
         device_id = body.client.device_id
     elif settings.require_app:
         raise HTTPException(403, ac.APP_REQUIRED_DETAIL)
@@ -549,11 +553,13 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     # Audit M-02: a Mac whose login session is in the background (fast user switching,
     # login window) is not locked, whatever the app says.
     checks = ac.parse_checks(body.checks)
-    locked = body.locked and checks.get("console") != "0"
+    locked = body.locked and checks.get("console") != "0" and ac.ipad_lock_held(checks, settings.dev)
     if checks.get("console") == "0" and meta["status"] == "in_progress" \
             and await ac.once_per(store, f"offcon:{aid}", ac.FLAG_REPEAT_S):
-        await ac.add_event(session, store, aid, exam_id, "off_console",
-                           "this Mac switched to another user or the login window")
+        detail = ("this iPad left the exam, or its screen is recorded or mirrored"
+                  if checks.get("plat") == "ipad" else
+                  "this Mac switched to another user or the login window")
+        await ac.add_event(session, store, aid, exam_id, "off_console", detail)
     if checks.get("secinput") == "1" and meta["status"] == "in_progress" \
             and await ac.once_per(store, f"secin:{aid}", ac.FLAG_REPEAT_S):
         await ac.add_event(session, store, aid, exam_id, "secure_input_other_app",
@@ -561,8 +567,13 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     if meta["status"] == "in_progress":
         await _check_strong_lock(session, store, aid, exam_id, checks)
     if last and meta["status"] == "in_progress" and now - last["t"] > ac.APP_GAP_S:
-        await ac.add_event(session, store, aid, exam_id, "app_gap",
-                           f"no signal from the app for {int(now - last['t'])} s")
+        gap = f"no signal from the app for {int(now - last['t'])} s"
+        # iPad re-review N8: under Assessment Mode with teacher-allowed apps, iPadOS
+        # suspends FairPlay while the student is in one of them (e.g. Calculator).
+        prev = ac.parse_checks(last.get("checks", ""))
+        if prev.get("plat") == "ipad" and prev.get("aac") == "1" and prev.get("apps", "0") not in ("", "0"):
+            gap += " (Assessment Mode was on: probably in a teacher-allowed app)"
+        await ac.add_event(session, store, aid, exam_id, "app_gap", gap)
     if last and last.get("locked") and not locked and meta["status"] == "in_progress":
         await ac.add_event(session, store, aid, exam_id, "unlocked_in_exam",
                            "the app reports it is no longer locked")
@@ -696,9 +707,12 @@ async def offline_key(aid: str, body: OfflineKeyIn, request: Request,
                            f"the offline exit key for this session was asked for more than {OFFLINE_KEY_ASKS} times")
     key_hex = ac.offline_key(settings.secret, aid, body.session).hex()
     out = {"key": key_hex}
-    if settings.app_keys:   # Windows app verifies the reply (RequireSignedVerdicts)
-        out["proof"] = ac.sign(settings.app_keys[0],
-                               ac.offkey_response_message(aid, body.session, key_hex, body.ts))
+    if settings.app_keys:
+        msg = ac.offkey_response_message(aid, body.session, key_hex, body.ts)
+        # Windows checks `proof` (first key); iPad checks `proofs` (one per key, so apps
+        # built with any key in a rotation can verify it; review M2 2026-10-20).
+        out["proof"] = ac.sign(settings.app_keys[0], msg)
+        out["proofs"] = [ac.sign(k, msg) for k in settings.app_keys]
     return out
 
 

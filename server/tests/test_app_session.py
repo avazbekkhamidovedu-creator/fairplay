@@ -335,6 +335,27 @@ def test_off_console_beat_counts_as_not_locked(app_client, exam):
     assert "off_console" in ev and "secure_input_other_app" in ev and "unlocked_in_exam" in ev
 
 
+
+def test_ipad_beats_and_events(app_client, exam):
+    """iPad app (ios/FairPlay): its checks summary and event types are understood."""
+    t = login(app_client, "teacher")
+    h = login(app_client, "alice")
+    a = start(app_client, h, exam).json()
+    aid, sess = a["attempt_id"], a["session"]
+    ipad = "plat=ipad,aac=1,sam=0,soft=0,disp=1,cap=1,mw=0,fg=1,console=0,secinput=0"
+    assert beat(app_client, h, aid, sess, 1000, checks=ipad).status_code == 200
+    live = app_client.get(f"/api/exams/{exam['id']}/live", headers=t).json()
+    assert live["students"][0]["locked"] is False
+    assert live["students"][0]["app_checks"] == ipad
+    r = app_client.post(f"/api/student/attempts/{aid}/events", headers={**h, "X-FairPlay-Session": sess},
+                        json={"events": [{"type": "screenshot_taken", "detail": "1", "client_time": "2026-10-20T10:00:00Z"},
+                                         {"type": "app_backgrounded", "detail": "1x", "client_time": "2026-10-20T10:00:01Z"}]})
+    assert r.status_code == 200
+    res = app_client.get(f"/api/exams/{exam['id']}/results", headers=t).json()
+    evs = {ev["type"]: ev["detail"] for att in res["attempts"] for ev in att.get("events", [])}
+    assert "screenshot_taken" in evs and "app_backgrounded" in evs
+    assert "iPad" in evs["off_console"]
+
 def test_signed_handin_status(app_client, exam):
     from app.app_client import handin_message
     t = login(app_client, "teacher")
@@ -363,3 +384,45 @@ def test_signed_handin_status(app_client, exam):
     assert gone.status_code == 200 and gone.json()["status"] == "gone"
     bad = app_client.get(f"/api/student/attempts/{aid}/handin", params={"nonce": "a|b"}, headers=hs)
     assert bad.status_code == 422
+
+
+def test_ipad_review_fixes(app_client, exam):
+    """iPad review 2026-10-20: M6 (dev builds / soft lock) and M2 (offline-key proofs)."""
+    from app.app_client import offkey_response_message
+    t = login(app_client, "teacher")
+    h = login(app_client, "alice")
+    # M6: a dev build can't start an exam on a server without FAIRPLAY_DEV.
+    dev_proof = {**proof(app_client, h, exam["id"], DEV_A), "build": "dev"}
+    r = app_client.post(f"/api/student/exams/{exam['id']}/start", headers=h,
+                        json={"start_code": exam["start_code"], "client": dev_proof})
+    assert r.status_code == 403
+    a = start(app_client, h, exam).json()
+    aid, sess = a["attempt_id"], a["session"]
+    live = lambda: app_client.get(f"/api/exams/{exam['id']}/live", headers=t).json()["students"][0]["locked"]
+    # M6: an iPad is locked only while iPadOS holds the lock; a soft lock never counts here.
+    assert beat(app_client, h, aid, sess, 1000, checks="plat=ipad,aac=0,sam=0,soft=1,console=1").status_code == 200
+    assert live() is False
+    assert beat(app_client, h, aid, sess, 2000, checks="plat=ipad,aac=1,sam=0,soft=0,console=1").status_code == 200
+    assert live() is True
+    assert beat(app_client, h, aid, sess, 3000, checks="plat=ipad,aac=0,sam=1,soft=0,console=1").status_code == 200
+    assert live() is True
+    # M2: the offline-key reply carries one proof per app key.
+    k = _fetch_offline_key(app_client, h, a, ts=4000).json()
+    assert k["proofs"] == [sign(KEY, offkey_response_message(aid, sess, k["key"], 4000))]
+    assert k["proof"] == k["proofs"][0]
+
+
+def test_ipad_app_gap_in_allowed_app(app_client, exam, monkeypatch):
+    """iPad re-review N8: a gap while Assessment Mode held with allowed apps says so."""
+    t = login(app_client, "teacher")
+    h = login(app_client, "alice")
+    a = start(app_client, h, exam).json()
+    aid, sess = a["attempt_id"], a["session"]
+    ipad = "plat=ipad,aac=1,sam=0,apps=1,console=1"
+    assert beat(app_client, h, aid, sess, 1000, checks=ipad).status_code == 200
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + 60)
+    assert beat(app_client, h, aid, sess, 2000, checks=ipad).status_code == 200
+    res = app_client.get(f"/api/exams/{exam['id']}/results", headers=t).json()
+    gaps = [e["detail"] for att in res["attempts"] for e in att["events"] if e["type"] == "app_gap"]
+    assert gaps and "teacher-allowed app" in gaps[0]

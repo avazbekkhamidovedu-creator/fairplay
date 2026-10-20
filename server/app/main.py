@@ -130,8 +130,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/app/version")
     async def app_version():
         # S2: no auth, so an app can tell "update first" before the student signs in.
-        return {"mac": settings.min_app_version("mac"),
-                "windows": settings.min_app_version("windows"), "server_time": iso(utcnow())}
+        return {"mac": settings.min_app_version("mac"), "windows": settings.min_app_version("windows"),
+                "ipad": settings.min_app_version("ipad"), "server_time": iso(utcnow())}
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
                    include_in_schema=False)

@@ -72,3 +72,15 @@ def test_app_beat_gated(app_client, exam):
     assert beat(app_client, _hdr(hs, "1.0.0"), a["attempt_id"], a["session"], 3).status_code == 200
     # health is never gated
     assert app_client.get("/api/health", headers=_hdr({}, "0.1")).status_code == 200
+
+
+def test_ipad_platform_gate(app_client, exam):
+    """iPad app (2026-10-20): its own minimum, reported by /api/app/version."""
+    s = app_client.app.state.settings
+    assert app_client.get("/api/app/version").json()["ipad"] is None
+    s.min_app_version_ipad = "0.6"
+    assert app_client.get("/api/app/version").json()["ipad"] == "0.6"
+    h = login(app_client, "alice")
+    assert start(app_client, _hdr(h, "0.5", "ipad"), exam).status_code == 426
+    r = start(app_client, _hdr(h, "0.6", "ipad"), exam)
+    assert r.status_code == 200 and r.json()["min_app_version"] == "0.6"

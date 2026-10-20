@@ -626,7 +626,7 @@ export function DeviceReadiness({ examId }: { examId: string }) {
 }
 
 function platformName(p: string | null): string {
-  return p === "mac" ? "Mac" : p === "windows" ? "Windows" : p ?? "";
+  return p === "mac" ? "Mac" : p === "windows" ? "Windows" : p === "ipad" ? "iPad" : p ?? "";
 }
 
 export const SECRET_SHOW_MS = 20_000;

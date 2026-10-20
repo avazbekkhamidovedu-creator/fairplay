@@ -117,9 +117,11 @@ class Settings:
     min_app_version_mac: str = field(default_factory=lambda: os.environ.get("MIN_APP_VERSION_MAC", "").strip())
     min_app_version_windows: str = field(
         default_factory=lambda: os.environ.get("MIN_APP_VERSION_WINDOWS", "").strip())
+    min_app_version_ipad: str = field(default_factory=lambda: os.environ.get("MIN_APP_VERSION_IPAD", "").strip())
 
     def min_app_version(self, platform: str | None) -> str | None:
-        v = {"mac": self.min_app_version_mac, "windows": self.min_app_version_windows}.get(
+        v = {"mac": self.min_app_version_mac, "windows": self.min_app_version_windows,
+             "ipad": self.min_app_version_ipad}.get(
             (platform or "").strip().lower(), "")
         return v or None
 

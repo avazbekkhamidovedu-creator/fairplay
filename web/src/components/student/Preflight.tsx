@@ -1,10 +1,14 @@
 // Audit 2026-10-12 M-11: what must be fixed before the Mac locks. Shown instead of locking,
 // because some of these (Remote Login, Screen Sharing) can't be fixed from inside the lock.
+import { nativePlatform } from "../../lib/bridge";
+
 export function PreflightProblems({ problems, onRetry }: { problems: string[]; onRetry: () => void }) {
   return (
     <main className="stu-center">
       <div className="stu-card" style={{ gap: 14, maxWidth: 600 }} role="alert">
-        <h1 style={{ margin: 0, fontSize: 22 }}>Fix this before the exam locks your Mac</h1>
+        <h1 style={{ margin: 0, fontSize: 22 }}>
+          Fix this before the exam locks your {nativePlatform() === "ipad" ? "iPad" : "Mac"}
+        </h1>
         <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
           {problems.map((p) => (
             <li key={p}>{p}</li>

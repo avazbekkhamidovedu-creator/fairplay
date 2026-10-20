@@ -117,3 +117,52 @@ describe("allowed apps (2026-10-14)", () => {
     expect(bridge.allowedAppIds(undefined)).toEqual([]);
   });
 });
+
+describe("iPad app (2026-10-20)", () => {
+  afterEach(() => {
+    delete (window as unknown as { webkit?: unknown }).webkit;
+    bridge._resetBridgeForTests();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("is told apart from the Mac app by its user agent", () => {
+    native();
+    expect(bridge.nativePlatform()).toBe("mac");
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (iPad) FairPlay/0.5 FairPlay-iPad");
+    expect(bridge.nativePlatform()).toBe("ipad");
+  });
+
+  it("keeps waiting for the lock while iPadOS asks to allow Assessment Mode", async () => {
+    vi.useFakeTimers();
+    native();
+    const p = bridge.requestLock(1000, { attempt_id: "a_1", token: "t", session: "s-12345678" });
+    vi.advanceTimersByTime(900);
+    send({ type: "lockPending", reason: "assessment_prompt" });
+    vi.advanceTimersByTime(900);
+    send({ type: "locked" });
+    await expect(p).resolves.toEqual({ ok: true });
+  });
+
+  it("still times out when the app goes quiet", async () => {
+    vi.useFakeTimers();
+    native();
+    const p = bridge.requestLock(1000, { attempt_id: "a_1", token: "t", session: "s-12345678" });
+    send({ type: "lockPending", reason: "assessment_prompt" });
+    vi.advanceTimersByTime(1001);
+    await expect(p).resolves.toEqual({ ok: false, reason: "timeout" });
+  });
+});
+
+describe("iPad state (review 2026-10-20)", () => {
+  afterEach(() => {
+    delete (window as unknown as { webkit?: unknown }).webkit;
+    bridge._resetBridgeForTests();
+  });
+
+  it("takes the platform from the app's state message", () => {
+    native();
+    send({ type: "state", locked: false, trusted: true, version: "0.5", platform: "ipad" });
+    expect(bridge.nativePlatform()).toBe("ipad");
+  });
+});

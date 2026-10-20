@@ -4,10 +4,10 @@ import * as bridge from "../../lib/bridge";
 import { AlertIcon, CheckIcon, DotsIcon } from "./icons";
 
 export interface Readiness {
-  /** Running inside the FairPlay app (Mac or Windows). */
+  /** Running inside the FairPlay app (Mac, Windows or iPad). */
   native: boolean;
-  /** Which app: "mac" | "windows" (null in a browser). */
-  platform: "mac" | "windows" | null;
+  /** Which app: "mac" | "windows" | "ipad" (null in a browser). */
+  platform: "mac" | "windows" | "ipad" | null;
   /** Accessibility (lock) permission: true / false, or null while unknown. */
   trusted: boolean | null;
 }
@@ -47,7 +47,11 @@ function CheckRow({ tone, title, detail }: { tone: Tone; title: string; detail?:
 /** The checks list. Only shows checks we can actually verify from the web page. */
 export function ReadinessChecks({ readiness }: { readiness: Readiness }) {
   const { native, trusted, platform } = readiness;
-  const app = platform === "windows" ? "FairPlay Windows app" : platform === "mac" ? "FairPlay Mac app" : "FairPlay app";
+  const app =
+    platform === "windows" ? "FairPlay Windows app"
+    : platform === "mac" ? "FairPlay Mac app"
+    : platform === "ipad" ? "FairPlay iPad app"
+    : "FairPlay app";
   return (
     <ul className="stu-checks" aria-label="Laptop checks">
       {native ? (
@@ -59,7 +63,10 @@ export function ReadinessChecks({ readiness }: { readiness: Readiness }) {
           detail="You are in a normal browser. Use the FairPlay app for real exams."
         />
       )}
-      {native && platform !== "windows" &&
+      {native && platform === "ipad" && (
+        <CheckRow tone="wait" title="Assessment Mode starts with the exam" detail="iPadOS asks you to allow it. Tap Yes." />
+      )}
+      {native && platform !== "windows" && platform !== "ipad" &&
         (trusted === true ? (
           <CheckRow tone="ok" title="Lock permission granted" />
         ) : trusted === false ? (
@@ -76,8 +83,8 @@ export function ReadinessChecks({ readiness }: { readiness: Readiness }) {
 }
 
 export function readinessOk(r: Readiness): boolean {
-  // The Windows app has no separate lock permission to grant.
-  return r.native && (r.platform === "windows" || r.trusted === true);
+  // The Windows and iPad apps have no separate lock permission to grant.
+  return r.native && (r.platform === "windows" || r.platform === "ipad" || r.trusted === true);
 }
 
 type RunState =

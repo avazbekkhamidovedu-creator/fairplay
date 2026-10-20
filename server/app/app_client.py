@@ -64,6 +64,11 @@ CLIENT_EVENT_TYPES = frozenset({
     "app_in_background",
     # review 2026-10-14: a reply the app expected to be signed was not
     "server_reply_unsigned", "watchdog_stopped", "events_capped",
+    # iPad app (ios/FairPlay, 2026-10-20)
+    "app_backgrounded", "screenshot_taken", "screen_captured", "multitasking",
+    "jailbreak_detected", "debugger_attached", "assessment_interrupted", "assessment_resumed",
+    "assessment_unavailable", "keyboard_connected", "screen_locked", "single_app_on",
+    "single_app_off", "vpn_on", "proxy_on",
 })
 SERVER_EVENT_TYPES = frozenset({
     "second_device", "foreign_session", "re_entry", "app_gap", "no_app_signal",
@@ -194,6 +199,17 @@ class AppSafe:
     @staticmethod
     def token(s: str, lo: int, hi: int) -> bool:
         return lo <= len(s) <= hi and all(c.isalnum() or c in "-_" for c in s) and s.isascii()
+
+
+def ipad_lock_held(checks: dict[str, str], dev: bool) -> bool:
+    """iPad review M6 (2026-10-20): an iPad is locked only while iPadOS holds the lock
+    (Assessment Mode or Single App Mode). A dev soft lock counts on dev servers only.
+    Other platforms: True (their own checks decide)."""
+    if checks.get("plat") != "ipad":
+        return True
+    if checks.get("aac") == "1" or checks.get("sam") == "1":
+        return True
+    return dev and checks.get("soft") == "1"
 
 
 def beat_message(aid: str, session: str, device_id: str, ts: int, locked: bool, checks: str) -> str:

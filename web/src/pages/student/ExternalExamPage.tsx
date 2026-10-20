@@ -242,15 +242,25 @@ export default function ExternalExamPage() {
           {title && <p className="ext-eyebrow">{title}</p>}
           <h1>Locked mode could not start</h1>
           <p>
-            {lockReason === "accessibility"
+            {bridge.nativePlatform() === "ipad"
+              ? "FairPlay could not turn on Assessment Mode on this iPad."
+              : lockReason === "accessibility"
               ? "FairPlay needs the Accessibility permission to lock this computer."
               : "The FairPlay app could not lock this computer."}
           </p>
-          <ol style={{ paddingLeft: 20 }}>
+          {bridge.nativePlatform() === "ipad" ? (
+<ol style={{ paddingLeft: 20 }}>
+            <li>Press Retry and tap Yes when iPadOS asks to start Assessment Mode.</li>
+            <li>Stop screen recording, Screen Mirroring or AirPlay, and close Split View.</li>
+            <li>Still stuck? Ask the invigilator.</li>
+          </ol>
+) : (
+<ol style={{ paddingLeft: 20 }}>
             <li>Open System Settings → Privacy &amp; Security → Accessibility.</li>
             <li>Turn on FairPlay.</li>
             <li>Come back here and press Retry.</li>
           </ol>
+)}
           <p className="ext-small">Your exam time is running. Ask your teacher if you need help.</p>
           <div className="ext-row">
             <button type="button" className="ext-btn primary" onClick={() => void lock()}>

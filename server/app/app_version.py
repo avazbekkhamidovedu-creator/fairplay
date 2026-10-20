@@ -1,6 +1,6 @@
 """S2 (2026-10-20): app version gate and the server clock header.
 
-The apps send X-FairPlay-Version ("0.5") and X-FairPlay-Platform ("mac" | "windows") on
+The apps send X-FairPlay-Version ("0.5") and X-FairPlay-Platform ("mac" | "windows" | "ipad") on
 every request. Start and app-beat refuse an app older than the platform's minimum with
 426, so a fixed bug can't keep running in an exam. No platform header = a browser
 without the app: never gated (FAIRPLAY_REQUIRE_APP decides about browsers).

@@ -657,3 +657,18 @@ After a kill or crash, the Mac and Windows apps reopen the exam page, which keep
 session, so start is never called. A `previous_run_killed` client event on an in-progress
 attempt therefore also sets `pending_resume` (when the exam's `resume_needs_approval` is on)
 and records `resume_requested` once. The page sees `approval: "pending"` on its next heartbeat.
+
+## 2026-10-20 iPad app (`ios/`)
+Same bridge, app session, beats, hand-in, exits and website mode as the Mac app; differences only:
+- **Detect:** same `window.webkit.messageHandlers.proctora`; the user agent contains `FairPlay-iPad` (`bridge.nativePlatform()` → `"ipad"`). `state` adds `"platform": "ipad"`; `trusted` is always true (no permission to grant).
+- **App → page `lockPending`** `{"type":"lockPending","reason":"assessment_prompt"}`, sent when locking starts and every 4 s while iPadOS asks the student to allow Assessment Mode (its prompt times out after 60 s). `requestLock` restarts its timeout on each one. Older pages ignore it.
+- **`lockFailed` reason `"assessment"`:** neither Assessment Mode nor Single App Mode could start (release builds never lock without one of them).
+- **Device id:** `ipad-` + 32 hex of SHA-256(`fairplay-device|<random secret in this iPad's Keychain, ThisDeviceOnly>|<app key>`).
+- **Beat `checks`:** `plat=ipad,aac=,sam=,ga=,soft=,shield=,disp=,cap=,mw=,fg=,left=,shot=,jb=,dbg=,sim=,kbd=,vpn=,proxy=,att=,console=,secinput=0`. `console=0` when the app is not in front (except in a teacher-allowed app while Assessment Mode holds), the screen is captured / mirrored, or a second display is attached (server: not locked + `off_console`, iPad wording). The beat's `locked` is true only while Assessment Mode or Single App Mode holds (or a dev soft lock). `sam=1` only for Single App Mode FairPlay turned on itself; pre-existing Guided Access is `ga=1` and never a lock.
+- **Server (review 2026-10-20):** an iPad beat counts as locked only with `aac=1` or `sam=1` (`soft=1` only on `FAIRPLAY_DEV=1` servers). Starts whose `client.build` is `"dev"` are refused (403) unless `FAIRPLAY_DEV=1`.
+- **Offline key reply:** adds `"proofs"` (HMAC over `offkey-resp|aid|session|key|ts`, one per app key) next to `"proof"`. The iPad and Mac apps accept the key only with a valid proof.
+- **Allowed apps:** the page's `allowed_apps` bundle ids become Assessment Mode participants without network (browsers refused).
+- **Client event types (added):** `app_backgrounded`, `screenshot_taken`, `screen_captured`, `multitasking`, `jailbreak_detected`, `debugger_attached`, `assessment_interrupted`, `assessment_resumed`, `assessment_unavailable`, `keyboard_connected`, `screen_locked`, `single_app_on`, `single_app_off`, `vpn_on`, `proxy_on`.
+- **Invigilator exit:** hold the lock bar 3 s (or Ctrl-Opt-Cmd-E); the offline dialog shows an "iPad code" (same Mac-code format and rule).
+- **Relaunch:** a lock that never ended is remembered on the iPad; the next launch records `previous_run_killed` and opens `/student/exam/<aid>`.
+- **S1–S6 on iPad:** requests carry `X-FairPlay-Platform: ipad` + `X-FairPlay-Version`; server env `MIN_APP_VERSION_IPAD`, `GET /api/app/version` adds `"ipad"`. `state` adds `app_version`, `sealed_pending`. `preflight` replies with `checks` rows (`ipados_version`, `app_version`, `server`, `clock`, `assessment`, lock problems, `battery`, `vpn`), `platform: "ipad"`, `os_version`. `seal` / `sealedToken` / `sealed` as on the Mac (file in Application Support, proof with the offline key, `sealed_at` from the server clock). Beats add `sep=1` while Assessment Mode or Single App Mode holds (S6 strongest lock) and `sealed=1`. Live room shows the platform as "iPad".

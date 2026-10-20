@@ -21,6 +21,8 @@ export type NativeMessage =
   | { type: "unlocked" }
   /** Audit 2026-10-12: the app unlocks only once the server confirms the hand-in. */
   | { type: "unlockPending"; reason: string }
+  /** iPad app: iPadOS is asking the student to allow Assessment Mode; keep waiting. */
+  | { type: "lockPending"; reason: string }
   | { type: "event"; event: IntegrityEvent }
   | { type: "attestation"; nonce: string; device_id: string; signature: string; version: string; build: string }
   | { type: "attestationFailed"; nonce: string; reason: string }
@@ -124,8 +126,12 @@ export function isNative(): boolean {
 }
 
 /** Which native host we're inside, for platform-specific copy/download links. */
-export function nativePlatform(): "mac" | "windows" | null {
-  if (macHandler()) return "mac";
+export function nativePlatform(): "mac" | "windows" | "ipad" | null {
+  if (macHandler()) {
+    // The iPad app says so in its "state"; before that answer, its user agent tells.
+    if (getNativeState()?.platform === "ipad") return "ipad";
+    return typeof navigator !== "undefined" && navigator.userAgent.includes("FairPlay-iPad") ? "ipad" : "mac";
+  }
   if (winHandler()) return "windows";
   return null;
 }
@@ -337,8 +343,13 @@ export function requestLock(timeoutMs = 10000, exam?: Partial<ExamSessionParams>
       if (msg.type === "locked") finish({ ok: true });
       else if (msg.type === "lockFailed") finish({ ok: false, reason: msg.reason || "unknown" });
       else if (msg.type === "state" && msg.locked) finish({ ok: true });
+      else if (msg.type === "lockPending") {
+        // The iPad app waits for the student to allow Assessment Mode: wait with it.
+        clearTimeout(timer);
+        timer = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
+      }
     });
-    const timer = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
+    let timer = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
     // Audit M-06: the app locks only for a valid exam session, or when the page says
     // this is an offline start (no server session yet; the app then can't unlock by itself
     // until the attempt reaches the server).

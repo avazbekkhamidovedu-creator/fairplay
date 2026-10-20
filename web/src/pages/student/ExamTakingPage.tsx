@@ -649,15 +649,25 @@ function ExamTakingInner() {
           <div className="stu-card" style={{ gap: 14 }}>
             <h1 style={{ margin: 0, fontSize: 22 }}>Locked mode could not start</h1>
             <p style={{ margin: 0, color: "var(--s-text-2)" }}>
-              {lockReason === "accessibility"
+              {bridge.nativePlatform() === "ipad"
+                ? "FairPlay could not turn on Assessment Mode on this iPad."
+                : lockReason === "accessibility"
                 ? "FairPlay needs the Accessibility permission to lock this computer."
                 : "The FairPlay app could not lock this computer."}
             </p>
-            <ol style={{ margin: 0, paddingLeft: 20, lineHeight: 1.7, color: "var(--s-text-2)" }}>
+            {bridge.nativePlatform() === "ipad" ? (
+<ol style={{ margin: 0, paddingLeft: 20, lineHeight: 1.7, color: "var(--s-text-2)" }}>
+              <li>Press Retry and tap Yes when iPadOS asks to start Assessment Mode.</li>
+              <li>Stop screen recording, Screen Mirroring or AirPlay, and close Split View.</li>
+              <li>Still stuck? Ask the invigilator.</li>
+            </ol>
+) : (
+<ol style={{ margin: 0, paddingLeft: 20, lineHeight: 1.7, color: "var(--s-text-2)" }}>
               <li>Open System Settings → Privacy &amp; Security → Accessibility.</li>
               <li>Turn on FairPlay.</li>
               <li>Come back here and press Retry.</li>
             </ol>
+)}
             <p className="stu-muted stu-small" style={{ margin: 0 }}>
               Your exam time is running. Ask your teacher if you need help.
             </p>
