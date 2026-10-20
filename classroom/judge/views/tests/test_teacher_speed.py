@@ -11,10 +11,12 @@ from django.contrib.auth.models import User
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
+from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import Class, Contest, Organization
-from judge.models.tests.util import create_contest, create_user
+from judge.models import Class, Contest, Organization, ProblemMCQConfig, ProblemType
+from judge.models.notification import ensure_instructors_group
+from judge.models.tests.util import create_contest, create_problem, create_user
 from judge.subjects.access import teaching_courses, user_course_subject_keys
 
 
@@ -140,3 +142,111 @@ class VisibleContestsMatrixTest(TestCase):
         for name, keys in expected.items():
             with self.subTest(user=name):
                 self.assertEqual(self.visible(name), keys)
+
+
+class AssignmentEditorLibraryTest(TestCase):
+    """The editor's "Add from library" loads a page at a time instead of the whole bank.
+
+    Before: every attachable problem was rendered into /contests/create/ (11.8 MB for an
+    administrator on the seed). After: the page size and query count do not depend on the number
+    of problems, and ContestProblemLibraryView serves the same problems with the same filters.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.teacher = create_user(username='lib_teacher')
+        cls.teacher.groups.add(ensure_instructors_group())
+        cls.other = create_user(username='lib_other')
+        cls.student = create_user(username='lib_student')
+        cls.course = Organization.objects.create(name='Lib course', slug='lib-course', short_name='LC', is_open=False)
+        cls.other_course = Organization.objects.create(name='Lib other', slug='lib-other', short_name='LO',
+                                                       is_open=False)
+        cls.course.admins.add(cls.teacher.profile)
+        cls.course.members.add(cls.student.profile)
+        cls.other_course.admins.add(cls.other.profile)
+        cls.easy = ProblemType.objects.create(name='easy', full_name='Easy')
+        cls.hard = ProblemType.objects.create(name='hard', full_name='Hard')
+        cls.tag = ProblemType.objects.create(name='lib-loops', full_name='Loops')
+
+        def problem(code, kind='S', course=None, public=False, types=(), ac=0.0):
+            p = create_problem(code, name=code.replace('-', ' ').title(), submission_type=kind, is_public=public,
+                               is_organization_private=course is not None, ac_rate=ac,
+                               organizations=(course.name,) if course else ())
+            p.types.add(*types)
+            return p
+
+        cls.mine_easy = problem('lib-easy', 'C', cls.course, types=(cls.easy, cls.hard, cls.tag), ac=40)
+        cls.mine_hard = problem('lib-hard', 'M', cls.course, types=(cls.hard,), ac=90)
+        ProblemMCQConfig.objects.create(problem=cls.mine_hard, multiple_select=True)
+        cls.mine_plain = problem('lib-plain', 'B', cls.course, ac=10)
+        cls.public = problem('lib-public', 'S', None, public=True, ac=55)
+        cls.hidden = problem('lib-secret', 'S', cls.other_course)
+
+    def setUp(self):
+        self.client.force_login(self.teacher)
+
+    def library(self, **params):
+        response = self.client.get(reverse('contest_problem_library'), params)
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def codes(self, **params):
+        return [r['code'] for r in self.library(page_size=50, **params)['rows']]
+
+    def test_editor_page_does_not_grow_with_the_bank(self):
+        def measure():
+            with CaptureQueriesContext(connection) as ctx:
+                html = self.client.get(reverse('contest_create')).content
+            return len(html), len(ctx)
+
+        measure()  # first request warms per-process caches
+        size, queries = measure()
+        for i in range(30):
+            create_problem('lib-more-%02d' % i, name='More problem %d with a long enough name' % i,
+                           is_public=True)
+        size_after, queries_after = measure()
+        self.assertEqual(queries_after, queries)
+        self.assertLess(size_after - size, 200)
+
+    def test_library_query_count_is_flat(self):
+        with CaptureQueriesContext(connection) as ctx:
+            self.library()
+        before = len(ctx)
+        for i in range(30):
+            p = create_problem('lib-flat-%02d' % i, is_public=True)
+            p.types.add(self.tag)
+        with CaptureQueriesContext(connection) as ctx:
+            data = self.library()
+        self.assertEqual(len(data['rows']), 10)
+        self.assertEqual(len(ctx), before)
+
+    def test_same_problems_as_the_editor_may_attach(self):
+        self.assertEqual(sorted(self.codes()), ['lib-easy', 'lib-hard', 'lib-plain', 'lib-public'])
+        self.client.force_login(self.student)
+        self.assertEqual(self.client.get(reverse('contest_problem_library')).status_code, 403)
+        admin = create_user(username='lib_admin', is_superuser=True)
+        self.client.force_login(admin)
+        self.assertIn('lib-secret', self.codes())
+
+    def test_filters_match_the_old_client_side_rules(self):
+        self.assertEqual(self.codes(q='HARD'), ['lib-hard'])
+        self.assertEqual(self.codes(format='M'), ['lib-hard'])
+        self.assertEqual(self.codes(format='multiple'), ['lib-hard'])
+        self.assertEqual(self.codes(format='single'), [])
+        # A problem tagged easy and hard is easy (Problem.difficulty takes the easiest).
+        self.assertEqual(self.codes(diff='easy'), ['lib-easy'])
+        self.assertEqual(self.codes(diff='hard'), ['lib-hard'])
+        self.assertEqual(sorted(self.codes(diff='none')), ['lib-plain', 'lib-public'])
+        self.assertEqual(sorted(self.codes(course=self.course.id)), ['lib-easy', 'lib-hard', 'lib-plain'])
+        self.assertEqual(self.codes(tag=self.tag.id), ['lib-easy'])
+        self.assertEqual(sorted(self.codes(ac_min=40, ac_max=60)), ['lib-easy', 'lib-public'])
+        self.assertEqual(self.codes(sort='ac', desc='1')[:2], ['lib-hard', 'lib-public'])
+        self.assertEqual(self.codes(sort='diff')[:2], ['lib-easy', 'lib-hard'])
+        row = {r['code']: r for r in self.library(page_size=50)['rows']}['lib-easy']
+        self.assertEqual((row['diff'], row['knowledge'], row['org_ids']), ('easy', [self.tag.id], [self.course.id]))
+        self.assertEqual(row['status'], 'unsolved')
+
+    def test_paging(self):
+        data = self.library(page_size=3, page=1)
+        self.assertEqual((data['total'], data['pages'], data['page'], len(data['rows'])), (4, 2, 1, 1))
+        self.assertEqual(self.library(page_size=3, page=99)['page'], 1)

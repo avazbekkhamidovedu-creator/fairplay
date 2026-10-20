@@ -1003,10 +1003,15 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
 
         lib = self.client.get(reverse('contest_create')).content.decode()
         self.assertNotIn('applyCpOptionLocks', lib)
-        self.assertIn('data-format="single"', lib)
-        self.assertIn('data-format="truefalse"', lib)
-        self.assertIn('data-format="multiple"', lib)
-        self.assertIn('data-points="%s"' % int(code.points), lib)
+        # Library rows come from the paged JSON endpoint; the page builds data-format/data-points from it.
+        self.assertIn("tr.setAttribute('data-format', p.format)", lib)
+        self.assertIn("tr.setAttribute('data-points', p.points)", lib)
+        rows = {r['code']: r for r in self.client.get(
+            reverse('contest_problem_library'), {'q': 'lock-', 'page_size': 50}).json()['rows']}
+        self.assertEqual(rows['lock-single']['format'], 'single')
+        self.assertEqual(rows['lock-tf']['format'], 'truefalse')
+        self.assertEqual(rows['lock-multi']['format'], 'multiple')
+        self.assertEqual(rows['lock-code']['points'], int(code.points))
         self.assertIn('function defaultCpPoints', lib)
         self.assertIn('cp-opt-partial', lib)
         self.assertIn('.cp-row:not([data-format="C"]) .cp-opt-pretested', lib)
@@ -1161,10 +1166,13 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         self.assertIn('id="id_allow_ai_hints"', html)
 
     def test_library_author_filter_hidden_without_problem_perm(self):
+        create_problem('libnoauthp', name='Lib No Auth P', is_public=True)
         html = self.client.get(reverse('contest_create')).content.decode()
         _, library = html.split('id="problem-library"', 1)
         self.assertNotIn('id="lib-filter-author"', library)
-        self.assertNotIn('data-author-ids', library)
+        self.assertNotIn('data-author-ids', html)
+        rows = self.client.get(reverse('contest_problem_library'), {'q': 'libnoauthp'}).json()['rows']
+        self.assertNotIn('author_ids', rows[0])
 
     def test_library_author_filter_visible_for_problem_editor(self):
         teacher = create_user(username='lib_author_teacher', user_permissions=(
@@ -1175,8 +1183,9 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         html = self.client.get(reverse('contest_create')).content.decode()
         _, library = html.split('id="problem-library"', 1)
         self.assertIn('id="lib-filter-author"', library)
-        self.assertIn('data-author-ids', library)
-        self.assertIn(str(teacher.profile.id), library)
+        self.assertIn('data-author-ids', html)
+        rows = self.client.get(reverse('contest_problem_library'), {'q': 'libauthp'}).json()['rows']
+        self.assertEqual(rows[0]['author_ids'], [teacher.profile.id])
 
     def test_course_selects_omit_public_sentinel(self):
         public_problem = create_problem(
@@ -1187,9 +1196,9 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
         lib_course = library.split('id="lib-filter-course"', 1)[1].split('</select>', 1)[0]
         self.assertNotIn('value="public"', lib_course)
         self.assertNotRegex(lib_course, r'>\s*Public\s*<')
-        # Unselected course still lists public problems in the library.
-        self.assertIn(public_problem.code, library)
-        self.assertIn(public_problem.name, library)
+        # Unselected course still lists public problems in the library (loaded page by page).
+        rows = self.client.get(reverse('contest_problem_library'), {'q': public_problem.code}).json()['rows']
+        self.assertEqual([(r['code'], r['name']) for r in rows], [(public_problem.code, public_problem.name)])
 
         org_select = html.split('id="id_organizations"', 1)[1].split('</select>', 1)[0]
         self.assertNotIn('value="public"', org_select)
@@ -1442,12 +1451,10 @@ class ContestCreateNewFieldsTestCase(CommonDataMixin, TestCase):
 
     def test_library_rows_carry_problem_points(self):
         problem = create_problem('lib-pts-25', is_public=True, points=25)
+        rows = self.client.get(reverse('contest_problem_library'), {'q': 'lib-pts-25'}).json()['rows']
+        self.assertEqual([(r['id'], r['points']) for r in rows], [(problem.id, 25)])
         html = self.client.get(reverse('contest_create')).content.decode()
-        marker = 'data-pid="%s"' % problem.id
-        start = html.find(marker)
-        self.assertNotEqual(start, -1, marker)
-        row = html[start:html.find('</tr>', start)]
-        self.assertIn('data-points="25"', row)
+        self.assertIn("tr.setAttribute('data-points', p.points)", html)
 
     # NOTE: attaching a *hidden* problem is only possible for trusted editors
     # (edit_all_contest / see_private_problem). Curators are blocked from it —

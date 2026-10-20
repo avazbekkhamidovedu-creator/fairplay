@@ -1264,9 +1264,7 @@ class ContestCreate(LoginRequiredMixin, View):
         ``edit_own_contest`` from attaching — and thereby leaking — a
         colleague's hidden problem through a contest that students can see.
         """
-        if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.see_private_problem'):
-            return Problem.objects.all()
-        return Problem.get_visible_problems(user)
+        return problems_attachable_by(user)
 
     @staticmethod
     def _local_input(dt):
@@ -1306,7 +1304,6 @@ class ContestCreate(LoginRequiredMixin, View):
         ]
         from judge.views.problem import user_can_see_problem_author_metadata
 
-        profile = getattr(self.request, 'profile', None)
         return {
             'lib_format_types': format_types,
             'lib_knowledge_types': knowledge_types,
@@ -1315,7 +1312,6 @@ class ContestCreate(LoginRequiredMixin, View):
                 ('medium', str(_('Medium'))),
                 ('hard', str(_('Hard'))),
             ],
-            'lib_completed_ids': user_completed_ids(profile) if profile is not None else set(),
             'can_see_problem_authors': user_can_see_problem_author_metadata(self.request.user),
         }
 
@@ -1466,13 +1462,8 @@ class ContestCreate(LoginRequiredMixin, View):
             'classes': Class.objects.all(),
             'tags': ContestTag.objects.all(),
             'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
-            # Only problems this editor may attach — see _visible_problems_for.
-            # select_related/prefetch_related feed the library columns (types /
-            # difficulty / orgs / MCQ format) without N+1 queries on a large bank.
-            'problems': (self._visible_problems_for(self.request.user)
-                         .select_related('mcq_config')
-                         .prefetch_related('types', 'organizations', 'authors__user')
-                         .order_by('-date')),
+            # The "Add from library" rows are not rendered here: the panel loads them a page at a
+            # time from ContestProblemLibraryView (same problems: problems_attachable_by).
             'contest': contest,
             # Subject registry: code-only settings (IDE output, pretests) follow the assignment's
             # courses when editing, else the editor's own courses (judge/subjects/).
@@ -1495,6 +1486,199 @@ class ContestCreate(LoginRequiredMixin, View):
         }
         ctx.update(self._library_filter_context())
         return ctx
+
+
+def problems_attachable_by(user):
+    """Problems the assignment editor may attach (see ``ContestCreate._visible_problems_for``)."""
+    if user.has_perm('judge.edit_all_contest') or user.has_perm('judge.see_private_problem'):
+        return Problem.objects.all()
+    return Problem.get_visible_problems(user)
+
+
+class ContestProblemLibraryView(LoginRequiredMixin, View):
+    """One page of the assignment editor's "Add from library" table, as JSON.
+
+    The editor used to render every problem the teacher may attach into the page and filter,
+    sort and page them in the browser: 155 KB for a typical instructor and 11.8 MB (6,000 rows)
+    for an administrator on the teacher-scale seed. The same filters, sorts and page size now run
+    here on the same set of problems (``problems_attachable_by``), so a page costs the same
+    whatever the size of the bank.
+
+    Query parameters (all optional): ``q`` (code or name contains), ``format`` (submission type or
+    single/multiple/truefalse), ``diff`` (easy/medium/hard/none), ``course``, ``author`` (only for
+    viewers allowed to see problem authors), ``tag`` (knowledge ProblemType ids), ``status``
+    (solved/unsolved), ``ac_min``/``ac_max``, ``sort`` (name/type/diff/ac), ``desc`` (1),
+    ``page`` (0-based), ``page_size`` (1-50, default 10), ``contest`` (key, for editors of that
+    assignment who may not create new ones).
+    """
+    PAGE_SIZE = 10
+    MAX_PAGE_SIZE = 50
+    MCQ_FORMATS = {
+        'single': Q(mcq_config__multiple_select=False, mcq_config__is_true_false=False),
+        'multiple': Q(mcq_config__multiple_select=True, mcq_config__is_true_false=False),
+        'truefalse': Q(mcq_config__is_true_false=True),
+    }
+    DIFFICULTY_ORDER = ('easy', 'medium', 'hard')
+
+    @staticmethod
+    def _ints(values):
+        out = []
+        for value in values:
+            for part in str(value).split(','):
+                part = part.strip()
+                if part.isdigit():
+                    out.append(int(part))
+        return out
+
+    @staticmethod
+    def _float(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    def _allowed(self, request):
+        if Contest.can_be_added_by(request.user):
+            return True
+        key = request.GET.get('contest')
+        if key:
+            contest = Contest.objects.filter(key=key).first()
+            return contest is not None and contest.is_changeable_by(request.user)
+        return False
+
+    @classmethod
+    def _difficulty_type_ids(cls):
+        """ProblemType ids per canonical difficulty, matched like ``Problem.difficulty`` does."""
+        from judge.models import ProblemType
+        ids = {name: set() for name in cls.DIFFICULTY_ORDER}
+        for problem_type in ProblemType.objects.only('id', 'name', 'full_name'):
+            canon = (Problem.canonical_difficulty_name(problem_type.name) or
+                     Problem.canonical_difficulty_name(problem_type.full_name))
+            if canon in ids:
+                ids[canon].add(problem_type.id)
+        return ids
+
+    @staticmethod
+    def _has_type(type_ids):
+        if not type_ids:
+            return Q(pk__in=[])
+        return Q(Exists(Problem.types.through.objects.filter(problem=OuterRef('pk'),
+                                                             problemtype_id__in=type_ids)))
+
+    def get(self, request, *args, **kwargs):
+        from judge.views.problem import user_can_see_problem_author_metadata
+        if not self._allowed(request):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        get = request.GET
+        user = request.user
+        profile = request.profile
+        can_see_authors = user_can_see_problem_author_metadata(user)
+        queryset = problems_attachable_by(user)
+
+        term = (get.get('q') or '').strip()
+        if term:
+            queryset = queryset.filter(Q(name__icontains=term) | Q(code__icontains=term))
+        formats = [f for f in get.getlist('format') if f]
+        if formats:
+            format_q = Q(submission_type__in=[f for f in formats if len(f) == 1])
+            for name in formats:
+                if name in self.MCQ_FORMATS:
+                    format_q |= Q(submission_type=ProblemSubmissionType.MCQ) & self.MCQ_FORMATS[name]
+            queryset = queryset.filter(format_q)
+
+        difficulty_ids = self._difficulty_type_ids()
+        # A problem's difficulty is its easiest difficulty tag (Problem.difficulty).
+        level_q = {}
+        earlier = set()
+        for name in self.DIFFICULTY_ORDER:
+            level_q[name] = self._has_type(difficulty_ids[name]) & ~self._has_type(earlier)
+            earlier |= difficulty_ids[name]
+        level_q['none'] = ~self._has_type(earlier)
+        diffs = [d for d in get.getlist('diff') if d in level_q]
+        if diffs:
+            diff_q = Q()
+            for name in diffs:
+                diff_q |= level_q[name]
+            queryset = queryset.filter(diff_q)
+
+        courses = self._ints(get.getlist('course'))
+        if courses:
+            queryset = queryset.filter(Exists(Problem.organizations.through.objects.filter(
+                problem=OuterRef('pk'), organization_id__in=courses)))
+        authors = self._ints(get.getlist('author')) if can_see_authors else []
+        if authors:
+            queryset = queryset.filter(Exists(Problem.authors.through.objects.filter(
+                problem=OuterRef('pk'), profile_id__in=authors)))
+        tags = self._ints(get.getlist('tag'))
+        if tags:
+            queryset = queryset.filter(self._has_type(tags))
+        completed = user_completed_ids(profile) if profile is not None else set()
+        status = get.get('status')
+        if status == 'solved':
+            queryset = queryset.filter(id__in=completed)
+        elif status == 'unsolved' and completed:
+            queryset = queryset.exclude(id__in=completed)
+        ac_min, ac_max = self._float(get.get('ac_min')), self._float(get.get('ac_max'))
+        if ac_min is not None:
+            queryset = queryset.filter(ac_rate__gte=ac_min)
+        if ac_max is not None:
+            queryset = queryset.filter(ac_rate__lte=ac_max)
+
+        desc = get.get('desc') == '1'
+        sort = get.get('sort')
+        if sort == 'diff':
+            queryset = queryset.annotate(diff_rank=Case(
+                *[When(level_q[name], then=Value(i)) for i, name in enumerate(self.DIFFICULTY_ORDER)],
+                default=Value(len(self.DIFFICULTY_ORDER)), output_field=IntegerField()))
+            order = ['diff_rank']
+        else:
+            order = {'name': ['name'], 'type': ['submission_type'], 'ac': ['ac_rate']}.get(sort)
+        if order:
+            order = [('-' + f if desc else f) for f in order] + ['-date', '-id']
+        else:
+            order = ['-date', '-id']
+        queryset = queryset.order_by(*order)
+
+        try:
+            page_size = min(max(int(get.get('page_size') or self.PAGE_SIZE), 1), self.MAX_PAGE_SIZE)
+        except ValueError:
+            page_size = self.PAGE_SIZE
+        total = queryset.count()
+        pages = max(1, -(-total // page_size))
+        try:
+            page = min(max(int(get.get('page') or 0), 0), pages - 1)
+        except ValueError:
+            page = 0
+        prefetch = ['types', 'organizations']
+        if can_see_authors:
+            prefetch.append('authors')
+        rows = []
+        for problem in (queryset.select_related('mcq_config').prefetch_related(*prefetch)
+                        [page * page_size:(page + 1) * page_size]):
+            organizations = list(problem.organizations.all())
+            row = {
+                'id': problem.id,
+                'code': problem.code,
+                'name': problem.name,
+                'points': int(problem.points),
+                'org_ids': [o.id for o in organizations],
+                'org_names': [o.name for o in organizations],
+                'format': problem.format_filter_code,
+                'stype': problem.submission_type,
+                'format_types': [str(label) for label in problem.format_types_list],
+                'knowledge': problem.knowledge_type_ids,
+                'knowledge_types': [str(label) for label in problem.knowledge_types_list],
+                'diff': problem.difficulty or 'none',
+                'diff_label': problem.difficulty_label or '',
+                'ac': round(problem.ac_rate, 1),
+                'public': bool(problem.is_public and not problem.is_organization_private),
+                'status': 'solved' if problem.id in completed else 'unsolved',
+            }
+            if can_see_authors:
+                row['author_ids'] = [a.id for a in problem.authors.all()]
+            rows.append(row)
+        return JsonResponse({'rows': rows, 'total': total, 'page': page, 'pages': pages, 'page_size': page_size})
 
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')

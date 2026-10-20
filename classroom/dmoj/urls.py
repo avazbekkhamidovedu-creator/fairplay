@@ -260,6 +260,7 @@ urlpatterns = [
     path('contests/', paged_list_view(contests.ContestListV2, 'contest_list')),
     path('contests/legacy/', paged_list_view(contests.ContestList, 'contest_list_legacy')),
     path('contests/create/', contests.ContestCreate.as_view(), name='contest_create'),
+    path('contests/library/', contests.ContestProblemLibraryView.as_view(), name='contest_problem_library'),
     path('contests/delete/', contests.ContestBulkDelete.as_view(), name='contest_bulk_delete'),
     path('contests/<str:contest>/edit/', contests.ContestCreate.as_view(), name='contest_edit'),
     path('contest-tags/create/', contests.ContestTagCreateView.as_view(), name='contest_tag_create'),
