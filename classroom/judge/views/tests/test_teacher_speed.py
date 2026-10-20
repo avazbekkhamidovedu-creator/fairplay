@@ -542,3 +542,51 @@ class ProblemEditorCapsTest(TestCase):
         cs_caps = data['sets'][data['orgs'][str(Organization.objects.get(slug='pe-0').pk)]]
         self.assertNotIn('question_programming', math_caps)
         self.assertIn('question_programming', cs_caps)
+
+
+class AssignmentEditorPickerTest(TestCase):
+    """The assignment editor's course/class pickers search the server instead of carrying every
+    course and class of the site in the page (about 70 KB at 150 courses and 300 classes)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.teacher = create_user(username='ep_teacher')
+        cls.teacher.groups.add(ensure_instructors_group())
+        cls.student = create_user(username='ep_student')
+        cls.course = Organization.objects.create(name='EP course', slug='ep-course', short_name='EP')
+        cls.section = Class.objects.create(organization=cls.course, name='EP-01', slug='ep-01')
+
+    def test_editor_page_does_not_grow_with_courses(self):
+        self.client.force_login(self.teacher)
+        url = reverse('contest_create')
+        self.client.get(url)
+        size = len(self.client.get(url).content)
+        for i in range(30):
+            org = Organization.objects.create(name='Another course %d' % i, slug='another-%d' % i,
+                                              short_name='AC%d' % i)
+            Class.objects.create(organization=org, name='Another class %d' % i, slug='another-class-%d' % i)
+        self.assertLess(len(self.client.get(url).content) - size, 200)
+
+    def test_options(self):
+        self.client.force_login(self.teacher)
+        courses = self.client.get(reverse('contest_editor_options', args=['courses']), {'term': 'EP'}).json()
+        self.assertEqual(courses['results'], [{'id': self.course.id, 'text': 'EP course'}])
+        classes_url = reverse('contest_editor_options', args=['classes'])
+        self.assertEqual(self.client.get(classes_url, {'term': ''}).json()['results'], [])
+        classes = self.client.get(classes_url, {'organizations': str(self.course.id)}).json()
+        self.assertEqual(classes['results'], [{'id': self.section.id, 'text': 'EP-01', 'org': self.course.id}])
+
+    def test_options_need_editor_access(self):
+        self.client.force_login(self.student)
+        response = self.client.get(reverse('contest_editor_options', args=['courses']))
+        self.assertEqual(response.status_code, 403)
+
+    def test_edit_page_renders_stored_choices(self):
+        contest = create_contest(key='epstored', authors=('ep_teacher',), organizations=('EP course',))
+        contest.classes.add(self.section)
+        self.client.force_login(self.teacher)
+        html = self.client.get(reverse('contest_edit', args=['epstored'])).content.decode()
+        org_select = html.split('id="id_organizations"', 1)[1].split('</select>', 1)[0]
+        class_select = html.split('id="id_classes"', 1)[1].split('</select>', 1)[0]
+        self.assertIn('value="%d" selected>EP course' % self.course.id, org_select)
+        self.assertIn('data-org="%d" selected>EP-01' % self.course.id, class_select)

@@ -1836,6 +1836,32 @@
                 syncAutoGradeAfterEnd();
             }
 
+            // select2 AJAX source for the course / class pickers (contest_editor_options).
+            var EDITOR_OPTIONS_URLS = {
+                courses: {{ url('contest_editor_options', 'courses')|tojson }},
+                classes: {{ url('contest_editor_options', 'classes')|tojson }},
+            };
+            var EDITOR_CONTEST = {{ (contest.key if contest else '')|tojson }};
+            function editorOptionsAjax(kind, extra) {
+                return {
+                    url: EDITOR_OPTIONS_URLS[kind],
+                    dataType: 'json',
+                    delay: 250,
+                    data: function (params) {
+                        var d = {term: params.term || '', page: params.page || 1};
+                        if (EDITOR_CONTEST) d.contest = EDITOR_CONTEST;
+                        if (extra) {
+                            var more = extra();
+                            Object.keys(more).forEach(function (k) { d[k] = more[k]; });
+                        }
+                        return d;
+                    },
+                    processResults: function (data) {
+                        return {results: data.results || [], pagination: {more: !!data.more}};
+                    },
+                };
+            }
+
             // --- From library button + enhanced bank (filters/sort/pagination) ---
             var libBtn = document.getElementById('cp-from-library');
             var slideover = document.getElementById('problem-library');
@@ -2260,9 +2286,10 @@
                     ['lib-filter-format', 'lib-filter-difficulty', 'lib-filter-course', 'lib-filter-knowledge'].forEach(function (id) {
                         var el = document.getElementById(id);
                         if (!el) return;
-                        jQuery(el).select2(jQuery.extend({}, multiOpts, {
-                            placeholder: el.getAttribute('data-placeholder') || '',
-                        })).on('change', function () { libPage = 0; renderLib(); });
+                        var extra = {placeholder: el.getAttribute('data-placeholder') || ''};
+                        if (id === 'lib-filter-course') extra.ajax = editorOptionsAjax('courses');
+                        jQuery(el).select2(jQuery.extend({}, multiOpts, extra))
+                            .on('change', function () { libPage = 0; renderLib(); });
                     });
                     var authorEl = document.getElementById('lib-filter-author');
                     if (authorEl) {
@@ -2544,77 +2571,71 @@
             }
 
             // --- Course + Class: multi-select (original M2M) with org→class cascade ---
-            // Class options carry data-org. With no course selected the class
-            // list is empty (same as class_select2 without ?organizations=).
-            // Option labels are written with textContent, never innerHTML.
+            // Courses and classes are searched on the server (contest_editor_options); only the
+            // stored ones are in the page. With no course selected the class search is empty
+            // (same as class_select2 without ?organizations=). Labels go through select2's escaping.
             var orgSel = document.getElementById('id_organizations');
             var classSel = document.getElementById('id_classes');
-            if (orgSel && classSel) {
-                var select2Theme = '{{ DMOJ_SELECT2_THEME }}';
-                var classCatalog = [];
+            var joinSel = document.getElementById('id_join_organizations');
+            var select2Theme = '{{ DMOJ_SELECT2_THEME }}';
+            function selectedOrgIds() {
+                if (!orgSel) return [];
+                if (window.jQuery && jQuery(orgSel).data('select2')) {
+                    var v = jQuery(orgSel).val() || [];
+                    return (Array.isArray(v) ? v : [v]).map(String).filter(Boolean);
+                }
+                return Array.from(orgSel.selectedOptions).map(function (o) { return o.value; }).filter(Boolean);
+            }
+            function dropClassesOutsideOrgs() {
+                if (!classSel) return;
+                var orgs = selectedOrgIds();
+                var changed = false;
                 Array.from(classSel.options).forEach(function (opt) {
-                    if (!opt.value) return;
-                    classCatalog.push({
-                        id: opt.value,
-                        org: opt.getAttribute('data-org') || '',
-                        name: opt.textContent,
-                        selected: !!opt.selected,
-                    });
+                    if (orgs.indexOf(opt.getAttribute('data-org') || '') === -1) {
+                        opt.remove();
+                        changed = true;
+                    }
                 });
-                function selectedOrgIds() {
-                    if (window.jQuery && jQuery(orgSel).data('select2')) {
-                        var v = jQuery(orgSel).val() || [];
-                        return (Array.isArray(v) ? v : [v]).map(String).filter(Boolean);
-                    }
-                    return Array.from(orgSel.selectedOptions).map(function (o) { return o.value; }).filter(Boolean);
-                }
-                function selectedClassIds() {
-                    return Array.from(classSel.selectedOptions).map(function (o) { return o.value; });
-                }
-                function classSelect2Opts() {
-                    return {
-                        theme: select2Theme,
-                        width: '100%',
-                        placeholder: classSel.getAttribute('data-placeholder') || '',
-                        allowClear: true,
-                        closeOnSelect: false,
-                    };
-                }
-                function rebuildClassOptions() {
-                    var orgs = selectedOrgIds();
-                    var keep = {};
-                    selectedClassIds().forEach(function (id) { keep[id] = true; });
-                    var $cls = (window.jQuery && jQuery.fn.select2) ? jQuery(classSel) : null;
-                    var hadSelect2 = !!( $cls && $cls.data('select2') );
-                    if (hadSelect2) $cls.select2('destroy');
-                    while (classSel.firstChild) classSel.removeChild(classSel.firstChild);
-                    classCatalog.forEach(function (item) {
-                        if (orgs.indexOf(item.org) === -1) return;
-                        var opt = document.createElement('option');
-                        opt.value = item.id;
-                        opt.setAttribute('data-org', item.org);
-                        opt.textContent = item.name;
-                        if (keep[item.id] || item.selected) opt.selected = true;
-                        classSel.appendChild(opt);
-                    });
-                    classCatalog.forEach(function (item) { item.selected = false; });
-                    if (hadSelect2 || ($cls && jQuery.fn.select2)) {
-                        $cls.select2(classSelect2Opts());
-                    }
-                }
-                if (window.jQuery && jQuery.fn.select2) {
+                if (changed && window.jQuery && jQuery(classSel).data('select2')) jQuery(classSel).trigger('change');
+            }
+            if (window.jQuery && jQuery.fn.select2) {
+                if (orgSel && classSel) {
                     jQuery(orgSel).select2({
                         theme: select2Theme,
                         width: '100%',
                         placeholder: orgSel.getAttribute('data-placeholder') || '',
                         allowClear: true,
                         closeOnSelect: false,
+                        ajax: editorOptionsAjax('courses'),
                     });
-                    jQuery(orgSel).on('change', rebuildClassOptions);
-                } else {
-                    orgSel.addEventListener('change', rebuildClassOptions);
+                    jQuery(orgSel).on('change', dropClassesOutsideOrgs);
+                    jQuery(classSel).select2({
+                        theme: select2Theme,
+                        width: '100%',
+                        placeholder: classSel.getAttribute('data-placeholder') || '',
+                        allowClear: true,
+                        closeOnSelect: false,
+                        ajax: editorOptionsAjax('classes', function () {
+                            return {organizations: selectedOrgIds().join(',')};
+                        }),
+                    }).on('select2:select', function (e) {
+                        var d = e.params && e.params.data;
+                        if (!d) return;
+                        var opt = classSel.querySelector('option[value="' + String(d.id) + '"]');
+                        if (opt && d.org != null) opt.setAttribute('data-org', String(d.org));
+                    });
                 }
-                rebuildClassOptions();
+                if (joinSel) {
+                    jQuery(joinSel).select2({
+                        theme: select2Theme,
+                        width: '100%',
+                        allowClear: true,
+                        closeOnSelect: false,
+                        ajax: editorOptionsAjax('courses'),
+                    });
+                }
+            } else if (orgSel) {
+                orgSel.addEventListener('change', dropClassesOutsideOrgs);
             }
 
             // --- Description RichEditor (③) ---
@@ -2958,9 +2979,9 @@
                                         <select id="id_organizations" name="organizations" multiple
                                                 data-placeholder="{{ _('Select courses…') }}"
                                                 style="width:100%;max-width:500px;">
-                                            {% set prefill_org_ids = (prefill.organizations or []) | map(attribute=0) | list %}
-                                            {% for org in organizations %}
-                                                <option value="{{ org.id }}"{% if org.id in prefill_org_ids %} selected{% endif %}>{{ org.name }}</option>
+                                            {# Only the stored courses; the others are searched (contest_editor_options). #}
+                                            {% for org_id, org_name in prefill.organizations or [] %}
+                                                <option value="{{ org_id }}" selected>{{ org_name }}</option>
                                             {% endfor %}
                                         </select>
                                         <div class="vis-mute-note" id="org-mute-note"></div>
@@ -2977,10 +2998,10 @@
                                         <select id="id_classes" name="classes" multiple
                                                 data-placeholder="{{ _('Select course first') }}"
                                                 style="width:100%;max-width:500px;">
-                                            {% set prefill_class_ids = (prefill.classes or []) | map(attribute=0) | list %}
+                                            {# Only the stored classes; the others are searched within the chosen courses.
+                                               data-org drives the course→class cascade (see JS above). #}
                                             {% for cls in classes %}
-                                                {# data-org drives the client-side org→class cascade (see JS above). #}
-                                                <option value="{{ cls.id }}" data-org="{{ cls.organization_id }}"{% if cls.id in prefill_class_ids %} selected{% endif %}>{{ cls.name }}</option>
+                                                <option value="{{ cls.id }}" data-org="{{ cls.organization_id }}" selected>{{ cls.name }}</option>
                                             {% endfor %}
                                         </select>
                                         <div class="vis-mute-note" id="class-mute-note"></div>
@@ -3363,10 +3384,9 @@
                                             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.4rem;">
                                                 <input type="checkbox" id="id_limit_join_organizations" name="limit_join_organizations"{% if prefill.limit_join_organizations %} checked{% endif %}> {{ _('limit organizations that can join') }}
                                             </label>
-                                            <select id="id_join_organizations" name="join_organizations" multiple data-oj-select style="width:100%;max-width:500px;">
-                                                {% set join_org_ids = (prefill.join_organizations or []) | map(attribute=0) | list %}
-                                                {% for org in organizations %}
-                                                    <option value="{{ org.id }}"{% if org.id in join_org_ids %} selected{% endif %}>{{ org.name }}</option>
+                                            <select id="id_join_organizations" name="join_organizations" multiple style="width:100%;max-width:500px;">
+                                                {% for org_id, org_name in prefill.join_organizations or [] %}
+                                                    <option value="{{ org_id }}" selected>{{ org_name }}</option>
                                                 {% endfor %}
                                             </select>
                                             <div class="vis-mute-note" id="join-mute-note"></div>
@@ -3523,11 +3543,7 @@
                             </div>
                             <div class="filter-block">
                                 <label class="filter-label" for="lib-filter-course">{{ _('Course') }}</label>
-                                <select id="lib-filter-course" multiple data-placeholder="{{ _('All courses') }}">
-                                    {% for org in organizations %}
-                                        <option value="{{ org.id }}">{{ org.name }}</option>
-                                    {% endfor %}
-                                </select>
+                                <select id="lib-filter-course" multiple data-placeholder="{{ _('All courses') }}"></select>
                             </div>
                             {% if can_see_problem_authors %}
                             <div class="filter-block">

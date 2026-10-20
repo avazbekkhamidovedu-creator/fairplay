@@ -1543,8 +1543,9 @@ class ContestCreate(LoginRequiredMixin, View):
             'title': _('Edit Assignment') if contest else _('Add Assignment'),
             'content_title': _('Edit Assignment') if contest else _('Add Assignment'),
             'now': timezone.now(),
-            'organizations': Organization.objects.all(),
-            'classes': Class.objects.all(),
+            # Only the stored classes (the pickers search the rest via ContestEditorOptionsView;
+            # rendering every course and class grew with each new term).
+            'classes': Class.objects.filter(id__in=[c[0] for c in prefill['classes']]),
             'tags': ContestTag.objects.all(),
             'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
             # The "Add from library" rows are not rendered here: the panel loads them a page at a
@@ -1571,6 +1572,51 @@ class ContestCreate(LoginRequiredMixin, View):
         }
         ctx.update(self._library_filter_context())
         return ctx
+
+
+def contest_editor_allowed(request):
+    """Who may use the assignment editor's AJAX helpers: whoever may open the editor (create, or
+    ``?contest=<key>`` of an assignment they may change)."""
+    if Contest.can_be_added_by(request.user):
+        return True
+    key = request.GET.get('contest')
+    if key:
+        contest = Contest.objects.filter(key=key).first()
+        return contest is not None and contest.is_changeable_by(request.user)
+    return False
+
+
+class ContestEditorOptionsView(LoginRequiredMixin, View):
+    """Course and class choices for the assignment editor's pickers, in select2's format.
+
+    The editor offered every course and every class of the site, rendered into the page
+    (``Organization.objects.all()`` / ``Class.objects.all()``, about 70 KB at 150 courses and
+    growing every term). It now renders the stored choices only and searches the same sets here.
+    ``classes`` needs ``organizations=<id,id>``; without it there is nothing to choose, as before.
+    """
+    PAGE_SIZE = 20
+
+    def get(self, request, kind):
+        if not contest_editor_allowed(request):
+            return JsonResponse({'error': _('Permission denied.')}, status=403)
+        term = (request.GET.get('term') or '').strip()
+        try:
+            page = max(int(request.GET.get('page') or 1), 1)
+        except ValueError:
+            page = 1
+        if kind == 'courses':
+            queryset = Organization.objects.filter(name__icontains=term).only('id', 'name')
+            label = (lambda org: {'id': org.id, 'text': org.name})
+        elif kind == 'classes':
+            org_ids = [int(x) for x in (request.GET.get('organizations') or '').split(',') if x.strip().isdigit()]
+            queryset = (Class.objects.filter(organization_id__in=org_ids, name__icontains=term)
+                        .only('id', 'name', 'organization_id'))
+            label = (lambda cls: {'id': cls.id, 'text': cls.name, 'org': cls.organization_id})
+        else:
+            raise Http404()
+        rows = list(queryset[(page - 1) * self.PAGE_SIZE:page * self.PAGE_SIZE + 1])
+        return JsonResponse({'results': [label(row) for row in rows[:self.PAGE_SIZE]],
+                             'more': len(rows) > self.PAGE_SIZE})
 
 
 def problems_attachable_by(user):
@@ -1624,13 +1670,7 @@ class ContestProblemLibraryView(LoginRequiredMixin, View):
         return number if math.isfinite(number) else None
 
     def _allowed(self, request):
-        if Contest.can_be_added_by(request.user):
-            return True
-        key = request.GET.get('contest')
-        if key:
-            contest = Contest.objects.filter(key=key).first()
-            return contest is not None and contest.is_changeable_by(request.user)
-        return False
+        return contest_editor_allowed(request)
 
     @classmethod
     def _difficulty_type_ids(cls):
