@@ -459,6 +459,16 @@ class AssignmentListPagingTest(TestCase):
         self.assertEqual(len(keys), 5)
         self.assertTrue(all(k.startswith('alnext') for k in keys))
 
+    def test_visibility_rule_runs_once(self):
+        # The per-row visibility checks run once per request; the counts and filter options
+        # reuse the ids (before: once per query, six times per page).
+        self.client.force_login(self.teacher)
+        self.client.get(reverse('contest_list'))
+        with CaptureQueriesContext(connection) as ctx:
+            self.client.get(reverse('contest_list'))
+        rule = [q for q in ctx.captured_queries if 'judge_contest_private_contestants' in q['sql']]
+        self.assertEqual(len(rule), 1)
+
     def test_small_list_renders_in_full(self):
         keys, html = self.rows(self.teacher)
         self.assertIn('var SERVER_PAGED = false', html)

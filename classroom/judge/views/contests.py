@@ -231,8 +231,28 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         tf = self.request.GET.get('time', '')
         return tf if tf in self.time_filters else ''
 
+    @cached_property
+    def _visible_ids(self):
+        """The ids of the assignments this user may see, worked out once per request.
+
+        The visibility rule is a set of per-row EXISTS checks over every assignment of the site;
+        the list, its counts and the four filter-option queries used to evaluate it again each
+        time. Users who see everything (``see_private_contest`` / ``edit_all_contest``) and
+        anonymous visitors have no per-row checks, so they keep the plain queryset (``None``).
+        """
+        user = self.request.user
+        if not user.is_authenticated or user.has_perm('judge.see_private_contest') or \
+                user.has_perm('judge.edit_all_contest'):
+            return None
+        return list(super().get_queryset().values_list('id', flat=True))
+
+    def _visible_queryset(self):
+        if self._visible_ids is None:
+            return super().get_queryset()
+        return Contest.objects.filter(id__in=self._visible_ids).defer('description')
+
     def _get_queryset(self):
-        queryset = super().get_queryset().prefetch_related(
+        queryset = self._visible_queryset().prefetch_related(
             'tags',
             'organizations',
             'authors__user',
