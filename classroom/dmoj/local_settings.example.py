@@ -53,6 +53,9 @@ DATABASES = {
         'PASSWORD': _env('CLASSROOM_DB_PASSWORD', 'classroom'),
         'HOST': _env('CLASSROOM_DB_HOST', '127.0.0.1'),
         'PORT': _env('CLASSROOM_DB_PORT', '3306'),
+        # Persistent connections (production: 60, see docs/classroom/reports/scaling.md).
+        'CONN_MAX_AGE': int(_env('CLASSROOM_DB_CONN_MAX_AGE', '0')),
+        'CONN_HEALTH_CHECKS': True,
         'OPTIONS': {
             'charset': 'utf8mb4',
         },
