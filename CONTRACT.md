@@ -651,3 +651,9 @@ Spec: `docs/contract-s1-s6-2026-10-20.md`. Everything below is live on the serve
 
 ### New event types (server-written, refused from clients as `client_*`)
 `sealed_submit`, `resume_requested`, `resume_approved`*, `swap_requested`, `swap_approved`*, `weak_lock` (* bookkeeping, not flags).
+
+### S3 addendum (2026-10-20): relaunch after a kill
+After a kill or crash, the Mac and Windows apps reopen the exam page, which keeps its saved
+session, so start is never called. A `previous_run_killed` client event on an in-progress
+attempt therefore also sets `pending_resume` (when the exam's `resume_needs_approval` is on)
+and records `resume_requested` once. The page sees `approval: "pending"` on its next heartbeat.

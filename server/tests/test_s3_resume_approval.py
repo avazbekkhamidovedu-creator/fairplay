@@ -114,3 +114,37 @@ def test_setting_defaults_on_and_survives_put(app_client):
     assert e["resume_needs_approval"] is False
     e = app_client.put(f"/api/exams/{e['id']}", json=SAMPLE_EXAM, headers=t).json()   # omitted: kept
     assert e["resume_needs_approval"] is False
+
+
+def test_relaunch_that_keeps_its_session_waits_too(app_client, exam):
+    """Mac/Windows after a kill: the app reopens the exam page, which keeps its saved
+    session (no start). The app's previous_run_killed event makes it wait as well."""
+    h = login(app_client, "alice")
+    a = start(app_client, h, exam).json()
+    aid, sess = a["attempt_id"], a["session"]
+    hs = {**h, "X-FairPlay-Session": sess}
+    ev = {"events": [{"type": "previous_run_killed", "detail": "FairPlay ended while locked last time",
+                      "client_time": "2026-10-20T10:00:00Z"}]}
+    assert app_client.post(f"/api/student/attempts/{aid}/events", headers=hs, json=ev).status_code == 200
+    view = app_client.get(f"/api/student/attempts/{aid}", headers=hs).json()
+    assert view["approval"] == "pending"
+    assert beat(app_client, hs, aid, sess, 1).json()["approval"] == "pending"
+    # a second report doesn't start a new wait
+    app_client.post(f"/api/student/attempts/{aid}/events", headers=hs, json=ev)
+    t = login(app_client, "teacher")
+    res = app_client.get(f"/api/exams/{exam['id']}/results", headers=t).json()["attempts"][0]
+    assert [e["type"] for e in res["events"]].count("resume_requested") == 1
+    assert app_client.post(f"/api/exams/{exam['id']}/attempts/{aid}/approve-resume", headers=t).status_code == 200
+    assert app_client.get(f"/api/student/attempts/{aid}", headers=hs).json()["approval"] == "approved"
+
+
+def test_kill_report_ignored_when_setting_off(app_client):
+    t = login(app_client, "teacher")
+    e = app_client.post("/api/exams", json={**SAMPLE_EXAM, "resume_needs_approval": False}, headers=t).json()
+    exam = app_client.post(f"/api/exams/{e['id']}/open", headers=t).json()
+    h = login(app_client, "alice")
+    a = start(app_client, h, exam).json()
+    hs = {**h, "X-FairPlay-Session": a["session"]}
+    ev = {"events": [{"type": "previous_run_killed", "detail": "x", "client_time": "2026-10-20T10:00:00Z"}]}
+    app_client.post(f"/api/student/attempts/{a['attempt_id']}/events", headers=hs, json=ev)
+    assert app_client.get(f"/api/student/attempts/{a['attempt_id']}", headers=hs).json()["approval"] is None

@@ -447,7 +447,27 @@ async def events(aid: str, body: EventsIn, request: Request,
     await store.hincrby(f"evc:{exam_id}", aid, len(rows), LIVE_TTL)
     last = rows[-1]
     await store.hset(f"evl:{exam_id}", aid, f"{last['type']} {last['detail']}".strip(), LIVE_TTL)
+    if meta["status"] == "in_progress" and any(r["type"] == "previous_run_killed" for r in rows):
+        await _resume_after_kill(session, store, aid)
     return {"ok": True, "stored": len(rows)}
+
+
+async def _resume_after_kill(session: AsyncSession, store, aid: str) -> None:
+    """S3, Mac/Windows relaunch: after a kill or crash the app opens the exam page straight
+    away and the page keeps its saved session, so start (_resume) is never called. The app
+    reports previous_run_killed instead; that, too, waits for the teacher's OK."""
+    a = await session.get(Attempt, aid)
+    exam = await session.get(Exam, a.exam_id) if a else None
+    if a is None or exam is None or a.status != "in_progress" or a.pending_resume:
+        return
+    if exam.resume_needs_approval is False:
+        return
+    a.pending_resume, a.pending_since = True, utcnow()
+    a.updated_at = utcnow()
+    await session.commit()
+    await cache_attempt(store, a)
+    await ac.add_event(session, store, aid, a.exam_id, "resume_requested",
+                       "FairPlay ended while locked and was opened again; the student waits for your OK")
 
 
 @router.post("/attempts/{aid}/submit")
