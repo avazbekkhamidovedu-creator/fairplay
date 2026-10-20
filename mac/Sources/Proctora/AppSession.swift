@@ -258,6 +258,13 @@ final class AppSession {
             guard let self, let now = self.exam,
                   now.attemptId == exam.attemptId, now.session == exam.session else { return }
             if status == 200, let hex = json?["key"] as? String, let key = AppSession.data(hex: hex), key.count == 32 {
+                // iPad review M2 (2026-10-20): the key counts only with the server's signature
+                // over offkey-resp|aid|session|key|ts, so a man in the middle can't plant one.
+                guard AppSession.offkeyReplyIsGenuine(json: json, attemptId: exam.attemptId, session: exam.session,
+                                                      keyHex: hex, ts: ts) else {
+                    EventLog.shared.record(.serverReplyUnsigned("offline key answer"))
+                    return
+                }
                 self.offlineKey = key
                 DebugLog.log("exam", "offline exit key received")
             } else if AppSession.offlineKeyRetryable(status) && self.offlineKeyTries < 30 {
@@ -267,6 +274,15 @@ final class AppSession {
                 DebugLog.log("exam", "offline exit key NOT available (HTTP \(status.map(String.init) ?? "none"))")
             }
         }
+    }
+
+    /// Offline-key reply: `proofs` (one per server key) or the single `proof` older servers send.
+    static func offkeyReplyIsGenuine(json: [String: Any]?, attemptId: String, session: String,
+                                     keyHex: String, ts: Int64) -> Bool {
+        var proofs = (json?["proofs"] as? [String]) ?? []
+        if let one = json?["proof"] as? String { proofs.append(one) }
+        let expected = sign("offkey-resp|\(attemptId)|\(session)|\(keyHex)|\(ts)")
+        return proofs.contains { constantTimeEqual($0, expected) }
     }
 
     /// No answer, a server error or "busy": try again. 4xx is a definite no.
