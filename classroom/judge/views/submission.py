@@ -30,7 +30,7 @@ from judge.utils.infinite_paginator import InfinitePaginationMixin
 from judge.utils.lazy import memo_lazy
 from judge.utils.problems import get_result_data, user_completed_ids, user_editable_ids, user_tester_ids
 from judge.utils.raw_sql import join_sql_subquery, use_straight_join
-from judge.utils.result_visibility import results_hidden_q, solved_source_visibility_applies, visible_results
+from judge.utils.result_visibility import solved_source_visibility_applies, visible_results
 from judge.utils.safe_json import script_json
 from judge.utils.sandbox_output import submission_output_hidden_for
 from judge.utils.views import DiggPaginatorMixin, TitleMixin, generic_message
@@ -989,6 +989,7 @@ def single_submission(request):
 
 class AllSubmissions(InfinitePaginationMixin, SubmissionsListBase):
     stats_update_interval = 3600
+    user_stats_cache_seconds = 300
 
     @property
     def use_infinite_pagination(self):
@@ -1010,13 +1011,18 @@ class AllSubmissions(InfinitePaginationMixin, SubmissionsListBase):
                 self.filter_problems or self.filter_users or self.filter_contests):
             return super(AllSubmissions, self)._get_result_data(queryset)
 
-        key = 'global_submission_result_data'
+        # The chart counts exactly the submissions this list shows the viewer (private courses,
+        # assignments and problems left out, hidden verdicts left out). Every anonymous visitor
+        # sees the same list, so they share one cache entry; a signed-in user gets their own.
+        if self.request.user.is_authenticated:
+            key, timeout = 'submission_result_data:%d' % self.request.profile.id, self.user_stats_cache_seconds
+        else:
+            key, timeout = 'submission_result_data:anonymous', self.stats_update_interval
         result = cache.get(key)
         if result:
             return result
-        # Cached for every viewer: leave out every currently hidden verdict.
-        result = get_result_data(Submission.objects.exclude(results_hidden_q()).order_by())
-        cache.set(key, result, self.stats_update_interval)
+        result = super(AllSubmissions, self)._get_result_data(self.get_queryset())
+        cache.set(key, result, timeout)
         return result
 
 
