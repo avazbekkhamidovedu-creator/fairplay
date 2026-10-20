@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         mariadb-server redis-server tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt ./
-RUN pip install -r requirements.txt mysqlclient
+RUN pip install -r requirements.txt mysqlclient gunicorn whitenoise
 COPY . .
 COPY --from=styles /app/resources ./resources
 RUN sh scripts/demo/prepare.sh

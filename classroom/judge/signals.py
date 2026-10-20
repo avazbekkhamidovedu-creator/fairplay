@@ -10,7 +10,7 @@ from django.dispatch import receiver
 
 from .caching import finished_submission
 from .models import BlogPost, Comment, Contest, ContestProblem, ContestSubmission, EFFECTIVE_MATH_ENGINES, Judge, \
-    Language, License, MiscConfig, Organization, Problem, ProblemImportItem, Profile, Submission, \
+    Language, License, MiscConfig, NavigationBar, Organization, Problem, ProblemImportItem, Profile, Submission, \
     WebAuthnCredential
 
 
@@ -162,3 +162,10 @@ def problem_import_item_delete(sender, instance, **kwargs):
 def contest_submission_update(sender, instance, **kwargs):
     Submission.objects.filter(id=instance.submission_id).update(contest_object_id=instance.participation.contest_id)
     instance.participation.recompute_results()
+
+
+@receiver(post_save, sender=NavigationBar)
+@receiver(post_delete, sender=NavigationBar)
+def navigation_bar_changed(sender, **kwargs):
+    from judge.template_context import NAVIGATION_BAR_CACHE_KEY
+    cache.delete(NAVIGATION_BAR_CACHE_KEY)

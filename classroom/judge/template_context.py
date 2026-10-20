@@ -3,6 +3,7 @@ from functools import partial
 from django.conf import settings
 from django.contrib.auth.context_processors import PermWrapper
 from django.contrib.sites.shortcuts import get_current_site
+from django.core.cache import cache
 from django.utils.functional import SimpleLazyObject, new_method_proxy
 
 from judge.utils.caniuse import CanIUse, SUPPORT
@@ -51,16 +52,40 @@ def comet_location(request):
             'EVENT_DAEMON_POLL_LOCATION': poll}
 
 
-def __nav_tab(path):
-    result = list(NavigationBar.objects.extra(where=['%s REGEXP BINARY regex'], params=[path])[:1])
-    return result[0].get_ancestors(include_self=True).values_list('key', flat=True) if result else []
+NAVIGATION_BAR_CACHE_KEY = 'navigation_bar_items'
+
+
+def navigation_bar_items():
+    """Every navigation item in tree order, cached (judge/signals.py drops it on any change).
+
+    The bar is on every page; reading it from the database cost three queries per request."""
+    items = cache.get(NAVIGATION_BAR_CACHE_KEY)
+    if items is None:
+        items = list(NavigationBar.objects.all())
+        cache.set(NAVIGATION_BAR_CACHE_KEY, items, 3600)
+    return items
+
+
+def _nav_tab_keys(path):
+    # Same rule as the old SQL (`path REGEXP BINARY regex`, first item in tree order): a
+    # case-sensitive search of each item's regex in the path.
+    items = navigation_bar_items()
+    by_id = {item.id: item for item in items}
+    for item in items:
+        if item.pattern.search(path):
+            keys = []
+            while item is not None:
+                keys.append(item.key)
+                item = by_id.get(item.parent_id)
+            return keys[::-1]
+    return []
 
 
 def general_info(request):
     path = request.get_full_path()
     return {
-        'nav_tab': FixedSimpleLazyObject(partial(__nav_tab, request.path)),
-        'nav_bar': NavigationBar.objects.all(),
+        'nav_tab': FixedSimpleLazyObject(partial(_nav_tab_keys, request.path)),
+        'nav_bar': FixedSimpleLazyObject(navigation_bar_items),
         'LOGIN_RETURN_PATH': '' if path.startswith('/accounts/') else path,
         'REGISTRATION_OPEN': settings.REGISTRATION_OPEN,
         'perms': PermWrapper(request.user),

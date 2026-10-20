@@ -19,5 +19,6 @@ SQL
 python manage.py migrate --noinput
 python manage.py loaddata navbar language_small demo
 python manage.py compilejsi18n
+python manage.py collectstatic --noinput -v 0
 mariadb-admin -uroot shutdown
 redis-cli shutdown nosave || true

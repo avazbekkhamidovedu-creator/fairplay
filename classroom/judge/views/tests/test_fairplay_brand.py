@@ -126,3 +126,15 @@ class LightByDefaultTestCase(TestCase):
                     if 'prefers-color-scheme' in line:
                         offenders.append('%s:%d' % (path.relative_to(CLASSROOM), line_no))
         self.assertEqual(offenders, [])
+
+
+class MathJaxOnDemandTestCase(CommonDataMixin, TestCase):
+    """MathJax (about 1.1 MB) is no longer a <script src> on every page: a small loader fetches
+    it only when the page, or content added later, has math (checked in a browser: a blog post
+    with \\(x^2\\) still renders, /contests/ and the question pages download nothing)."""
+
+    def test_pages_do_not_download_mathjax_up_front(self):
+        response = self.client.get('/problems/')
+        self.assertNotContains(response, 'src="/static/libs/mathjax/es5/tex-chtml.js"')
+        self.assertContains(response, 'libs/mathjax/es5/tex-chtml.js')  # the loader knows where it is
+        self.assertContains(response, 'stub.typesetPromise')

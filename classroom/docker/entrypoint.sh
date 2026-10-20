@@ -13,14 +13,18 @@ case "$role" in
     python manage.py compilemessages
     python manage.py compilejsi18n
     # COMPRESS_OFFLINE installs may also need: python manage.py compress --force
-    # Worker model: see docs/classroom/reports/load-test.md. With the mysqlclient driver a
-    # gevent worker blocks on every query, so GUNICORN_WORKER_CLASS=gthread (with
-    # GUNICORN_THREADS and a CONN_MAX_AGE in local_settings) queues more fairly under load.
+    # Worker model: gthread (threads per worker) by default. With the mysqlclient driver a
+    # gevent worker blocks on every query and queues requests unfairly; gthread cut the
+    # worst-case latency from 28 s to 9 s in docs/classroom/reports/load-test.md. Pair it
+    # with DATABASES['default']['CONN_MAX_AGE'] = 60 in local_settings.py. Rule of thumb:
+    # GUNICORN_WORKERS = 2 x CPU cores, GUNICORN_THREADS = 4 (docs/classroom/reports/scaling.md).
+    # GUNICORN_WORKER_CLASS=gevent still works for a deploy that wants the old model.
     exec gunicorn dmoj.wsgi \
         --bind "0.0.0.0:${GUNICORN_PORT:-8000}" \
-        --worker-class "${GUNICORN_WORKER_CLASS:-gevent}" \
+        --worker-class "${GUNICORN_WORKER_CLASS:-gthread}" \
         --workers "${GUNICORN_WORKERS:-4}" \
-        --threads "${GUNICORN_THREADS:-1}" \
+        --threads "${GUNICORN_THREADS:-4}" \
+        --timeout "${GUNICORN_TIMEOUT:-120}" \
         "$@"
     ;;
   celery)

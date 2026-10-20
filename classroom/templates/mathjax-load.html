@@ -1,11 +1,83 @@
 <script type="text/javascript" src="{{ static('mathjax_config.js') }}"></script>
-{# Served from this site (npm "mathjax", copied to libs/ at build time), never from a CDN. #}
-<script type="text/javascript" src="{{ static('libs/mathjax/es5/tex-chtml.js') }}"></script>
+{# MathJax (about 1.1 MB, served from this site, never a CDN) is loaded only when the page, or
+   content added to it later, contains math. Until then window.MathJax is a small stand-in whose
+   typesetPromise() loads the library on the first call that has math to render; scripts that
+   check `typeof MathJax.typesetPromise === 'function'` keep working unchanged. #}
 <script type="text/javascript">
-    if (window.MathJax && typeof MathJax.typesetPromise === 'function') {
-        MathJax.typesetPromise().then(function () {
-            $('.tex-image').hide();
-            $('.tex-text').show();
-        });
-    }
+    (function () {
+        var config = window.MathJax || {};
+        var src = {{ static('libs/mathjax/es5/tex-chtml.js')|tojson }};
+        var MATH = /\\\(|\\\[|\$\$|\\begin\{|~[^~\n]+~/;
+        var loading = null;
+
+        var SKIP = {SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, TEXTAREA: 1};
+
+        // Visible text only: page scripts (this one included) contain math-like patterns.
+        function textOf(root) {
+            if (!root || !root.nodeType) return '';
+            if (root.nodeType === 3) return root.nodeValue;
+            var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+                acceptNode: function (node) {
+                    for (var p = node.parentNode; p && p !== root.parentNode; p = p.parentNode) {
+                        if (SKIP[p.nodeName]) return NodeFilter.FILTER_REJECT;
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+            });
+            var parts = [];
+            while (walker.nextNode()) parts.push(walker.currentNode.nodeValue);
+            return parts.join(' ');
+        }
+
+        function hasMath(elements) {
+            var list = elements && elements.length !== undefined ? elements : (elements ? [elements] : [document.body]);
+            for (var i = 0; i < list.length; i++) {
+                if (MATH.test(textOf(list[i]))) return true;
+            }
+            return false;
+        }
+
+        function load() {
+            if (!loading) {
+                loading = new Promise(function (resolve, reject) {
+                    var real = {};
+                    for (var key in config) if (Object.prototype.hasOwnProperty.call(config, key)) real[key] = config[key];
+                    real.startup = {typeset: false};
+                    window.MathJax = real;
+                    var script = document.createElement('script');
+                    script.src = src;
+                    script.async = true;
+                    script.onload = function () {
+                        var ready = window.MathJax.startup && window.MathJax.startup.promise;
+                        (ready || Promise.resolve()).then(resolve, reject);
+                    };
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                });
+            }
+            return loading;
+        }
+
+        var stub = {};
+        for (var key in config) if (Object.prototype.hasOwnProperty.call(config, key)) stub[key] = config[key];
+        stub.typesetPromise = function (elements) {
+            if (!hasMath(elements)) return Promise.resolve();
+            return load().then(function () { return window.MathJax.typesetPromise(elements); });
+        };
+        stub.typeset = function (elements) { stub.typesetPromise(elements); };
+        stub.typesetClear = function () {};
+        stub.whenReady = load;
+        window.MathJax = stub;
+
+        function typesetPage() {
+            if (!hasMath()) return;
+            window.MathJax.typesetPromise().then(function () {
+                $('.tex-image').hide();
+                $('.tex-text').show();
+            });
+        }
+
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', typesetPage);
+        else typesetPage();
+    })();
 </script>
