@@ -68,8 +68,16 @@ class PostList(ListView):
         visible_contests = Contest.get_visible_contests(self.request.user).filter(is_visible=True) \
                                   .order_by('start_time')
 
-        context['current_contests'] = visible_contests.filter(start_time__lte=now, end_time__gt=now)
-        context['future_contests'] = visible_contests.filter(start_time__gt=now)
+        # The sidebar shows the first few of each and links to the assignment list for the rest;
+        # listing all of them put every running assignment of the site on an administrator's
+        # home page (456 on the teacher-scale seed).
+        limit = getattr(settings, 'CLASSROOM_HOME_CONTEST_LIMIT', 10)
+        current = list(visible_contests.filter(start_time__lte=now, end_time__gt=now)[:limit + 1])
+        future = list(visible_contests.filter(start_time__gt=now)[:limit + 1])
+        context['current_contests'] = current[:limit]
+        context['future_contests'] = future[:limit]
+        context['more_current_contests'] = len(current) > limit
+        context['more_future_contests'] = len(future) > limit
 
         context['teaching_courses'] = teaching_courses(self.request.user)
 

@@ -10,12 +10,14 @@ from judge.views.problem_import import _delete_problem_data_directories, _save_p
 
 
 class ProblemImportCreationTestCase(SimpleTestCase):
-    @mock.patch('judge.utils.problem_create.Problem.objects.values_list')
-    def test_problem_code_generation_uses_one_existing_code_query(self, values_list):
-        values_list.return_value = ['p000000', 'p000002']
+    @mock.patch('judge.utils.problem_create.Problem.objects.filter')
+    def test_problem_code_generation_uses_one_existing_code_query(self, code_filter):
+        # One query, and only for codes of the series (not every problem code on the site).
+        code_filter.return_value.values_list.return_value = ['p000000', 'p000002']
 
         self.assertEqual(generate_problem_code(), 'p000001')
-        values_list.assert_called_once_with('code', flat=True)
+        code_filter.assert_called_once_with(code__startswith='p')
+        code_filter.return_value.values_list.assert_called_once_with('code', flat=True)
 
     @mock.patch('judge.views.problem_import.apply_simple_problem_defaults')
     @mock.patch('judge.views.problem_import.Problem.objects.filter')

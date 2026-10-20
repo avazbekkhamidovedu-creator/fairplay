@@ -33,8 +33,9 @@ _PROBLEM_LOG_M2M = (
 
 
 def generate_problem_code():
+    # Only codes that can collide with the series: not every problem code on the site.
     return next_prefixed_id(
-        Problem.objects.values_list('code', flat=True),
+        Problem.objects.filter(code__startswith='p').values_list('code', flat=True),
         'p',
         fallback_prefix='mcq',
     )

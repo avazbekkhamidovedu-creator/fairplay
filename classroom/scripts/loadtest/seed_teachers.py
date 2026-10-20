@@ -122,7 +122,9 @@ def make_users(language):
     pw = make_password(PASSWORD)
     uid, pid = next_id(User), next_id(Profile)
     names = ['tprof%03d' % i for i in range(1, N_PROF + 1)] + ['tstu%04d' % i for i in range(1, N_STUD + 1)]
+    # Approved site teachers are in the Instructors group and are staff (grant_site_teacher_role).
     users = [User(id=uid + i, username=n, email='%s@example.edu' % n, password=pw, is_active=True,
+                  is_staff=n.startswith('tprof'),
                   first_name=('Prof' if n.startswith('tprof') else 'Student'), last_name=n[-4:])
              for i, n in enumerate(names)]
     chunked_create(User, users)

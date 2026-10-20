@@ -7,7 +7,7 @@ table), or a query count / response size that must not grow with the number of r
 """
 from datetime import timedelta
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
 from django.db import connection
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -463,3 +463,57 @@ class AssignmentListPagingTest(TestCase):
         self.assertIn('var SERVER_PAGED = false', html)
         self.assertEqual(sorted(k for k in keys if k.startswith('alpast')), ['alpast00', 'alpast01'])
         self.assertEqual(len([k for k in keys if k.startswith('alnext')]), 8)
+
+
+@override_settings(CLASSROOM_HOME_CONTEST_LIMIT=3)
+class HomeSidebarTest(TestCase):
+    """The home page sidebar lists the first few ongoing / upcoming assignments, not all of them."""
+
+    @classmethod
+    def setUpTestData(cls):
+        now = timezone.now()
+        cls.admin = create_user(username='hs_admin', is_superuser=True)
+        for i in range(5):
+            create_contest(key='hsnow%d' % i, is_visible=True, start_time=now - timedelta(hours=1 + i),
+                           end_time=now + timedelta(days=1))
+            create_contest(key='hsnext%d' % i, is_visible=True, start_time=now + timedelta(days=1 + i),
+                           end_time=now + timedelta(days=9))
+
+    def test_capped_with_link(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse('home'))
+        self.assertEqual(len(response.context['current_contests']), 3)
+        self.assertEqual([c.key for c in response.context['future_contests']], ['hsnext0', 'hsnext1', 'hsnext2'])
+        html = response.content.decode()
+        self.assertIn('?time=ongoing', html)
+        self.assertIn('?time=upcoming', html)
+
+
+class AdminSubmissionChangelistTest(TestCase):
+    """A teacher's admin submission list uses a literal list of their problems (no role joins)."""
+    fixtures = ['language_small.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.teacher = create_user(username='as_teacher', is_staff=True)
+        cls.teacher.groups.add(ensure_instructors_group())
+        cls.teacher.user_permissions.add(*Permission.objects.filter(codename='change_submission'))
+        student = create_user(username='as_student')
+        language = Language.get_answer_language()
+        mine = create_problem('as-mine', authors=('as_teacher',))
+        curated = create_problem('as-cur', curators=('as_teacher',), authors=('as_student',))
+        other = create_problem('as-other')
+        cls.subs = {p.code: Submission.objects.create(user=student.profile, problem=p, language=language)
+                    for p in (mine, curated, other)}
+
+    def test_rows_and_query_shape(self):
+        self.client.force_login(self.teacher)
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get('/admin/judge/submission/')
+        self.assertEqual(response.status_code, 200)
+        listed = {s.problem.code for s in response.context['cl'].result_list}
+        self.assertEqual(listed, {'as-mine', 'as-cur'})
+        submission_queries = [q['sql'] for q in ctx.captured_queries if 'FROM `judge_submission`' in q['sql']]
+        self.assertTrue(submission_queries)
+        for sql in submission_queries:
+            self.assertNotIn('JOIN `judge_problem_authors`', sql)

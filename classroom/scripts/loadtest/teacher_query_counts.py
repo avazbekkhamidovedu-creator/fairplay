@@ -68,6 +68,8 @@ class Runner:
         print('%-8s %-34s %3d %5d q %6d ms (sql %5d) %8.1f KB%s' % (
             who, label[:34], row['status'], row['queries'], row['ms'], row['sql_ms'], row['kb'],
             '  (max repeat %d)' % row['max_repeat'] if row['max_repeat'] else ''))
+        if self.args.explain:
+            self.explain(ctx.captured_queries)
         if self.args.verbose:
             for n, s in repeated[:6]:
                 print('          x%-4d %s' % (n, s[:240]))
@@ -76,6 +78,23 @@ class Runner:
                 if float(q['time']) > 0.02:
                     print('          %.0f ms  %s' % (float(q['time']) * 1000, q['sql'][:300]))
         return response
+
+    def explain(self, queries):
+        """Print full table/index scans of more than ``--scan-rows`` rows (missing-index suspects)."""
+        seen = set()
+        for q in queries:
+            sql = q['sql']
+            if not sql.lstrip(' (').upper().startswith('SELECT') or NUM.sub('?', sql) in seen:
+                continue
+            seen.add(NUM.sub('?', sql))
+            with connection.cursor() as cursor:
+                cursor.execute('EXPLAIN ' + sql)
+                cols = [d[0] for d in cursor.description]
+                for row in cursor.fetchall():
+                    row = dict(zip(cols, row))
+                    if row['type'] in ('ALL', 'index') and int(row['rows'] or 0) > self.args.scan_rows:
+                        print('          SCAN %s %s rows=%s key=%s  %s' % (
+                            row['table'], row['type'], row['rows'], row['key'], sql[:160]))
 
 
 def pick_fixtures(username):
@@ -180,6 +199,8 @@ def main():
     ap.add_argument('--as', dest='users', action='append')
     ap.add_argument('--repeat', type=int, default=1)
     ap.add_argument('--verbose', action='store_true')
+    ap.add_argument('--explain', action='store_true', help='EXPLAIN every query, print large scans')
+    ap.add_argument('--scan-rows', type=int, default=2000)
     ap.add_argument('--only')
     ap.add_argument('--json')
     ap.add_argument('--compare')

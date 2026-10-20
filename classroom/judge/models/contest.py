@@ -272,8 +272,9 @@ class Contest(models.Model):
     @classmethod
     def generate_unique_key(cls):
         """Next unused assignment/contest id in the clone/admin series ``c000000``."""
+        # Only ids that can collide with the series: not every key on the site.
         return next_prefixed_id(
-            cls.objects.values_list('key', flat=True),
+            cls.objects.filter(key__startswith='c').values_list('key', flat=True),
             'c',
             fallback_prefix='contest',
         )

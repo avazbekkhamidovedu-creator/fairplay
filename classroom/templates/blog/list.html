@@ -128,6 +128,9 @@
                                 </div>
                             </div>
                         {% endfor %}
+                        {% if more_current_contests %}
+                            <div class="contest"><a href="{{ url('contest_list') }}?time=ongoing">{{ _('All ongoing assignments') }} &rarr;</a></div>
+                        {% endif %}
                     </div>
                 </div>
             {% endif %}
@@ -146,6 +149,9 @@
                                 </div>
                             </div>
                         {% endfor %}
+                        {% if more_future_contests %}
+                            <div class="contest"><a href="{{ url('contest_list') }}?time=upcoming">{{ _('All upcoming assignments') }} &rarr;</a></div>
+                        {% endif %}
                     </div>
                 </div>
             {% endif %}
