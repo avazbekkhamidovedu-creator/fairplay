@@ -2845,3 +2845,8 @@ details.stu-rubric-details > summary .pts {
     animation: none;
   }
 }
+
+.stu-pop-warn {
+  border-color: var(--s-warn-border);
+  background: var(--s-warn-tint);
+}
