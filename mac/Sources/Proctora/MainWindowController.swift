@@ -291,6 +291,14 @@ final class MainWindowController: NSWindowController, LockSurface,
             SettingsPane.open((body["pane"] as? String) ?? "")
         case "unlock":
             requestUnlock()
+        case "installUpdate":
+            // 2026-10-22: in-app update (Updater.swift); refused while locked or in an exam.
+            Updater.shared.install { [weak self] message in self?.send(message) }
+        case "openDownloadPage":
+            // The fixed public download page, in the browser (the window shows only the server).
+            guard !LockdownController.shared.isLocked else { return }
+            DebugLog.log("update", "open the download page")
+            NSWorkspace.shared.open(Updater.releasePage)
         default:
             break
         }
@@ -353,13 +361,18 @@ final class MainWindowController: NSWindowController, LockSurface,
     private var lastGoneCheck = Date.distantPast
 
     func sendState() {
-        send(["type": "state",
-              "locked": LockdownController.shared.isLocked,
-              "trusted": EventTap.isTrusted,
-              "version": Config.version,
-              "app_version": Config.version,
-              "platform": "mac",
-              "sealed_pending": Sealed.hasPending])
+        var state: [String: Any] = ["type": "state",
+                                    "locked": LockdownController.shared.isLocked,
+                                    "trusted": EventTap.isTrusted,
+                                    "version": Config.version,
+                                    "app_version": Config.version,
+                                    "platform": "mac",
+                                    "sealed_pending": Sealed.hasPending]
+        // 2026-10-22: a newer release the app can install (Updater.swift); never while locked.
+        if let update = Updater.shared.available, !LockdownController.shared.isLocked {
+            state["update"] = ["version": update.version]
+        }
+        send(state)
     }
 
     /// Review 2026-10-14: integrity events wait here until a page that forwards them to the

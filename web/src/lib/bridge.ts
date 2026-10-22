@@ -12,6 +12,13 @@ export interface NativeState {
   app_version?: string;
   platform?: string;
   sealed_pending?: boolean;
+  /** 2026-10-22 (Mac): a newer FairPlay the app can install itself (missing = none). */
+  update?: AppUpdate;
+}
+
+/** A newer release the Mac app found and verified it can install ({action:"installUpdate"}). */
+export interface AppUpdate {
+  version: string;
 }
 
 export type NativeMessage =
@@ -32,7 +39,11 @@ export type NativeMessage =
   /** Review 2026-10-14: the app could not open the website exam (e.g. "bad_session"). */
   | { type: "externalFailed"; reason: string }
   /** S5: the app wrote the sealed answers file. */
-  | { type: "sealed"; attempt_id: string; ok: boolean };
+  | { type: "sealed"; attempt_id: string; ok: boolean }
+  /** 2026-10-22 (Mac): an update install is on its way ("downloading", then "installing"). */
+  | { type: "updateProgress"; stage: string }
+  /** 2026-10-22 (Mac): the update was not installed (see UpdateFailure). */
+  | { type: "updateFailed"; reason: string };
 
 /** The attempt the app is locking for: it sends its own signed beats with these. */
 export interface ExamSessionParams {
@@ -88,7 +99,9 @@ type OutMessage =
   | ({ action: "openExternal" } & OpenExternalParams)
   | ({ action: "seal" } & SealParams)
   | { action: "sealedToken"; token: string }
-  | { action: "openSettings"; pane: string };
+  | { action: "openSettings"; pane: string }
+  | { action: "installUpdate" }
+  | { action: "openDownloadPage" };
 
 /** S5: what the app seals when the submit at time-up failed. answers_json is the exact
  *  string the app hashes (SHA-256 of its UTF-8 bytes). */
@@ -205,7 +218,46 @@ function stateOf(d: NativeState): NativeState {
   if (typeof d.app_version === "string" && d.app_version) out.app_version = d.app_version;
   if (typeof d.platform === "string" && d.platform) out.platform = d.platform;
   if (typeof d.sealed_pending === "boolean") out.sealed_pending = d.sealed_pending;
+  const update = parseUpdate((d as { update?: unknown }).update);
+  if (update) out.update = update;
   return out;
+}
+
+/** The state's `update` field (it crosses a trust boundary): {version: "X.Y.Z"} or null. */
+export function parseUpdate(v: unknown): AppUpdate | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const version = (v as { version?: unknown }).version;
+  if (typeof version !== "string" || version.length > 32 || !/^\d+\.\d+\.\d+$/.test(version)) return null;
+  return { version };
+}
+
+/** Why the Mac app did not install an update. */
+export type UpdateFailure = "download" | "verify" | "not_writable" | "locked" | "busy" | "unknown";
+
+export function parseUpdateFailure(reason: unknown): UpdateFailure {
+  return reason === "download" || reason === "verify" || reason === "not_writable" || reason === "locked" || reason === "busy"
+    ? reason
+    : "unknown";
+}
+
+/** Public page with every FairPlay download. */
+export const DOWNLOAD_PAGE = "https://github.com/khamidov17/fairplay-download/releases/latest";
+
+/** 2026-10-22: ask the Mac app to download, verify and install the update it offered
+ *  (state.update). It answers updateProgress / updateFailed, or quits and reopens updated.
+ *  Returns false outside the Mac app (nothing is sent). */
+export function installUpdate(): boolean {
+  if (nativePlatform() !== "mac") return false;
+  post({ action: "installUpdate" });
+  return true;
+}
+
+/** Ask the Mac app to open DOWNLOAD_PAGE in the browser (the exam window only shows the
+ *  exam server). Returns false outside the Mac app: follow the link normally there. */
+export function openDownloadPage(): boolean {
+  if (nativePlatform() !== "mac") return false;
+  post({ action: "openDownloadPage" });
+  return true;
 }
 
 let installed = false;

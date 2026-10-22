@@ -2079,6 +2079,26 @@ details.stu-rubric-details > summary .pts {
   background: var(--s-warn-tint);
   color: var(--s-text);
 }
+/* 2026-10-22: "FairPlay X is available · Update now" above the device checks. */
+.stu-update-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stu-dev-line.stu-update {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 6px 6px 6px 10px;
+  color: var(--s-text);
+}
+.stu-update-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.stu-update-box .stu-dev-sub a {
+  color: var(--s-primary);
+  font-weight: 600;
+}
 .stu-dev-sub {
   margin: 0;
   font-size: 13px;

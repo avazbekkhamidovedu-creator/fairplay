@@ -10,6 +10,8 @@ export interface Readiness {
   platform: "mac" | "windows" | "ipad" | null;
   /** Accessibility (lock) permission: true / false, or null while unknown. */
   trusted: boolean | null;
+  /** 2026-10-22 (Mac): a newer FairPlay the app can install (null/missing = none). */
+  update?: bridge.AppUpdate | null;
 }
 
 /** What we can truly know about this computer: Mac app present + lock permission. */
@@ -24,7 +26,85 @@ export function useReadiness(): Readiness {
     return off;
   }, []);
   const native = bridge.isNative();
-  return { native, platform: bridge.nativePlatform(), trusted: native && state ? state.trusted : null };
+  return {
+    native,
+    platform: bridge.nativePlatform(),
+    trusted: native && state ? state.trusted : null,
+    update: native && state?.update ? state.update : null,
+  };
+}
+
+type UpdateRun = { kind: "idle" } | { kind: "installing" } | { kind: "failed"; reason: bridge.UpdateFailure };
+
+/**
+ * 2026-10-22: "FairPlay X is available · Update now" above the device checks (Mac app).
+ * The app downloads and verifies the update, replaces itself and reopens; this line only
+ * shows progress and, if that fails, what to do instead.
+ */
+export function UpdateNotice({ update }: { update: bridge.AppUpdate }) {
+  const [run, setRun] = useState<UpdateRun>({ kind: "idle" });
+  useEffect(
+    () =>
+      bridge.onNative((msg) => {
+        if (msg.type === "updateProgress") setRun({ kind: "installing" });
+        else if (msg.type === "updateFailed") {
+          const reason = bridge.parseUpdateFailure(msg.reason);
+          // "busy": an install is already running; keep showing it.
+          setRun(reason === "busy" ? { kind: "installing" } : { kind: "failed", reason });
+        }
+      }),
+    [],
+  );
+
+  function start() {
+    if (bridge.installUpdate()) setRun({ kind: "installing" });
+  }
+
+  if (run.kind === "installing") {
+    return (
+      <p className="stu-dev-line stu-update" role="status" data-testid="update-notice">
+        <DotsIcon size={16} />
+        <span>Updating… FairPlay restarts by itself.</span>
+      </p>
+    );
+  }
+  const retry = run.kind === "idle" || run.reason === "download";
+  return (
+    <div className="stu-update-box" data-testid="update-notice">
+      <p className="stu-dev-line stu-update" role="status">
+        <span className="stu-update-text">FairPlay {update.version} is available</span>
+        {retry && (
+          <button type="button" className="stu-btn sm" onClick={start}>
+            Update now
+          </button>
+        )}
+      </p>
+      {run.kind === "failed" && (
+        <p className="stu-dev-sub" role="alert">
+          {run.reason === "download" ? (
+            "Couldn't download the update. Check the connection and try again."
+          ) : run.reason === "locked" ? (
+            "Can't update during an exam."
+          ) : (
+            <>
+              Download the new version from the{" "}
+              <a
+                href={bridge.DOWNLOAD_PAGE}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => {
+                  if (bridge.openDownloadPage()) e.preventDefault();
+                }}
+              >
+                download page
+              </a>
+              .
+            </>
+          )}
+        </p>
+      )}
+    </div>
+  );
 }
 
 type Tone = "ok" | "warn" | "wait" | "info";

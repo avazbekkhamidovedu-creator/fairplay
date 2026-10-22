@@ -734,3 +734,46 @@ lock, heartbeats and app beats. Not related to practice assignments (`/api/pract
   `/api/student/exams` or `/api/student/grades` (`/grades/e_sample_exam` → 404).
 - **Native apps need no changes:** the lock, beats and unlock are the existing ones; only the
   signed hand-in ends the lock.
+
+## In-app update (Mac app) (2026-10-22)
+Release builds of the Mac app update themselves from the public download repo
+(`khamidov17/fairplay-download`, GitHub Releases, tag `vX.Y.Z`). Dev builds never check.
+- **Check:** a few seconds after launch, then every 6 h (1 h after a failed check; skipped while
+  locked): `GET https://api.github.com/repos/khamidov17/fairplay-download/releases/latest`
+  (`Accept: application/vnd.github+json`, a `FairPlay/<version> (Mac)` User-Agent, 10 s timeout,
+  `If-None-Match` with the last ETag). An update is offered only when: not a draft/prerelease;
+  `tag_name` is `vX.Y.Z` (or `X.Y.Z`) and newer than the app (`AppVersion.compare`); exactly one
+  asset is named `FairPlay-Mac.zip`; its `browser_download_url` is exactly
+  `https://github.com/khamidov17/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip`
+  (GitHub's redirect to its file host is followed); its `digest` is `sha256:<64 hex>`. No digest
+  means no update (never an unverified install).
+- **State:** the `state` message adds `"update": {"version": "X.Y.Z"}` while such a release is
+  known and the app is not locked (omitted otherwise). The app re-sends `state` when a check finds
+  one. The page accepts only `{version}` matching `^\d+\.\d+\.\d+$`.
+- **Page → app:** `{"action":"installUpdate"}`; `{"action":"openDownloadPage"}` opens the fixed
+  page `https://github.com/khamidov17/fairplay-download/releases/latest` in the browser (not while
+  locked; the exam window itself only shows the server).
+- **App → page:** `{"type":"updateProgress","stage":"downloading"|"installing"}`;
+  `{"type":"updateFailed","reason":"download"|"verify"|"not_writable"|"locked"|"busy"}`. On success
+  there is no message: the app quits and the new copy opens.
+- **Install steps (app):** refused (`locked`) while locked or while an exam session is bound
+  (checked again right before the swap); `busy` while one runs; `not_writable` (and the download
+  page opens in the browser) when the running bundle or its folder is not writable or the copy
+  runs translocated. Then: download the zip (URLSession, so no quarantine attribute) → SHA-256 must
+  equal the digest → `ditto -x -k` into a fresh folder that must hold exactly `FairPlay.app`
+  (a `__MACOSX` folder is ignored; no links) → its Info.plist `CFBundleIdentifier` = the running
+  app's, `CFBundleShortVersionString` = the release version → `codesign --verify --deep --strict` →
+  if the running app is signed with a certificate (not ad hoc), the new copy must satisfy the
+  running app's designated requirement (an update can't change the signer) → the running bundle
+  moves to the Trash, the new one takes its path (the old one is put back on failure) →
+  `open -n <path>`, then the app quits. Not locked, so no watchdog marker exists and the quit is
+  not reported as a killed exam. Ad-hoc builds lose the Accessibility permission with every new
+  signature; the permission screen ("Fix permission") handles that after the restart.
+- **Web:** the "Test my device" card shows "FairPlay X.Y.Z is available" + "Update now"
+  (`stu-btn sm`) above the checks; while installing "Updating… FairPlay restarts by itself.";
+  failures: `download` → "Couldn't download the update. Check the connection and try again."
+  (button stays), `locked` → "Can't update during an exam.", others → "Download the new version
+  from the download page." with a link to the download page.
+- **Releases:** the `FairPlay-Mac.zip` must contain `FairPlay.app` at its top level (CI:
+  `ditto -c -k --sequesterRsrc --keepParent`) with `CFBundleShortVersionString` equal to the tag
+  (both come from `Config.version` / `RELEASE_VERSION`; keep them the same).

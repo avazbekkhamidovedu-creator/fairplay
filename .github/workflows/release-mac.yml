@@ -35,6 +35,9 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then TAG="$GITHUB_REF_NAME"; else TAG="v$(tr -d ' \n' < RELEASE_VERSION)"; fi
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad version $TAG"; exit 1; }
           echo "TAG=$TAG" >> "$GITHUB_ENV"
+          # In-app updates check that the downloaded app's version equals the release tag.
+          APPV=$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' mac/Sources/Proctora/Config.swift | head -1)
+          [ "v$APPV" = "$TAG" ] || { echo "::error::mac Config.version ($APPV) must equal the release ($TAG)"; exit 1; }
 
       # 2026-10-22: a fixed signing certificate keeps macOS' Accessibility permission across
       # updates (ad-hoc signatures change with every build). Secrets MAC_SIGN_P12 (base64
