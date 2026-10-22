@@ -54,7 +54,11 @@ final class AssessmentMode: NSObject, AEAssessmentSessionDelegate {
         c.allowsPasswordAutoFill = false
         c.allowsContinuousPathKeyboard = false
         if #available(iOS 26.0, *) { c.allowsAccessibilityTypingFeedback = false }
-        if #available(iOS 26.4, *) { c.allowsEmojiKeyboard = false }
+        // iPadOS 26.4 setting, by name (like writingToolsBehavior in ExamViewController):
+        // the 26.2 SDK in GitHub's newest runner Xcode (26.3) doesn't declare it yet.
+        if #available(iOS 26.4, *), c.responds(to: NSSelectorFromString("setAllowsEmojiKeyboard:")) {
+            c.setValue(false, forKey: "allowsEmojiKeyboard")
+        }
         c.mainParticipantConfiguration.allowsNetworkAccess = true     // the exam server
         if AEAssessmentSession.supportsMultipleParticipants {
             for id in participants {
