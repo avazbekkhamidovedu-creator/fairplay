@@ -695,8 +695,8 @@ function ExamTakingInner() {
   const trialEndedPanel = (
         <main className="stu-center" data-testid="trial-ended">
           <div className="stu-card" style={{ gap: 14, maxWidth: 560 }} role="alert">
-            <h1 style={{ margin: 0, fontSize: 22 }}>This sample exam was ended on this computer</h1>
-            <p style={{ margin: 0 }}>Start a new one to try again. Nothing from a sample exam is kept or graded.</p>
+            <h1 style={{ margin: 0, fontSize: 22 }}>These sample questions were ended on this computer</h1>
+            <p style={{ margin: 0 }}>Start again from Test my device. Nothing from the sample questions is kept or graded.</p>
             {restartError && (
               <p className="stu-alert error" role="alert" style={{ margin: 0 }}>
                 {restartError}

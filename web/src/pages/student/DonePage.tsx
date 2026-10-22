@@ -33,7 +33,7 @@ function TrialDone({ how }: { how: "stopped" | "finished" }) {
     <StudentLayout>
       <main className="stu-main">
         <section className="stu-done" aria-labelledby="trial-done-h" role="status">
-          <h1 id="trial-done-h">{how === "stopped" ? "Sample exam stopped" : "Sample exam finished"}</h1>
+          <h1 id="trial-done-h">{how === "stopped" ? "Sample questions stopped" : "Sample questions finished"}</h1>
           <p className="stu-done-text">FairPlay is unlocking this computer…</p>
         </section>
       </main>

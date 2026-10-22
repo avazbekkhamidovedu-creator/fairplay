@@ -111,9 +111,9 @@ describe("offline exit code (sample exam only)", () => {
   });
 });
 
-describe("sample exam card", () => {
-  it("shows on the dashboard and starts the sample exam", async () => {
-    api.trialInfo.mockResolvedValue({ exam_id: "e_sample_exam", title: "Sample exam", duration_min: 10, question_count: 4, attempt: null });
+describe("Test my device card", () => {
+  it("shows the device checks and starts the sample questions", async () => {
+    api.trialInfo.mockResolvedValue({ exam_id: "e_sample_exam", title: "Sample questions", duration_min: 10, question_count: 5, attempt: null });
     api.startTrial.mockResolvedValue(view());
     online();
     render(
@@ -124,37 +124,40 @@ describe("sample exam card", () => {
         </Routes>
       </MemoryRouter>,
     );
-    expect(screen.getByRole("heading", { name: "Sample exam" })).toBeTruthy();
-    expect(screen.getByText("See how an exam works: FairPlay locks this computer just like on exam day.")).toBeTruthy();
-    expect(await screen.findByText(/10 minutes · 4 questions/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Try the sample exam" }));
+    expect(screen.getByRole("heading", { name: "Test my device" })).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Laptop checks" })).toBeTruthy();
+    expect(screen.getByText("Locks like a real exam. Stop any time. Not graded.")).toBeTruthy();
+    const btn = await screen.findByRole("button", { name: "Try 5 sample questions" });
+    expect(btn.className).toContain("primary");
+    fireEvent.click(btn);
     expect(await screen.findByText("exam page")).toBeTruthy();
     expect(api.startTrial).toHaveBeenCalledTimes(1);
   });
 
   it("offers Continue while one runs and explains a refused start", async () => {
-    api.trialInfo.mockResolvedValue({ exam_id: "e", title: "Sample exam", duration_min: 10, question_count: 4, attempt: { attempt_id: "a", status: "in_progress" } });
+    api.trialInfo.mockResolvedValue({ exam_id: "e", title: "Sample questions", duration_min: 10, question_count: 5, attempt: { attempt_id: "a", status: "in_progress" } });
     api.startTrial.mockRejectedValue(new ApiError(403, "Open this exam in the FairPlay app. It cannot be taken in a web browser."));
     render(
       <MemoryRouter>
         <TrialCard />
       </MemoryRouter>,
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Continue the sample exam" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue sample questions" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/FairPlay app/);
   });
 });
 
-describe("lock bar in a sample exam", () => {
-  it("shows the label and Stop practice next to the timer", () => {
+describe("lock bar in the sample questions", () => {
+  it("shows Stop in the corner and no timer", () => {
     const stop = vi.fn();
-    const { rerender } = render(<LockedBar title="Sample exam" locked native sync="synced" remaining={600_000} trial={{ onStop: stop }} />);
-    expect(screen.getByText("Sample exam", { selector: ".stu-trial-badge" })).toBeTruthy();
-    expect(screen.getByRole("timer")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Stop practice" }));
+    const { rerender } = render(<LockedBar title="Sample questions" locked native sync="synced" remaining={600_000} trial={{ onStop: stop }} />);
+    expect(screen.queryByRole("timer")).toBeNull();
+    const header = screen.getByRole("banner");
+    expect(header.lastElementChild?.previousElementSibling?.textContent).toBe("Stop");
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(stop).toHaveBeenCalledTimes(1);
-    rerender(<LockedBar title="Sample exam" locked native sync="synced" remaining={600_000} trial={{ onStop: stop, disabled: true }} />);
-    expect((screen.getByRole("button", { name: "Stop practice" }) as HTMLButtonElement).disabled).toBe(true);
+    rerender(<LockedBar title="Sample questions" locked native sync="synced" remaining={600_000} trial={{ onStop: stop, disabled: true }} />);
+    expect((screen.getByRole("button", { name: "Stop" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("a real exam has no Stop practice", async () => {
@@ -162,7 +165,7 @@ describe("lock bar in a sample exam", () => {
     online();
     at("/student/exam/a_t");
     expect(await screen.findByText("Which is prime?")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Stop practice" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     expect(api.trialKey).not.toHaveBeenCalled();
   });
 });
@@ -174,7 +177,7 @@ describe("Stop practice", () => {
     api.trialStop.mockResolvedValue({ status: "submitted", submitted_at: "t" });
     online();
     at("/student/exam/a_t");
-    fireEvent.click(await screen.findByRole("button", { name: "Stop practice" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
     expect(await screen.findByText("home stopped")).toBeTruthy();
     expect(api.trialStop).toHaveBeenCalledWith("a_t");
     expect(api.submit).not.toHaveBeenCalled();
@@ -188,7 +191,7 @@ describe("Stop practice", () => {
     api.trialStop.mockReturnValue(new Promise((r) => (release = r)));
     online();
     at("/student/exam/a_t");
-    const stop = await screen.findByRole("button", { name: "Stop practice" });
+    const stop = await screen.findByRole("button", { name: "Stop" });
     await waitFor(() => expect(posted.some((m) => m.action === "lock")).toBe(true));
     await screen.findByText("Which is prime?");
     fireEvent.click(stop);
@@ -196,7 +199,7 @@ describe("Stop practice", () => {
     expect(posted.some((m) => m.action === "unlock")).toBe(false); // the server has not answered yet
     await act(async () => release({ status: "submitted", submitted_at: "t" }));
     await waitFor(() => expect(posted.some((m) => m.action === "unlock")).toBe(true));
-    expect(await screen.findByText("Sample exam stopped")).toBeTruthy();
+    expect(await screen.findByText("Sample questions stopped")).toBeTruthy();
     expect(screen.queryByText(/^home/)).toBeNull(); // still locked: stay on the done page
     act(() => send({ type: "unlocked" }));
     expect(await screen.findByText("home stopped")).toBeTruthy();
@@ -211,7 +214,7 @@ describe("Stop practice", () => {
     api.trialStop.mockResolvedValue({ status: "submitted", submitted_at: "t" });
     online();
     at("/student/exam/a_t");
-    const stop = (await screen.findByRole("button", { name: "Stop practice" })) as HTMLButtonElement;
+    const stop = (await screen.findByRole("button", { name: "Stop" })) as HTMLButtonElement;
     expect(stop.disabled).toBe(true);
     expect(posted.some((m) => m.action === "lock")).toBe(false);
   });
@@ -226,14 +229,14 @@ describe("Stop practice", () => {
     at("/student/exam/a_t");
     await screen.findByText("Which is prime?");
     await waitFor(() => expect(api.trialKey).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "Stop practice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(await screen.findByTestId("trial-exit")).toBeTruthy();
     expect(screen.queryByText(/invigilator to end/i)).toBeNull();
     fireEvent.change(screen.getByLabelText(/Type that Mac code here/), { target: { value: "K7QM-3XPA" } });
     expect(screen.getByTestId("trial-exit-code").textContent).toBe("0671 0479");
     api.trialStop.mockResolvedValue({ status: "submitted", submitted_at: "t" });
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByText("Sample exam stopped")).toBeTruthy();
+    expect(await screen.findByText("Sample questions stopped")).toBeTruthy();
   });
 
   it("a refused lock (bad session) offers a new sample exam, not the start code", async () => {

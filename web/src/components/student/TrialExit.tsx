@@ -32,9 +32,9 @@ export function TrialExit({
   return (
     <main className="stu-center" data-testid="trial-exit">
       <div className="stu-card" style={{ gap: 14, maxWidth: 600 }} role="alert">
-        <h1 style={{ margin: 0, fontSize: 22 }}>The sample exam cannot reach the server</h1>
+        <h1 style={{ margin: 0, fontSize: 22 }}>The sample questions cannot reach the server</h1>
         <p className="stu-muted" style={{ margin: 0 }}>
-          {message ?? "Check the Wi-Fi and try again."} Nothing from a sample exam is kept or graded.
+          {message ?? "Check the Wi-Fi and try again."} Nothing from the sample questions is kept or graded.
         </p>
         <div className="stu-row">
           <button type="button" className="stu-btn primary" onClick={onRetry} disabled={retrying}>
@@ -77,7 +77,7 @@ export function TrialExit({
           </>
         ) : (
           <p style={{ margin: 0 }}>
-            This computer never reached the server during this sample exam, so no exit code can be made here.
+            This computer never reached the server during these sample questions, so no exit code can be made here.
             Restart the computer to end it.
           </p>
         )}

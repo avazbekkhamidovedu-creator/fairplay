@@ -46,7 +46,7 @@ def test_seeded_once_with_system_owner(client):
     assert e.is_trial and e.status == "live" and e.class_id is None and e.course_link_id is None
     assert e.resume_needs_approval is False and e.start_code is None
     types = {q["type"] for q in e.questions}
-    assert {"mcq", "short", "essay"} <= types and e.duration_min == 10
+    assert types == {"mcq"} and len(e.questions) == 5 and e.duration_min == 10
     assert len(owners) == 1 and owners[0].role == "system"
     # the system account cannot sign in
     r = client.post("/api/auth/login", json={"username": TRIAL_OWNER, "password": "!"})

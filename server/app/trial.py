@@ -48,25 +48,25 @@ TRIAL_EXAM_ID = "e_sample_exam"
 # accepts teacher/student only) and "!" is no password hash, so nobody can sign in as it.
 TRIAL_OWNER = "__fairplay_sample__"
 TRIAL_ROLE = "system"
-TRIAL_TITLE = "Sample exam"
+TRIAL_TITLE = "Sample questions"
 TRIAL_DURATION_MIN = 10
 # A second start within this window is a double click: the same attempt and session.
 TRIAL_REENTRY_QUIET_S = 15
 STOP_DETAIL = "Only the sample exam can be stopped this way."
 
+# "Test my device": five easy multiple-choice questions, so students see how questions look
+# in the locked app. Nothing is graded; "Stop" works at any time.
+def _mcq(n: int, prompt: str, options: list[str], correct: int) -> dict:
+    return {"id": f"q_sample_{n}", "type": "mcq", "points": 1, "topics": ["sample"],
+            "prompt": prompt, "options": options, "correct_index": correct}
+
+
 TRIAL_QUESTIONS = [
-    {"id": "q_sample_mcq", "type": "mcq", "points": 1, "topics": ["sample"],
-     "prompt": "Which of these is a prime number?",
-     "options": ["21", "27", "29", "33"], "correct_index": 2},
-    {"id": "q_sample_numeric", "type": "numeric", "points": 1, "topics": ["sample"],
-     "prompt": "What is 12 × 7? Type a number.", "answer_number": 84, "tolerance": 0},
-    {"id": "q_sample_short", "type": "short", "points": 1, "topics": ["sample"],
-     "prompt": "What is the capital of Uzbekistan? Answer in one or two words.",
-     "accepted_answers": ["Tashkent", "Toshkent"]},
-    {"id": "q_sample_essay", "type": "essay", "points": 2, "topics": ["sample"],
-     "prompt": "In two or three sentences, describe a place you like to study and why.",
-     "max_words": 150,
-     "rubric": [{"label": "Names a place", "points": 1}, {"label": "Says why", "points": 1}]},
+    _mcq(1, "2 + 2 = ?", ["3", "4", "5", "22"], 1),
+    _mcq(2, "5 × 3 = ?", ["8", "12", "15", "53"], 2),
+    _mcq(3, "10 − 4 = ?", ["6", "7", "14", "4"], 0),
+    _mcq(4, "Which number is the largest?", ["19", "91", "9", "11"], 1),
+    _mcq(5, "How many days are in a week?", ["5", "6", "7", "10"], 2),
 ]
 
 

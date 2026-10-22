@@ -2027,36 +2027,38 @@ details.stu-rubric-details > summary .pts {
   gap: 16px;
   flex-wrap: wrap;
 }
+/* 2026-10-22: "Test my device" card, top-right corner of the student dashboard. */
 .stu-trial-card {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 420px;
-  flex: 0 1 420px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--s-surface);
-  border: 1px solid var(--s-border);
-}
-.stu-trial-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 10px;
+  flex: 0 1 340px;
+  max-width: 340px;
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--s-surface);
+  border: 2px solid var(--s-primary);
 }
-.stu-trial-text h2 {
+.stu-trial-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
 }
-.stu-trial-text p {
+.stu-trial-title svg {
+  color: var(--s-primary);
+}
+.stu-trial-card .stu-checks {
   margin: 0;
-  font-size: 14px;
-  line-height: 1.4;
-  color: var(--s-text-2);
+}
+/* .stu-btn.primary is the logo blue (#2F4BD8). */
+.stu-trial-try {
+  width: 100%;
 }
 .stu-trial-meta {
+  margin: 0;
   font-size: 13px;
   color: var(--s-muted);
 }
@@ -2065,17 +2067,6 @@ details.stu-rubric-details > summary .pts {
     flex: 1 1 100%;
     max-width: none;
   }
-}
-.stu-trial-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 99px;
-  background: var(--s-primary-tint);
-  color: var(--s-primary);
-  font-size: 13px;
-  font-weight: 700;
-  white-space: nowrap;
 }
 .stu-trial-stop {
   white-space: nowrap;

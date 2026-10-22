@@ -7,7 +7,7 @@ import { ClockIcon, CloudCheckIcon, DiskIcon, LockIcon, UnlockIcon } from "./ico
 /**
  * Slim white top bar shown while taking an exam:
  * lock state · course + title · save status · timer (amber under 5 minutes).
- * The sample exam adds a "Sample exam" label and a "Stop practice" button on the right.
+ * "Test my device" sample questions: no timer, and a "Stop" button in the right corner.
  * In a plain browser the yellow "not locked" strip above this bar carries the lock state.
  */
 export function LockedBar({
@@ -26,12 +26,12 @@ export function LockedBar({
   native?: boolean;
   sync: SyncStatus;
   remaining: number;
-  /** 2026-10-22: the sample exam: a "Sample exam" label and "Stop practice" in the corner. */
+  /** 2026-10-22: "Test my device" sample questions: no timer, "Stop" in the corner. */
   trial?: { onStop: () => void; stopping?: boolean; disabled?: boolean };
 }) {
   const lowTime = remaining < 5 * 60 * 1000;
   const synced = sync === "synced";
-  const announce = useAnnouncements(sync, remaining);
+  const announce = useAnnouncements(sync, trial ? Number.POSITIVE_INFINITY : remaining);
   return (
     <header className="stu-lockbar">
       <LogoMark size={28} title="FairPlay" />
@@ -46,7 +46,6 @@ export function LockedBar({
           Not locked
         </span>
       ) : null}
-      {trial && <span className="stu-trial-badge">Sample exam</span>}
       <span className="stu-lockbar-title">
         {course && <small>{course}</small>}
         <span className="t">{title}</span>
@@ -60,10 +59,12 @@ export function LockedBar({
         {synced ? <CloudCheckIcon /> : <DiskIcon />}
         {synced ? "All answers saved" : "Saved on this computer"}
       </span>
-      <span className={`stu-timer${lowTime ? " low" : ""}`} role="timer" aria-label="Time left">
-        <ClockIcon />
-        {Number.isFinite(remaining) ? formatCountdown(remaining) : "--:--"}
-      </span>
+      {!trial && (
+        <span className={`stu-timer${lowTime ? " low" : ""}`} role="timer" aria-label="Time left">
+          <ClockIcon />
+          {Number.isFinite(remaining) ? formatCountdown(remaining) : "--:--"}
+        </span>
+      )}
       {trial && (
         <button
           type="button"
@@ -72,12 +73,12 @@ export function LockedBar({
           disabled={trial.disabled || trial.stopping}
           aria-describedby="trial-stop-hint"
         >
-          {trial.stopping ? "Stopping…" : "Stop practice"}
+          {trial.stopping ? "Stopping…" : "Stop"}
         </button>
       )}
       {trial && (
         <span id="trial-stop-hint" className="sr-only">
-          Ends the sample exam now and unlocks this computer. Nothing is graded.
+          Ends the sample questions now and unlocks this computer. Nothing is graded.
         </span>
       )}
     </header>

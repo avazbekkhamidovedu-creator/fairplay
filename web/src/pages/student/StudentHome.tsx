@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { firstName, examName, plural, shortTime, isToday, shortDate } from "../../components/student/format";
-import { DeviceCheckRun, ReadinessChecks, useReadiness } from "../../components/student/Readiness";
 import { JoinClass } from "../../components/student/JoinClass";
 import { PastExamRow } from "../../components/student/ResultRow";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
@@ -15,7 +14,6 @@ import { pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
 export default function StudentHome() {
   const me = useMe("student");
   const { exams, error, reload } = useStudentExams();
-  const readiness = useReadiness();
   const [activeId, setActiveId] = useState<string | null>(null);
   // 2026-10-22: back from the sample exam (DonePage sends this once the computer unlocked).
   const trialDone = (useLocation().state as { trialDone?: string } | null)?.trialDone;
@@ -91,12 +89,6 @@ export default function StudentHome() {
                 </div>
               )}
 
-              <section className="stu-card stu-ready" aria-labelledby="ready-h">
-                <h2 id="ready-h">Are you ready?</h2>
-                <ReadinessChecks readiness={readiness} />
-                <DeviceCheckRun />
-                <p className="stu-hint">Other apps will close when the exam starts. Save your work in them now.</p>
-              </section>
             </div>
           )}
 
