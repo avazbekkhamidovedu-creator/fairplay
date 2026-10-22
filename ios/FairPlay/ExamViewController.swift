@@ -386,9 +386,14 @@ final class ExamViewController: UIViewController, LockSurface,
         case "preflight":
             // Audit M-11 + S1: problems to fix before locking, and the device-check rows.
             LockdownController.shared.preflight { [weak self] problems, rows in
+                // apps_to_close (2026-10-22, Mac / Windows): iPadOS lets no app list or close
+                // other apps, and Assessment Mode closes them itself: always [] here.
                 self?.send(["type": "preflight", "problems": problems, "checks": rows.map(\.dict), "platform": "ipad",
-                            "app_version": Config.version, "os_version": UIDevice.current.systemVersion])
+                            "app_version": Config.version, "os_version": UIDevice.current.systemVersion,
+                            "apps_to_close": [String]()])
             }
+        case "quitApps":
+            send(["type": "appsQuit", "still_running": [String]()])
         case "seal":
             let aid = (body["attempt_id"] as? String) ?? ""
             let seq = (body["client_seq"] as? NSNumber)?.int64Value ?? -1

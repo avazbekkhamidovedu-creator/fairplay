@@ -674,6 +674,8 @@ Same bridge, app session, beats, hand-in, exits and website mode as the Mac app;
 - **S1–S6 on iPad:** requests carry `X-FairPlay-Platform: ipad` + `X-FairPlay-Version`; server env `MIN_APP_VERSION_IPAD`, `GET /api/app/version` adds `"ipad"`. `state` adds `app_version`, `sealed_pending`. `preflight` replies with `checks` rows (`ipados_version`, `app_version`, `server`, `clock`, `assessment`, lock problems, `battery`, `vpn`), `platform: "ipad"`, `os_version`. `seal` / `sealedToken` / `sealed` as on the Mac (file in Application Support, proof with the offline key, `sealed_at` from the server clock). Beats add `sep=1` while Assessment Mode or Single App Mode holds (S6 strongest lock) and `sealed=1`. Live room shows the platform as "iPad".
 
 ### Before the lock: apps to close (2026-10-22, Mac and Windows)
+(iPad 0.5.1: `apps_to_close` is always `[]` and `quitApps` answers `still_running: []` at once:
+iPadOS lets no app list or close others; Assessment Mode does that itself.)
 - page → app `{action:"preflight", allowed_apps?: string[]}`: the app's preflight reply gains
   `apps_to_close: string[]`. These are the windowed apps the lock would close with that
   allowed list: not the system, VPN clients, teacher-allowed apps or FairPlay itself. Names are
