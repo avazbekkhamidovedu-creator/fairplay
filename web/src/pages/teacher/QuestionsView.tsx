@@ -3,6 +3,9 @@ import { describeEntry, effectiveAllowedSites } from "../../components/teacher/e
 import type { Exam } from "../../api/types";
 import { KIND_LABEL, kindOf } from "./examDraft";
 import { QuestionImages, TopicChips } from "../../components/QuestionImages";
+import { LANGUAGE_LABEL, resolveLanguage } from "../../lib/code/languages";
+import { fmtSeconds } from "../../lib/code/runner";
+import "../../styles/code.css";
 
 const LETTERS = "ABCDEFGH";
 
@@ -123,6 +126,7 @@ export function QuestionsView({ exam }: { exam: Exam }) {
                         )}
                       </>
                     )}
+                    {q.type === "code" && <CodeSummary q={q} examDefault={exam.default_language} />}
                     <span className="t-q-meta">
                       {KIND_LABEL[kind]} · {q.points} {q.points === 1 ? "pt" : "pts"}
                     </span>
@@ -134,5 +138,51 @@ export function QuestionsView({ exam }: { exam: Exam }) {
         </ol>
       )}
     </section>
+  );
+}
+
+/** Phase 4: language, tests and starter code of a coding question (teacher view). */
+function CodeSummary({ q, examDefault }: { q: Exam["questions"][number]; examDefault?: string }) {
+  const tests = q.tests ?? [];
+  const lang = resolveLanguage(q.language, examDefault);
+  const visible = tests.filter((t) => t.visible).length;
+  return (
+    <div className="t-code-summary">
+      <span className="t-small">
+        <strong>{LANGUAGE_LABEL[lang]}</strong>
+        {q.language ? "" : " (exam default)"} · {visible} visible, {tests.length - visible} hidden{" "}
+        {tests.length === 1 ? "test" : "tests"} · time limit {fmtSeconds(q.time_limit_ms ?? 2000)}
+        {q.write_only ? " · write only (no Run)" : ""}
+      </span>
+      {q.starter_code ? <pre className="t-code-pre">{q.starter_code}</pre> : null}
+      {tests.length > 0 && (
+        <table className="t-code-table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Input</th>
+              <th scope="col">Expected output</th>
+              <th scope="col">Shown</th>
+              <th scope="col">Points</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tests.map((t, i) => (
+              <tr key={i}>
+                <td>{i + 1}</td>
+                <td>
+                  <pre>{t.input}</pre>
+                </td>
+                <td>
+                  <pre>{t.expected}</pre>
+                </td>
+                <td>{t.visible ? "Visible" : "Hidden"}</td>
+                <td>{t.points}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }

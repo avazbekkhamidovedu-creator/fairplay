@@ -8,6 +8,7 @@ import { Loading } from "../../components/Loading";
 import { QuestionImages } from "../../components/QuestionImages";
 import { errorText, num, plural } from "../../components/teacher/util";
 import { TYPE_LABEL } from "./examDraft";
+import { BulkCodeRun, CodeAnswerPanel } from "../../components/teacher/CodeGrading";
 import {
   buildGrade,
   countWords,
@@ -142,6 +143,7 @@ function GradingWorkspace({ examId, queue, exam, qid, pos, hideNames, onHideName
           <input type="checkbox" checked={hideNames} onChange={(e) => onHideNames(e.target.checked)} />
           Hide names
         </label>
+        <BulkCodeRun examId={examId} questions={queue.questions} items={queue.items} onItemGraded={onItemGraded} />
         {question && c && c.total > 0 && (
           <div className="t-progress">
             <span className="t-small t-muted" id="grade-progress-label">
@@ -165,7 +167,7 @@ function GradingWorkspace({ examId, queue, exam, qid, pos, hideNames, onHideName
         <div className="t-card">
           <div className="t-empty">
             <strong>Nothing to grade</strong>
-            Essays and short answers that did not match your accepted answers appear here after students submit.
+            Essays, coding answers and short answers that did not match your accepted answers appear here after students submit.
           </div>
         </div>
       ) : (
@@ -371,13 +373,28 @@ export function GradeItem({
           </p>
         ) : paperImage(item.answer) ? (
           <img className="t-review-scan" src={paperImage(item.answer) ?? undefined} alt="Scanned answer" />
+        ) : question.type === "code" ? (
+          <CodeAnswerPanel
+            question={question}
+            code={text}
+            onScored={(s) => {
+              setError(null);
+              setForm((f) => ({ ...f, points: String(s.points), comment: f.comment.trim() ? f.comment : s.comment }));
+            }}
+          />
         ) : isBlankAnswer(item.answer) ? (
           <p className="t-essay empty">No answer was given.</p>
         ) : (
           <p className="t-essay">{text}</p>
         )}
         <span className="t-small t-muted">
-          {question.type === "essay" ? `${plural(words, "word")}` : question.type === "external" ? "Exam website" : "Short answer"}
+          {question.type === "essay"
+            ? `${plural(words, "word")}`
+            : question.type === "external"
+              ? "Exam website"
+              : question.type === "code"
+                ? "Coding"
+                : "Short answer"}
           {examQ?.min_words != null && question.type === "essay" && ` · min ${examQ.min_words}`}
           {examQ?.max_words != null && question.type === "essay" && ` · max ${examQ.max_words}`}
           {" · "}

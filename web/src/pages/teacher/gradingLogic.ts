@@ -6,10 +6,15 @@ export function isBlankAnswer(answer: AnswerValue | null | undefined): boolean {
   return answer == null || (typeof answer === "string" && answer.trim() === "");
 }
 
-/** An item still needs the teacher: no grade yet, and not a blank essay (blank essays count as graded, 0). */
+/** Written answers (essay, phase 4: code): a blank one counts as graded with 0. */
+export function isWritten(q: Pick<GradingQuestion, "type"> | undefined): boolean {
+  return q?.type === "essay" || q?.type === "code";
+}
+
+/** An item still needs the teacher: no grade yet, and not a blank essay or code answer (those count as graded, 0). */
 export function isPending(item: GradingItem, q: Pick<GradingQuestion, "type"> | undefined): boolean {
   if (item.grade) return false;
-  if (q?.type === "essay" && isBlankAnswer(item.answer)) return false;
+  if (isWritten(q) && isBlankAnswer(item.answer)) return false;
   return true;
 }
 
@@ -38,7 +43,7 @@ export function initialForm(item: GradingItem, q: GradingQuestion): GradeForm {
     return { scores, points: String(g.points), comment: g.comment ?? "" };
   }
   let points = "";
-  if (q.type !== "essay") points = String(item.auto_points ?? 0);
+  if (!isWritten(q)) points = String(item.auto_points ?? 0);
   else if (isBlankAnswer(item.answer)) points = "0";
   return {
     scores: rubric.map(() => (q.type === "essay" && isBlankAnswer(item.answer) ? 0 : null)),

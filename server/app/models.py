@@ -99,6 +99,9 @@ class Exam(Base):
                                             server_default=false())
     websites: Mapped[list] = mapped_column(JSON, nullable=False, default=list,
                                            server_default=text("'[]'"))
+    # Phase 4: language of coding questions that do not set their own (students never pick)
+    default_language: Mapped[str] = mapped_column(String(16), nullable=False, default="python",
+                                                  server_default="python")
 
 
 class Attempt(Base):

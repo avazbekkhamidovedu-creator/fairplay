@@ -15,6 +15,7 @@ import { urlHost } from "../../components/teacher/externalValidation";
 import { errorText, eventLabel, formatWhen, num, pct } from "../../components/teacher/util";
 import { KIND_LABEL, kindOf } from "./examDraft";
 import { formatGiven } from "./ResultsView";
+import "../../styles/code.css";
 
 const LETTERS = "ABCDEFGH";
 
@@ -351,7 +352,9 @@ function ReviewItem({
                 alt={`Scanned answer for question ${n}`}
               />
             )}
-            <div className={q?.type === "essay" ? "t-review-essay" : "t-review-value"}>{formatGiven(q, ans.given)}</div>
+            <div className={q?.type === "essay" ? "t-review-essay" : q?.type === "code" ? "t-review-essay t-review-code" : "t-review-value"}>
+              {formatGiven(q, ans.given)}
+            </div>
           </div>
           {right && (
             <div className="t-review-correct">

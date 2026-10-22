@@ -2,6 +2,8 @@ import type { AnswerValue, FeedbackQuestion as FQ } from "../../api/types";
 import { paperImage, paperValue } from "../../lib/paperAnswer";
 import { LETTERS, fmtNum } from "./format";
 import { QuestionImages } from "../QuestionImages";
+import { LANGUAGE_LABEL } from "../../lib/code/languages";
+import "../../styles/code.css";
 
 export function typeLabel(q: Pick<FQ, "type" | "options">): string {
   if (q.type === "mcq") {
@@ -10,6 +12,7 @@ export function typeLabel(q: Pick<FQ, "type" | "options">): string {
   }
   if (q.type === "numeric") return "Number";
   if (q.type === "short") return "Short answer";
+  if (q.type === "code") return "Coding";
   return "Essay";
 }
 
@@ -61,7 +64,7 @@ export function FeedbackQuestionCard({ q }: { q: FQ }) {
   const headId = `fbq-${q.question_id}`;
   const mono = q.type === "numeric";
   const yours = show(q, q.given);
-  const correct = q.type === "essay" ? null : correctText(q);
+  const correct = q.type === "essay" || q.type === "code" ? null : correctText(q);
   const rubric = q.rubric ?? [];
 
   return (
@@ -82,7 +85,12 @@ export function FeedbackQuestionCard({ q }: { q: FQ }) {
         />
       )}
 
-      {q.type === "essay" ? (
+      {q.type === "code" ? (
+        <div className="stu-ans code" data-testid="feedback-code">
+          <span>YOUR CODE{q.language ? ` · ${LANGUAGE_LABEL[q.language] ?? q.language}` : ""}</span>
+          {typeof q.given === "string" && q.given.trim() ? <pre className="stu-fbq-code">{q.given}</pre> : <span>No answer</span>}
+        </div>
+      ) : q.type === "essay" ? (
         <>
           {!((q as { image?: string | null }).image || paperImage(q.given)) && (
             <div className={`stu-ans essay`}>

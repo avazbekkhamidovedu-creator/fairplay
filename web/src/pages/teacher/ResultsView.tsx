@@ -251,7 +251,7 @@ export function ResultsView({ exam, onExamChange }: { exam: Exam; onExamChange: 
                 const i = qIndex.get(rq.question_id) ?? 0;
                 const kind = q ? kindOf(q) : rq.type;
                 const essayPending =
-                  rq.type === "essay"
+                  rq.type === "essay" || rq.type === "code"
                     ? results.attempts.filter((a) => a.answers.some((x) => x.question_id === rq.question_id && x.pending)).length
                     : 0;
                 return (

@@ -4,6 +4,10 @@ import { ApiError, NetworkError, currentStudentId, getToken, slice6Api, studentA
 import type { AllowedApp, AnswerMap, AnswerValue, AttemptView, IntegrityEvent } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { AnswerInput, RubricPanel } from "../../components/student/AnswerInput";
+import { CodeQuestion } from "../../components/student/CodeQuestion";
+import { preloadCodeEditor } from "../../components/code/LazyCodeEditor";
+import { prefetchRunner } from "../../lib/code/runners";
+import { canRunInBrowser, resolveLanguage } from "../../lib/code/languages";
 import { LockedBar } from "../../components/student/LockedBar";
 import { ReviewPanel } from "../../components/student/ReviewPanel";
 import { StuLoading } from "../../components/student/StudentLayout";
@@ -645,6 +649,26 @@ function ExamTakingInner() {
   }, []);
 
   const questions = attempt?.questions ?? [];
+  // Phase 4: load the runtime of runnable coding questions in idle time (Python is large)
+  const runLangs = useMemo(
+    () =>
+      [...new Set(questions.filter((x) => x.type === "code" && !x.write_only).map((x) => resolveLanguage(x.language)))].filter(
+        canRunInBrowser,
+      ),
+    [questions],
+  );
+  const runLangKey = runLangs.join(",");
+  const hasCode = questions.some((x) => x.type === "code");
+  useEffect(() => {
+    // the editor chunk loads now, while the exam is surely online
+    if (hasCode) void preloadCodeEditor().catch(() => undefined);
+  }, [hasCode]);
+  useEffect(() => {
+    if (phase !== "exam" && phase !== "review") return;
+    for (const l of runLangs) if (l === "python") prefetchRunner(l);
+    // once per exam screen
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runLangKey, phase === "exam" || phase === "review"]);
   const unanswered = useMemo(
     () => questions.map((q, i) => ({ q, i })).filter(({ q }) => answers[q.id] === undefined),
     [questions, answers],
@@ -840,7 +864,7 @@ function ExamTakingInner() {
     !waitPanel && !stopPanel && (phase === "exam" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam"));
   const showReview =
     !waitPanel && !stopPanel && (phase === "review" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current !== "exam"));
-  const typeLabel = q?.type === "essay" ? " · Essay" : "";
+  const typeLabel = q?.type === "essay" ? " · Essay" : q?.type === "code" ? " · Coding" : "";
 
   const isLast = current === questions.length - 1;
   const toolsShown = showExam || showReview;
@@ -962,8 +986,8 @@ function ExamTakingInner() {
 
       {showExam && q && (
         <>
-          <div className="stu-exam-body">
-            <main className="stu-paper stu-question" aria-labelledby="question-prompt">
+          <div className={`stu-exam-body${q.type === "code" ? " code" : ""}`}>
+            <main className={`stu-paper stu-question${q.type === "code" ? " stu-cq-paper" : ""}`} aria-labelledby="question-prompt">
               <div className="stu-qhead">
                 <span className="stu-qnum" aria-hidden="true">
                   {current + 1}
@@ -999,22 +1023,41 @@ function ExamTakingInner() {
                 )}
               </div>
 
-              <QuestionImages images={q.images} />
+              {q.type === "code" ? (
+                <CodeQuestion
+                  key={q.id}
+                  question={q}
+                  value={answers[q.id]}
+                  onChange={(v) => setAnswer(q.id, v)}
+                  prompt={
+                    <>
+                      <QuestionImages images={q.images} />
+                      <h1 id="question-prompt" ref={promptRef} tabIndex={-1} className="stu-prompt">
+                        {q.prompt}
+                      </h1>
+                    </>
+                  }
+                />
+              ) : (
+                <>
+                  <QuestionImages images={q.images} />
 
-              <h1 id="question-prompt" ref={promptRef} tabIndex={-1} className="stu-prompt">
-                {q.prompt}
-              </h1>
+                  <h1 id="question-prompt" ref={promptRef} tabIndex={-1} className="stu-prompt">
+                    {q.prompt}
+                  </h1>
 
-              {q.type === "essay" && <RubricPanel question={q} />}
+                  {q.type === "essay" && <RubricPanel question={q} />}
 
-              <AnswerInput
-                key={q.id}
-                question={q}
-                value={answers[q.id]}
-                onChange={(v) => setAnswer(q.id, v)}
-                labelledBy="question-prompt"
-                cross={{ on: crossMode, crossed: crossed[q.id] ?? [], onToggle: (i) => toggleCross(q.id, i) }}
-              />
+                  <AnswerInput
+                    key={q.id}
+                    question={q}
+                    value={answers[q.id]}
+                    onChange={(v) => setAnswer(q.id, v)}
+                    labelledBy="question-prompt"
+                    cross={{ on: crossMode, crossed: crossed[q.id] ?? [], onToggle: (i) => toggleCross(q.id, i) }}
+                  />
+                </>
+              )}
             </main>
           </div>
 

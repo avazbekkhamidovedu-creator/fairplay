@@ -11,11 +11,11 @@ from sqlalchemy import and_, case, delete, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
-from .grading import exam_questions, auto_points, external_question, grade_attempt, is_answered, num, percent, word_count
+from .grading import MANUAL_TYPES, exam_questions, auto_points, external_question, grade_attempt, is_answered, num, percent, word_count
 from .models import Attempt, ClassMember, DeviceCheck, Exam, ExamMaterial, IntegrityEvent, User
 from .schemas import QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitIn, ReleaseIn, ReviewIn
 from .security import Principal, require_teacher
-from .services import (attempt_key, exam_delivery, exam_out, exam_out_full, invalidate_exam,
+from .services import (attempt_key, code_fields, code_language, exam_default_language, exam_delivery, exam_out, exam_out_full, invalidate_exam,
                        new_id, new_invigilator_code, new_receipt, new_session_id,
                        new_start_code, pending_by_exam)
 from . import app_client as ac
@@ -67,7 +67,8 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
     # Optional slice-2 fields: on PUT, a field the client did not send keeps its value.
     for f in ("course", "room", "scheduled_at", "shuffle_questions", "class_id",
               "resume_needs_approval", "require_strong_lock",
-              "calculator", "open_book", "websites"):            # 2026-10-23: exam tools
+              "calculator", "open_book", "websites",             # 2026-10-23: exam tools
+              "default_language"):                               # phase 4
         if creating or f in body.model_fields_set:
             setattr(e, f, getattr(body, f))
     # 2026-10-23: no outside apps any more (calculator, materials and websites are built
@@ -592,7 +593,7 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
     def q_stats(q: dict) -> dict:
         qid, pts = q["id"], q.get("points", 1)
         n = q_n[qid]
-        if q["type"] in ("essay", "external"):
+        if q["type"] in MANUAL_TYPES:
             pc = round(q_sum[qid] / n / pts * 100, 1) if n and pts else None
         else:
             pc = round(q_correct[qid] / n_submitted * 100, 1) if n_submitted else 0.0
@@ -684,7 +685,7 @@ async def grading_queue(exam_id: str, p: Principal = Depends(require_teacher),
             g = grades.get(qid)
             if g is not None:
                 stats[qid]["graded"] += 1
-            if t in ("essay", "external"):
+            if t in MANUAL_TYPES:
                 include = True
                 stats[qid]["to_grade"] += int(r["pending"])
             elif t == "short":
@@ -697,7 +698,7 @@ async def grading_queue(exam_id: str, p: Principal = Depends(require_teacher),
                     "attempt_id": a.id, "anon_id": anon_id(a.id), "username": username,
                     "name": name, "question_id": qid, "answer": given,
                     "word_count": word_count(given) if t == "essay" else None,
-                    "auto_points": None if t in ("essay", "external") else num(auto_points(q, given)),
+                    "auto_points": None if t in MANUAL_TYPES else num(auto_points(q, given)),
                     "grade": g, "flag_count": int(flag_count.get(a.id, 0)),
                 })
     return {
@@ -707,9 +708,20 @@ async def grading_queue(exam_id: str, p: Principal = Depends(require_teacher),
                        "prompt": q["prompt"], "points": q.get("points", 1),
                        "rubric": [dict(x) for x in q.get("rubric") or []],
                        "images": [dict(x) for x in q.get("images") or []],  # slice 6
+                       **grading_code_fields(q, e),                          # phase 4
                        **stats[q["id"]]} for i, q in enumerate(qs)],
         "items": [it for q in qs for it in items_by_q[q["id"]]],
     }
+
+
+def grading_code_fields(q: dict, e: Exam) -> dict:
+    """Phase 4: what the grading page needs to run a coding answer's tests (all of them,
+    hidden ones included: this is the teacher's view)."""
+    if q.get("type") != "code":
+        return {}
+    f = code_fields(q)
+    return {"language": code_language(q, exam_default_language(e)), "tests": f["tests"],
+            "time_limit_ms": f["time_limit_ms"], "write_only": f["write_only"]}
 
 
 async def _exam_attempt(session: AsyncSession, exam_id: str, aid: str,

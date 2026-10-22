@@ -261,8 +261,9 @@ def test_teacher_sees_materials_read_only(client, teacher, alice, book_exam):
 def test_csp_allows_the_websites_pane_and_pdf_worker(client):
     csp = client.get("/teacher").headers["content-security-policy"]
     assert "frame-src 'self' https:" in csp and "worker-src 'self' blob:" in csp
-    assert "script-src 'self';" in csp and "frame-ancestors 'none'" in csp and "object-src 'none'" in csp
-    assert "unsafe-eval" not in csp and "http:" not in csp.replace("https:", "")
+    # phase 4: 'wasm-unsafe-eval' (Pyodide's WebAssembly) but never JavaScript eval
+    assert "script-src 'self' 'wasm-unsafe-eval';" in csp and "frame-ancestors 'none'" in csp and "object-src 'none'" in csp
+    assert "'unsafe-eval'" not in csp and "'unsafe-inline'" not in csp.split("style-src")[0] and "http:" not in csp.replace("https:", "")
 
 
 def test_material_upload_size_limit():

@@ -24,8 +24,9 @@ DEFAULT_LIMIT = 8 * MB          # answers, exams, everything else
 #
 # 2026-10-23 (exam tools): frame-src https: for the allowed-websites pane (the exam's own
 # list is enforced by the page and, in sub-frames, by the apps); worker-src blob: for the
-# bundled pdf.js worker of the materials viewer. Scripts stay 'self' only.
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+# bundled pdf.js worker of the materials viewer. Scripts stay 'self' only, plus
+# 'wasm-unsafe-eval' (phase 4: Pyodide compiles its WebAssembly; no JavaScript eval).
+CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; "
        "frame-src 'self' https:; worker-src 'self' blob:; "
        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")

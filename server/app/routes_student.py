@@ -22,7 +22,8 @@ from .schemas import (AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
                       OfflineKeyIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
 from .services import (LIVE_TTL, attempt_view, cache_attempt, find_attempt, get_attempt_meta,
-                       get_exam_cached, new_id, new_receipt, new_session_id, student_tools)
+                       get_exam_cached, new_id, new_receipt, new_session_id, student_tools,
+                       code_language, exam_default_language)
 from .store import get_store
 from .timeutil import iso, utcnow
 
@@ -874,6 +875,8 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
             "images": [dict(x) for x in q.get("images") or []],  # slice 6
             "rubric_scores": r["rubric_scores"],
         })
+        if q.get("type") == "code":   # phase 4: the code is shown with its language
+            out_q[-1]["language"] = code_language(q, exam_default_language(e))
         if r.get("image"):  # slice 6 D: the student's scanned answer (paper exams)
             out_q[-1]["image"] = r["image"]
     return {

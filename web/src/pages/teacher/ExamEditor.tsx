@@ -4,7 +4,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ApiError, classesApi, lmsApi, slice6Api, teacherApi } from "../../api/client";
-import type { Exam, SchoolClass, TopicCount } from "../../api/types";
+import type { CodeLanguage, Exam, SchoolClass, TopicCount } from "../../api/types";
+import { CodeQuestionEditor } from "../../components/teacher/CodeQuestionEditor";
+import { CODE_LANGUAGES, LANGUAGE_LABEL } from "../../lib/code/languages";
 import { Icon } from "../../components/ui/Icon";
 import { Switch } from "../../components/ui/Switch";
 import { ExternalExamSettings } from "../../components/teacher/ExternalExamSettings";
@@ -41,6 +43,7 @@ const MENU: { kind: DraftKind; hint: string }[] = [
   { kind: "numeric", hint: "A number with optional tolerance" },
   { kind: "short", hint: "A word or phrase from your list" },
   { kind: "essay", hint: "Written answer, you grade with a rubric" },
+  { kind: "code", hint: "A program checked with your test cases" },
 ];
 
 /** Bottom quick-add buttons (labels kept stable for the e2e test). */
@@ -50,6 +53,7 @@ const QUICK: { kind: DraftKind; label: string }[] = [
   { kind: "numeric", label: "+ Numeric answer" },
   { kind: "short", label: "+ Short answer" },
   { kind: "essay", label: "+ Essay" },
+  { kind: "code", label: "+ Coding" },
 ];
 
 interface Props {
@@ -271,6 +275,7 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
               draft.external.mode === "external" ? "on another website" : isPaper ? "on paper" : null,
               draft.date ? "scheduled" : null,
               draft.room.trim() ? draft.room.trim() : null,
+              draft.questions.some((q) => q.type === "code") ? `coding in ${LANGUAGE_LABEL[draft.defaultLanguage]}` : null,
             ]
               .filter(Boolean)
               .join(" · ")}
@@ -321,6 +326,27 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
                 describedBy="exam-strong-lock-sub"
               />
             </div>
+            {draft.external.mode !== "external" && (
+              <div className="t-field" style={{ maxWidth: 320 }}>
+                <label htmlFor="exam-default-language">Default language for coding questions</label>
+                <select
+                  id="exam-default-language"
+                  className="t-select"
+                  value={draft.defaultLanguage}
+                  onChange={(e) => set({ defaultLanguage: e.target.value as CodeLanguage })}
+                  aria-describedby="exam-default-language-hint"
+                >
+                  {CODE_LANGUAGES.map((l) => (
+                    <option key={l} value={l}>
+                      {LANGUAGE_LABEL[l]}
+                    </option>
+                  ))}
+                </select>
+                <span className="hint" id="exam-default-language-hint">
+                  Students never choose the language. A coding question can use another one.
+                </span>
+              </div>
+            )}
             <div className="t-grid-2">
               <div className="t-field">
                 <label htmlFor="exam-course">Course code (optional)</label>
@@ -447,6 +473,7 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
               onMove={(delta) => moveQ(i, delta)}
               onRemove={() => removeQ(q.key)}
               topicSuggestions={topicSuggestions}
+              defaultLanguage={draft.defaultLanguage}
             />
           ))}
 
@@ -633,6 +660,7 @@ function QuestionCard({
   onMove,
   onRemove,
   topicSuggestions = [],
+  defaultLanguage = "python",
 }: {
   q: DraftQuestion;
   index: number;
@@ -645,6 +673,7 @@ function QuestionCard({
   onMove: (delta: number) => void;
   onRemove: () => void;
   topicSuggestions?: TopicCount[];
+  defaultLanguage?: CodeLanguage;
 }) {
   const id = (s: string) => `q${q.key}-${s}`;
   const n = index + 1;
@@ -708,7 +737,7 @@ function QuestionCard({
               <textarea
                 id={id("prompt")}
                 className="textarea"
-                rows={q.type === "essay" ? 3 : 2}
+                rows={q.type === "essay" || q.type === "code" ? 4 : 2}
                 value={q.prompt}
                 onChange={(ev) => onChange({ prompt: ev.target.value })}
                 aria-invalid={!!e.prompt}
@@ -808,6 +837,9 @@ function QuestionCard({
           )}
 
           {q.type === "essay" && <EssayEditor q={q} id={id} errors={e} onChange={onChange} />}
+          {q.type === "code" && (
+            <CodeQuestionEditor q={q} id={id} errors={e} onChange={onChange} defaultLanguage={defaultLanguage} />
+          )}
         </div>
       )}
     </section>

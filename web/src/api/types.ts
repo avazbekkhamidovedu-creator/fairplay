@@ -1,7 +1,7 @@
 // Types mirror CONTRACT.md exactly. Do not add fields that are not in the contract.
 
 export type Role = "teacher" | "student";
-export type QuestionType = "mcq" | "numeric" | "short" | "essay" | "external";
+export type QuestionType = "mcq" | "numeric" | "short" | "essay" | "external" | "code";
 export type ExamStatus = "draft" | "live" | "closed";
 export type AttemptStatus = "in_progress" | "submitted";
 /** Slice 3: where students answer — in FairPlay or on another website (SEB-style). */
@@ -1076,4 +1076,57 @@ export interface ReadinessRow {
   ok: boolean | null;
   failed: string[] | null;
   checked_at: string | null;
+}
+
+// ---------- Phase 4: coding questions ----------
+
+/** Languages a coding question can use. The teacher picks; students never choose. */
+export type CodeLanguage = "python" | "javascript" | "c" | "cpp" | "java";
+
+/** One test: stdin in, expected stdout out. Hidden tests (visible false) never reach students. */
+export interface CodeTest {
+  input: string;
+  expected: string;
+  visible: boolean;
+  points: number;
+}
+
+/** A visible test as students get it (no points, no visible flag). */
+export interface StudentCodeTest {
+  input: string;
+  expected: string;
+}
+
+/** Fields of a "code" question (teacher view). language null = the exam's default_language. */
+export interface Question {
+  language?: CodeLanguage | null;
+  starter_code?: string;
+  tests?: CodeTest[];
+  write_only?: boolean;
+  time_limit_ms?: number;
+}
+export interface StudentQuestion {
+  /** resolved: the question's own language or the exam default */
+  language?: CodeLanguage;
+  starter_code?: string;
+  /** visible tests only */
+  tests?: StudentCodeTest[];
+  write_only?: boolean;
+  time_limit_ms?: number;
+}
+export interface Exam {
+  default_language?: CodeLanguage;
+}
+export interface ExamInput {
+  default_language?: CodeLanguage;
+}
+export interface GradingQuestion {
+  /** code questions: resolved language and every test (hidden ones too) */
+  language?: CodeLanguage;
+  tests?: CodeTest[];
+  time_limit_ms?: number;
+  write_only?: boolean;
+}
+export interface FeedbackQuestion {
+  language?: CodeLanguage;
 }

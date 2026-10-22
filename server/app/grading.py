@@ -79,7 +79,10 @@ def num(x: float) -> int | float:
 # One helper for score / needs_grading, shared by submit/close (stored score), results,
 # the grading queue, the gradebook and the student grade views.
 
-MANUAL_TYPES = ("essay", "external")
+MANUAL_TYPES = ("essay", "external", "code")
+# Phase 4: answers the teacher grades (pending until graded; a blank one is 0 and graded).
+# Coding answers are graded on the grading page, where the tests run in the browser.
+WRITTEN_TYPES = ("essay", "code")
 
 # slice 4: an exam held on another website stores one hidden grading item. Students never
 # see it (their view has no questions); the teacher enters the score from the website.
@@ -135,7 +138,7 @@ def grade_attempt(questions: list[dict], answers: dict | None,
         elif paper_pending:
             pts = 0.0
             pending = True
-        elif q.get("type") == "essay":
+        elif q.get("type") in WRITTEN_TYPES:
             pts = 0.0
             pending = answered
         elif q.get("type") == "external":

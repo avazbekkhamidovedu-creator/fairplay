@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .grading import num
 from .models import Attempt, Exam
-from .schemas import external_host
+from .schemas import CODE_LANGUAGES, DEFAULT_TIME_LIMIT_MS, external_host
 from .store import Store
 from .timeutil import iso
 
@@ -62,16 +62,47 @@ def teacher_question(q: dict) -> dict:
         "images": [dict(i) for i in q.get("images") or []],
         "topics": list(q.get("topics") or []),
         "answer_lines": q.get("answer_lines"),  # slice 6: paper answer space
+        **code_fields(q),                         # phase 4: coding questions only
     }
 
 
-def student_question(q: dict) -> dict:
+def code_language(q: dict, default_language: str | None = None) -> str:
+    """Phase 4: the language a coding question runs in (its own, else the exam default)."""
+    lang = q.get("language")
+    if lang in CODE_LANGUAGES:
+        return lang
+    return default_language if default_language in CODE_LANGUAGES else "python"
+
+
+def code_fields(q: dict) -> dict:
+    """Phase 4: the stored coding fields (teacher view); {} for other question types."""
+    if q.get("type") != "code":
+        return {}
+    return {
+        "language": q.get("language") if q.get("language") in CODE_LANGUAGES else None,
+        "starter_code": q.get("starter_code") or "",
+        "tests": [{"input": t.get("input", ""), "expected": t.get("expected", ""),
+                   "visible": bool(t.get("visible")), "points": t.get("points", 0)}
+                  for t in q.get("tests") or [] if isinstance(t, dict)],
+        "write_only": bool(q.get("write_only")),
+        "time_limit_ms": int(q.get("time_limit_ms") or DEFAULT_TIME_LIMIT_MS),
+    }
+
+
+def student_question(q: dict, default_language: str | None = None) -> dict:
     tq = teacher_question(q)
     for f in TEACHER_ONLY_FIELDS:
         tq.pop(f)
     # slice 6: topic tags can hint at the method ("integration by parts"): not shown while
     # writing. Images are shown above the prompt.
     tq.pop("topics", None)
+    if tq["type"] == "code":
+        # Phase 4: hidden tests (input and expected output) never reach students, nor their
+        # count or points. Visible tests are the samples. The language is resolved here:
+        # students see it as a fixed label.
+        tq["language"] = code_language(q, default_language)
+        tq["tests"] = [{"input": t["input"], "expected": t["expected"]}
+                       for t in tq["tests"] if t["visible"]]
     return tq
 
 
@@ -106,7 +137,14 @@ def exam_out(e: Exam, pending_grading: int = 0) -> dict:
         "allowed_apps": [],
         **lock_settings(e),                           # S3 / S6
         **tool_settings(e),                           # 2026-10-23: exam tools
+        "default_language": exam_default_language(e),  # phase 4
     }
+
+
+def exam_default_language(e) -> str:
+    """Phase 4: the exam's default coding language (rows from before: python)."""
+    lang = getattr(e, "default_language", None)
+    return lang if lang in CODE_LANGUAGES else "python"
 
 
 def tool_settings(e: Exam) -> dict:
@@ -224,7 +262,7 @@ async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> 
         **lock_settings(e),                           # S3 / S6: read by start and app-beat
         **tool_settings(e),                           # 2026-10-23: exam tools
         "is_trial": bool(e.is_trial),                 # 2026-10-22: the sample exam
-        "questions": [student_question(q) for q in e.questions or []],
+        "questions": [student_question(q, exam_default_language(e)) for q in e.questions or []],
         **external_fields(e),
     }
     if data["mode"] == "external":

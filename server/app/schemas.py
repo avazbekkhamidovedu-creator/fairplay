@@ -135,6 +135,28 @@ class RubricItemIn(BaseModel):
         return v
 
 
+# ---------------------------------------------------------------- phase 4: coding questions
+# A "code" question: the student writes a program that reads stdin and prints to stdout.
+# Tests are {input, expected, visible, points}. Hidden tests never reach students (see
+# services.student_question). The server never runs code: runs happen in the browser
+# (students: visible tests; teachers: all tests on the grading page).
+CODE_LANGUAGES = ("python", "javascript", "c", "cpp", "java")
+CodeLanguage = Literal["python", "javascript", "c", "cpp", "java"]
+MAX_CODE_TESTS = 50
+MAX_TEST_TEXT = 20_000
+MAX_STARTER_CODE = 20_000
+DEFAULT_TIME_LIMIT_MS = 2000
+CODE_FIELDS = ("language", "starter_code", "tests", "write_only", "time_limit_ms")
+
+
+class CodeTestIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    input: str = Field(default="", max_length=MAX_TEST_TEXT)
+    expected: str = Field(default="", max_length=MAX_TEST_TEXT)
+    visible: bool = False
+    points: int = Field(default=0, ge=0, le=1000)
+
+
 # ---------------------------------------------------------------- slice 6: images + topics
 MAX_QUESTION_IMAGES = 6
 MAX_TOPICS = 5
@@ -191,7 +213,7 @@ class QuestionIn(BaseModel):
     # checked in ExamIn so stored exams from before slice 6 stay valid)
     images: list[ImageIn] = Field(default_factory=list, max_length=MAX_QUESTION_IMAGES)
     topics: list[str] = Field(default_factory=list, max_length=50)
-    type: Literal["mcq", "numeric", "short", "essay"]
+    type: Literal["mcq", "numeric", "short", "essay", "code"]
     prompt: str = Field(min_length=1, max_length=10_000)
     points: int = Field(default=1, ge=1, le=1000)
     options: list[str] | None = None
@@ -204,6 +226,12 @@ class QuestionIn(BaseModel):
     max_words: int | None = Field(default=None, ge=1, le=100_000)
     # slice 6 (Scan & Grade): lines of answer space on the printed paper (null = default)
     answer_lines: int | None = Field(default=None, ge=1, le=40)
+    # phase 4 (type "code"): language None = the exam's default_language
+    language: CodeLanguage | None = None
+    starter_code: str = Field(default="", max_length=MAX_STARTER_CODE)
+    tests: list[CodeTestIn] = Field(default_factory=list, max_length=MAX_CODE_TESTS)
+    write_only: bool = False
+    time_limit_ms: int = Field(default=DEFAULT_TIME_LIMIT_MS, ge=100, le=10_000)
 
     @field_validator("prompt")
     @classmethod
@@ -219,6 +247,19 @@ class QuestionIn(BaseModel):
 
     @model_validator(mode="after")
     def _by_type(self) -> "QuestionIn":
+        if self.type != "code":
+            self.language, self.starter_code, self.tests = None, "", []
+            self.write_only, self.time_limit_ms = False, DEFAULT_TIME_LIMIT_MS
+        else:
+            # phase 4: graded by the teacher (tests run in the teacher's browser). Test points,
+            # when given, must add up to the question's points.
+            test_sum = sum(t.points for t in self.tests)
+            if test_sum and test_sum != self.points:
+                raise ValueError("test points must add up to the question points")
+            self.options, self.correct_index, self.accepted_answers = [], None, []
+            self.answer_number = self.tolerance = None
+            self.rubric, self.min_words, self.max_words = [], None, None
+            return self
         if self.type == "essay":
             rubric = self.rubric or []
             if rubric and abs(sum(r.points for r in rubric) - self.points) > 1e-9:
@@ -260,7 +301,8 @@ class QuestionIn(BaseModel):
         return self
 
     def to_dict(self) -> dict:
-        d = self.model_dump(exclude={"id", "rubric"})
+        exclude = {"id", "rubric"} | (set() if self.type == "code" else set(CODE_FIELDS))
+        d = self.model_dump(exclude=exclude)
         d["rubric"] = [{"label": r.label, "points": _whole(r.points)} for r in self.rubric or []]
         return d
 
@@ -301,6 +343,8 @@ class ExamIn(BaseModel):
     calculator: Literal["off", "scientific", "graphing"] = "off"
     open_book: bool = False
     websites: list[str] = Field(default_factory=list, max_length=100)
+    # phase 4: language of coding questions that do not pick their own
+    default_language: CodeLanguage = "python"
 
     @field_validator("websites")
     @classmethod
@@ -376,6 +420,8 @@ class ExamIn(BaseModel):
         else:
             if not self.questions:
                 raise ValueError("add at least one question")
+            if self.delivery == "paper" and any(q.type == "code" for q in self.questions):
+                raise ValueError("coding questions need an exam on computers, not on paper")
             self.external_url = None
             self.allowed_domains = []
             self.finish_url_contains = None

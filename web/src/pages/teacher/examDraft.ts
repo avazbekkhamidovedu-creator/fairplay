@@ -1,6 +1,13 @@
 // Editor state for an exam, plus validation and conversion to the API body.
 
-import type { CalculatorMode, Delivery, Exam, ExamInput, QuestionImage, QuestionInput, QuestionType } from "../../api/types";
+import type { CalculatorMode, CodeLanguage, Delivery, Exam, ExamInput, QuestionImage, QuestionInput, QuestionType } from "../../api/types";
+import {
+  DEFAULT_TIME_LIMIT_MS,
+  MAX_TIME_LIMIT_MS,
+  MIN_TIME_LIMIT_MS,
+  LANGUAGE_LABEL,
+  isCodeLanguage,
+} from "../../lib/code/languages";
 import {
   EMPTY_EXTERNAL_SETTINGS,
   externalExamInput,
@@ -37,6 +44,22 @@ export interface DraftQuestion {
   /** slice 6: pictures above the prompt, and topic tags (≥ 1 required) */
   images: QuestionImage[];
   topics: string[];
+  /** phase 4 (code): "" = the exam's default language */
+  language: CodeLanguage | "";
+  starter: string;
+  tests: DraftTest[];
+  writeOnly: boolean;
+  /** milliseconds, as typed */
+  timeLimit: string;
+}
+
+/** Phase 4: one test case row of a coding question. */
+export interface DraftTest {
+  key: string;
+  input: string;
+  expected: string;
+  visible: boolean;
+  points: string;
 }
 
 export interface DraftExam {
@@ -66,11 +89,14 @@ export interface DraftExam {
   resumeNeedsApproval: boolean;
   /** S6: require the strongest lock (default off). */
   strongLock: boolean;
+  /** Phase 4: language of coding questions that do not pick their own. */
+  defaultLanguage: CodeLanguage;
 }
 
 export type QuestionErrors = Partial<
   Record<
-    "prompt" | "points" | "options" | "correct" | "answer" | "tolerance" | "accepted" | "rubric" | "words" | "topics",
+    | "prompt" | "points" | "options" | "correct" | "answer" | "tolerance" | "accepted" | "rubric" | "words" | "topics"
+    | "tests" | "timeLimit",
     string
   >
 >;
@@ -96,6 +122,7 @@ export const TYPE_LABEL: Record<QuestionType, string> = {
   short: "Short answer",
   essay: "Essay",
   external: "Exam website",
+  code: "Coding",
 };
 
 export const KIND_LABEL: Record<DraftKind, string> = {
@@ -117,15 +144,42 @@ export function newRubricRow(label = "", points = ""): DraftRubricRow {
   return { key: newKey(), label, points };
 }
 
+export function newTestRow(visible = true, input = "", expected = "", points = ""): DraftTest {
+  return { key: newKey(), input, expected, visible, points };
+}
+
+/** Sum of the test rows' points (invalid rows count as 0). */
+export function testPointsSum(rows: DraftTest[]): number {
+  return rows.reduce((s, r) => s + (/^\d+$/.test(r.points.trim()) ? Number(r.points) : 0), 0);
+}
+
 /** 2026-10-13: switch a question's type in place; text, points, images and topics stay. */
 export function changeKind(q: DraftQuestion, kind: DraftKind): DraftQuestion {
   const fresh = newQuestion(kind);
   return { ...fresh, key: q.key, prompt: q.prompt, points: q.points || fresh.points, images: q.images, topics: q.topics };
 }
 
+const CODE_DEFAULTS = { language: "" as const, starter: "", writeOnly: false, timeLimit: String(DEFAULT_TIME_LIMIT_MS) };
+
+function codeDraft(q: Exam["questions"][number]): Pick<DraftQuestion, "language" | "starter" | "tests" | "writeOnly" | "timeLimit"> {
+  if (q.type !== "code") return { ...CODE_DEFAULTS, tests: [] };
+  return {
+    language: isCodeLanguage(q.language) ? q.language : "",
+    starter: q.starter_code ?? "",
+    tests: (q.tests ?? []).map((t) => newTestRow(t.visible, t.input, t.expected, t.points ? String(t.points) : "")),
+    writeOnly: q.write_only === true,
+    timeLimit: String(q.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS),
+  };
+}
+
 /** 2026-10-13: questions copied from another exam (new keys, so they are separate copies). */
 export function copyQuestions(exam: Exam): DraftQuestion[] {
-  return draftFromExam(exam).questions.map((q) => ({ ...q, key: newKey(), rubric: q.rubric.map((r) => ({ ...r, key: newKey() })) }));
+  return draftFromExam(exam).questions.map((q) => ({
+    ...q,
+    key: newKey(),
+    rubric: q.rubric.map((r) => ({ ...r, key: newKey() })),
+    tests: q.tests.map((t) => ({ ...t, key: newKey() })),
+  }));
 }
 
 export function newQuestion(kind: DraftKind): DraftQuestion {
@@ -135,7 +189,7 @@ export function newQuestion(kind: DraftKind): DraftQuestion {
     type,
     tf: kind === "tf",
     prompt: "",
-    points: kind === "essay" ? "10" : "1",
+    points: kind === "essay" || kind === "code" ? "10" : "1",
     options: kind === "tf" ? [...TF_OPTIONS] : type === "mcq" ? ["", ""] : [],
     correct_index: null,
     answer_number: "",
@@ -146,6 +200,8 @@ export function newQuestion(kind: DraftKind): DraftQuestion {
     max_words: "",
     images: [],
     topics: [],
+    ...CODE_DEFAULTS,
+    tests: kind === "code" ? [newTestRow(true), newTestRow(false)] : [],
   };
 }
 
@@ -186,6 +242,7 @@ export function draftFromExam(exam?: Exam): DraftExam {
       websites: [],
       resumeNeedsApproval: true,
       strongLock: false,
+      defaultLanguage: "python",
     };
   const sched = splitSchedule(exam.scheduled_at);
   return {
@@ -205,6 +262,7 @@ export function draftFromExam(exam?: Exam): DraftExam {
     websites: [...(exam.websites ?? [])],
     resumeNeedsApproval: exam.resume_needs_approval !== false,
     strongLock: exam.require_strong_lock === true,
+    defaultLanguage: isCodeLanguage(exam.default_language) ? exam.default_language : "python",
     questions: exam.questions.map((q) => ({
       key: newKey(),
       type: q.type,
@@ -221,6 +279,7 @@ export function draftFromExam(exam?: Exam): DraftExam {
       max_words: q.max_words == null ? "" : String(q.max_words),
       images: (q.images ?? []).map((im) => ({ url: im.url, alt: im.alt ?? "" })),
       topics: [...(q.topics ?? [])],
+      ...codeDraft(q),
     })),
   };
 }
@@ -294,6 +353,19 @@ export function validateDraft(d: DraftExam): DraftErrors {
       const max = q.max_words.trim();
       if ((min && !isNonNegInt(min)) || (max && !isNonNegInt(max))) e.words = "Word limits must be whole numbers.";
       else if (min && max && Number(min) > Number(max)) e.words = "Minimum words cannot be more than maximum.";
+    } else if (q.type === "code") {
+      if (d.delivery === "paper") e.prompt = e.prompt ?? "Coding questions need an exam on computers, not on paper.";
+      const tl = q.timeLimit.trim();
+      if (!/^\d+$/.test(tl) || Number(tl) < MIN_TIME_LIMIT_MS || Number(tl) > MAX_TIME_LIMIT_MS)
+        e.timeLimit = `Time limit must be ${MIN_TIME_LIMIT_MS} to ${MAX_TIME_LIMIT_MS} milliseconds.`;
+      if (q.tests.length > 50) e.tests = "Use at most 50 tests.";
+      else if (q.tests.some((t) => t.points.trim() !== "" && !isNonNegInt(t.points)))
+        e.tests = "Test points must be whole numbers.";
+      else if (q.tests.some((t) => t.input.length > 20000 || t.expected.length > 20000))
+        e.tests = "Keep each test's input and output under 20,000 characters.";
+      else if (!e.points && testPointsSum(q.tests) > 0 && testPointsSum(q.tests) !== Number(q.points))
+        e.tests = `Test points add up to ${testPointsSum(q.tests)}, but the question is worth ${q.points}.`;
+      if (q.starter.length > 20000) e.tests = e.tests ?? "Keep the starter code under 20,000 characters.";
     }
     if (Object.keys(e).length) errors.byKey[q.key] = e;
   }
@@ -308,6 +380,7 @@ export function hasErrors(e: DraftErrors): boolean {
 }
 
 const NON_ESSAY = { rubric: [], min_words: null, max_words: null };
+const NO_KEYS = { options: [], correct_index: null, answer_number: null, tolerance: null, accepted_answers: [] };
 
 export function toQuestionInput(q: DraftQuestion): QuestionInput {
   const base = {
@@ -350,6 +423,23 @@ export function toQuestionInput(q: DraftQuestion): QuestionInput {
       accepted_answers: splitAccepted(q.accepted),
     };
   }
+  if (q.type === "code") {
+    return {
+      ...base,
+      ...NON_ESSAY,
+      ...NO_KEYS,
+      language: q.language === "" ? null : q.language,
+      starter_code: q.starter,
+      tests: q.tests.map((t) => ({
+        input: t.input,
+        expected: t.expected,
+        visible: t.visible,
+        points: t.points.trim() === "" ? 0 : Number(t.points),
+      })),
+      write_only: q.writeOnly,
+      time_limit_ms: Number(q.timeLimit),
+    };
+  }
   return {
     ...base,
     options: [],
@@ -383,6 +473,7 @@ export function toExamInput(d: DraftExam): ExamInput {
       : { calculator: d.calculator, open_book: d.openBook, websites: [...d.websites] }),
     resume_needs_approval: d.resumeNeedsApproval,
     require_strong_lock: d.strongLock,
+    default_language: d.defaultLanguage,
   };
 }
 
@@ -401,6 +492,10 @@ export function questionMeta(q: DraftQuestion): string {
   const parts: string[] = [KIND_LABEL[q.tf ? "tf" : q.type]];
   if (q.type === "mcq" && !q.tf) parts.push(`${q.options.length} options`);
   if (q.type === "essay" && q.rubric.length) parts.push(`${q.rubric.length}-row rubric`);
+  if (q.type === "code") {
+    parts.push(q.language ? LANGUAGE_LABEL[q.language] : "exam language");
+    parts.push(q.writeOnly ? "write only" : `${q.tests.length} ${q.tests.length === 1 ? "test" : "tests"}`);
+  }
   parts.push(`${q.points || 0} ${q.points === "1" ? "pt" : "pts"}`);
   return parts.join(" · ");
 }

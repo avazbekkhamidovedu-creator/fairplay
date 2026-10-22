@@ -343,6 +343,41 @@ describe("2026-10-13 simpler exam editor", () => {
     renderAt("/teacher/exams/new?class=7");
     await waitFor(() => expect(document.querySelector<HTMLSelectElement>("#exam-class")!.value).toBe("7"));
   });
+
+  it("phase 4: adds a coding question and sets the exam's default language", { timeout: 20000 }, async () => {
+    const user = userEvent.setup();
+    let saved: ExamInput | null = null;
+    api.createExam.mockImplementation(async (input: ExamInput) => {
+      saved = input;
+      return exam();
+    });
+    api.getExam.mockResolvedValue(exam());
+    renderAt("/teacher/exams/new");
+    await user.type(document.querySelector<HTMLInputElement>("#exam-title")!, "Coding quiz");
+    await user.click(screen.getByRole("button", { name: "+ Coding" }));
+    await user.type(document.querySelector<HTMLTextAreaElement>("[id$='-prompt']")!, "Print the largest number.");
+    await user.type(document.querySelector<HTMLTextAreaElement>("[id$='-test-0-in']")!, "3{Enter}1 5 2");
+    await user.type(document.querySelector<HTMLTextAreaElement>("[id$='-test-0-out']")!, "5");
+    await user.type(document.querySelector<HTMLTextAreaElement>("[id$='-test-1-in']")!, "1{Enter}-4");
+    await user.type(document.querySelector<HTMLTextAreaElement>("[id$='-test-1-out']")!, "-4");
+    await user.click(screen.getByRole("button", { name: /More settings/ }));
+    await user.selectOptions(screen.getByLabelText("Default language for coding questions"), "javascript");
+    expect(screen.getByRole("option", { name: "Exam default (JavaScript)" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save exam" }));
+    await waitFor(() => expect(api.createExam).toHaveBeenCalled());
+    expect(saved!.default_language).toBe("javascript");
+    expect(saved!.questions[0]).toMatchObject({
+      type: "code",
+      language: null,
+      points: 10,
+      write_only: false,
+      time_limit_ms: 2000,
+      tests: [
+        { input: "3\n1 5 2", expected: "5", visible: true, points: 0 },
+        { input: "1\n-4", expected: "-4", visible: false, points: 0 },
+      ],
+    });
+  });
 });
 
 describe("live room", () => {

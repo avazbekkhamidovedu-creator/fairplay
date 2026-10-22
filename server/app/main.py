@@ -159,6 +159,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # JavaScript type (and everything is sent with nosniff)
             if candidate.endswith(".mjs"):
                 return FileResponse(candidate, media_type="text/javascript")
+            # Phase 4: Pyodide's WebAssembly (compiled while streaming needs this type)
+            if candidate.endswith(".wasm"):
+                return FileResponse(candidate, media_type="application/wasm")
             return FileResponse(candidate)
         index = os.path.join(static_root, "index.html")
         if os.path.isfile(index):
