@@ -795,7 +795,7 @@ function ExamTakingInner() {
         </div>
       )}
 
-      {phase === "preflight" && !stopPanel && <PreflightProblems problems={preflightProblems} onRetry={() => void lock()} />}
+      {phase === "preflight" && !stopPanel && <PreflightProblems problems={preflightProblems} onRetry={() => void lock()} trial={!!attempt.trial} />}
       {phase === "closeApps" && !stopPanel && (
         <AppsToClose
           apps={appsToClose}
@@ -837,7 +837,9 @@ function ExamTakingInner() {
             </ol>
 )}
             <p className="stu-muted stu-small" style={{ margin: 0 }}>
-              Your exam time is running. Ask your teacher if you need help.
+              {attempt.trial
+                ? "FairPlay needs this for every exam. Turn it on now, so it is ready on exam day."
+                : "Your exam time is running. Ask your teacher if you need help."}
             </p>
             <div>
               <button type="button" className="stu-btn primary lg" onClick={() => void lock()}>

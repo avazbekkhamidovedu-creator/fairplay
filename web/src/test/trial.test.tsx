@@ -24,6 +24,7 @@ vi.mock("../api/client", async (importOriginal) => {
 
 import { ApiError, NetworkError } from "../api/client";
 import { LockedBar } from "../components/student/LockedBar";
+import { PreflightProblems } from "../components/student/Preflight";
 import { TrialCard } from "../components/student/TrialCard";
 import * as bridge from "../lib/bridge";
 import { hmacSha256, normalizeAppCode, offlineExitCode, sha256 } from "../lib/offlineExit";
@@ -267,5 +268,15 @@ describe("Stop practice", () => {
     const confirm = screen.queryAllByRole("button", { name: /submit/i });
     if (confirm.length && !api.submit.mock.calls.length) fireEvent.click(confirm[confirm.length - 1]!);
     expect(await screen.findByText("home finished")).toBeTruthy();
+  });
+});
+
+describe("device problems during the sample questions", () => {
+  it("explains the check instead of 'exam time is running'", () => {
+    const { rerender } = render(<PreflightProblems problems={["Turn off Remote Login (SSH)."]} onRetry={() => undefined} trial />);
+    expect(screen.getByText(/FairPlay checks this before every exam/)).toBeTruthy();
+    expect(screen.queryByText(/exam time is running/)).toBeNull();
+    rerender(<PreflightProblems problems={["Turn off Remote Login (SSH)."]} onRetry={() => undefined} />);
+    expect(screen.getByText(/exam time is running/)).toBeTruthy();
   });
 });

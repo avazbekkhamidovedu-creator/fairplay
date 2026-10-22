@@ -2,7 +2,16 @@
 // because some of these (Remote Login, Screen Sharing) can't be fixed from inside the lock.
 import { nativePlatform } from "../../lib/bridge";
 
-export function PreflightProblems({ problems, onRetry }: { problems: string[]; onRetry: () => void }) {
+export function PreflightProblems({
+  problems,
+  onRetry,
+  trial = false,
+}: {
+  problems: string[];
+  onRetry: () => void;
+  /** "Test my device": no exam time and no invigilator; say what this check means. */
+  trial?: boolean;
+}) {
   return (
     <main className="stu-center">
       <div className="stu-card" style={{ gap: 14, maxWidth: 600 }} role="alert">
@@ -16,7 +25,9 @@ export function PreflightProblems({ problems, onRetry }: { problems: string[]; o
           ))}
         </ul>
         <p className="stu-muted" style={{ margin: 0 }}>
-          Your exam time is running. Ask the invigilator if you need help.
+          {trial
+            ? "FairPlay checks this before every exam. Fix it now, so it is ready on exam day, then press Check again. Or press Stop to go back."
+            : "Your exam time is running. Ask the invigilator if you need help."}
         </p>
         <div className="stu-row">
           <button type="button" className="stu-btn primary" onClick={onRetry}>
