@@ -17,3 +17,16 @@ import Foundation
         #expect(Permission.thisCopy.path.hasPrefix("/"))
     }
 }
+
+@Suite struct SettingsPaneTests {
+    @Test func onlyKnownPanesOpen() {
+        #expect(SettingsPane.url("sharing")?.absoluteString == "x-apple.systempreferences:com.apple.Sharing-Settings.extension")
+        #expect(SettingsPane.url("datetime") != nil)
+        #expect(SettingsPane.url("displays") != nil)
+        #expect(SettingsPane.url("keyboard") != nil)
+        #expect(SettingsPane.url("accessibility") != nil)
+        #expect(SettingsPane.url("https://example.com") == nil)
+        #expect(SettingsPane.url("") == nil)
+        #expect(!SettingsPane.open("nope"))
+    }
+}

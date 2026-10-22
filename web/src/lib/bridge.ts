@@ -87,7 +87,8 @@ type OutMessage =
   | { action: "quitApps"; allowed_apps?: string[] }
   | ({ action: "openExternal" } & OpenExternalParams)
   | ({ action: "seal" } & SealParams)
-  | { action: "sealedToken"; token: string };
+  | { action: "sealedToken"; token: string }
+  | { action: "openSettings"; pane: string };
 
 /** S5: what the app seals when the submit at time-up failed. answers_json is the exact
  *  string the app hashes (SHA-256 of its UTF-8 bytes). */
@@ -247,6 +248,27 @@ export function hello(): void {
  *  held while no such page was listening, and the next ones as they happen. */
 export function requestEvents(): void {
   post({ action: "flushEvents" });
+}
+
+/** 2026-10-22: System Settings panes the Mac app can open for a pre-exam problem. */
+export type SettingsPane = "sharing" | "datetime" | "displays" | "keyboard" | "accessibility";
+
+/** Which pane fixes a pre-exam problem text from the Mac app, or null. */
+export function settingsPaneFor(problem: string): SettingsPane | null {
+  const p = problem.toLowerCase();
+  if (p.includes("general > sharing")) return "sharing";
+  if (p.includes("date & time") || p.includes("date and time")) return "datetime";
+  if (p.includes("screen") || p.includes("display") || p.includes("mirroring")) return "displays";
+  if (p.includes("keyboard")) return "keyboard";
+  if (p.includes("accessibility")) return "accessibility";
+  return null;
+}
+
+/** Ask the Mac app to open that System Settings pane (other apps ignore it). */
+export function openSettings(pane: SettingsPane): boolean {
+  if (nativePlatform() !== "mac") return false;
+  post({ action: "openSettings", pane });
+  return true;
 }
 
 export function unlock(): void {

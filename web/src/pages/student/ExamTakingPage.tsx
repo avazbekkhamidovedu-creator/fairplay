@@ -795,7 +795,7 @@ function ExamTakingInner() {
         </div>
       )}
 
-      {phase === "preflight" && !stopPanel && <PreflightProblems problems={preflightProblems} onRetry={() => void lock()} trial={!!attempt.trial} />}
+      {phase === "preflight" && !stopPanel && <PreflightProblems problems={preflightProblems} onRetry={() => lock()} trial={!!attempt.trial} />}
       {phase === "closeApps" && !stopPanel && (
         <AppsToClose
           apps={appsToClose}

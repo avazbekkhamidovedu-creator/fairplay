@@ -82,3 +82,25 @@ enum Permission {
         return p.hasPrefix(home) ? "~" + p.dropFirst(home.count) : p
     }
 }
+
+/// 2026-10-22: "Open settings" buttons next to a pre-exam problem ("Turn off Remote Login..."):
+/// the page names a pane, the app opens exactly that System Settings pane. Fixed list only;
+/// never while locked (the problems are fixed before the lock).
+enum SettingsPane {
+    static let urls: [String: String] = [
+        "sharing": "x-apple.systempreferences:com.apple.Sharing-Settings.extension",
+        "datetime": "x-apple.systempreferences:com.apple.Date-Time-Settings.extension",
+        "displays": "x-apple.systempreferences:com.apple.Displays-Settings.extension",
+        "keyboard": "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
+        "accessibility": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    ]
+
+    static func url(_ pane: String) -> URL? { urls[pane].flatMap(URL.init(string:)) }
+
+    @discardableResult
+    static func open(_ pane: String) -> Bool {
+        guard !LockdownController.shared.isLocked, let url = url(pane) else { return false }
+        DebugLog.log("click", "open System Settings: \(pane)")
+        return NSWorkspace.shared.open(url)
+    }
+}

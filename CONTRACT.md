@@ -688,6 +688,12 @@ iPadOS lets no app list or close others; Assessment Mode does that itself.)
 - Mac permission screen: shows which FairPlay copy runs and lists other copies. "Fix permission"
   runs `tccutil reset Accessibility ai.proctora.student`, then asks macOS again. There is also
   "Restart FairPlay".
+- page → app (Mac only, 0.5.3+) `{action:"openSettings", pane}` with pane one of `sharing`,
+  `datetime`, `displays`, `keyboard`, `accessibility`: opens that System Settings pane (never
+  while locked; unknown panes are ignored). The pre-exam problems screen shows an "Open …
+  settings" button per problem and checks again by itself every 3 s, so it moves on as soon as
+  the setting is fixed. Services such as Remote Login need the user's admin password to turn
+  off, so the app can't switch them off itself.
 
 ## Sample exam (trial) (2026-10-22)
 One built-in sample exam every student can take any time ("Try a sample exam" card on the

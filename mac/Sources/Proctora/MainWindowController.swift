@@ -286,6 +286,9 @@ final class MainWindowController: NSWindowController, LockSurface,
             if let token = body["token"] as? String, !token.isEmpty, token.count < 4000, Sealed.hasPending {
                 Sealed.uploadAll(token: token)
             }
+        case "openSettings":
+            // 2026-10-22: a fixed System Settings pane for a pre-exam problem.
+            SettingsPane.open((body["pane"] as? String) ?? "")
         case "unlock":
             requestUnlock()
         default:

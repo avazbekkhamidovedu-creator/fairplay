@@ -216,7 +216,7 @@ export default function ExternalExamPage() {
   if (phase === "preflight")
     return (
       <div className="stu stu-exam">
-        <PreflightProblems problems={preflightProblems} onRetry={() => void lock()} />
+        <PreflightProblems problems={preflightProblems} onRetry={() => lock()} />
       </div>
     );
   if (phase === "loadError")
