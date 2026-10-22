@@ -52,6 +52,9 @@ enum Config {
             raw = env
         } else if let d = UserDefaults.standard.string(forKey: "ServerURL"), !d.isEmpty {
             raw = d
+            // Remember a -ServerURL launch argument, so opening the app from the iPad's home
+            // screen (no arguments) still finds the Mac's server.
+            UserDefaults.standard.set(d, forKey: "ServerURL")
         }
         #endif
         let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
