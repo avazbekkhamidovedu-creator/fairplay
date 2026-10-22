@@ -78,9 +78,11 @@ enum AllowedSites {
     static func frameAllowed(_ url: URL, allowed: [String]) -> Bool {
         let scheme = url.scheme?.lowercased()
         if scheme == "about" {
+            // Foundation may keep "#x" or percent-encode it ("%23x"): accept both.
             let s = url.absoluteString.lowercased()
-            let page = s.components(separatedBy: "#")[0]
-            return page == "about:blank" || page == "about:srcdoc"
+            return ["about:blank", "about:srcdoc"].contains { page in
+                s == page || s.hasPrefix(page + "#") || s.hasPrefix(page + "%23")
+            }
         }
         guard scheme == "https", let host = url.host, url.user == nil, url.password == nil else { return false }
         if let port = url.port, port != 443 { return false }
