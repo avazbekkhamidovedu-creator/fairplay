@@ -28,6 +28,9 @@ public struct DeviceState: Equatable {
     public var debugger = false
     public var simulator = false
     public var hardwareKeyboard = false
+    /// Dev builds with -AllowCapture YES: recording / mirroring doesn't put up the red
+    /// screen (still reported as cap=1). Never set in release or test builds.
+    public var captureAllowed = false
     public var vpn = false
     public var proxy = false
     /// "1" attested this launch, "0" not supported, "?" not tried / failed.
@@ -69,7 +72,7 @@ public enum Integrity {
     /// neither Assessment Mode nor Single App Mode.
     public static func problems(_ s: DeviceState, release: Bool) -> [String: String] {
         var out: [String: String] = [:]
-        if s.screens > 1 || s.captured {
+        if s.screens > 1 || (s.captured && !s.captureAllowed) {
             out["display"] = "This screen is being recorded, mirrored or shown on another display.\n"
                 + "Stop screen recording, turn off AirPlay / Screen Mirroring and unplug any cable."
         }
@@ -87,7 +90,10 @@ public enum Integrity {
             out["shield"] = "FairPlay could not protect this screen from recording.\n"
                 + "Ask the invigilator. (Assessment Mode must be on for this iPad.)"
         }
-        if release && !s.assessment && !s.singleApp {
+        // A watched test build (soft=1, Config.isWatchedBuild) has no Assessment Mode by
+        // design: the server already counts it as not locked; a red screen would only stop
+        // the test. Release builds without WatchedLock never have softLock set.
+        if release && !s.assessment && !s.singleApp && !s.softLock {
             out["assessment"] = "Assessment Mode was turned off.\nTap \"Resume locked mode\" or ask the invigilator."
         }
         return out
@@ -102,7 +108,7 @@ public enum Integrity {
     /// The same problems with an id each, for the S1 device-check rows.
     public static func preflightProblems(_ s: DeviceState, release: Bool, osMajor: Int) -> [(id: String, message: String)] {
         var out: [(id: String, message: String)] = []
-        if s.screens > 1 || s.captured {
+        if s.screens > 1 || (s.captured && !s.captureAllowed) {
             out.append(("display", "Stop screen recording and turn off Screen Mirroring / AirPlay. Unplug any external display."))
         }
         if s.multitasking {
@@ -121,6 +127,27 @@ public enum Integrity {
             out.append(("ipados_version", "Update iPadOS to version 17.5 or later (Settings > General > Software Update)."))
         }
         return out
+    }
+
+    /// Folders the system loads its own code from (dyld shared cache paths included).
+    static let systemImagePrefixes = ["/system/", "/usr/lib/", "/developer/", "/private/preboot/cryptexes/"]
+
+    /// Jailbreak / hooking code by its install location: always suspicious wherever it is.
+    static let hookPathMarkers = ["/library/mobilesubstrate/", "/usr/lib/tweakinject", "/var/jb/", "/.jbroot",
+                                  "/private/var/jb/", "/procursus/"]
+    /// Hooking frameworks and tweaks by name: suspicious outside the system's folders.
+    static let hookNames = ["substrate", "substitute", "libhooker", "ellekit", "frida", "cycript",
+                            "sslkillswitch", "tweakinject", "libblackjack", "shadow.dylib", "flexdylib", "flexing"]
+
+    /// Name of the hooking library this loaded image looks like, or nil. Before 0.5.1 any
+    /// path containing "shadow" or "flex" counted, which can match Apple's own libraries
+    /// and block a normal iPad in a release build.
+    public static func hookLibrary(imagePath: String) -> String? {
+        let p = imagePath.lowercased()
+        if let m = hookPathMarkers.first(where: { p.contains($0) }) { return m.trimmingCharacters(in: CharacterSet(charactersIn: "/.")) }
+        if systemImagePrefixes.contains(where: { p.hasPrefix($0) }) { return nil }
+        let file = p.split(separator: "/").last.map(String.init) ?? p
+        return hookNames.first { file.contains($0) }
     }
 
     /// Integrity event to report once per lock for each problem key.

@@ -298,3 +298,48 @@ import Foundation
         #expect(rows.allSatisfy { $0.message.count <= 300 } && rows.count <= 40)
     }
 }
+
+/// 0.5.1 (iPad review 2026-10-22): watched test builds, dev capture, jailbreak matcher.
+@Suite struct WatchedBuildTests {
+    @Test func watchedLockIsNotBlockedButStillReported() {
+        var s = DeviceState()
+        s.softLock = true
+        s.shield = true
+        #expect(Integrity.problems(s, release: true).isEmpty)
+        #expect(s.summary.contains("aac=0") && s.summary.contains("sam=0") && s.summary.contains("soft=1"))
+        // A release build that is not watched never sets softLock: still blocked.
+        s.softLock = false
+        #expect(Integrity.problems(s, release: true)["assessment"] != nil)
+        // Watched builds keep the other release checks.
+        s.softLock = true
+        s.debugger = true
+        s.jailbreak = ["/var/jb"]
+        #expect(Set(Integrity.problems(s, release: true).keys) == ["debugger", "jailbreak"])
+    }
+
+    @Test func allowedCaptureSkipsOnlyTheRedScreen() {
+        var s = DeviceState()
+        s.captured = true
+        s.captureAllowed = true
+        #expect(Integrity.problems(s, release: false)["display"] == nil)
+        #expect(Integrity.preflight(s, release: false, osMajor: 26).isEmpty)
+        #expect(s.summary.contains("cap=1") && s.summary.contains("console=0"))
+        s.screens = 2
+        #expect(Integrity.problems(s, release: false)["display"] != nil)
+    }
+
+    @Test func hookLibrariesByLocationAndName() {
+        // Apple's own code never counts, whatever its name.
+        #expect(Integrity.hookLibrary(imagePath: "/System/Library/PrivateFrameworks/ShadowCore.framework/ShadowCore") == nil)
+        #expect(Integrity.hookLibrary(imagePath: "/usr/lib/system/libflexible.dylib") == nil)
+        #expect(Integrity.hookLibrary(imagePath: "/System/Library/Frameworks/UIKit.framework/UIKit") == nil)
+        #expect(Integrity.hookLibrary(imagePath: "/private/var/containers/Bundle/Application/X/FairPlay.app/FairPlay") == nil)
+        // Jailbreak install places count everywhere.
+        #expect(Integrity.hookLibrary(imagePath: "/Library/MobileSubstrate/DynamicLibraries/Anything.dylib") != nil)
+        #expect(Integrity.hookLibrary(imagePath: "/var/jb/usr/lib/libellekit.dylib") != nil)
+        #expect(Integrity.hookLibrary(imagePath: "/usr/lib/TweakInject.dylib") != nil)
+        // Hooking libraries by name outside the system folders (e.g. injected into the app).
+        #expect(Integrity.hookLibrary(imagePath: "/private/var/containers/Bundle/Application/X/FairPlay.app/Frameworks/FridaGadget.dylib") == "frida")
+        #expect(Integrity.hookLibrary(imagePath: "/var/mobile/x/libsubstrate.dylib") == "substrate")
+    }
+}

@@ -57,6 +57,19 @@ final class ExamViewController: UIViewController, LockSurface,
     private let server = Config.serverURL
     private lazy var external = ExternalExamController(server: Config.serverURL)
     private var launchURL = Config.startURL
+    /// "Connecting to <server>…" over the web view until the first page commits (the web
+    /// view alone shows a blank white page while it waits).
+    private var connecting: UIView?
+    private var connectingDetail: UILabel?
+    private var connectingTimer: Timer?
+    /// The page the offline screen's "Try again" loads (kept here, never in its HTML).
+    private var retryURL: URL?
+    /// Page loads from the exam server give up after this long (WebKit's own default is 60 s)
+    /// and show the offline screen, which keeps retrying.
+    static let loadTimeout: TimeInterval = 20
+    /// Links our own offline / connecting pages use to talk to the app (only honoured while
+    /// one of our own pages is shown).
+    static let appScheme = "fairplay-app"
 
     var hostWindow: UIWindow? { view.window }
     var captureShieldActive: Bool { shield?.isShielding ?? false }
@@ -118,6 +131,10 @@ final class ExamViewController: UIViewController, LockSurface,
         config.userContentController = ucc
 
         let wv = ExamWebView(frame: .zero, configuration: config)
+        // Same light grey as the pages, instead of white while nothing has loaded yet.
+        wv.isOpaque = false
+        wv.backgroundColor = view.backgroundColor
+        wv.scrollView.backgroundColor = view.backgroundColor
         wv.navigationDelegate = self
         wv.uiDelegate = self
         wv.allowsBackForwardNavigationGestures = false
@@ -144,13 +161,13 @@ final class ExamViewController: UIViewController, LockSurface,
                 guard let self, let u = view.url, self.isServerURL(u) else { return }
                 if ExamPaths.isTeacherPath(u.path) {
                     EventLog.shared.record("blocked_navigation", "teacher page \(u.path)")
-                    view.load(URLRequest(url: Config.startURL))
+                    view.load(Self.serverRequest(Config.startURL))
                     return
                 }
                 let aid = AppSession.shared.exam?.attemptId
                 if LockdownController.shared.isLocked, !ExamPaths.allowedWhileLocked(path: u.path, attemptId: aid), let aid {
                     EventLog.shared.record("blocked_navigation", "left the exam: \(u.path)")
-                    view.load(URLRequest(url: Config.serverURL.appendingPathComponent("student/exam/\(aid)")))
+                    view.load(Self.serverRequest(Config.serverURL.appendingPathComponent("student/exam/\(aid)")))
                 }
             }
         }
@@ -168,16 +185,129 @@ final class ExamViewController: UIViewController, LockSurface,
             DebugLog.log("app", "last run ended while locked: resuming \(aid)")
             launchURL = server.appendingPathComponent("student/exam/\(aid)")
         }
-        webView.load(URLRequest(url: launchURL))
+        loadFromServer(launchURL)
     }
 
     func reload() {
         guard Config.serverIsAcceptable else { return }
         if webView.url == nil || webView.url?.scheme == "about" {
-            webView.load(URLRequest(url: Config.startURL))
+            loadFromServer(Config.startURL)
         } else {
             webView.reload()
         }
+    }
+
+    static func serverRequest(_ url: URL) -> URLRequest {
+        URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: loadTimeout)
+    }
+
+    private func loadFromServer(_ url: URL) {
+        showConnecting()
+        webView.load(Self.serverRequest(url))
+    }
+
+    // MARK: - Connecting screen
+
+    private func showConnecting() {
+        connectingTimer?.invalidate()
+        connectingDetail?.text = nil
+        let t = Timer(timeInterval: 8, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.connectingDetail?.text = "Still connecting… A test server that was asleep can take up to a minute to wake up."
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        connectingTimer = t
+        guard connecting == nil else { return }
+        let v = UIView()
+        v.backgroundColor = view.backgroundColor
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.accessibilityIdentifier = "connectingScreen"
+        let spinner = UIActivityIndicatorView(style: .large)
+        spinner.startAnimating()
+        let title = UILabel()
+        title.text = "Connecting to \(Config.serverLabel)…"
+        title.font = .systemFont(ofSize: 20, weight: .semibold)
+        title.textColor = UIColor(red: 0.067, green: 0.094, blue: 0.153, alpha: 1)
+        title.textAlignment = .center
+        title.numberOfLines = 0
+        let detail = UILabel()
+        detail.font = .systemFont(ofSize: 15)
+        detail.textColor = UIColor(red: 0.29, green: 0.33, blue: 0.39, alpha: 1)
+        detail.textAlignment = .center
+        detail.numberOfLines = 0
+        var rows: [UIView] = [spinner, title, detail]
+        if Config.isDevBuild {
+            let b = UIButton(type: .system)
+            b.setTitle("Change server (dev build)", for: .normal)
+            b.addTarget(self, action: #selector(changeServerTapped), for: .touchUpInside)
+            rows.append(b)
+        }
+        let stack = UIStackView(arrangedSubviews: rows)
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(stack)
+        shield.content.insertSubview(v, aboveSubview: webView)
+        shield.content.bringSubviewToFront(bar)
+        if let blockingView { shield.content.bringSubviewToFront(blockingView) }
+        if let privacyCover { shield.content.bringSubviewToFront(privacyCover) }
+        NSLayoutConstraint.activate([
+            v.leadingAnchor.constraint(equalTo: webView.leadingAnchor), v.trailingAnchor.constraint(equalTo: webView.trailingAnchor),
+            v.topAnchor.constraint(equalTo: webView.topAnchor), v.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
+            stack.centerXAnchor.constraint(equalTo: v.centerXAnchor), stack.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            stack.widthAnchor.constraint(lessThanOrEqualTo: v.widthAnchor, constant: -80),
+        ])
+        connecting = v
+        connectingDetail = detail
+    }
+
+    private func hideConnecting() {
+        connectingTimer?.invalidate(); connectingTimer = nil
+        connecting?.removeFromSuperview()
+        connecting = nil; connectingDetail = nil
+    }
+
+    // MARK: - Dev builds: change the server without Xcode
+
+    @objc private func changeServerTapped() { promptServerChange() }
+
+    private func promptServerChange() {
+        guard Config.isDevBuild, !LockdownController.shared.isLocked, presentedViewController == nil else { return }
+        let a = UIAlertController(title: "Exam server (dev build)",
+                                  message: "Now: \(Config.serverURL.absoluteString)\n\nExample: http://192.168.1.20:8000 (the Mac running "
+                                    + "\"Run Server for iPad.command\"). Takes effect when FairPlay is opened again.",
+                                  preferredStyle: .alert)
+        a.addTextField { f in
+            f.text = Config.serverURL.absoluteString
+            f.keyboardType = .URL
+            f.autocapitalizationType = .none
+            f.autocorrectionType = .no
+            f.clearButtonMode = .whileEditing
+        }
+        a.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak a] _ in
+            let text = a?.textFields?.first?.text ?? ""
+            guard Config.parseServer(text) != nil else {
+                DispatchQueue.main.async { self?.message("Not a server address", "Use http://<address>:<port> or https://<name>.") }
+                return
+            }
+            DevServer.save(text)
+            DispatchQueue.main.async { self?.message("Saved", "Close FairPlay (swipe it away in the app switcher) and open it again.") }
+        })
+        a.addAction(UIAlertAction(title: "Forget it (use \(BuildConfig.serverURL))", style: .destructive) { [weak self] _ in
+            DevServer.save(nil)
+            DispatchQueue.main.async { self?.message("Forgotten", "Close FairPlay and open it again.") }
+        })
+        a.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(a, animated: true)
+    }
+
+    private func message(_ title: String, _ text: String) {
+        guard presentedViewController == nil else { return }
+        let a = UIAlertController(title: title, message: text, preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: "OK", style: .default))
+        present(a, animated: true)
     }
 
     // MARK: - System chrome while locked
@@ -366,6 +496,23 @@ final class ExamViewController: UIViewController, LockSurface,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
         let mainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        if url.scheme?.lowercased() == Self.appScheme {
+            decisionHandler(.cancel)
+            // Only from our own offline page (about:blank), never from a server or exam site.
+            guard mainFrame, committedURL == nil || committedURL?.scheme == "about" else { return }
+            switch url.host?.lowercased() {
+            case "retry":
+                if let u = retryURL { loadFromServer(u) }
+            case "autoretry":
+                // Every 3 s from the offline page: quietly, the offline text stays up.
+                if let u = retryURL { webView.load(Self.serverRequest(u)) }
+            case "server":
+                promptServerChange()
+            default:
+                break
+            }
+            return
+        }
         if isServerURL(url) && ExamPaths.isTeacherPath(url.path) {
             EventLog.shared.record("blocked_navigation", "teacher page \(url.path)")
             decisionHandler(.cancel)
@@ -418,6 +565,7 @@ final class ExamViewController: UIViewController, LockSurface,
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         committedURL = webView.url
+        hideConnecting()
         if LockdownController.shared.isLocked, let u = webView.url, isServerURL(u) || external.allows(u) {
             ExamViewController.lastLockedPage = u
         }
@@ -443,33 +591,40 @@ final class ExamViewController: UIViewController, LockSurface,
         DebugLog.log("web", "page load failed: \(ns.domain) \(ns.code) \(ns.localizedDescription)")
         var retry = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? Config.startURL
         if !isServerURL(retry) && !external.allows(retry) { retry = Config.startURL }
+        retryURL = retry
+        let why = ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut
+            ? "No answer within \(Int(Self.loadTimeout)) seconds." : ns.localizedDescription
         loadOwnHTML(Self.page(title: "Cannot reach the exam server",
                               body: "FairPlay is trying again every 3 seconds. Answers you already typed are saved on this iPad.",
-                              small: server.absoluteString, retry: retry.absoluteString))
+                              small: "\(server.absoluteString) · \(why)", retry: true, changeServer: Config.isDevBuild))
     }
 
     private func loadOwnHTML(_ html: String) {
+        hideConnecting()
         ownPageLoadPending = true
         webView.loadHTMLString(html, baseURL: nil)
     }
 
-    static func page(title: String, body: String, small: String? = nil, retry: String? = nil) -> String {
-        // Review L3: text is HTML-escaped; the retry URL goes in as a JSON string literal
-        // (no inline handler built from it), with "</" broken so it can't close the script.
+    /// Our own pages (offline, not set up). Review L3: all text is HTML-escaped. The page
+    /// holds no URL: "Try again" and "Change server" are fairplay-app:// links the app
+    /// handles itself (decidePolicyFor), only while one of these pages is shown.
+    static func page(title: String, body: String, small: String? = nil, retry: Bool = false,
+                     changeServer: Bool = false) -> String {
         let esc: (String) -> String = {
             $0.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
                 .replacingOccurrences(of: "'", with: "&#39;")
         }
-        var button = ""
-        if let retry, let data = try? JSONSerialization.data(withJSONObject: [retry]),
-           var lit = String(data: data, encoding: .utf8) {
-            lit = String(lit.dropFirst().dropLast()).replacingOccurrences(of: "</", with: "<\\/")
-            button = """
-            <button id="retry">Try again now</button><script>(function(){var t=\(lit);\
-            document.getElementById('retry').addEventListener('click',function(){location.href=t;});\
-            setTimeout(function(){location.href=t;},3000);})();</script>
+        var extra = ""
+        if retry {
+            extra += """
+            <button id="retry">Try again now</button><script>(function(){\
+            document.getElementById('retry').addEventListener('click',function(){location.href='\(appScheme)://retry';});\
+            setTimeout(function(){location.href='\(appScheme)://autoretry';},3000);})();</script>
             """
+        }
+        if changeServer {
+            extra += "<p><a href=\"\(appScheme)://server\" style=\"font-size:15px\">Change server (dev build)</a></p>"
         }
         return """
         <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -477,8 +632,8 @@ final class ExamViewController: UIViewController, LockSurface,
         font:17px -apple-system,system-ui,sans-serif;background:#f4f5f8;color:#111827}
         .card{background:#fff;border-radius:16px;padding:32px 36px;max-width:480px;margin:24px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
         h1{font-size:24px;margin:0 0 10px}p{color:#4b5563;line-height:1.5}button{margin-top:12px;font:inherit;font-weight:600;
-        padding:12px 20px;border:0;border-radius:12px;background:#2f4bd9;color:#fff}</style></head>
-        <body><div class="card"><h1>\(esc(title))</h1><p>\(esc(body))</p>\(small.map { "<p style=\"font-size:13px\">\(esc($0))</p>" } ?? "")\(button)</div></body></html>
+        padding:12px 20px;border:0;border-radius:12px;background:#2f4bd9;color:#fff}a{color:#2f4bd9}</style></head>
+        <body><div class="card"><h1>\(esc(title))</h1><p>\(esc(body))</p>\(small.map { "<p style=\"font-size:13px\">\(esc($0))</p>" } ?? "")\(extra)</div></body></html>
         """
     }
 
@@ -520,7 +675,8 @@ final class ExamViewController: UIViewController, LockSurface,
     func lockStateChanged() {
         let s = LockdownController.shared.state
         if s.softLock {
-            bar.setLockText("Watched (dev build, no Assessment Mode)", soft: true)
+            bar.setLockText(Config.isDevBuild ? "Watched (dev build, no Assessment Mode)"
+                                              : "Watched (test build, no Assessment Mode)", soft: true)
         } else if s.assessment {
             bar.setLockText("Locked · Assessment Mode", soft: false)
         } else if s.singleApp {

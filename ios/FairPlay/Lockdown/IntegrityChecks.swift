@@ -19,6 +19,9 @@ enum IntegrityChecks {
         // Dev builds only: the simulator can't be screen-recorded from inside iPadOS, so
         // this pretends it is, to test the red screen (-DevForceCapture YES).
         if UserDefaults.standard.bool(forKey: "DevForceCapture") { s.captured = true }
+        // Dev builds only: watch a test through QuickTime / AirPlay (-AllowCapture YES).
+        // The beat still says cap=1; only the red screen is skipped (Integrity.problems).
+        s.captureAllowed = Config.allowsCapture
         #endif
         s.multitasking = isMultitasking(window)
         s.foreground = UIApplication.shared.applicationState == .active
@@ -39,18 +42,23 @@ enum IntegrityChecks {
     }
 
     /// This iPad's screen plus any external display (cable, AirPlay, Sidecar-like receivers).
+    /// Review L8: connected scenes only (openSessions keeps disconnected ones around).
+    /// Mirroring makes no scene of its own; isCaptured below catches it. (UIScreen.screens,
+    /// counted here before, is deprecated since iPadOS 16.)
     static func screenCount() -> Int {
-        // Review L8: connected scenes only (openSessions keeps disconnected ones around).
         let external = UIApplication.shared.connectedScenes.filter {
             $0.session.role == .windowExternalDisplayNonInteractive && $0.activationState != .unattached
         }.count
-        return max(1 + external, UIScreen.screens.count)
+        return 1 + external
     }
 
-    /// Screen recording, QuickTime capture over the cable, AirPlay or cable mirroring.
+    /// Screen recording, QuickTime capture over the cable, AirPlay or cable mirroring
+    /// (sceneCaptureState, iPadOS 17+; UIScreen.isCaptured is deprecated).
     static func isCaptured(_ window: UIWindow?) -> Bool {
-        if let scene = window?.windowScene, scene.traitCollection.sceneCaptureState == .active { return true }
-        return UIScreen.main.isCaptured
+        if let scene = window?.windowScene { return scene.traitCollection.sceneCaptureState == .active }
+        return UIApplication.shared.connectedScenes.contains {
+            ($0 as? UIWindowScene)?.traitCollection.sceneCaptureState == .active
+        }
     }
 
     /// Split View / Slide Over / a Stage Manager window that doesn't fill the screen.
@@ -70,8 +78,6 @@ enum IntegrityChecks {
         "/Library/MobileSubstrate/MobileSubstrate.dylib", "/usr/lib/libsubstitute.dylib", "/usr/lib/TweakInject",
         "/usr/sbin/sshd", "/usr/bin/ssh", "/bin/bash", "/etc/apt", "/private/var/lib/apt", "/private/var/lib/cydia",
     ]
-    private static let hookLibraries = ["substrate", "substitute", "libhooker", "ellekit", "frida", "cycript",
-                                        "sslkillswitch", "tweakinject", "libblackjack", "shadow", "flex"]
 
     /// Signs of a modified iPadOS (never meaningful in the simulator, which runs on macOS).
     static func jailbreakSigns() -> [String] {
@@ -88,10 +94,11 @@ enum IntegrityChecks {
             try? fm.removeItem(atPath: probe)
         }
         if let env = getenv("DYLD_INSERT_LIBRARIES"), !String(cString: env).isEmpty { out.append("DYLD_INSERT_LIBRARIES") }
+        // Loaded code: Integrity.hookLibrary decides (a name match only counts outside the
+        // system's own folders, so an Apple library can never make an iPad look jailbroken).
         for i in 0..<_dyld_image_count() {
             guard let c = _dyld_get_image_name(i) else { continue }
-            let name = String(cString: c).lowercased()
-            if let hit = hookLibraries.first(where: { name.contains($0) }) { out.append("loaded \(hit)") }
+            if let hit = Integrity.hookLibrary(imagePath: String(cString: c)) { out.append("loaded \(hit)") }
         }
         for scheme in ["cydia", "sileo", "zbra", "filza"] {
             if let u = URL(string: "\(scheme)://"), UIApplication.shared.canOpenURL(u) { out.append("\(scheme) app") }

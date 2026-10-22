@@ -61,7 +61,7 @@ final class LockdownController {
     private var pendingTimer: Timer?
 
     /// How this lock is held. Set once when the lock starts.
-    enum Mode: String { case assessment = "assessment mode", singleApp = "single app mode", soft = "dev soft lock" }
+    enum Mode: String { case assessment = "assessment mode", singleApp = "single app mode", soft = "watched lock" }
     private(set) var mode: Mode = .soft
     private var lockedAt: Date?
 
@@ -100,9 +100,11 @@ final class LockdownController {
     /// and refuses with an unknown error while it cleans up: try again shortly.
     private func beginAssessment(_ ids: [String], triesLeft: Int) {
         guard Config.tryAssessmentMode else {
-            DebugLog.log("lock", "Assessment Mode skipped (dev build in the simulator; -Assessment YES to try it)")
-            EventLog.shared.record("assessment_unavailable", "dev soft lock: simulator")
-            didLock(.soft)
+            // Simulator (dev), or signed without the entitlement (free Apple ID, sideloaded
+            // test build). fallBack still decides: Single App Mode, else a watched lock
+            // only where Config.allowsSoftLock says so, else the lock fails.
+            DebugLog.log("lock", "Assessment Mode skipped (simulator, or not in this build's provisioning profile)")
+            fallBack(why: "not available in this copy of FairPlay")
             return
         }
         assessment.begin(participants: ids) { [weak self] error in
@@ -130,7 +132,7 @@ final class LockdownController {
                 EventLog.shared.record("assessment_unavailable", "using Single App Mode: \(why)")
                 self.didLock(.singleApp)
             } else if Config.allowsSoftLock {
-                EventLog.shared.record("assessment_unavailable", "dev soft lock: \(why)")
+                EventLog.shared.record("assessment_unavailable", "watched lock: \(why)")
                 self.didLock(.soft)
             } else {
                 EventLog.shared.record("lock_failed", wasOn

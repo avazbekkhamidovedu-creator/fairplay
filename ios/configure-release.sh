@@ -9,6 +9,10 @@
 #   FAIRPLAY_PINS=<base64 sha256 of CA certs, comma-separated; see mac/pin.sh> \
 #   bash ios/configure-release.sh
 #
+# FAIRPLAY_WATCHED_LOCK=1 makes a TEST build (the sideloaded .ipa on the GitHub release,
+# or TestFlight before Apple grants the Assessment Mode entitlement): without Assessment
+# Mode it locks in "watched" mode, which the server and the live room count as NOT locked.
+#
 # Never commit the generated plist (it is in .gitignore). Delete it to go back to the dev
 # defaults (BuildConfig in Config.swift).
 set -euo pipefail
@@ -32,4 +36,8 @@ for pin in "${P[@]}"; do
   [[ "$pin" =~ ^[A-Za-z0-9+/=]{44}$ ]] || { echo "bad pin: $pin"; rm -f "$OUT"; exit 1; }
   /usr/libexec/PlistBuddy -c "Add :Pins: string $pin" "$OUT" >/dev/null
 done
+if [ "${FAIRPLAY_WATCHED_LOCK:-0}" = 1 ]; then
+  /usr/libexec/PlistBuddy -c "Add :WatchedLock bool true" "$OUT" >/dev/null
+  echo "Test build: watched lock allowed without Assessment Mode (counts as NOT locked)."
+fi
 echo "Wrote $OUT for $SERVER (${#P[@]} pin(s)). Archive the Release configuration now."

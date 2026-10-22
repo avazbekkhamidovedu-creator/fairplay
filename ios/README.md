@@ -31,9 +31,11 @@ configure-release.sh writes the release server / app key / pins into the bundle
    target FairPlay > **Signing & Capabilities** → Team: your name (Personal Team). If Xcode says
    the bundle id is taken, change `ai.proctora.student.ipad` to something of your own.
 4. Server reachable from the iPad: double-click **Run Server for iPad.command** (listens on the
-   Wi-Fi). Scheme > Run > Arguments: `-ServerURL http://<the Mac's Wi-Fi IP>:8000` (the app
-   remembers it). University Wi-Fi often blocks device-to-device traffic: then use a phone
-   hotspot for both, or a tunnel URL (https) as the server.
+   Wi-Fi and prints the address). Scheme > Run > Arguments: `-ServerURL http://<the Mac's Wi-Fi IP>:8000`
+   (the app remembers it for home-screen launches; **Change server** on the connecting /
+   offline screen edits or forgets it without Xcode). University Wi-Fi often blocks
+   device-to-device traffic: then use a phone hotspot for both. Also check iPad **Settings >
+   Privacy & Security > Local Network > FairPlay** is on, or the iPad can't reach the Mac.
 5. Pick your iPad as the run destination and press Run. First launch: iPad **Settings > General >
    VPN & Device Management** → trust your developer certificate.
 
@@ -52,6 +54,7 @@ Dev-build launch arguments (scheme > Run > Arguments, or `xcrun simctl launch �
 | `-Assessment YES` | `NO` in the simulator | try Apple Assessment Mode in the simulator (it shows the consent prompt but can never finish there: its agent can't write its policy store) |
 | `-SoftLock NO` | `YES` | refuse to lock without Assessment / Single App Mode, like a release build |
 | `-DevExitCode 1234` | `0000` | fixed invigilator code (dev builds only) |
+| `-AllowCapture YES` | `NO` | watch a test through QuickTime (cable) or AirPlay: recording / mirroring no longer puts up the red screen while locked (still reported, `cap=1`) |
 | `-DevForceCapture YES` | `NO` | pretend the screen is recorded, to test the red screen (the simulator can't be recorded from inside iPadOS) |
 | `-ShieldSelfTest YES` | `NO` | 3 s after locking, render the window the way iPadOS snapshots it and log `HIDDEN` / `VISIBLE` |
 
@@ -62,6 +65,37 @@ that say `build: "dev"` (that field isn't signed, so the key is the real protect
 
 Tests: `cd ios/FairPlayCore && swift test` (signing formats and offline-exit vectors match
 the server's own tests).
+
+## Test build for anyone (GitHub release, no Mac needed for the app itself)
+
+`.github/workflows/ipad.yml` builds the **Release** configuration pointed at
+https://exam.speakupai.uz on every push that touches `ios/`, **unsigned**, with
+`WatchedLock` in `FairPlayBuild.plist`, and attaches it to the current release as
+**FairPlay-iPad.ipa**. Testers sign it with their own Apple ID (Sideloadly / AltStore, steps
+in `RELEASES.md`). Such a copy can't have Assessment Mode (no entitlement), so it locks in
+**watched** mode: the beat says `aac=0,sam=0,soft=1`, the server counts it as **not locked**
+(`ipad_lock_held`), the lock bar says "Watched (test build, no Assessment Mode)". All other
+release rules stay: https + pins + the real app key, jailbreak / debugger / recording checks,
+signed hand-in, no `0000`. A release build without `WatchedLock` still refuses to lock
+without Assessment Mode or Single App Mode.
+
+## TestFlight (paid Apple Developer Program, not set up yet)
+
+The `testflight` job in `ipad.yml` is ready but switched off. To use it:
+1. Join the Apple Developer Program. In App Store Connect create the app with bundle id
+   `ai.proctora.student.ipad` (Certificates, IDs & Profiles: enable App Attest for it).
+2. App Store Connect > Users and Access > Integrations > App Store Connect API: create a key
+   with the **Admin** role (it lets the runner create the distribution certificate).
+3. GitHub > Settings > Secrets and variables > Actions:
+   secrets `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` (the .p8 file's text), `APPLE_TEAM_ID`;
+   variable `IPAD_TESTFLIGHT` = `true`.
+4. Push anything under `ios/`: the build appears in TestFlight. Add testers there (a public
+   link works for up to 10,000 people).
+5. When Apple grants the Assessment Mode entitlement (Release checklist 1), set the variable
+   `IPAD_ASSESSMENT_APPROVED` = `true`: TestFlight builds then use `Config/FairPlay.entitlements`
+   and lock for real. Before that they are watched test builds, like the .ipa.
+
+This job has not run yet (no account); expect to fix small signing details on its first run.
 
 ## How the lock works (strongest first)
 
@@ -130,8 +164,10 @@ pass "Require the strongest lock". See CONTRACT.md "2026-10-20 iPad app".
 
 ## Not done yet
 
-- **App Attest verification on the server.** The app reports `att=` in every beat; the server
-  side (attestation + assertion checks against Apple's root) is the next step and closes the
-  "extracted app key" gap for iPads (CONTRACT M-20).
+- **App Attest is not built yet, in the app or on the server.** The app only reports whether
+  the device supports it (`att=0` / `att=?`); nothing is attested and the server checks
+  nothing. Both halves (attestKey / assertions in the app, verification against Apple's
+  root on the server) need the App Attest entitlement, so they come with the paid account.
+  Until then an extracted app key is as much of a risk on iPad as on Mac and Windows (CONTRACT M-20).
 - Assessment Mode can only be tested end to end on a real iPad with the entitlement.
 - Security review and fixes: see `REVIEW-2026-10-20.md`.

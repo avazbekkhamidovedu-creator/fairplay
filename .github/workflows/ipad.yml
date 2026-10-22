@@ -1,0 +1,164 @@
+name: ipad
+
+# iPad app (ios/):
+#  - test:  FairPlayCore unit tests + compile check of the Debug (simulator) build.
+#  - ipa:   Release build pointed at the exam server, NOT signed, with the watched lock
+#           allowed (test build). Attached to the GitHub release of RELEASE_VERSION as
+#           FairPlay-iPad.ipa; testers sign it with their own Apple ID (Sideloadly /
+#           AltStore, see RELEASES.md). Without Apple's Assessment Mode entitlement it locks
+#           in "watched" mode, which the server and the live room count as NOT locked.
+#  - testflight: only when the repository variable IPAD_TESTFLIGHT is "true" (paid Apple
+#           Developer account + App Store Connect API key secrets, see ios/README.md).
+#
+# Needs the repository secret FAIRPLAY_APP_KEY (same value as the server's FAIRPLAY_APP_KEY).
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["ios/**", "RELEASE_VERSION", ".github/workflows/ipad.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FAIRPLAY_SERVER: https://exam.speakupai.uz
+  # Same pins as release-mac.yml: ISRG Root X1/X2, GTS Root R1/R3/R4.
+  FAIRPLAY_PINS: "lrzsBiZJdvN0YHeazyjFp8/oo8Cq4RqP/O4FwL3fCMY=,aXKbjhWobvwXelevtxcd/GSt0owvyozxUH40RTzLFHA=,2UdDKr3nt/qQ/C5rWRAbEoDg4cfk5A+jxoh//1en9M8=,NNinPuII2bzbDZVlIJNLTkDmlIJZbotvc8hCawEKb0g=,NJ36QFjF4mMSOzmK55VXPE4TE8g/5o+TVWzV6AMbPH0="
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Newest Xcode
+        run: |
+          X="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$X"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
+      - name: FairPlayCore tests
+        run: cd ios/FairPlayCore && swift test
+      - name: Debug build (simulator, compile check)
+        run: |
+          xcodebuild -project ios/FairPlay.xcodeproj -scheme FairPlay -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build > build.log 2>&1 \
+            || { grep -E "error:" build.log | sort -u | head -60; tail -n 40 build.log; exit 1; }
+          grep -E "warning:" build.log | grep -v "/build/" | sort -u | head -40 || true
+          tail -n 3 build.log
+
+  ipa:
+    needs: test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Version
+        run: |
+          V="$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' ios/FairPlay/Config.swift | head -1)"
+          TAG="v$(tr -d ' \n' < RELEASE_VERSION)"
+          [[ "$V" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad version $V / $TAG"; exit 1; }
+          echo "APP_VERSION=$V" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+      - name: Release settings (watched test build)
+        env:
+          FAIRPLAY_APP_KEY: ${{ secrets.FAIRPLAY_APP_KEY }}
+          FAIRPLAY_WATCHED_LOCK: "1"
+        run: |
+          if [ ${#FAIRPLAY_APP_KEY} -lt 32 ]; then
+            echo "::error::Set the repository secret FAIRPLAY_APP_KEY (same value as the server)"; exit 1
+          fi
+          bash ios/configure-release.sh
+      - name: Build (Release, device, unsigned)
+        run: |
+          xcodebuild -project ios/FairPlay.xcodeproj -scheme FairPlay -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build > build.log 2>&1 \
+            || { grep -E "error:" build.log | sort -u | head -60; tail -n 40 build.log; exit 1; }
+          tail -n 3 build.log
+      - name: Check and package
+        run: |
+          APP=build/Build/Products/Release-iphoneos/FairPlay.app
+          plutil -extract ServerURL raw "$APP/FairPlayBuild.plist"
+          plutil -extract WatchedLock raw "$APP/FairPlayBuild.plist" | grep -qx true
+          plutil -extract CFBundleShortVersionString raw "$APP/Info.plist"
+          if plutil -p "$APP/Info.plist" | grep -q NSAllowsArbitraryLoads; then echo "::error::release Info.plist allows http"; exit 1; fi
+          mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry FairPlay-iPad.ipa Payload
+          ls -l FairPlay-iPad.ipa
+      - name: Attach to the GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "FairPlay $TAG" --notes-file RELEASES.md || \
+            gh release view "$TAG" >/dev/null
+          gh release upload "$TAG" FairPlay-iPad.ipa --clobber
+      - name: Keep the ipa (manual runs)
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FairPlay-iPad
+          path: FairPlay-iPad.ipa
+          retention-days: 14
+
+  # Paid Apple Developer account only. NOT RUN YET: set the variable IPAD_TESTFLIGHT=true
+  # after adding the secrets below (ios/README.md "TestFlight"). Until Apple grants the
+  # Assessment Mode entitlement (variable IPAD_ASSESSMENT_APPROVED=true), the TestFlight
+  # build is a watched test build signed without it.
+  testflight:
+    needs: test
+    if: vars.IPAD_TESTFLIGHT == 'true' && github.event_name != 'pull_request'
+    runs-on: macos-15
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPROVED: ${{ vars.IPAD_ASSESSMENT_APPROVED }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Newest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - name: Check secrets
+        run: |
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 APPLE_TEAM_ID; do
+            [ -n "${!v}" ] || { echo "::error::missing secret $v"; exit 1; }
+          done
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/AuthKey.p8"
+          echo "APP_VERSION=$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' ios/FairPlay/Config.swift | head -1)" >> "$GITHUB_ENV"
+      - name: Release settings
+        env:
+          FAIRPLAY_APP_KEY: ${{ secrets.FAIRPLAY_APP_KEY }}
+        run: |
+          if [ "$APPROVED" = true ]; then export FAIRPLAY_WATCHED_LOCK=0; else export FAIRPLAY_WATCHED_LOCK=1; fi
+          bash ios/configure-release.sh
+      - name: Archive and upload to TestFlight
+        run: |
+          ENT=Config/FairPlay.entitlements
+          [ "$APPROVED" = true ] || ENT=Config/FairPlay-Personal.entitlements
+          AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey.p8"
+                -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          xcodebuild archive -project ios/FairPlay.xcodeproj -scheme FairPlay -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/FairPlay.xcarchive \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic CODE_SIGN_ENTITLEMENTS="$ENT" \
+            MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" "${AUTH[@]}"
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/FairPlay.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist -exportPath build/export "${AUTH[@]}"
