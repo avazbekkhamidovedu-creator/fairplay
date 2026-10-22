@@ -23,6 +23,26 @@ configure-release.sh writes the release server / app key / pins into the bundle
 4. Invigilator exit while locked: **press and hold the lock bar at the top for 3 s** (or Ctrl-Opt-Cmd-E
    on a hardware keyboard), code from the live room. Dev builds also accept `0000`.
 
+## Run it on your own iPad (free Apple ID is enough)
+
+1. Cable the iPad to the Mac, unlock it, tap **Trust This Computer**.
+2. iPad: **Settings > Privacy & Security > Developer Mode** → on (it restarts).
+3. Mac: **Xcode > Settings > Accounts** → add your Apple ID. Open `ios/FairPlay.xcodeproj`,
+   target FairPlay > **Signing & Capabilities** → Team: your name (Personal Team). If Xcode says
+   the bundle id is taken, change `ai.proctora.student.ipad` to something of your own.
+4. Server reachable from the iPad: double-click **Run Server for iPad.command** (listens on the
+   Wi-Fi). Scheme > Run > Arguments: `-ServerURL http://<the Mac's Wi-Fi IP>:8000` (the app
+   remembers it). University Wi-Fi often blocks device-to-device traffic: then use a phone
+   hotspot for both, or a tunnel URL (https) as the server.
+5. Pick your iPad as the run destination and press Run. First launch: iPad **Settings > General >
+   VPN & Device Management** → trust your developer certificate.
+
+Debug builds on a device sign **without** the Assessment Mode / App Attest entitlements (a
+Personal Team can't have them), so the app runs the dev "watched" lock there. The full lock
+needs Apple's Assessment Mode entitlement on a paid team (see Release checklist). Free-team
+installs expire after 7 days; reinstall from Xcode. Students get the app through TestFlight or
+the App Store / Apple School Manager (paid Apple Developer Program).
+
 Dev-build launch arguments (scheme > Run > Arguments, or `xcrun simctl launch … -Key value`):
 
 | argument | default | meaning |
