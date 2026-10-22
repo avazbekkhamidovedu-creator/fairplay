@@ -377,6 +377,25 @@ import Foundation
         #expect(!ExamPaths.allowedWhileLocked(path: "/student", attemptId: "a_1", preLock: true))
     }
 
+    @Test func startPageAndWayBack() {
+        #expect(PreLockState.startPageExamId(path: "/student/exams/e_1/start") == "e_1")
+        #expect(PreLockState.startPageExamId(path: "/student/exams/E-9/start/") == "E-9")
+        #expect(PreLockState.startPageExamId(path: "/Student/Exams/e1/START") == "e1")
+        #expect(PreLockState.startPageExamId(path: "/student/exams/e_1/checkin") == nil)
+        #expect(PreLockState.startPageExamId(path: "/student/exams/e_1") == nil)
+        #expect(PreLockState.startPageExamId(path: "/student/exams//start") == nil)
+        #expect(PreLockState.startPageExamId(path: "/student//exams/e_1/start") == nil)
+        #expect(PreLockState.startPageExamId(path: "/student/exams/e%2F1/start") == nil)
+        #expect(PreLockState.startPageExamId(path: "/teacher/exams/e_1/start") == nil)
+        #expect(PreLockState.startPageExamId(path: "/student/exams/" + String(repeating: "a", count: 65) + "/start") == nil)
+        #expect(PreLockState.homePath(examId: "e_1") == "student/exams/e_1/start")
+        #expect(PreLockState.homePath(examId: nil) == "student")
+        #expect(PreLockState.homePath(examId: "../teacher") == "student")
+        // Both ways back are pages the pre-exam lock shows.
+        #expect(PreLockState.allowedWhilePreLocked(path: "/" + PreLockState.homePath(examId: "e_1")))
+        #expect(PreLockState.allowedWhilePreLocked(path: "/" + PreLockState.homePath(examId: nil)))
+    }
+
     @Test func relaunchMarker() {
         #expect(PreLockState.markerIsPreLock(PreLockState.marker))
         #expect(PreLockState.markerIsPreLock(PreLockState.marker + "\n"))

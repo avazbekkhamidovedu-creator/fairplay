@@ -1,33 +1,94 @@
 import Foundation
 
 /// 2026-10-23: teacher-allowed websites inside the exam. The exam page shows them in an
-/// <iframe> side pane and sends `allowed_sites` (host names such as "docs.python.org")
-/// with "lock" / "session" (also "openExternal" / "prelock"; missing = none). While
-/// locked, a SUB-FRAME may load https pages on a listed host or any subdomain of it,
-/// plus about:blank / about:srcdoc. The main frame still shows only the exam pages, no
-/// window ever opens and nothing downloads.
+/// <iframe> side pane and sends `allowed_sites` with "lock" / "session" (also
+/// "openExternal" / "prelock"). A message without the key leaves the list as it is; an
+/// explicit [] means none; the unlock clears it. While locked, a SUB-FRAME may load https
+/// pages on a listed site, plus about:blank / about:srcdoc. The main frame still shows only
+/// the exam pages, no window ever opens and nothing downloads.
+///
+/// Entry rule (review 2026-10-23): "docs.python.org" is that host only (and the same host with "www."
+/// added or removed); "*.python.org" is python.org and every subdomain of it. A wildcard on a
+/// public suffix or a shared-hosting domain ("*.github.io", "*.com", "*.co.uk") is ignored:
+/// anyone can put a page there.
 ///
 /// Pure decisions only (MainWindowController acts on them), for the tests. Same rules as
-/// the iPad's FairPlayCore AllowedSites.swift.
+/// the iPad's FairPlayCore AllowedSites.swift and the Windows NavigationPolicy.
 enum AllowedSites {
 
     /// Most entries a page may send (more are ignored).
     static let maxEntries = 200
 
-    /// Host names from a bridge message, normalised (see `normalizedHost`), without
+    /// Entries from a bridge message, normalised (see `normalizedEntry`), without
     /// duplicates. Anything else in the list is dropped. Missing or not a list = [].
     static func parse(_ raw: Any?) -> [String] {
         guard let list = raw as? [Any] else { return [] }
         var out: [String] = []
         for case let s as String in list {
             guard out.count < maxEntries else { break }
-            if let h = normalizedHost(s), isUsableEntry(h), !out.contains(h) { out.append(h) }
+            if let e = normalizedEntry(s), !out.contains(e) { out.append(e) }
         }
         return out
     }
 
+    /// The list after a "lock" / "session" / "prelock" / "openExternal" message: unchanged when
+    /// the message has no `allowed_sites` key, otherwise what it sends ([] = none).
+    static func updated(_ current: [String], from body: [String: Any]) -> [String] {
+        guard let raw = body["allowed_sites"] else { return current }
+        return parse(raw)
+    }
+
+    static let wildcardPrefix = "*."
+
+    /// Wildcard bases that are never allowed: public suffixes and shared hosting, where
+    /// anyone can get a subdomain. The one list on the Mac (same as the iPad's and Windows').
+    static let sharedSuffixes: Set<String> = [
+        "com", "net", "org", "edu", "gov", "mil", "int", "info", "biz", "io", "app", "dev", "page",
+        "site", "online", "xyz", "me", "co", "ai", "cn", "uk", "us", "eu", "de", "ru", "uz", "jp",
+        "co.uk", "org.uk", "ac.uk", "gov.uk", "com.cn", "net.cn", "org.cn", "edu.cn", "gov.cn", "ac.cn",
+        "github.io", "githubusercontent.com", "github.com", "gitlab.io", "gitlab.com", "bitbucket.io",
+        "vercel.app", "now.sh", "netlify.app", "netlify.com", "pages.dev", "workers.dev",
+        "web.app", "firebaseapp.com", "herokuapp.com", "blogspot.com", "wordpress.com",
+        "glitch.me", "replit.app", "replit.dev", "repl.co", "onrender.com", "fly.dev",
+        "azurewebsites.net", "azurestaticapps.net", "cloudfront.net", "amazonaws.com",
+        "appspot.com", "wixsite.com", "weebly.com", "notion.site", "carrd.co", "surge.sh",
+        "neocities.org", "codepen.io", "jsfiddle.net", "stackblitz.io", "codesandbox.io",
+        "ngrok.io", "ngrok-free.app", "trycloudflare.com", "google.com", "googleusercontent.com",
+        "sites.google.com", "docs.google.com", "translate.goog", "s3.amazonaws.com",
+    ]
+
+    /// Second-level labels under a two-letter country code that are public suffixes too
+    /// ("com.au", "co.jp", "ac.kr", "edu.uz").
+    private static let countrySecondLevels: Set<String> = [
+        "com", "net", "org", "edu", "gov", "mil", "ac", "co", "go", "or", "ne", "gob", "nic", "sch", "gv",
+    ]
+
+    /// A wildcard base nobody may use: on the list above, a single label, or a country-code
+    /// second level.
+    static func isSharedSuffix(_ host: String) -> Bool {
+        if sharedSuffixes.contains(host) { return true }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        if labels.count < 2 { return true }
+        return labels.count == 2 && labels[1].count == 2 && countrySecondLevels.contains(String(labels[0]))
+    }
+
+    /// An allowed-site entry in canonical form: a usable host name (`normalizedHost`,
+    /// `isUsableEntry`), or "*." + a host name that is neither an IP literal nor a shared
+    /// suffix. nil for anything else (a wildcard anywhere else, a scheme, a path...).
+    static func normalizedEntry(_ raw: String) -> String? {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix(wildcardPrefix) {
+            let rest = String(t.dropFirst(wildcardPrefix.count))
+            guard rest == rest.trimmingCharacters(in: .whitespaces), let base = normalizedHost(rest),
+                  !isIPLiteral(base), !isSharedSuffix(base) else { return nil }
+            return wildcardPrefix + base
+        }
+        guard let h = normalizedHost(t), isUsableEntry(h) else { return nil }
+        return h
+    }
+
     /// Lowercased, without one trailing dot or IPv6 brackets. nil when it is not a plain
-    /// host name: a scheme, path, port, wildcard, spaces, empty labels or non-ASCII
+    /// host name: a scheme, path, port, "*", spaces, empty labels or non-ASCII
     /// characters (WebKit gives hosts in punycode, "xn--...", and they are compared as is).
     static func normalizedHost(_ raw: String) -> String? {
         var h = raw.trimmingCharacters(in: .whitespaces).lowercased()
@@ -56,24 +117,36 @@ enum AllowedSites {
         return last.allSatisfy { digits.contains($0) }
     }
 
-    /// A list entry must name a site, not a whole top-level domain: "com" or "edu" would
-    /// open every site under it. IP literals are taken as they are.
+    /// A plain list entry must name a site with a dot, never a bare label ("com",
+    /// "localhost"). IP literals are taken as they are.
     static func isUsableEntry(_ host: String) -> Bool {
         isIPLiteral(host) || host.contains(".")
     }
 
-    /// `host` equals an allowed entry or is a subdomain of one ("x.docs.python.org" for
-    /// "docs.python.org"; never "evildocs.python.org" or "docs.python.org.attacker.com").
-    /// An IP literal only matches the same literal.
+    /// Does a normalised `host` match one normalised entry? "*.a.com": a.com or any
+    /// subdomain ("x.a.com"; never "xa.com" or "a.com.evil.net"). A plain entry: that host,
+    /// or the same host with "www." added or removed. An IP literal only matches itself.
+    static func entryMatches(_ host: String, entry: String) -> Bool {
+        if entry.hasPrefix(wildcardPrefix) {
+            let base = String(entry.dropFirst(wildcardPrefix.count))
+            return !isIPLiteral(host) && (host == base || host.hasSuffix("." + base))
+        }
+        if host == entry { return true }
+        if isIPLiteral(host) || isIPLiteral(entry) { return false }
+        if host == "www." + entry { return true }
+        let bare = String(entry.dropFirst(4))
+        return entry.hasPrefix("www.") && bare.contains(".") && host == bare
+    }
+
+    /// `host` matches one of the allowed entries (`entryMatches`). Entries that are not
+    /// valid (`normalizedEntry`), e.g. "*.github.io", match nothing.
     static func hostAllowed(_ host: String, allowed: [String]) -> Bool {
         guard let h = normalizedHost(host) else { return false }
-        let entries = allowed.compactMap(normalizedHost).filter(isUsableEntry)
-        if isIPLiteral(h) { return entries.contains(h) }
-        return entries.contains { a in !isIPLiteral(a) && (h == a || h.hasSuffix("." + a)) }
+        return allowed.compactMap(normalizedEntry).contains { entryMatches(h, entry: $0) }
     }
 
     /// May a sub-frame of the locked exam page load `url`? about:blank / about:srcdoc, or
-    /// https on the default port (no user name or password in the URL) on an allowed host.
+    /// https on the default port (no user name or password in the URL) on an allowed site.
     /// Plain http never.
     static func frameAllowed(_ url: URL, allowed: [String]) -> Bool {
         let scheme = url.scheme?.lowercased()

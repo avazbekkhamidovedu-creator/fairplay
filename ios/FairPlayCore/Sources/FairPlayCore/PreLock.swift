@@ -69,6 +69,28 @@ public enum PreLockState {
             && !parts[3].isEmpty && (parts[4] == "start" || parts[4] == "checkin")
     }
 
+    /// The exam id of a "Before you start" page, /student/exams/<id>/start (trailing slash
+    /// allowed), or nil for any other path or an id that is not a plain token (1-64 of
+    /// A-Z a-z 0-9 _ -).
+    public static func startPageExamId(path: String) -> String? {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.count == 4, parts[0].lowercased() == "student", parts[1].lowercased() == "exams",
+              parts[3].lowercased() == "start", !path.contains("//") else { return nil }
+        let id = String(parts[2])
+        guard (1...64).contains(id.count), id.unicodeScalars.allSatisfy({ idChars.contains($0) }) else { return nil }
+        return id
+    }
+
+    private static let idChars = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz"
+                                                + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+
+    /// Where an in-page route change the pre-exam lock does not allow goes back to: the start
+    /// page of the exam it was taken for (when known), else the student home.
+    public static func homePath(examId: String?) -> String {
+        guard let examId, startPageExamId(path: "/student/exams/\(examId)/start") == examId else { return "student" }
+        return "student/exams/\(examId)/start"
+    }
+
     /// What the relaunch marker holds during the pre-exam lock. Not a safe token (the "+"),
     /// so it can never be read back as an attempt id.
     public static let marker = "+prelock"

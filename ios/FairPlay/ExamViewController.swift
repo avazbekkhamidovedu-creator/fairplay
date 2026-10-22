@@ -80,6 +80,9 @@ final class ExamViewController: UIViewController, LockSurface,
     /// the exam page's side pane. Used only while locked; cleared when the lock ends.
     private var allowedSites: [String] = []
     private var batteryObservers: [NSObjectProtocol] = []
+    /// The exam id of the last "Before you start" page shown: where the pre-exam lock sends
+    /// a route change it does not allow (PreLockState.homePath).
+    private var lastStartExamId: String?
 
     // MARK: - Setup
 
@@ -194,11 +197,20 @@ final class ExamViewController: UIViewController, LockSurface,
                     view.load(Self.serverRequest(Config.startURL))
                     return
                 }
+                if let id = PreLockState.startPageExamId(path: u.path) { self.lastStartExamId = id }
+                let lock = LockdownController.shared
                 let aid = AppSession.shared.exam?.attemptId
-                if LockdownController.shared.isLocked,
-                   !ExamPaths.allowedWhileLocked(path: u.path, attemptId: aid, preLock: LockdownController.shared.isPreLock), let aid {
-                    EventLog.shared.record("blocked_navigation", "left the exam: \(u.path)")
+                guard lock.isLocked,
+                      !ExamPaths.allowedWhileLocked(path: u.path, attemptId: aid, preLock: lock.isPreLock) else { return }
+                EventLog.shared.record("blocked_navigation", "left the exam: \(u.path)")
+                if let aid {
                     view.load(Self.serverRequest(Config.serverURL.appendingPathComponent("student/exam/\(aid)")))
+                } else if lock.isPreLock {
+                    // 2026-10-23: the pre-exam lock has no attempt yet: back to the start page
+                    // it was taken on (or the student home).
+                    let back = PreLockState.homePath(examId: self.lastStartExamId)
+                    DebugLog.log("web", "pre-exam lock: in-page route \(u.path) sent back to /\(back)")
+                    view.load(Self.serverRequest(Config.serverURL.appendingPathComponent(back)))
                 }
             }
         }
@@ -384,7 +396,7 @@ final class ExamViewController: UIViewController, LockSurface,
                                                   preLocked: LockdownController.shared.isPreLock) == .promote
             if AppSession.shared.setExam(attemptId: body["attempt_id"] as? String, token: body["token"] as? String,
                                          session: body["session"] as? String) {
-                allowedSites = AllowedSites.parse(body["allowed_sites"])
+                allowedSites = AllowedSites.updated(allowedSites, from: body)
                 if promote {
                     // 2026-10-23: the exam is attached to the pre-exam lock: it is the exam's lock now.
                     LockdownController.shared.promoteToExamLock(participants: ExamPaths.allowedParticipants(body["allowed_apps"]))
@@ -401,7 +413,8 @@ final class ExamViewController: UIViewController, LockSurface,
             case .alreadyPreLocked:
                 send(["type": "locked", "prelock": true])
             case .lock:
-                allowedSites = AllowedSites.parse(body["allowed_sites"])
+                allowedSites = AllowedSites.updated(allowedSites, from: body)
+                if let id = committedURL.flatMap({ PreLockState.startPageExamId(path: $0.path) }) { lastStartExamId = id }
                 lock.preLock(participants: ExamPaths.allowedParticipants(body["allowed_apps"])) { [weak self] r in
                     switch r {
                     // false when an exam lock asked meanwhile and this became its lock.
@@ -437,7 +450,7 @@ final class ExamViewController: UIViewController, LockSurface,
                 send(["type": "lockFailed", "reason": "bad_session"])
                 return
             }
-            allowedSites = AllowedSites.parse(body["allowed_sites"])
+            allowedSites = AllowedSites.updated(allowedSites, from: body)
             LockdownController.shared.lock(participants: ExamPaths.allowedParticipants(body["allowed_apps"])) { [weak self] r in
                 switch r {
                 case .locked: self?.send(["type": "locked"])
@@ -450,7 +463,7 @@ final class ExamViewController: UIViewController, LockSurface,
                 send(["type": "externalFailed", "reason": "bad_session"])
                 return
             }
-            allowedSites = AllowedSites.parse(body["allowed_sites"])
+            allowedSites = AllowedSites.updated(allowedSites, from: body)
             LockdownController.shared.lock(participants: ExamPaths.allowedParticipants(body["allowed_apps"])) { [weak self] r in
                 guard let self else { return }
                 guard r == .locked else {
@@ -610,9 +623,18 @@ final class ExamViewController: UIViewController, LockSurface,
             decisionHandler(.cancel)
             return
         }
+        // 2026-10-23 (review): while locked for an exam on the exam server (pre-exam lock
+        // included, not a website exam) a sub-frame never loads an exam-server page: only
+        // about:blank / about:srcdoc and the allowed sites below (as on Windows).
+        if !mainFrame, LockdownController.shared.isLocked, !external.isActive, isServerURL(url) {
+            EventLog.shared.record("blocked_navigation", "frame \(url.path)")
+            DebugLog.log("web", "frame BLOCKED while locked (exam server page): \(url.path)")
+            decisionHandler(.cancel)
+            return
+        }
         // 2026-10-23: the exam page's side pane of teacher-allowed websites (FairPlayCore
-        // AllowedSites): sub-frames only, only while locked, https on a listed host or its
-        // subdomains (or about:blank / about:srcdoc). No downloads from there.
+        // AllowedSites): sub-frames only, only while locked, https on a listed site (or
+        // about:blank / about:srcdoc). No downloads from there.
         if !mainFrame, LockdownController.shared.isLocked, !isServerURL(url), !external.allows(url),
            AllowedSites.frameAllowed(url, allowed: allowedSites) {
             if navigationAction.shouldPerformDownload {

@@ -53,6 +53,12 @@ final class MainWindowController: NSWindowController, LockSurface,
     /// exam page's side pane. Used only while locked; cleared when the lock ends.
     private var allowedSites: [String] = []
     private var batteryTimer: Timer?
+    /// The page actually on screen (didCommit). webView.url already shows a page that is
+    /// still loading, so the battery script is gated on this too (iPad review L2).
+    private var committedURL: URL?
+    /// The exam id of the last "Before you start" page shown: where the pre-exam lock sends
+    /// a route change it does not allow (PreLockState.homePath).
+    private var lastStartExamId: String?
 
     private static let normalStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
 
@@ -129,14 +135,23 @@ final class MainWindowController: NSWindowController, LockSurface,
                     view.load(URLRequest(url: Config.startURL))
                     return
                 }
+                if let id = PreLockState.startPageExamId(path: u.path) { self.lastStartExamId = id }
                 // Review 2026-10-14: in-page route changes away from the locked attempt
                 // (e.g. a "Back to home" link) go back to it.
+                let lock = LockdownController.shared
                 let aid = AppSession.shared.exam?.attemptId
-                if LockdownController.shared.isLocked,
-                   !MainWindowController.allowedWhileLocked(path: u.path, attemptId: aid,
-                                                            preLock: LockdownController.shared.isPreLock), let aid {
-                    EventLog.shared.record(.blockedNavigation("left the exam: \(u.path)"))
+                guard lock.isLocked,
+                      !MainWindowController.allowedWhileLocked(path: u.path, attemptId: aid, preLock: lock.isPreLock)
+                else { return }
+                EventLog.shared.record(.blockedNavigation("left the exam: \(u.path)"))
+                if let aid {
                     view.load(URLRequest(url: Config.serverURL.appendingPathComponent("student/exam/\(aid)")))
+                } else if lock.isPreLock {
+                    // 2026-10-23: the pre-exam lock has no attempt yet: back to the start page
+                    // it was taken on (or the student home).
+                    let back = PreLockState.homePath(examId: self.lastStartExamId)
+                    DebugLog.log("web", "pre-exam lock: in-page route \(u.path) sent back to /\(back)")
+                    view.load(URLRequest(url: Config.serverURL.appendingPathComponent(back)))
                 }
             }
         }
@@ -156,9 +171,11 @@ final class MainWindowController: NSWindowController, LockSurface,
         Readiness.observePowerChanges { [weak self] in self?.pushBattery() }
     }
 
-    /// Only into the exam server's own pages; the script holds number and boolean literals only.
+    /// Only into the exam server's own pages: the one on screen (committed) and the one the
+    /// web view names (not a website-exam page that is loading). The script holds number and
+    /// boolean literals only.
     private func pushBattery() {
-        guard let webView, isServerURL(webView.url), let b = Readiness.batteryLevel(),
+        guard let webView, isServerURL(committedURL), isServerURL(webView.url), let b = Readiness.batteryLevel(),
               let js = BatteryScript.make(level: b.level, charging: b.charging) else { return }
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
@@ -245,7 +262,7 @@ final class MainWindowController: NSWindowController, LockSurface,
             let promote = examLockAction() == .promote
             if AppSession.shared.setExam(attemptId: body["attempt_id"] as? String, token: body["token"] as? String,
                                          session: body["session"] as? String) {
-                allowedSites = AllowedSites.parse(body["allowed_sites"])
+                allowedSites = AllowedSites.updated(allowedSites, from: body)
                 if promote {
                     attachExamToPreLock(allowedApps: body["allowed_apps"])
                 } else {
@@ -267,7 +284,8 @@ final class MainWindowController: NSWindowController, LockSurface,
                 // for this lock or be taken for its attempt.
                 if AppSession.shared.exam != nil { AppSession.shared.clearExam() }
                 Allowlist.updateTeacherAllowed(body["allowed_apps"])
-                allowedSites = AllowedSites.parse(body["allowed_sites"])
+                allowedSites = AllowedSites.updated(allowedSites, from: body)
+                if let id = webView.url.flatMap({ PreLockState.startPageExamId(path: $0.path) }) { lastStartExamId = id }
                 if lock.preLock() {
                     hidePermission()
                     send(["type": "locked", "prelock": true])
@@ -306,7 +324,7 @@ final class MainWindowController: NSWindowController, LockSurface,
                 return
             }
             if offlineStart { DebugLog.log("lock", "offline start: locking without a server session") }
-            allowedSites = AllowedSites.parse(body["allowed_sites"])
+            allowedSites = AllowedSites.updated(allowedSites, from: body)
             if promote {
                 // 2026-10-23: already locked before the start code: the screen stays locked
                 // and this becomes the exam's lock.
@@ -330,7 +348,7 @@ final class MainWindowController: NSWindowController, LockSurface,
                 send(["type": "externalFailed", "reason": "bad_session"])
                 return
             }
-            allowedSites = AllowedSites.parse(body["allowed_sites"])
+            allowedSites = AllowedSites.updated(allowedSites, from: body)
             if promote {
                 attachExamToPreLock(allowedApps: body["allowed_apps"])
             } else {
@@ -547,9 +565,19 @@ final class MainWindowController: NSWindowController, LockSurface,
             decisionHandler(.cancel)
             return
         }
+        // 2026-10-23 (review): while locked for an exam on the exam server (pre-exam lock
+        // included, not a website exam) a sub-frame never loads an exam-server page: only
+        // about:blank / about:srcdoc and the allowed sites below (as on Windows).
+        if !(navigationAction.targetFrame?.isMainFrame ?? true), LockdownController.shared.isLocked,
+           !external.isActive, isServerURL(url) {
+            EventLog.shared.record(.blockedNavigation("frame \(url.path)"))
+            DebugLog.log("web", "frame BLOCKED while locked (exam server page): \(url.path)")
+            decisionHandler(.cancel)
+            return
+        }
         // 2026-10-23: the exam page's side pane of teacher-allowed websites (AllowedSites.swift):
-        // sub-frames only, only while locked, https on a listed host or its subdomains (or
-        // about:blank / about:srcdoc). No downloads from there.
+        // sub-frames only, only while locked, https on a listed site (or about:blank /
+        // about:srcdoc). No downloads from there.
         if !(navigationAction.targetFrame?.isMainFrame ?? true), LockdownController.shared.isLocked,
            !isServerURL(url), !external.allows(url), AllowedSites.frameAllowed(url, allowed: allowedSites) {
             if navigationAction.shouldPerformDownload {
@@ -654,6 +682,10 @@ final class MainWindowController: NSWindowController, LockSurface,
         let ns = error as NSError
         DebugLog.log("web", "page failed: \(ns.domain) \(ns.code) \(ns.localizedDescription)")
         showOffline(error)
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        committedURL = webView.url
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

@@ -14,25 +14,81 @@ import Foundation
         #expect(AllowedSites.parse("docs.python.org") == [])          // not a list
         let mixed: [Any] = ["Docs.Python.ORG", " docs.python.org. ", 7, "cppreference.com", "docs.python.org"]
         #expect(AllowedSites.parse(mixed) == ["docs.python.org", "cppreference.com"])
-        // Not plain host names: scheme, path, port, wildcard, spaces, empty labels, unicode.
-        #expect(AllowedSites.parse(["https://a.com", "a.com/x", "a.com:443", "*.a.com", "a b.com",
-                                    "a..com", ".a.com", "", "пример.рф", "abc.de:443"]) == [])
+        // Not plain host names: scheme, path, port, a "*" not at the front, spaces, empty labels, unicode.
+        #expect(AllowedSites.parse(["https://a.com", "a.com/x", "a.com:443", "a.*.com", "*a.com", "**.a.com",
+                                    "*.", "*. a.com", "a b.com", "a..com", ".a.com", "", "пример.рф", "abc.de:443"]) == [])
         // A whole top-level domain is never an entry.
         #expect(AllowedSites.parse(["com", "edu", "localhost"]) == [])
         #expect(AllowedSites.parse(["10.0.0.5", "[::1]"]) == ["10.0.0.5", "::1"])
+        #expect(AllowedSites.parse(["*.Python.ORG.", "*.python.org"]) == ["*.python.org"])
     }
 
-    @Test func exactHostAndSubdomains() {
+    @Test func plainEntryIsThatHostOnly() {
         let a = ["docs.python.org"]
         #expect(AllowedSites.hostAllowed("docs.python.org", allowed: a))
-        #expect(AllowedSites.hostAllowed("x.docs.python.org", allowed: a))
-        #expect(AllowedSites.hostAllowed("a.b.docs.python.org", allowed: a))
+        #expect(!AllowedSites.hostAllowed("x.docs.python.org", allowed: a))
+        #expect(!AllowedSites.hostAllowed("a.b.docs.python.org", allowed: a))
         #expect(!AllowedSites.hostAllowed("python.org", allowed: a))
         #expect(!AllowedSites.hostAllowed("evildocs.python.org", allowed: a))
         #expect(!AllowedSites.hostAllowed("docs.python.org.attacker.com", allowed: a))
-        #expect(!AllowedSites.hostAllowed("evildocs.python.org.attacker.com", allowed: a))
         #expect(!AllowedSites.hostAllowed("docs-python.org", allowed: a))
         #expect(!AllowedSites.hostAllowed("", allowed: a))
+        // The review's cases: a plain shared-hosting or big-company entry never opens its subdomains.
+        #expect(AllowedSites.hostAllowed("github.io", allowed: ["github.io"]))
+        #expect(!AllowedSites.hostAllowed("someone.github.io", allowed: ["github.io"]))
+        #expect(!AllowedSites.hostAllowed("cheat.vercel.app", allowed: ["vercel.app"]))
+        #expect(!AllowedSites.hostAllowed("gemini.google.com", allowed: ["google.com"]))
+    }
+
+    @Test func wwwAddedOrRemoved() {
+        #expect(AllowedSites.hostAllowed("www.cppreference.com", allowed: ["cppreference.com"]))
+        #expect(AllowedSites.hostAllowed("cppreference.com", allowed: ["www.cppreference.com"]))
+        #expect(AllowedSites.hostAllowed("WWW.cppreference.com.", allowed: ["cppreference.com"]))
+        #expect(!AllowedSites.hostAllowed("www2.cppreference.com", allowed: ["cppreference.com"]))
+        #expect(!AllowedSites.hostAllowed("www.www.cppreference.com", allowed: ["cppreference.com"]))
+        #expect(!AllowedSites.hostAllowed("en.cppreference.com", allowed: ["www.cppreference.com"]))
+        // "www.com" never opens the top-level domain "com".
+        #expect(!AllowedSites.hostAllowed("com", allowed: ["www.com"]))
+    }
+
+    @Test func wildcardEntry() {
+        let a = ["*.python.org"]
+        #expect(AllowedSites.hostAllowed("python.org", allowed: a))
+        #expect(AllowedSites.hostAllowed("docs.python.org", allowed: a))
+        #expect(AllowedSites.hostAllowed("a.b.python.org", allowed: a))
+        #expect(!AllowedSites.hostAllowed("evilpython.org", allowed: a))
+        #expect(!AllowedSites.hostAllowed("python.org.attacker.com", allowed: a))
+        #expect(!AllowedSites.hostAllowed("org", allowed: a))
+        #expect(frame("https://docs.python.org/3/", a))
+        #expect(!frame("http://docs.python.org/3/", a))
+    }
+
+    @Test func sharedSuffixWildcardsIgnored() {
+        for base in ["com", "net", "org", "edu", "gov", "io", "app", "dev", "cn", "uk", "co.uk", "com.cn",
+                     "github.io", "gitlab.io", "vercel.app", "netlify.app", "pages.dev", "web.app",
+                     "firebaseapp.com", "herokuapp.com", "blogspot.com", "glitch.me", "replit.app", "repl.co",
+                     "onrender.com", "fly.dev", "azurewebsites.net", "cloudfront.net", "appspot.com",
+                     "wixsite.com", "notion.site", "github.com", "google.com", "com.au", "co.jp", "ac.kr"] {
+            #expect(AllowedSites.normalizedEntry("*." + base) == nil)
+            #expect(!AllowedSites.hostAllowed("x." + base, allowed: ["*." + base]))
+        }
+        #expect(AllowedSites.parse(["*.github.io", "*.CO.UK", "docs.python.org"]) == ["docs.python.org"])
+        // IP literals never take a wildcard.
+        #expect(AllowedSites.normalizedEntry("*.10.0.0.5") == nil)
+        #expect(AllowedSites.normalizedEntry("*.::1") == nil)
+        // A real site under a shared suffix may still be a wildcard.
+        #expect(AllowedSites.normalizedEntry("*.bbc.co.uk") == "*.bbc.co.uk")
+        #expect(AllowedSites.hostAllowed("news.bbc.co.uk", allowed: ["*.bbc.co.uk"]))
+        #expect(AllowedSites.isSharedSuffix("github.io"))
+        #expect(!AllowedSites.isSharedSuffix("python.org"))
+    }
+
+    @Test func missingKeyKeepsTheList() {
+        let now = ["docs.python.org"]
+        #expect(AllowedSites.updated(now, from: ["action": "lock"]) == now)
+        #expect(AllowedSites.updated(now, from: ["action": "lock", "allowed_sites": [Any]()]) == [])
+        #expect(AllowedSites.updated(now, from: ["action": "session", "allowed_sites": ["x.org"]]) == ["x.org"])
+        #expect(AllowedSites.updated(now, from: ["action": "lock", "allowed_sites": "x.org"]) == [])   // malformed: none
     }
 
     @Test func caseAndTrailingDot() {
@@ -93,6 +149,7 @@ import Foundation
         let a = ["xn--80ak6aa92e.com"]
         #expect(AllowedSites.hostAllowed("xn--80ak6aa92e.com", allowed: a))
         #expect(AllowedSites.hostAllowed("www.xn--80ak6aa92e.com", allowed: a))
+        #expect(!AllowedSites.hostAllowed("x.xn--80ak6aa92e.com", allowed: a))
         #expect(!AllowedSites.hostAllowed("xn--80ak6aa92f.com", allowed: a))
         // A unicode entry is not a host name WebKit ever gives: it opens nothing.
         #expect(!AllowedSites.hostAllowed("xn--e1afmkfd.xn--p1ai", allowed: ["пример.рф"]))
