@@ -490,6 +490,10 @@ class HeartbeatIn(BaseModel):
     current_question: int = Field(default=0, ge=0, le=10_000)
     # Ignored since the audit (#2): lock state only counts from signed app beats.
     locked: bool = False
+    # 2026-10-23: the laptop's battery (0..1) and charger, so the invigilator sees a seat
+    # about to run flat. Optional: older pages and desktops send nothing.
+    battery: float | None = Field(default=None, ge=0, le=1)
+    charging: bool | None = None
 
 
 class AppBeatIn(BaseModel):

@@ -170,6 +170,16 @@ describe("exam top bar", () => {
     delete (window as unknown as { fairplayBattery?: unknown }).fairplayBattery;
   });
 
+  it("warns once when the battery drops under 10 %", () => {
+    const w = window as unknown as { fairplayBattery?: unknown };
+    w.fairplayBattery = { level: 0.08, charging: false };
+    render(<LockedBar title="Midterm" locked native sync="synced" remaining={60_000} />);
+    expect(screen.getByRole("alertdialog", { name: "Battery low" })).toHaveTextContent("Battery 8%");
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    expect(screen.queryByRole("alertdialog", { name: "Battery low" })).toBeNull();
+    delete w.fairplayBattery;
+  });
+
   it("rates the battery", () => {
     expect(batteryTone({ level: 0.5, charging: false })).toBe("ok");
     expect(batteryTone({ level: 0.15, charging: false })).toBe("low");

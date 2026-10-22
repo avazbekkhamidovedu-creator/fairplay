@@ -72,7 +72,7 @@ export function LockedBar({
   const synced = sync === "synced";
   const announce = useAnnouncements(sync, trial ? Number.POSITIVE_INFINITY : remaining);
   const battery = useBattery();
-  const [open, setOpen] = useState<null | "directions" | "more" | "help">(null);
+  const [open, setOpen] = useState<null | "directions" | "more" | "help" | "battery">(null);
   const barRef = useRef<HTMLElement>(null);
   const close = useCallback(() => setOpen(null), []);
 
@@ -92,6 +92,15 @@ export function LockedBar({
 
   const tone = battery ? batteryTone(battery) : "ok";
   const pct = battery ? Math.round(battery.level * 100) : 0;
+  // 2026-10-23: one gentle warning when the battery drops under 10 % (not charging).
+  const warnedRef = useRef(false);
+  useEffect(() => {
+    if (tone === "critical" && !warnedRef.current) {
+      warnedRef.current = true;
+      setOpen("battery");
+    }
+    if (tone !== "critical") warnedRef.current = false;
+  }, [tone]);
 
   return (
     <header className="stu-lockbar" ref={barRef}>
@@ -274,6 +283,16 @@ export function LockedBar({
           <button type="button" role="menuitem" className="stu-menu-item" onClick={() => setOpen("help")}>
             <HelpIcon />
             Help
+          </button>
+        </div>
+      )}
+      {open === "battery" && (
+        <div className="stu-pop stu-pop-right stu-pop-warn" role="alertdialog" aria-label="Battery low">
+          <p className="stu-pop-title">Battery {pct}%</p>
+          <p>Plug in your charger now, or raise your hand for one.</p>
+          <p className="stu-muted">Your answers are saved.</p>
+          <button type="button" className="stu-btn sm" onClick={close}>
+            OK
           </button>
         </div>
       )}

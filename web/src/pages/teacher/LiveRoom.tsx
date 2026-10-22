@@ -521,6 +521,13 @@ function FlagCard({ examId, flag, onDone }: { examId: string; flag: LiveFlag; on
 }
 
 
+/** 2026-10-23: "Battery 14% · not charging" under 20 % (not charging, laptop known). */
+export function lowBatteryBadge(s: Pick<LiveStudent, "battery" | "charging" | "online">): string | null {
+  if (typeof s.battery !== "number" || s.charging || !s.online) return null;
+  if (s.battery >= 0.2) return null;
+  return `Battery ${Math.round(s.battery * 100)}% · not charging`;
+}
+
 /** S3-S6: what needs the invigilator at this seat, as short badges (+ the button for it). */
 export function SeatBadges({ examId, student: s, onChanged }: { examId: string; student: LiveStudent; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -531,6 +538,8 @@ export function SeatBadges({ examId, student: s, onChanged }: { examId: string; 
   if (writing && s.approval === "pending") badges.push("Waiting for approval");
   if (writing && s.swap_requested) badges.push("Wants to continue on another computer");
   if (writing && s.weak_lock) badges.push("Not using the strongest lock");
+  const low = lowBatteryBadge(s);
+  if (writing && low) badges.push(low);
   if (badges.length === 0) return null;
 
   async function act(fn: () => Promise<unknown>) {

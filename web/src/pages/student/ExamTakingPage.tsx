@@ -26,6 +26,7 @@ import {
   writeTimerHidden,
 } from "../../lib/examPrefs";
 import { useStudentIdentity } from "../../lib/useStudentIdentity";
+import { useBattery } from "../../lib/battery";
 import { AnswerQueue, type SyncStatus } from "../../lib/answerQueue";
 import * as bridge from "../../lib/bridge";
 import { readTrialKey, writeTrialKey } from "../../lib/trialKey";
@@ -150,6 +151,10 @@ function ExamTakingInner() {
   const [timerHidden, setTimerHidden] = useState(() => readTimerHidden(attemptId));
   const [textSize, setTextSize] = useState(readTextSize);
   const me = useStudentIdentity();
+  // 2026-10-23: sent with the heartbeat so the invigilator sees low batteries.
+  const battery = useBattery();
+  const batteryRef = useRef(battery);
+  batteryRef.current = battery;
   // 2026-10-22: sample exam ("Stop practice"). trialRef is set as soon as the attempt loads.
   const trialRef = useRef(false);
   const [stopping, setStopping] = useState(false);
@@ -604,7 +609,7 @@ function ExamTakingInner() {
     const beat = async () => {
       if (finishedRef.current) return;
       try {
-        const res = await call((aid) => studentApi.heartbeat(aid, currentRef.current, bridge.isLocked()));
+        const res = await call((aid) => studentApi.heartbeat(aid, currentRef.current, bridge.isLocked(), batteryRef.current));
         setOffset(clockOffset(res.server_time));
         if (res.deadline_at) setDeadline(res.deadline_at);
         if (res.approval !== undefined) setWaiting(res.approval === "pending");
