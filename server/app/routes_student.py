@@ -4,6 +4,7 @@ import json
 import time
 from datetime import timedelta
 
+import math
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -51,22 +52,35 @@ SWAP_REQUESTS_PER_MIN = 10
 
 
 async def take_code_try(store, lock_key: str, count_key: str, limit: int, window_s: int,
-                        detail: str) -> int:
+                        detail: str, retry_s: int = 60) -> int:
     """Audit 2026-10-13 (wrong-code lockouts were check-then-act): reserve the try FIRST
     (one atomic INCR), then look at the lock. However many requests race, at most `limit`
-    of them get to compare a code before the lock is set. Returns the try number."""
+    of them get to compare a code before the lock is set. Returns the try number.
+    2026-10-23: the 429 says how many seconds are left (Retry-After header and
+    "retry_after" in the body) so the page can count down."""
     n = await store.incr(count_key, window_s)
-    if n > limit or await store.get(lock_key):
-        raise HTTPException(429, detail)
+    locked = await store.get(lock_key)
+    if n > limit or locked:
+        wait = retry_s
+        try:
+            ends = float(locked) if locked else 0.0
+        except (TypeError, ValueError):
+            ends = 0.0
+        # An old lock value ("1", before 2026-10-23) has no end time: say the full wait.
+        if ends > 1_000_000_000:
+            wait = min(retry_s, max(1, math.ceil(ends - time.time())))
+        raise HTTPException(429, {"message": detail, "code": "too_many_codes", "retry_after": wait},
+                            headers={"Retry-After": str(wait)})
     return n
 
 
 async def wrong_code(store, lock_key: str, count_key: str, n: int, limit: int,
                      lock_s: int) -> None:
     """The n-th reserved try was wrong: the last allowed one sets the lock. The lock goes
-    on before the counter is cleared, so a try reserved in between still sees it."""
+    on before the counter is cleared, so a try reserved in between still sees it.
+    The lock's value is the time it ends (epoch seconds), for the countdown."""
     if n >= limit:
-        await store.set(lock_key, "1", lock_s)
+        await store.set(lock_key, f"{time.time() + lock_s:.3f}", lock_s)
         await store.delete(count_key)
 
 
@@ -182,7 +196,7 @@ async def start(exam_id: str, body: StartIn, request: Request,
     device_id = await verify_start_proof(store, settings, p.user_id, exam_id, body.client)
     lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
     n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
-                            "Too many wrong codes, wait 60 seconds")
+                            "Too many wrong codes, wait 60 seconds", WRONG_CODE_LOCK_S)
     if not same_code(body.start_code, exam["start_code"]):
         await wrong_code(store, lock_key, count_key, n, MAX_WRONG_CODES, WRONG_CODE_LOCK_S)
         raise HTTPException(403, "Wrong start code")
@@ -670,7 +684,7 @@ async def exit_code(aid: str, body: ExitCodeIn, request: Request,
     # Audit 2026-10-13: the try is reserved before the (awaited) DB read, so parallel
     # guesses can't all slip past the lock check.
     n = await take_code_try(store, lock_key, count_key, MAX_WRONG_EXIT, 600,
-                            "Too many wrong codes, wait 5 minutes")
+                            "Too many wrong codes, wait 5 minutes", WRONG_EXIT_LOCK_S)
     exam = await session.get(Exam, a.exam_id)
     code = (exam.invigilator_code or "") if exam else ""
     if not same_code(body.code, code):      # audit S-12: compare bytes

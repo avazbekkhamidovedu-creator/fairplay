@@ -18,20 +18,36 @@ enum Watchdog {
         return base.appendingPathComponent("FairPlay", isDirectory: true)
     }
 
-    /// Exists exactly while the app is locked: "<attempt>\n<token>\n<session>" (may be empty lines).
+    /// Exists exactly while the app is locked: "<attempt>\n<token>\n<session>" (may be empty lines),
+    /// plus a 4th line "prelock" during the pre-exam lock (PreLock.swift).
     static var markerURL: URL { folder.appendingPathComponent("locked.marker") }
+
+    /// 2026-10-23: the lock is the pre-exam lock (no attempt). If the app ends meanwhile,
+    /// nothing is reported, FairPlay is not reopened and the next launch is not "killed".
+    private static var preLock = false
+    static let preLockLine = "prelock"
 
     // MARK: - In the app
 
-    static func lockStarted() {
+    static func lockStarted(preLock: Bool = false) {
         signal(SIGTERM, SIG_IGN)
         signal(SIGHUP, SIG_IGN)
         signal(SIGINT, SIG_IGN)
+        Watchdog.preLock = preLock
         writeMarker(AppSession.shared.exam)
         spawn()
     }
 
+    /// The pre-exam lock became the exam lock: from now on the marker is a normal one.
+    static func preLockEnded() {
+        guard preLock else { return }
+        preLock = false
+        guard FileManager.default.fileExists(atPath: markerURL.path) else { return }
+        writeMarker(AppSession.shared.exam)
+    }
+
     static func lockEnded() {
+        preLock = false
         try? FileManager.default.removeItem(at: markerURL)
         signal(SIGTERM, SIG_DFL)
         signal(SIGHUP, SIG_DFL)
@@ -46,16 +62,35 @@ enum Watchdog {
         writeMarker(exam)
     }
 
-    /// At launch: a marker left behind means the last run died while locked.
+    /// At launch: a marker left behind means the last run died while locked (2026-10-23:
+    /// not when that was only the pre-exam lock; then there is nothing to report).
     static func cleanUpAtLaunch() -> Bool {
         let existed = FileManager.default.fileExists(atPath: markerURL.path)
+        let text = existed ? (try? String(contentsOf: markerURL, encoding: .utf8)) : nil
         try? FileManager.default.removeItem(at: markerURL)
+        if let text, markerIsPreLock(text) {
+            DebugLog.log("app", "last run ended during the pre-exam lock (no exam): nothing to report")
+            return false
+        }
         return existed
+    }
+
+    /// The marker's text (pure, for the tests).
+    static func markerText(exam: AppSession.Exam?, preLock: Bool) -> String {
+        var lines = [exam?.attemptId ?? "", exam?.token ?? "", exam?.session ?? ""]
+        if preLock { lines.append(preLockLine) }
+        return lines.joined(separator: "\n")
+    }
+
+    /// A pre-exam lock marker: the 4th line says so and no attempt is named.
+    static func markerIsPreLock(_ text: String) -> Bool {
+        let parts = text.components(separatedBy: "\n")
+        return parts.count >= 4 && parts[3] == preLockLine && parts[0].isEmpty
     }
 
     private static func writeMarker(_ exam: AppSession.Exam?) {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let text = [exam?.attemptId ?? "", exam?.token ?? "", exam?.session ?? ""].joined(separator: "\n")
+        let text = markerText(exam: exam, preLock: preLock)
         // Audit 2026-10-13: the marker holds the token, so it is 0600 from the first byte
         // (was: written with default permissions, then chmodded). Temp file + rename keeps
         // the update atomic for the watchdog reading it.
@@ -111,6 +146,11 @@ enum Watchdog {
             let markerExists = FileManager.default.fileExists(atPath: markerURL.path)
             if !markerExists { exit(0) }                       // lock ended normally
             if kill(parent, 0) != 0 && errno == ESRCH {         // app gone while locked
+                // 2026-10-23: only the pre-exam lock (no attempt): no report, no reopen.
+                if let text = try? String(contentsOf: markerURL, encoding: .utf8), markerIsPreLock(text) {
+                    try? FileManager.default.removeItem(at: markerURL)
+                    exit(0)
+                }
                 if let text = try? String(contentsOf: markerURL, encoding: .utf8),
                    let aid = text.components(separatedBy: "\n").first,
                    AppSession.isSafeToken(aid, min: 3, max: 32) {

@@ -29,8 +29,8 @@ export function startErrorMessage(err: unknown): string {
     // audit S-03: not in the exam's class
     if (err.status === 403 && /is for .* students|not for your class/i.test(err.detail)) return err.detail;
     if (err.status === 409 && /another computer|somewhere else/i.test(err.detail)) return err.detail;
-    if (err.status === 403) return "Wrong start code. Check the code your teacher gave and try again.";
-    if (err.status === 429) return err.detail || "Too many wrong codes. Wait 60 seconds, then try again.";
+    if (err.status === 403) return "That code isn't right. Check it with your teacher and try again.";
+    if (err.status === 429) return "Too many wrong codes. Wait a moment, then try again.";
     if (err.status === 409 && /submitted/i.test(err.detail)) return "You have already submitted this exam.";
     if (err.status === 409) return "This exam is not open right now. Wait for your teacher to open it.";
     if (err.status === 404) return "This exam was not found.";
@@ -61,6 +61,11 @@ export function StartCodeForm({
   const [digits, setDigits] = useState<string[]>(emptyCode);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 2026-10-23: after too many wrong codes the boxes switch off and a countdown runs.
+  const [waitUntil, setWaitUntil] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [shake, setShake] = useState(0);
+  const [readyAgain, setReadyAgain] = useState(false);
   // S4: asked the teacher to move the exam here; start is retried every SWAP_RETRY_MS.
   const [waitingSwap, setWaitingSwap] = useState(false);
   const swapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -81,6 +86,22 @@ export function StartCodeForm({
   useEffect(() => {
     if (autoFocus) boxes.current?.focus(0);
   }, [autoFocus]);
+
+  const waitLeft = waitUntil === null ? 0 : Math.max(0, Math.ceil((waitUntil - now) / 1000));
+  const waiting = waitUntil !== null && waitLeft > 0;
+  useEffect(() => {
+    if (waitUntil === null) return;
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [waitUntil]);
+  useEffect(() => {
+    if (waitUntil !== null && waitLeft === 0) {
+      setWaitUntil(null);
+      setError(null);
+      setReadyAgain(true);
+      setTimeout(() => boxes.current?.focus(0), 0);
+    }
+  }, [waitUntil, waitLeft]);
 
   function retryAfterSwap(startCode: string) {
     swapTimer.current = setTimeout(async () => {
@@ -104,6 +125,8 @@ export function StartCodeForm({
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (waiting) return;
+    setReadyAgain(false);
     if (!complete) {
       setError(`The start code has ${CODE_LENGTH} digits.`);
       boxes.current?.focus(digits.indexOf("") === -1 ? 0 : digits.indexOf(""));
@@ -139,12 +162,19 @@ export function StartCodeForm({
         return;
       }
       setDigits(emptyCode());
+      if (err instanceof ApiError && err.status === 429) {
+        setNow(Date.now());
+        setWaitUntil(Date.now() + (err.retryAfter ?? 60) * 1000);
+        return;
+      }
+      if (err instanceof ApiError && err.status === 403) setShake((n) => n + 1);
       setTimeout(() => boxes.current?.focus(0), 0);
     }
   }
 
   return (
     <form onSubmit={submit} className="stu-code-panel" noValidate>
+      <div key={shake} className={shake ? "stu-shake" : undefined}>
       <StartCodeBoxes
         ref={boxes}
         idPrefix={`code-${examId}`}
@@ -154,14 +184,25 @@ export function StartCodeForm({
           if (error) setError(null);
         }}
         onComplete={() => startBtn.current?.focus()}
-        invalid={!!error}
+        invalid={!!error && !waiting}
         describedBy={error ? errId : undefined}
-        disabled={busy}
+        disabled={busy || waiting}
         legend={legend}
       />
-      {error && (
+      </div>
+      {error && !waiting && (
         <div id={errId} className="stu-alert error" role="alert">
           {error}
+        </div>
+      )}
+      {waiting && (
+        <div id={errId} className="stu-alert warn" role="status" data-testid="code-wait">
+          Too many wrong codes. Try again in <b className="stu-tabnum">{waitLeft} s</b>.
+        </div>
+      )}
+      {readyAgain && !error && (
+        <div className="stu-alert success" role="status">
+          You can try again.
         </div>
       )}
       {waitingSwap && (
@@ -171,7 +212,7 @@ export function StartCodeForm({
         </div>
       )}
       <div className="stu-row">
-        <button ref={startBtn} type="submit" className="stu-btn primary lg" style={{ flex: "1 1 160px" }} disabled={busy}>
+        <button ref={startBtn} type="submit" className="stu-btn primary lg" style={{ flex: "1 1 160px" }} disabled={busy || waiting}>
           {waitingSwap ? "Waiting for your teacher…" : busy ? "Checking…" : "Start exam"}
         </button>
         {onCancel && (

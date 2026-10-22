@@ -103,13 +103,22 @@ export class ApiError extends Error {
   code: string | null;
   /** S2: on 426, the oldest app version the server accepts. */
   minAppVersion: string | null;
-  constructor(status: number, detail: string, code: string | null = null, minAppVersion: string | null = null) {
+  /** 2026-10-23: on 429, seconds until the next try is allowed (for a countdown). */
+  retryAfter: number | null;
+  constructor(
+    status: number,
+    detail: string,
+    code: string | null = null,
+    minAppVersion: string | null = null,
+    retryAfter: number | null = null,
+  ) {
     super(detail);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
     this.code = code;
     this.minAppVersion = minAppVersion;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -134,7 +143,9 @@ function errorOf(status: number, body: unknown, fallback: string): ApiError {
     ? (d as { code: string }).code
     : null;
   const min = typeof b.min_app_version === "string" ? b.min_app_version : null;
-  return new ApiError(status, detailOf(body, fallback), code, min);
+  const ra = d && typeof d === "object" && !Array.isArray(d) ? (d as { retry_after?: unknown }).retry_after : undefined;
+  const retryAfter = typeof ra === "number" && Number.isFinite(ra) && ra > 0 ? Math.ceil(ra) : null;
+  return new ApiError(status, detailOf(body, fallback), code, min, retryAfter);
 }
 
 /** Every /api request carries the app's version and platform once the bridge knows them. */

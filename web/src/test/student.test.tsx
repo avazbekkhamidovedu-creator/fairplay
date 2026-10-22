@@ -130,7 +130,7 @@ describe("start code form", () => {
     await user.click(box(1));
     await user.keyboard("111111");
     await user.click(screen.getByRole("button", { name: "Start exam" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/Wrong start code/);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/That code isn't right/);
     expect(box(1).value).toBe("");
     expect(api.start).toHaveBeenCalledWith("e_1", "111111");
   });
@@ -147,14 +147,20 @@ describe("start code form", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/FairPlay app/);
   });
 
-  it("shows the server detail on 429 lockout", async () => {
+  it("on 429 switches the boxes off and counts down, then lets the student try again", async () => {
     const user = userEvent.setup();
-    api.start.mockRejectedValueOnce(new ApiError(429, "Too many wrong codes, wait 60 seconds"));
+    api.start.mockRejectedValueOnce(new ApiError(429, "Too many wrong codes, wait 60 seconds", "too_many_codes", null, 2));
     renderForm();
     await user.click(box(1));
     await user.keyboard("123456");
     await user.click(screen.getByRole("button", { name: "Start exam" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Too many wrong codes, wait 60 seconds");
+    const wait = await screen.findByTestId("code-wait");
+    expect(wait).toHaveTextContent(/Try again in [12] s/);
+    expect(box(1)).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start exam" })).toBeDisabled();
+    expect(await screen.findByText("You can try again.", {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(box(1)).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start exam" })).not.toBeDisabled();
   });
 
   it("navigates to the exam on success", async () => {

@@ -50,7 +50,8 @@ def test_parallel_wrong_codes_compare_at_most_the_limit():
         await asyncio.gather(*(guess() for _ in range(200)))
     asyncio.run(go())
     assert compared == 5
-    assert asyncio.run(store.get("lock")) == "1"
+    # 2026-10-23: the lock's value is the time it ends (for the countdown)
+    assert float(asyncio.run(store.get("lock"))) > time.time() + 250
 
 
 def test_lockout_holds_after_the_limit():
@@ -63,7 +64,7 @@ def test_lockout_holds_after_the_limit():
         with pytest.raises(Exception) as e:
             await rs.take_code_try(store, "L", "C", 5, 600, "wait")
         assert getattr(e.value, "status_code", None) == 429
-        assert await store.get("L") == "1"
+        assert float(await store.get("L")) > time.time()
     asyncio.run(go())
 
 
@@ -85,6 +86,29 @@ def test_start_code_lockout_still_works(app_client, exam):
     r = app_client.post(url, headers=h, json={"start_code": exam["start_code"],
                                               "client": proof(app_client, h, exam["id"], "device-aaaa-1111")})
     assert r.status_code == 429
+    # 2026-10-23: the page counts down: seconds left in the body and the Retry-After header
+    body = r.json()["detail"]
+    assert body["code"] == "too_many_codes"
+    assert body["message"] == "Too many wrong codes, wait 60 seconds"
+    assert 55 <= body["retry_after"] <= 60
+    assert r.headers["Retry-After"] == str(body["retry_after"])
+
+
+def test_code_lock_counts_down_and_old_lock_values_still_work():
+    async def go():
+        store = MemoryStore()
+        n = 0
+        for _ in range(5):
+            n = await rs.take_code_try(store, "L", "C", 5, 600, "wait", 300)
+            await rs.wrong_code(store, "L", "C", n, 5, 300)
+        with pytest.raises(Exception) as e:
+            await rs.take_code_try(store, "L", "C", 5, 600, "wait", 300)
+        assert 295 <= e.value.detail["retry_after"] <= 300
+        await store.set("L2", "1", 60)          # a lock written by the previous version
+        with pytest.raises(Exception) as e2:
+            await rs.take_code_try(store, "L2", "C2", 5, 600, "wait", 60)
+        assert e2.value.detail["retry_after"] == 60
+    asyncio.run(go())
 
 
 # ---------------------------------------------------------------- signed exit reply

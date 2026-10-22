@@ -168,10 +168,19 @@ function ExamHero({
         <StartCodeForm examId={exam.id} autoFocus onCancel={onCancel} onConflict={onChanged} />
       ) : (
         <>
-          <div className="stu-exam-hero-note">Your teacher will read a start code in the room. Type it in and the exam opens.</div>
+          <div className="stu-exam-hero-note">
+            Read the rules, lock this computer, then type the start code your teacher reads out.
+          </div>
           <div className="stu-row">
-            <button type="button" className="stu-btn primary lg" onClick={onActivate}>
-              Enter start code
+            <button
+              type="button"
+              className="stu-btn primary lg"
+              onClick={() => {
+                onActivate();
+                navigate(`/student/exams/${encodeURIComponent(exam.id)}/start`);
+              }}
+            >
+              Start exam
             </button>
             <Link to={`/student/exams/${exam.id}/checkin`} className="stu-btn on-dark lg">
               Check in

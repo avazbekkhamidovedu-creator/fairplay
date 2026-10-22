@@ -7,6 +7,7 @@ import LoginPage from "../LoginPage";
 import StudentHome from "./StudentHome";
 import ExamsPage from "./ExamsPage";
 import CheckInPage from "./CheckInPage";
+import BeforeStartPage from "./BeforeStartPage";
 import ExamTakingPage from "./ExamTakingPage";
 import DonePage from "./DonePage";
 import GradesPage from "./GradesPage";
@@ -21,6 +22,7 @@ export default function StudentRoutes() {
       <Route path="login" element={<LoginPage role="student" />} />
       <Route index element={<RequireAuth role="student"><StudentHome /></RequireAuth>} />
       <Route path="exams" element={<RequireAuth role="student"><ExamsPage /></RequireAuth>} />
+      <Route path="exams/:examId/start" element={<RequireAuth role="student"><BeforeStartPage /></RequireAuth>} />
       <Route path="exams/:examId/checkin" element={<RequireAuth role="student"><CheckInPage /></RequireAuth>} />
       <Route path="exam/:attemptId" element={<RequireAuth role="student"><ExamTakingPage /></RequireAuth>} />
       <Route path="external/:attemptId" element={<RequireAuth role="student"><ExternalExamPage /></RequireAuth>} />

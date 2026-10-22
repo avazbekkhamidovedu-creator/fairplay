@@ -12,6 +12,8 @@ export interface NativeState {
   app_version?: string;
   platform?: string;
   sealed_pending?: boolean;
+  /** 2026-10-23: locked before the start code, no exam attached yet. */
+  prelock?: boolean;
   /** 2026-10-22 (Mac): a newer FairPlay the app can install itself (missing = none). */
   update?: AppUpdate;
 }
@@ -23,9 +25,11 @@ export interface AppUpdate {
 
 export type NativeMessage =
   | ({ type: "state" } & NativeState)
-  | { type: "locked" }
+  | { type: "locked"; prelock?: boolean }
   | { type: "lockFailed"; reason: string }
   | { type: "unlocked" }
+  /** 2026-10-23: "preunlock" refused (an exam is attached to the lock). */
+  | { type: "preunlockRefused" }
   /** Audit 2026-10-12: the app unlocks only once the server confirms the hand-in. */
   | { type: "unlockPending"; reason: string }
   /** iPad app: iPadOS is asking the student to allow Assessment Mode; keep waiting. */
@@ -92,6 +96,8 @@ type OutMessage =
   | ({ action: "session" } & ExamSessionParams)
   | { action: "attest"; nonce: string }
   | { action: "unlock" }
+  | { action: "prelock" }
+  | { action: "preunlock" }
   | { action: "hello" }
   | { action: "flushEvents" }
   | { action: "preflight"; allowed_apps?: string[] }
@@ -448,6 +454,71 @@ export function requestLock(timeoutMs = 10000, exam?: Partial<ExamSessionParams>
         ? { action: "lock", ...exam }
         : { action: "lock", offline: true, allowed_apps: [...(exam?.allowed_apps ?? [])] },
     );
+  });
+}
+
+/** 2026-10-23: result of the pre-exam lock. "unsupported": outside the app, or an app build
+ *  that doesn't know "prelock" (the exam then locks after the start code, as before). */
+export type PreLockResult = { ok: true } | { ok: false; reason: string } | { ok: false; reason: "unsupported" };
+
+/**
+ * 2026-10-23: lock the computer BEFORE the start code ("Before you start" -> "Lock and
+ * continue"). No exam is attached yet, so the student may still leave with preUnlock().
+ * The exam's own requestLock() later turns this into the exam lock without unlocking.
+ */
+export function requestPreLock(timeoutMs = 10000): Promise<PreLockResult> {
+  install();
+  if (!isNative()) return Promise.resolve({ ok: false, reason: "unsupported" });
+  return new Promise((resolve) => {
+    let done = false;
+    let answered = false;
+    const finish = (r: PreLockResult) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      off();
+      resolve(r);
+    };
+    const off = onNative((msg) => {
+      if (msg.type === "locked") finish({ ok: true });
+      else if (msg.type === "lockFailed") finish({ ok: false, reason: msg.reason || "unknown" });
+      else if (msg.type === "lockPending") {
+        // iPad: iPadOS asks the student to allow Assessment Mode; wait with it.
+        answered = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
+      }
+    });
+    // An older app ignores "prelock": no answer at all within PRELOCK_SILENT_MS -> unsupported.
+    let timer = setTimeout(() => finish(answered ? { ok: false, reason: "timeout" } : { ok: false, reason: "unsupported" }), Math.min(timeoutMs, PRELOCK_SILENT_MS));
+    post({ action: "prelock" });
+  });
+}
+
+/** How long requestPreLock waits for any answer before treating the app as too old. */
+export const PRELOCK_SILENT_MS = 4000;
+
+/** 2026-10-23: leave the pre-exam lock ("Not ready? Leave and unlock"). The app refuses it
+ *  once an exam is attached. Resolves true when the app unlocked (or there is no app). */
+export function preUnlock(timeoutMs = 5000): Promise<boolean> {
+  install();
+  if (!isNative()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      off();
+      resolve(ok);
+    };
+    const off = onNative((msg) => {
+      if (msg.type === "unlocked") finish(true);
+      else if (msg.type === "preunlockRefused") finish(false);
+      else if (msg.type === "state" && !msg.locked) finish(true);
+    });
+    const timer = setTimeout(() => finish(!isLocked()), timeoutMs);
+    post({ action: "preunlock" });
   });
 }
 

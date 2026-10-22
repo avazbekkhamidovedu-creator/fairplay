@@ -129,7 +129,8 @@ final class MainWindowController: NSWindowController, LockSurface,
                 // (e.g. a "Back to home" link) go back to it.
                 let aid = AppSession.shared.exam?.attemptId
                 if LockdownController.shared.isLocked,
-                   !MainWindowController.allowedWhileLocked(path: u.path, attemptId: aid), let aid {
+                   !MainWindowController.allowedWhileLocked(path: u.path, attemptId: aid,
+                                                            preLock: LockdownController.shared.isPreLock), let aid {
                     EventLog.shared.record(.blockedNavigation("left the exam: \(u.path)"))
                     view.load(URLRequest(url: Config.serverURL.appendingPathComponent("student/exam/\(aid)")))
                 }
@@ -217,9 +218,53 @@ final class MainWindowController: NSWindowController, LockSurface,
         case "attest":
             send(AppSession.shared.attestation(nonce: (body["nonce"] as? String) ?? ""))
         case "session":
+            let promote = examLockAction() == .promote
             if AppSession.shared.setExam(attemptId: body["attempt_id"] as? String, token: body["token"] as? String,
                                          session: body["session"] as? String) {
+                if promote {
+                    attachExamToPreLock(allowedApps: body["allowed_apps"])
+                } else {
+                    Allowlist.updateTeacherAllowed(body["allowed_apps"])
+                }
+            }
+        case "prelock":
+            // 2026-10-23: lock before the start code (PreLock.swift): the same lock as an
+            // exam's, with no exam session.
+            let lock = LockdownController.shared
+            switch PreLockState.onPreLock(locked: lock.isLocked, preLocked: lock.isPreLock,
+                                          hasExam: AppSession.shared.exam != nil) {
+            case .examLocked:
+                send(["type": "locked", "prelock": false])
+            case .alreadyPreLocked:
+                send(["type": "locked", "prelock": true])
+            case .lock:
+                // No exam: a session left from an earlier page (not locked) must not beat
+                // for this lock or be taken for its attempt.
+                if AppSession.shared.exam != nil { AppSession.shared.clearExam() }
                 Allowlist.updateTeacherAllowed(body["allowed_apps"])
+                if lock.preLock() {
+                    hidePermission()
+                    send(["type": "locked", "prelock": true])
+                } else {
+                    showPermission()
+                    send(["type": "lockFailed", "reason": "accessibility"])
+                }
+            }
+        case "preunlock":
+            // 2026-10-23: "Not ready? Leave and unlock": only the pre-exam lock with no exam
+            // attached, and then with no server check (there is no attempt).
+            let lock = LockdownController.shared
+            switch PreLockState.onPreUnlock(locked: lock.isLocked, preLocked: lock.isPreLock,
+                                            hasExam: AppSession.shared.exam != nil) {
+            case .unlock:
+                lock.endPreLock()            // onUnlocked sends "unlocked"
+                sendState()
+            case .notLocked:
+                send(["type": "unlocked"])
+                sendState()
+            case .refuse:
+                DebugLog.log("lock", "preunlock refused: this is an exam lock")
+                send(["type": "preunlockRefused"])
             }
         case "lock":
             // Audit M-06: lock only for a valid exam session -- or an explicit offline start
@@ -227,6 +272,7 @@ final class MainWindowController: NSWindowController, LockSurface,
             // server ends the lock).
             let offlineStart = (body["offline"] as? Bool) == true
                 && body["attempt_id"] == nil && body["session"] == nil
+            let promote = examLockAction() == .promote
             if !offlineStart && !AppSession.shared.setExam(attemptId: body["attempt_id"] as? String,
                                                           token: body["token"] as? String,
                                                           session: body["session"] as? String) {
@@ -234,6 +280,14 @@ final class MainWindowController: NSWindowController, LockSurface,
                 return
             }
             if offlineStart { DebugLog.log("lock", "offline start: locking without a server session") }
+            if promote {
+                // 2026-10-23: already locked before the start code: the screen stays locked
+                // and this becomes the exam's lock.
+                attachExamToPreLock(allowedApps: body["allowed_apps"])
+                hidePermission()
+                send(["type": "locked"])
+                return
+            }
             Allowlist.updateTeacherAllowed(body["allowed_apps"])
             if LockdownController.shared.lock() {
                 hidePermission()
@@ -243,12 +297,17 @@ final class MainWindowController: NSWindowController, LockSurface,
                 send(["type": "lockFailed", "reason": "accessibility"])
             }
         case "openExternal":
+            let promote = examLockAction() == .promote
             guard AppSession.shared.setExam(attemptId: body["attempt_id"] as? String, token: body["token"] as? String,
                                             session: body["session"] as? String) else {
                 send(["type": "externalFailed", "reason": "bad_session"])
                 return
             }
-            Allowlist.updateTeacherAllowed(body["allowed_apps"])
+            if promote {
+                attachExamToPreLock(allowedApps: body["allowed_apps"])
+            } else {
+                Allowlist.updateTeacherAllowed(body["allowed_apps"])
+            }
             if !LockdownController.shared.isLocked {
                 guard LockdownController.shared.lock() else {
                     showPermission()
@@ -302,6 +361,20 @@ final class MainWindowController: NSWindowController, LockSurface,
         default:
             break
         }
+    }
+
+    /// 2026-10-23: what an exam lock / session does now (PreLock.swift).
+    private func examLockAction() -> PreLockState.OnExamLock {
+        PreLockState.onExamLock(locked: LockdownController.shared.isLocked,
+                                preLocked: LockdownController.shared.isPreLock)
+    }
+
+    /// The exam's lock or session arrived during the pre-exam lock: its teacher-allowed
+    /// apps replace the pre-exam lock's (like a lock taken right now), then the lock
+    /// becomes the exam's without unlocking.
+    private func attachExamToPreLock(allowedApps: Any?) {
+        Allowlist.setTeacherAllowed(allowedApps)
+        LockdownController.shared.promoteToExamLock()
     }
 
     /// The page asks to unlock after handing in. Audit #11: the page alone can no longer
@@ -367,7 +440,8 @@ final class MainWindowController: NSWindowController, LockSurface,
                                     "version": Config.version,
                                     "app_version": Config.version,
                                     "platform": "mac",
-                                    "sealed_pending": Sealed.hasPending]
+                                    "sealed_pending": Sealed.hasPending,
+                                    "prelock": LockdownController.shared.isPreLock]
         // 2026-10-22: a newer release the app can install (Updater.swift); never while locked.
         if let update = Updater.shared.available, !LockdownController.shared.isLocked {
             state["update"] = ["version": update.version]
@@ -438,7 +512,8 @@ final class MainWindowController: NSWindowController, LockSurface,
         if ownLocalPage { ownPageLoadPending = false }
         // Review 2026-10-14: while locked, only the locked attempt's own pages.
         if isServerURL(url), (navigationAction.targetFrame?.isMainFrame ?? true), LockdownController.shared.isLocked,
-           !MainWindowController.allowedWhileLocked(path: url.path, attemptId: AppSession.shared.exam?.attemptId) {
+           !MainWindowController.allowedWhileLocked(path: url.path, attemptId: AppSession.shared.exam?.attemptId,
+                                                    preLock: LockdownController.shared.isPreLock) {
             EventLog.shared.record(.blockedNavigation("left the exam: \(url.path)"))
             DebugLog.log("web", "navigation BLOCKED while locked: \(url.path)")
             decisionHandler(.cancel)
@@ -471,7 +546,9 @@ final class MainWindowController: NSWindowController, LockSurface,
 
     /// Pages a locked computer may show: the locked attempt's exam / website-exam / done
     /// pages (and any attempt's while the attempt is not known yet, i.e. an offline start).
-    static func allowedWhileLocked(path: String, attemptId: String?) -> Bool {
+    /// 2026-10-23: the pre-exam lock (no attempt) also shows the start-code pages.
+    static func allowedWhileLocked(path: String, attemptId: String?, preLock: Bool = false) -> Bool {
+        if preLock && attemptId == nil && PreLockState.allowedWhilePreLocked(path: path) { return true }
         let p = path.lowercased()
         let roots = ["/student/exam/", "/student/external/", "/student/external-done/", "/student/done/"]
         guard let aid = attemptId?.lowercased() else { return roots.contains { p.hasPrefix($0) } }
@@ -555,7 +632,9 @@ final class MainWindowController: NSWindowController, LockSurface,
     /// Plan M2: the lock problems plus server reachability, clock, minimum version, disk,
     /// battery and VPN. Answers within ~2.5 s (the page waits 3 s) even when offline.
     private func runPreflight() {
-        let problems = LockdownController.shared.preflightProblems()
+        // 2026-10-23: during the pre-exam lock, not what FairPlay's own lock causes or fixes.
+        let preLocked = LockdownController.shared.isPreLock
+        let problems = PreLockState.preflightProblems(LockdownController.shared.preflightProblems(), preLocked: preLocked)
         var answered = false
         let finish: (Bool, String?) -> Void = { [weak self] reached, minimum in
             guard let self, !answered else { return }
@@ -573,7 +652,7 @@ final class MainWindowController: NSWindowController, LockSurface,
                                       freeBytes: Readiness.freeBytes(), battery: Readiness.battery(),
                                       vpn: Readiness.vpnInterfaces(), accessibility: EventTap.isTrusted)
             self.send(["type": "preflight", "problems": blocking.map { $0.message },
-                       "apps_to_close": LockdownController.names(LockdownController.shared.appsToClose()),
+                       "apps_to_close": preLocked ? [String]() : LockdownController.names(LockdownController.shared.appsToClose()),
                        "checks": rows.map { $0.dict }, "platform": "mac",
                        "app_version": Config.version, "os_version": Readiness.macOSVersion])
         }
@@ -833,6 +912,16 @@ final class MainWindowController: NSWindowController, LockSurface,
     /// lock never needs a Mac restart.
     func promptEmergencyExit() {
         DebugLog.log("exit", "Ctrl-Opt-Cmd-E pressed (locked=\(LockdownController.shared.isLocked))")
+        // 2026-10-23: the pre-exam lock has no attempt to protect: the shortcut just unlocks
+        // (no code, no server, no exit event).
+        if PreLockState.emergencyExitUnlocksAtOnce(locked: LockdownController.shared.isLocked,
+                                                   preLocked: LockdownController.shared.isPreLock,
+                                                   hasExam: AppSession.shared.exam != nil) {
+            DebugLog.log("exit", "pre-exam lock: unlocked by the shortcut (no exam attached)")
+            LockdownController.shared.endPreLock()   // onUnlocked sends "unlocked"
+            sendState()
+            return
+        }
         guard LockdownController.shared.isLocked, let win = window, win.attachedSheet == nil else { return }
         let alert = NSAlert()
         alert.messageText = "Invigilator exit"

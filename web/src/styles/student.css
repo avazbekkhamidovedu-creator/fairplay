@@ -2714,3 +2714,130 @@ details.stu-rubric-details > summary .pts {
   gap: 14px;
   padding: 18px 0 6px;
 }
+
+/* 2026-10-23 "Before you start" and the locked start-code screen */
+.stu-start-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  padding: 0 24px;
+  background: var(--s-surface);
+  border-bottom: 1px solid var(--s-border);
+}
+.stu-start-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stu-start-card {
+  width: min(620px, 100%);
+  gap: 16px;
+  animation: stu-pop-in 0.22s ease-out;
+}
+.stu-start-card h1 {
+  margin: 0;
+  font-size: 26px;
+}
+.stu-rules {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.stu-rules li {
+  position: relative;
+  padding: 12px 14px 12px 40px;
+  border-radius: 10px;
+  background: var(--s-surface-2);
+  border: 1px solid var(--s-border);
+  line-height: 1.5;
+  color: var(--s-text-2);
+}
+.stu-rules li::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  top: 19px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--s-primary);
+}
+.stu-rules b {
+  color: var(--s-text);
+}
+.stu-start-battery {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 14px;
+  background: var(--s-success-tint);
+  color: var(--s-success);
+}
+.stu-start-battery.low,
+.stu-start-battery.critical {
+  background: var(--s-warn-tint);
+  color: var(--s-warn-dark);
+}
+.stu-ready {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.stu-ready input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--s-primary);
+}
+.stu-code-card {
+  align-items: stretch;
+  text-align: left;
+}
+.stu-linkbtn {
+  align-self: center;
+  border: 0;
+  background: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--s-text-2);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.stu-linkbtn:hover {
+  color: var(--s-primary);
+  background: var(--s-primary-tint);
+}
+.stu-tabnum {
+  font-variant-numeric: tabular-nums;
+}
+.stu-shake {
+  animation: stu-shake 0.42s ease-in-out;
+}
+@keyframes stu-shake {
+  0%, 100% { transform: none; }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(7px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stu-shake,
+  .stu-start-card {
+    animation: none;
+  }
+}

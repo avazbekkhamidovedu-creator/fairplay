@@ -27,6 +27,8 @@ final class LockdownController {
     static let shared = LockdownController()
 
     private(set) var isLocked = false
+    /// 2026-10-23: locked before the start code, no exam attached yet (PreLock.swift).
+    private(set) var isPreLock = false
     private var observers: [NSObjectProtocol] = []
     private var focusTimer: Timer?
     private var pasteboardTimer: Timer?
@@ -90,7 +92,7 @@ final class LockdownController {
         installWorkspaceWatchers()
         installFocusGuard()
         clearAndGuardPasteboard()
-        Watchdog.lockStarted()
+        Watchdog.lockStarted(preLock: isPreLock)
         runChecks(atLock: true)
         installCheckTimer()
         AppSession.shared.beat()
@@ -131,7 +133,61 @@ final class LockdownController {
         surface?.exitLockedMode()
         EventLog.shared.record(.lockEnded)
         AppSession.shared.beat()
+        if isPreLock {
+            // After .lockEnded above: that one stays local too (setForwarding is in order).
+            isPreLock = false
+            EventLog.shared.setForwarding(true)
+        }
         onUnlocked?()
+    }
+
+    // MARK: - Pre-exam lock (2026-10-23, PreLock.swift)
+
+    /// The same lock as an exam's (tap, kiosk options, watchers, checks, watchdog), with no
+    /// exam: nothing goes to the server until an exam is attached. False (and unlocked)
+    /// when Accessibility is not granted, like lock().
+    @discardableResult
+    func preLock() -> Bool {
+        guard !isLocked else { return true }
+        EventLog.shared.setForwarding(false)
+        isPreLock = true
+        if lock() {
+            DebugLog.log("lock", "pre-exam lock on (no exam attached)")
+            return true
+        }
+        isPreLock = false
+        EventLog.shared.setForwarding(true)
+        return false
+    }
+
+    /// The exam was attached (its lock / session / website exam): the pre-exam lock becomes
+    /// the exam lock without unlocking. From here on everything is exactly as after lock():
+    /// events reach the teacher (the current problems are reported again for this exam),
+    /// beats run, the watchdog reports and reopens, and only the exam's ways out unlock.
+    func promoteToExamLock() {
+        guard isLocked, isPreLock else { return }
+        DebugLog.log("lock", "pre-exam lock -> exam lock (stays locked)")
+        isPreLock = false
+        EventLog.shared.setForwarding(true)
+        Watchdog.preLockEnded()
+        reported.removeAll(); backgroundApps.removeAll()
+        OfflineExit.reset()
+        EventLog.shared.record(.lockStarted)
+        if IsSecureEventInputEnabled() { EventLog.shared.record(.secureInputOn) }
+        runChecks(atLock: true)
+        AppSession.shared.beat()
+    }
+
+    /// "Not ready? Leave and unlock" (or the invigilator shortcut) during the pre-exam
+    /// lock: the normal unlock with no server check, since there is no attempt. False, and
+    /// nothing changes, when an exam is attached or this is not the pre-exam lock.
+    @discardableResult
+    func endPreLock() -> Bool {
+        guard PreLockState.onPreUnlock(locked: isLocked, preLocked: isPreLock,
+                                       hasExam: AppSession.shared.exam != nil) == .unlock else { return false }
+        DebugLog.log("lock", "pre-exam lock ended (no exam was attached)")
+        unlock()
+        return true
     }
 
     private func bringToFront() {

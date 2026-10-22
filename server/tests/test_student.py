@@ -67,7 +67,9 @@ def test_rate_limit_after_five_wrong(client, alice, bob, live_exam):
         assert start(client, alice, live_exam, bad).status_code == 403
     r = start(client, alice, live_exam)  # even the right code is blocked now
     assert r.status_code == 429
-    assert r.json() == {"detail": "Too many wrong codes, wait 60 seconds"}
+    d = r.json()["detail"]
+    assert d["message"] == "Too many wrong codes, wait 60 seconds"
+    assert d["code"] == "too_many_codes" and 1 <= d["retry_after"] <= 60
     assert start(client, bob, live_exam).status_code == 200  # per student
 
 

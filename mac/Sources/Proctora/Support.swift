@@ -232,6 +232,9 @@ final class EventLog {
     private var lastSent: [String: Date] = [:]
     private var perType: [String: Int] = [:]
     private var capped: Set<String> = []
+    /// 2026-10-23: off during the pre-exam lock (no attempt): events then stay in the local
+    /// log only and never reach a page or the server. Read and written on `queue`.
+    private var forwarding = true
     private static let maxLogBytes: UInt64 = 5_000_000
 
     /// Decides (under `queue`) whether an event goes out. Pure state, testable.
@@ -253,6 +256,15 @@ final class EventLog {
         return n <= maxPerType
     }
 
+    /// In order with record(): events recorded before this call keep the old setting.
+    func setForwarding(_ on: Bool) {
+        queue.async { [weak self] in
+            guard let self, self.forwarding != on else { return }
+            self.forwarding = on
+            DebugLog.log("event", on ? "events go to the exam again" : "events kept local (pre-exam lock, no exam)")
+        }
+    }
+
     /// Thread-safe and non-blocking: the event tap callback calls this on its own thread,
     /// so all formatting and file work happens on `queue` (review 2026-10-14: it used to
     /// wait there behind file writes).
@@ -264,6 +276,7 @@ final class EventLog {
             let now = self.iso.string(from: at)
             self.append("\(now) \(type) \(detail)\n")
             DebugLog.log("event", "\(type) \(detail)")
+            guard self.forwarding else { return }
             var out: [(String, String)] = []
             if EventLog.shouldSend(type: type, detail: detail, at: at, lastSent: &self.lastSent, perType: &self.perType) {
                 out.append((type, detail))

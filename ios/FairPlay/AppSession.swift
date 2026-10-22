@@ -259,7 +259,8 @@ enum LockMarker {
             .appendingPathComponent("FairPlay/locked-attempt")
     }
 
-    /// Locked: the attempt id ("-" for an offline start). nil: not locked.
+    /// Locked: the attempt id ("-" for an offline start, PreLockState.marker for the
+    /// pre-exam lock). nil: not locked.
     static func update(attemptId: String?) {
         if let attemptId {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -273,6 +274,11 @@ enum LockMarker {
     static func takeLeftover() -> (wasLocked: Bool, attemptId: String?) {
         guard let s = try? String(contentsOf: url, encoding: .utf8) else { return (false, nil) }
         try? FileManager.default.removeItem(at: url)
+        // 2026-10-23: only the pre-exam lock (no attempt): nothing to report or resume.
+        if PreLockState.markerIsPreLock(s) {
+            DebugLog.log("app", "last run ended during the pre-exam lock (no exam): starting normally")
+            return (false, nil)
+        }
         let id = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return (true, Signing.isSafeToken(id, min: 3, max: 32) ? id : nil)
     }

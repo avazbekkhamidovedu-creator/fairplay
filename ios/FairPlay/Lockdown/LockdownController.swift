@@ -39,6 +39,10 @@ final class LockdownController {
     static let shared = LockdownController()
 
     private(set) var isLocked = false
+    /// 2026-10-23: locked before the start code, no exam attached yet (FairPlayCore PreLock.swift).
+    private(set) var isPreLock = false
+    /// A pre-exam lock is coming up (iPadOS may be asking the student first).
+    private var wantPreLock = false
     private(set) var state = DeviceState()
     weak var surface: LockSurface?
     var onUnlocked: (() -> Void)?
@@ -81,7 +85,37 @@ final class LockdownController {
     // MARK: - Lock / unlock
 
     func lock(participants ids: [String], completion: @escaping (LockResult) -> Void) {
+        if isLocked {
+            // 2026-10-23: the exam's lock during the pre-exam lock: stays locked, becomes the exam's.
+            if isPreLock { promoteToExamLock(participants: ids) }
+            completion(.locked)
+            return
+        }
+        if locking && wantPreLock {
+            // The exam's lock arrived while the pre-exam lock was still coming up: this lock
+            // is the exam's from the start.
+            wantPreLock = false
+            EventLog.shared.forwarding = true
+        }
+        startLock(participants: ids, completion: completion)
+    }
+
+    /// 2026-10-23: the pre-exam lock. Exactly the exam's lock (Assessment Mode the same way,
+    /// "lockPending" while iPadOS asks), with no exam: nothing goes to the server until an
+    /// exam is attached.
+    func preLock(participants ids: [String], completion: @escaping (LockResult) -> Void) {
         if isLocked { completion(.locked); return }
+        if !locking {
+            // No exam: a session left from an earlier page (not locked) must not beat for
+            // this lock or be taken for its attempt.
+            if AppSession.shared.exam != nil { AppSession.shared.clearExam() }
+            wantPreLock = true
+            EventLog.shared.forwarding = false
+        }
+        startLock(participants: ids, completion: completion)
+    }
+
+    private func startLock(participants ids: [String], completion: @escaping (LockResult) -> Void) {
         lockWaiters.append(completion)
         guard !locking else { return }
         locking = true
@@ -146,6 +180,10 @@ final class LockdownController {
     private func finishLock(_ r: LockResult) {
         locking = false
         pendingTimer?.invalidate(); pendingTimer = nil
+        if r != .locked && wantPreLock {
+            wantPreLock = false
+            EventLog.shared.forwarding = true
+        }
         let waiters = lockWaiters
         lockWaiters.removeAll()
         waiters.forEach { $0(r) }
@@ -153,6 +191,9 @@ final class LockdownController {
 
     private func didLock(_ mode: Mode) {
         isLocked = true
+        isPreLock = wantPreLock && AppSession.shared.exam == nil
+        wantPreLock = false
+        if !isPreLock { EventLog.shared.forwarding = true }
         self.mode = mode
         lockedAt = Date()
         state = DeviceState()
@@ -162,7 +203,7 @@ final class LockdownController {
         problems.removeAll(); reported.removeAll()
         leaves = 0; screenshots = 0
         OfflineExit.reset()
-        LockMarker.update(attemptId: AppSession.shared.exam?.attemptId ?? "-")
+        LockMarker.update(attemptId: isPreLock ? PreLockState.marker : (AppSession.shared.exam?.attemptId ?? "-"))
         EventLog.shared.record("lock_started", mode.rawValue)
         clearPasteboard()
         surface?.enterLockedMode()
@@ -196,8 +237,50 @@ final class LockdownController {
         surface?.exitLockedMode()
         EventLog.shared.record("lock_ended")
         AppSession.shared.beat()
+        if isPreLock {
+            // After "lock_ended" above: that one stays local too.
+            isPreLock = false
+            EventLog.shared.forwarding = true
+        }
         state = DeviceState()
         onUnlocked?()
+    }
+
+    // MARK: - Pre-exam lock (2026-10-23)
+
+    /// The exam was attached (its lock / session / website exam): the pre-exam lock becomes
+    /// the exam lock without unlocking. From here on everything is as after lock(): events
+    /// reach the teacher (current problems reported again for this exam), beats run, the
+    /// relaunch marker names the attempt and only the exam's ways out unlock.
+    /// Assessment Mode keeps the participants it began with (none for a pre-exam lock):
+    /// changing them would mean ending it, i.e. unlocking.
+    func promoteToExamLock(participants ids: [String] = []) {
+        guard isLocked, isPreLock else { return }
+        DebugLog.log("lock", "pre-exam lock -> exam lock (stays locked)")
+        if mode == .assessment && Set(ids) != Set(participants) {
+            DebugLog.log("lock", "teacher-allowed apps not added: Assessment Mode began without them")
+        }
+        isPreLock = false
+        EventLog.shared.forwarding = true
+        LockMarker.update(attemptId: AppSession.shared.exam?.attemptId ?? "-")
+        reported.removeAll()
+        leaves = 0; screenshots = 0
+        OfflineExit.reset()
+        EventLog.shared.record("lock_started", mode.rawValue)
+        runChecks(atLock: true)
+        AppSession.shared.beat()
+    }
+
+    /// "Not ready? Leave and unlock" (or the invigilator exit) during the pre-exam lock:
+    /// the normal unlock with no server check, since there is no attempt. False, and
+    /// nothing changes, when an exam is attached or this is not the pre-exam lock.
+    @discardableResult
+    func endPreLock() -> Bool {
+        guard PreLockState.onPreUnlock(locked: isLocked, preLocked: isPreLock,
+                                       hasExam: AppSession.shared.exam != nil) == .unlock else { return false }
+        DebugLog.log("lock", "pre-exam lock ended (no exam was attached)")
+        unlock()
+        return true
     }
 
     // MARK: - Assessment Mode lost mid-exam

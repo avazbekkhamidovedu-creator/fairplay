@@ -288,7 +288,7 @@ describe("offline start", () => {
     api.start.mockRejectedValue(new NetworkError());
     renderStart();
     await typeCode(user, "111111");
-    expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(/Wrong start code/);
+    expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(/That code isn't right/);
     expect(readOfflineRecord("e_1")).toBeNull();
   });
 

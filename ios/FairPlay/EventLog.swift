@@ -22,6 +22,9 @@ final class EventLog {
 
     /// Called for every event that goes out.
     var onEvent: ((_ type: String, _ detail: String, _ time: String) -> Void)?
+    /// 2026-10-23: off during the pre-exam lock (no attempt): events then stay in the local
+    /// log only and never reach a page or the server.
+    var forwarding = true
 
     private let url: URL
     private var throttle = EventThrottle()
@@ -63,6 +66,7 @@ final class EventLog {
             }
         }
         DebugLog.log("event", "\(type) \(detail)")
+        guard forwarding else { return }
         for (t, d) in throttle.decide(type: type, detail: detail, at: at) { onEvent?(t, d, now) }
     }
 }

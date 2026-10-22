@@ -343,3 +343,46 @@ import Foundation
         #expect(Integrity.hookLibrary(imagePath: "/var/mobile/x/libsubstrate.dylib") == "substrate")
     }
 }
+
+// 2026-10-23: the pre-exam lock (same decisions as the Mac's PreLockTests).
+@Suite struct PreLockTests {
+
+    @Test func decisions() {
+        #expect(PreLockState.onPreLock(locked: false, preLocked: false, hasExam: false) == .lock)
+        #expect(PreLockState.onPreLock(locked: true, preLocked: true, hasExam: false) == .alreadyPreLocked)
+        #expect(PreLockState.onPreLock(locked: true, preLocked: false, hasExam: true) == .examLocked)
+        #expect(PreLockState.onPreLock(locked: true, preLocked: false, hasExam: false) == .examLocked)   // offline start
+
+        #expect(PreLockState.onPreUnlock(locked: true, preLocked: true, hasExam: false) == .unlock)
+        #expect(PreLockState.onPreUnlock(locked: true, preLocked: true, hasExam: true) == .refuse)
+        #expect(PreLockState.onPreUnlock(locked: true, preLocked: false, hasExam: false) == .refuse)
+        #expect(PreLockState.onPreUnlock(locked: false, preLocked: false, hasExam: false) == .notLocked)
+
+        #expect(PreLockState.onExamLock(locked: true, preLocked: true) == .promote)
+        #expect(PreLockState.onExamLock(locked: true, preLocked: false) == .lock)
+        #expect(PreLockState.onExamLock(locked: false, preLocked: false) == .lock)
+
+        #expect(PreLockState.emergencyExitUnlocksAtOnce(locked: true, preLocked: true, hasExam: false))
+        #expect(!PreLockState.emergencyExitUnlocksAtOnce(locked: true, preLocked: false, hasExam: false))
+        #expect(!PreLockState.emergencyExitUnlocksAtOnce(locked: true, preLocked: true, hasExam: true))
+    }
+
+    @Test func pages() {
+        #expect(ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/checkin", attemptId: nil, preLock: true))
+        #expect(ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/start", attemptId: nil, preLock: true))
+        #expect(!ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/start", attemptId: nil))
+        #expect(ExamPaths.allowedWhileLocked(path: "/student", attemptId: nil, preLock: true))
+        #expect(!ExamPaths.allowedWhileLocked(path: "/student/grades", attemptId: nil, preLock: true))
+        #expect(!ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/checkin", attemptId: nil))
+        #expect(!ExamPaths.allowedWhileLocked(path: "/student", attemptId: "a_1", preLock: true))
+    }
+
+    @Test func relaunchMarker() {
+        #expect(PreLockState.markerIsPreLock(PreLockState.marker))
+        #expect(PreLockState.markerIsPreLock(PreLockState.marker + "\n"))
+        #expect(!PreLockState.markerIsPreLock("-"))          // offline start
+        #expect(!PreLockState.markerIsPreLock("a_1"))
+        // Never mistaken for an attempt id.
+        #expect(!Signing.isSafeToken(PreLockState.marker, min: 3, max: 32))
+    }
+}

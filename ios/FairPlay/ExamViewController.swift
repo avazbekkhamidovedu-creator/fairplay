@@ -165,7 +165,8 @@ final class ExamViewController: UIViewController, LockSurface,
                     return
                 }
                 let aid = AppSession.shared.exam?.attemptId
-                if LockdownController.shared.isLocked, !ExamPaths.allowedWhileLocked(path: u.path, attemptId: aid), let aid {
+                if LockdownController.shared.isLocked,
+                   !ExamPaths.allowedWhileLocked(path: u.path, attemptId: aid, preLock: LockdownController.shared.isPreLock), let aid {
                     EventLog.shared.record("blocked_navigation", "left the exam: \(u.path)")
                     view.load(Self.serverRequest(Config.serverURL.appendingPathComponent("student/exam/\(aid)")))
                 }
@@ -349,8 +350,48 @@ final class ExamViewController: UIViewController, LockSurface,
         case "attest":
             send(AppSession.shared.attestation(nonce: (body["nonce"] as? String) ?? ""))
         case "session":
-            AppSession.shared.setExam(attemptId: body["attempt_id"] as? String, token: body["token"] as? String,
-                                      session: body["session"] as? String)
+            let promote = PreLockState.onExamLock(locked: LockdownController.shared.isLocked,
+                                                  preLocked: LockdownController.shared.isPreLock) == .promote
+            if AppSession.shared.setExam(attemptId: body["attempt_id"] as? String, token: body["token"] as? String,
+                                         session: body["session"] as? String), promote {
+                // 2026-10-23: the exam is attached to the pre-exam lock: it is the exam's lock now.
+                LockdownController.shared.promoteToExamLock(participants: ExamPaths.allowedParticipants(body["allowed_apps"]))
+            }
+        case "prelock":
+            // 2026-10-23: lock before the start code (FairPlayCore PreLock.swift): the same
+            // lock as an exam's (Assessment Mode, "lockPending" while iPadOS asks), no session.
+            let lock = LockdownController.shared
+            switch PreLockState.onPreLock(locked: lock.isLocked, preLocked: lock.isPreLock,
+                                          hasExam: AppSession.shared.exam != nil) {
+            case .examLocked:
+                send(["type": "locked", "prelock": false])
+            case .alreadyPreLocked:
+                send(["type": "locked", "prelock": true])
+            case .lock:
+                lock.preLock(participants: ExamPaths.allowedParticipants(body["allowed_apps"])) { [weak self] r in
+                    switch r {
+                    // false when an exam lock asked meanwhile and this became its lock.
+                    case .locked: self?.send(["type": "locked", "prelock": LockdownController.shared.isPreLock])
+                    case .failed(let reason): self?.send(["type": "lockFailed", "reason": reason])
+                    }
+                }
+            }
+        case "preunlock":
+            // 2026-10-23: "Not ready? Leave and unlock": only the pre-exam lock with no exam
+            // attached, and then with no server check (there is no attempt).
+            let lock = LockdownController.shared
+            switch PreLockState.onPreUnlock(locked: lock.isLocked, preLocked: lock.isPreLock,
+                                            hasExam: AppSession.shared.exam != nil) {
+            case .unlock:
+                lock.endPreLock()            // onUnlocked sends "unlocked"
+                sendState()
+            case .notLocked:
+                send(["type": "unlocked"])
+                sendState()
+            case .refuse:
+                DebugLog.log("lock", "preunlock refused: this is an exam lock")
+                send(["type": "preunlockRefused"])
+            }
         case "lock":
             let offlineStart = (body["offline"] as? Bool) == true && body["attempt_id"] == nil && body["session"] == nil
             // Review L1: an offline start has no server session yet; drop any older one so
@@ -458,7 +499,7 @@ final class ExamViewController: UIViewController, LockSurface,
     func sendState() {
         send(["type": "state", "locked": LockdownController.shared.isLocked, "trusted": true,
               "version": Config.version, "app_version": Config.version, "platform": "ipad",
-              "sealed_pending": Sealed.hasPending])
+              "sealed_pending": Sealed.hasPending, "prelock": LockdownController.shared.isPreLock])
     }
 
     private var eventsReady = false
@@ -527,7 +568,8 @@ final class ExamViewController: UIViewController, LockSurface,
         let ownLocalPage = isLocal && ownPageLoadPending && navigationAction.navigationType == .other && mainFrame
         if ownLocalPage { ownPageLoadPending = false }
         if isServerURL(url), mainFrame, LockdownController.shared.isLocked,
-           !ExamPaths.allowedWhileLocked(path: url.path, attemptId: AppSession.shared.exam?.attemptId) {
+           !ExamPaths.allowedWhileLocked(path: url.path, attemptId: AppSession.shared.exam?.attemptId,
+                                         preLock: LockdownController.shared.isPreLock) {
             EventLog.shared.record("blocked_navigation", "left the exam: \(url.path)")
             decisionHandler(.cancel)
             return
@@ -796,6 +838,16 @@ final class ExamViewController: UIViewController, LockSurface,
     /// rate-limited there. No server / an error: the offline code instead.
     func promptEmergencyExit() {
         DebugLog.log("exit", "invigilator exit opened (locked=\(LockdownController.shared.isLocked))")
+        // 2026-10-23: the pre-exam lock has no attempt to protect: this just unlocks (no
+        // code, no server, no exit event).
+        if PreLockState.emergencyExitUnlocksAtOnce(locked: LockdownController.shared.isLocked,
+                                                   preLocked: LockdownController.shared.isPreLock,
+                                                   hasExam: AppSession.shared.exam != nil) {
+            DebugLog.log("exit", "pre-exam lock: unlocked by the invigilator exit (no exam attached)")
+            LockdownController.shared.endPreLock()   // onUnlocked sends "unlocked"
+            sendState()
+            return
+        }
         guard LockdownController.shared.isLocked, presentedViewController == nil else { return }
         let a = UIAlertController(title: "Invigilator exit",
                                   message: "Enter the invigilator code from the teacher's live room to end locked mode. The teacher will see this."

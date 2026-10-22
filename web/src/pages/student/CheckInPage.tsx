@@ -3,7 +3,6 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { examName, isToday, plural, shortDate, shortTime } from "../../components/student/format";
 import { DeviceCheckRun, ReadinessChecks, readinessOk, useReadiness } from "../../components/student/Readiness";
-import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { CheckIcon } from "../../components/student/icons";
 import "../../styles/student.css";
 import { useStudentExams } from "./useStudentExams";
@@ -13,7 +12,7 @@ import { downloadPackage } from "../../lib/offline";
 export default function CheckInPage() {
   const { examId = "" } = useParams();
   const navigate = useNavigate();
-  const { exams, error, reload } = useStudentExams();
+  const { exams, error } = useStudentExams();
   const readiness = useReadiness();
   const exam = exams?.find((e) => e.id === examId) ?? null;
   const ready = readinessOk(readiness);
@@ -86,7 +85,18 @@ export default function CheckInPage() {
             <span className="stu-step-num" aria-hidden="true">2</span>
             <h2 id="c2-h">Start code</h2>
           </div>
-          <StartCodeForm examId={exam.id} autoFocus onConflict={reload} />
+          <p className="stu-hint" style={{ margin: 0, lineHeight: 1.5 }}>
+            When your teacher opens the exam: read the rules, lock this computer, then type the code.
+          </p>
+          <div className="stu-row">
+            <button
+              type="button"
+              className="stu-btn primary lg"
+              onClick={() => navigate(`/student/exams/${encodeURIComponent(exam.id)}/start`)}
+            >
+              Start exam
+            </button>
+          </div>
           {offlineReady && (
             <p className="stu-hint" role="status" data-testid="offline-ready">
               Exam saved on this computer. If Wi-Fi drops, you can still start with the code.
