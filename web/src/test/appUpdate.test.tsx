@@ -162,3 +162,13 @@ describe("update line in the Test my device card", () => {
     expect(posted.some((m) => m.action === "openDownloadPage")).toBe(true);
   });
 });
+
+describe("Windows update answers", () => {
+  it("maps the Windows reasons", async () => {
+    const b = await import("../lib/bridge");
+    expect(b.parseUpdateFailure("failed")).toBe("download");
+    expect(b.parseUpdateFailure("not_installed")).toBe("not_writable");
+    expect(b.parseUpdateFailure("no_update")).toBe("no_update");
+    expect(b.parseUpdateFailure("weird")).toBe("unknown");
+  });
+});

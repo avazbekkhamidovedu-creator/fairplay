@@ -85,6 +85,8 @@ export function UpdateNotice({ update }: { update: bridge.AppUpdate }) {
             "Couldn't download the update. Check the connection and try again."
           ) : run.reason === "locked" ? (
             "Can't update during an exam."
+          ) : run.reason === "no_update" ? (
+            "You already have the newest version."
           ) : (
             <>
               Download the new version from the{" "}

@@ -12,7 +12,7 @@ import Foundation
 /// home-screen launches and shown on the connecting / offline screens, where
 /// "Change server" edits or clears it.
 enum Config {
-    static let version = "0.5.3"
+    static let version = "0.5.4"
 
     #if FAIRPLAY_DEV
     static let isDevBuild = true

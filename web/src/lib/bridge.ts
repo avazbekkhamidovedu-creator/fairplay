@@ -231,11 +231,16 @@ export function parseUpdate(v: unknown): AppUpdate | null {
   return { version };
 }
 
-/** Why the Mac app did not install an update. */
-export type UpdateFailure = "download" | "verify" | "not_writable" | "locked" | "busy" | "unknown";
+/** Why the Mac or Windows app did not install an update. */
+export type UpdateFailure = "download" | "verify" | "not_writable" | "locked" | "busy" | "no_update" | "unknown";
 
+/** Mac and Windows reasons. Windows also says "failed" (= download) and "not_installed"
+ *  (the zip copy can't update itself: = download page). */
 export function parseUpdateFailure(reason: unknown): UpdateFailure {
-  return reason === "download" || reason === "verify" || reason === "not_writable" || reason === "locked" || reason === "busy"
+  if (reason === "failed") return "download";
+  if (reason === "not_installed") return "not_writable";
+  return reason === "download" || reason === "verify" || reason === "not_writable" || reason === "locked" ||
+    reason === "busy" || reason === "no_update"
     ? reason
     : "unknown";
 }
@@ -243,11 +248,12 @@ export function parseUpdateFailure(reason: unknown): UpdateFailure {
 /** Public page with every FairPlay download. */
 export const DOWNLOAD_PAGE = "https://github.com/khamidov17/fairplay-download/releases/latest";
 
-/** 2026-10-22: ask the Mac app to download, verify and install the update it offered
+/** 2026-10-22: ask the Mac or Windows app to download, verify and install the update it offered
  *  (state.update). It answers updateProgress / updateFailed, or quits and reopens updated.
  *  Returns false outside the Mac app (nothing is sent). */
 export function installUpdate(): boolean {
-  if (nativePlatform() !== "mac") return false;
+  const p = nativePlatform();
+  if (p !== "mac" && p !== "windows") return false;
   post({ action: "installUpdate" });
   return true;
 }
