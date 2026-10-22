@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { clearToken } from "../../api/client";
 import { useFeatures, type Feature } from "../../lib/features";
 import { useMe } from "../../lib/useMe";
-import { Icon, LogoMark, type IconName } from "../ui/Icon";
+import { Icon, LogoMark, Wordmark, type IconName } from "../ui/Icon";
 import "../../styles/teacher.css";
 
 type Section = "home" | "exams" | "classes" | "grading" | "gradebook" | "lms" | "insights" | "students" | "practice" | "scan";
@@ -55,7 +55,7 @@ export function TeacherLayout() {
       <nav className="t-nav" aria-label="Main">
         <Link to="/teacher" className="t-brand" aria-label="FairPlay home">
           <LogoMark />
-          <span>FairPlay</span>
+          <Wordmark />
         </Link>
         {NAV.filter((item) => !item.feature || features.has(item.feature)).map((item) => (
           <Link

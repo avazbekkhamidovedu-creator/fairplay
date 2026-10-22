@@ -1,14 +1,5 @@
 // Small inline icons used by the student UI. All decorative (aria-hidden).
 
-export function ShieldIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3l8 4v5c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V7z" />
-      <path d="M8.5 12l2.5 2.5 4.5-5" />
-    </svg>
-  );
-}
-
 export function CheckIcon({ size = 20, color = "#16794C" }: { size?: number; color?: string }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

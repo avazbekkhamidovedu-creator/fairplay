@@ -148,24 +148,29 @@ export function Icon({ name, size = 20, strokeWidth = 2 }: { name: IconName; siz
   );
 }
 
-/** FairPlay brand mark: white shield-check in a primary rounded square. */
-export function LogoMark({ size = 32 }: { size?: number }) {
+/** FairPlay mark (brand/mark.svg): a white circle split into two equal halves on a blue
+ *  rounded square -- fair, the same for everyone. The same drawing is the app icon. */
+export function LogoMark({ size = 32, title }: { size?: number; title?: string }) {
   return (
-    <span
-      aria-hidden="true"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: Math.round(size * 0.28),
-        background: "var(--primary)",
-        color: "#fff",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-      }}
+    <svg
+      className="fp-mark"
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      role={title ? "img" : undefined}
+      aria-label={title}
+      aria-hidden={title ? undefined : true}
+      focusable="false"
+      style={{ flexShrink: 0, display: "block" }}
     >
-      <Icon name="shield" size={Math.round(size * 0.56)} strokeWidth={2.2} />
-    </span>
+      <rect width="64" height="64" rx="12.3" fill="#2F4BD8" />
+      <path d="M29.7 13.64A18.5 18.5 0 0 0 29.7 50.36Z" fill="#fff" />
+      <path d="M34.3 13.64A18.5 18.5 0 0 1 34.3 50.36Z" fill="#fff" />
+    </svg>
   );
+}
+
+/** The FairPlay name next to the mark. */
+export function Wordmark() {
+  return <span className="fp-wordmark">FairPlay</span>;
 }

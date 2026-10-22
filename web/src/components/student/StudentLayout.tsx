@@ -4,16 +4,14 @@ import { clearToken } from "../../api/client";
 import { clearExamDataOnSignOut } from "../../lib/offline";
 import { useFeatures } from "../../lib/features";
 import { useMe } from "../../lib/useMe";
-import { ShieldIcon } from "./icons";
+import { LogoMark, Wordmark } from "../ui/Icon";
 import "../../styles/student.css";
 
 export function StudentLogo({ to = "/student" }: { to?: string }) {
   return (
     <Link to={to} className="stu-logo" aria-label="FairPlay home">
-      <span className="stu-logo-mark">
-        <ShieldIcon />
-      </span>
-      <span>FairPlay</span>
+      <LogoMark size={32} />
+      <Wordmark />
     </Link>
   );
 }

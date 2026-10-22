@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SyncStatus } from "../../lib/answerQueue";
 import { formatCountdown } from "../../lib/timer";
+import { LogoMark } from "../ui/Icon";
 import { ClockIcon, CloudCheckIcon, DiskIcon, LockIcon, UnlockIcon } from "./icons";
 
 /**
@@ -29,6 +30,7 @@ export function LockedBar({
   const announce = useAnnouncements(sync, remaining);
   return (
     <header className="stu-lockbar">
+      <LogoMark size={28} title="FairPlay" />
       {locked ? (
         <span className="stu-lock-badge">
           <LockIcon />

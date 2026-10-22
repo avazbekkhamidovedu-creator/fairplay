@@ -89,16 +89,6 @@
   text-decoration: none;
   border-radius: 8px;
 }
-.stu-logo-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: var(--s-primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
 .stu-nav {
   display: flex;
   flex-wrap: wrap;

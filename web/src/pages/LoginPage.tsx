@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { ApiError, auth, setToken } from "../api/client";
 import type { Role } from "../api/types";
 import { isNative } from "../lib/bridge";
-import { Icon, LogoMark } from "../components/ui/Icon";
+import { Icon, LogoMark, Wordmark } from "../components/ui/Icon";
 import "../styles/teacher.css";
 
 const COPY: Record<Role, { title: string; sub: string; hint: string; pitch: string; points: string[] }> = {
@@ -87,7 +87,7 @@ export default function LoginPage({ role }: { role: Role }) {
       <aside className="t-login-side" aria-label="About FairPlay">
         <span className="t-brand">
           <LogoMark />
-          <span>FairPlay</span>
+          <Wordmark />
         </span>
         <h2>{copy.pitch}</h2>
         <ul className="t-login-points">

@@ -145,6 +145,7 @@ final class MainWindowController: NSWindowController, LockSurface,
             // Release builds never talk to a plain-http server (audit #11).
             loadOwnHTML("""
             <!doctype html><meta charset="utf-8"><body style="font:16px -apple-system;padding:40px">
+            \(BrandMark.svg(size: 44))
             <h1>This copy of FairPlay is not set up</h1>
             <p>It has no secure (https) exam server. Ask your school for the correct FairPlay app.</p>
             """)
@@ -525,6 +526,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         p{color:#4b5563;line-height:1.5}button{margin-top:12px;font:inherit;font-weight:600;
         padding:10px 18px;border:0;border-radius:10px;background:#2f4bd9;color:#fff}
         </style></head><body><div class="card">
+        \(BrandMark.svg(size: 44))
         <h1>Cannot reach the exam server</h1>
         <p>FairPlay is trying again every 3 seconds. Answers you already typed are saved on this computer.</p>
         <p style="font-size:13px">\(server.absoluteString)</p>
@@ -586,6 +588,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         box-shadow:0 2px 12px rgba(0,0,0,.08)}h1{font-size:22px;margin:0 0 10px}
         p{color:#4b5563;line-height:1.5}
         </style></head><body><div class="card">
+        \(BrandMark.svg(size: 44))
         <h1>Update FairPlay</h1>
         <p>This is FairPlay \(Config.version). Your exams need version \(safe.isEmpty ? "a newer one" : safe) or newer.</p>
         <p>Download the new version from your course page or ask your teacher, then open FairPlay again.</p>
@@ -651,7 +654,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         let buttons = NSStackView(views: [fix, open, restart])
         buttons.orientation = .horizontal; buttons.spacing = 12
 
-        let stack = NSStackView(views: [title, body, copies, status, buttons])
+        let stack = NSStackView(views: [BrandMark.view(size: 56), title, body, copies, status, buttons])
         stack.orientation = .vertical; stack.spacing = 20; stack.alignment = .centerX
         stack.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(stack)

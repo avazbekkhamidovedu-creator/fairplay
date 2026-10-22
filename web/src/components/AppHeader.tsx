@@ -3,12 +3,13 @@ import { Link, useNavigate } from "react-router-dom";
 import { clearToken } from "../api/client";
 import type { Role } from "../api/types";
 import { useMe } from "../lib/useMe";
+import { LogoMark, Wordmark } from "./ui/Icon";
 
 export function Brand({ to }: { to?: string }) {
   const inner = (
     <>
-      <span className="brand-mark" aria-hidden="true">P</span>
-      <span>FairPlay</span>
+      <LogoMark size={30} />
+      <Wordmark />
     </>
   );
   return to ? (

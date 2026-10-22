@@ -46,7 +46,7 @@ final class LockBar: UIView {
 
         let spacer = UIView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let stack = UIStackView(arrangedSubviews: [badge, titleLabel, spacer, countdown, finish, clock])
+        let stack = UIStackView(arrangedSubviews: [BrandMark.view(size: 28), badge, titleLabel, spacer, countdown, finish, clock])
         stack.axis = .horizontal
         stack.alignment = .center
         stack.spacing = 16

@@ -85,6 +85,8 @@ cp "$BIN" "$BUNDLE/Contents/MacOS/$APP"
 # (e.g. from a script left running before the exam) can't take it down with the app.
 cp "$BIN" "$BUNDLE/Contents/MacOS/FairPlayGuard"
 GUARD="$BUNDLE/Contents/MacOS/FairPlayGuard"
+# App icon: the FairPlay logo (brand/FairPlay.icns, made from brand/mark.svg).
+cp ../brand/FairPlay.icns "$BUNDLE/Contents/Resources/FairPlay.icns"
 CONF="$BUNDLE/Contents/Resources/FairPlayBuild.plist"
 plutil -create xml1 "$CONF"
 plutil -insert ServerURL -string "$SERVER" "$CONF"
@@ -113,6 +115,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>FairPlay</string>
   <key>CFBundleExecutable</key><string>$APP</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.education</string>

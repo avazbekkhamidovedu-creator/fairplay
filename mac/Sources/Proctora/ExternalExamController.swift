@@ -358,7 +358,7 @@ final class ExternalExamController {
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
 
-        let stack = NSStackView(views: [lock, t, spacer, time, button])
+        let stack = NSStackView(views: [BrandMark.view(size: 28), lock, t, spacer, time, button])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 14

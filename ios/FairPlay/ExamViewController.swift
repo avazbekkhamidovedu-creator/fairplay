@@ -638,7 +638,7 @@ final class ExamViewController: UIViewController, LockSurface,
         .card{background:#fff;border-radius:16px;padding:32px 36px;max-width:480px;margin:24px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
         h1{font-size:24px;margin:0 0 10px}p{color:#4b5563;line-height:1.5}button{margin-top:12px;font:inherit;font-weight:600;
         padding:12px 20px;border:0;border-radius:12px;background:#2f4bd9;color:#fff}a{color:#2f4bd9}</style></head>
-        <body><div class="card"><h1>\(esc(title))</h1><p>\(esc(body))</p>\(small.map { "<p style=\"font-size:13px\">\(esc($0))</p>" } ?? "")\(extra)</div></body></html>
+        <body><div class="card">\(BrandMark.svg(size: 44))<h1>\(esc(title))</h1><p>\(esc(body))</p>\(small.map { "<p style=\"font-size:13px\">\(esc($0))</p>" } ?? "")\(extra)</div></body></html>
         """
     }
 
