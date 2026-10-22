@@ -672,3 +672,17 @@ Same bridge, app session, beats, hand-in, exits and website mode as the Mac app;
 - **Invigilator exit:** hold the lock bar 3 s (or Ctrl-Opt-Cmd-E); the offline dialog shows an "iPad code" (same Mac-code format and rule).
 - **Relaunch:** a lock that never ended is remembered on the iPad; the next launch records `previous_run_killed` and opens `/student/exam/<aid>`.
 - **S1–S6 on iPad:** requests carry `X-FairPlay-Platform: ipad` + `X-FairPlay-Version`; server env `MIN_APP_VERSION_IPAD`, `GET /api/app/version` adds `"ipad"`. `state` adds `app_version`, `sealed_pending`. `preflight` replies with `checks` rows (`ipados_version`, `app_version`, `server`, `clock`, `assessment`, lock problems, `battery`, `vpn`), `platform: "ipad"`, `os_version`. `seal` / `sealedToken` / `sealed` as on the Mac (file in Application Support, proof with the offline key, `sealed_at` from the server clock). Beats add `sep=1` while Assessment Mode or Single App Mode holds (S6 strongest lock) and `sealed=1`. Live room shows the platform as "iPad".
+
+### Before the lock: apps to close (2026-10-22, Mac and Windows)
+- page → app `{action:"preflight", allowed_apps?: string[]}`: the app's preflight reply gains
+  `apps_to_close: string[]`. These are the windowed apps the lock would close with that
+  allowed list: not the system, VPN clients, teacher-allowed apps or FairPlay itself. Names are
+  display names, distinct and sorted. They are not `problems`, so they never block on their own.
+- page → app `{action:"quitApps", allowed_apps?: string[]}`: the app asks those apps to quit,
+  force-quits what is left after about 3 s, and answers `{type:"appsQuit", still_running: string[]}`.
+- The page shows the list with "Close them and start" (so the student can save first), then
+  locks. The lock still closes whatever is left. While locked, the blocking "close these apps"
+  screen re-checks as soon as an app quits.
+- Mac permission screen: shows which FairPlay copy runs and lists other copies. "Fix permission"
+  runs `tccutil reset Accessibility ai.proctora.student`, then asks macOS again. There is also
+  "Restart FairPlay".

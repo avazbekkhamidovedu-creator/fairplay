@@ -36,6 +36,31 @@ jobs:
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad version $TAG"; exit 1; }
           echo "TAG=$TAG" >> "$GITHUB_ENV"
 
+      # 2026-10-22: a fixed signing certificate keeps macOS' Accessibility permission across
+      # updates (ad-hoc signatures change with every build). Secrets MAC_SIGN_P12 (base64
+      # of the .p12) and MAC_SIGN_PASSWORD; without them the build is ad-hoc signed.
+      - name: Signing certificate
+        env:
+          P12: ${{ secrets.MAC_SIGN_P12 }}
+          P12_PASSWORD: ${{ secrets.MAC_SIGN_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "::warning::MAC_SIGN_P12 not set: ad-hoc signing"; exit 0; fi
+          KC="$RUNNER_TEMP/fp.keychain-db"; KCPW="$(uuidgen)"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/fp.p12"
+          security import "$RUNNER_TEMP/fp.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          # Self-signed: trust it for code signing on this runner only (codesign wants a valid identity).
+          openssl pkcs12 -in "$RUNNER_TEMP/fp.p12" -nokeys -passin env:P12_PASSWORD -legacy -out "$RUNNER_TEMP/fp.pem" 2>/dev/null \
+            || openssl pkcs12 -in "$RUNNER_TEMP/fp.p12" -nokeys -passin env:P12_PASSWORD -out "$RUNNER_TEMP/fp.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/fp.pem"
+          rm -f "$RUNNER_TEMP/fp.p12" "$RUNNER_TEMP/fp.pem"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security find-identity -p codesigning "$KC"
+          echo "FAIRPLAY_SIGN_SELF=FairPlay Code Signing" >> "$GITHUB_ENV"
+
       - name: Build (release, universal)
         env:
           FAIRPLAY_APP_KEY: ${{ secrets.FAIRPLAY_APP_KEY }}
@@ -49,6 +74,7 @@ jobs:
           lipo -info mac/FairPlay.app/Contents/MacOS/Proctora | grep -q arm64
           lipo -info mac/FairPlay.app/Contents/MacOS/Proctora | grep -q x86_64
           codesign --verify --deep --strict mac/FairPlay.app
+          codesign -dr - mac/FairPlay.app 2>&1 | tail -1    # designated requirement (TCC uses it)
           plutil -extract ServerURL raw mac/FairPlay.app/Contents/Resources/FairPlayBuild.plist
 
       - name: Zip

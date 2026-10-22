@@ -11,11 +11,11 @@ import { getAttemptSession } from "../../lib/appSession";
 import { useForwardNativeEvents } from "../../lib/useForwardNativeEvents";
 import { clockOffset, remainingMs } from "../../lib/timer";
 import { ReenterExam, isSessionConflict } from "../../components/student/ReenterExam";
-import { PreflightProblems } from "../../components/student/Preflight";
+import { AppsToClose, PreflightProblems } from "../../components/student/Preflight";
 import "../../styles/external.css";
 import "../../styles/student.css";
 
-type Phase = "loading" | "loadError" | "reenter" | "notNative" | "locking" | "preflight" | "lockFailed" | "opening" | "openFailed";
+type Phase = "loading" | "loadError" | "reenter" | "notNative" | "locking" | "preflight" | "closeApps" | "lockFailed" | "opening" | "openFailed";
 
 export default function ExternalExamPage() {
   const { attemptId = "" } = useParams();
@@ -26,6 +26,9 @@ export default function ExternalExamPage() {
   const [loadError, setLoadError] = useState("");
   const [lockReason, setLockReason] = useState("");
   const [preflightProblems, setPreflightProblems] = useState<string[]>([]);
+  const [appsToClose, setAppsToClose] = useState<string[]>([]);
+  const [closingApps, setClosingApps] = useState(false);
+  const appsConfirmedRef = useRef(false);
   // server clock offset measured when the attempt arrived
   const offsetRef = useRef(0);
   const lockingRef = useRef(false);
@@ -115,11 +118,19 @@ export default function ExternalExamPage() {
     if (!attempt || lockingRef.current) return;
     lockingRef.current = true;
     setPhase("locking");
-    const problems = await bridge.preflight();          // audit M-11
+    const allowed = bridge.allowedAppIds(attempt.allowed_apps);
+    const report = await bridge.preflightReport(3000, allowed);   // audit M-11
+    const problems = report?.problems ?? [];
     if (problems.length > 0) {
       lockingRef.current = false;
       setPreflightProblems(problems);
       setPhase("preflight");
+      return;
+    }
+    if (!appsConfirmedRef.current && report && report.apps_to_close.length > 0) {
+      lockingRef.current = false;
+      setAppsToClose(report.apps_to_close);
+      setPhase("closeApps");
       return;
     }
     const token = getToken("student");
@@ -187,6 +198,21 @@ export default function ExternalExamPage() {
   }
 
   if (phase === "reenter") return <ReenterExam attemptId={attemptId} detail={loadError} />;
+  if (phase === "closeApps")
+    return (
+      <AppsToClose
+        apps={appsToClose}
+        busy={closingApps}
+        onContinue={() => {
+          setClosingApps(true);
+          void bridge.quitApps(bridge.allowedAppIds(attempt?.allowed_apps)).then(() => {
+            appsConfirmedRef.current = true;
+            setClosingApps(false);
+            void lock();
+          });
+        }}
+      />
+    );
   if (phase === "preflight")
     return (
       <div className="stu stu-exam">

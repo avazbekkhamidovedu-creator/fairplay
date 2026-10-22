@@ -37,6 +37,7 @@ final class MainWindowController: NSWindowController, LockSurface,
     private var blockingView: NSView?
     private var blockingLabel: NSTextField?
     private var trustPoll: Timer?
+    private var permissionShownAt = Date()
     private var unlockRetry: Timer?
     private var urlWatch: NSKeyValueObservation?
     /// Audit M-18: set only while WE load an about:/data: page (loadOwnHTML); a link or
@@ -262,7 +263,15 @@ final class MainWindowController: NSWindowController, LockSurface,
         case "preflight":
             // Audit M-11: before locking, list what must be fixed outside the lock.
             // Plan M2: plus the full "Check this Mac" rows (server, clock, version, disk...).
+            Allowlist.updateTeacherAllowed(body["allowed_apps"])   // only applies while unlocked
             runPreflight()
+        case "quitApps":
+            // 2026-10-22: close the listed apps before the lock (the student saved first).
+            guard !LockdownController.shared.isLocked else { return }
+            Allowlist.updateTeacherAllowed(body["allowed_apps"])
+            LockdownController.shared.quitAppsBeforeLock { [weak self] still in
+                self?.send(["type": "appsQuit", "still_running": still])
+            }
         case "seal":
             let aid = (body["attempt_id"] as? String) ?? ""
             let seq = (body["client_seq"] as? NSNumber)?.int64Value ?? -1
@@ -546,6 +555,7 @@ final class MainWindowController: NSWindowController, LockSurface,
                                       freeBytes: Readiness.freeBytes(), battery: Readiness.battery(),
                                       vpn: Readiness.vpnInterfaces(), accessibility: EventTap.isTrusted)
             self.send(["type": "preflight", "problems": blocking.map { $0.message },
+                       "apps_to_close": LockdownController.names(LockdownController.shared.appsToClose()),
                        "checks": rows.map { $0.dict }, "platform": "mac",
                        "app_version": Config.version, "os_version": Readiness.macOSVersion])
         }
@@ -606,22 +616,42 @@ final class MainWindowController: NSWindowController, LockSurface,
         FairPlay locks this Mac during the exam so that no other app, website \
         or shortcut can be used. macOS needs your OK for that, once.
 
-        1. Click "Open settings" below. It opens Privacy & Security > Accessibility
-           (on newer macOS it is called "Device Control and Data Access").
-        2. Turn ON "FairPlay". If it is already on, turn it off and on again.
+        1. Click "Fix permission". macOS asks: click "Open System Settings".
+        2. In Privacy & Security > Accessibility turn ON "FairPlay"
+           (newer macOS: "Device Control and Data Access").
         3. Come back here. This screen disappears by itself.
+           Still here after turning it on? Click "Restart FairPlay".
         """, size: 15, weight: .regular, color: NSColor(white: 0.85, alpha: 1))
         body.alignment = .left
         body.preferredMaxLayoutWidth = 600
+
+        // 2026-10-22: which copy is running, and other copies that confuse macOS.
+        var where_ = "This copy: " + Permission.display(Permission.thisCopy)
+        let others = Permission.otherCopies()
+        if !others.isEmpty {
+            where_ += "\nOther FairPlay copies on this Mac (move them to the Trash, then click Fix permission):\n"
+                + others.prefix(4).map { "  " + Permission.display($0) }.joined(separator: "\n")
+            DebugLog.log("lock", "other FairPlay copies: " + others.map(\.path).joined(separator: ", "))
+        }
+        let copies = label(where_, size: 12, weight: .regular, color: NSColor(white: 0.62, alpha: 1))
+        copies.alignment = .left
+        copies.preferredMaxLayoutWidth = 600
 
         let status = label("Waiting for permission...", size: 14, weight: .semibold,
                            color: NSColor(calibratedRed: 1, green: 0.78, blue: 0.4, alpha: 1))
         permissionStatus = status
 
+        let fix = NSButton(title: "Fix permission", target: self, action: #selector(fixPermission))
+        fix.bezelStyle = .rounded
+        fix.keyEquivalent = "\r"
         let open = NSButton(title: "Open settings", target: self, action: #selector(openAccessibility))
         open.bezelStyle = .rounded
+        let restart = NSButton(title: "Restart FairPlay", target: self, action: #selector(restartForPermission))
+        restart.bezelStyle = .rounded
+        let buttons = NSStackView(views: [fix, open, restart])
+        buttons.orientation = .horizontal; buttons.spacing = 12
 
-        let stack = NSStackView(views: [title, body, status, open])
+        let stack = NSStackView(views: [title, body, copies, status, buttons])
         stack.orientation = .vertical; stack.spacing = 20; stack.alignment = .centerX
         stack.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(stack)
@@ -630,6 +660,7 @@ final class MainWindowController: NSWindowController, LockSurface,
             stack.centerYAnchor.constraint(equalTo: v.centerYAnchor),
             stack.widthAnchor.constraint(lessThanOrEqualTo: v.widthAnchor, constant: -40)
         ])
+        permissionShownAt = Date()
         content.addSubview(v, positioned: .above, relativeTo: webView)
         permissionView = v
         startTrustPoll()
@@ -644,7 +675,10 @@ final class MainWindowController: NSWindowController, LockSurface,
                 self.sendState()
             } else {
                 let now = Date().formatted(date: .omitted, time: .standard)
-                self.permissionStatus?.stringValue = "Waiting for permission... (checked \(now))"
+                let waited = Date().timeIntervalSince(self.permissionShownAt)
+                self.permissionStatus?.stringValue = waited > 20
+                    ? "Still waiting (\(now)). Already turned on? Click \"Fix permission\", then turn FairPlay on again."
+                    : "Waiting for permission... (checked \(now))"
             }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -658,10 +692,23 @@ final class MainWindowController: NSWindowController, LockSurface,
     }
 
     @objc private func openAccessibility() {
+        DebugLog.log("click", "\"Open settings\" pressed")
         EventTap.requestTrust()
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
+        Permission.openSettings()
+    }
+
+    @objc private func fixPermission() {
+        DebugLog.log("click", "\"Fix permission\" pressed")
+        let ok = Permission.resetAndAsk()
+        permissionShownAt = Date()
+        permissionStatus?.stringValue = ok
+            ? "Old FairPlay entries removed. Turn FairPlay ON in the list that opens."
+            : "Turn FairPlay ON in the list that opens (if it is on, turn it off and on)."
+    }
+
+    @objc private func restartForPermission() {
+        DebugLog.log("click", "\"Restart FairPlay\" pressed")
+        Permission.relaunch()
     }
 
     // MARK: - LockSurface
