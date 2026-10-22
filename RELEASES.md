@@ -6,7 +6,7 @@
 | Windows 10/11 (64-bit) | **FairPlay-Windows-Setup.exe** (or FairPlay-Windows.zip without installing) |
 | iPad (iPadOS 17.5 or newer), **test build** | **FairPlay-iPad.ipa** (install with a Mac or PC, see below) |
 
-The newest version is always at https://github.com/khamidov17/fairplay/releases/latest
+The newest version is always at https://github.com/khamidov17/fairplay-download/releases/latest
 
 ### Install on a Mac
 1. Download **FairPlay-Mac.zip** and double-click it. Move **FairPlay** into **Applications**.

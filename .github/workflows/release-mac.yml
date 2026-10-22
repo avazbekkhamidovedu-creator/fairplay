@@ -90,6 +90,23 @@ jobs:
             gh release view "$TAG" >/dev/null   # created meanwhile by another job
           gh release upload "$TAG" FairPlay-Mac.zip --clobber
 
+      # The code repo is private; students download from the public khamidov17/fairplay-download.
+      # Needs the secret PUBLIC_RELEASE_TOKEN (fine-grained, Contents read/write on fairplay-download).
+      - name: Publish to fairplay-download
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::error::PUBLIC_RELEASE_TOKEN not set: students can't download this version"; exit 1; fi
+          R=khamidov17/fairplay-download
+          sed 's#khamidov17/fairplay/releases#khamidov17/fairplay-download/releases#g' RELEASES.md > notes.md
+          gh release view "$TAG" -R $R >/dev/null 2>&1 || \
+            gh release create "$TAG" -R $R --title "FairPlay $TAG" --notes-file notes.md || \
+            gh release view "$TAG" -R $R >/dev/null   # created meanwhile by the Windows workflow
+          if ! out=$(gh release upload "$TAG" -R $R FairPlay-Mac.zip --clobber 2>&1); then
+            echo "$out"; echo "::error::Upload to $R failed: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"; exit 1
+          fi
+
       - name: Keep the zip (manual runs)
         if: github.event_name != 'push'
         uses: actions/upload-artifact@v4
