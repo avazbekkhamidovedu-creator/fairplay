@@ -399,10 +399,14 @@ export const studentApi = {
       client_seq: clientSeq,
     }),
   /** `locked` is informational only: the server takes lock state from the app's signed beats. */
-  heartbeat: (aid: string, currentQuestion: number, locked: boolean) =>
+  heartbeat: (aid: string, currentQuestion: number, locked: boolean, battery?: { level: number; charging: boolean } | null) =>
     request<HeartbeatResponse>("student", "POST", `/api/student/attempts/${enc(aid)}/heartbeat`, {
       current_question: currentQuestion,
       locked,
+      // 2026-10-23: only when known (the server shows low batteries to the invigilator)
+      ...(battery && battery.level >= 0 && battery.level <= 1
+        ? { battery: Math.round(battery.level * 100) / 100, charging: battery.charging }
+        : {}),
     }),
   events: (aid: string, events: IntegrityEvent[]) =>
     request<EventsResponse>("student", "POST", `/api/student/attempts/${enc(aid)}/events`, { events }),

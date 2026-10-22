@@ -439,6 +439,9 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
             "answered": min(int(answered), len(qids)),
             "question_count": len(qids),
             "current_question": h["cq"] if h else 0,
+            # 2026-10-23: from the student page's heartbeat; None = not known
+            "battery": h.get("bat") if h else None,
+            "charging": h.get("chg") if h else None,
             # Only a fresh, signed beat from the app counts as locked (audit #2).
             "locked": app_online and bool(b.get("locked")),
             "app_online": app_online,

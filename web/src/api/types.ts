@@ -195,6 +195,9 @@ export interface LiveStudent {
   question_count: number;
   current_question: number;
   locked: boolean;
+  /** 2026-10-23: 0..1 from the student's laptop, null/missing when unknown. */
+  battery?: number | null;
+  charging?: boolean | null;
   last_heartbeat_at: string | null;
   online: boolean;
   event_count: number;

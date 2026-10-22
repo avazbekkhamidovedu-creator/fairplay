@@ -212,7 +212,7 @@ def test_live_endpoint(client, teacher, alice, bob, live_exam):
     assert [s["username"] for s in live["students"]] == ["alice", "bob"]
     s = live["students"][0]
     assert set(s) == {"attempt_id", "username", "name", "status", "started_at", "submitted_at",
-                      "deadline_at", "answered", "question_count", "current_question", "locked",
+                      "deadline_at", "answered", "question_count", "current_question", "locked", "battery", "charging",
                       "last_heartbeat_at", "online", "event_count", "last_event", "needs_look",
                       "app_online", "last_app_signal_at", "app_checks", "client", "entries", "late",
                       "sealed_pending", "approval", "pending_since",   # S1-S6 (2026-10-20)

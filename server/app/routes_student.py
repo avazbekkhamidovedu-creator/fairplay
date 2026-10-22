@@ -433,8 +433,11 @@ async def heartbeat(aid: str, body: HeartbeatIn, request: Request,
     now = time.time()
     # Audit #2: body.locked is self-reported and no longer stored; the live room takes
     # the lock state from the app's signed beats (POST .../app-beat).
-    await store.hset(f"hb:{meta['exam_id']}", aid,
-                     json.dumps({"t": now, "cq": body.current_question}), LIVE_TTL)
+    beat = {"t": now, "cq": body.current_question}
+    if body.battery is not None:                  # 2026-10-23: low-battery warning
+        beat["bat"] = round(body.battery, 2)
+        beat["chg"] = bool(body.charging)
+    await store.hset(f"hb:{meta['exam_id']}", aid, json.dumps(beat), LIVE_TTL)
     await ac.note_js_heartbeat(request, session, store, aid, meta)
     return {"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
             "deadline_at": meta["deadline_at"], "approval": meta.get("approval")}   # S3
