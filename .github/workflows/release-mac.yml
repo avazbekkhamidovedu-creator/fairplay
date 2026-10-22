@@ -39,7 +39,54 @@ jobs:
       # 2026-10-22: a fixed signing certificate keeps macOS' Accessibility permission across
       # updates (ad-hoc signatures change with every build). Secrets MAC_SIGN_P12 (base64
       # of the .p12) and MAC_SIGN_PASSWORD; without them the build is ad-hoc signed.
+      # Developer ID + notarization (like VoiceLab): macOS then opens FairPlay without the
+      # "Apple could not verify ... free of malware" box. Needs an Apple Developer Program
+      # membership. Secrets (all six; until then this step is skipped):
+      #   APPLE_CERTIFICATE_BASE64   base64 of the "Developer ID Application" .p12
+      #   APPLE_CERTIFICATE_PASSWORD password of that .p12
+      #   APPLE_API_KEY_BASE64       base64 of the App Store Connect API key (.p8)
+      #   APPLE_API_KEY_ID, APPLE_API_ISSUER   from App Store Connect > Users and Access > Integrations
+      #   APPLE_TEAM_ID              10-character team id
+      - name: Developer ID certificate (notarized builds)
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          API_KEY: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for n in CERT CERT_PASSWORD API_KEY API_KEY_ID API_ISSUER TEAM_ID; do [ -n "${!n}" ] || missing="$missing $n"; done
+          if [ -n "$missing" ]; then
+            echo "::warning::No Developer ID secrets (missing:$missing): macOS will warn students when they open FairPlay"
+            exit 0
+          fi
+          KC="$RUNNER_TEMP/devid.keychain-db"; KCPW="$(uuidgen)"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/devid.p12"
+          security import "$RUNNER_TEMP/devid.p12" -k "$KC" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/devid.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          ID=$(security find-identity -v -p codesigning "$KC" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
+          [ -n "$ID" ] || { echo "::error::No 'Developer ID Application' identity in APPLE_CERTIFICATE_BASE64"; exit 1; }
+          echo "$ID" | grep -q "($TEAM_ID)" || { echo "::error::Certificate team does not match APPLE_TEAM_ID"; exit 1; }
+          echo "$API_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials fairplay-notary --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$API_KEY_ID" --issuer "$API_ISSUER" --keychain "$KC" >/dev/null
+          rm -f "$RUNNER_TEMP/notary.p8"
+          {
+            echo "FAIRPLAY_SIGN_ID=$ID"
+            echo "FAIRPLAY_NOTARY_PROFILE=fairplay-notary"
+            echo "NOTARY_KEYCHAIN=$KC"
+          } >> "$GITHUB_ENV"
+          echo "::notice::Signing with $ID and notarizing"
+
       - name: Signing certificate
+        if: env.FAIRPLAY_SIGN_ID == ''
         env:
           P12: ${{ secrets.MAC_SIGN_P12 }}
           P12_PASSWORD: ${{ secrets.MAC_SIGN_PASSWORD }}
@@ -80,6 +127,23 @@ jobs:
       - name: Zip
         run: ditto -c -k --sequesterRsrc --keepParent mac/FairPlay.app FairPlay-Mac.zip
 
+      # Disk image like most Mac apps: open it, drag FairPlay onto Applications.
+      - name: Disk image
+        run: |
+          D="$RUNNER_TEMP/dmg"; rm -rf "$D"; mkdir -p "$D"
+          ditto mac/FairPlay.app "$D/FairPlay.app"
+          ln -s /Applications "$D/Applications"
+          hdiutil create -volname FairPlay -srcfolder "$D" -fs HFS+ -format UDZO -ov FairPlay-Mac.dmg
+          if [ -n "${FAIRPLAY_SIGN_ID:-}" ]; then
+            codesign --force --timestamp --sign "$FAIRPLAY_SIGN_ID" FairPlay-Mac.dmg
+            out="$(xcrun notarytool submit FairPlay-Mac.dmg --keychain-profile fairplay-notary --keychain "$NOTARY_KEYCHAIN" --wait 2>&1)"
+            echo "$out"
+            echo "$out" | grep -q "status: Accepted" || { echo "::error::Notarization of the disk image was not accepted"; exit 1; }
+            xcrun stapler staple FairPlay-Mac.dmg
+            spctl -a -t open --context context:primary-signature -v FairPlay-Mac.dmg
+          fi
+          hdiutil verify FairPlay-Mac.dmg
+
       # The code repo is private; students download from the public khamidov17/fairplay-download.
       # Needs the secret PUBLIC_RELEASE_TOKEN (fine-grained, Contents read/write on fairplay-download).
       - name: Publish to fairplay-download
@@ -98,7 +162,7 @@ jobs:
                 exit 1; }
             fi
           fi
-          if ! out=$(gh release upload "$TAG" -R $R FairPlay-Mac.zip --clobber 2>&1); then
+          if ! out=$(gh release upload "$TAG" -R $R FairPlay-Mac.dmg FairPlay-Mac.zip --clobber 2>&1); then
             echo "$out"; echo "::error::Upload to $R failed: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"; exit 1
           fi
 
@@ -107,5 +171,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FairPlay-Mac
-          path: FairPlay-Mac.zip
+          path: |
+            FairPlay-Mac.dmg
+            FairPlay-Mac.zip
           retention-days: 14

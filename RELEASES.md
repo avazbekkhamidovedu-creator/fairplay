@@ -2,15 +2,16 @@
 
 | Your computer | File |
 |---|---|
-| Mac (Apple Silicon or Intel, macOS 13 or newer) | **FairPlay-Mac.zip** |
+| Mac (Apple Silicon or Intel, macOS 13 or newer) | **FairPlay-Mac.dmg** (or FairPlay-Mac.zip) |
 | Windows 10/11 (64-bit) | **FairPlay-Windows-Setup.exe** (or FairPlay-Windows.zip without installing) |
 | iPad (iPadOS 17.5 or newer), **test build** | **FairPlay-iPad.ipa** (install with a Mac or PC, see below) |
 
 The newest version is always at https://github.com/khamidov17/fairplay-download/releases/latest
 
 ### Install on a Mac
-1. Download **FairPlay-Mac.zip** and double-click it. Move **FairPlay** into **Applications**.
-2. Open FairPlay. macOS says it "cannot be opened" or "cannot be verified": click **Done**.
+1. Download **FairPlay-Mac.dmg** and open it. Drag **FairPlay** onto **Applications**.
+2. Open FairPlay from Applications. If macOS says it "cannot be opened" or "cannot be verified":
+   click **Done** (not "Move to Trash").
    (The app is not signed with an Apple Developer ID yet.)
 3. Open **System Settings > Privacy & Security**, scroll down and click **Open Anyway** next to
    FairPlay, then **Open Anyway** again and enter your Mac password.

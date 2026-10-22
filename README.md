@@ -4,7 +4,7 @@
 
 | Computer | Download |
 |---|---|
-| Mac (Apple Silicon or Intel) | [FairPlay-Mac.zip](https://github.com/khamidov17/fairplay-download/releases/latest/download/FairPlay-Mac.zip) |
+| Mac (Apple Silicon or Intel) | [FairPlay-Mac.dmg](https://github.com/khamidov17/fairplay-download/releases/latest/download/FairPlay-Mac.dmg) |
 | Windows 10/11 | [FairPlay-Windows-Setup.exe](https://github.com/khamidov17/fairplay-download/releases/latest/download/FairPlay-Windows-Setup.exe) |
 | iPad (test build) | [FairPlay-iPad.ipa](https://github.com/khamidov17/fairplay-download/releases/latest/download/FairPlay-iPad.ipa) (install with Sideloadly / AltStore, see RELEASES.md) |
 

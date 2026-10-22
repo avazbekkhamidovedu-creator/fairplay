@@ -141,7 +141,7 @@ elif [ -n "${FAIRPLAY_SIGN_ID:-}" ]; then
     echo "==> Notarizing..."
     ditto -c -k --keepParent "$BUNDLE" FairPlay.zip
     # Audit M-19: notarytool exits 0 even when Apple says "Invalid"; check the status.
-    NOTARY_OUT="$(xcrun notarytool submit FairPlay.zip --keychain-profile "$FAIRPLAY_NOTARY_PROFILE" --wait 2>&1)"
+    NOTARY_OUT="$(xcrun notarytool submit FairPlay.zip --keychain-profile "$FAIRPLAY_NOTARY_PROFILE" ${NOTARY_KEYCHAIN:+--keychain "$NOTARY_KEYCHAIN"} --wait 2>&1)"
     echo "$NOTARY_OUT"
     echo "$NOTARY_OUT" | grep -q "status: Accepted" || { echo "Notarization was NOT accepted"; rm -f FairPlay.zip; exit 1; }
     xcrun stapler staple "$BUNDLE"
