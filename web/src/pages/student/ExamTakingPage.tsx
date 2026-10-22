@@ -27,7 +27,7 @@ import {
   rememberedStartCode,
 } from "../../lib/offline";
 import { ReenterExam, isSessionConflict } from "../../components/student/ReenterExam";
-import { PreflightProblems } from "../../components/student/Preflight";
+import { AppsToClose, PreflightProblems } from "../../components/student/Preflight";
 import { TimeUpOffline } from "../../components/student/TimeUpOffline";
 import { CODE_LENGTH, StartCodeBoxes, emptyCode } from "../../components/student/StartCodeBoxes";
 import { QuestionImages } from "../../components/QuestionImages";
@@ -59,7 +59,7 @@ function writeMarks(aid: string, marks: Set<string>): void {
   }
 }
 
-type Phase = "loading" | "locking" | "preflight" | "lockFailed" | "exam" | "review" | "submitting" | "loadError" | "reenter";
+type Phase = "loading" | "locking" | "preflight" | "closeApps" | "lockFailed" | "exam" | "review" | "submitting" | "loadError" | "reenter";
 
 export interface DoneState {
   receipt: string;
@@ -127,6 +127,10 @@ function ExamTakingInner() {
   // teacher) the student types it again to send the offline answers.
   const [needCode, setNeedCode] = useState<null | "reload" | "changed">(null);
   const [preflightProblems, setPreflightProblems] = useState<string[]>([]);
+  // 2026-10-22: apps the lock will close, shown first so the student can save their work.
+  const [appsToClose, setAppsToClose] = useState<string[]>([]);
+  const [closingApps, setClosingApps] = useState(false);
+  const appsConfirmedRef = useRef(false);
   const reconnectRef = useRef<Promise<string> | null>(null);
 
   const ensureOnline = useCallback((): Promise<string> => {
@@ -354,11 +358,19 @@ function ExamTakingInner() {
     lockingRef.current = true;
     setPhase("locking");
     // Audit M-11: problems the student must fix outside the lock come first.
-    const problems = await bridge.preflight();
+    const allowed = bridge.allowedAppIds(appsRef.current);
+    const report = await bridge.preflightReport(3000, allowed);
+    const problems = report?.problems ?? [];
     if (problems.length > 0) {
       lockingRef.current = false;
       setPreflightProblems(problems);
       setPhase("preflight");
+      return;
+    }
+    if (!appsConfirmedRef.current && report && report.apps_to_close.length > 0) {
+      lockingRef.current = false;
+      setAppsToClose(report.apps_to_close);
+      setPhase("closeApps");
       return;
     }
     const aid = realAidRef.current;
@@ -643,6 +655,21 @@ function ExamTakingInner() {
       )}
 
       {phase === "preflight" && <PreflightProblems problems={preflightProblems} onRetry={() => void lock()} />}
+      {phase === "closeApps" && (
+        <AppsToClose
+          apps={appsToClose}
+          busy={closingApps}
+          onContinue={() => {
+            setClosingApps(true);
+            void bridge.quitApps(bridge.allowedAppIds(appsRef.current)).then(() => {
+              // Whatever is still open is closed by the lock itself.
+              appsConfirmedRef.current = true;
+              setClosingApps(false);
+              void lock();
+            });
+          }}
+        />
+      )}
 
       {phase === "lockFailed" && (
         <main className="stu-center">

@@ -193,6 +193,17 @@ final class LockdownController {
             self.bringToFront()
         })
 
+        // 2026-10-22: an app we were closing is gone -> check again now, so the "These apps
+        // must be closed" screen disappears at once instead of on the next 3 s round.
+        observers.append(ws.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
+                                        object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.isLocked, self.problems["proc"] != nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self, self.isLocked else { return }
+                self.runChecks(atLock: false)
+            }
+        })
+
         observers.append(ws.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification,
                                         object: nil, queue: .main) { [weak self] _ in
             guard let self, self.isLocked else { return }
@@ -308,6 +319,17 @@ final class LockdownController {
         // this exam is closed: asked politely, then force-quit after 2 s (a hidden "Save
         // changes?" sheet must not keep it alive). Finder is only hidden (macOS relaunches it).
         let now = Date()
+        var askedNow = false
+        defer {
+            // 2026-10-22: force-quit what ignored the polite request right after its 2 s,
+            // not on the next 3 s round (the blocking screen used to stay up to ~6 s).
+            if askedNow {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
+                    guard let self, self.isLocked else { return }
+                    self.runChecks(atLock: false)
+                }
+            }
+        }
         for app in NSWorkspace.shared.runningApplications
         where app.processIdentifier != me && app.activationPolicy == .regular
             && !Allowlist.permits(app) && !app.isTerminated {
@@ -320,6 +342,7 @@ final class LockdownController {
                 if now.timeIntervalSince(asked) > 2, LockdownController.forceQuit(app) { continue }
             } else {
                 quitting[app.processIdentifier] = now
+                askedNow = true
                 report("app:\(app.bundleIdentifier ?? name)", .processBlocked("closed at lock: \(name)"))
                 let asked = app.terminate()
                 DebugLog.log("quit", "asked to quit (\(asked ? "sent" : "REFUSED")): \(DebugLog.describe(app))")
@@ -411,6 +434,38 @@ final class LockdownController {
         }
         DebugLog.log("check", out.isEmpty ? "preflight OK" : "preflight problems: " + out.map { $0.message }.joined(separator: " || "))
         return out
+    }
+
+    // MARK: - Before the lock (2026-10-22)
+
+    /// Windowed apps the lock would close (with the current teacher-allowed list): shown
+    /// to the student before the exam starts so they can save their work first.
+    func appsToClose() -> [NSRunningApplication] {
+        let me = ProcessInfo.processInfo.processIdentifier
+        return NSWorkspace.shared.runningApplications.filter {
+            $0.processIdentifier != me && $0.activationPolicy == .regular && !$0.isTerminated
+                && $0.bundleIdentifier != Allowlist.finder && !Allowlist.permits($0)
+        }
+    }
+
+    static func names(_ apps: [NSRunningApplication]) -> [String] {
+        Array(Set(apps.map { $0.localizedName ?? $0.bundleIdentifier ?? "app" })).sorted()
+    }
+
+    /// "Close them and start": asks each app to quit (it may show "Save changes?"), force-quits
+    /// what is left after 3 s, and reports what still runs about a second later.
+    func quitAppsBeforeLock(_ done: @escaping ([String]) -> Void) {
+        let apps = appsToClose()
+        DebugLog.log("quit", "before lock: closing " + LockdownController.names(apps).joined(separator: ", "))
+        for app in apps { app.terminate() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            for app in apps where !app.isTerminated { LockdownController.forceQuit(app) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                let still = LockdownController.names(self?.appsToClose() ?? [])
+                DebugLog.log("quit", still.isEmpty ? "before lock: all closed" : "before lock: still running " + still.joined(separator: ", "))
+                done(still)
+            }
+        }
     }
 
     /// The student pressed "Quit these apps now": force-quit everything that must go

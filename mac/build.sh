@@ -122,7 +122,15 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 
-if [ -n "${FAIRPLAY_SIGN_ID:-}" ]; then
+if [ -n "${FAIRPLAY_SIGN_SELF:-}" ]; then
+  # 2026-10-22: one fixed self-signed certificate (CI imports it from a secret). Not
+  # Developer ID, so Gatekeeper still asks once ("Open Anyway"), but the signature stays
+  # the same across versions: macOS keeps the Accessibility permission after updates.
+  # No --timestamp: Apple's timestamp service only serves Apple-issued certificates.
+  echo "==> Signing with '$FAIRPLAY_SIGN_SELF' (fixed certificate, hardened runtime)..."
+  codesign --force --options runtime --sign "$FAIRPLAY_SIGN_SELF" "$GUARD"
+  codesign --force --options runtime --sign "$FAIRPLAY_SIGN_SELF" "$BUNDLE"
+elif [ -n "${FAIRPLAY_SIGN_ID:-}" ]; then
   echo "==> Signing with '$FAIRPLAY_SIGN_ID' (hardened runtime)..."
   codesign --force --options runtime --timestamp --sign "$FAIRPLAY_SIGN_ID" "$GUARD"
   codesign --force --options runtime --timestamp --sign "$FAIRPLAY_SIGN_ID" "$BUNDLE"
@@ -147,7 +155,7 @@ else
   codesign --force --options runtime --sign - "$GUARD"
   codesign --force --options runtime --sign - "$BUNDLE"
 fi
-[ "$MODE" = release ] && [ -z "${FAIRPLAY_SIGN_ID:-}" ] && \
+[ "$MODE" = release ] && [ -z "${FAIRPLAY_SIGN_ID:-}" ] && [ -z "${FAIRPLAY_SIGN_SELF:-}" ] && \
   echo "WARNING: release build without Developer ID signing/notarization (FAIRPLAY_SIGN_ID)."
 echo "==> Done: $BUNDLE ($MODE)"
 if [ -n "$DEBUG_LOG" ]; then echo "    Debug trace: $DEBUG_LOG"; fi

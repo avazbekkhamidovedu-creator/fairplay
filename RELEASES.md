@@ -14,8 +14,10 @@ The newest version is always at https://github.com/khamidov17/fairplay/releases/
    (The app is not signed with an Apple Developer ID yet.)
 3. Open **System Settings > Privacy & Security**, scroll down and click **Open Anyway** next to
    FairPlay, then **Open Anyway** again and enter your Mac password.
-4. FairPlay asks for **Accessibility**: click **Open settings** and turn **FairPlay** on.
-   After each FairPlay update this switch must be turned off and on again.
+4. FairPlay asks for **Accessibility**: click **Fix permission**, then **Open System Settings**,
+   and turn **FairPlay** on. If the screen stays, click **Restart FairPlay**.
+   Keep only one copy of FairPlay (in Applications); delete older downloads, because macOS can
+   mix them up.
 
 If step 3 shows no button, open Terminal and run:
 `xattr -dr com.apple.quarantine /Applications/FairPlay.app`

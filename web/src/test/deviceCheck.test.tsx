@@ -44,6 +44,7 @@ describe("device check (S1)", () => {
     const r = await p;
     expect(r).toEqual({
       problems: ["Unplug the second display"],
+      apps_to_close: [],
       checks: [
         { id: "macos_version", ok: true, message: "macOS 15.1" },
         { id: "displays", ok: false, message: "Unplug the second display" },

@@ -26,7 +26,9 @@ export type NativeMessage =
   | { type: "event"; event: IntegrityEvent }
   | { type: "attestation"; nonce: string; device_id: string; signature: string; version: string; build: string }
   | { type: "attestationFailed"; nonce: string; reason: string }
-  | { type: "preflight"; problems: string[]; checks?: DeviceCheck[]; platform?: string; app_version?: string; os_version?: string }
+  | { type: "preflight"; problems: string[]; checks?: DeviceCheck[]; platform?: string; app_version?: string; os_version?: string; apps_to_close?: string[] }
+  /** 2026-10-22: answer to {action:"quitApps"}: what is still open after closing. */
+  | { type: "appsQuit"; still_running: string[] }
   /** Review 2026-10-14: the app could not open the website exam (e.g. "bad_session"). */
   | { type: "externalFailed"; reason: string }
   /** S5: the app wrote the sealed answers file. */
@@ -81,7 +83,8 @@ type OutMessage =
   | { action: "unlock" }
   | { action: "hello" }
   | { action: "flushEvents" }
-  | { action: "preflight" }
+  | { action: "preflight"; allowed_apps?: string[] }
+  | { action: "quitApps"; allowed_apps?: string[] }
   | ({ action: "openExternal" } & OpenExternalParams)
   | ({ action: "seal" } & SealParams)
   | { action: "sealedToken"; token: string };
@@ -371,6 +374,43 @@ export async function preflight(timeoutMs = 3000): Promise<string[]> {
   return (await preflightReport(timeoutMs))?.problems ?? [];
 }
 
+/**
+ * 2026-10-22: ask the app to close the apps it listed in `apps_to_close` (the student saw
+ * the list and saved their work). Resolves with what is still open; [] outside the app or
+ * when an older app doesn't answer (the lock itself closes them anyway).
+ */
+export function quitApps(allowedApps: string[] = [], timeoutMs = 9000): Promise<string[]> {
+  install();
+  if (!isNative()) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (r: string[]) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      off();
+      resolve(r);
+    };
+    const off = onNative((msg) => {
+      if (msg.type === "appsQuit") finish(names((msg as { still_running?: unknown }).still_running));
+    });
+    const timer = setTimeout(() => finish([]), timeoutMs);
+    post({ action: "quitApps", allowed_apps: allowedApps });
+  });
+}
+
+/** App names from the app (a trust boundary): strings only, short, at most 30. */
+export function names(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const x of v.slice(0, 30)) {
+    if (typeof x !== "string") continue;
+    const t = x.trim().slice(0, 80);
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
 /** S1: one row of the app's device check. `info` rows (VPN, battery) never block. */
 export interface DeviceCheck {
   id: string;
@@ -381,6 +421,8 @@ export interface DeviceCheck {
 
 export interface PreflightReport {
   problems: string[];
+  /** 2026-10-22: windowed apps the lock would close (shown so the student can save first). */
+  apps_to_close: string[];
   /** [] from older apps and Windows builds that only send `problems`. */
   checks: DeviceCheck[];
   platform: string;
@@ -404,6 +446,7 @@ export function parsePreflight(msg: Record<string, unknown>): PreflightReport {
   }
   return {
     problems: Array.isArray(msg.problems) ? msg.problems.map(String) : [],
+    apps_to_close: names(msg.apps_to_close),
     checks,
     platform: text(msg.platform) || nativePlatform() || "",
     app_version: text(msg.app_version),
@@ -412,7 +455,7 @@ export function parsePreflight(msg: Record<string, unknown>): PreflightReport {
 }
 
 /** S1: the whole preflight answer (null outside the app or when it doesn't answer). */
-export function preflightReport(timeoutMs = 3000): Promise<PreflightReport | null> {
+export function preflightReport(timeoutMs = 3000, allowedApps?: string[]): Promise<PreflightReport | null> {
   install();
   if (!isNative()) return Promise.resolve(null);
   return new Promise((resolve) => {
@@ -428,7 +471,7 @@ export function preflightReport(timeoutMs = 3000): Promise<PreflightReport | nul
       if (msg.type === "preflight") finish(parsePreflight(msg as unknown as Record<string, unknown>));
     });
     const timer = setTimeout(() => finish(null), timeoutMs);
-    post({ action: "preflight" });
+    post(allowedApps ? { action: "preflight", allowed_apps: allowedApps } : { action: "preflight" });
   });
 }
 
