@@ -80,16 +80,6 @@ jobs:
       - name: Zip
         run: ditto -c -k --sequesterRsrc --keepParent mac/FairPlay.app FairPlay-Mac.zip
 
-      - name: GitHub release
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "FairPlay $TAG" --notes-file RELEASES.md || \
-            gh release view "$TAG" >/dev/null   # created meanwhile by another job
-          gh release upload "$TAG" FairPlay-Mac.zip --clobber
-
       # The code repo is private; students download from the public khamidov17/fairplay-download.
       # Needs the secret PUBLIC_RELEASE_TOKEN (fine-grained, Contents read/write on fairplay-download).
       - name: Publish to fairplay-download
