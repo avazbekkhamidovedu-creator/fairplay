@@ -1,0 +1,27 @@
+name: mac
+
+# Mac app: unit tests and a dev build of the bundle (icon, Info.plist) on every Mac change.
+on:
+  push:
+    branches: ["**"]
+    paths: ["mac/**", "brand/**", ".github/workflows/mac.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        working-directory: mac
+        run: swift test 2>&1 | tail -40; exit ${PIPESTATUS[0]}
+      - name: Build the app bundle
+        working-directory: mac
+        run: |
+          bash build.sh
+          test -f FairPlay.app/Contents/Resources/FairPlay.icns
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' FairPlay.app/Contents/Info.plist)" = FairPlay ]
+          echo "::notice::FairPlay.app has the FairPlay icon"
