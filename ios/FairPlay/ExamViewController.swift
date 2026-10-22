@@ -76,6 +76,10 @@ final class ExamViewController: UIViewController, LockSurface,
     /// Origin of the document actually on screen (review L2): webView.url already shows
     /// a pending load, so bridge messages are gated on what has committed.
     private var committedURL: URL?
+    /// 2026-10-23: the exam's teacher-allowed websites (FairPlayCore AllowedSites), shown in
+    /// the exam page's side pane. Used only while locked; cleared when the lock ends.
+    private var allowedSites: [String] = []
+    private var batteryObservers: [NSObjectProtocol] = []
 
     // MARK: - Setup
 
@@ -93,6 +97,32 @@ final class ExamViewController: UIViewController, LockSurface,
         bar.onInvigilator = { [weak self] in self?.promptEmergencyExit() }
         external.attach(webView: webView, bar: bar)
         external.confirmFinish = { [weak self] done in self?.confirmFinish(done) }
+        startBatteryUpdates()
+    }
+
+    // MARK: - Battery for the exam top bar (2026-10-23)
+
+    /// On every page load (didFinish) and whenever iPadOS reports a level or state change.
+    private func startBatteryUpdates() {
+        guard batteryObservers.isEmpty else { return }
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        let nc = NotificationCenter.default
+        for name in [UIDevice.batteryLevelDidChangeNotification, UIDevice.batteryStateDidChangeNotification] {
+            batteryObservers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pushBattery() }
+            })
+        }
+    }
+
+    /// Only into the exam server's own pages; the script holds number and boolean literals
+    /// only. An unknown level (-1, e.g. the simulator) sends nothing.
+    private func pushBattery() {
+        let device = UIDevice.current
+        device.isBatteryMonitoringEnabled = true
+        let charging = device.batteryState == .charging || device.batteryState == .full
+        guard let webView, isServerURL(committedURL), isServerURL(webView.url),
+              let js = BatteryScript.make(level: Double(device.batteryLevel), charging: charging) else { return }
+        webView.evaluateJavaScript(js)
     }
 
     private func buildWebView() {
@@ -353,9 +383,12 @@ final class ExamViewController: UIViewController, LockSurface,
             let promote = PreLockState.onExamLock(locked: LockdownController.shared.isLocked,
                                                   preLocked: LockdownController.shared.isPreLock) == .promote
             if AppSession.shared.setExam(attemptId: body["attempt_id"] as? String, token: body["token"] as? String,
-                                         session: body["session"] as? String), promote {
-                // 2026-10-23: the exam is attached to the pre-exam lock: it is the exam's lock now.
-                LockdownController.shared.promoteToExamLock(participants: ExamPaths.allowedParticipants(body["allowed_apps"]))
+                                         session: body["session"] as? String) {
+                allowedSites = AllowedSites.parse(body["allowed_sites"])
+                if promote {
+                    // 2026-10-23: the exam is attached to the pre-exam lock: it is the exam's lock now.
+                    LockdownController.shared.promoteToExamLock(participants: ExamPaths.allowedParticipants(body["allowed_apps"]))
+                }
             }
         case "prelock":
             // 2026-10-23: lock before the start code (FairPlayCore PreLock.swift): the same
@@ -368,6 +401,7 @@ final class ExamViewController: UIViewController, LockSurface,
             case .alreadyPreLocked:
                 send(["type": "locked", "prelock": true])
             case .lock:
+                allowedSites = AllowedSites.parse(body["allowed_sites"])
                 lock.preLock(participants: ExamPaths.allowedParticipants(body["allowed_apps"])) { [weak self] r in
                     switch r {
                     // false when an exam lock asked meanwhile and this became its lock.
@@ -403,6 +437,7 @@ final class ExamViewController: UIViewController, LockSurface,
                 send(["type": "lockFailed", "reason": "bad_session"])
                 return
             }
+            allowedSites = AllowedSites.parse(body["allowed_sites"])
             LockdownController.shared.lock(participants: ExamPaths.allowedParticipants(body["allowed_apps"])) { [weak self] r in
                 switch r {
                 case .locked: self?.send(["type": "locked"])
@@ -415,6 +450,7 @@ final class ExamViewController: UIViewController, LockSurface,
                 send(["type": "externalFailed", "reason": "bad_session"])
                 return
             }
+            allowedSites = AllowedSites.parse(body["allowed_sites"])
             LockdownController.shared.lock(participants: ExamPaths.allowedParticipants(body["allowed_apps"])) { [weak self] r in
                 guard let self else { return }
                 guard r == .locked else {
@@ -574,6 +610,19 @@ final class ExamViewController: UIViewController, LockSurface,
             decisionHandler(.cancel)
             return
         }
+        // 2026-10-23: the exam page's side pane of teacher-allowed websites (FairPlayCore
+        // AllowedSites): sub-frames only, only while locked, https on a listed host or its
+        // subdomains (or about:blank / about:srcdoc). No downloads from there.
+        if !mainFrame, LockdownController.shared.isLocked, !isServerURL(url), !external.allows(url),
+           AllowedSites.frameAllowed(url, allowed: allowedSites) {
+            if navigationAction.shouldPerformDownload {
+                EventLog.shared.record("blocked_navigation", "download from \(url.host ?? "an allowed site")")
+                decisionHandler(.cancel)
+            } else {
+                decisionHandler(ExamViewController.allowInPlace)
+            }
+            return
+        }
         if ownLocalPage || isServerURL(url) || external.allows(url) || (isLocal && !mainFrame && url.absoluteString == "about:blank") {
             if mainFrame {
                 external.checkFinishURL(url)
@@ -587,6 +636,25 @@ final class ExamViewController: UIViewController, LockSurface,
         }
     }
 
+    /// 2026-10-23: nothing downloads from a sub-frame while locked (the allowed-site pane):
+    /// a response WebKit cannot show, or one sent as an attachment, is cancelled. Everything
+    /// else as WebKit's own default (show what it can show, cancel the rest).
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        if !navigationResponse.isForMainFrame, LockdownController.shared.isLocked {
+            let disposition = (navigationResponse.response as? HTTPURLResponse)?
+                .value(forHTTPHeaderField: "Content-Disposition")
+            if !navigationResponse.canShowMIMEType || AllowedSites.isAttachment(contentDisposition: disposition) {
+                let host = navigationResponse.response.url?.host ?? "?"
+                EventLog.shared.record("blocked_navigation", "download from \(host)")
+                DebugLog.log("web", "download BLOCKED in a frame: \(host)")
+                decisionHandler(.cancel)
+                return
+            }
+        }
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .cancel)
+    }
+
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
                  completionHandler: @escaping @MainActor (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         Pinning.handle(challenge) { d, c in DispatchQueue.main.async { completionHandler(d, c) } }
@@ -596,6 +664,11 @@ final class ExamViewController: UIViewController, LockSurface,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let url = navigationAction.request.url, isServerURL(url) || external.allows(url) {
             webView.load(URLRequest(url: url))
+        } else if let url = navigationAction.request.url, LockdownController.shared.isLocked,
+                  AllowedSites.isAllowedPopup(url, allowed: allowedSites) {
+            // 2026-10-23: a new window / target=_blank from the allowed-site pane: never a
+            // window, and not the exam's main frame either. Ignored (not a cheating attempt).
+            DebugLog.log("web", "new window from an allowed site ignored: \(url.host ?? "")")
         } else if let url = navigationAction.request.url {
             EventLog.shared.record("blocked_navigation", url.host ?? url.absoluteString)
         }
@@ -624,6 +697,7 @@ final class ExamViewController: UIViewController, LockSurface,
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let u = webView.url { DebugLog.log("web", "page shown: \(u.host ?? u.scheme ?? "")\(u.path)") }
+        pushBattery()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -702,6 +776,7 @@ final class ExamViewController: UIViewController, LockSurface,
 
     func exitLockedMode() {
         ExamViewController.lastLockedPage = nil
+        allowedSites = []                            // the next exam sends its own
         external.abort()
         barHeight.constant = 0
         bar.isHidden = true

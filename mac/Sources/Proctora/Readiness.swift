@@ -111,6 +111,18 @@ enum Readiness {
 
     /// nil on a Mac without a battery.
     static func battery() -> Battery? {
+        guard let r = batteryReading() else { return nil }
+        return Battery(percent: r.current * 100 / r.max, charging: r.charging)
+    }
+
+    /// 2026-10-23: the exam top bar's battery, 0...1 (BatteryScript). nil without a battery.
+    static func batteryLevel() -> (level: Double, charging: Bool)? {
+        guard let r = batteryReading() else { return nil }
+        return (Double(r.current) / Double(r.max), r.charging)
+    }
+
+    /// The internal battery's capacity (max > 0) and whether it is on the charger.
+    private static func batteryReading() -> (current: Int, max: Int, charging: Bool)? {
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else { return nil }
         for ps in list {
@@ -119,9 +131,23 @@ enum Readiness {
                   let cur = d[kIOPSCurrentCapacityKey] as? Int, let max = d[kIOPSMaxCapacityKey] as? Int, max > 0
             else { continue }
             let onAC = (d[kIOPSPowerSourceStateKey] as? String) == kIOPSACPowerValue
-            return Battery(percent: cur * 100 / max, charging: onAC || (d[kIOPSIsChargingKey] as? Bool) == true)
+            return (cur, max, onAC || (d[kIOPSIsChargingKey] as? Bool) == true)
         }
         return nil
+    }
+
+    private static var powerChanged: (() -> Void)?
+    private static var powerSource: CFRunLoopSource?
+
+    /// 2026-10-23: calls `handler` on the main run loop whenever a power source changes
+    /// (plugged in, unplugged, level). Once per app; a later call replaces the handler.
+    static func observePowerChanges(_ handler: @escaping () -> Void) {
+        powerChanged = handler
+        guard powerSource == nil,
+              let src = IOPSNotificationCreateRunLoopSource({ _ in Readiness.powerChanged?() }, nil)?.takeRetainedValue()
+        else { return }
+        CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
+        powerSource = src
     }
 
     static func batteryOK(_ b: Battery?) -> Bool {

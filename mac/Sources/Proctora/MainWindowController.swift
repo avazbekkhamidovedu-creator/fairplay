@@ -49,6 +49,10 @@ final class MainWindowController: NSWindowController, LockSurface,
     private var normalFrame = NSRect(x: 0, y: 0, width: 1280, height: 820)
     private let server = Config.serverURL
     private let external = ExternalExamController(server: Config.serverURL)
+    /// 2026-10-23: the exam's teacher-allowed websites (AllowedSites.swift), shown in the
+    /// exam page's side pane. Used only while locked; cleared when the lock ends.
+    private var allowedSites: [String] = []
+    private var batteryTimer: Timer?
 
     private static let normalStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
 
@@ -137,6 +141,26 @@ final class MainWindowController: NSWindowController, LockSurface,
             }
         }
         external.attach(webView: wv, container: content, window: window)
+        startBatteryUpdates()
+    }
+
+    // MARK: - Battery for the exam top bar (2026-10-23)
+
+    /// On every page load (didFinish), every 60 s, and when the power source changes.
+    /// A Mac without a battery sends nothing.
+    private func startBatteryUpdates() {
+        guard batteryTimer == nil else { return }
+        let t = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.pushBattery() }
+        RunLoop.main.add(t, forMode: .common)
+        batteryTimer = t
+        Readiness.observePowerChanges { [weak self] in self?.pushBattery() }
+    }
+
+    /// Only into the exam server's own pages; the script holds number and boolean literals only.
+    private func pushBattery() {
+        guard let webView, isServerURL(webView.url), let b = Readiness.batteryLevel(),
+              let js = BatteryScript.make(level: b.level, charging: b.charging) else { return }
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
     func start() {
@@ -221,6 +245,7 @@ final class MainWindowController: NSWindowController, LockSurface,
             let promote = examLockAction() == .promote
             if AppSession.shared.setExam(attemptId: body["attempt_id"] as? String, token: body["token"] as? String,
                                          session: body["session"] as? String) {
+                allowedSites = AllowedSites.parse(body["allowed_sites"])
                 if promote {
                     attachExamToPreLock(allowedApps: body["allowed_apps"])
                 } else {
@@ -242,6 +267,7 @@ final class MainWindowController: NSWindowController, LockSurface,
                 // for this lock or be taken for its attempt.
                 if AppSession.shared.exam != nil { AppSession.shared.clearExam() }
                 Allowlist.updateTeacherAllowed(body["allowed_apps"])
+                allowedSites = AllowedSites.parse(body["allowed_sites"])
                 if lock.preLock() {
                     hidePermission()
                     send(["type": "locked", "prelock": true])
@@ -280,6 +306,7 @@ final class MainWindowController: NSWindowController, LockSurface,
                 return
             }
             if offlineStart { DebugLog.log("lock", "offline start: locking without a server session") }
+            allowedSites = AllowedSites.parse(body["allowed_sites"])
             if promote {
                 // 2026-10-23: already locked before the start code: the screen stays locked
                 // and this becomes the exam's lock.
@@ -303,6 +330,7 @@ final class MainWindowController: NSWindowController, LockSurface,
                 send(["type": "externalFailed", "reason": "bad_session"])
                 return
             }
+            allowedSites = AllowedSites.parse(body["allowed_sites"])
             if promote {
                 attachExamToPreLock(allowedApps: body["allowed_apps"])
             } else {
@@ -519,6 +547,20 @@ final class MainWindowController: NSWindowController, LockSurface,
             decisionHandler(.cancel)
             return
         }
+        // 2026-10-23: the exam page's side pane of teacher-allowed websites (AllowedSites.swift):
+        // sub-frames only, only while locked, https on a listed host or its subdomains (or
+        // about:blank / about:srcdoc). No downloads from there.
+        if !(navigationAction.targetFrame?.isMainFrame ?? true), LockdownController.shared.isLocked,
+           !isServerURL(url), !external.allows(url), AllowedSites.frameAllowed(url, allowed: allowedSites) {
+            if navigationAction.shouldPerformDownload {
+                EventLog.shared.record(.blockedNavigation("download from \(url.host ?? "an allowed site")"))
+                DebugLog.log("web", "download BLOCKED in an allowed-site frame: \(url.host ?? "")\(url.path)")
+                decisionHandler(.cancel)
+            } else {
+                decisionHandler(.allow)
+            }
+            return
+        }
         if ownLocalPage || isServerURL(url) || external.allows(url) {
             if navigationAction.targetFrame?.isMainFrame ?? true {
                 external.checkFinishURL(url)
@@ -530,6 +572,25 @@ final class MainWindowController: NSWindowController, LockSurface,
             DebugLog.log("web", "navigation BLOCKED: \(url.scheme ?? "")://\(url.host ?? "")\(url.path)")
             decisionHandler(.cancel)
         }
+    }
+
+    /// 2026-10-23: nothing downloads from a sub-frame while locked (the allowed-site pane):
+    /// a response WebKit cannot show, or one sent as an attachment, is cancelled. Everything
+    /// else as WebKit's own default (show what it can show, cancel the rest).
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if !navigationResponse.isForMainFrame, LockdownController.shared.isLocked {
+            let disposition = (navigationResponse.response as? HTTPURLResponse)?
+                .value(forHTTPHeaderField: "Content-Disposition")
+            if !navigationResponse.canShowMIMEType || AllowedSites.isAttachment(contentDisposition: disposition) {
+                let host = navigationResponse.response.url?.host ?? "?"
+                EventLog.shared.record(.blockedNavigation("download from \(host)"))
+                DebugLog.log("web", "download BLOCKED in a frame: \(host)")
+                decisionHandler(.cancel)
+                return
+            }
+        }
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .cancel)
     }
 
     /// Audit M-17: relaunched by the watchdog after the app ended while locked -> straight
@@ -572,6 +633,11 @@ final class MainWindowController: NSWindowController, LockSurface,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let url = navigationAction.request.url, isServerURL(url) || external.allows(url) {
             webView.load(URLRequest(url: url))   // same-server links open in place
+        } else if let url = navigationAction.request.url, LockdownController.shared.isLocked,
+                  AllowedSites.isAllowedPopup(url, allowed: allowedSites) {
+            // 2026-10-23: a new window / target=_blank from the allowed-site pane: never a
+            // window, and not the exam's main frame either. Ignored (not a cheating attempt).
+            DebugLog.log("web", "new window from an allowed site ignored: \(url.host ?? "")")
         } else if let url = navigationAction.request.url {
             EventLog.shared.record(.blockedNavigation(url.host ?? url.absoluteString))
         }
@@ -592,6 +658,7 @@ final class MainWindowController: NSWindowController, LockSurface,
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let u = webView.url { DebugLog.log("web", "page shown: \(u.host ?? u.scheme ?? "")\(u.path)") }
+        pushBattery()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -829,6 +896,7 @@ final class MainWindowController: NSWindowController, LockSurface,
     }
 
     func exitLockedMode() {
+        allowedSites = []                       // the next exam sends its own
         guard let win = window else { return }
         win.level = .normal
         win.styleMask = MainWindowController.normalStyle
