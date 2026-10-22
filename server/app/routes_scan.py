@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +33,7 @@ from .security import Principal, require_teacher
 from .services import attempt_key, invalidate_exam, new_id, new_receipt
 from .store import get_store
 from .timeutil import iso, utcnow
+from .uploads import MULTIPART_OVERHEAD, form_files, read_capped_form
 
 log = logging.getLogger("fairplay.scan")
 
@@ -349,14 +350,25 @@ def _sniff(head: bytes) -> str | None:
 
 
 @router.post("/exams/{exam_id}/scans", status_code=202)
-async def upload_scans(exam_id: str, files: list[UploadFile] = File(...),
+async def upload_scans(exam_id: str, request: Request,
                        p: Principal = Depends(require_teacher), session: AsyncSession = Depends(get_session)):
+    """Multipart "files" (1 to MAX_FILES). 2026-10-23 (review): the body is read only after
+    the teacher and the exam are checked (read_capped_form), not parsed up front by FastAPI."""
     e = await _own_exam(session, exam_id, p)
     _printable(e)
     if e.status == "live" and delivery_of(e) != "paper":
         raise HTTPException(409, "Close the exam before uploading scans")
     if await session.get(PrintLayout, e.id) is None:
         raise HTTPException(409, "Print the booklets from FairPlay first — scans are read with their layout")
+    form = await read_capped_form(request, MAX_SCAN_BYTES + MULTIPART_OVERHEAD,
+                                  "Scans can be at most 200 MB per upload", max_files=MAX_FILES + 1)
+    try:
+        return await _store_scans(session, e, p, form_files(form, "files"))
+    finally:
+        await form.close()
+
+
+async def _store_scans(session: AsyncSession, e: Exam, p: Principal, files: list) -> dict:
     if not files or len(files) > MAX_FILES:
         raise HTTPException(422, f"Upload 1 to {MAX_FILES} files")
     batch_id = new_id("b")

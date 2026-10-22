@@ -1,6 +1,9 @@
 // Phase 4: Python runner (page side). One worker holds Pyodide; a program that runs past
 // its time limit is stopped by terminating the worker, and the next run starts a new one
 // (Pyodide's files then come from the browser cache).
+// 2026-10-23: the student's runs share one worker (each run starts from the same interpreter
+// state, see pyDriver.ts); grading makes a PythonRunner per answer (runners.createRunner) and
+// disposes it after scoring, so no answer can change the results of the next one.
 import { MAX_OUTPUT_CHARS, SerialQueue, timedOut, unavailable, type RunResult, type Runner } from "./runner";
 
 /** Where the Pyodide files are served (server/static/pyodide/, copied at build time). */
@@ -16,6 +19,8 @@ interface DoneMessage {
   failed: boolean;
   truncated?: boolean;
   timeMs: number;
+  /** the program changed the interpreter's files: start a fresh worker for the next run */
+  restart?: boolean;
 }
 
 export class PythonRunner implements Runner {
@@ -83,6 +88,7 @@ export class PythonRunner implements Runner {
         const d = ev.data;
         if (!d || d.type !== "done" || d.id !== id) return;
         clearTimeout(timer);
+        if (d.restart) this.kill(w);
         resolve({
           status: d.failed ? "error" : "ok",
           stdout: d.stdout,

@@ -2850,3 +2850,10 @@ details.stu-rubric-details > summary .pts {
   border-color: var(--s-warn-border);
   background: var(--s-warn-tint);
 }
+
+/* 2026-10-23: the bars (and their menus: More, Directions, the question list) stay above the
+   floating calculator (z 45) and the side panels. */
+.stu-exam .stu-lockbar,
+.stu-exam .stu-bottombar {
+  z-index: 50;
+}

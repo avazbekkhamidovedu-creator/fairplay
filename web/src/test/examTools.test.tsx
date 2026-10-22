@@ -15,7 +15,16 @@ import { ToolPane, clampPaneWidth } from "../components/student/ToolPane";
 import { toolsLine } from "../components/student/format";
 import { ExamToolsSettings, type ExamToolsValue } from "../components/teacher/ExamToolsSettings";
 import * as bridge from "../lib/bridge";
-import { _resetMaterialsForTests, checkFile, formatBytes } from "../lib/materials";
+import {
+  BLOB_CACHE_BYTES,
+  _materialsMemoryForTests,
+  _resetMaterialsForTests,
+  checkFile,
+  forgetAttemptMaterials,
+  formatBytes,
+  loadAttemptMaterials,
+  materialBlob,
+} from "../lib/materials";
 import { pagesMatching } from "../lib/pdf";
 import { hostAllowed, normalizeWebsite } from "../lib/websites";
 import { ExamEditor } from "../pages/teacher/ExamEditor";
@@ -274,10 +283,12 @@ describe("websites pane", () => {
 
   it("normalises website names like the server", () => {
     expect(normalizeWebsite("HTTPS://Docs.Python.org/")).toEqual({ ok: true, host: "docs.python.org" });
-    for (const bad of ["docs.python.org/3/", "*.python.org", "localhost", "ftp://x.org", "10.0.0.1", "a.com:80", ""])
+    for (const bad of ["docs.python.org/3/", "*.com", "localhost", "ftp://x.org", "10.0.0.1", "a.com:80", ""])
       expect(normalizeWebsite(bad).ok).toBe(false);
-    expect(hostAllowed("docs.python.org", ["python.org"])).toBe(true);
-    expect(hostAllowed("evilpython.org", ["python.org"])).toBe(false);
+    // 2026-10-23 (review): exact entries; "*." for subdomains (websitesWildcard.test.tsx)
+    expect(hostAllowed("docs.python.org", ["python.org"])).toBe(false);
+    expect(hostAllowed("docs.python.org", ["*.python.org"])).toBe(true);
+    expect(hostAllowed("evilpython.org", ["*.python.org"])).toBe(false);
   });
 });
 
@@ -306,10 +317,49 @@ describe("materials pane", () => {
     expect(within(viewer).queryByRole("link")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "All files" }));
     expect(screen.getByRole("list", { name: "Your materials" })).toBeInTheDocument();
-    // the files were fetched with the student's token, in the background too
-    const urls = fetchFn.mock.calls.map((c) => c[0]);
-    expect(urls).toContain("/api/student/attempts/a_1/materials");
-    await waitFor(() => expect(urls).toContain("/api/student/attempts/a_1/materials/m_2"));
+    // 2026-10-23 (review): only the opened file was fetched (no prefetch of the others)
+    const urls = () => fetchFn.mock.calls.map((c) => c[0]);
+    expect(urls()).toContain("/api/student/attempts/a_1/materials");
+    expect(urls()).toContain("/api/student/attempts/a_1/materials/m_1");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(urls()).not.toContain("/api/student/attempts/a_1/materials/m_2");
+    // re-opening comes from memory
+    fireEvent.click(screen.getByRole("button", { name: /notes\.txt/ }));
+    expect(await screen.findByText("E = mc^2")).toBeInTheDocument();
+    expect(urls().filter((u) => u.endsWith("/materials/m_1"))).toHaveLength(1);
+  });
+
+  it("keeps opened files in memory up to the cap, least recently opened dropped first", async () => {
+    setToken("student", "S");
+    const MB = 1024 * 1024;
+    const sizes: Record<string, number> = { m_a: 25 * MB, m_b: 25 * MB, m_c: 20 * MB, m_d: 1 };
+    const fetchFn = vi.fn(async (url: string) => {
+      const id = url.split("/").pop() as string;
+      return new Response(new Uint8Array(sizes[id]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchFn);
+    await materialBlob("a_1", "m_a");
+    await materialBlob("a_1", "m_b");
+    await materialBlob("a_1", "m_a");                  // m_a is now the most recent
+    expect(_materialsMemoryForTests()).toEqual({ bytes: 50 * MB, keys: ["a_1/m_b", "a_1/m_a"] });
+    await materialBlob("a_1", "m_c");                  // 70 MB > 60 MB: m_b goes
+    expect(_materialsMemoryForTests()).toEqual({ bytes: 45 * MB, keys: ["a_1/m_a", "a_1/m_c"] });
+    expect(BLOB_CACHE_BYTES).toBe(60 * MB);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    await materialBlob("a_1", "m_b");                  // fetched again
+    expect(fetchFn).toHaveBeenCalledTimes(4);
+    await materialBlob("a_2", "m_d");
+    forgetAttemptMaterials("a_1");
+    expect(_materialsMemoryForTests()).toEqual({ bytes: 1, keys: ["a_2/m_d"] });
+  });
+
+  it("loading the list fetches no file", async () => {
+    setToken("student", "S");
+    const fetchFn = vi.fn(async () => json({ files: FILES }));
+    vi.stubGlobal("fetch", fetchFn);
+    expect(await loadAttemptMaterials("a_1")).toHaveLength(2);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it("needs the connection when the attempt is offline", async () => {
@@ -337,7 +387,7 @@ describe("materials pane", () => {
 describe("materials upload", () => {
   const info = (over: Partial<MaterialsInfo> = {}): MaterialsInfo => ({
     open_book: true, can_change: true, reason: null, files: [], used_bytes: 0,
-    max_files: 5, max_bytes: 50 * 1024 * 1024, types: ["pdf", "png", "jpg", "txt", "md"], ...over,
+    max_files: 5, max_bytes: 20 * 1024 * 1024, types: ["pdf", "png", "jpg", "txt", "md"], ...over,
   });
 
   it("uploads chosen files, checks them first, and removes them", async () => {
@@ -406,7 +456,8 @@ describe("materials upload", () => {
     expect(checkFile({ name: "a.docx", size: 10 }, 0, 0)).toMatch(/use a PDF/);
     expect(checkFile({ name: "a.pdf", size: 0 }, 0, 0)).toMatch(/empty/);
     expect(checkFile({ name: "a.pdf", size: 10 }, 5, 0)).toMatch(/at most 5/);
-    expect(checkFile({ name: "a.pdf", size: 2 }, 1, 50 * 1024 * 1024 - 1)).toMatch(/50 MB/);
+    expect(checkFile({ name: "a.pdf", size: 2 }, 1, 20 * 1024 * 1024 - 1)).toMatch(/20 MB/);
+    expect(checkFile({ name: "a.pdf", size: 2 }, 1, 20 * 1024 * 1024 - 2)).toBeNull();
     expect(formatBytes(900)).toBe("900 B");
     expect(formatBytes(2048)).toBe("2 KB");
     expect(formatBytes(15 * 1024 * 1024)).toBe("15 MB");

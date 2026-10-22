@@ -1,13 +1,15 @@
 // Phase 4: grading coding answers. The server never runs code; the tests (sample and
 // hidden) run here in the teacher's browser with the same runners the students use, and
 // the points of the passed tests fill the score (the teacher can still change it).
+// 2026-10-23: each answer runs in a runner (worker) of its own that is thrown away after
+// scoring: a program that tampers with its interpreter cannot change the next answer's score.
 import { useState } from "react";
 import { ApiError, teacherApi } from "../../api/client";
 import type { CodeTest, GradingItem, GradingQuestion } from "../../api/types";
 import { CodeEditor } from "../code/LazyCodeEditor";
 import { DEFAULT_TIME_LIMIT_MS, LANGUAGE_LABEL, canRunInBrowser, resolveLanguage } from "../../lib/code/languages";
 import { fmtSeconds } from "../../lib/code/runner";
-import { getRunner } from "../../lib/code/runners";
+import { createRunner } from "../../lib/code/runners";
 import { STATUS_LABEL, runTests, scoreOutcomes, testSummary, type TestOutcome } from "../../lib/code/runTests";
 import { isBlankAnswer } from "../../pages/teacher/gradingLogic";
 import { errorText } from "./util";
@@ -25,12 +27,16 @@ export function canAutoRun(q: Pick<GradingQuestion, "type" | "language" | "tests
 }
 
 export async function scoreCode(q: GradingQuestion, code: string, onProgress?: (o: TestOutcome[]) => void): Promise<CodeScore> {
-  const runner = getRunner(resolveLanguage(q.language));
-  if (!runner) throw new Error("This language cannot run in the browser.");
-  const r = await runner;
-  await r.prepare();
-  const tests: CodeTest[] = q.tests ?? [];
-  const outcomes = await runTests(r, code, tests, q.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS, onProgress);
+  const r = createRunner(resolveLanguage(q.language));
+  if (!r) throw new Error("This language cannot run in the browser.");
+  let outcomes: TestOutcome[];
+  try {
+    await r.prepare();
+    const tests: CodeTest[] = q.tests ?? [];
+    outcomes = await runTests(r, code, tests, q.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS, onProgress);
+  } finally {
+    r.dispose();
+  }
   if (outcomes.some((o) => o.status === "unavailable")) throw new Error(outcomes.find((o) => o.stderr)?.stderr || "The tests could not run.");
   const s = scoreOutcomes(outcomes, q.points);
   return { points: s.points, comment: testSummary(outcomes), outcomes };

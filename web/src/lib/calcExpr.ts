@@ -8,9 +8,13 @@
 //   unary   := ("-" | "+") unary | power
 //   power   := postfix ("^" unary)?                               right-assoc, -2^2 = -4
 //   postfix := primary "!"*
-//   primary := number | name | func "(" expr ")" | func power | "√" power | "(" expr ")"
+//   primary := number | name | func "(" expr ")" | func unary | "√" unary | "(" expr ")"
 //
 // Unclosed "(" at the very end are closed for the student, like a hand calculator.
+// 2026-10-23: numbers take scientific notation (1e5, 6.02e23, 1.e3, 2.5E-3): a number
+// directly followed by e/E, an optional sign and digits. Anything else keeps e as the
+// constant (2e = 2·e, 2e^2). Two numbers in a row ("2 3") are an error, not 6. √, the
+// functions and ^ take a sign (√-4, sin -30, 2^-1).
 
 export type AngleMode = "deg" | "rad";
 
@@ -59,8 +63,12 @@ export function tokenize(src: string): Tok[] {
         j++;
         while (j < src.length && /[0-9]/.test(src[j] as string)) j++;
       }
+      if (j === i + 1 && c === ".") throw new CalcError("Check the number");
+      // scientific notation: e/E, an optional sign, then at least one digit
+      const sci = /^[eE][+-]?[0-9]+/.exec(src.slice(j));
+      if (sci) j += sci[0].length;
       const text = src.slice(i, j);
-      // "1..2", "1.2.3": not one number
+      // "1..2", "1.2.3", "1e5.5": not one number
       if (text === "." || src[j] === ".") throw new CalcError("Check the number");
       out.push({ k: "num", v: Number(text) });
       i = j;
@@ -128,6 +136,8 @@ export function parse(src: string, opts: ParseOptions = {}): Node {
         const op = (toks[p++] as { v: "*" | "/" }).v;
         a = { t: "bin", op, a, b: unary() };
       } else if (startsOperand()) {
+        const prev = toks[p - 1];
+        if (prev && prev.k === "num" && peek()?.k === "num") throw new CalcError("Missing an operator");
         a = { t: "bin", op: "*", a, b: power() };      // implicit: 2π, 3(4), 2x
       } else return a;
     }
@@ -188,7 +198,7 @@ export function parse(src: string, opts: ParseOptions = {}): Node {
       }
       if (t.k === "op" && t.v === "√") {
         p++;
-        return { t: "call", f: "sqrt", a: power() };
+        return { t: "call", f: "sqrt", a: unary() };
       }
       if (t.k === "name") {
         p++;
@@ -198,7 +208,7 @@ export function parse(src: string, opts: ParseOptions = {}): Node {
             p++;
             return { t: "call", f, a: group() };
           }
-          return { t: "call", f, a: power() };            // sin x, ln 2
+          return { t: "call", f, a: unary() };            // sin x, ln 2, sin -30
         }
         if (t.v === "x") {
           if (!opts.x) throw new CalcError("x is only for graphs");
@@ -223,6 +233,24 @@ export interface Env {
   x?: number;
   ans?: number;
   angle?: AngleMode;
+}
+
+/** b as p/q with q <= 1000 (continued fractions), or null when no such fraction is close. */
+function smallFraction(b: number): { p: number; q: number } | null {
+  let h0 = 0, h1 = 1, k0 = 1, k1 = 0;
+  let x = b;
+  for (let i = 0; i < 32; i++) {
+    const a = Math.floor(x);
+    const h = a * h1 + h0;
+    const k = a * k1 + k0;
+    if (k > 1000) break;
+    h0 = h1; h1 = h; k0 = k1; k1 = k;
+    if (Math.abs(h1 / k1 - b) < 1e-9) return { p: Math.abs(h1), q: k1 };
+    const frac = x - a;
+    if (frac < 1e-12) break;
+    x = 1 / frac;
+  }
+  return null;
 }
 
 function factorial(n: number): number {
@@ -270,10 +298,10 @@ function evaluate(n: Node, env: Env): number {
         case "/":
           return a / b;
         case "^":
-          // odd roots of negatives: (-8)^(1/3) = -2
-          if (a < 0 && !Number.isInteger(b)) {
-            const inv = 1 / b;
-            if (Number.isInteger(Math.round(inv * 1e9) / 1e9) && Math.round(inv) % 2 !== 0) return -Math.pow(-a, b);
+          // real powers of negatives with an odd denominator: (-8)^(1/3) = -2, (-8)^(2/3) = 4
+          if (a < 0 && Number.isFinite(b) && !Number.isInteger(b)) {
+            const f = smallFraction(b);
+            if (f && f.q % 2 !== 0) return (f.p % 2 !== 0 ? -1 : 1) * Math.pow(-a, b);
           }
           return Math.pow(a, b);
       }

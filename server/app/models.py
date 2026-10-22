@@ -280,4 +280,6 @@ class ExamMaterial(Base):
     kind: Mapped[str] = mapped_column(String(8), nullable=False)          # pdf | png | jpg | txt | md
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
+    # 2026-10-23: hex sha256 of `data`, set on upload; the download's ETag ('' on older rows)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

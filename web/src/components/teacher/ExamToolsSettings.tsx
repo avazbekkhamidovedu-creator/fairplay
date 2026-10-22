@@ -94,7 +94,7 @@ export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; 
             <b>Open book</b>
             <span className="t-small t-muted">
               {" "}
-              · students upload up to 5 files (PDF, images, text; 50 MB in all) before they start, and read them in the exam. You
+              · students upload up to 5 files (PDF, images, text; 20 MB in all) before they start, and read them in the exam. You
               can see their files in Results.
             </span>
           </span>
@@ -169,7 +169,8 @@ export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; 
               </span>
             ) : (
               <span id="exam-site-hint" className="t-small t-muted">
-                Only the site name. Its subdomains are allowed too (python.org also allows docs.python.org). Up to {MAX_WEBSITES}.
+                {/* 2026-10-23 (review): entries match exactly; "*." for a whole site */}
+                docs.python.org — exactly this site; *.python.org — all of python.org. Up to {MAX_WEBSITES}.
               </span>
             )}
           </div>

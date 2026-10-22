@@ -437,7 +437,8 @@ async def heartbeat(aid: str, body: HeartbeatIn, request: Request,
     beat = {"t": now, "cq": body.current_question}
     if body.battery is not None:                  # 2026-10-23: low-battery warning
         beat["bat"] = round(body.battery, 2)
-        beat["chg"] = bool(body.charging)
+        # 2026-10-23 (review): as reported; None (the browser can't tell) stays unknown
+        beat["chg"] = body.charging
     await store.hset(f"hb:{meta['exam_id']}", aid, json.dumps(beat), LIVE_TTL)
     await ac.note_js_heartbeat(request, session, store, aid, meta)
     return {"ok": True, "status": meta["status"], "server_time": iso(utcnow()),

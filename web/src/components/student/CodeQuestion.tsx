@@ -16,6 +16,8 @@ interface Props {
   onChange: (v: AnswerValue | undefined) => void;
   /** pictures + the prompt heading (the page owns its focus handling) */
   prompt: ReactNode;
+  /** 2026-10-23: the attempt, so remembered results never show in another attempt */
+  attemptId?: string;
 }
 
 type Tab = "samples" | "custom";
@@ -29,21 +31,35 @@ interface Memory {
 }
 
 // Results stay while the student moves between questions (this page only, never saved).
+// 2026-10-23: kept per attempt + question, and forgotten when the attempt finishes.
 const memory = new Map<string, Memory>();
+const memoryKey = (attemptId: string, questionId: string) => `${attemptId}\u0000${questionId}`;
+
+/** Forget the run results of one attempt (the exam is over). */
+export function forgetCodeResults(attemptId: string): void {
+  const prefix = `${attemptId}\u0000`;
+  for (const k of [...memory.keys()]) if (k.startsWith(prefix)) memory.delete(k);
+}
+
+/** For tests: how many questions have remembered results. */
+export function rememberedCodeResults(): number {
+  return memory.size;
+}
 const DEFAULT_PANEL = 260;
 
 export function codeOf(question: StudentQuestion, value: AnswerValue | undefined): string {
   return typeof value === "string" ? value : question.starter_code ?? "";
 }
 
-export function CodeQuestion({ question, value, onChange, prompt }: Props) {
+export function CodeQuestion({ question, value, onChange, prompt, attemptId = "" }: Props) {
   const lang: CodeLanguage = resolveLanguage(question.language);
   const label = LANGUAGE_LABEL[lang];
   const samples = question.tests ?? [];
   const writeOnly = !!question.write_only;
   const runnable = !writeOnly && canRunInBrowser(lang);
   const limit = question.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS;
-  const mem = memory.get(question.id);
+  const key = memoryKey(attemptId, question.id);
+  const mem = memory.get(key);
 
   const codeRef = useRef(codeOf(question, value));
   const [tab, setTab] = useState<Tab>(mem?.tab ?? (samples.length ? "samples" : "custom"));
@@ -55,8 +71,8 @@ export function CodeQuestion({ question, value, onChange, prompt }: Props) {
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
-    memory.set(question.id, { tab, samples: results, customInput, custom, panel });
-  }, [question.id, tab, results, customInput, custom, panel]);
+    memory.set(key, { tab, samples: results, customInput, custom, panel });
+  }, [key, tab, results, customInput, custom, panel]);
 
   const onCode = useCallback(
     (code: string) => {

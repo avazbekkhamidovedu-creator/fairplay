@@ -14,8 +14,15 @@ import os
 import re
 import secrets
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
+from starlette.datastructures import FormData
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.formparsers import (
+    MultiPartException,
+    MultiPartParser,
+    parse_options_header,
+)
 
 from .security import Principal, require_teacher
 
@@ -140,10 +147,57 @@ def read_upload(uid: str) -> tuple[bytes, str] | None:
         return f.read(), found[1]
 
 
+MULTIPART_OVERHEAD = 64 * 1024   # boundaries, part headers and the file name
+
+
+async def read_capped_form(request: Request, cap: int, too_big: str, max_files: int = 1) -> FormData:
+    """2026-10-23: parse a multipart body AFTER the route's checks have run. FastAPI parses
+    `File(...)` / `Form(...)` parameters before it runs the dependencies, so routes that take
+    an upload read it here instead: a missing or too large Content-Length is refused before
+    anything is read, and reading stops (413) as soon as more than `cap` bytes arrive. File
+    parts are spooled by Starlette (to disk past 1 MB), never held in memory whole."""
+    try:
+        declared = int(request.headers.get("content-length", ""))
+    except ValueError:
+        raise HTTPException(413, too_big) from None
+    if declared < 0 or declared > cap:
+        raise HTTPException(413, too_big)
+    ctype, _ = parse_options_header(request.headers.get("content-type", ""))
+    if ctype != b"multipart/form-data":
+        raise HTTPException(422, "Send the file as multipart/form-data")
+    seen = 0
+
+    async def capped():
+        nonlocal seen
+        async for chunk in request.stream():
+            seen += len(chunk)
+            if seen > cap:
+                raise HTTPException(413, too_big)
+            yield chunk
+
+    try:
+        return await MultiPartParser(request.headers, capped(), max_files=max_files, max_fields=8,
+                                     max_part_size=MULTIPART_OVERHEAD).parse()
+    except MultiPartException as e:
+        raise HTTPException(400, e.message) from None
+
+
+def form_files(form: FormData, field: str) -> list[StarletteUploadFile]:
+    return [v for v in form.getlist(field) if isinstance(v, StarletteUploadFile)]
+
+
 @router.post("", status_code=201)
-async def upload(file: UploadFile = File(...),
-                 p: Principal = Depends(require_teacher)):
-    data = await file.read(MAX_UPLOAD_BYTES + 1)
+async def upload(request: Request, p: Principal = Depends(require_teacher)):
+    # 2026-10-23: the body is read only once the teacher is known (read_capped_form)
+    too_big = "Images can be at most 5 MB"
+    form = await read_capped_form(request, MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD, too_big)
+    files = form_files(form, "file")
+    if not files:
+        raise HTTPException(422, "Choose a file to upload")
+    try:
+        data = await files[0].read(MAX_UPLOAD_BYTES + 1)
+    finally:
+        await form.close()
     try:
         return await asyncio.to_thread(save_image_bytes, data)
     except ValueError as e:

@@ -6,7 +6,11 @@
 // console.log / console.error print, require("fs").readFileSync(0, "utf8") returns all of
 // stdin, and require("readline").createInterface(...) gives "line" / "close" events and
 // `for await (const line of rl)`, like Node.
+// 2026-10-23: every run is a new Blob worker that is terminated when it ends, so one run
+// never sees another. Before the program, the script removes fetch / XMLHttpRequest /
+// WebSocket / indexedDB / importScripts / ... from the worker (sandboxGlobals.ts).
 import { MAX_OUTPUT_CHARS, SerialQueue, timedOut, unavailable, type RunResult, type Runner } from "./runner";
+import { lockGlobalsSource } from "./sandboxGlobals";
 
 export interface JsWorkerSource {
   source: string;
@@ -16,7 +20,8 @@ export interface JsWorkerSource {
 
 /** The worker script for one run. Pure (tested without a browser). */
 export function buildJsWorkerSource(code: string, stdin: string, maxOutput = MAX_OUTPUT_CHARS): JsWorkerSource {
-  const head = `var __fp = (function () {
+  const head = `${lockGlobalsSource("self")}
+var __fp = (function () {
   var stdin = ${JSON.stringify(stdin)};
   var max = ${Math.max(1, Math.floor(maxOutput))};
   var out = [], err = [], sizes = [0, 0], cut = false;

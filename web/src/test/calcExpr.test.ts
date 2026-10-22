@@ -1,5 +1,6 @@
 // 2026-10-23 (exam tools): the calculator's own parser (no eval).
 import { describe, expect, it } from "vitest";
+import { avoidPane } from "../components/student/Calculator";
 import { CalcError, calculate, compile, formatResult, parse, tokenize } from "../lib/calcExpr";
 
 const calc = (s: string, env = {}) => calculate(s, env);
@@ -119,5 +120,14 @@ describe("calculator expressions", () => {
     expect(formatResult(-1 / 0)).toBe("Too small");
     expect(formatResult(NaN)).toBe("Not a number");
     expect(formatResult(123456789)).toBe("123456789");
+  });
+});
+
+describe("calculator steps out of the side panel's way", () => {
+  it("moves left of an open panel, never off screen", () => {
+    expect(avoidPane(1000, 336, 1440, 0)).toBe(1000);
+    expect(avoidPane(1080, 336, 1440, 440)).toBe(1440 - 440 - 336 - 16);
+    expect(avoidPane(100, 336, 1440, 440)).toBe(100);
+    expect(avoidPane(500, 336, 700, 440)).toBe(8);
   });
 });

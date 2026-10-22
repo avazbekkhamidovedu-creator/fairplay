@@ -228,6 +228,7 @@ function stateOf(d: NativeState): NativeState {
   if (typeof d.app_version === "string" && d.app_version) out.app_version = d.app_version;
   if (typeof d.platform === "string" && d.platform) out.platform = d.platform;
   if (typeof d.sealed_pending === "boolean") out.sealed_pending = d.sealed_pending;
+  if (typeof d.prelock === "boolean") out.prelock = d.prelock;   // 2026-10-23
   const update = parseUpdate((d as { update?: unknown }).update);
   if (update) out.update = update;
   return out;

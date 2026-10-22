@@ -1,11 +1,11 @@
 // 2026-10-23 (exam tools): "Your materials" on Check-in and "Before you start" of an
 // open-book exam. Drag files in or choose them; the list shows each file's size with
-// Remove. Up to 5 files, 50 MB in all, PDF / PNG / JPEG / TXT / MD. Locked once the exam
+// Remove. Up to 5 files, 20 MB in all (2026-10-23 review: was 50), PDF / PNG / JPEG / TXT / MD. Locked once the exam
 // has started (the server says so: can_change false).
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { ApiError, NetworkError, materialsApi } from "../../api/client";
 import type { MaterialsInfo } from "../../api/types";
-import { ACCEPT, MAX_BYTES, MAX_FILES, checkFile, formatBytes } from "../../lib/materials";
+import { ACCEPT, MAX_BYTES, MAX_FILES, MAX_LABEL, checkFile, formatBytes } from "../../lib/materials";
 import { FileIcon, UploadIcon } from "./icons";
 import "../../styles/tools.css";
 
@@ -91,7 +91,7 @@ export function MaterialsUpload({ examId, compact = false }: { examId: string; c
     <section className={`stu-upload${compact ? " compact" : ""}`} aria-labelledby={`mat-h-${examId}`} data-testid="materials-upload">
       <div className="stu-upload-head">
         <h2 id={`mat-h-${examId}`}>Your materials</h2>
-        <span className="stu-muted stu-small">Open book: bring up to {MAX_FILES} files (PDF, PNG, JPEG, TXT, MD), 50 MB in all.</span>
+        <span className="stu-muted stu-small">Open book: bring up to {MAX_FILES} files (PDF, PNG, JPEG, TXT, MD), {MAX_LABEL} in all.</span>
       </div>
       {loadError && (
         <p className="stu-alert warn" role="alert" style={{ margin: 0 }}>
@@ -170,10 +170,10 @@ export function MaterialsUpload({ examId, compact = false }: { examId: string; c
         </ul>
       )}
       {info && (
-        <div className="stu-upload-meter" aria-label={`${info.files.length} of ${MAX_FILES} files, ${formatBytes(used)} of 50 MB`}>
+        <div className="stu-upload-meter" aria-label={`${info.files.length} of ${MAX_FILES} files, ${formatBytes(used)} of ${MAX_LABEL}`}>
           <span style={{ width: `${Math.min(100, (used / (info.max_bytes || MAX_BYTES)) * 100)}%` }} />
           <small>
-            {info.files.length} of {MAX_FILES} files · {formatBytes(used)} of 50 MB
+            {info.files.length} of {MAX_FILES} files · {formatBytes(used)} of {MAX_LABEL}
           </small>
         </div>
       )}

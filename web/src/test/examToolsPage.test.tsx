@@ -140,6 +140,7 @@ describe("exam page tools", () => {
     // materials (fetched when the exam opened: the count is in the menu)
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     expect(await screen.findByRole("menuitem", { name: /Materials\s*1 file/ })).toBeInTheDocument();
+    expect(mat.attemptFile).not.toHaveBeenCalled();                                 // only when opened
     fireEvent.click(screen.getByRole("menuitem", { name: /Materials/ }));
     expect(screen.getByRole("complementary", { name: "Materials" })).toBeInTheDocument();
     expect(document.querySelector(".stu-exam")).toHaveClass("has-pane");
@@ -189,7 +190,7 @@ describe("before you start: tools and materials", () => {
     api.listExams.mockResolvedValue([{ ...EXAM, tools: ALL }]);
     mat.list.mockResolvedValue({
       open_book: true, can_change: true, reason: null, files: [], used_bytes: 0, max_files: 5,
-      max_bytes: 50 * 1024 * 1024, types: [],
+      max_bytes: 20 * 1024 * 1024, types: [],
     });
     renderStart();
     expect(await screen.findByTestId("start-tools")).toHaveTextContent(

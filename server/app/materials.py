@@ -7,8 +7,14 @@ attempt's app session) and shows them in its own viewer. The teacher can list an
 every student's files.
 
 Files are served so they can never run script on our origin: a fixed media type from the
-sniffed kind (text is always text/plain), `X-Content-Type-Options: nosniff`, `inline`, a
-sandbox CSP and no caching.
+sniffed kind (text is always text/plain), `X-Content-Type-Options: nosniff`, `inline` and a
+sandbox CSP.
+
+2026-10-23 (review): downloads are streamed from the database in CHUNK pieces (SQL substr
+on the bytes, a short session per piece), never loaded whole; the browser may keep a file
+for the attempt (`private, max-age=3600`) and re-asks with If-None-Match (the sha256 taken
+at upload is the ETag). The page fetches a file only when the student opens it. Uploads
+are read only after every check has passed (see upload_material).
 
 Routes:
   GET    /api/student/exams/{exam_id}/materials          own files + limits (before the exam)
@@ -22,28 +28,32 @@ Routes:
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
-from sqlalchemy import delete, func, select
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
+from sqlalchemy import LargeBinary, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import app_client as ac
 from .access import require_member
-from .db import get_session
+from .db import get_database, get_session
 from .models import Attempt, ExamMaterial, User
 from .security import Principal, require_student, require_teacher
 from .services import find_attempt, get_exam_cached, new_id
 from .store import get_store
 from .timeutil import iso, utcnow
+from .uploads import MULTIPART_OVERHEAD, form_files, read_capped_form
 
 student_router = APIRouter(prefix="/api/student", tags=["materials"])
 teacher_router = APIRouter(prefix="/api/exams", tags=["materials"])
 
 MAX_FILES = 5
-MAX_BYTES = 50 * 1024 * 1024
+MAX_BYTES = 20 * 1024 * 1024          # 2026-10-23 (review): 20 MB in all per student and exam (was 50)
+CHUNK = 512 * 1024                    # download piece read from the database at a time
 MAX_NAME = 120
 UPLOADS_PER_MIN = 30
 UPLOAD_LOCK_S = 120
@@ -52,6 +62,7 @@ MEDIA_TYPES = {"pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg"
 TEXT_EXTENSIONS = {".txt": "txt", ".md": "md", ".markdown": "md"}
 TYPES_DETAIL = "Use a PDF, PNG, JPEG, TXT or MD file"
 LOCKED_DETAIL = "Materials can't be changed once you have started the exam"
+TOO_BIG = "Files can be at most 20 MB in all. Remove a file or upload a smaller one."
 NOT_OPEN_BOOK = "This exam is not open book"
 
 
@@ -115,19 +126,57 @@ async def _files(session: AsyncSession, exam_id: str, student_id: int) -> list[E
     return list(res.scalars())
 
 
-def file_response(m: ExamMaterial, data: bytes) -> Response:
+def _etag(m: ExamMaterial) -> str:
+    # A material never changes once stored, so its id also names its bytes (rows from
+    # before the sha256 column have '' there).
+    return f'"{m.sha256 or m.id}"'
+
+
+def _not_modified(request: Request, etag: str) -> bool:
+    given = request.headers.get("if-none-match")
+    if not given:
+        return False
+    tags = {t.strip().removeprefix("W/") for t in given.split(",")}
+    return "*" in tags or etag in tags
+
+
+async def _chunks(mid: str, total: int):
+    """The bytes of one material, CHUNK at a time. substr(blob, start, n) is 1-based on both
+    SQLite (bytes of a BLOB) and PostgreSQL (substr(bytea, int, int) -> bytea), so only one
+    piece is ever in memory. Each piece gets its own short session: a slow download never
+    holds a pooled connection."""
+    pos = 1
+    while pos <= total:
+        async with get_database().sessionmaker() as s:
+            part = (await s.execute(
+                select(func.substr(ExamMaterial.data, pos, CHUNK, type_=LargeBinary))
+                .where(ExamMaterial.id == mid))).scalar_one_or_none()
+        if not part:
+            return
+        yield bytes(part)
+        pos += len(part)
+
+
+async def file_response(request: Request, session: AsyncSession, m: ExamMaterial) -> Response:
     ascii_name = re.sub(r"[^A-Za-z0-9._ -]", "_", m.name) or "file"
-    return Response(content=data, media_type=MEDIA_TYPES[m.kind], headers={
+    etag = _etag(m)
+    headers = {
         "Content-Disposition": f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(m.name)}",
         "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, no-store",
+        # The attempt's own browser may keep it (re-opens cost nothing); never a shared cache.
+        "Cache-Control": "private, max-age=3600",
+        "ETag": etag,
         # Even opened directly, nothing in it may run or load anything.
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-    })
-
-
-async def _load_bytes(session: AsyncSession, mid: str) -> bytes:
-    return (await session.execute(select(ExamMaterial.data).where(ExamMaterial.id == mid))).scalar_one()
+    }
+    if _not_modified(request, etag):
+        return Response(status_code=304, headers=headers)
+    total = (await session.execute(
+        select(func.length(ExamMaterial.data)).where(ExamMaterial.id == m.id))).scalar_one()
+    headers["Content-Length"] = str(int(total))
+    # Hand the request's connection back now: the pieces use their own sessions.
+    await session.close()
+    return StreamingResponse(_chunks(m.id, int(total)), media_type=MEDIA_TYPES[m.kind], headers=headers)
 
 
 # ---------------------------------------------------------------- student, before the exam
@@ -164,10 +213,20 @@ async def my_materials(exam_id: str, p: Principal = Depends(require_student),
             **limits_out()}
 
 
+async def _usage(session: AsyncSession, exam_id: str, student_id: int) -> tuple[int, int]:
+    count, used = (await session.execute(
+        select(func.count(ExamMaterial.id), func.coalesce(func.sum(ExamMaterial.size), 0))
+        .where(ExamMaterial.exam_id == exam_id, ExamMaterial.student_id == student_id))).one()
+    return int(count), int(used)
+
+
 @student_router.post("/exams/{exam_id}/materials", status_code=201)
-async def upload_material(exam_id: str, file: UploadFile = File(...),
-                          p: Principal = Depends(require_student),
+async def upload_material(exam_id: str, request: Request, p: Principal = Depends(require_student),
                           session: AsyncSession = Depends(get_session)):
+    """Multipart "file". 2026-10-23 (review): takes the raw request, not a File(...) parameter,
+    so FastAPI does not parse the body before require_student: the student, the exam, open
+    book, "not started yet", the room left and the rate limit are all checked first, and the
+    body is then read with a hard cap of the room left."""
     store = get_store()
     if await store.incr(f"matrate:{p.user_id}", 60) > UPLOADS_PER_MIN:
         raise HTTPException(429, "Too many uploads, wait a minute")
@@ -175,30 +234,43 @@ async def upload_material(exam_id: str, file: UploadFile = File(...),
     can, why = await _can_change(session, exam, p)
     if not can:
         raise HTTPException(409, why)
+    count, used = await _usage(session, exam_id, p.user_id)
+    if count >= MAX_FILES:
+        raise HTTPException(409, f"You can upload at most {MAX_FILES} files. Remove one first.")
+    room = MAX_BYTES - used
+    if room <= 0:
+        raise HTTPException(413, TOO_BIG)
     # One upload at a time per student and exam, so two at once can't pass the limits.
     lock = f"matup:{exam_id}:{p.user_id}"
     if not await store.setnx(lock, "1", UPLOAD_LOCK_S):
         raise HTTPException(429, "Another file is still uploading. Wait for it to finish.")
     try:
-        data = await file.read(MAX_BYTES + 1)
+        form = await read_capped_form(request, room + MULTIPART_OVERHEAD, TOO_BIG)
+        try:
+            files = form_files(form, "file")
+            if not files:
+                raise HTTPException(422, "Choose a file to upload")
+            file = files[0]
+            data = await file.read(room + 1)
+        finally:
+            await form.close()
         if not data:
             raise HTTPException(422, "The file is empty")
-        if len(data) > MAX_BYTES:
-            raise HTTPException(413, "Files can be at most 50 MB in all")
+        if len(data) > room:
+            raise HTTPException(413, TOO_BIG)
         kind = sniff_material(data, file.filename or "")
         if kind is None:
             raise HTTPException(422, TYPES_DETAIL)
-        count, used = (await session.execute(
-            select(func.count(ExamMaterial.id), func.coalesce(func.sum(ExamMaterial.size), 0))
-            .where(ExamMaterial.exam_id == exam_id, ExamMaterial.student_id == p.user_id))).one()
-        if int(count) >= MAX_FILES:
-            raise HTTPException(409, f"You can upload at most {MAX_FILES} files. Remove one first.")
-        if int(used) + len(data) > MAX_BYTES:
-            raise HTTPException(413, "Files can be at most 50 MB in all. Remove a file or upload a smaller one.")
         m = ExamMaterial(id=new_id("m"), exam_id=exam_id, student_id=p.user_id,
                          name=clean_name(file.filename, kind), kind=kind, size=len(data), data=data,
-                         created_at=utcnow())
+                         sha256=hashlib.sha256(data).hexdigest(), created_at=utcnow())
         session.add(m)
+        await session.flush()
+        # 2026-10-23 (review): the exam may have been started while the body was arriving;
+        # checked again in the same transaction as the insert, so the list stays fixed.
+        if await find_attempt(session, exam_id, p.user_id) is not None:
+            await session.rollback()
+            raise HTTPException(409, LOCKED_DETAIL)
         await session.commit()
         return file_out(m)
     finally:
@@ -248,7 +320,7 @@ async def attempt_material_file(aid: str, mid: str, request: Request,
     m = await session.get(ExamMaterial, mid)
     if m is None or m.exam_id != a.exam_id or m.student_id != p.user_id:
         raise HTTPException(404, "File not found")
-    return file_response(m, await _load_bytes(session, mid))
+    return await file_response(request, session, m)
 
 
 # ---------------------------------------------------------------- teacher (read only)
@@ -283,10 +355,11 @@ async def attempt_materials_teacher(exam_id: str, aid: str, p: Principal = Depen
 
 
 @teacher_router.get("/{exam_id}/materials/{mid}")
-async def material_file_teacher(exam_id: str, mid: str, p: Principal = Depends(require_teacher),
+async def material_file_teacher(exam_id: str, mid: str, request: Request,
+                                p: Principal = Depends(require_teacher),
                                 session: AsyncSession = Depends(get_session)):
     await _teacher_exam(session, exam_id, p)
     m = await session.get(ExamMaterial, mid)
     if m is None or m.exam_id != exam_id:
         raise HTTPException(404, "File not found")
-    return file_response(m, await _load_bytes(session, mid))
+    return await file_response(request, session, m)

@@ -10,6 +10,9 @@ describe("low battery in the live room", () => {
     expect(lowBatteryBadge({ battery: 0.5, charging: false, online: true })).toBeNull();
     expect(lowBatteryBadge({ battery: 0.14, charging: false, online: false })).toBeNull();
     expect(lowBatteryBadge({ battery: null, charging: null, online: true })).toBeNull();
+    // charging unknown: still a warning, without "not charging"
+    expect(lowBatteryBadge({ battery: 0.14, charging: null, online: true })).toBe("Battery 14%");
+    expect(lowBatteryBadge({ battery: 0.14, online: true })).toBe("Battery 14%");
     expect(lowBatteryBadge({ online: true })).toBeNull();
   });
 });

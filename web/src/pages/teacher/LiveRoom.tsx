@@ -521,11 +521,13 @@ function FlagCard({ examId, flag, onDone }: { examId: string; flag: LiveFlag; on
 }
 
 
-/** 2026-10-23: "Battery 14% · not charging" under 20 % (not charging, laptop known). */
+/** 2026-10-23: "Battery 14% · not charging" under 20 % (laptop known, not charging).
+ *  2026-10-23 (review): charging unknown (null) still warns, as just "Battery 14%". */
 export function lowBatteryBadge(s: Pick<LiveStudent, "battery" | "charging" | "online">): string | null {
-  if (typeof s.battery !== "number" || s.charging || !s.online) return null;
+  if (typeof s.battery !== "number" || s.charging === true || !s.online) return null;
   if (s.battery >= 0.2) return null;
-  return `Battery ${Math.round(s.battery * 100)}% · not charging`;
+  const pct = `Battery ${Math.round(s.battery * 100)}%`;
+  return s.charging === false ? `${pct} · not charging` : pct;
 }
 
 /** S3-S6: what needs the invigilator at this seat, as short badges (+ the button for it). */

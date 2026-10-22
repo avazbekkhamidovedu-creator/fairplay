@@ -1,12 +1,14 @@
 // 2026-10-23 (exam tools): what the side pane shows. Materials: the student's own uploaded
-// files (fetched once when the exam opens and kept in memory). Websites: the exam's allowed
+// files (the list fetched once; a file's bytes when it is opened, then kept in memory for
+// re-opens, see lib/materials). Websites: the exam's allowed
 // sites in a sandboxed frame with our own Back / Forward / Reload; the address is shown,
-// never editable. The apps only let those hosts (and their subdomains) load in sub-frames.
+// never editable. The apps only let those sites load in sub-frames (2026-10-23 review: each
+// entry exactly; "*.python.org" is shown as "python.org (all pages)" and opens python.org).
 import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
 import type { MaterialFile } from "../../api/types";
 import { formatBytes, isOfflineError, loadAttemptMaterials, materialBlob } from "../../lib/materials";
-import { siteUrl } from "../../lib/websites";
+import { siteLabel, siteUrl } from "../../lib/websites";
 import { MaterialViewer } from "./MaterialViewer";
 import { ArrowLeftIcon, ArrowRightIcon, FileIcon, GlobeIcon, ReloadIcon } from "./icons";
 import "../../styles/tools.css";
@@ -124,7 +126,7 @@ export function WebsitesPaneContent({ sites }: { sites: string[] }) {
             <li key={host}>
               <button type="button" className="stu-filerow" onClick={() => openSite(host)}>
                 <GlobeIcon size={20} />
-                <span className="stu-filerow-name">{host}</span>
+                <span className="stu-filerow-name">{siteLabel(host)}</span>
               </button>
             </li>
           ))}

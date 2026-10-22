@@ -33,6 +33,8 @@ type Outcome = { ok: true; value: number; text: string } | { ok: false; error: s
 export function evaluateExpr(expr: string, ans: number, angle: AngleMode): Outcome {
   try {
     const v = calculate(expr, { ans, angle });
+    // 2026-10-23: √-4, (-8)^(1/2), asin 2: say so instead of showing NaN as an answer
+    if (Number.isNaN(v)) return { ok: false, error: "Not a real number" };
     return { ok: true, value: v, text: formatResult(v) };
   } catch (e) {
     return { ok: false, error: e instanceof CalcError ? e.message : "Check the expression" };
@@ -82,14 +84,25 @@ const KEYS: Key[] = [
 ];
 const STARTS_WITH_OPERATOR = /^[+\-−×÷*/^!]/;
 
+/** 2026-10-23: x for a calculator of width w so it doesn't cover a side panel paneW wide on
+ *  the right of a vw-wide window (it moves left of the panel, never off the screen). */
+export function avoidPane(x: number, w: number, vw: number, paneW: number): number {
+  if (paneW <= 0) return x;
+  const limit = vw - paneW - w - 16;
+  return x > limit ? Math.max(8, limit) : x;
+}
+
 export function Calculator({
   mode,
   open,
   onClose,
+  paneWidth = 0,
 }: {
   mode: CalculatorMode;
   open: boolean;
   onClose: () => void;
+  /** Width of the side panel (materials / websites) open on the right; 0 = none. */
+  paneWidth?: number;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
@@ -111,6 +124,18 @@ export function Calculator({
     setPos((p) => clampPosition(p ? p.x : window.innerWidth - w - 24, p ? p.y : below, w, h, window.innerWidth, window.innerHeight));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tab]);
+
+  // A side panel opened (or got wider): step out of its way.
+  useEffect(() => {
+    if (!open || paneWidth <= 0) return;
+    setPos((p) => {
+      if (!p) return p;
+      const { w } = size();
+      const x = avoidPane(p.x, w, window.innerWidth, paneWidth);
+      return x === p.x ? p : { x, y: p.y };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paneWidth, open]);
 
   useEffect(() => {
     const onResize = () =>

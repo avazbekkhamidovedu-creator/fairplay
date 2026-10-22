@@ -16,6 +16,12 @@ def test_battery_reaches_the_live_room(client, teacher, alice, live_exam):
     row = _live_row(client, teacher, live_exam["id"], aid)
     assert row["battery"] == 0.14 and row["charging"] is False
     assert row["current_question"] == 2
+    # 2026-10-23 (review): charging not reported stays unknown (not "not charging")
+    assert client.post(url, json={"battery": 0.1}, headers=alice).status_code == 200
+    row = _live_row(client, teacher, live_exam["id"], aid)
+    assert row["battery"] == 0.1 and row["charging"] is None
+    assert client.post(url, json={"battery": 0.1, "charging": True}, headers=alice).status_code == 200
+    assert _live_row(client, teacher, live_exam["id"], aid)["charging"] is True
 
 
 def test_battery_is_optional_and_checked(client, teacher, alice, live_exam):

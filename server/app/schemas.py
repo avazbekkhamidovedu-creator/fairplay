@@ -46,17 +46,53 @@ def normalize_domain(v: str) -> str:
     return ("*." if wildcard else "") + host + path
 
 
-# 2026-10-23 (exam tools): allowed websites of a "questions" exam. Plain host names; the
-# exam pane (and the apps) allow each host and its subdomains. Not the external-exam
-# allowed_domains (no "*." or paths here).
+# 2026-10-23 (exam tools): allowed websites of a "questions" exam. Not the external-exam
+# allowed_domains (no paths here).
+# 2026-10-23 (review): the apps match an entry exactly: "docs.python.org" is that host (and
+# the same host with "www." added or removed); "*.python.org" is python.org and all its
+# subdomains. A wildcard on a public suffix or shared hosting, where anyone can get a
+# subdomain ("*.com", "*.github.io", "*.co.uk"), is refused. The same list as the apps'
+# AllowedSites (Mac / iPad) and web/src/lib/websites.ts.
 MAX_WEBSITES = 20
 CALCULATOR_MODES = ("off", "scientific", "graphing")
+WILDCARD_PREFIX = "*."
+SHARED_SUFFIXES = frozenset({
+    "com", "net", "org", "edu", "gov", "mil", "int", "info", "biz", "io", "app", "dev", "page",
+    "site", "online", "xyz", "me", "co", "ai", "cn", "uk", "us", "eu", "de", "ru", "uz", "jp",
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "com.cn", "net.cn", "org.cn", "edu.cn", "gov.cn", "ac.cn",
+    "github.io", "githubusercontent.com", "github.com", "gitlab.io", "gitlab.com", "bitbucket.io",
+    "vercel.app", "now.sh", "netlify.app", "netlify.com", "pages.dev", "workers.dev",
+    "web.app", "firebaseapp.com", "herokuapp.com", "blogspot.com", "wordpress.com",
+    "glitch.me", "replit.app", "replit.dev", "repl.co", "onrender.com", "fly.dev",
+    "azurewebsites.net", "azurestaticapps.net", "cloudfront.net", "amazonaws.com",
+    "appspot.com", "wixsite.com", "weebly.com", "notion.site", "carrd.co", "surge.sh",
+    "neocities.org", "codepen.io", "jsfiddle.net", "stackblitz.io", "codesandbox.io",
+    "ngrok.io", "ngrok-free.app", "trycloudflare.com", "google.com", "googleusercontent.com",
+    "sites.google.com", "docs.google.com", "translate.goog", "s3.amazonaws.com",
+})
+# second-level labels under a two-letter country code that are public suffixes too (com.au)
+COUNTRY_SECOND_LEVELS = frozenset({
+    "com", "net", "org", "edu", "gov", "mil", "ac", "co", "go", "or", "ne", "gob", "nic", "sch", "gv",
+})
+
+
+def is_shared_suffix(host: str) -> bool:
+    """A wildcard base nobody may use: on SHARED_SUFFIXES, a single label, or a
+    country-code second level ("com.au", "edu.uz")."""
+    if host in SHARED_SUFFIXES:
+        return True
+    labels = host.split(".")
+    if len(labels) < 2:
+        return True
+    return len(labels) == 2 and len(labels[1]) == 2 and labels[0] in COUNTRY_SECOND_LEVELS
 
 
 def normalize_website(v: str) -> str:
-    """Host name of one allowed website ("https://docs.python.org/3/" -> "docs.python.org").
-    A scheme, a trailing slash, "www." stays as typed; anything with a real path, a port,
-    a wildcard, an IP-less single label or odd characters is refused (ValueError)."""
+    """One allowed website ("https://docs.python.org/3/" is refused, "HTTPS://Docs.Python.org/"
+    -> "docs.python.org", "*.Python.org" -> "*.python.org"). A scheme, a trailing slash,
+    "www." stays as typed; a real path, a port, a "*" anywhere but one leading "*.", a
+    wildcard on a shared suffix, an IP, a single label or odd characters is refused
+    (ValueError)."""
     raw = v.strip()
     s = raw
     if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", s):
@@ -67,12 +103,17 @@ def normalize_website(v: str) -> str:
     if rest.strip("/") or "?" in host or "#" in host:
         raise ValueError(f"'{raw}': use only the site name, like docs.python.org")
     host = host.lower().rstrip(".")
-    if ":" in host or "@" in host or host.startswith("*"):
-        raise ValueError(f"'{raw}': use only the site name, like docs.python.org")
+    wildcard = host.startswith(WILDCARD_PREFIX)
+    if wildcard:
+        host = host[len(WILDCARD_PREFIX):]
+    if ":" in host or "@" in host or "*" in host:
+        raise ValueError(f"'{raw}': use only the site name, like docs.python.org or *.python.org")
     if (not host or len(host) > 253 or not DOMAIN_RE.match(host) or "." not in host
             or re.fullmatch(r"[0-9.]+", host)):
         raise ValueError(f"'{raw}' is not a website name like docs.python.org")
-    return host
+    if wildcard and is_shared_suffix(host):
+        raise ValueError(f"'{raw}': anyone can make a site under {host}; name the site itself")
+    return (WILDCARD_PREFIX if wildcard else "") + host
 
 
 def normalize_websites(v: list[str] | None) -> list[str]:

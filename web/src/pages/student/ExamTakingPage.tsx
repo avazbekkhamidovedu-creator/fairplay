@@ -4,9 +4,9 @@ import { ApiError, NetworkError, currentStudentId, getToken, slice6Api, studentA
 import type { AllowedApp, AnswerMap, AnswerValue, AttemptView, IntegrityEvent } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { AnswerInput, RubricPanel } from "../../components/student/AnswerInput";
-import { CodeQuestion } from "../../components/student/CodeQuestion";
+import { CodeQuestion, forgetCodeResults } from "../../components/student/CodeQuestion";
 import { preloadCodeEditor } from "../../components/code/LazyCodeEditor";
-import { prefetchRunner } from "../../lib/code/runners";
+import { prefetchRunner, resetSharedRunners } from "../../lib/code/runners";
 import { canRunInBrowser, resolveLanguage } from "../../lib/code/languages";
 import { LockedBar } from "../../components/student/LockedBar";
 import { ReviewPanel } from "../../components/student/ReviewPanel";
@@ -14,6 +14,7 @@ import { StuLoading } from "../../components/student/StudentLayout";
 import { ArrowLeftIcon, ArrowRightIcon, BookmarkIcon, ChevronIcon, CloseIcon, CrossOutIcon, PinIcon } from "../../components/student/icons";
 import {
   type Crossed,
+  clearExamPrefs,
   nextTextSize,
   readCrossMode,
   readCrossed,
@@ -269,6 +270,12 @@ function ExamTakingInner() {
       }
       clearAttemptSession(doneAid);
       forgetAttemptMaterials(doneAid);
+      // 2026-10-23: forget this attempt's cross-outs / hidden timer and run results, and stop
+      // the Python worker (the student's last program is still loaded in it)
+      clearExamPrefs(attemptId);
+      if (doneAid !== attemptId) clearExamPrefs(doneAid);
+      forgetCodeResults(attemptId);
+      resetSharedRunners();
       // Sample exam: while the app is still locked the done page keeps the key, so a hand-in the
       // app cannot confirm still has a way out there (it clears the key once unlocked).
       if (trialRef.current && !bridge.isLocked()) writeTrialKey(doneAid, null);
@@ -786,13 +793,20 @@ function ExamTakingInner() {
     calcButtonRef.current?.focus();
   };
   const [pane, setPane] = useState<null | "materials" | "websites">(null);
+  // 2026-10-23: a side panel opens from More; closing it puts the focus back there
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const closePane = () => {
+    setPane(null);
+    moreButtonRef.current?.focus();
+  };
   const [paneWidth, setPaneWidth] = useState(() =>
     clampPaneWidth(readPaneWidth(), typeof window === "undefined" ? 1280 : window.innerWidth),
   );
   const [materialCount, setMaterialCount] = useState<number | null>(null);
   const materialsAid = connected ? realAidRef.current : null;
   useEffect(() => {
-    // fetched once when the exam opens (kept in memory for a Wi-Fi drop later)
+    // the file list only, for the count in More (2026-10-23 review: a file's bytes are
+    // fetched when the student opens it, never all at once when the exam opens)
     if (!tools?.open_book || !materialsAid || phase === "loading") return;
     let alive = true;
     loadAttemptMaterials(materialsAid).then(
@@ -872,7 +886,8 @@ function ExamTakingInner() {
   const typeLabel = q?.type === "essay" ? " · Essay" : q?.type === "code" ? " · Coding" : "";
 
   const isLast = current === questions.length - 1;
-  const toolsShown = showExam || showReview;
+  // 2026-10-23: no calculator or side panel while handing in or once the time is up
+  const toolsShown = (phase === "exam" || phase === "review") && !waitPanel && !stopPanel && remaining > 0;
   const paneShown = toolsShown && !!pane && (pane === "materials" ? !!tools?.open_book : (tools?.websites?.length ?? 0) > 0);
 
   return (
@@ -900,6 +915,7 @@ function ExamTakingInner() {
             : undefined
         }
         directions={attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length)}
+        moreButtonRef={moreButtonRef}
         trial={
           attempt.trial
             ? {
@@ -1031,6 +1047,7 @@ function ExamTakingInner() {
               {q.type === "code" ? (
                 <CodeQuestion
                   key={q.id}
+                  attemptId={attemptId}
                   question={q}
                   value={answers[q.id]}
                   onChange={(v) => setAnswer(q.id, v)}
@@ -1226,14 +1243,14 @@ function ExamTakingInner() {
 
       {phase === "trialEnded" && trialEndedPanel}
 
-      {calcMode && calcMounted && toolsShown && <Calculator mode={calcMode} open={calcOpen} onClose={closeCalc} />}
+      {calcMode && calcMounted && toolsShown && <Calculator mode={calcMode} open={calcOpen} onClose={closeCalc} paneWidth={paneShown ? paneWidth : 0} />}
       {paneShown && pane === "materials" && (
-        <ToolPane title="Materials" icon={<BookIcon />} labelId="pane-materials-h" width={paneWidth} onWidth={setPaneWidth} onClose={() => setPane(null)}>
+        <ToolPane title="Materials" icon={<BookIcon />} labelId="pane-materials-h" width={paneWidth} onWidth={setPaneWidth} onClose={closePane}>
           <MaterialsPaneContent attemptId={materialsAid} />
         </ToolPane>
       )}
       {paneShown && pane === "websites" && tools && (
-        <ToolPane title="Websites" icon={<GlobeIcon />} labelId="pane-websites-h" width={paneWidth} onWidth={setPaneWidth} onClose={() => setPane(null)}>
+        <ToolPane title="Websites" icon={<GlobeIcon />} labelId="pane-websites-h" width={paneWidth} onWidth={setPaneWidth} onClose={closePane}>
           <WebsitesPaneContent sites={tools.websites} />
         </ToolPane>
       )}

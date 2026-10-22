@@ -75,6 +75,12 @@ export const writeCrossMode = (aid: string, on: boolean) => write(crossModeKey(a
 export const readTimerHidden = (aid: string) => read(timerKey(aid)) === "1";
 export const writeTimerHidden = (aid: string, hidden: boolean) => write(timerKey(aid), hidden ? "1" : null);
 
+/** 2026-10-23: the attempt is over: forget its cross-outs, cross-out switch and hidden timer
+ *  (the text size is for every exam and stays). */
+export function clearExamPrefs(aid: string): void {
+  for (const key of [crossKey(aid), crossModeKey(aid), timerKey(aid)]) write(key, null);
+}
+
 export function readTextSize(): TextSize {
   const n = Number(read(TEXT_SIZE_KEY));
   return (TEXT_SIZES as readonly number[]).includes(n) ? (n as TextSize) : 1;

@@ -44,6 +44,7 @@ export function LockedBar({
   calculator,
   materials,
   websites,
+  moreButtonRef,
 }: {
   title: string;
   course?: string;
@@ -66,6 +67,8 @@ export function LockedBar({
   /** open-book exams: count = the student's files (null = not known yet) */
   materials?: { count: number | null; onOpen: () => void };
   websites?: { count: number; onOpen: () => void };
+  /** 2026-10-23: the More button, so focus can come back to it when a side panel closes. */
+  moreButtonRef?: Ref<HTMLButtonElement>;
 }) {
   const lowTime = remaining < TIMER_FORCE_SHOW_MS;
   const showTime = !timerHidden || lowTime;
@@ -197,6 +200,7 @@ export function LockedBar({
         )}
         {!trial && (
           <button
+            ref={moreButtonRef}
             type="button"
             className={`stu-tool${open === "more" || open === "help" ? " on" : ""}`}
             aria-haspopup="menu"

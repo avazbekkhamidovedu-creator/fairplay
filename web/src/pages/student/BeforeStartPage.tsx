@@ -24,6 +24,9 @@ type Step = "rules" | "checking" | "preflight" | "closeApps" | "locking" | "lock
  * computer locks fully and asks for the 6-digit start code. Nothing of the exam is on this
  * computer yet, so "Not ready? Leave and unlock" is allowed until the code is right.
  * The exam page then turns the pre-exam lock into the exam lock without unlocking.
+ * 2026-10-23 review: a page opened (or reloaded) while the pre-exam lock is on goes straight
+ * to the code; leaving always asks the app to unlock when the computer is locked, even when
+ * the lock answer came too late (the iPad answers only once Assessment Mode is on).
  */
 export default function BeforeStartPage() {
   const { examId = "" } = useParams();
@@ -31,13 +34,13 @@ export default function BeforeStartPage() {
   const [exam, setExam] = useState<StudentExamSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  const [step, setStep] = useState<Step>("rules");
+  const [step, setStep] = useState<Step>(() => (bridge.getNativeState()?.prelock && bridge.isLocked() ? "code" : "rules"));
   const [problems, setProblems] = useState<string[]>([]);
   const [apps, setApps] = useState<string[]>([]);
   const [closing, setClosing] = useState(false);
   const [lockReason, setLockReason] = useState("");
   const [leaveError, setLeaveError] = useState<string | null>(null);
-  const [prelocked, setPrelocked] = useState(false);
+  const [prelocked, setPrelocked] = useState(() => !!bridge.getNativeState()?.prelock && bridge.isLocked());
   const appsConfirmed = useRef(false);
   const battery = useBattery();
 
@@ -60,6 +63,21 @@ export default function BeforeStartPage() {
       alive = false;
     };
   }, [examId]);
+
+  // The app's lock state while this page is open: a late "locked" (prelock) after the 4 s
+  // "unsupported" guess, or a "state" that says the pre-exam lock is on.
+  useEffect(
+    () =>
+      bridge.onNative((msg) => {
+        if (msg.type === "locked" && msg.prelock) setPrelocked(true);
+        else if (msg.type === "state") {
+          const on = !!msg.prelock && !!msg.locked;
+          setPrelocked(on);
+          if (on) setStep((s) => (s === "rules" ? "code" : s));
+        } else if (msg.type === "unlocked") setPrelocked(false);
+      }),
+    [],
+  );
 
   const lockAndContinue = useCallback(async () => {
     setStep("checking");
@@ -93,7 +111,7 @@ export default function BeforeStartPage() {
   const leave = useCallback(async () => {
     setLeaveError(null);
     setStep("leaving");
-    const ok = prelocked ? await bridge.preUnlock() : true;
+    const ok = prelocked || bridge.isLocked() ? await bridge.preUnlock() : true;
     if (ok) {
       navigate("/student", { replace: true });
     } else {
@@ -101,6 +119,12 @@ export default function BeforeStartPage() {
       setStep("code");
     }
   }, [navigate, prelocked]);
+
+  /** Back from the rules / lock-failed screens: unlock first if the computer is locked. */
+  const back = useCallback(() => {
+    if (bridge.isLocked()) void leave();
+    else navigate("/student");
+  }, [leave, navigate]);
 
   if (exam?.attempt?.status === "in_progress")
     return <Navigate to={`/student/exam/${encodeURIComponent(exam.attempt.attempt_id)}`} replace />;
@@ -194,7 +218,7 @@ export default function BeforeStartPage() {
               >
                 Lock and continue
               </button>
-              <button type="button" className="stu-btn lg" onClick={() => navigate("/student")}>
+              <button type="button" className="stu-btn lg" onClick={back}>
                 Back
               </button>
             </div>
@@ -240,7 +264,7 @@ export default function BeforeStartPage() {
               <button type="button" className="stu-btn primary lg" onClick={() => void lockAndContinue()}>
                 Try again
               </button>
-              <button type="button" className="stu-btn lg" onClick={() => navigate("/student")}>
+              <button type="button" className="stu-btn lg" onClick={back}>
                 Back
               </button>
             </div>

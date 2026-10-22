@@ -54,7 +54,7 @@ def test_websites_normalised(client, teacher, given, want):
     assert create(client, teacher, websites=given)["websites"] == want
 
 
-@pytest.mark.parametrize("bad", ["docs.python.org/3/library", "*.python.org", "localhost", "ftp://x.org",
+@pytest.mark.parametrize("bad", ["docs.python.org/3/library", "*.com", "localhost", "ftp://x.org",
                                  "10.0.0.1", "python.org:8080", "a b.com", "user@host.com"])
 def test_websites_refused(client, teacher, bad):
     r = client.post("/api/exams", json={**SAMPLE_EXAM, "websites": [bad]}, headers=teacher)
@@ -146,7 +146,7 @@ def test_materials_upload_list_delete(client, alice, book_exam):
     eid = book_exam["id"]
     info = client.get(f"/api/student/exams/{eid}/materials", headers=alice).json()
     assert info["open_book"] is True and info["can_change"] is True and info["files"] == []
-    assert info["max_files"] == 5 and info["max_bytes"] == 50 * 1024 * 1024
+    assert info["max_files"] == 5 and info["max_bytes"] == 20 * 1024 * 1024
     r = upload(client, alice, eid, "notes/../Chapter 1.pdf", PDF)
     assert r.status_code == 201, r.text
     f = r.json()
@@ -188,7 +188,7 @@ def test_materials_limits(client, alice, book_exam, monkeypatch):
     monkeypatch.setattr(materials, "MAX_BYTES", 100)
     assert upload(client, alice, eid, "a.txt", b"x" * 60).status_code == 201
     r = upload(client, alice, eid, "b.txt", b"x" * 60)
-    assert r.status_code == 413 and "50 MB" in r.json()["detail"]
+    assert r.status_code == 413 and "20 MB" in r.json()["detail"]
     assert upload(client, alice, eid, "c.txt", b"x" * 101).status_code == 413
 
 
@@ -220,7 +220,9 @@ def test_materials_during_the_attempt(client, teacher, alice, book_exam):
     assert r.headers["content-disposition"].startswith("inline;")
     assert r.headers["x-content-type-options"] == "nosniff"
     assert "sandbox" in r.headers["content-security-policy"]
-    assert "no-store" in r.headers["cache-control"]
+    # 2026-10-23 (review): the attempt's browser may keep it; never a shared cache
+    assert r.headers["cache-control"] == "private, max-age=3600"
+    assert r.headers["content-length"] == str(len(PDF))
     r = client.get(f"/api/student/attempts/{aid}/materials/{txt['id']}", headers=alice)
     assert r.headers["content-type"].startswith("text/plain")          # never text/html
     # another student can't read them
@@ -268,7 +270,7 @@ def test_csp_allows_the_websites_pane_and_pdf_worker(client):
 
 def test_material_upload_size_limit():
     from app.http_guard import DEFAULT_LIMIT, MB, limit_for
-    assert limit_for("/api/student/exams/e_1/materials") == 51 * MB
+    assert limit_for("/api/student/exams/e_1/materials") == 21 * MB
     assert limit_for("/api/student/exams/e_1/materials/m_1") == DEFAULT_LIMIT
 
 
