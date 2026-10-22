@@ -76,10 +76,7 @@ export function TimeUpOffline({ message, onRetry, onSeal }: Props) {
 /** The existing offline exit: the app shows this computer's code, the teacher's live room
  *  turns it into the exit code (CONTRACT.md "Offline exit"). The page never sees the code. */
 function OfflineExitSteps({ platform }: { platform: "mac" | "windows" | "ipad" | null }) {
-  const keys =
-    platform === "windows" ? "the invigilator shortcut"
-    : platform === "ipad" ? "a 3-second press on the lock bar at the top"
-    : "Ctrl-Opt-Cmd-E";
+  const keys = bridge.exitShortcut(platform);
   const code = platform === "windows" ? "PC code" : platform === "ipad" ? "iPad code" : "Mac code";
   return (
     <ol style={{ margin: 0, paddingLeft: 20, lineHeight: 1.7 }} data-testid="offline-exit-steps">

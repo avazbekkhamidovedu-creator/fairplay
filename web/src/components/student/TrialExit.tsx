@@ -19,12 +19,7 @@ export function TrialExit({
   const [code, setCode] = useState("");
   const inputId = useId();
   const platform = bridge.nativePlatform();
-  const keys =
-    platform === "windows"
-      ? "the invigilator shortcut"
-      : platform === "ipad"
-        ? "a 3-second press on the lock bar at the top"
-        : "Ctrl-Opt-Cmd-E";
+  const keys = bridge.exitShortcut(platform);
   const name = platform === "windows" ? "PC code" : platform === "ipad" ? "iPad code" : "Mac code";
   const exit = keyHex ? offlineExitCode(keyHex, code) : null;
   const typed = code.replace(/[^A-Za-z0-9]/g, "").length >= 8;

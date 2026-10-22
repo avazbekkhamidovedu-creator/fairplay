@@ -10,6 +10,7 @@ import { StuLoading } from "../../components/student/StudentLayout";
 import { ArrowLeftIcon, ArrowRightIcon, ChevronIcon, CloseIcon, FlagIcon, GridIcon } from "../../components/student/icons";
 import { AnswerQueue, type SyncStatus } from "../../lib/answerQueue";
 import * as bridge from "../../lib/bridge";
+import { readTrialKey, writeTrialKey } from "../../lib/trialKey";
 import { clearAttemptSession, getAttemptSession } from "../../lib/appSession";
 import { clockOffset, remainingMs } from "../../lib/timer";
 import {
@@ -79,23 +80,6 @@ export interface DoneState {
   trial?: "stopped" | "finished";
 }
 
-/** Sample exam: its offline exit key, kept for this tab only (lib/offlineExit.ts). */
-const trialKeyStorage = (aid: string) => `fairplay:trialkey:${aid}`;
-function readTrialKey(aid: string): string | null {
-  try {
-    return sessionStorage.getItem(trialKeyStorage(aid));
-  } catch {
-    return null;
-  }
-}
-function writeTrialKey(aid: string, key: string | null): void {
-  try {
-    if (key) sessionStorage.setItem(trialKeyStorage(aid), key);
-    else sessionStorage.removeItem(trialKeyStorage(aid));
-  } catch {
-    /* storage unavailable: kept in memory */
-  }
-}
 
 /** Remount per attempt id so no state leaks between attempts. */
 export default function ExamTakingPage() {
@@ -236,7 +220,9 @@ function ExamTakingInner() {
         clearAttemptView(doneAid);
       }
       clearAttemptSession(doneAid);
-      if (trialRef.current) writeTrialKey(doneAid, null);
+      // Sample exam: while the app is still locked the done page keeps the key, so a hand-in the
+      // app cannot confirm still has a way out there (it clears the key once unlocked).
+      if (trialRef.current && !bridge.isLocked()) writeTrialKey(doneAid, null);
       // The app unlocks only after the server confirms the hand-in (audit #11).
       bridge.unlock();
       // The done page is allowed while locked; for the sample exam it waits for the unlock

@@ -329,6 +329,13 @@ export function openSettings(pane: SettingsPane): boolean {
   return true;
 }
 
+/** The invigilator exit gesture of the host app, as the student should read it. */
+export function exitShortcut(platform: "mac" | "windows" | "ipad" | null = nativePlatform()): string {
+  if (platform === "windows") return "Ctrl+Alt+E";
+  if (platform === "ipad") return "a 3-second press on the lock bar at the top";
+  return "Ctrl-Opt-Cmd-E";
+}
+
 export function unlock(): void {
   post({ action: "unlock" });
 }

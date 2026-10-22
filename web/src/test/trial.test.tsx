@@ -271,6 +271,57 @@ describe("Stop practice", () => {
   });
 });
 
+describe("done page while the app cannot confirm the hand-in (2026-10-22)", () => {
+  it("shows the way out (offline code) and keeps the sample key until the app unlocks", async () => {
+    const posted = nativeHost();
+    api.getAttempt.mockResolvedValue(view());
+    const key = hex(Uint8Array.from({ length: 32 }, (_, i) => i));
+    api.trialKey.mockResolvedValue({ key });
+    api.trialStop.mockResolvedValue({ status: "submitted", submitted_at: "t" });
+    online();
+    at("/student/exam/a_t");
+    await screen.findByText("Which is prime?");
+    await waitFor(() => expect(api.trialKey).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("Sample questions stopped")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull(); // nowhere to go while locked
+    act(() => send({ type: "unlockPending", reason: "offline" }));
+    expect(await screen.findByTestId("trial-exit")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/Type that Mac code here/), { target: { value: "K7QM-3XPA" } });
+    expect(screen.getByTestId("trial-exit-code").textContent).toBe("0671 0479");
+    const before = posted.filter((m) => m.action === "unlock").length;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(posted.filter((m) => m.action === "unlock").length).toBe(before + 1);
+    act(() => send({ type: "unlocked" }));
+    expect(await screen.findByText("home stopped")).toBeTruthy();
+    expect(sessionStorage.getItem("fairplay:trialkey:a_t")).toBeNull();
+  });
+
+  it("not confirmed yet: says how the invigilator ends it", async () => {
+    nativeHost();
+    api.getAttempt.mockResolvedValue(view());
+    api.trialKey.mockResolvedValue({ key: "00".repeat(32) });
+    api.trialStop.mockResolvedValue({ status: "submitted", submitted_at: "t" });
+    online();
+    at("/student/exam/a_t");
+    await screen.findByText("Which is prime?");
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("Sample questions stopped")).toBeTruthy();
+    act(() => send({ type: "unlockPending", reason: "not_submitted" }));
+    expect((await screen.findByTestId("still-locked")).textContent).toContain("Ctrl-Opt-Cmd-E");
+  });
+
+  it("names the Windows shortcut", () => {
+    (window as unknown as { chrome: unknown }).chrome = { webview: { postMessage: vi.fn(), addEventListener: vi.fn() } };
+    try {
+      expect(bridge.exitShortcut()).toBe("Ctrl+Alt+E");
+      expect(bridge.exitShortcut("mac")).toBe("Ctrl-Opt-Cmd-E");
+    } finally {
+      delete (window as unknown as { chrome?: unknown }).chrome;
+    }
+  });
+});
+
 describe("device problems during the sample questions", () => {
   it("explains the check instead of 'exam time is running'", () => {
     const { rerender } = render(<PreflightProblems problems={["Turn off Remote Login (SSH)."]} onRetry={() => undefined} trial />);
