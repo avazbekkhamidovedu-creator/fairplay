@@ -154,7 +154,9 @@ describe("lock bar in the sample questions", () => {
     const { rerender } = render(<LockedBar title="Sample questions" locked native sync="synced" remaining={600_000} trial={{ onStop: stop }} />);
     expect(screen.queryByRole("timer")).toBeNull();
     const header = screen.getByRole("banner");
-    expect(header.lastElementChild?.previousElementSibling?.textContent).toBe("Stop");
+    // Stop is the last control in the right-hand group of the bar
+    const right = header.querySelector(".stu-lb-right");
+    expect(right?.lastElementChild?.previousElementSibling?.textContent).toBe("Stop");
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(stop).toHaveBeenCalledTimes(1);
     rerender(<LockedBar title="Sample questions" locked native sync="synced" remaining={600_000} trial={{ onStop: stop, disabled: true }} />);

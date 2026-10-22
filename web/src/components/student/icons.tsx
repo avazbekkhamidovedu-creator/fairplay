@@ -163,3 +163,62 @@ export function WarnTriangleIcon({ size = 16 }: { size?: number }) {
     </svg>
   );
 }
+
+/** 2026-10-23 exam screen: bookmark ("Mark for review"), vertical dots ("More"), text size, help,
+ *  battery and the cross-out "ABC" mark. */
+export function BookmarkIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 3h12v18l-6-4-6 4z" />
+    </svg>
+  );
+}
+
+export function MoreVerticalIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.9" />
+      <circle cx="12" cy="12" r="1.9" />
+      <circle cx="12" cy="19" r="1.9" />
+    </svg>
+  );
+}
+
+export function TextSizeIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 19 8.5 5 14 19M5.2 14h6.6M15 19l3-7.5 3 7.5M16 16.5h4" />
+    </svg>
+  );
+}
+
+export function HelpIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.7.4-1.1.9-1.1 1.7V14M12 17h.01" />
+    </svg>
+  );
+}
+
+export function BatteryIcon({ level, charging }: { level: number; charging: boolean }) {
+  const w = Math.max(1.5, Math.round(14 * Math.min(1, Math.max(0, level)) * 10) / 10);
+  return (
+    <svg width="24" height="14" viewBox="0 0 24 14" fill="none" aria-hidden="true">
+      <rect x="1" y="1.5" width="19" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="21.2" y="5" width="1.8" height="4" rx="0.9" fill="currentColor" />
+      <rect x="3" y="3.5" width={w} height="7" rx="1.2" fill="currentColor" />
+      {charging && <path d="M11.5 3 8.5 7.5h3l-1 3.5 3-4.5h-3z" fill="#fff" stroke="currentColor" strokeWidth="0.6" strokeLinejoin="round" />}
+    </svg>
+  );
+}
+
+/** "ABC" with a slash: the cross-out tool. */
+export function CrossOutIcon({ size = 30 }: { size?: number }) {
+  return (
+    <svg width={size} height={Math.round(size * 0.7)} viewBox="0 0 30 21" fill="none" aria-hidden="true">
+      <text x="15" y="15" textAnchor="middle" fontSize="11" fontWeight="700" fontFamily="inherit" fill="currentColor">ABC</text>
+      <path d="M5 17 25 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}

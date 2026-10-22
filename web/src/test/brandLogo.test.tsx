@@ -39,7 +39,8 @@ describe("FairPlay logo", () => {
   it("is in the exam bar, named for screen readers", () => {
     render(<LockedBar title="Midterm" locked native sync="synced" remaining={60_000} />);
     const bar = screen.getByRole("banner");
-    expect(bar.firstElementChild?.classList.contains("fp-mark")).toBe(true);
+    // the logo opens the left group of the bar
+    expect(bar.firstElementChild?.firstElementChild?.classList.contains("fp-mark")).toBe(true);
     expect(screen.getByRole("img", { name: "FairPlay" })).toBeTruthy();
   });
 });

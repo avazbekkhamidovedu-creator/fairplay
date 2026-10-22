@@ -7,7 +7,21 @@ import { AnswerInput, RubricPanel } from "../../components/student/AnswerInput";
 import { LockedBar } from "../../components/student/LockedBar";
 import { ReviewPanel } from "../../components/student/ReviewPanel";
 import { StuLoading } from "../../components/student/StudentLayout";
-import { ArrowLeftIcon, ArrowRightIcon, ChevronIcon, CloseIcon, FlagIcon, GridIcon } from "../../components/student/icons";
+import { ArrowLeftIcon, ArrowRightIcon, BookmarkIcon, ChevronIcon, CloseIcon, CrossOutIcon, PinIcon } from "../../components/student/icons";
+import {
+  type Crossed,
+  nextTextSize,
+  readCrossMode,
+  readCrossed,
+  readTextSize,
+  readTimerHidden,
+  toggleCrossed,
+  writeCrossMode,
+  writeCrossed,
+  writeTextSize,
+  writeTimerHidden,
+} from "../../lib/examPrefs";
+import { useStudentIdentity } from "../../lib/useStudentIdentity";
 import { AnswerQueue, type SyncStatus } from "../../lib/answerQueue";
 import * as bridge from "../../lib/bridge";
 import { readTrialKey, writeTrialKey } from "../../lib/trialKey";
@@ -61,6 +75,18 @@ function writeMarks(aid: string, marks: Set<string>): void {
   }
 }
 
+/** 2026-10-23: the "Directions" list under the exam title. */
+export function examDirections(durationMin: number, count: number): string[] {
+  return [
+    `${count} ${count === 1 ? "question" : "questions"} · ${durationMin} minutes.`,
+    "Answer in any order. Use the question list at the bottom to jump between questions.",
+    "Mark for review flags a question so you can come back to it.",
+    "On multiple choice, the ABC tool lets you cross out answers you think are wrong.",
+    "Your answers save automatically, even if the Wi-Fi drops.",
+    "When you finish, open the review page and submit.",
+  ];
+}
+
 type Phase =
   | "loading" | "locking" | "preflight" | "closeApps" | "lockFailed" | "exam" | "review" | "submitting"
   | "loadError" | "reenter"
@@ -109,6 +135,12 @@ function ExamTakingInner() {
   // S3: back after FairPlay closed; the teacher must approve before questions show again.
   const [waiting, setWaiting] = useState(false);
   const [marked, setMarked] = useState<Set<string>>(() => readMarks(attemptId));
+  // 2026-10-23 exam screen: cross-out, hidden timer and text size (this device only).
+  const [crossed, setCrossed] = useState<Crossed>(() => readCrossed(attemptId));
+  const [crossMode, setCrossMode] = useState(() => readCrossMode(attemptId));
+  const [timerHidden, setTimerHidden] = useState(() => readTimerHidden(attemptId));
+  const [textSize, setTextSize] = useState(readTextSize);
+  const me = useStudentIdentity();
   // 2026-10-22: sample exam ("Stop practice"). trialRef is set as soon as the attempt loads.
   const trialRef = useRef(false);
   const [stopping, setStopping] = useState(false);
@@ -619,6 +651,32 @@ function ExamTakingInner() {
     [attemptId],
   );
 
+  const toggleCross = useCallback(
+    (qid: string, index: number) => {
+      setCrossed((prev) => {
+        const next = toggleCrossed(prev, qid, index);
+        writeCrossed(attemptId, next);
+        return next;
+      });
+    },
+    [attemptId],
+  );
+  const flipCrossMode = () =>
+    setCrossMode((on) => {
+      writeCrossMode(attemptId, !on);
+      return !on;
+    });
+  const hideTimer = (hidden: boolean) => {
+    writeTimerHidden(attemptId, hidden);
+    setTimerHidden(hidden);
+  };
+  const cycleTextSize = () =>
+    setTextSize((t) => {
+      const n = nextTextSize(t);
+      writeTextSize(n);
+      return n;
+    });
+
   // Move focus to the question when the student changes question (not on first show).
   const promptRef = useRef<HTMLHeadingElement>(null);
   const shownRef = useRef(false);
@@ -738,7 +796,7 @@ function ExamTakingInner() {
   const isLast = current === questions.length - 1;
 
   return (
-    <div className="stu stu-exam">
+    <div className="stu stu-exam" style={{ ["--stu-text-scale" as string]: String(textSize) }}>
       <NotLockedBanner />
       <LockedBar
         title={attempt.title}
@@ -747,6 +805,11 @@ function ExamTakingInner() {
         native={bridge.isNative()}
         sync={sync}
         remaining={remaining}
+        timerHidden={timerHidden}
+        onTimerHidden={hideTimer}
+        textSize={textSize}
+        onTextSize={cycleTextSize}
+        directions={attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length)}
         trial={
           attempt.trial
             ? {
@@ -840,12 +903,16 @@ function ExamTakingInner() {
         <>
           <div className="stu-exam-body">
             <main className="stu-paper stu-question" aria-labelledby="question-prompt">
-              <div className="stu-question-meta">
-                <span>
-                  <b>
-                    Question {current + 1} of {questions.length}
-                  </b>
-                  {typeLabel} · {q.points} {q.points === 1 ? "point" : "points"}
+              <div className="stu-qhead">
+                <span className="stu-qnum" aria-hidden="true">
+                  {current + 1}
+                </span>
+                <span className="sr-only">
+                  Question {current + 1} of {questions.length}
+                </span>
+                <span className="stu-qhead-pts">
+                  {q.points} {q.points === 1 ? "point" : "points"}
+                  {typeLabel}
                 </span>
                 <button
                   type="button"
@@ -854,9 +921,21 @@ function ExamTakingInner() {
                   className="stu-mark"
                   onClick={() => toggleMark(q.id)}
                 >
-                  <FlagIcon />
+                  <BookmarkIcon />
                   {isMarked ? "Marked for review" : "Mark for review"}
                 </button>
+                {q.type === "mcq" && (
+                  <button
+                    type="button"
+                    className="stu-crossout-tool"
+                    aria-pressed={crossMode}
+                    aria-label="Cross out answers"
+                    title="Cross out answers"
+                    onClick={flipCrossMode}
+                  >
+                    <CrossOutIcon />
+                  </button>
+                )}
               </div>
 
               <QuestionImages images={q.images} />
@@ -873,21 +952,21 @@ function ExamTakingInner() {
                 value={answers[q.id]}
                 onChange={(v) => setAnswer(q.id, v)}
                 labelledBy="question-prompt"
+                cross={{ on: crossMode, crossed: crossed[q.id] ?? [], onToggle: (i) => toggleCross(q.id, i) }}
               />
             </main>
           </div>
 
           <nav className="stu-bottombar" aria-label="Questions">
             <div className="stu-bottombar-inner">
-              <button
-                type="button"
-                className="stu-btn lg"
-                onClick={() => setCurrent((c) => Math.max(0, c - 1))}
-                disabled={current === 0}
-              >
-                <ArrowLeftIcon />
-                Previous
-              </button>
+              <span className="stu-who" data-testid="student-identity">
+                {me && (
+                  <>
+                    <b>{me.name}</b>
+                    <span className="netid">{me.netId}</span>
+                  </>
+                )}
+              </span>
 
               <button
                 ref={navToggleRef}
@@ -895,23 +974,34 @@ function ExamTakingInner() {
                 className="stu-qtoggle"
                 aria-expanded={navOpen}
                 aria-controls="question-navigator"
+                aria-label={`Question ${current + 1} of ${questions.length}`}
                 onClick={() => setNavOpen((o) => !o)}
               >
-                <GridIcon />
-                Question {current + 1} of {questions.length}
+                Question {current + 1}
                 <ChevronIcon className="chev" />
               </button>
 
-              {isLast ? (
-                <button type="button" className="stu-btn primary lg" onClick={() => setPhase("review")}>
-                  Review and submit
+              <div className="stu-bottombar-nav">
+                <button
+                  type="button"
+                  className="stu-btn lg"
+                  onClick={() => setCurrent((c) => Math.max(0, c - 1))}
+                  disabled={current === 0}
+                >
+                  <ArrowLeftIcon />
+                  Back
                 </button>
-              ) : (
-                <button type="button" className="stu-btn primary lg" onClick={() => setCurrent((c) => c + 1)}>
-                  Next
-                  <ArrowRightIcon />
-                </button>
-              )}
+                {isLast ? (
+                  <button type="button" className="stu-btn primary lg" onClick={() => setPhase("review")}>
+                    Review and submit
+                  </button>
+                ) : (
+                  <button type="button" className="stu-btn primary lg" onClick={() => setCurrent((c) => c + 1)}>
+                    Next
+                    <ArrowRightIcon />
+                  </button>
+                )}
+              </div>
 
               {navOpen && (
                 <div
@@ -922,10 +1012,28 @@ function ExamTakingInner() {
                   aria-labelledby="nav-h"
                 >
                   <div className="stu-navigator-head">
-                    <h2 id="nav-h">All questions</h2>
+                    <h2 id="nav-h">{attempt.title}: questions</h2>
                     <button type="button" className="stu-icon-btn" aria-label="Close" onClick={() => closeNav(true)}>
                       <CloseIcon />
                     </button>
+                  </div>
+                  <div className="stu-legend">
+                    <span>
+                      <PinIcon size={14} />
+                      Current
+                    </span>
+                    <span>
+                      <span className="stu-swatch" aria-hidden="true" />
+                      Not yet {unanswered.length}
+                    </span>
+                    <span>
+                      <span className="stu-swatch answered" aria-hidden="true" />
+                      Answered {answeredCount}
+                    </span>
+                    <span>
+                      <span className="stu-swatch marked" aria-hidden="true" />
+                      Marked {markedCount}
+                    </span>
                   </div>
                   <div className="stu-qgrid">
                     {questions.map((qq, i) => {
@@ -947,27 +1055,18 @@ function ExamTakingInner() {
                             closeNav(false);
                           }}
                         >
+                          {isCurrent && (
+                            <span className="stu-qcell-pin" aria-hidden="true">
+                              <PinIcon size={14} />
+                            </span>
+                          )}
                           {i + 1}
                         </button>
                       );
                     })}
                   </div>
-                  <div className="stu-legend">
-                    <span>
-                      <span className="stu-swatch answered" aria-hidden="true" />
-                      Answered {answeredCount}
-                    </span>
-                    <span>
-                      <span className="stu-swatch marked" aria-hidden="true" />
-                      Marked {markedCount}
-                    </span>
-                    <span>
-                      <span className="stu-swatch" aria-hidden="true" />
-                      Not yet {unanswered.length}
-                    </span>
-                  </div>
-                  <button type="button" className="stu-btn block" onClick={() => setPhase("review")}>
-                    Review and submit
+                  <button type="button" className="stu-btn stu-goreview" onClick={() => setPhase("review")}>
+                    Go to review page
                   </button>
                   <p className="stu-offline-note">
                     If Wi-Fi drops, keep going. Answers are stored on this computer and sent when you&apos;re back online.

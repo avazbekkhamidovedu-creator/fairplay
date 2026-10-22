@@ -9,59 +9,98 @@ interface Props {
   onChange: (v: AnswerValue | undefined) => void;
   /** id of the element that labels the question (the prompt heading). */
   labelledBy: string;
+  /** 2026-10-23: cross-out for multiple choice (local only, never graded). */
+  cross?: CrossOut;
+}
+
+export interface CrossOut {
+  /** The cross-out tool is switched on: show a cross-out button beside each option. */
+  on: boolean;
+  /** Crossed-out option indexes. */
+  crossed: number[];
+  onToggle: (index: number) => void;
 }
 
 /** The answer control for one question. Remount (key) per question. */
-export function AnswerInput({ question, value, onChange, labelledBy }: Props) {
-  if (question.type === "mcq") return <McqInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} />;
+export function AnswerInput({ question, value, onChange, labelledBy, cross }: Props) {
+  if (question.type === "mcq")
+    return <McqInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} cross={cross} />;
   if (question.type === "numeric") return <NumericInput question={question} value={value} onChange={onChange} />;
   if (question.type === "essay") return <EssayInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} />;
   return <ShortInput question={question} value={value} onChange={onChange} />;
 }
 
-function McqInput({ question, value, onChange, labelledBy }: Props) {
+function McqInput({ question, value, onChange, labelledBy, cross }: Props) {
   const count = question.options.length;
+  const crossed = new Set(cross?.crossed ?? []);
+  const crossOn = !!cross?.on;
   // Roving tabindex: the selected option (or the first) is the tab stop; arrows move + select.
   const focusIndex = typeof value === "number" && value >= 0 && value < count ? value : 0;
+  const choose = (i: number) => {
+    // Choosing a crossed-out option brings it back.
+    if (crossed.has(i)) cross?.onToggle(i);
+    onChange(i);
+  };
   const move = (from: number, delta: number, el: HTMLElement) => {
     const next = (from + delta + count) % count;
-    onChange(next);
+    choose(next);
     const group = el.closest("[role=radiogroup]");
     (group?.querySelectorAll<HTMLElement>("[role=radio]")[next])?.focus();
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div className="stu-options" role="radiogroup" aria-labelledby={labelledBy}>
+      <div className={`stu-options${crossOn ? " cross-on" : ""}`} role="radiogroup" aria-labelledby={labelledBy}>
         {question.options.map((opt, i) => {
           const selected = value === i;
+          const isCrossed = crossed.has(i) && !selected;
           return (
-            <button
-              key={i}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              tabIndex={i === focusIndex ? 0 : -1}
-              className="stu-option"
-              onClick={() => onChange(selected ? undefined : i)}
-              onKeyDown={(e) => {
-                if (e.key === "ArrowDown" || e.key === "ArrowRight") {
-                  e.preventDefault();
-                  move(i, 1, e.currentTarget);
-                } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
-                  e.preventDefault();
-                  move(i, -1, e.currentTarget);
-                }
-              }}
-            >
-              <span className="stu-option-letter" aria-hidden="true">
-                {LETTERS[i]}
-              </span>
-              <span className="stu-option-text">{opt}</span>
-            </button>
+            <div key={i} className={`stu-option-row${isCrossed ? " crossed" : ""}`}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                aria-description={isCrossed ? "crossed out" : undefined}
+                tabIndex={i === focusIndex ? 0 : -1}
+                className="stu-option"
+                onClick={() => (selected ? onChange(undefined) : choose(i))}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+                    e.preventDefault();
+                    move(i, 1, e.currentTarget);
+                  } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+                    e.preventDefault();
+                    move(i, -1, e.currentTarget);
+                  }
+                }}
+              >
+                <span className="stu-option-letter" aria-hidden="true">
+                  {LETTERS[i]}
+                </span>
+                <span className="stu-option-text">{opt}</span>
+              </button>
+              {crossOn && cross && (
+                <button
+                  type="button"
+                  className="stu-cross-btn"
+                  aria-pressed={isCrossed}
+                  aria-label={isCrossed ? `Undo cross out ${LETTERS[i]}` : `Cross out ${LETTERS[i]}`}
+                  onClick={() => {
+                    if (selected && !isCrossed) onChange(undefined);
+                    cross.onToggle(i);
+                  }}
+                >
+                  {isCrossed ? "Undo" : <span className="stu-cross-letter">{LETTERS[i]}</span>}
+                </button>
+              )}
+            </div>
           );
         })}
       </div>
-      <p className="stu-hint">Click an option to choose it. Click it again to clear.</p>
+      <p className="stu-hint">
+        {crossOn
+          ? "Cross out answers you think are wrong. Click Undo to bring one back."
+          : "Click an option to choose it. Click it again to clear."}
+      </p>
     </div>
   );
 }

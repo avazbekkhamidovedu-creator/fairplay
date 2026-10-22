@@ -1,12 +1,26 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { SyncStatus } from "../../lib/answerQueue";
+import { batteryTone, useBattery } from "../../lib/battery";
+import { TIMER_FORCE_SHOW_MS, type TextSize } from "../../lib/examPrefs";
 import { formatCountdown } from "../../lib/timer";
 import { LogoMark } from "../ui/Icon";
-import { ClockIcon, CloudCheckIcon, DiskIcon, LockIcon, UnlockIcon } from "./icons";
+import {
+  BatteryIcon,
+  ChevronIcon,
+  CloudCheckIcon,
+  DiskIcon,
+  HelpIcon,
+  LockIcon,
+  MoreVerticalIcon,
+  TextSizeIcon,
+  UnlockIcon,
+} from "./icons";
 
 /**
- * Slim white top bar shown while taking an exam:
- * lock state · course + title · save status · timer (amber under 5 minutes).
+ * Top bar shown while taking an exam (2026-10-23 layout):
+ *   left   logo · lock state · course + title, "Directions" under it
+ *   middle the timer, which the student may hide (it comes back by itself in the last 5 minutes)
+ *   right  save status · battery (when known) · More (text size, help)
  * "Test my device" sample questions: no timer, and a "Stop" button in the right corner.
  * In a plain browser the yellow "not locked" strip above this bar carries the lock state.
  */
@@ -18,6 +32,11 @@ export function LockedBar({
   sync,
   remaining,
   trial,
+  timerHidden = false,
+  onTimerHidden,
+  directions,
+  textSize = 1,
+  onTextSize,
 }: {
   title: string;
   course?: string;
@@ -28,58 +47,182 @@ export function LockedBar({
   remaining: number;
   /** 2026-10-22: "Test my device" sample questions: no timer, "Stop" in the corner. */
   trial?: { onStop: () => void; stopping?: boolean; disabled?: boolean };
+  /** The student hid the timer (ignored in the last 5 minutes). */
+  timerHidden?: boolean;
+  onTimerHidden?: (hidden: boolean) => void;
+  /** Lines shown under "Directions"; omitted -> no Directions button. */
+  directions?: string[];
+  textSize?: TextSize;
+  onTextSize?: () => void;
 }) {
-  const lowTime = remaining < 5 * 60 * 1000;
+  const lowTime = remaining < TIMER_FORCE_SHOW_MS;
+  const showTime = !timerHidden || lowTime;
   const synced = sync === "synced";
   const announce = useAnnouncements(sync, trial ? Number.POSITIVE_INFINITY : remaining);
+  const battery = useBattery();
+  const [open, setOpen] = useState<null | "directions" | "more" | "help">(null);
+  const barRef = useRef<HTMLElement>(null);
+  const close = useCallback(() => setOpen(null), []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    const onDown = (e: PointerEvent) => {
+      if (barRef.current && !barRef.current.contains(e.target as Node)) close();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown);
+    };
+  }, [open, close]);
+
+  const tone = battery ? batteryTone(battery) : "ok";
+  const pct = battery ? Math.round(battery.level * 100) : 0;
+
   return (
-    <header className="stu-lockbar">
-      <LogoMark size={28} title="FairPlay" />
-      {locked ? (
-        <span className="stu-lock-badge">
-          <LockIcon />
-          Locked
+    <header className="stu-lockbar" ref={barRef}>
+      <div className="stu-lb-left">
+        <LogoMark size={28} title="FairPlay" />
+        {locked ? (
+          <span className="stu-lock-badge">
+            <LockIcon />
+            Locked
+          </span>
+        ) : native ? (
+          <span className="stu-lock-badge off">
+            <UnlockIcon />
+            Not locked
+          </span>
+        ) : null}
+        <div className="stu-lockbar-title">
+          <span className="t">
+            {course && <small>{course} · </small>}
+            {title}
+          </span>
+          {directions && directions.length > 0 && (
+            <button
+              type="button"
+              className="stu-directions-btn"
+              aria-expanded={open === "directions"}
+              aria-controls="exam-directions"
+              onClick={() => setOpen((o) => (o === "directions" ? null : "directions"))}
+            >
+              Directions
+              <ChevronIcon size={14} className="chev" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="stu-lb-center">
+        {!trial && (
+          <>
+            <span
+              className={`stu-timer${lowTime ? " low" : ""}${showTime ? "" : " hidden"}`}
+              role="timer"
+              aria-label={showTime ? "Time left" : "Timer hidden"}
+            >
+              {showTime ? (Number.isFinite(remaining) ? formatCountdown(remaining) : "--:--") : ""}
+            </span>
+            {onTimerHidden && !lowTime && (
+              <button
+                type="button"
+                className="stu-timer-toggle"
+                aria-pressed={timerHidden}
+                onClick={() => onTimerHidden(!timerHidden)}
+              >
+                {timerHidden ? "Show" : "Hide"}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="stu-lb-right">
+        {/* Audit W-14: the chip flips on every keystroke, so it is not a live region; the
+            screen-reader line below speaks only lasting changes and the time cues. */}
+        <span className="sr-only" role="status" aria-live="polite">
+          {announce}
         </span>
-      ) : native ? (
-        <span className="stu-lock-badge off">
-          <UnlockIcon />
-          Not locked
+        <span className={`stu-sync ${synced ? "synced" : "pending"}`}>
+          {synced ? <CloudCheckIcon /> : <DiskIcon />}
+          <span className="stu-sync-text">{synced ? "All answers saved" : "Saved on this computer"}</span>
         </span>
-      ) : null}
-      <span className="stu-lockbar-title">
-        {course && <small>{course}</small>}
-        <span className="t">{title}</span>
-      </span>
-      {/* Audit W-14: the chip flips on every keystroke, so it is not a live region; the
-          screen-reader line below speaks only lasting changes and the time cues. */}
-      <span className="sr-only" role="status" aria-live="polite">
-        {announce}
-      </span>
-      <span className={`stu-sync ${synced ? "synced" : "pending"}`}>
-        {synced ? <CloudCheckIcon /> : <DiskIcon />}
-        {synced ? "All answers saved" : "Saved on this computer"}
-      </span>
-      {!trial && (
-        <span className={`stu-timer${lowTime ? " low" : ""}`} role="timer" aria-label="Time left">
-          <ClockIcon />
-          {Number.isFinite(remaining) ? formatCountdown(remaining) : "--:--"}
-        </span>
+        {battery && (
+          <span
+            className={`stu-battery ${tone}`}
+            title={battery.charging ? "Charging" : "Battery"}
+            aria-label={`Battery ${pct}%${battery.charging ? ", charging" : ""}${tone !== "ok" ? ", plug in your charger" : ""}`}
+          >
+            <BatteryIcon level={battery.level} charging={battery.charging} />
+            <span aria-hidden="true">
+              {pct}%{tone !== "ok" ? " · Plug in" : ""}
+            </span>
+          </span>
+        )}
+        {!trial && (
+          <button
+            type="button"
+            className={`stu-tool${open === "more" || open === "help" ? " on" : ""}`}
+            aria-haspopup="menu"
+            aria-expanded={open === "more"}
+            aria-controls="exam-more-menu"
+            onClick={() => setOpen((o) => (o === "more" || o === "help" ? null : "more"))}
+          >
+            <MoreVerticalIcon />
+            <span>More</span>
+          </button>
+        )}
+        {trial && (
+          <button
+            type="button"
+            className="stu-btn sm stu-trial-stop"
+            onClick={trial.onStop}
+            disabled={trial.disabled || trial.stopping}
+            aria-describedby="trial-stop-hint"
+          >
+            {trial.stopping ? "Stopping…" : "Stop"}
+          </button>
+        )}
+        {trial && (
+          <span id="trial-stop-hint" className="sr-only">
+            Ends the sample questions now and unlocks this computer. Nothing is graded.
+          </span>
+        )}
+      </div>
+
+      {open === "directions" && directions && (
+        <div id="exam-directions" className="stu-pop stu-pop-left" role="region" aria-label="Directions">
+          <ul>
+            {directions.map((d) => (
+              <li key={d}>{d}</li>
+            ))}
+          </ul>
+        </div>
       )}
-      {trial && (
-        <button
-          type="button"
-          className="stu-btn sm stu-trial-stop"
-          onClick={trial.onStop}
-          disabled={trial.disabled || trial.stopping}
-          aria-describedby="trial-stop-hint"
-        >
-          {trial.stopping ? "Stopping…" : "Stop"}
-        </button>
+      {open === "more" && (
+        <div id="exam-more-menu" className="stu-pop stu-pop-right stu-menu" role="menu" aria-label="More">
+          {onTextSize && (
+            <button type="button" role="menuitem" className="stu-menu-item" onClick={onTextSize}>
+              <TextSizeIcon />
+              Text size
+              <span className="stu-menu-note">{Math.round(textSize * 100)}%</span>
+            </button>
+          )}
+          <button type="button" role="menuitem" className="stu-menu-item" onClick={() => setOpen("help")}>
+            <HelpIcon />
+            Help
+          </button>
+        </div>
       )}
-      {trial && (
-        <span id="trial-stop-hint" className="sr-only">
-          Ends the sample questions now and unlocks this computer. Nothing is graded.
-        </span>
+      {open === "help" && (
+        <div className="stu-pop stu-pop-right" role="dialog" aria-label="Help">
+          <p className="stu-pop-title">Need help?</p>
+          <p>Raise your hand. The invigilator will come to your desk.</p>
+          <p className="stu-muted">Your answers keep saving and the timer keeps running.</p>
+        </div>
       )}
     </header>
   );

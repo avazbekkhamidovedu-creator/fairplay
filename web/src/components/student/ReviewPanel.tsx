@@ -77,6 +77,43 @@ export function ReviewPanel({ questions, answers, marked, onGoTo, onKeepWorking,
           </div>
         </div>
 
+        {/* 2026-10-23: every question at a glance (same boxes as the question list). */}
+        <div className="stu-review-grid">
+          <div className="stu-legend">
+            <span>
+              <span className="stu-swatch" aria-hidden="true" />
+              Not answered
+            </span>
+            <span>
+              <span className="stu-swatch answered" aria-hidden="true" />
+              Answered
+            </span>
+            <span>
+              <span className="stu-swatch marked" aria-hidden="true" />
+              Marked
+            </span>
+          </div>
+          <div className="stu-qgrid" role="list" aria-label="All questions">
+            {questions.map((q, i) => {
+              const isAnswered = answers[q.id] !== undefined;
+              const m = marked.has(q.id);
+              return (
+                <div role="listitem" key={q.id} style={{ display: "contents" }}>
+                  <button
+                    type="button"
+                    className={`stu-qcell${isAnswered ? " answered" : ""}${m ? " marked" : ""}`}
+                    aria-label={`Question ${i + 1}, ${isAnswered ? "answered" : "not answered"}${m ? ", marked for review" : ""}`}
+                    onClick={() => onGoTo(i)}
+                    disabled={submitting}
+                  >
+                    {i + 1}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         {attention.length > 0 ? (
           <>
             <h2 className="stu-review-sub">Worth another look</h2>
