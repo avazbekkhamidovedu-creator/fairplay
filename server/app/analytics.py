@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import false, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .grading import exam_questions, grade_attempt, percent
@@ -193,7 +193,8 @@ def answer_mistakes(row: dict, grade: dict | None, draft: dict | None) -> list[t
 # ---------------------------------------------------------------- loading
 async def teacher_exams(session: AsyncSession, teacher_id: int) -> list[Exam]:
     rows = (await session.execute(
-        select(Exam).where(Exam.teacher_id == teacher_id, Exam.status != "draft")
+        select(Exam).where(Exam.teacher_id == teacher_id, Exam.status != "draft",
+                           Exam.is_trial == false())
         .order_by(Exam.created_at, Exam.id))).scalars().all()
     return [e for e in rows if not getattr(e, "formative", False)]
 

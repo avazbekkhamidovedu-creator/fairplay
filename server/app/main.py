@@ -23,6 +23,7 @@ from .routes_practice import router as practice_router, student_router as practi
 from .routes_sealed import router as sealed_router
 from .routes_student import router as student_router
 from .routes_teacher import router as teacher_router
+from .trial import refresh_trial_cache, router as trial_router
 from .seed import refuse_public_demo_logins, seed, seed_demo_class
 from .routes_classes import student_router as classes_student_router, teacher_router as classes_teacher_router
 from .store import make_store, set_store
@@ -51,6 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store = make_store(settings.redis_url)
         set_db(db)
         set_store(store)
+        await refresh_trial_cache()        # the seed may have changed the sample exam
         # Audit L-06: resume scan batches a restart or crash left unfinished.
         sweeper = None
         if settings.feature("scan"):
@@ -100,6 +102,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(classes_student_router)
     app.include_router(teacher_router)
     app.include_router(student_router)
+    app.include_router(trial_router)             # 2026-10-22: sample exam (app.trial)
     app.include_router(sealed_router)            # S5: sealed offline hand-in
     app.include_router(grading_router)
     app.include_router(gradebook_router)

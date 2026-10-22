@@ -14,6 +14,7 @@ import type { AllowedAppOption,
   GradingSummary,
   StudentFeedback,
   StudentGradeSummary,
+  TrialInfo,
   HeartbeatResponse,
   IntegrityEvent,
   LiveRoom,
@@ -341,12 +342,20 @@ export const teacherApi = {
  * has the app sign it; in a browser it sends no proof (the server refuses unless
  * FAIRPLAY_REQUIRE_APP=0). Stores the returned app session for the attempt.
  */
-async function startAttempt(examId: string, startCode: string, offlineStartedAt?: string): Promise<AttemptView> {
-  const body: Record<string, unknown> = { start_code: startCode };
+async function startAttempt(
+  examId: string,
+  startCode: string,
+  offlineStartedAt?: string,
+  trial = false,
+): Promise<AttemptView> {
+  // 2026-10-22: the sample exam has its own challenge/start (no class, no start code) but
+  // the same app proof, session and lock as a real exam.
+  const base = trial ? "/api/student/trial" : `/api/student/exams/${enc(examId)}`;
+  const body: Record<string, unknown> = trial ? {} : { start_code: startCode };
   if (offlineStartedAt) body.offline_started_at = offlineStartedAt;
   let deviceId: string | null = null;
   if (bridge.isNative()) {
-    const ch = await request<{ nonce: string }>("student", "GET", `/api/student/exams/${enc(examId)}/challenge`);
+    const ch = await request<{ nonce: string }>("student", "GET", `${base}/challenge`);
     const proof = await bridge.attest(ch.nonce);
     if (proof) {
       body.client = proof;
@@ -355,7 +364,7 @@ async function startAttempt(examId: string, startCode: string, offlineStartedAt?
   }
   let view: AttemptView;
   try {
-    view = await request<AttemptView>("student", "POST", `/api/student/exams/${enc(examId)}/start`, body);
+    view = await request<AttemptView>("student", "POST", `${base}/start`, body);
   } catch (e) {
     // S4: bound to another computer; this one can ask to take over (swap-request).
     if (e instanceof ApiError && e.code === "swap_needed") throw new SwapNeededError(e.detail, deviceId);
@@ -392,6 +401,14 @@ export const studentApi = {
       client_seq: clientSeq,
     }),
   grades: () => request<StudentGradeSummary[]>("student", "GET", "/api/student/grades"),
+  /** 2026-10-22: the sample exam ("Try a sample exam"). */
+  trialInfo: () => request<TrialInfo>("student", "GET", "/api/student/trial"),
+  startTrial: () => startAttempt("", "", undefined, true),
+  /** "Stop practice": ends the sample attempt (refused for real exams); then unlock. */
+  trialStop: (aid: string) =>
+    request<{ status: string; submitted_at: string | null }>("student", "POST", `/api/student/attempts/${enc(aid)}/trial-stop`),
+  /** Sample exam only: its offline exit key, kept in memory for an exit without the server. */
+  trialKey: (aid: string) => request<{ key: string }>("student", "GET", `/api/student/attempts/${enc(aid)}/trial-key`),
   /** S4: ask the teacher to move the attempt to this computer (202). */
   swapRequest: (aid: string, deviceId: string) =>
     request<{ ok: boolean }>("student", "POST", `/api/student/attempts/${enc(aid)}/swap-request`, { device_id: deviceId }),

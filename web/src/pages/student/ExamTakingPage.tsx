@@ -31,6 +31,7 @@ import { AppsToClose, PreflightProblems } from "../../components/student/Preflig
 import { TimeUpOffline } from "../../components/student/TimeUpOffline";
 import { CODE_LENGTH, StartCodeBoxes, emptyCode } from "../../components/student/StartCodeBoxes";
 import { QuestionImages } from "../../components/QuestionImages";
+import { TrialExit } from "../../components/student/TrialExit";
 import "../../styles/student.css";
 
 export const HEARTBEAT_MS = 5000;
@@ -59,7 +60,11 @@ function writeMarks(aid: string, marks: Set<string>): void {
   }
 }
 
-type Phase = "loading" | "locking" | "preflight" | "closeApps" | "lockFailed" | "exam" | "review" | "submitting" | "loadError" | "reenter";
+type Phase =
+  | "loading" | "locking" | "preflight" | "closeApps" | "lockFailed" | "exam" | "review" | "submitting"
+  | "loadError" | "reenter"
+  // sample exam: the app refused the lock for this attempt (offer to start again)
+  | "trialEnded";
 
 export interface DoneState {
   receipt: string;
@@ -70,6 +75,26 @@ export interface DoneState {
   total?: number;
   /** Audit W-05: why the page stopped (shown on the done page). */
   notice?: string;
+  /** 2026-10-22: the sample exam: the done page waits for the unlock, then goes home. */
+  trial?: "stopped" | "finished";
+}
+
+/** Sample exam: its offline exit key, kept for this tab only (lib/offlineExit.ts). */
+const trialKeyStorage = (aid: string) => `fairplay:trialkey:${aid}`;
+function readTrialKey(aid: string): string | null {
+  try {
+    return sessionStorage.getItem(trialKeyStorage(aid));
+  } catch {
+    return null;
+  }
+}
+function writeTrialKey(aid: string, key: string | null): void {
+  try {
+    if (key) sessionStorage.setItem(trialKeyStorage(aid), key);
+    else sessionStorage.removeItem(trialKeyStorage(aid));
+  } catch {
+    /* storage unavailable: kept in memory */
+  }
 }
 
 /** Remount per attempt id so no state leaks between attempts. */
@@ -100,6 +125,12 @@ function ExamTakingInner() {
   // S3: back after FairPlay closed; the teacher must approve before questions show again.
   const [waiting, setWaiting] = useState(false);
   const [marked, setMarked] = useState<Set<string>>(() => readMarks(attemptId));
+  // 2026-10-22: sample exam ("Stop practice"). trialRef is set as soon as the attempt loads.
+  const trialRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopProblem, setStopProblem] = useState<string | null>(null);
+  const [trialKey, setTrialKey] = useState<string | null>(() => readTrialKey(attemptId));
+  const [restartError, setRestartError] = useState<string | null>(null);
 
   const queueRef = useRef<AnswerQueue | null>(null);
   const currentRef = useRef(0);
@@ -205,9 +236,15 @@ function ExamTakingInner() {
         clearAttemptView(doneAid);
       }
       clearAttemptSession(doneAid);
+      if (trialRef.current) writeTrialKey(doneAid, null);
       // The app unlocks only after the server confirms the hand-in (audit #11).
       bridge.unlock();
-      navigate(`/student/done/${encodeURIComponent(doneAid)}`, { replace: true, state: done ?? undefined });
+      // The done page is allowed while locked; for the sample exam it waits for the unlock
+      // and then goes to the dashboard (no receipt, no score).
+      const state = trialRef.current
+        ? { receipt: "", submitted_at: "", title: done?.title ?? "", trial: done?.trial ?? "finished" }
+        : done ?? undefined;
+      navigate(`/student/done/${encodeURIComponent(doneAid)}`, { replace: true, state });
     },
     [attemptId, navigate, offline, offlineExamId],
   );
@@ -298,6 +335,7 @@ function ExamTakingInner() {
     load.then(
       (a) => {
         if (!alive) return;
+        trialRef.current = a.trial === true;
         if (!offline && a.status !== "submitted") cacheAttemptView(a, clockOffset(a.server_time));
         if (a.mode === "external") {
           // Exams held on another website run in their own page (CONTRACT slice 3).
@@ -328,6 +366,10 @@ function ExamTakingInner() {
       },
       (e) => {
         if (!alive) return;
+        if (e instanceof ApiError && isSessionConflict(e.status, e.detail) && cachedAttemptView(attemptId)?.trial) {
+          setPhase("trialEnded");      // sample exam: no start code, offer a new one
+          return;
+        }
         if (e instanceof ApiError && isSessionConflict(e.status, e.detail)) {
           setLoadError(e.detail);       // audit W-01: offer the start code instead of a dead end
           setPhase("reenter");
@@ -354,12 +396,17 @@ function ExamTakingInner() {
 
   const lockingRef = useRef(false);
   const lock = useCallback(async () => {
-    if (lockingRef.current) return;
+    if (lockingRef.current || finishedRef.current) return;
     lockingRef.current = true;
     setPhase("locking");
     // Audit M-11: problems the student must fix outside the lock come first.
     const allowed = bridge.allowedAppIds(appsRef.current);
     const report = await bridge.preflightReport(3000, allowed);
+    // Stopped (sample exam) or handed in meanwhile: never lock after that.
+    if (finishedRef.current) {
+      lockingRef.current = false;
+      return;
+    }
     const problems = report?.problems ?? [];
     if (problems.length > 0) {
       lockingRef.current = false;
@@ -376,6 +423,10 @@ function ExamTakingInner() {
     const aid = realAidRef.current;
     const session = aid ? getAttemptSession(aid) : null;
     const token = getToken("student");
+    if (finishedRef.current) {
+      lockingRef.current = false;
+      return;
+    }
     const res = await bridge.requestLock(
       10000,
       aid && session && token
@@ -387,6 +438,9 @@ function ExamTakingInner() {
     if (res.ok) {
       setLocked(bridge.isLocked());
       setPhase("exam");
+    } else if (res.reason === "bad_session" && trialRef.current) {
+      // Sample exam: no start code to type; offer a fresh start instead.
+      setPhase("trialEnded");
     } else if (res.reason === "bad_session") {
       // Audit M-06: the app won't lock without a valid exam session: start code again.
       setLoadError("This computer has no valid session for this exam.");
@@ -402,6 +456,60 @@ function ExamTakingInner() {
     // only when we enter "locking" after load
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempt]);
+
+  // ----- sample exam: offline exit key (while online) and "Stop practice" -----
+  useEffect(() => {
+    const aid = realAidRef.current;
+    if (!attempt?.trial || !aid || trialKey) return;
+    let alive = true;
+    studentApi.trialKey(aid).then(
+      (r) => {
+        if (!alive) return;
+        writeTrialKey(aid, r.key);
+        setTrialKey(r.key);
+      },
+      () => undefined, // offline / ended: Stop through the server is still the normal way
+    );
+    return () => {
+      alive = false;
+    };
+  }, [attempt, trialKey]);
+
+  const stopPractice = useCallback(async () => {
+    if (finishedRef.current || submittingRef.current) return;
+    setStopping(true);
+    setStopProblem(null);
+    try {
+      // Wait for the server to commit the stop: only then does the app's signed hand-in
+      // say "submitted" and the app unlock (bridge.unlock in finish).
+      await call((aid) => studentApi.trialStop(aid));
+      finish({ receipt: "", submitted_at: "", title: attempt?.title ?? "", trial: "stopped" });
+    } catch (e) {
+      setStopping(false);
+      if (e instanceof ApiError && e.status === 404) {
+        // Gone (replaced by a newer sample attempt): the app hears "gone" and unlocks.
+        finish({ receipt: "", submitted_at: "", title: attempt?.title ?? "", trial: "stopped" });
+        return;
+      }
+      setStopProblem(
+        e instanceof NetworkError
+          ? "Cannot reach the server, so FairPlay cannot unlock yet."
+          : e instanceof ApiError
+            ? e.detail
+            : "Stopping failed.",
+      );
+    }
+  }, [attempt, call, finish]);
+
+  const restartTrial = useCallback(async () => {
+    setRestartError(null);
+    try {
+      const a = await studentApi.startTrial();
+      navigate(`/student/exam/${encodeURIComponent(a.attempt_id)}`, { replace: true, state: { attempt: a } });
+    } catch (e) {
+      setRestartError(e instanceof ApiError ? e.detail : "Cannot reach the server. Try again.");
+    }
+  }, [navigate]);
 
   // ----- the app's own signed beats need the attempt + session (audit #2, #6) -----
   useEffect(() => {
@@ -584,6 +692,28 @@ function ExamTakingInner() {
         </div>
       </div>
     );
+  const trialEndedPanel = (
+        <main className="stu-center" data-testid="trial-ended">
+          <div className="stu-card" style={{ gap: 14, maxWidth: 560 }} role="alert">
+            <h1 style={{ margin: 0, fontSize: 22 }}>This sample exam was ended on this computer</h1>
+            <p style={{ margin: 0 }}>Start a new one to try again. Nothing from a sample exam is kept or graded.</p>
+            {restartError && (
+              <p className="stu-alert error" role="alert" style={{ margin: 0 }}>
+                {restartError}
+              </p>
+            )}
+            <div className="stu-row">
+              <button type="button" className="stu-btn primary" onClick={() => void restartTrial()}>
+                Start again
+              </button>
+              <Link to="/student" className="stu-btn">
+                Back to home
+              </Link>
+            </div>
+          </div>
+        </main>
+  );
+  if (phase === "trialEnded" && !attempt) return <div className="stu stu-exam">{trialEndedPanel}</div>;
   if (phase === "reenter") return <ReenterExam attemptId={attemptId} detail={loadError} />;
   if (phase === "loadError")
     return (
@@ -612,10 +742,11 @@ function ExamTakingInner() {
   const isMarked = q ? marked.has(q.id) : false;
   const timeUpPanel = phase === "submitting" && timeUpProblem;
   const waitPanel = waiting && (phase === "exam" || phase === "review");
+  const stopPanel = !!stopProblem && !timeUpPanel;   // sample exam: Stop could not reach the server
   const showExam =
-    !waitPanel && (phase === "exam" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam"));
+    !waitPanel && !stopPanel && (phase === "exam" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam"));
   const showReview =
-    !waitPanel && (phase === "review" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current !== "exam"));
+    !waitPanel && !stopPanel && (phase === "review" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current !== "exam"));
   const typeLabel = q?.type === "essay" ? " · Essay" : "";
 
   const isLast = current === questions.length - 1;
@@ -630,6 +761,16 @@ function ExamTakingInner() {
         native={bridge.isNative()}
         sync={sync}
         remaining={remaining}
+        trial={
+          attempt.trial
+            ? {
+                onStop: () => void stopPractice(),
+                stopping,
+                // never while a lock request is on its way (the app could lock after the stop)
+                disabled: phase === "locking" || closingApps || phase === "submitting",
+              }
+            : undefined
+        }
       />
       {offline && (offlineProblem || !connected) && !needCode && (
         <div className="stu-alert warn fp-offline-note" role="status" data-testid="offline-banner">
@@ -654,8 +795,8 @@ function ExamTakingInner() {
         </div>
       )}
 
-      {phase === "preflight" && <PreflightProblems problems={preflightProblems} onRetry={() => void lock()} />}
-      {phase === "closeApps" && (
+      {phase === "preflight" && !stopPanel && <PreflightProblems problems={preflightProblems} onRetry={() => void lock()} />}
+      {phase === "closeApps" && !stopPanel && (
         <AppsToClose
           apps={appsToClose}
           busy={closingApps}
@@ -671,7 +812,7 @@ function ExamTakingInner() {
         />
       )}
 
-      {phase === "lockFailed" && (
+      {phase === "lockFailed" && !stopPanel && (
         <main className="stu-center">
           <div className="stu-card" style={{ gap: 14 }}>
             <h1 style={{ margin: 0, fontSize: 22 }}>Locked mode could not start</h1>
@@ -877,9 +1018,17 @@ function ExamTakingInner() {
         </main>
       )}
 
-      {timeUpPanel && (
+      {timeUpPanel && !attempt.trial && (
         <TimeUpOffline message={submitError} onRetry={() => void doSubmit(true)} onSeal={sealAnswers} />
       )}
+      {timeUpPanel && attempt.trial && (
+        <TrialExit keyHex={trialKey} message={submitError} onRetry={() => void doSubmit(true)} />
+      )}
+      {stopPanel && (
+        <TrialExit keyHex={trialKey} message={stopProblem} onRetry={() => void stopPractice()} retrying={stopping} />
+      )}
+
+      {phase === "trialEnded" && trialEndedPanel}
 
       {phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam" && (
         <div className="stu-toast" role="status">

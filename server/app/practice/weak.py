@@ -8,7 +8,7 @@ import asyncio
 
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import false, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..grading import exam_questions, grade_attempt
@@ -37,7 +37,8 @@ def question_topics(q: dict, exam: Exam | None = None) -> list[str]:
 
 
 async def teacher_exams(session: AsyncSession, teacher_id: int) -> list[Exam]:
-    return list((await session.scalars(select(Exam).where(Exam.teacher_id == teacher_id))).all())
+    return list((await session.scalars(select(Exam).where(Exam.teacher_id == teacher_id,
+                                                                  Exam.is_trial == false()))).all())
 
 
 async def topic_stats_by_student(session: AsyncSession, teacher_id: int,

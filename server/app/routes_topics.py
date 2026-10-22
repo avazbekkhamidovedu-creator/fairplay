@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import false, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
@@ -31,5 +31,5 @@ def count_topics(question_lists) -> list[dict]:
 async def list_topics(p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
-        select(Exam.questions).where(Exam.teacher_id == p.user_id))).scalars().all()
+        select(Exam.questions).where(Exam.teacher_id == p.user_id, Exam.is_trial == false()))).scalars().all()
     return count_topics(rows)

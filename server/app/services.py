@@ -199,6 +199,7 @@ async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> 
         "scheduled_at": iso(e.scheduled_at),
         "allowed_apps": list(e.allowed_apps or []),   # 2026-10-14
         **lock_settings(e),                           # S3 / S6: read by start and app-beat
+        "is_trial": bool(e.is_trial),                 # 2026-10-22: the sample exam
         "questions": [student_question(q) for q in e.questions or []],
         **external_fields(e),
     }
@@ -280,6 +281,7 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         # 2026-10-14: apps the app keeps open while locked (everything else is closed)
         "allowed_apps": _student_apps(exam.get("allowed_apps")),
         "approval": approval_of(a),    # S3: "pending" -> the page shows "Wait for your teacher"
+        "trial": bool(exam.get("is_trial")),   # 2026-10-22: the sample exam (Stop practice)
     }
 
 

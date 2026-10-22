@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import * as bridge from "../../lib/bridge";
 import { studentApi } from "../../api/client";
 import { clockTime, shortDate } from "../../components/student/format";
 import { CheckIcon } from "../../components/student/icons";
@@ -7,9 +8,41 @@ import { StudentLayout } from "../../components/student/StudentLayout";
 import type { DoneState } from "./ExamTakingPage";
 
 export default function DonePage() {
-  const { attemptId = "" } = useParams();
   const location = useLocation();
   const fromState = location.state as DoneState | null;
+  if (fromState?.trial) return <TrialDone how={fromState.trial} />;
+  return <ExamDone fromState={fromState} />;
+}
+
+/** 2026-10-22: the sample exam ended. This page is allowed while locked; it goes to the
+ *  dashboard only once the app has unlocked (the app checks the signed hand-in first). */
+function TrialDone({ how }: { how: "stopped" | "finished" }) {
+  const navigate = useNavigate();
+  useEffect(() => {
+    const home = () => navigate("/student", { replace: true, state: { trialDone: how } });
+    if (!bridge.isNative() || !bridge.isLocked()) {
+      home();
+      return;
+    }
+    const off = bridge.onNative((msg) => {
+      if (msg.type === "unlocked" || (msg.type === "state" && !bridge.isLocked())) home();
+    });
+    return off;
+  }, [how, navigate]);
+  return (
+    <StudentLayout>
+      <main className="stu-main">
+        <section className="stu-done" aria-labelledby="trial-done-h" role="status">
+          <h1 id="trial-done-h">{how === "stopped" ? "Sample exam stopped" : "Sample exam finished"}</h1>
+          <p className="stu-done-text">FairPlay is unlocking this computer…</p>
+        </section>
+      </main>
+    </StudentLayout>
+  );
+}
+
+function ExamDone({ fromState }: { fromState: DoneState | null }) {
+  const { attemptId = "" } = useParams();
   const [info, setInfo] = useState<DoneState | null>(fromState?.receipt ? fromState : null);
   const [missing, setMissing] = useState(false);
 

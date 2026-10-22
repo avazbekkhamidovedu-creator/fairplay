@@ -47,7 +47,8 @@ def test_start_wrong_then_right_and_resume(client, alice, live_exam):
                       "server_time", "questions", "answers", "status", "course",
                       "mode", "external_url", "allowed_domains", "finish_url_contains", "session",
                       "allowed_apps", "min_app_version",     # S2
-                      "approval", "needs_approval"}          # S3
+                      "approval", "needs_approval",          # S3
+                      "trial"}                                # sample exam flag
     assert a["status"] == "in_progress" and a["answers"] == {} and a["title"] == "Midterm"
     for q in a["questions"]:
         for secret in ("correct_index", "answer_number", "tolerance", "accepted_answers"):

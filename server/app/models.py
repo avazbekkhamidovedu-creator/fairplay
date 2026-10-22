@@ -84,6 +84,11 @@ class Exam(Base):
     # assessment mode, not built yet). A beat without sep=1 is flagged weak_lock once.
     require_strong_lock: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
                                                       server_default=false())
+    # 2026-10-22: the built-in sample exam ("Try a sample exam", app.trial). Owned by the
+    # system account, in no class; every student may take it any time. Its attempts are
+    # never shown to teachers and never count anywhere.
+    is_trial: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                           server_default=false(), index=True)
 
 
 class Attempt(Base):

@@ -350,7 +350,7 @@ async def practice_item_add(sid: str, body: AddItemIn, p: Principal = Depends(re
     if len(s.items or []) >= MAX_ITEMS:
         raise HTTPException(409, f"A set can have at most {MAX_ITEMS} items")
     e = await session.get(Exam, body.exam_id)
-    if e is None or e.teacher_id != p.user_id:
+    if e is None or e.teacher_id != p.user_id or e.is_trial:
         raise HTTPException(404, "Question not found")
     q = next((q for q in e.questions or [] if q.get("id") == body.question_id), None)
     if q is None or q.get("type") not in SOURCE_TYPES:

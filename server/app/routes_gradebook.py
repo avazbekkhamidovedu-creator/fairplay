@@ -9,7 +9,7 @@ import csv
 import io
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
@@ -28,7 +28,7 @@ async def grading_overview(p: Principal = Depends(require_teacher),
         select(Exam.id, Exam.title, Exam.course, Exam.status, Exam.grades_released, Exam.class_id,
                func.count(Attempt.id), func.coalesce(func.sum(Attempt.needs_grading), 0))
         .join(Attempt, Attempt.exam_id == Exam.id)
-        .where(Exam.teacher_id == p.user_id, Attempt.status == "submitted")
+        .where(Exam.teacher_id == p.user_id, Attempt.status == "submitted", Exam.is_trial == false())
         .group_by(Exam.id, Exam.title, Exam.course, Exam.status, Exam.grades_released,
                   Exam.class_id, Exam.created_at)
         .order_by(Exam.created_at.desc(), Exam.id))).all()
@@ -42,7 +42,8 @@ async def _gradebook(session: AsyncSession, p: Principal, course: str | None,
                      class_id: int | None = None) -> dict:
     course = (course or "").strip()
     all_exams = list((await session.execute(
-        select(Exam).where(Exam.teacher_id == p.user_id, Exam.status != "draft")
+        select(Exam).where(Exam.teacher_id == p.user_id, Exam.status != "draft",
+                           Exam.is_trial == false())
         .order_by(Exam.created_at, Exam.id))).scalars())
     courses = sorted({e.course for e in all_exams if e.course})
     exams = [e for e in all_exams if (not course or e.course == course)

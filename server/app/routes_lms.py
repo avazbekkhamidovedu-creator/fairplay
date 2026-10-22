@@ -102,7 +102,7 @@ async def _own_link(session: AsyncSession, link_id: int, p: Principal
 
 async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
     e = await session.get(Exam, exam_id)
-    if e is None or e.teacher_id != p.user_id:
+    if e is None or e.teacher_id != p.user_id or e.is_trial:   # never the sample exam
         raise HTTPException(404, "Exam not found")
     return e
 

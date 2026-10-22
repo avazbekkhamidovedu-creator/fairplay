@@ -458,6 +458,17 @@ export interface AttemptView {
   needs_approval?: boolean;
   /** S2: only in the POST start response. */
   min_app_version?: string | null;
+  /** 2026-10-22: the built-in sample exam ("Stop practice", no score page). */
+  trial?: boolean;
+}
+
+/** 2026-10-22: GET /api/student/trial, for the "Sample exam" card. */
+export interface TrialInfo {
+  exam_id: string;
+  title: string;
+  duration_min: number;
+  question_count: number;
+  attempt: { attempt_id: string; status: AttemptStatus } | null;
 }
 
 export interface SaveAnswersResponse {

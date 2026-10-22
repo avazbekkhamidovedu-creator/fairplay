@@ -688,3 +688,43 @@ iPadOS lets no app list or close others; Assessment Mode does that itself.)
 - Mac permission screen: shows which FairPlay copy runs and lists other copies. "Fix permission"
   runs `tccutil reset Accessibility ai.proctora.student`, then asks macOS again. There is also
   "Restart FairPlay".
+
+## Sample exam (trial) (2026-10-22)
+One built-in sample exam every student can take any time ("Try a sample exam" card on the
+student dashboard) to feel a real exam: the same app proof, preflight, apps-to-close step,
+lock, heartbeats and app beats. Not related to practice assignments (`/api/practice`).
+- **Exam:** `Exam.is_trial = true`, id `e_sample_exam`, seeded idempotently at every startup
+  (`app/trial.py`, column added by `db._add_missing_columns`). Owner: system account
+  `__fairplay_sample__` (role `system`, cannot sign in), no class, no start code, 10 minutes,
+  4 questions (mcq, numeric, short, essay), `resume_needs_approval = false`.
+- `GET /api/student/trial` → `{exam_id, title, duration_min, question_count, attempt: null | {attempt_id, status}}`.
+- `GET /api/student/trial/challenge` → `{nonce, expires_in}` (as a real exam's challenge).
+- `POST /api/student/trial/start` body `{client?: {device_id, nonce, signature, version, build}}` →
+  attempt view + `session` (same shape as a real start; `needs_approval` always false). Same app
+  rules as a real start (`FAIRPLAY_REQUIRE_APP`, dev builds, `426`). One attempt per student: an
+  attempt still running on the same device continues (same id; a start within 15 s keeps the
+  session, later ones get a new session); a finished, timed-out or other-device one is deleted
+  with its events and a new one starts (unlimited retakes). The real
+  `/exams/e_sample_exam/{challenge,start,package,package-key}` answer `404`.
+- Attempt views add `"trial": bool`.
+- **Stop practice:** `POST /api/student/attempts/{aid}/trial-stop` (with `X-FairPlay-Session`) →
+  `{status: "submitted", submitted_at}`; commits before replying, drops the answers, no score,
+  no grading. `403` for any non-sample attempt, `404` for another student's. The page then sends
+  bridge `unlock`; the app unlocks only on the signed `GET .../handin` (`submitted`, or `gone`
+  for a replaced attempt) like after any hand-in, and app beats answer `status: "submitted"`.
+  The page goes to `/student/done/<aid>` (allowed while locked), which waits for the native
+  `unlocked` and then shows the dashboard with "That's how an exam works". Normal submit /
+  time-up ends the same way (not graded, no score page). Stop is disabled while a lock request
+  is on its way, and the page never locks after a stop.
+- **No invigilator, sample only:** `GET /api/student/attempts/{aid}/trial-key` → `{key}` = the
+  attempt's offline exit key for the current session (`403` for real exams, `409` once ended).
+  When Stop can't reach the server, the page turns the Mac / PC / iPad code the app shows into
+  the 8-digit offline exit code itself (same rule as "Offline exit"). No seal / "ask the
+  invigilator" screens in a sample exam. `lockFailed bad_session` offers "Start again".
+- **Invisible to teachers:** no teacher endpoint lists or opens the sample exam, its attempts or
+  events (exam lists, live room, results, grading queue and overview, gradebook + CSV, insights,
+  student lists / profiles, topics, practice bank, scan, LMS push, readiness, class counts), even
+  if it were owned by a teacher (`_own_exam` refuses `is_trial`). Students: not in
+  `/api/student/exams` or `/api/student/grades` (`/grades/e_sample_exam` → 404).
+- **Native apps need no changes:** the lock, beats and unlock are the existing ones; only the
+  signed hand-in ends the lock.

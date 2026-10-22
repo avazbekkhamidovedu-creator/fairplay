@@ -7,7 +7,7 @@ import time
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
@@ -86,7 +86,7 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
 
 async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
     e = await session.get(Exam, exam_id)
-    if e is None or e.teacher_id != p.user_id:
+    if e is None or e.teacher_id != p.user_id or e.is_trial:   # never the sample exam
         raise HTTPException(404, "Exam not found")
     return e
 
@@ -95,7 +95,8 @@ async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
 async def list_exams(p: Principal = Depends(require_teacher),
                      session: AsyncSession = Depends(get_session)):
     res = await session.execute(
-        select(Exam).where(Exam.teacher_id == p.user_id).order_by(Exam.created_at.desc(), Exam.id))
+        select(Exam).where(Exam.teacher_id == p.user_id, Exam.is_trial == false())
+        .order_by(Exam.created_at.desc(), Exam.id))
     exams = list(res.scalars())
     pending = await pending_by_exam(session, [e.id for e in exams if e.status != "draft"])
     return [exam_out(e, pending.get(e.id, 0)) for e in exams]

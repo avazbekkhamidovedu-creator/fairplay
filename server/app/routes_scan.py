@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import ai
@@ -83,7 +83,7 @@ def delivery_of(e: Exam) -> str:
 
 async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
     e = await session.get(Exam, exam_id)
-    if e is None or e.teacher_id != p.user_id:
+    if e is None or e.teacher_id != p.user_id or e.is_trial:   # never the sample exam
         raise HTTPException(404, "Exam not found")
     return e
 
@@ -109,7 +109,7 @@ def teacher_student_ids(teacher_id: int):
                  .join(LmsConnection, LmsConnection.id == CourseLink.connection_id)
                  .where(LmsConnection.teacher_id == teacher_id))
     took = (select(Attempt.student_id).join(Exam, Exam.id == Attempt.exam_id)
-            .where(Exam.teacher_id == teacher_id))
+            .where(Exam.teacher_id == teacher_id, Exam.is_trial == false()))
     return in_class.union(in_course, took)
 
 
@@ -177,7 +177,8 @@ def _question_map(e: Exam) -> dict[str, dict]:
 async def scan_exams(p: Principal = Depends(require_teacher), session: AsyncSession = Depends(get_session)):
     """Paper exams (and any exam with printed booklets or uploaded scans), newest first."""
     exams = (await session.execute(
-        select(Exam).where(Exam.teacher_id == p.user_id).order_by(Exam.created_at.desc(), Exam.id)
+        select(Exam).where(Exam.teacher_id == p.user_id, Exam.is_trial == false())
+        .order_by(Exam.created_at.desc(), Exam.id)
     )).scalars().all()
     ids = [e.id for e in exams]
     printed = set((await session.execute(

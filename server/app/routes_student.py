@@ -7,7 +7,7 @@ from datetime import timedelta
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import and_, func, insert, or_, select, true, update
+from sqlalchemy import and_, false, func, insert, or_, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -103,6 +103,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None)))
         # slice 6: paper exams are printed; students never see them in the app
         .where(or_(Exam.delivery.is_(None), Exam.delivery != "paper"))
+        .where(Exam.is_trial == false())     # the sample exam lives only in its own card
         .order_by(Exam.created_at.desc(), Exam.id))).all()
     out = []
     for (eid, title, dur, qc, status, aid, astatus, sub, receipt, course, room, sched, released,
@@ -129,14 +130,39 @@ async def challenge(exam_id: str, p: Principal = Depends(require_student),
                     session: AsyncSession = Depends(get_session)):
     """Single-use nonce the FairPlay app signs to prove it starts the attempt (audit #1)."""
     exam = await get_exam_cached(get_store(), session, exam_id)
-    if exam is None:
+    if exam is None or exam.get("is_trial"):     # the sample exam: /api/student/trial/...
         raise HTTPException(404, "Exam not found")
     await require_member(session, exam, p.user_id)
-    if await get_store().incr(f"chalrate:{p.user_id}", 60) > CHALLENGES_PER_MIN:
+    return await issue_challenge(p.user_id, exam_id)
+
+
+async def issue_challenge(user_id: int, exam_id: str) -> dict:
+    """Single-use nonce bound to student + exam (also used by the sample exam, app.trial)."""
+    if await get_store().incr(f"chalrate:{user_id}", 60) > CHALLENGES_PER_MIN:
         raise HTTPException(429, "Too many tries, wait a minute")
     nonce = secrets.token_urlsafe(24)
-    await get_store().set(f"chal:{nonce}", f"{p.user_id}:{exam_id}", ac.CHALLENGE_TTL_S)
+    await get_store().set(f"chal:{nonce}", f"{user_id}:{exam_id}", ac.CHALLENGE_TTL_S)
     return {"nonce": nonce, "expires_in": ac.CHALLENGE_TTL_S}
+
+
+async def verify_start_proof(store, settings, user_id: int, exam_id: str, client) -> str | None:
+    """Audit #1: the app proves itself with a signed, single-use challenge. Returns the
+    app's device id, or None for a browser start (only with FAIRPLAY_REQUIRE_APP=0).
+    Shared by a real start and the sample exam's start (app.trial)."""
+    if client is not None:
+        # Audit S-09: read-and-delete in one step, so one proof starts at most once.
+        owner = await store.getdel(f"chal:{client.nonce}")
+        if owner != f"{user_id}:{exam_id}" or not ac.verify(
+                settings, ac.start_message(client.nonce, client.device_id), client.signature):
+            raise HTTPException(403, ac.APP_PROOF_DETAIL)
+        # iPad review M6 (2026-10-20): dev builds (soft lock, fixed exit code, inspector)
+        # only ever take exams on a FAIRPLAY_DEV=1 server.
+        if client.build == "dev" and not settings.dev:
+            raise HTTPException(403, ac.APP_PROOF_DETAIL)
+        return client.device_id
+    if settings.require_app:
+        raise HTTPException(403, ac.APP_REQUIRED_DETAIL)
+    return None
 
 
 @router.post("/exams/{exam_id}/start")
@@ -147,27 +173,13 @@ async def start(exam_id: str, body: StartIn, request: Request,
     settings = ac.settings_of(request)
     min_version = check_app_version(request, settings)   # S2: 426 for an outdated app
     exam = await get_exam_cached(store, session, exam_id)
-    if exam is None or exam.get("delivery") == "paper":  # slice 6: paper is never started
+    # slice 6: paper is never started; the sample exam starts at /api/student/trial/start
+    if exam is None or exam.get("delivery") == "paper" or exam.get("is_trial"):
         raise HTTPException(404, "Exam not found")
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
     await require_member(session, exam, p.user_id)   # audit S-03: class / LMS course only
-    # Audit #1: the app proves itself with a signed, single-use challenge.
-    device_id = None
-    if body.client is not None:
-        # Audit S-09: read-and-delete in one step, so one proof starts at most once.
-        owner = await store.getdel(f"chal:{body.client.nonce}")
-        if owner != f"{p.user_id}:{exam_id}" or not ac.verify(
-                settings, ac.start_message(body.client.nonce, body.client.device_id),
-                body.client.signature):
-            raise HTTPException(403, ac.APP_PROOF_DETAIL)
-        # iPad review M6 (2026-10-20): dev builds (soft lock, fixed exit code, inspector)
-        # only ever take exams on a FAIRPLAY_DEV=1 server.
-        if body.client.build == "dev" and not settings.dev:
-            raise HTTPException(403, ac.APP_PROOF_DETAIL)
-        device_id = body.client.device_id
-    elif settings.require_app:
-        raise HTTPException(403, ac.APP_REQUIRED_DETAIL)
+    device_id = await verify_start_proof(store, settings, p.user_id, exam_id, body.client)
     lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
     n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
                             "Too many wrong codes, wait 60 seconds")
@@ -497,6 +509,8 @@ async def submit(aid: str, body: AnswersIn, request: Request,
         answers = sent if use_body and not late else stored
         late_answers = changed if late and changed else None
         score, pending, _ = grade_attempt(exam_questions(exam) if exam else [], answers, a.grades)
+        if exam is not None and exam.is_trial:
+            score, pending = None, 0      # the sample exam is never graded
         # Audit 2026-10-13: only if no newer PUT landed since the read above (client_seq
         # unchanged); otherwise read again and redo the choice with the newer answers.
         res = await session.execute(
@@ -776,7 +790,8 @@ async def my_grades(p: Principal = Depends(require_student),
         select(Exam.id, Exam.title, Exam.course, Exam.total_points, Exam.grades_released,
                Attempt.submitted_at, Attempt.score)
         .join(Attempt, Attempt.exam_id == Exam.id)
-        .where(Attempt.student_id == p.user_id, Attempt.status == "submitted")
+        .where(Attempt.student_id == p.user_id, Attempt.status == "submitted",
+               Exam.is_trial == false())     # the sample exam never counts
         .order_by(Attempt.submitted_at.desc(), Exam.id))).all()
     out = []
     for eid, title, course, total, released, sub, score in rows:
@@ -808,7 +823,7 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
     if a is None or a.status != "submitted":
         raise HTTPException(404, "No submitted attempt for this exam")
     e = await session.get(Exam, exam_id)
-    if e is None:
+    if e is None or e.is_trial:
         raise HTTPException(404, "No submitted attempt for this exam")
     if not e.grades_released:
         raise HTTPException(403, "Grades not released yet")

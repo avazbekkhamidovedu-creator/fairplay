@@ -7,6 +7,7 @@ import { ClockIcon, CloudCheckIcon, DiskIcon, LockIcon, UnlockIcon } from "./ico
 /**
  * Slim white top bar shown while taking an exam:
  * lock state · course + title · save status · timer (amber under 5 minutes).
+ * The sample exam adds a "Sample exam" label and a "Stop practice" button on the right.
  * In a plain browser the yellow "not locked" strip above this bar carries the lock state.
  */
 export function LockedBar({
@@ -16,6 +17,7 @@ export function LockedBar({
   native,
   sync,
   remaining,
+  trial,
 }: {
   title: string;
   course?: string;
@@ -24,6 +26,8 @@ export function LockedBar({
   native?: boolean;
   sync: SyncStatus;
   remaining: number;
+  /** 2026-10-22: the sample exam: a "Sample exam" label and "Stop practice" in the corner. */
+  trial?: { onStop: () => void; stopping?: boolean; disabled?: boolean };
 }) {
   const lowTime = remaining < 5 * 60 * 1000;
   const synced = sync === "synced";
@@ -42,6 +46,7 @@ export function LockedBar({
           Not locked
         </span>
       ) : null}
+      {trial && <span className="stu-trial-badge">Sample exam</span>}
       <span className="stu-lockbar-title">
         {course && <small>{course}</small>}
         <span className="t">{title}</span>
@@ -59,6 +64,22 @@ export function LockedBar({
         <ClockIcon />
         {Number.isFinite(remaining) ? formatCountdown(remaining) : "--:--"}
       </span>
+      {trial && (
+        <button
+          type="button"
+          className="stu-btn sm stu-trial-stop"
+          onClick={trial.onStop}
+          disabled={trial.disabled || trial.stopping}
+          aria-describedby="trial-stop-hint"
+        >
+          {trial.stopping ? "Stopping…" : "Stop practice"}
+        </button>
+      )}
+      {trial && (
+        <span id="trial-stop-hint" className="sr-only">
+          Ends the sample exam now and unlocks this computer. Nothing is graded.
+        </span>
+      )}
     </header>
   );
 }

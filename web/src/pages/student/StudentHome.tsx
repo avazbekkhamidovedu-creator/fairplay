@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { firstName, examName, plural, shortTime, isToday, shortDate } from "../../components/student/format";
@@ -8,6 +8,7 @@ import { JoinClass } from "../../components/student/JoinClass";
 import { PastExamRow } from "../../components/student/ResultRow";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
+import { TrialCard } from "../../components/student/TrialCard";
 import { useMe } from "../../lib/useMe";
 import { pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
 
@@ -16,6 +17,9 @@ export default function StudentHome() {
   const { exams, error, reload } = useStudentExams();
   const readiness = useReadiness();
   const [activeId, setActiveId] = useState<string | null>(null);
+  // 2026-10-22: back from the sample exam (DonePage sends this once the computer unlocked).
+  const trialDone = (useLocation().state as { trialDone?: string } | null)?.trialDone;
+  const [trialNote, setTrialNote] = useState(!!trialDone);
 
   const upcoming = exams ? upcomingExams(exams) : [];
   const past = exams ? pastExams(exams) : [];
@@ -37,10 +41,25 @@ export default function StudentHome() {
       <NotLockedBanner />
       <StudentLayout>
         <main className="stu-main">
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <h1 className="stu-h1">{name ? `Hi ${name}` : "Hi"}</h1>
-            <p className="stu-sub" aria-live="polite">{summary}</p>
+          <div className="stu-home-top">
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <h1 className="stu-h1">{name ? `Hi ${name}` : "Hi"}</h1>
+              <p className="stu-sub" aria-live="polite">{summary}</p>
+            </div>
+            <TrialCard />
           </div>
+
+          {trialNote && (
+            <div className="stu-alert success stu-row" role="status" data-testid="trial-note">
+              <span style={{ flex: 1 }}>
+                That&apos;s how an exam works. On exam day your teacher gives you a start code, and FairPlay locks this
+                computer the same way until you submit.
+              </span>
+              <button type="button" className="stu-btn sm quiet" onClick={() => setTrialNote(false)}>
+                OK
+              </button>
+            </div>
+          )}
 
           {error && (
             <div className="stu-alert warn" role="alert">

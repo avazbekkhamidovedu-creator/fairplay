@@ -89,6 +89,8 @@ async def refuse_public_demo_logins(db: Database, settings: Settings) -> None:
 
 async def seed(db: Database, settings: Settings) -> None:
     await upgrade_external_exams(db)
+    from .trial import seed_trial_exam
+    await seed_trial_exam(db)          # 2026-10-22: the built-in sample exam
     wanted = [(u, pw, n, r) for u, pw, n, r in SEED_USERS] if settings.demo_logins else []
     demo_names = {u for u, *_ in SEED_USERS}
     # Accounts from FAIRPLAY_INITIAL_USERS: created once, never overwritten (a changed

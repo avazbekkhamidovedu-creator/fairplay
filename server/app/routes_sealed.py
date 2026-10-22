@@ -93,6 +93,8 @@ async def _hand_in(session: AsyncSession, a: Attempt, seal: ac.Seal, answers: di
     final = stored if late else answers
     exam = await session.get(Exam, a.exam_id)
     score, pending, _ = grade_attempt(exam_questions(exam) if exam else [], final, a.grades)
+    if exam is not None and exam.is_trial:
+        score, pending = None, 0          # the sample exam is never graded
     await session.execute(
         update(Attempt).where(Attempt.id == a.id, Attempt.status == "in_progress").values(
             status="submitted", submitted_at=min(seal.sealed_at, now), receipt=new_receipt(),

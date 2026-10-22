@@ -186,7 +186,7 @@ async def package(exam_id: str, request: Request, p: Principal = Depends(require
                   session: AsyncSession = Depends(get_session)):
     store = get_store()
     exam = await get_exam_cached(store, session, exam_id)
-    if exam is None or exam.get("delivery") == "paper":
+    if exam is None or exam.get("delivery") == "paper" or exam.get("is_trial"):
         raise HTTPException(404, "Exam not found")
     if (exam.get("mode") or "questions") == "external":
         raise HTTPException(409, "This exam runs on another website and needs the internet")
@@ -235,7 +235,7 @@ async def package_key(exam_id: str, p: Principal = Depends(require_student),
     """Audit S-03: the second half of the package key, only while the exam is live and
     only for its class. The page keeps it next to the package (cleared after the exam)."""
     exam = await get_exam_cached(get_store(), session, exam_id)
-    if exam is None or exam.get("delivery") == "paper":
+    if exam is None or exam.get("delivery") == "paper" or exam.get("is_trial"):
         raise HTTPException(404, "Exam not found")
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")

@@ -6,7 +6,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, false, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,7 +80,7 @@ async def _counts(session: AsyncSession, ids: list[int]) -> tuple[dict, dict]:
         .where(ClassMember.class_id.in_(ids)).group_by(ClassMember.class_id))).all())
     exams = dict((await session.execute(
         select(Exam.class_id, func.count(Exam.id))
-        .where(Exam.class_id.in_(ids)).group_by(Exam.class_id))).all())
+        .where(Exam.class_id.in_(ids), Exam.is_trial == false()).group_by(Exam.class_id))).all())
     return members, exams
 
 

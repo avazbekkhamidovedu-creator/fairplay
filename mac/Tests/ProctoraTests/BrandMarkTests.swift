@@ -14,10 +14,13 @@ import AppKit
         let img = BrandMark.image(size: 64)
         let rep = NSBitmapImageRep(data: img.tiffRepresentation!)!
         let k = rep.pixelsWide / 64   // 1 on a normal screen, 2 on Retina
-        #expect(rgb(img, 4 * k, 32 * k) == (0x2F, 0x4B, 0xD8))      // square
-        #expect(rgb(img, 22 * k, 32 * k) == (255, 255, 255))         // left half
-        #expect(rgb(img, 42 * k, 32 * k) == (255, 255, 255))         // right half
-        #expect(rgb(img, 32 * k, 32 * k) == (0x2F, 0x4B, 0xD8))     // gap in the middle
+        // Colour management shifts exact values a little; check blue vs white.
+        func isBlue(_ c: (Int, Int, Int)) -> Bool { c.2 > 180 && c.0 < 120 && c.2 - c.0 > 100 }
+        func isWhite(_ c: (Int, Int, Int)) -> Bool { min(c.0, c.1, c.2) > 235 }
+        #expect(isBlue(rgb(img, 4 * k, 32 * k)))      // square
+        #expect(isWhite(rgb(img, 22 * k, 32 * k)))    // left half
+        #expect(isWhite(rgb(img, 42 * k, 32 * k)))    // right half
+        #expect(isBlue(rgb(img, 32 * k, 32 * k)))     // gap in the middle
     }
 
     @Test func htmlMarkMatchesTheWebLogo() {
