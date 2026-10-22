@@ -23,12 +23,13 @@ enum Allowlist {
     /// Dev builds only: terminals (local server) and browsers (teacher dashboard) stay
     /// running while you test the lock on one Mac. They stay hidden behind the locked
     /// window. Release builds close them like any other app the teacher didn't allow.
+    /// More bundle ids for this Mac only:
+    ///   defaults write ai.proctora.student DevKeep -array com.example.app
     #if FAIRPLAY_DEV
-    static let devKeep: Set<String> = [
+    static let devKeep: Set<String> = Set([
         "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable",
-        "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox", "company.thebrowser.Browser",
-        "com.example.devtool"
-    ]
+        "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox", "company.thebrowser.Browser"
+    ] + (UserDefaults.standard.stringArray(forKey: "DevKeep") ?? []).filter { !$0.isEmpty && $0.count < 200 })
     #else
     static let devKeep: Set<String> = []
     #endif
