@@ -47,6 +47,11 @@ import { TimeUpOffline } from "../../components/student/TimeUpOffline";
 import { CODE_LENGTH, StartCodeBoxes, emptyCode } from "../../components/student/StartCodeBoxes";
 import { QuestionImages } from "../../components/QuestionImages";
 import { TrialExit } from "../../components/student/TrialExit";
+import { Calculator } from "../../components/student/Calculator";
+import { MaterialsPaneContent, WebsitesPaneContent } from "../../components/student/ExamToolPanes";
+import { ToolPane, clampPaneWidth, readPaneWidth } from "../../components/student/ToolPane";
+import { BookIcon, GlobeIcon } from "../../components/student/icons";
+import { forgetAttemptMaterials, loadAttemptMaterials } from "../../lib/materials";
 import "../../styles/student.css";
 
 export const HEARTBEAT_MS = 5000;
@@ -163,6 +168,8 @@ function ExamTakingInner() {
   // server yet. Every API call goes through call(): online attempts call straight through,
   // offline ones first POST start with offline_started_at (once), then use the real id.
   const appsRef = useRef<AllowedApp[] | undefined>(undefined);
+  // 2026-10-23 (exam tools): the exam's websites, handed to the app with "lock" / "session"
+  const sitesRef = useRef<string[]>([]);
   const offline = isOfflineAttemptId(attemptId);
   const offlineExamId = offline ? examIdOfOffline(attemptId) : "";
   const realAidRef = useRef<string | null>(
@@ -252,6 +259,7 @@ function ExamTakingInner() {
         clearAttemptView(doneAid);
       }
       clearAttemptSession(doneAid);
+      forgetAttemptMaterials(doneAid);
       // Sample exam: while the app is still locked the done page keeps the key, so a hand-in the
       // app cannot confirm still has a way out there (it clears the key once unlocked).
       if (trialRef.current && !bridge.isLocked()) writeTrialKey(doneAid, null);
@@ -376,6 +384,7 @@ function ExamTakingInner() {
         queue.init(a.answers);
         setAnswers(queue.getAnswers());
         appsRef.current = a.allowed_apps;   // 2026-10-14: handed to the app with "lock"
+        sitesRef.current = [...(a.tools?.websites ?? [])];
         setWaiting(a.needs_approval === true || a.approval === "pending");
         setAttempt(a);
         setDeadline(a.deadline_at);
@@ -448,8 +457,8 @@ function ExamTakingInner() {
     const res = await bridge.requestLock(
       10000,
       aid && session && token
-        ? { attempt_id: aid, token, session, allowed_apps: bridge.allowedAppIds(appsRef.current) }
-        : { allowed_apps: bridge.allowedAppIds(appsRef.current) },   // offline start
+        ? { attempt_id: aid, token, session, allowed_apps: bridge.allowedAppIds(appsRef.current), allowed_sites: sitesRef.current }
+        : { allowed_apps: bridge.allowedAppIds(appsRef.current), allowed_sites: sitesRef.current },   // offline start
     );
     lockingRef.current = false;
     if (finishedRef.current) return;
@@ -535,7 +544,13 @@ function ExamTakingInner() {
     const session = aid ? getAttemptSession(aid) : null;
     const token = getToken("student");
     if (attempt && aid && session && token)
-      bridge.setExamSession({ attempt_id: aid, token, session, allowed_apps: bridge.allowedAppIds(attempt.allowed_apps) });
+      bridge.setExamSession({
+        attempt_id: aid,
+        token,
+        session,
+        allowed_apps: bridge.allowedAppIds(attempt.allowed_apps),
+        allowed_sites: [...(attempt.tools?.websites ?? [])],   // 2026-10-23
+      });
   }, [attempt, connected]);
 
   // ----- native messages: lock state + integrity events -----
@@ -726,6 +741,40 @@ function ExamTakingInner() {
     };
   }, [navOpen, closeNav]);
 
+  // ----- 2026-10-23 exam tools: calculator, materials, websites -----
+
+  const tools = attempt?.tools;
+  const calcMode = tools?.calculator === "scientific" || tools?.calculator === "graphing" ? tools.calculator : null;
+  const [calcOpen, setCalcOpen] = useState(false);
+  const [calcMounted, setCalcMounted] = useState(false);   // stays mounted: keeps its state
+  const calcButtonRef = useRef<HTMLButtonElement>(null);
+  const toggleCalc = () => {
+    setCalcMounted(true);
+    setCalcOpen((o) => !o);
+  };
+  const closeCalc = () => {
+    setCalcOpen(false);
+    calcButtonRef.current?.focus();
+  };
+  const [pane, setPane] = useState<null | "materials" | "websites">(null);
+  const [paneWidth, setPaneWidth] = useState(() =>
+    clampPaneWidth(readPaneWidth(), typeof window === "undefined" ? 1280 : window.innerWidth),
+  );
+  const [materialCount, setMaterialCount] = useState<number | null>(null);
+  const materialsAid = connected ? realAidRef.current : null;
+  useEffect(() => {
+    // fetched once when the exam opens (kept in memory for a Wi-Fi drop later)
+    if (!tools?.open_book || !materialsAid || phase === "loading") return;
+    let alive = true;
+    loadAttemptMaterials(materialsAid).then(
+      (f) => alive && setMaterialCount(f.length),
+      () => undefined,
+    );
+    return () => {
+      alive = false;
+    };
+  }, [tools?.open_book, materialsAid, phase]);
+
   // ----- render -----
 
   if (phase === "loading")
@@ -794,9 +843,14 @@ function ExamTakingInner() {
   const typeLabel = q?.type === "essay" ? " · Essay" : "";
 
   const isLast = current === questions.length - 1;
+  const toolsShown = showExam || showReview;
+  const paneShown = toolsShown && !!pane && (pane === "materials" ? !!tools?.open_book : (tools?.websites?.length ?? 0) > 0);
 
   return (
-    <div className="stu stu-exam" style={{ ["--stu-text-scale" as string]: String(textSize) }}>
+    <div
+      className={`stu stu-exam${paneShown ? " has-pane" : ""}`}
+      style={{ ["--stu-text-scale" as string]: String(textSize), ["--stu-pane-w" as string]: `${paneWidth}px` }}
+    >
       <NotLockedBanner />
       <LockedBar
         title={attempt.title}
@@ -809,6 +863,13 @@ function ExamTakingInner() {
         onTimerHidden={hideTimer}
         textSize={textSize}
         onTextSize={cycleTextSize}
+        calculator={calcMode && toolsShown ? { open: calcOpen, onToggle: toggleCalc, buttonRef: calcButtonRef } : undefined}
+        materials={tools?.open_book && toolsShown ? { count: materialCount, onOpen: () => setPane("materials") } : undefined}
+        websites={
+          tools && tools.websites.length > 0 && toolsShown
+            ? { count: tools.websites.length, onOpen: () => setPane("websites") }
+            : undefined
+        }
         directions={attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length)}
         trial={
           attempt.trial
@@ -1116,6 +1177,18 @@ function ExamTakingInner() {
       )}
 
       {phase === "trialEnded" && trialEndedPanel}
+
+      {calcMode && calcMounted && toolsShown && <Calculator mode={calcMode} open={calcOpen} onClose={closeCalc} />}
+      {paneShown && pane === "materials" && (
+        <ToolPane title="Materials" icon={<BookIcon />} labelId="pane-materials-h" width={paneWidth} onWidth={setPaneWidth} onClose={() => setPane(null)}>
+          <MaterialsPaneContent attemptId={materialsAid} />
+        </ToolPane>
+      )}
+      {paneShown && pane === "websites" && tools && (
+        <ToolPane title="Websites" icon={<GlobeIcon />} labelId="pane-websites-h" width={paneWidth} onWidth={setPaneWidth} onClose={() => setPane(null)}>
+          <WebsitesPaneContent sites={tools.websites} />
+        </ToolPane>
+      )}
 
       {phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam" && (
         <div className="stu-toast" role="status">

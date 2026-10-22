@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
 from .grading import exam_questions, auto_points, external_question, grade_attempt, is_answered, num, percent, word_count
-from .models import Attempt, ClassMember, DeviceCheck, Exam, IntegrityEvent, User
+from .models import Attempt, ClassMember, DeviceCheck, Exam, ExamMaterial, IntegrityEvent, User
 from .schemas import QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitIn, ReleaseIn, ReviewIn
 from .security import Principal, require_teacher
 from .services import (attempt_key, exam_delivery, exam_out, exam_out_full, invalidate_exam,
@@ -65,10 +65,17 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
     e.total_points = float(sum(q["points"] for q in qs))
     e.updated_at = utcnow()
     # Optional slice-2 fields: on PUT, a field the client did not send keeps its value.
-    for f in ("course", "room", "scheduled_at", "shuffle_questions", "class_id", "allowed_apps",
-              "resume_needs_approval", "require_strong_lock"):
+    for f in ("course", "room", "scheduled_at", "shuffle_questions", "class_id",
+              "resume_needs_approval", "require_strong_lock",
+              "calculator", "open_book", "websites"):            # 2026-10-23: exam tools
         if creating or f in body.model_fields_set:
             setattr(e, f, getattr(body, f))
+    # 2026-10-23: no outside apps any more (calculator, materials and websites are built
+    # in). Older editors still send allowed_apps; it is accepted and dropped, so the apps
+    # close everything when they lock.
+    e.allowed_apps = []
+    if body.mode == "external":
+        e.calculator, e.open_book, e.websites = "off", False, []
     # Slice 3: mode and its fields always come from the body (already normalised by
     # ExamIn: null/[] for "questions" mode, so switching back clears them).
     e.mode = body.mode
@@ -159,6 +166,7 @@ async def delete_exam(exam_id: str, p: Principal = Depends(require_teacher),
         raise HTTPException(409, "Exam is live; close it first")
     aids = (await session.execute(select(Attempt.id).where(Attempt.exam_id == exam_id))).scalars().all()
     await session.execute(delete(IntegrityEvent).where(IntegrityEvent.exam_id == exam_id))
+    await session.execute(delete(ExamMaterial).where(ExamMaterial.exam_id == exam_id))   # 2026-10-23
     await session.execute(delete(Attempt).where(Attempt.exam_id == exam_id))
     await session.delete(e)
     await session.commit()

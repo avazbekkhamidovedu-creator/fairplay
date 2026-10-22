@@ -398,6 +398,8 @@ export function offlineAttemptView(exam: OfflineExam, now = Date.now()): Attempt
     allowed_domains: [],
     finish_url_contains: null,
     allowed_apps: exam.allowed_apps ?? [],
+    // 2026-10-23: the exam tools (older packages: none). Materials need the connection.
+    ...(exam.tools ? { tools: exam.tools } : {}),
   };
 }
 

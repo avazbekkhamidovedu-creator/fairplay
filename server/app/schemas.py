@@ -46,6 +46,48 @@ def normalize_domain(v: str) -> str:
     return ("*." if wildcard else "") + host + path
 
 
+# 2026-10-23 (exam tools): allowed websites of a "questions" exam. Plain host names; the
+# exam pane (and the apps) allow each host and its subdomains. Not the external-exam
+# allowed_domains (no "*." or paths here).
+MAX_WEBSITES = 20
+CALCULATOR_MODES = ("off", "scientific", "graphing")
+
+
+def normalize_website(v: str) -> str:
+    """Host name of one allowed website ("https://docs.python.org/3/" -> "docs.python.org").
+    A scheme, a trailing slash, "www." stays as typed; anything with a real path, a port,
+    a wildcard, an IP-less single label or odd characters is refused (ValueError)."""
+    raw = v.strip()
+    s = raw
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", s):
+        if not s.lower().startswith(("http://", "https://")):
+            raise ValueError(f"'{raw}' is not a website")
+        s = s.split("://", 1)[1]
+    host, _, rest = s.partition("/")
+    if rest.strip("/") or "?" in host or "#" in host:
+        raise ValueError(f"'{raw}': use only the site name, like docs.python.org")
+    host = host.lower().rstrip(".")
+    if ":" in host or "@" in host or host.startswith("*"):
+        raise ValueError(f"'{raw}': use only the site name, like docs.python.org")
+    if (not host or len(host) > 253 or not DOMAIN_RE.match(host) or "." not in host
+            or re.fullmatch(r"[0-9.]+", host)):
+        raise ValueError(f"'{raw}' is not a website name like docs.python.org")
+    return host
+
+
+def normalize_websites(v: list[str] | None) -> list[str]:
+    out: list[str] = []
+    for d in v or []:
+        if not isinstance(d, str) or not d.strip():
+            continue
+        h = normalize_website(d)
+        if h not in out:
+            out.append(h)
+    if len(out) > MAX_WEBSITES:
+        raise ValueError(f"at most {MAX_WEBSITES} websites")
+    return out
+
+
 def external_host(url: str | None) -> str | None:
     """Lowercase hostname of an http(s) URL, or None."""
     if not url:
@@ -254,6 +296,16 @@ class ExamIn(BaseModel):
     resume_needs_approval: bool = True
     # S6: require the strongest lock (beats must say sep=1, else weak_lock is flagged)
     require_strong_lock: bool = False
+    # 2026-10-23 (exam tools): calculator, open book (student uploads), allowed websites.
+    # allowed_apps above is still accepted from older editors but no longer stored.
+    calculator: Literal["off", "scientific", "graphing"] = "off"
+    open_book: bool = False
+    websites: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("websites")
+    @classmethod
+    def _websites(cls, v: list[str]) -> list[str]:
+        return normalize_websites(v)
 
     @field_validator("allowed_apps")
     @classmethod
@@ -319,6 +371,8 @@ class ExamIn(BaseModel):
             self.external_url = url
             fin = (self.finish_url_contains or "").strip()
             self.finish_url_contains = fin or None
+            # 2026-10-23: the exam tools live in FairPlay's own exam page, not on the website
+            self.calculator, self.open_book, self.websites = "off", False, []
         else:
             if not self.questions:
                 raise ValueError("add at least one question")

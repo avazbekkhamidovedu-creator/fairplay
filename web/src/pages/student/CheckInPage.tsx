@@ -7,6 +7,7 @@ import { CheckIcon } from "../../components/student/icons";
 import "../../styles/student.css";
 import { useStudentExams } from "./useStudentExams";
 import { downloadPackage } from "../../lib/offline";
+import { MaterialsUpload } from "../../components/student/MaterialsUpload";
 
 /** Check-in before an exam: what we can verify about this laptop + the start code. */
 export default function CheckInPage() {
@@ -103,6 +104,12 @@ export default function CheckInPage() {
             </p>
           )}
         </section>
+        {/* 2026-10-23: open-book exams: the student's files, before the exam starts */}
+        {exam.tools?.open_book && (
+          <section className="stu-checkin-card stu-checkin-wide" aria-label="Materials">
+            <MaterialsUpload examId={exam.id} />
+          </section>
+        )}
       </div>
     );
   }

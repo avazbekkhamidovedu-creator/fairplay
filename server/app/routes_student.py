@@ -22,7 +22,7 @@ from .schemas import (AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
                       OfflineKeyIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
 from .services import (LIVE_TTL, attempt_view, cache_attempt, find_attempt, get_attempt_meta,
-                       get_exam_cached, new_id, new_receipt, new_session_id)
+                       get_exam_cached, new_id, new_receipt, new_session_id, student_tools)
 from .store import get_store
 from .timeutil import iso, utcnow
 
@@ -111,7 +111,8 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         select(Exam.id, Exam.title, Exam.duration_min, Exam.question_count, Exam.status,
                Attempt.id, Attempt.status, Attempt.submitted_at, Attempt.receipt,
                Exam.course, Exam.room, Exam.scheduled_at, Exam.grades_released,
-               Exam.total_points, Attempt.score, Exam.mode, Exam.delivery, Exam.start_code)
+               Exam.total_points, Attempt.score, Exam.mode, Exam.delivery, Exam.start_code,
+               Exam.calculator, Exam.open_book, Exam.websites)       # 2026-10-23: exam tools
         .outerjoin(Attempt, and_(Attempt.exam_id == Exam.id, Attempt.student_id == p.user_id))
         # Audit S-03: live exams of the student's classes / LMS courses, plus their own attempts.
         .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None)))
@@ -121,7 +122,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         .order_by(Exam.created_at.desc(), Exam.id))).all()
     out = []
     for (eid, title, dur, qc, status, aid, astatus, sub, receipt, course, room, sched, released,
-         total, score, mode, delivery, code) in rows:
+         total, score, mode, delivery, code, calc, open_book, websites) in rows:
         mode = mode or "questions"
         delivery = delivery or ("website" if mode == "external" else "computer")
         attempt = None
@@ -135,7 +136,10 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                     "status": status, "course": course or "", "room": room or "",
                     "scheduled_at": iso(sched), "mode": mode, "delivery": delivery,
                     "attempt": attempt,
-                    "package_id": package_id(secret, eid, code, dur) if status == "live" else None})
+                    "package_id": package_id(secret, eid, code, dur) if status == "live" else None,
+                    # 2026-10-23: shown on "Before you start"; open_book -> the upload area
+                    "tools": student_tools({"mode": mode, "calculator": calc, "open_book": open_book,
+                                            "websites": websites})})
     return out
 
 

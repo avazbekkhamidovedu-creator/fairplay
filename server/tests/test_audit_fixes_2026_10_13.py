@@ -384,16 +384,12 @@ def test_allowed_apps_catalog_and_exam(client, teacher, alice):
     assert client.get("/api/exams/allowed-apps", headers=alice).status_code == 403
     bad = client.post("/api/exams", headers=teacher, json={**SAMPLE_EXAM, "allowed_apps": ["terminal"]})
     assert bad.status_code == 422
+    # 2026-10-23: older editors may still send apps; they are accepted but no longer kept,
+    # so the apps close everything (calculator, materials and websites are built in).
     e = client.post("/api/exams", headers=teacher,
                     json={**SAMPLE_EXAM, "allowed_apps": ["excel", "calculator", "calculator"]}).json()
-    assert e["allowed_apps"] == ["calculator", "excel"]          # catalog order, no duplicates
+    assert e["allowed_apps"] == []
     e = client.post(f"/api/exams/{e['id']}/open", headers=teacher).json()
     a = client.post(f"/api/student/exams/{e['id']}/start", headers=alice,
                     json={"start_code": e["start_code"]}).json()
-    apps = a["allowed_apps"]
-    assert [x["key"] for x in apps] == ["calculator", "excel"]
-    assert apps[0]["mac"] == ["com.apple.calculator"] and "excel" in apps[1]["windows"]
-    # PUT without the field keeps it
-    r = client.put(f"/api/exams/{e['id']}", headers=teacher, json={**SAMPLE_EXAM, "title": "T2"})
-    if r.status_code == 200:
-        assert r.json()["allowed_apps"] == ["calculator", "excel"]
+    assert a["allowed_apps"] == []

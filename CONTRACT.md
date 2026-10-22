@@ -777,3 +777,40 @@ Release builds of the Mac app update themselves from the public download repo
 - **Releases:** the `FairPlay-Mac.zip` must contain `FairPlay.app` at its top level (CI:
   `ditto -c -k --sequesterRsrc --keepParent`) with `CFBundleShortVersionString` equal to the tag
   (both come from `Config.version` / `RELEASE_VERSION`; keep them the same).
+
+## Exam tools (2026-10-23): calculator, open book, allowed websites
+Outside apps are gone: the apps close every windowed app when they lock. What students may
+use is built into the FairPlay exam page.
+- **Exam fields** (teacher `ExamIn` / exam out, columns with `server_default`, so older
+  databases and exams read as off): `calculator: "off"|"scientific"|"graphing"` (default
+  `"off"`), `open_book: bool` (default false), `websites: string[]` (plain host names, lowercase,
+  no scheme / path / port / `*.`, at most 20; `https://Docs.Python.org/` is stored as
+  `docs.python.org`). Website exams always have `off` / false / `[]`. On PUT an omitted field
+  keeps its value. `allowed_apps` is still accepted from older editors but always stored and sent
+  as `[]` (attempt views, offline packages, exam out).
+- **Student:** attempt views (start, GET attempt) and `/api/student/exams` rows add
+  `"tools": {"calculator": ..., "open_book": bool, "websites": [...]}`; offline packages built
+  since add the same `tools`.
+- **Bridge:** the exam page adds `allowed_sites: string[]` (= `tools.websites`, `[]` when none) to
+  `{action:"lock", ...}` (online and offline) and `{action:"session", ...}`. The app lets only
+  those hosts and their subdomains load in sub-frames of the exam page (the websites pane:
+  `<iframe sandbox="allow-scripts allow-same-origin allow-forms">`, no popups, no top
+  navigation). The field is absent from messages of older pages: treat a missing field as `[]`.
+- **CSP:** `frame-src 'self' https:` (the pane) and `worker-src 'self' blob:` (pdf.js) are added;
+  everything else unchanged. The pdf.js worker is `/assets/pdf.worker.min-*.mjs` (served as
+  `text/javascript`), its fonts and character maps under `/pdfjs/`.
+- **Open-book materials** (`app/materials.py`, table `exam_materials`, bytes in the database):
+  - `GET /api/student/exams/{id}/materials` → `{open_book, can_change, reason, files, used_bytes,
+    max_files: 5, max_bytes: 52428800, types}`; `POST` (multipart `file`) → 201 file;
+    `DELETE .../materials/{mid}` → 204. Changes only while the exam is open book, not closed, and
+    the student has no attempt yet (else 409). Limits 5 files / 50 MB in all (409 / 413); type
+    from the bytes: PDF (`%PDF-`), PNG, JPEG, or UTF-8 text named `.txt` / `.md` (else 422).
+  - During the attempt (`in_progress`, with `X-FairPlay-Session`):
+    `GET /api/student/attempts/{aid}/materials` → `{files}`; `.../materials/{mid}` → the bytes as
+    `application/pdf` / `image/png` / `image/jpeg` / `text/plain; charset=utf-8`, `inline`,
+    `nosniff`, `no-store`, sandbox CSP.
+  - Teacher (read only): `GET /api/exams/{id}/materials` → `[{username, name, files}]`;
+    `GET /api/exams/{id}/attempts/{aid}/materials` → `{files}`; `GET /api/exams/{id}/materials/{mid}`.
+  - File: `{id, name, kind: "pdf"|"png"|"jpg"|"txt"|"md", media_type, size, created_at}`.
+  - The exam page fetches the files when the exam opens and keeps them in memory; after a reload
+    without the connection it says "Materials need the connection" (the exam keeps working).

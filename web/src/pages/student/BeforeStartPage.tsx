@@ -6,7 +6,8 @@ import { NotLockedBanner } from "../../components/LockBanner";
 import { AppsToClose, PreflightProblems } from "../../components/student/Preflight";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { StuLoading } from "../../components/student/StudentLayout";
-import { examName, plural } from "../../components/student/format";
+import { examName, plural, toolsLine } from "../../components/student/format";
+import { MaterialsUpload } from "../../components/student/MaterialsUpload";
 import { BatteryIcon, LockIcon } from "../../components/student/icons";
 import { LogoMark } from "../../components/ui/Icon";
 import { batteryTone, useBattery } from "../../lib/battery";
@@ -134,6 +135,11 @@ export default function BeforeStartPage() {
                 {exam.room ? ` · Room ${exam.room}` : ""}
               </p>
             )}
+            {exam && toolsLine(exam.tools) && (
+              <p className="stu-start-tools" data-testid="start-tools">
+                <b>Allowed in FairPlay:</b> {toolsLine(exam.tools)}
+              </p>
+            )}
             {loadError && (
               <div className="stu-alert error" role="alert">
                 {loadError}
@@ -156,6 +162,9 @@ export default function BeforeStartPage() {
                 <b>Need help?</b> Raise your hand. The invigilator can come to your desk.
               </li>
             </ul>
+
+            {/* 2026-10-23: open book: upload (or check) the materials before locking */}
+            {exam?.tools?.open_book && <MaterialsUpload examId={exam.id} compact />}
 
             {battery && (
               <div

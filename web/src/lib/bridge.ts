@@ -57,6 +57,10 @@ export interface ExamSessionParams {
   /** 2026-10-14: app ids (macOS bundle ids and Windows process names) kept open while
    *  locked; every other windowed app is closed. */
   allowed_apps?: string[];
+  /** 2026-10-23 (exam tools): host names the exam's websites pane may show. The app allows
+   *  only these hosts (and their subdomains) inside sub-frames of the exam page; [] = none.
+   *  Sent only when the page passes it, so older message shapes stay as they were. */
+  allowed_sites?: string[];
 }
 
 /** Flatten an attempt's allowed apps into the ids both apps understand. */
@@ -380,7 +384,13 @@ export function setExamSession(params: ExamSessionParams): void {
     token: params.token,
     session: params.session,
     allowed_apps: [...(params.allowed_apps ?? [])],
+    ...sitesOf(params),
   });
+}
+
+/** 2026-10-23: `allowed_sites` for lock / session, when the page gave it (a copy). */
+function sitesOf(p: Partial<ExamSessionParams> | undefined): { allowed_sites?: string[] } {
+  return p?.allowed_sites ? { allowed_sites: [...p.allowed_sites] } : {};
 }
 
 /**
@@ -451,8 +461,8 @@ export function requestLock(timeoutMs = 10000, exam?: Partial<ExamSessionParams>
     // until the attempt reaches the server).
     post(
       exam && exam.session
-        ? { action: "lock", ...exam }
-        : { action: "lock", offline: true, allowed_apps: [...(exam?.allowed_apps ?? [])] },
+        ? { action: "lock", ...exam, ...sitesOf(exam) }
+        : { action: "lock", offline: true, allowed_apps: [...(exam?.allowed_apps ?? [])], ...sitesOf(exam) },
     );
   });
 }

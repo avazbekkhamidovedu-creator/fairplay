@@ -9,9 +9,11 @@ from .timeutil import iso, utcnow
 
 MB = 1024 * 1024
 SCAN_UPLOAD = re.compile(r"^/api/exams/[^/]+/scans$")
+MATERIAL_UPLOAD = re.compile(r"^/api/student/exams/[^/]+/materials$")
 LIMITS = (                      # (path test, max body bytes); first match wins
     (lambda p: bool(SCAN_UPLOAD.match(p)), 210 * MB),   # routes_scan: 200 MB per upload
     (lambda p: p == "/api/uploads", 6 * MB),             # uploads: 5 MB images
+    (lambda p: bool(MATERIAL_UPLOAD.match(p)), 51 * MB),  # 2026-10-23: open-book files, 50 MB
 )
 DEFAULT_LIMIT = 8 * MB          # answers, exams, everything else
 
@@ -19,8 +21,13 @@ DEFAULT_LIMIT = 8 * MB          # answers, exams, everything else
 # put https:// pictures in questions (schemas.ImageIn). Only teacher-authored URLs reach
 # an <img> (no HTML sinks), and Referrer-Policy: no-referrer keeps the exam URL out of
 # those requests. Uploaded pictures (/api/uploads) are the default and stay first-party.
+#
+# 2026-10-23 (exam tools): frame-src https: for the allowed-websites pane (the exam's own
+# list is enforced by the page and, in sub-frames, by the apps); worker-src blob: for the
+# bundled pdf.js worker of the materials viewer. Scripts stay 'self' only.
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; "
+       "frame-src 'self' https:; worker-src 'self' blob:; "
        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
 

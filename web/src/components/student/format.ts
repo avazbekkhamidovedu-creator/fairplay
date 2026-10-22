@@ -65,3 +65,13 @@ export const LETTERS = "ABCDEFGH";
 export function firstName(name: string | null | undefined): string {
   return (name ?? "").trim().split(/\s+/)[0] ?? "";
 }
+
+/** 2026-10-23: "Calculator (graphing) · Materials · 2 websites", or "" when none. */
+export function toolsLine(tools: { calculator: string; open_book: boolean; websites: string[] } | undefined | null): string {
+  if (!tools) return "";
+  const parts: string[] = [];
+  if (tools.calculator === "scientific" || tools.calculator === "graphing") parts.push(`Calculator (${tools.calculator})`);
+  if (tools.open_book) parts.push("Materials (open book)");
+  if (tools.websites.length > 0) parts.push(plural(tools.websites.length, "website"));
+  return parts.join(" · ");
+}

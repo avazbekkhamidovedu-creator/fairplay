@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Ref } from "react";
 import type { SyncStatus } from "../../lib/answerQueue";
 import { batteryTone, useBattery } from "../../lib/battery";
 import { TIMER_FORCE_SHOW_MS, type TextSize } from "../../lib/examPrefs";
@@ -6,7 +6,10 @@ import { formatCountdown } from "../../lib/timer";
 import { LogoMark } from "../ui/Icon";
 import {
   BatteryIcon,
+  BookIcon,
+  CalculatorIcon,
   ChevronIcon,
+  GlobeIcon,
   CloudCheckIcon,
   DiskIcon,
   HelpIcon,
@@ -20,7 +23,8 @@ import {
  * Top bar shown while taking an exam (2026-10-23 layout):
  *   left   logo · lock state · course + title, "Directions" under it
  *   middle the timer, which the student may hide (it comes back by itself in the last 5 minutes)
- *   right  save status · battery (when known) · More (text size, help)
+ *   right  save status · battery (when known) · Calculator (if allowed) · More (Materials and
+ *          Websites when the exam has them, text size, help)
  * "Test my device" sample questions: no timer, and a "Stop" button in the right corner.
  * In a plain browser the yellow "not locked" strip above this bar carries the lock state.
  */
@@ -37,6 +41,9 @@ export function LockedBar({
   directions,
   textSize = 1,
   onTextSize,
+  calculator,
+  materials,
+  websites,
 }: {
   title: string;
   course?: string;
@@ -54,6 +61,11 @@ export function LockedBar({
   directions?: string[];
   textSize?: TextSize;
   onTextSize?: () => void;
+  /** 2026-10-23 (exam tools): only when the teacher allowed it. */
+  calculator?: { open: boolean; onToggle: () => void; buttonRef?: Ref<HTMLButtonElement> };
+  /** open-book exams: count = the student's files (null = not known yet) */
+  materials?: { count: number | null; onOpen: () => void };
+  websites?: { count: number; onOpen: () => void };
 }) {
   const lowTime = remaining < TIMER_FORCE_SHOW_MS;
   const showTime = !timerHidden || lowTime;
@@ -162,6 +174,18 @@ export function LockedBar({
             </span>
           </span>
         )}
+        {calculator && !trial && (
+          <button
+            ref={calculator.buttonRef}
+            type="button"
+            className={`stu-tool${calculator.open ? " on" : ""}`}
+            aria-pressed={calculator.open}
+            onClick={calculator.onToggle}
+          >
+            <CalculatorIcon />
+            <span>Calculator</span>
+          </button>
+        )}
         {!trial && (
           <button
             type="button"
@@ -204,6 +228,42 @@ export function LockedBar({
       )}
       {open === "more" && (
         <div id="exam-more-menu" className="stu-pop stu-pop-right stu-menu" role="menu" aria-label="More">
+          {materials && (
+            <button
+              type="button"
+              role="menuitem"
+              className="stu-menu-item"
+              onClick={() => {
+                close();
+                materials.onOpen();
+              }}
+            >
+              <BookIcon />
+              Materials
+              {materials.count !== null && (
+                <span className="stu-menu-note">
+                  {materials.count} {materials.count === 1 ? "file" : "files"}
+                </span>
+              )}
+            </button>
+          )}
+          {websites && (
+            <button
+              type="button"
+              role="menuitem"
+              className="stu-menu-item"
+              onClick={() => {
+                close();
+                websites.onOpen();
+              }}
+            >
+              <GlobeIcon />
+              Websites
+              <span className="stu-menu-note">
+                {websites.count} {websites.count === 1 ? "site" : "sites"}
+              </span>
+            </button>
+          )}
           {onTextSize && (
             <button type="button" role="menuitem" className="stu-menu-item" onClick={onTextSize}>
               <TextSizeIcon />

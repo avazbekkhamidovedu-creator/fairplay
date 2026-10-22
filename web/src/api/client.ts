@@ -580,3 +580,85 @@ export const studentClassesApi = {
   join: (code: string) => request<StudentClass>("student", "POST", "/api/student/classes/join", { code }),
   leave: (id: number) => request<void>("student", "DELETE", `/api/student/classes/${id}`),
 };
+
+// ---------- 2026-10-23 (exam tools): open-book materials ----------
+
+import type { MaterialFile, MaterialsInfo, StudentMaterials } from "./types";
+
+/** GET a file's bytes (the student's attempt session goes along, like request()). */
+async function fetchBlob(role: Role, path: string): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  const token = getToken(role);
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (role === "student") {
+    const aid = attemptIdOfPath(path);
+    const sess = aid ? getAttemptSession(aid) : null;
+    if (sess) headers["X-FairPlay-Session"] = sess;
+  }
+  let res: Response;
+  try {
+    res = await fetch(path, { headers: withAppHeaders(headers) });
+  } catch {
+    throw new NetworkError();
+  }
+  if (!res.ok) {
+    let data: unknown = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (res.status === 401) {
+      clearToken(role);
+      onUnauthorized(role);
+    }
+    throw errorOf(res.status, data, res.statusText || `Error ${res.status}`);
+  }
+  return res.blob();
+}
+
+export const materialsApi = {
+  /** Own files + limits for an exam (before it starts). */
+  list: (examId: string) => request<MaterialsInfo>("student", "GET", `/api/student/exams/${enc(examId)}/materials`),
+  /** POST multipart "file". PDF / PNG / JPEG / TXT / MD, checked by the server from the bytes. */
+  async upload(examId: string, file: File): Promise<MaterialFile> {
+    const token = getToken("student");
+    const form = new FormData();
+    form.append("file", file, file.name);
+    let res: Response;
+    try {
+      res = await fetch(`/api/student/exams/${enc(examId)}/materials`, {
+        method: "POST",
+        headers: withAppHeaders(token ? { Authorization: `Bearer ${token}`, Accept: "application/json" } : { Accept: "application/json" }),
+        body: form,
+      });
+    } catch {
+      throw new NetworkError();
+    }
+    let data: unknown = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      if (res.status === 401) {
+        clearToken("student");
+        onUnauthorized("student");
+      }
+      throw errorOf(res.status, data, res.statusText || `Error ${res.status}`);
+    }
+    return data as MaterialFile;
+  },
+  remove: (examId: string, id: string) =>
+    request<void>("student", "DELETE", `/api/student/exams/${enc(examId)}/materials/${enc(id)}`),
+  /** During the attempt. */
+  attemptFiles: (aid: string) =>
+    request<{ files: MaterialFile[] }>("student", "GET", `/api/student/attempts/${enc(aid)}/materials`),
+  attemptFile: (aid: string, id: string) => fetchBlob("student", `/api/student/attempts/${enc(aid)}/materials/${enc(id)}`),
+  // teacher (read only)
+  examMaterials: (examId: string) => request<StudentMaterials[]>("teacher", "GET", `/api/exams/${enc(examId)}/materials`),
+  submissionFiles: (examId: string, aid: string) =>
+    request<{ files: MaterialFile[] }>("teacher", "GET", `/api/exams/${enc(examId)}/attempts/${enc(aid)}/materials`),
+  teacherFile: (examId: string, id: string) => fetchBlob("teacher", `/api/exams/${enc(examId)}/materials/${enc(id)}`),
+};

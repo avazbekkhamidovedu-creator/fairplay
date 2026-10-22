@@ -10,6 +10,7 @@ import type { Exam, Question, ResultAnswer, ResultAttempt, Results } from "../..
 import { Loading } from "../../components/Loading";
 import { QuestionImages, TopicChips } from "../../components/QuestionImages";
 import { Pill } from "../../components/teacher/TeacherLayout";
+import { SubmissionMaterials } from "../../components/teacher/SubmissionMaterials";
 import { urlHost } from "../../components/teacher/externalValidation";
 import { errorText, eventLabel, formatWhen, num, pct } from "../../components/teacher/util";
 import { KIND_LABEL, kindOf } from "./examDraft";
@@ -197,6 +198,9 @@ export default function SubmissionReviewPage() {
           />
         ))}
       </ol>
+
+      {/* 2026-10-23: the files the student brought to this open-book exam */}
+      {exam?.open_book && <SubmissionMaterials examId={examId} attemptId={attempt.attempt_id} />}
 
       <div className="t-columns">
         <section className="t-card t-col-3" aria-labelledby="oc-h" style={{ gap: 12 }}>

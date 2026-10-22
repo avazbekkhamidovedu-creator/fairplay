@@ -22,7 +22,9 @@ def test_student_exam_list(client, teacher, alice, live_exam):
     assert item == {"id": live_exam["id"], "title": "Midterm", "duration_min": 30,
                     "question_count": 3, "status": "live", "attempt": None,
                     "course": "", "room": "", "scheduled_at": None,
-                    "mode": "questions", "delivery": "computer"}
+                    "mode": "questions", "delivery": "computer",
+                    # 2026-10-23: exam tools (all off by default)
+                    "tools": {"calculator": "off", "open_book": False, "websites": []}}
     a = start(client, alice, live_exam).json()
     item = next(x for x in client.get("/api/student/exams", headers=alice).json()
                 if x["id"] == live_exam["id"])
@@ -48,7 +50,8 @@ def test_start_wrong_then_right_and_resume(client, alice, live_exam):
                       "mode", "external_url", "allowed_domains", "finish_url_contains", "session",
                       "allowed_apps", "min_app_version",     # S2
                       "approval", "needs_approval",          # S3
-                      "trial"}                                # sample exam flag
+                      "trial",                                # sample exam flag
+                      "tools"}                                # 2026-10-23: exam tools
     assert a["status"] == "in_progress" and a["answers"] == {} and a["title"] == "Midterm"
     for q in a["questions"]:
         for secret in ("correct_index", "answer_number", "tolerance", "accepted_answers"):

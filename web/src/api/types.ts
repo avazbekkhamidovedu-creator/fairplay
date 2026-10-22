@@ -95,6 +95,51 @@ export interface Exam {
   resume_needs_approval?: boolean;
   /** S6: only the strongest lock counts (default false). */
   require_strong_lock?: boolean;
+  /** 2026-10-23 (exam tools); missing from older servers = off. */
+  calculator?: CalculatorMode;
+  open_book?: boolean;
+  websites?: string[];
+}
+
+/** 2026-10-23: calculator setting of an exam. */
+export type CalculatorMode = "off" | "scientific" | "graphing";
+
+/** 2026-10-23: what the student gets inside FairPlay (attempt view, exam list, offline package). */
+export interface ExamTools {
+  calculator: CalculatorMode;
+  open_book: boolean;
+  /** host names; each host and its subdomains may load in the websites pane */
+  websites: string[];
+}
+
+/** 2026-10-23: one open-book file (no bytes). kind is what the server sniffed. */
+export interface MaterialFile {
+  id: string;
+  name: string;
+  kind: "pdf" | "png" | "jpg" | "txt" | "md";
+  media_type: string;
+  size: number;
+  created_at: string;
+}
+
+/** GET /api/student/exams/{id}/materials */
+export interface MaterialsInfo {
+  open_book: boolean;
+  /** false once the attempt exists (or the exam is not open book / closed) */
+  can_change: boolean;
+  reason: string | null;
+  files: MaterialFile[];
+  used_bytes: number;
+  max_files: number;
+  max_bytes: number;
+  types: string[];
+}
+
+/** GET /api/exams/{id}/materials (teacher) */
+export interface StudentMaterials {
+  username: string;
+  name: string;
+  files: MaterialFile[];
 }
 
 /** 2026-10-14: an app a teacher may allow (GET /api/exams/allowed-apps). */
@@ -133,6 +178,9 @@ export interface ExamInput {
   allowed_apps?: string[];
   resume_needs_approval?: boolean;
   require_strong_lock?: boolean;
+  calculator?: CalculatorMode;
+  open_book?: boolean;
+  websites?: string[];
 }
 
 export interface LiveStudent {
@@ -378,6 +426,8 @@ export interface StudentExamSummary {
   scheduled_at: string | null;
   /** slice 3 (always sent by the server). */
   mode?: ExamMode;
+  /** 2026-10-23: exam tools (open_book -> the upload area before the exam). */
+  tools?: ExamTools;
   attempt: null | {
     attempt_id: string;
     status: AttemptStatus;
@@ -460,6 +510,8 @@ export interface AttemptView {
   min_app_version?: string | null;
   /** 2026-10-22: the built-in sample exam ("Stop practice", no score page). */
   trial?: boolean;
+  /** 2026-10-23: calculator / materials / websites (missing from older servers: none). */
+  tools?: ExamTools;
 }
 
 /** 2026-10-22: GET /api/student/trial, for the "Sample exam" card. */
@@ -655,6 +707,8 @@ export interface OfflineExam {
   questions: StudentQuestion[];
   /** 2026-10-14 (packages built since): apps kept open while locked */
   allowed_apps?: AllowedApp[];
+  /** 2026-10-23 (packages built since) */
+  tools?: ExamTools;
   generated_at: string;
 }
 

@@ -119,6 +119,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     set_uploads_dir(settings.uploads_dir)
     app.include_router(offline_router)
     app.include_router(uploads_router)
+    # 2026-10-23 (exam tools): open-book materials
+    from .materials import student_router as materials_student_router, teacher_router as materials_teacher_router
+    app.include_router(materials_student_router)
+    app.include_router(materials_teacher_router)
     app.include_router(topics_router)
     if settings.feature("scan"):
         from .routes_scan import router as scan_router  # slice 6 D: Scan & Grade (paper exams)
@@ -151,6 +155,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def spa(path: str, request: Request):
         candidate = os.path.realpath(os.path.join(static_root, path))
         if (candidate.startswith(static_root + os.sep) and os.path.isfile(candidate)):
+            # 2026-10-23: the pdf.js worker is a module (.mjs); module scripts need a
+            # JavaScript type (and everything is sent with nosniff)
+            if candidate.endswith(".mjs"):
+                return FileResponse(candidate, media_type="text/javascript")
             return FileResponse(candidate)
         index = os.path.join(static_root, "index.html")
         if os.path.isfile(index):

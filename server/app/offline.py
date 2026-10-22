@@ -45,7 +45,7 @@ from .access import require_member
 from .db import get_session
 from .models import Exam
 from .security import Principal, require_student
-from .services import get_exam_cached
+from .services import get_exam_cached, student_tools
 from .store import get_store
 from .timeutil import iso, utcnow
 from .uploads import UPLOAD_URL_PREFIX, read_upload
@@ -146,15 +146,13 @@ def package_plaintext(exam: dict) -> dict:
         "duration_min": exam["duration_min"], "mode": exam.get("mode") or "questions",
         "shuffle_questions": bool(exam.get("shuffle_questions")),
         "questions": inline_images(exam.get("questions") or []),
-        # 2026-10-14: an offline start closes the same apps as an online one
-        "allowed_apps": _apps_for_student(exam.get("allowed_apps")),
+        # 2026-10-14: an offline start closes the same apps as an online one (2026-10-23:
+        # none are allowed any more, so all of them)
+        "allowed_apps": [],
+        # 2026-10-23: calculator / open book / websites, as in the attempt view
+        "tools": student_tools(exam),
         "generated_at": iso(utcnow()),
     }
-
-
-def _apps_for_student(keys):
-    from .allowed_apps import for_student
-    return for_student(keys)
 
 
 def _build(exam: dict, package_key: str) -> dict:

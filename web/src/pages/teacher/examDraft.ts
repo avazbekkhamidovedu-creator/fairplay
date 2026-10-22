@@ -1,6 +1,6 @@
 // Editor state for an exam, plus validation and conversion to the API body.
 
-import type { Delivery, Exam, ExamInput, QuestionImage, QuestionInput, QuestionType } from "../../api/types";
+import type { CalculatorMode, Delivery, Exam, ExamInput, QuestionImage, QuestionInput, QuestionType } from "../../api/types";
 import {
   EMPTY_EXTERNAL_SETTINGS,
   externalExamInput,
@@ -58,8 +58,10 @@ export interface DraftExam {
   externalPoints: string;
   /** Slice 6: on computers / on paper / on another website (website <=> external.mode). */
   delivery: Delivery;
-  /** 2026-10-14: apps students may keep open (catalog keys); all others are closed. */
-  allowedApps: string[];
+  /** 2026-10-23 (exam tools): replaces the allowed apps (no outside apps any more). */
+  calculator: CalculatorMode;
+  openBook: boolean;
+  websites: string[];
   /** S3: the teacher approves a student coming back after FairPlay closed (default on). */
   resumeNeedsApproval: boolean;
   /** S6: require the strongest lock (default off). */
@@ -179,7 +181,9 @@ export function draftFromExam(exam?: Exam): DraftExam {
       external: { ...EMPTY_EXTERNAL_SETTINGS },
       externalPoints: "100",
       delivery: "computer",
-      allowedApps: [],
+      calculator: "off",
+      openBook: false,
+      websites: [],
       resumeNeedsApproval: true,
       strongLock: false,
     };
@@ -196,7 +200,9 @@ export function draftFromExam(exam?: Exam): DraftExam {
     external: externalSettingsFrom(exam),
     externalPoints: exam.mode === "external" && exam.total_points ? String(exam.total_points) : "100",
     delivery: exam.delivery ?? (exam.mode === "external" ? "website" : "computer"),
-    allowedApps: [...(exam.allowed_apps ?? [])],
+    calculator: exam.calculator === "scientific" || exam.calculator === "graphing" ? exam.calculator : "off",
+    openBook: exam.open_book === true,
+    websites: [...(exam.websites ?? [])],
     resumeNeedsApproval: exam.resume_needs_approval !== false,
     strongLock: exam.require_strong_lock === true,
     questions: exam.questions.map((q) => ({
@@ -370,7 +376,11 @@ export function toExamInput(d: DraftExam): ExamInput {
     ...externalExamInput(d.external),
     ...(d.external.mode === "external" ? { external_points: Number(d.externalPoints) } : {}),
     delivery: d.external.mode === "external" ? "website" : d.delivery === "paper" ? "paper" : "computer",
-    allowed_apps: d.delivery === "paper" && d.external.mode !== "external" ? [] : [...d.allowedApps],
+    // 2026-10-23: no outside apps; the tools are for exams taken in FairPlay
+    allowed_apps: [],
+    ...(d.external.mode === "external" || d.delivery === "paper"
+      ? { calculator: "off" as const, open_book: false, websites: [] }
+      : { calculator: d.calculator, open_book: d.openBook, websites: [...d.websites] }),
     resume_needs_approval: d.resumeNeedsApproval,
     require_strong_lock: d.strongLock,
   };

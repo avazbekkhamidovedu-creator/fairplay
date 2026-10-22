@@ -101,9 +101,32 @@ def exam_out(e: Exam, pending_grading: int = 0) -> dict:
         "course_link_id": e.course_link_id, "lms_assignment_id": e.lms_assignment_id,
         "delivery": exam_delivery(e),  # slice 6
         "class_id": e.class_id,        # audit S-03
-        "allowed_apps": list(e.allowed_apps or []),   # 2026-10-14
+        # 2026-10-14, emptied 2026-10-23: outside apps are no longer allowed (older pages
+        # still read the field)
+        "allowed_apps": [],
         **lock_settings(e),                           # S3 / S6
+        **tool_settings(e),                           # 2026-10-23: exam tools
     }
+
+
+def tool_settings(e: Exam) -> dict:
+    """2026-10-23: the exam tools as stored (teacher view and the student exam cache).
+    Rows from before have the column defaults; website exams never have tools."""
+    if e.mode == "external":
+        return {"calculator": "off", "open_book": False, "websites": []}
+    calc = e.calculator if e.calculator in ("scientific", "graphing") else "off"
+    return {"calculator": calc, "open_book": bool(e.open_book), "websites": list(e.websites or [])}
+
+
+def student_tools(exam: dict) -> dict:
+    """`tools` in the attempt view, the exam list and the offline package. `exam` is the
+    cached student view (entries cached before 2026-10-23 have no tool fields: all off)."""
+    if (exam.get("mode") or "questions") == "external":
+        return {"calculator": "off", "open_book": False, "websites": []}
+    calc = exam.get("calculator")
+    return {"calculator": calc if calc in ("scientific", "graphing") else "off",
+            "open_book": bool(exam.get("open_book")),
+            "websites": [w for w in exam.get("websites") or [] if isinstance(w, str)]}
 
 
 def lock_settings(e: Exam) -> dict:
@@ -197,8 +220,9 @@ async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> 
         "class_id": e.class_id,              # audit S-03: ... or to the exam's class
         "delivery": exam_delivery(e),  # slice 6: paper exams are never started in the app
         "scheduled_at": iso(e.scheduled_at),
-        "allowed_apps": list(e.allowed_apps or []),   # 2026-10-14
+        "allowed_apps": [],                           # 2026-10-14, emptied 2026-10-23
         **lock_settings(e),                           # S3 / S6: read by start and app-beat
+        **tool_settings(e),                           # 2026-10-23: exam tools
         "is_trial": bool(e.is_trial),                 # 2026-10-22: the sample exam
         "questions": [student_question(q) for q in e.questions or []],
         **external_fields(e),
@@ -278,13 +302,13 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         "external_url": exam.get("external_url") if external else None,
         "allowed_domains": list(exam.get("allowed_domains") or []) if external else [],
         "finish_url_contains": exam.get("finish_url_contains") if external else None,
-        # 2026-10-14: apps the app keeps open while locked (everything else is closed)
-        "allowed_apps": _student_apps(exam.get("allowed_apps")),
+        # 2026-10-14: apps the app keeps open while locked (everything else is closed).
+        # 2026-10-23: always [] now (older caches may still hold keys): close everything.
+        "allowed_apps": [],
+        # 2026-10-23: {calculator, open_book, websites}; the page passes websites to the
+        # app as allowed_sites (the only hosts its sub-frames may load)
+        "tools": student_tools(exam),
         "approval": approval_of(a),    # S3: "pending" -> the page shows "Wait for your teacher"
         "trial": bool(exam.get("is_trial")),   # 2026-10-22: the sample exam (Stop practice)
     }
 
-
-def _student_apps(keys):
-    from .allowed_apps import for_student
-    return for_student(keys)

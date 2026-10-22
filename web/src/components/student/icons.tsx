@@ -1,4 +1,5 @@
 // Small inline icons used by the student UI. All decorative (aria-hidden).
+import type { ReactNode } from "react";
 
 export function CheckIcon({ size = 20, color = "#16794C" }: { size?: number; color?: string }) {
   return (
@@ -220,5 +221,105 @@ export function CrossOutIcon({ size = 30 }: { size?: number }) {
       <text x="15" y="15" textAnchor="middle" fontSize="11" fontWeight="700" fontFamily="inherit" fill="currentColor">ABC</text>
       <path d="M5 17 25 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
     </svg>
+  );
+}
+
+// 2026-10-23 (exam tools)
+function Stroke({ size, children }: { size: number; children: ReactNode }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {children}
+    </svg>
+  );
+}
+
+export function CalculatorIcon({ size = 20 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <rect x="5" y="2.5" width="14" height="19" rx="2.5" />
+      <rect x="8" y="5.5" width="8" height="3.5" rx="0.8" />
+      <path d="M8.5 13h.01M12 13h.01M15.5 13h.01M8.5 16.5h.01M12 16.5h.01M15.5 16.5h.01" strokeWidth="2.6" />
+    </Stroke>
+  );
+}
+
+export function BookIcon({ size = 18 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z" />
+      <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5zM8 7.5h8" />
+    </Stroke>
+  );
+}
+
+export function GlobeIcon({ size = 18 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" />
+    </Stroke>
+  );
+}
+
+export function ReloadIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" />
+    </Stroke>
+  );
+}
+
+export function PlusIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <path d="M12 5v14M5 12h14" />
+    </Stroke>
+  );
+}
+
+export function MinusIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <path d="M5 12h14" />
+    </Stroke>
+  );
+}
+
+export function UploadIcon({ size = 22 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <path d="M12 16V4M7 9l5-5 5 5M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+    </Stroke>
+  );
+}
+
+export function FileIcon({ size = 18, label }: { size?: number; label?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 2.5H6.5A2 2 0 0 0 4.5 4.5v15a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2.5V8h5.5" />
+      {label && (
+        <text x="12" y="17.5" textAnchor="middle" fontSize="5.6" fontWeight="700" fill="currentColor" stroke="none">
+          {label}
+        </text>
+      )}
+    </svg>
+  );
+}
+
+export function SearchIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m20 20-4.2-4.2" />
+    </Stroke>
+  );
+}
+
+export function HomeIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Stroke size={size}>
+      <path d="M4 11 12 4l8 7M6.5 9.5V20h11V9.5" />
+    </Stroke>
   );
 }

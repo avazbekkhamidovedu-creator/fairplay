@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer,
-                        String, Text, UniqueConstraint, false, text, true)
-from sqlalchemy.orm import Mapped, mapped_column
+                        LargeBinary, String, Text, UniqueConstraint, false, text, true)
+from sqlalchemy.orm import Mapped, deferred, mapped_column
 
 from .db import Base
 from .timeutil import utcnow
@@ -89,6 +89,16 @@ class Exam(Base):
     # never shown to teachers and never count anywhere.
     is_trial: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
                                            server_default=false(), index=True)
+    # 2026-10-23 (exam tools): what students get inside FairPlay instead of outside apps.
+    # calculator "off" | "scientific" | "graphing"; open_book: students upload materials
+    # before they start (ExamMaterial); websites: host names the exam pane may show (each
+    # host and its subdomains), "questions" exams only.
+    calculator: Mapped[str] = mapped_column(String(16), nullable=False, default="off",
+                                            server_default="off")
+    open_book: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                            server_default=false())
+    websites: Mapped[list] = mapped_column(JSON, nullable=False, default=list,
+                                           server_default=text("'[]'"))
 
 
 class Attempt(Base):
@@ -251,3 +261,20 @@ class DeviceCheck(Base):
     checks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     exam_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ExamMaterial(Base):
+    """2026-10-23: a file a student brings to an open-book exam (PDF, PNG, JPEG, TXT, MD).
+    Uploaded before the attempt exists, read inside the exam. The bytes live in the
+    database (Render's disk is not kept across deploys); `data` is deferred so lists never
+    load it."""
+    __tablename__ = "exam_materials"
+    __table_args__ = (Index("ix_materials_exam_student", "exam_id", "student_id"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    exam_id: Mapped[str] = mapped_column(ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)          # pdf | png | jpg | txt | md
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
