@@ -126,7 +126,7 @@ describe("Test my device card", () => {
       </MemoryRouter>,
     );
     expect(screen.getByRole("heading", { name: "Test my device" })).toBeTruthy();
-    expect(screen.getByRole("list", { name: "Laptop checks" })).toBeTruthy();
+    expect(screen.getByText("Open the FairPlay app to test this computer.")).toBeTruthy();
     expect(screen.getByText("Locks like a real exam. Stop any time. Not graded.")).toBeTruthy();
     const btn = await screen.findByRole("button", { name: "Try 5 sample questions" });
     expect(btn.className).toContain("primary");

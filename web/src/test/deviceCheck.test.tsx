@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../api/client";
-import { DeviceCheckRun, ReadinessChecks } from "../components/student/Readiness";
+import { DeviceCheckRun, DeviceStatus, ReadinessChecks } from "../components/student/Readiness";
 import { DeviceReadiness } from "../pages/teacher/LiveRoom";
 import * as bridge from "../lib/bridge";
 
@@ -86,6 +86,50 @@ describe("device check (S1)", () => {
     const body = JSON.parse(String(init.body));
     expect(body).toMatchObject({ platform: "mac", app_version: "0.5", os_version: "15.1", exam_id: "e_1" });
     expect(body.checks).toHaveLength(3);
+  });
+
+  it("Test my device: checks by itself and shows one line plus only the problems", async () => {
+    native();
+    setToken("student", "S");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    render(<DeviceStatus readiness={{ native: true, platform: "mac", trusted: true }} />);
+    expect(screen.getByText("Checking this Mac…")).toBeInTheDocument();
+    send({ ...ANSWER, apps_to_close: ["Safari", "Word"] });
+    expect(await screen.findByText("1 thing to fix")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open settings" })).toBeInTheDocument(); // Displays settings
+    expect(await screen.findByText("1 thing to fix")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Things to fix" }).textContent).toBe("Unplug the second display Open settings");
+    expect(screen.getByText("A VPN is on")).toBeInTheDocument();
+    expect(screen.getByText(/2 apps will close/)).toBeInTheDocument();
+    expect(screen.queryByText("macOS 15.1")).toBeNull();            // passed rows stay folded
+    await userEvent.click(screen.getByRole("button", { name: "Show all checks" }));
+    expect(screen.getByText("macOS 15.1")).toBeInTheDocument();
+  });
+
+  it("Test my device: a Sharing problem gets Open settings", async () => {
+    const post = native();
+    setToken("student", "S");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    render(<DeviceStatus readiness={{ native: true, platform: "mac", trusted: true }} />);
+    const msg = "Turn off Remote Login (SSH) in System Settings > General > Sharing.";
+    send({ type: "preflight", problems: [msg], checks: [{ id: "blocked_apps", ok: false, message: msg }], platform: "mac" });
+    await userEvent.click(await screen.findByRole("button", { name: "Open settings" }));
+    expect(post).toHaveBeenCalledWith({ action: "openSettings", pane: "sharing" });
+  });
+
+  it("Test my device: all good is one green line", async () => {
+    native();
+    setToken("student", "S");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    render(<DeviceStatus readiness={{ native: true, platform: "mac", trusted: true }} />);
+    send({ type: "preflight", problems: [], checks: [{ id: "a", ok: true, message: "A" }, { id: "b", ok: true, message: "B" }], platform: "mac" });
+    expect(await screen.findByText("This Mac is ready")).toBeInTheDocument();
+    expect(screen.getByText(/2 checks passed/)).toBeInTheDocument();
+  });
+
+  it("Test my device in a browser asks for the app", () => {
+    render(<DeviceStatus readiness={{ native: false, platform: null, trusted: null }} />);
+    expect(screen.getByText("Open the FairPlay app to test this computer.")).toBeInTheDocument();
   });
 
   it("names the platform the page runs in", () => {

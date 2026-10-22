@@ -2050,8 +2050,88 @@ details.stu-rubric-details > summary .pts {
 .stu-trial-title svg {
   color: var(--s-primary);
 }
-.stu-trial-card .stu-checks {
+.stu-dev {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stu-dev-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  background: var(--s-ground);
+  color: var(--s-text-2);
+}
+.stu-dev-line svg {
+  flex-shrink: 0;
+}
+.stu-dev-line.ok {
+  background: var(--s-success-tint);
+  color: var(--s-text);
+}
+.stu-dev-line.warn {
+  background: var(--s-warn-tint);
+  color: var(--s-text);
+}
+.stu-dev-sub {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--s-muted);
+}
+.stu-dev-list,
+.stu-dev-notes,
+.stu-dev-all {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.stu-dev-list {
+  color: var(--s-text);
+}
+.stu-dev-notes {
+  color: var(--s-muted);
+}
+.stu-dev-all {
+  list-style: none;
+  padding: 0;
+  color: var(--s-text-2);
+}
+.stu-dev-all li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.stu-dev-all svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.stu-dev-actions {
+  display: flex;
+  gap: 16px;
+}
+.stu-linkbtn {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--s-primary);
+  cursor: pointer;
+}
+.stu-linkbtn:hover {
+  text-decoration: underline;
 }
 /* .stu-btn.primary is the logo blue (#2F4BD8). */
 .stu-trial-try {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { studentApi } from "../../api/client";
 import * as bridge from "../../lib/bridge";
 import { AlertIcon, CheckIcon, DotsIcon } from "./icons";
@@ -159,5 +159,147 @@ export function DeviceCheckRows({ report, saved }: { report: bridge.PreflightRep
         {saved ? "Your teacher can see this check." : "Could not send this check to your teacher. Try again when online."}
       </p>
     </>
+  );
+}
+
+function deviceWord(platform: string | null): string {
+  return platform === "windows" ? "PC" : platform === "ipad" ? "iPad" : platform === "mac" ? "Mac" : "computer";
+}
+
+/**
+ * 2026-10-22: "Test my device" card (like Bluebook): the check runs by itself, then ONE line
+ * says whether this device is ready. Only problems are spelled out; notes (battery, VPN) are
+ * one small line each; every row is behind "Show all checks". The result is stored for the
+ * teacher as with DeviceCheckRun.
+ */
+export function DeviceStatus({ readiness }: { readiness: Readiness }) {
+  const [state, setState] = useState<RunState>({ kind: "idle" });
+  const [showAll, setShowAll] = useState(false);
+  const device = deviceWord(readiness.platform);
+
+  const run = useCallback(async () => {
+    setState({ kind: "running" });
+    const report = await bridge.preflightReport();
+    if (!report) {
+      setState({ kind: "noAnswer" });
+      return;
+    }
+    let saved = false;
+    try {
+      await studentApi.deviceCheck({
+        platform: report.platform,
+        app_version: report.app_version,
+        os_version: report.os_version,
+        checks: report.checks,
+        exam_id: null,
+      });
+      saved = true;
+    } catch {
+      /* offline: the result still helps the student */
+    }
+    setState({ kind: "done", report, saved });
+  }, []);
+
+  useEffect(() => {
+    if (readiness.native) void run();
+  }, [readiness.native, run]);
+
+  if (!readiness.native) {
+    return (
+      <p className="stu-dev-line warn" role="status">
+        <AlertIcon size={16} />
+        <span>Open the FairPlay app to test this computer.</span>
+      </p>
+    );
+  }
+  if (state.kind === "idle" || state.kind === "running") {
+    return (
+      <p className="stu-dev-line" role="status">
+        <DotsIcon size={16} />
+        <span>Checking this {device}…</span>
+      </p>
+    );
+  }
+  if (state.kind === "noAnswer") {
+    return (
+      <p className="stu-dev-line" role="status">
+        <span>This version of FairPlay can't run the full check. The exam still checks before it locks.</span>
+      </p>
+    );
+  }
+
+  const { report, saved } = state;
+  const rows = report.checks.length
+    ? report.checks
+    : report.problems.map((p, i) => ({ id: `problem_${i}`, ok: false, message: p, info: false }));
+  const problems = rows.filter((c) => !c.ok && !c.info);
+  const notes = rows.filter((c) => !c.ok && c.info);
+  const passed = rows.filter((c) => c.ok).length;
+  const apps = report.apps_to_close.length;
+
+  return (
+    <div className="stu-dev" data-testid="device-status">
+      {problems.length === 0 ? (
+        <p className="stu-dev-line ok" role="status">
+          <CheckIcon size={16} />
+          <span>
+            This {device} is ready
+            {passed > 0 && <span className="stu-dev-sub"> · {passed} checks passed</span>}
+          </span>
+        </p>
+      ) : (
+        <>
+          <p className="stu-dev-line warn" role="status">
+            <AlertIcon size={16} />
+            <span>{problems.length === 1 ? "1 thing to fix" : `${problems.length} things to fix`}</span>
+          </p>
+          <ul className="stu-dev-list" aria-label="Things to fix">
+            {problems.map((c) => {
+              const pane = readiness.platform === "mac" ? bridge.settingsPaneFor(c.message) : null;
+              return (
+                <li key={c.id}>
+                  {c.message || c.id}
+                  {pane && (
+                    <>
+                      {" "}
+                      <button type="button" className="stu-linkbtn" onClick={() => bridge.openSettings(pane)}>
+                        Open settings
+                      </button>
+                    </>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      {(notes.length > 0 || apps > 0) && (
+        <ul className="stu-dev-notes" aria-label="Notes">
+          {notes.map((c) => (
+            <li key={c.id}>{c.message || c.id}</li>
+          ))}
+          {apps > 0 && <li>{apps === 1 ? "1 app will close" : `${apps} apps will close`} when an exam starts.</li>}
+        </ul>
+      )}
+      {showAll && (
+        <ul className="stu-dev-all" aria-label="All checks">
+          {rows.map((c) => (
+            <li key={c.id} className={c.ok ? "ok" : c.info ? "" : "warn"}>
+              {c.ok ? <CheckIcon size={14} /> : c.info ? <DotsIcon size={16} /> : <AlertIcon size={14} />}
+              <span>{c.message || c.id}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="stu-dev-actions">
+        <button type="button" className="stu-linkbtn" onClick={() => void run()}>
+          Check again
+        </button>
+        <button type="button" className="stu-linkbtn" onClick={() => setShowAll((v) => !v)} aria-expanded={showAll}>
+          {showAll ? "Hide checks" : "Show all checks"}
+        </button>
+      </div>
+      {!saved && <p className="stu-dev-sub">Couldn't send this check to your teacher. It will be sent next time.</p>}
+    </div>
   );
 }

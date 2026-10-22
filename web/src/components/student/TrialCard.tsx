@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, NetworkError, studentApi } from "../../api/client";
 import type { TrialInfo } from "../../api/types";
-import { DeviceCheckRun, ReadinessChecks, useReadiness } from "./Readiness";
+import { DeviceStatus, useReadiness } from "./Readiness";
 
 export function trialStartError(err: unknown): string {
   if (err instanceof NetworkError) return "Cannot reach the server. Check the connection and try again.";
@@ -68,8 +68,7 @@ export function TrialCard() {
         <DeviceIcon />
         Test my device
       </h2>
-      <ReadinessChecks readiness={readiness} />
-      <DeviceCheckRun />
+      <DeviceStatus readiness={readiness} />
       <button
         type="button"
         className="stu-btn primary stu-trial-try"
