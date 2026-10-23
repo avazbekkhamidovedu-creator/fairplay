@@ -706,6 +706,9 @@ export const contentApi = {
   /** A picture (fp-asset:) of a question during the attempt (attempt owner, exam live). */
   attemptAsset: (aid: string, name: string) =>
     fetchBlob("student", `/api/student/attempts/${enc(aid)}/assets/${enc(name)}`),
+  /** A picture of a released grade page (after the exam: sign-in only). */
+  gradeAsset: (examId: string, name: string) =>
+    fetchBlob("student", `/api/student/grades/${enc(examId)}/assets/${enc(name)}`),
   /** The same picture for the teacher. */
   teacherAsset: (examId: string, name: string) => fetchBlob("teacher", `/api/exams/${enc(examId)}/assets/${enc(name)}`),
   /** POST multipart "file" to .../files?question_id=: a file for a file_upload question

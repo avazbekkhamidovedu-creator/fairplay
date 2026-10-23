@@ -214,3 +214,28 @@ describe("one student's page of an externally graded exam (the report link targe
     expect(screen.queryByRole("button", { name: /save/i })).toBeNull();
   });
 });
+
+describe("pictures on a released grade page", () => {
+  it("come from the grade asset route of the exam", async () => {
+    setToken("student", "S");
+    const blob = new Blob(["png"], { type: "image/png" });
+    const get = vi.spyOn(contentApi, "gradeAsset").mockResolvedValue(blob);
+    const had = URL.createObjectURL;
+    URL.createObjectURL = (() => "blob:cell") as typeof URL.createObjectURL;
+    try {
+      const { ExternalFeedbackQuestionCard } = await import("../components/student/FeedbackQuestion");
+      render(
+        <ExternalFeedbackQuestionCard
+          examId="e_9"
+          q={{ question_id: "p1", index: 0, type: "short", prompt: "See ![cell](fp-asset:cell.png)", options: [],
+            points: 10, points_awarded: 5, status: "partial", given: "x", correct_answer: null, tolerance: null,
+            comment: "", rubric: [], rubric_scores: null, prompt_format: "markdown", comment_format: "markdown" } as never}
+        />,
+      );
+      await waitFor(() => expect(document.querySelector("img")?.getAttribute("src")).toBe("blob:cell"));
+      expect(get).toHaveBeenCalledWith("e_9", "cell.png");
+    } finally {
+      URL.createObjectURL = had;
+    }
+  });
+});

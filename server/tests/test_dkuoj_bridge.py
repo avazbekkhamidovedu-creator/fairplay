@@ -477,12 +477,19 @@ def test_full_flow(oj, fake):
     assert "external_ref" not in dq["Q1"] and "option_ids" not in json.dumps(d)
     lst = oj.get("/api/student/exams", headers=alice).json()
     assert next(x for x in lst if x["id"] == e["id"])["attempt"]["percent"] == 82.0
+    # the grade page's pictures: released result only, no app session needed after the exam
+    r = oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers={"Authorization": alice["Authorization"]})
+    assert r.status_code == 200 and r.content == PNG
+    assert oj.get(f"/api/student/grades/{e['id']}/assets/nope.png", headers=alice).status_code == 404
     # carol has no released result
     assert oj.get(f"/api/student/grades/{e['id']}", headers=carol).status_code == 403
+    assert oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers=carol).status_code == 404
+    assert oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers=bob).status_code == 404
     # a withdrawn release hides it again
     fake.results = [{**fake.results[0], "released": False, "updated_at": iso(utcnow() + timedelta(seconds=5))}]
     run(oj, now=fake.end + timedelta(minutes=3))
     assert oj.get(f"/api/student/grades/{e['id']}", headers=alice).status_code == 403
+    assert oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers=alice).status_code == 404
 
 
 def test_package_waits_until_24h_before_and_honours_425(oj, fake):

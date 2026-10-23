@@ -75,6 +75,11 @@ export function attemptAssetContext(aid: string | null, inline?: Record<string, 
   return { scope: `a:${aid ?? "offline"}`, inline, fetch: aid ? (n) => contentApi.attemptAsset(aid, n) : null };
 }
 
+/** The student's released grade page of an exam (pictures of its questions). */
+export function gradeAssetContext(examId: string): AssetContext {
+  return { scope: `g:${examId}`, fetch: (n) => contentApi.gradeAsset(examId, n) };
+}
+
 export function teacherAssetContext(examId: string, inline?: Record<string, string> | null): AssetContext {
   return { scope: `t:${examId}`, inline, fetch: (n) => contentApi.teacherAsset(examId, n) };
 }

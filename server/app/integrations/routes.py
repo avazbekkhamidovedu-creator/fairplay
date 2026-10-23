@@ -6,8 +6,10 @@
   normal teacher sign-in at `POST /api/integrations/live/exchange`. No token in a URL.
 - `GET /api/integrations/<source>/status`: health of one integration for teachers.
 - Statement assets (`fp-asset:<name>` in prompts): `GET /api/student/attempts/{aid}/assets/<name>`
-  (attempt owner, with the app session, exam live or attempt in progress) and
-  `GET /api/exams/{id}/assets/<name>` (the exam's teachers).
+  (attempt owner, with the app session, exam live or attempt in progress),
+  `GET /api/student/grades/{exam_id}/assets/<name>` (a student whose result the external
+  system released: the pictures of their grade page) and `GET /api/exams/{id}/assets/<name>`
+  (the exam's teachers).
 """
 from __future__ import annotations
 
@@ -104,6 +106,25 @@ async def attempt_asset(aid: str, name: str, request: Request, p: Principal = De
     if integ is None or (exam.get("status") != "live" and a.status != "in_progress"):
         raise HTTPException(404, "Not found")
     found = await integ.asset(session, a.exam_id, name)
+    if found is None:
+        raise HTTPException(404, "Not found")
+    return _asset_response(found, request)
+
+
+@router.get("/api/student/grades/{exam_id}/assets/{name}")
+async def grade_asset(exam_id: str, name: str, request: Request, p: Principal = Depends(require_student),
+                      session: AsyncSession = Depends(get_session)):
+    """Pictures of a released grade page (after the exam: no app session needed)."""
+    from sqlalchemy import select
+    from ..models import Exam
+    e = await session.get(Exam, exam_id)
+    integ = registry.integration_for(e) if e is not None else None
+    a = (await session.execute(select(Attempt).where(
+        Attempt.exam_id == exam_id, Attempt.student_id == p.user_id,
+        Attempt.status == "submitted"))).scalar_one_or_none() if integ else None
+    if a is None or not integ.released(a.external_result, e.total_points or 0)[0]:
+        raise HTTPException(404, "Not found")
+    found = await integ.asset(session, e.id, name)
     if found is None:
         raise HTTPException(404, "Not found")
     return _asset_response(found, request)

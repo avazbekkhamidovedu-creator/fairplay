@@ -104,7 +104,7 @@ function Feedback({ data }: { data: StudentFeedback }) {
       )}
       {questions.map((q) =>
         external ? (
-          <ExternalFeedbackQuestionCard key={q.question_id} q={q} />
+          <ExternalFeedbackQuestionCard key={q.question_id} q={q} examId={data.exam_id} />
         ) : (
           <FeedbackQuestionCard key={q.question_id} q={q} />
         ),

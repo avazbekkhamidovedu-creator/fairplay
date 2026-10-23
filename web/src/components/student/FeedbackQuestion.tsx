@@ -6,6 +6,7 @@ import { LANGUAGE_LABEL } from "../../lib/code/languages";
 import "../../styles/code.css";
 import { MarkdownContent } from "../MarkdownContent";
 import { isCodeAnswer } from "../../lib/answerTypes";
+import { gradeAssetContext } from "../../lib/questionAssets";
 
 export function typeLabel(q: Pick<FQ, "type" | "options">): string {
   if (q.type === "mcq") {
@@ -168,7 +169,7 @@ function richStatus(q: FQ): FQ["status"] {
 }
 
 /** One question of an exam graded elsewhere: points and that system's feedback. */
-export function ExternalFeedbackQuestionCard({ q }: { q: FQ }) {
+export function ExternalFeedbackQuestionCard({ q, examId }: { q: FQ; examId?: string }) {
   const headId = `fbq-${q.question_id}`;
   const label = q.label || `Question ${q.index + 1}`;
   const code = isCodeAnswer(q.given) || q.type === "code";
@@ -181,7 +182,12 @@ export function ExternalFeedbackQuestionCard({ q }: { q: FQ }) {
         </h2>
         <StatusPill q={{ ...q, status: richStatus(q) }} />
       </div>
-      <MarkdownContent className="stu-fbq-prompt" format={q.prompt_format ?? "markdown"} text={q.prompt} />
+      <MarkdownContent
+        className="stu-fbq-prompt"
+        format={q.prompt_format ?? "markdown"}
+        text={q.prompt}
+        assets={examId ? gradeAssetContext(examId) : null}
+      />
       <div className={`stu-ans${code ? " code" : ""}`}>
         <span>YOUR ANSWER{isCodeAnswer(q.given) ? ` · ${q.given.language}` : ""}</span>
         {code ? (
