@@ -19,9 +19,11 @@ public enum ExamPaths {
 
     /// Pages a locked iPad may show: the locked attempt's exam / website-exam / done pages
     /// (any attempt's while the attempt is not known yet, i.e. an offline start).
-    /// 2026-10-23: the pre-exam lock (no attempt) also shows the start-code pages.
-    public static func allowedWhileLocked(path: String, attemptId: String?, preLock: Bool = false) -> Bool {
-        if preLock && attemptId == nil && PreLockState.allowedWhilePreLocked(path: path) { return true }
+    /// 2026-10-23 (review): the pre-exam lock (no attempt) shows exactly the pages
+    /// PreLockState.allowedWhilePreLocked allows (`examId`: the exam it was taken for).
+    public static func allowedWhileLocked(path: String, attemptId: String?, preLock: Bool = false,
+                                          examId: String? = nil) -> Bool {
+        if preLock && attemptId == nil { return PreLockState.allowedWhilePreLocked(path: path, examId: examId) }
         let p = path.lowercased()
         let roots = ["/student/exam/", "/student/external/", "/student/external-done/", "/student/done/"]
         guard let aid = attemptId?.lowercased() else { return roots.contains { p.hasPrefix($0) } }

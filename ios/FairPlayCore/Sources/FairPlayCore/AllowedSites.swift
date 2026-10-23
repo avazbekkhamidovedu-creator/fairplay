@@ -41,21 +41,30 @@ public enum AllowedSites {
 
     public static let wildcardPrefix = "*."
 
-    /// Wildcard bases that are never allowed: public suffixes and shared hosting, where
-    /// anyone can get a subdomain. The one list on the iPad (same as the Mac's and Windows').
-    public static let sharedSuffixes: Set<String> = [
+    /// Wildcard bases that are never allowed, part 1: public suffixes, where anyone can
+    /// register a name. Matched exactly ("*.bbc.co.uk" is fine, "*.co.uk" is not). The one list
+    /// on the iPad (same as the Mac's and Windows' NavigationPolicy).
+    public static let publicSuffixes: Set<String> = [
         "com", "net", "org", "edu", "gov", "mil", "int", "info", "biz", "io", "app", "dev", "page",
         "site", "online", "xyz", "me", "co", "ai", "cn", "uk", "us", "eu", "de", "ru", "uz", "jp",
         "co.uk", "org.uk", "ac.uk", "gov.uk", "com.cn", "net.cn", "org.cn", "edu.cn", "gov.cn", "ac.cn",
-        "github.io", "githubusercontent.com", "github.com", "gitlab.io", "gitlab.com", "bitbucket.io",
-        "vercel.app", "now.sh", "netlify.app", "netlify.com", "pages.dev", "workers.dev",
-        "web.app", "firebaseapp.com", "herokuapp.com", "blogspot.com", "wordpress.com",
-        "glitch.me", "replit.app", "replit.dev", "repl.co", "onrender.com", "fly.dev",
-        "azurewebsites.net", "azurestaticapps.net", "cloudfront.net", "amazonaws.com",
-        "appspot.com", "wixsite.com", "weebly.com", "notion.site", "carrd.co", "surge.sh",
-        "neocities.org", "codepen.io", "jsfiddle.net", "stackblitz.io", "codesandbox.io",
-        "ngrok.io", "ngrok-free.app", "trycloudflare.com", "google.com", "googleusercontent.com",
-        "sites.google.com", "docs.google.com", "translate.goog", "s3.amazonaws.com",
+    ]
+
+    /// Part 2 (2026-10-23, review): shared hosting, where anyone can get a subdomain. A base
+    /// that is one of these OR ends with one ("*.s3.us-east-1.amazonaws.com") is refused.
+    /// Same list on all three platforms.
+    public static let sharedHosts: Set<String> = [
+        "github.io", "githubusercontent.com", "github.com", "github.dev", "gitlab.io", "gitlab.com",
+        "bitbucket.io", "gitpod.io", "codesandbox.io", "stackblitz.io", "codepen.io", "jsfiddle.net",
+        "vercel.app", "now.sh", "netlify.app", "netlify.com", "pages.dev", "workers.dev", "r2.dev",
+        "trycloudflare.com", "web.app", "firebaseapp.com", "appspot.com", "herokuapp.com",
+        "blogspot.com", "wordpress.com", "glitch.me", "replit.app", "replit.dev", "repl.co",
+        "onrender.com", "fly.dev", "deno.dev", "streamlit.app", "huggingface.co", "hf.space",
+        "pythonanywhere.com", "azurewebsites.net", "azurestaticapps.net", "azureedge.net",
+        "cloudfront.net", "amazonaws.com", "s3.amazonaws.com", "wixsite.com", "weebly.com",
+        "notion.site", "carrd.co", "surge.sh", "neocities.org", "ngrok.io", "ngrok-free.app",
+        "loca.lt", "google.com", "googleusercontent.com", "sites.google.com", "docs.google.com",
+        "translate.goog",
     ]
 
     /// Second-level labels under a two-letter country code that are public suffixes too
@@ -64,18 +73,29 @@ public enum AllowedSites {
         "com", "net", "org", "edu", "gov", "mil", "ac", "co", "go", "or", "ne", "gob", "nic", "sch", "gv",
     ]
 
-    /// A wildcard base nobody may use: on the list above, a single label, or a country-code
-    /// second level.
+    /// A wildcard base nobody may use: a public suffix, shared hosting (or under it), a
+    /// single label, a country-code second level, or Blogger in any country
+    /// ("blogspot.com", "blogspot.co.uk", "x.blogspot.de": a "blogspot" label right above a
+    /// top-level domain or a country-code second level).
     public static func isSharedSuffix(_ host: String) -> Bool {
-        if sharedSuffixes.contains(host) { return true }
-        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        if publicSuffixes.contains(host) { return true }
+        if sharedHosts.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
         if labels.count < 2 { return true }
-        return labels.count == 2 && labels[1].count == 2 && countrySecondLevels.contains(String(labels[0]))
+        if labels.count == 2 && labels[1].count == 2 && countrySecondLevels.contains(labels[0]) { return true }
+        for (i, label) in labels.enumerated() where label == "blogspot" {
+            let rest = Array(labels[(i + 1)...])
+            if rest.count == 1 || (rest.count == 2 && rest[1].count == 2 && countrySecondLevels.contains(rest[0])) {
+                return true
+            }
+        }
+        return false
     }
 
     /// An allowed-site entry in canonical form: a usable host name (`normalizedHost`,
     /// `isUsableEntry`), or "*." + a host name that is neither an IP literal nor a shared
-    /// suffix. nil for anything else (a wildcard anywhere else, a scheme, a path...).
+    /// suffix. nil for anything else (a wildcard anywhere else, a scheme, a path, an IP
+    /// address...).
     public static func normalizedEntry(_ raw: String) -> String? {
         let t = raw.trimmingCharacters(in: .whitespaces)
         if t.hasPrefix(wildcardPrefix) {
@@ -90,7 +110,9 @@ public enum AllowedSites {
 
     /// Lowercased, without one trailing dot or IPv6 brackets. nil when it is not a plain
     /// host name: a scheme, path, port, "*", spaces, empty labels or non-ASCII
-    /// characters (WebKit gives hosts in punycode, "xn--...", and they are compared as is).
+    /// characters. International names come as punycode ("xn--e1afmkfd.xn--p1ai"; the
+    /// server sends them so, 2026-10-23) and WebKit reports frame hosts the same way, so they
+    /// are compared as they are.
     public static func normalizedHost(_ raw: String) -> String? {
         var h = raw.trimmingCharacters(in: .whitespaces).lowercased()
         if h.hasPrefix("[") && h.hasSuffix("]") && h.count > 2 { h = String(h.dropFirst().dropLast()) }
@@ -119,14 +141,14 @@ public enum AllowedSites {
     }
 
     /// A plain list entry must name a site with a dot, never a bare label ("com",
-    /// "localhost"). IP literals are taken as they are.
+    /// "localhost"). 2026-10-23 (review): never an IP address either, as on Windows.
     public static func isUsableEntry(_ host: String) -> Bool {
-        isIPLiteral(host) || host.contains(".")
+        !isIPLiteral(host) && host.contains(".")
     }
 
     /// Does a normalised `host` match one normalised entry? "*.a.com": a.com or any
     /// subdomain ("x.a.com"; never "xa.com" or "a.com.evil.net"). A plain entry: that host,
-    /// or the same host with "www." added or removed. An IP literal only matches itself.
+    /// or the same host with "www." added or removed. An IP literal never matches a name.
     public static func entryMatches(_ host: String, entry: String) -> Bool {
         if entry.hasPrefix(wildcardPrefix) {
             let base = String(entry.dropFirst(wildcardPrefix.count))

@@ -19,7 +19,8 @@ import Foundation
                                     "*.", "*. a.com", "a b.com", "a..com", ".a.com", "", "пример.рф", "abc.de:443"]) == [])
         // A whole top-level domain is never an entry.
         #expect(AllowedSites.parse(["com", "edu", "localhost"]) == [])
-        #expect(AllowedSites.parse(["10.0.0.5", "[::1]"]) == ["10.0.0.5", "::1"])
+        // 2026-10-23 (review): never an IP address, as on Windows.
+        #expect(AllowedSites.parse(["10.0.0.5", "[::1]", "fe80::1"]) == [])
         #expect(AllowedSites.parse(["*.Python.ORG.", "*.python.org"]) == ["*.python.org"])
     }
 
@@ -83,6 +84,27 @@ import Foundation
         #expect(!AllowedSites.isSharedSuffix("python.org"))
     }
 
+    /// 2026-10-23 (review): more shared hosting, refused also under it ("ends with"), and
+    /// Blogger in every country. Same cases as the iPad's and Windows' tests.
+    @Test func sharedHostingWildcardsRefusedUnderneathToo() {
+        for base in ["s3.amazonaws.com", "s3.us-east-1.amazonaws.com", "x.cloudfront.net", "pythonanywhere.com",
+                     "r2.dev", "azureedge.net", "workers.dev", "surge.sh", "neocities.org", "vercel.app", "now.sh",
+                     "deno.dev", "streamlit.app", "huggingface.co", "hf.space", "github.dev", "gitpod.io",
+                     "codesandbox.io", "stackblitz.io", "ngrok.io", "ngrok-free.app", "trycloudflare.com", "loca.lt",
+                     "user.github.io", "a.b.vercel.app", "blogspot.co.uk", "blogspot.de", "blogspot.com.au",
+                     "me.blogspot.com", "me.blogspot.co.uk"] {
+            #expect(AllowedSites.normalizedEntry("*." + base) == nil)
+            #expect(AllowedSites.isSharedSuffix(base))
+        }
+        // Real sites still take a wildcard.
+        #expect(AllowedSites.normalizedEntry("*.python.org") == "*.python.org")
+        #expect(AllowedSites.normalizedEntry("*.bbc.co.uk") == "*.bbc.co.uk")
+        #expect(AllowedSites.normalizedEntry("*.blogspot-fan.org") == "*.blogspot-fan.org")
+        #expect(AllowedSites.normalizedEntry("*.dku.edu.cn") == "*.dku.edu.cn")
+        // A plain entry naming one of them is still that host only.
+        #expect(AllowedSites.normalizedEntry("bucket.s3.amazonaws.com") == "bucket.s3.amazonaws.com")
+    }
+
     @Test func missingKeyKeepsTheList() {
         let now = ["docs.python.org"]
         #expect(AllowedSites.updated(now, from: ["action": "lock"]) == now)
@@ -129,17 +151,17 @@ import Foundation
         #expect(!frame("about:blankx", ["a.com"]))
     }
 
-    @Test func ipLiteralsOnlyExactly() {
+    @Test func ipLiteralsNeverAllowed() {
+        // 2026-10-23 (review): IP-address entries are refused (as on Windows), so no IP host
+        // ever matches.
+        #expect(AllowedSites.normalizedEntry("10.0.0.5") == nil)
+        #expect(AllowedSites.normalizedEntry("[::1]") == nil)
         #expect(!AllowedSites.hostAllowed("10.0.0.5", allowed: ["docs.python.org"]))
-        #expect(AllowedSites.hostAllowed("10.0.0.5", allowed: ["10.0.0.5"]))
-        #expect(!AllowedSites.hostAllowed("10.0.0.50", allowed: ["10.0.0.5"]))
-        #expect(!AllowedSites.hostAllowed("1.10.0.0.5", allowed: ["10.0.0.5"]))
-        #expect(!AllowedSites.hostAllowed("0.0.5", allowed: ["10.0.0.5"]))
-        #expect(frame("https://10.0.0.5/x", ["10.0.0.5"]))
-        #expect(!frame("https://10.0.0.6/x", ["10.0.0.5"]))
-        #expect(AllowedSites.hostAllowed("::1", allowed: ["::1"]))
-        #expect(AllowedSites.hostAllowed("[::1]", allowed: ["[::1]"]))
-        #expect(!AllowedSites.hostAllowed("::2", allowed: ["::1"]))
+        #expect(!AllowedSites.hostAllowed("10.0.0.5", allowed: ["10.0.0.5"]))
+        #expect(!frame("https://10.0.0.5/x", ["10.0.0.5"]))
+        #expect(!AllowedSites.hostAllowed("::1", allowed: ["::1"]))
+        #expect(!AllowedSites.hostAllowed("[::1]", allowed: ["[::1]"]))
+        #expect(!frame("https://[::1]/", ["::1"]))
         #expect(AllowedSites.isIPLiteral("192.168.1.1"))
         #expect(AllowedSites.isIPLiteral("fe80::1"))
         #expect(!AllowedSites.isIPLiteral("docs.python.org"))
@@ -154,6 +176,18 @@ import Foundation
         // A unicode entry is not a host name WebKit ever gives: it opens nothing.
         #expect(!AllowedSites.hostAllowed("xn--e1afmkfd.xn--p1ai", allowed: ["пример.рф"]))
         #expect(!AllowedSites.hostAllowed("пример.рф", allowed: ["пример.рф"]))
+    }
+
+    /// 2026-10-23 (review): the server sends international names as punycode; WebKit gives
+    /// the frame's host the same way. Same cases as the iPad's and Windows' tests.
+    @Test func punycodeEntriesFromTheServer() {
+        let a = AllowedSites.parse(["XN--E1AFMKFD.XN--P1AI", "*.xn--e1afmkfd.xn--p1ai"])
+        #expect(a == ["xn--e1afmkfd.xn--p1ai", "*.xn--e1afmkfd.xn--p1ai"])
+        #expect(frame("https://xn--e1afmkfd.xn--p1ai/", ["xn--e1afmkfd.xn--p1ai"]))
+        #expect(frame("https://www.xn--e1afmkfd.xn--p1ai/x", ["xn--e1afmkfd.xn--p1ai"]))
+        #expect(!frame("https://x.xn--e1afmkfd.xn--p1ai/", ["xn--e1afmkfd.xn--p1ai"]))
+        #expect(frame("https://x.xn--e1afmkfd.xn--p1ai/", ["*.xn--e1afmkfd.xn--p1ai"]))
+        #expect(AllowedSites.normalizedEntry("*.xn--p1ai") == nil)   // a whole top-level domain
     }
 
     @Test func popupsAndDownloads() {

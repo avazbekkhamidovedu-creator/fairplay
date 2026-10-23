@@ -24,8 +24,11 @@ enum Watchdog {
 
     /// 2026-10-23: the lock is the pre-exam lock (no attempt). If the app ends meanwhile,
     /// nothing is reported, FairPlay is not reopened and the next launch is not "killed".
+    /// Review 2026-10-23: the watchdog learns this from its launch argument ("--prelock"),
+    /// never from the marker (the student can rewrite that file).
     private static var preLock = false
     static let preLockLine = "prelock"
+    static let preLockArgument = "--prelock"
 
     // MARK: - In the app
 
@@ -38,12 +41,23 @@ enum Watchdog {
         spawn()
     }
 
-    /// The pre-exam lock became the exam lock: from now on the marker is a normal one.
+    /// The pre-exam lock became the exam lock: from now on the marker is a normal one, and
+    /// (review 2026-10-23, as on Windows) a fresh exam watchdog takes over: the new one is
+    /// started first, then the "--prelock" one is retired, so there is no gap.
     static func preLockEnded() {
         guard preLock else { return }
         preLock = false
         guard FileManager.default.fileExists(atPath: markerURL.path) else { return }
         writeMarker(AppSession.shared.exam)
+        let old = child
+        child = nil
+        spawn()
+        if let old, old.isRunning {
+            // It ignores SIGTERM; SIGKILL on our own child always works.
+            let pid = old.processIdentifier
+            let ok = kill(pid, SIGKILL) == 0
+            DebugLog.log("lock", "pre-exam watchdog pid \(pid) retired: \(ok ? "ok" : "FAILED errno \(errno)")")
+        }
     }
 
     static func lockEnded() {
@@ -122,12 +136,23 @@ enum Watchdog {
         Bundle.main.url(forAuxiliaryExecutable: "FairPlayGuard") ?? Bundle.main.executableURL
     }
 
+    /// The watchdog's arguments (pure, for the tests).
+    static func arguments(parent: pid_t, preLock: Bool) -> [String] {
+        ["--watchdog", String(parent)] + (preLock ? [preLockArgument] : [])
+    }
+
+    /// `--watchdog <pid> [--prelock]` (main.swift), or nil when this is not a watchdog launch.
+    static func parseArguments(_ args: [String]) -> (parent: pid_t, preLock: Bool)? {
+        guard args.count >= 3, args[1] == "--watchdog", let pid = Int32(args[2]) else { return nil }
+        return (pid, args.dropFirst(3).contains(preLockArgument))
+    }
+
     private static func spawn() {
         if let c = child, c.isRunning { return }
         guard let exe = guardExecutable else { return }
         let p = Process()
         p.executableURL = exe
-        p.arguments = ["--watchdog", String(ProcessInfo.processInfo.processIdentifier)]
+        p.arguments = arguments(parent: ProcessInfo.processInfo.processIdentifier, preLock: preLock)
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do { try p.run(); child = p; DebugLog.log("lock", "watchdog started pid \(p.processIdentifier)") }
@@ -136,8 +161,24 @@ enum Watchdog {
 
     // MARK: - In the watchdog process
 
-    /// Entry point for `--watchdog <pid>`; never returns.
-    static func run(parent: pid_t) -> Never {
+    /// What a watchdog does when the app is gone while the marker exists (pure, for the
+    /// tests). Review 2026-10-23: the mode comes from the launch argument only. An exam
+    /// watchdog always reports and reopens, whatever the marker says ("\n\n\nprelock" written
+    /// into it during an exam changes nothing). A "--prelock" one never reports; it removes
+    /// the marker only while it is still the pre-exam lock's (a retired one that has not
+    /// exited yet never touches the exam's marker: the exam watchdog handles that).
+    enum ParentGone: Equatable {
+        case silent(removeMarker: Bool)
+        case reportAndReopen
+    }
+
+    static func onParentGone(preLockMode: Bool, markerText: String?) -> ParentGone {
+        guard preLockMode else { return .reportAndReopen }
+        return .silent(removeMarker: markerText.map(markerIsPreLock) ?? false)
+    }
+
+    /// Entry point for `--watchdog <pid> [--prelock]`; never returns.
+    static func run(parent: pid_t, preLock preLockMode: Bool = false) -> Never {
         signal(SIGTERM, SIG_IGN)
         signal(SIGHUP, SIG_IGN)
         signal(SIGINT, SIG_IGN)
@@ -147,11 +188,12 @@ enum Watchdog {
             if !markerExists { exit(0) }                       // lock ended normally
             if kill(parent, 0) != 0 && errno == ESRCH {         // app gone while locked
                 // 2026-10-23: only the pre-exam lock (no attempt): no report, no reopen.
-                if let text = try? String(contentsOf: markerURL, encoding: .utf8), markerIsPreLock(text) {
-                    try? FileManager.default.removeItem(at: markerURL)
+                let markerText = try? String(contentsOf: markerURL, encoding: .utf8)
+                if case .silent(let removeMarker) = onParentGone(preLockMode: preLockMode, markerText: markerText) {
+                    if removeMarker { try? FileManager.default.removeItem(at: markerURL) }
                     exit(0)
                 }
-                if let text = try? String(contentsOf: markerURL, encoding: .utf8),
+                if let text = markerText,
                    let aid = text.components(separatedBy: "\n").first,
                    AppSession.isSafeToken(aid, min: 3, max: 32) {
                     resumeAttemptId = aid

@@ -80,9 +80,14 @@ final class ExamViewController: UIViewController, LockSurface,
     /// the exam page's side pane. Used only while locked; cleared when the lock ends.
     private var allowedSites: [String] = []
     private var batteryObservers: [NSObjectProtocol] = []
-    /// The exam id of the last "Before you start" page shown: where the pre-exam lock sends
-    /// a route change it does not allow (PreLockState.homePath).
+    /// The exam id of the "Before you start" page the pre-exam lock was taken on: the one
+    /// start page it allows and where it sends a route change it does not allow
+    /// (PreLockState.homePath). 2026-10-23 (review): set when the pre-exam lock is asked for
+    /// (never by a page shown during it), cleared at unlock and when that lock is cancelled.
     private var lastStartExamId: String?
+    /// The last page the pre-exam lock allowed and showed (not the sign-in page): where a
+    /// route change goes back to when the exam id is not known. Cleared with it.
+    private var lastPreLockPage: URL?
 
     // MARK: - Setup
 
@@ -197,20 +202,27 @@ final class ExamViewController: UIViewController, LockSurface,
                     view.load(Self.serverRequest(Config.startURL))
                     return
                 }
-                if let id = PreLockState.startPageExamId(path: u.path) { self.lastStartExamId = id }
                 let lock = LockdownController.shared
                 let aid = AppSession.shared.exam?.attemptId
-                guard lock.isLocked,
-                      !ExamPaths.allowedWhileLocked(path: u.path, attemptId: aid, preLock: lock.isPreLock) else { return }
+                guard lock.isLocked else { return }
+                if ExamPaths.allowedWhileLocked(path: u.path, attemptId: aid, preLock: lock.isPreLock,
+                                                examId: self.lastStartExamId) {
+                    if lock.isPreLock, aid == nil, let page = Self.preLockFallback(u, examId: self.lastStartExamId) {
+                        self.lastPreLockPage = page
+                    }
+                    return
+                }
                 EventLog.shared.record("blocked_navigation", "left the exam: \(u.path)")
                 if let aid {
                     view.load(Self.serverRequest(Config.serverURL.appendingPathComponent("student/exam/\(aid)")))
                 } else if lock.isPreLock {
                     // 2026-10-23: the pre-exam lock has no attempt yet: back to the start page
-                    // it was taken on (or the student home).
+                    // it was taken on, else (review) the last page it allowed. Never the
+                    // student home: that is not allowed while pre-locked.
                     let back = PreLockState.homePath(examId: self.lastStartExamId)
-                    DebugLog.log("web", "pre-exam lock: in-page route \(u.path) sent back to /\(back)")
-                    view.load(Self.serverRequest(Config.serverURL.appendingPathComponent(back)))
+                        .map { Config.serverURL.appendingPathComponent($0) } ?? self.lastPreLockPage
+                    DebugLog.log("web", "pre-exam lock: in-page route \(u.path) sent back to \(back?.path ?? "(nowhere)")")
+                    if let back { view.load(Self.serverRequest(back)) }
                 }
             }
         }
@@ -238,6 +250,14 @@ final class ExamViewController: UIViewController, LockSurface,
         } else {
             webView.reload()
         }
+    }
+
+    /// 2026-10-23 (review): `url` when the pre-exam lock allows it and it is not the sign-in
+    /// page: a page a route change may go back to.
+    static func preLockFallback(_ url: URL?, examId: String?) -> URL? {
+        guard let url, !url.path.lowercased().hasPrefix("/student/login"),
+              PreLockState.allowedWhilePreLocked(path: url.path, examId: examId) else { return nil }
+        return url
     }
 
     static func serverRequest(_ url: URL) -> URLRequest {
@@ -414,7 +434,13 @@ final class ExamViewController: UIViewController, LockSurface,
                 send(["type": "locked", "prelock": true])
             case .lock:
                 allowedSites = AllowedSites.updated(allowedSites, from: body)
-                if let id = committedURL.flatMap({ PreLockState.startPageExamId(path: $0.path) }) { lastStartExamId = id }
+                // 2026-10-23 (review): the exam of the page that asked (nil when that is not a
+                // start page: then any exam's start page is allowed). A prelock joining one
+                // already coming up keeps what that one set.
+                if !lock.preLockInFlight {
+                    lastStartExamId = committedURL.flatMap { PreLockState.startPageExamId(path: $0.path) }
+                    lastPreLockPage = ExamViewController.preLockFallback(committedURL, examId: lastStartExamId)
+                }
                 lock.preLock(participants: ExamPaths.allowedParticipants(body["allowed_apps"])) { [weak self] r in
                     switch r {
                     // false when an exam lock asked meanwhile and this became its lock.
@@ -426,17 +452,32 @@ final class ExamViewController: UIViewController, LockSurface,
         case "preunlock":
             // 2026-10-23: "Not ready? Leave and unlock": only the pre-exam lock with no exam
             // attached, and then with no server check (there is no attempt).
+            // Review 2026-10-23: never "unlocked" while a lock is still coming up (the
+            // Assessment Mode prompt is up): a pre-exam lock is cancelled first, an exam's is
+            // refused.
             let lock = LockdownController.shared
             switch PreLockState.onPreUnlock(locked: lock.isLocked, preLocked: lock.isPreLock,
-                                            hasExam: AppSession.shared.exam != nil) {
+                                            hasExam: AppSession.shared.exam != nil,
+                                            lockInFlight: lock.lockInFlight, preLockInFlight: lock.preLockInFlight) {
             case .unlock:
                 lock.endPreLock()            // onUnlocked sends "unlocked"
                 sendState()
             case .notLocked:
                 send(["type": "unlocked"])
                 sendState()
+            case .cancelPending:
+                // Its waiters (the "prelock" above) answer lockFailed "cancelled" first.
+                if lock.cancelPendingPreLock() {
+                    lastStartExamId = nil
+                    lastPreLockPage = nil
+                    send(["type": "unlocked"])
+                    sendState()
+                } else {
+                    DebugLog.log("lock", "preunlock refused: the lock coming up could not be cancelled")
+                    send(["type": "preunlockRefused"])
+                }
             case .refuse:
-                DebugLog.log("lock", "preunlock refused: this is an exam lock")
+                DebugLog.log("lock", "preunlock refused: this is an exam lock (or one is coming up)")
                 send(["type": "preunlockRefused"])
             }
         case "lock":
@@ -618,7 +659,7 @@ final class ExamViewController: UIViewController, LockSurface,
         if ownLocalPage { ownPageLoadPending = false }
         if isServerURL(url), mainFrame, LockdownController.shared.isLocked,
            !ExamPaths.allowedWhileLocked(path: url.path, attemptId: AppSession.shared.exam?.attemptId,
-                                         preLock: LockdownController.shared.isPreLock) {
+                                         preLock: LockdownController.shared.isPreLock, examId: lastStartExamId) {
             EventLog.shared.record("blocked_navigation", "left the exam: \(url.path)")
             decisionHandler(.cancel)
             return
@@ -799,6 +840,8 @@ final class ExamViewController: UIViewController, LockSurface,
     func exitLockedMode() {
         ExamViewController.lastLockedPage = nil
         allowedSites = []                            // the next exam sends its own
+        lastStartExamId = nil                        // 2026-10-23 (review): the next pre-exam lock sets its own
+        lastPreLockPage = nil
         external.abort()
         barHeight.constant = 0
         bar.isHidden = true

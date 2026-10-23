@@ -51,6 +51,9 @@ final class LockdownController {
 
     private let assessment = AssessmentMode()
     private var locking = false
+    /// 2026-10-23 (review): which lock attempt is current. A cancelled one's late answers
+    /// (Assessment Mode, Single App Mode, a retry) see another number and do nothing.
+    private var lockAttempt = 0
     private var lockWaiters: [(LockResult) -> Void] = []
     private var singleAppRequested = false
     private var participants: [String] = []
@@ -81,6 +84,11 @@ final class LockdownController {
 
     /// Locked AND held by iPadOS (or a dev soft lock): what the signed beat says.
     var reallyLocked: Bool { isLocked && (state.assessment || state.singleApp || state.softLock) }
+
+    /// A lock was asked for and iPadOS has not answered yet (e.g. the Assessment Mode prompt).
+    var lockInFlight: Bool { locking }
+    /// ... and it is a pre-exam lock with no exam (an exam's lock asked meanwhile makes it the exam's).
+    var preLockInFlight: Bool { locking && wantPreLock }
 
     // MARK: - Lock / unlock
 
@@ -119,6 +127,7 @@ final class LockdownController {
         lockWaiters.append(completion)
         guard !locking else { return }
         locking = true
+        lockAttempt += 1
         participants = ids
         DebugLog.log("lock", "locking")
         onLockPending?()
@@ -127,40 +136,63 @@ final class LockdownController {
         }
         RunLoop.main.add(pt, forMode: .common)
         pendingTimer = pt
-        beginAssessment(ids, triesLeft: 2)
+        beginAssessment(ids, triesLeft: 2, attempt: lockAttempt)
+    }
+
+    /// 2026-10-23 (review): "preunlock" while the pre-exam lock is still coming up (the
+    /// Assessment Mode prompt is up). Cancels it: the pending Assessment Mode session is ended
+    /// (AssessmentMode ends it too if it comes up later), its waiters get .failed("cancelled")
+    /// and nothing locks afterwards. False, and nothing changes, when no pre-exam lock is
+    /// coming up (nothing pending, or an exam's lock asked meanwhile).
+    @discardableResult
+    func cancelPendingPreLock() -> Bool {
+        guard locking, wantPreLock, !isLocked else { return false }
+        DebugLog.log("lock", "pre-exam lock cancelled before it came up (preunlock)")
+        lockAttempt += 1                    // late answers of this attempt are ignored
+        assessment.end()
+        finishLock(.failed("cancelled"))    // also turns event forwarding back on
+        return true
     }
 
     /// After FairPlay ended while locked, iPadOS still holds the old session for a moment
     /// and refuses with an unknown error while it cleans up: try again shortly.
-    private func beginAssessment(_ ids: [String], triesLeft: Int) {
+    private func beginAssessment(_ ids: [String], triesLeft: Int, attempt: Int) {
+        guard attempt == lockAttempt, locking else { return }   // cancelled meanwhile
         guard Config.tryAssessmentMode else {
             // Simulator (dev), or signed without the entitlement (free Apple ID, sideloaded
             // test build). fallBack still decides: Single App Mode, else a watched lock
             // only where Config.allowsSoftLock says so, else the lock fails.
             DebugLog.log("lock", "Assessment Mode skipped (simulator, or not in this build's provisioning profile)")
-            fallBack(why: "not available in this copy of FairPlay")
+            fallBack(why: "not available in this copy of FairPlay", attempt: attempt)
             return
         }
         assessment.begin(participants: ids) { [weak self] error in
-            guard let self, !self.isLocked else { return }
+            guard let self, !self.isLocked, attempt == self.lockAttempt, self.locking else { return }
             if error == nil { self.didLock(.assessment); return }
             let ns = error as NSError?
             if triesLeft > 0, ns?.domain == "AEAssessmentErrorDomain", ns?.code == 1 {
                 DebugLog.log("lock", "Assessment Mode refused (stale session?), retrying")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.beginAssessment(ids, triesLeft: triesLeft - 1) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    self.beginAssessment(ids, triesLeft: triesLeft - 1, attempt: attempt)
+                }
                 return
             }
-            self.fallBack(why: ns?.localizedDescription ?? "unknown")
+            self.fallBack(why: ns?.localizedDescription ?? "unknown", attempt: attempt)
         }
     }
 
     /// No Assessment Mode. Review H1: Single App Mode counts only when FairPlay turns it on
     /// itself (supervised iPad with an Autonomous Single App Mode payload). Guided Access
     /// that was already on was started by someone with its passcode and doesn't count.
-    private func fallBack(why: String) {
+    private func fallBack(why: String, attempt: Int) {
         let wasOn = SingleAppMode.anyOn
         SingleAppMode.request(true) { [weak self] ok in
             guard let self, !self.isLocked else { return }
+            guard attempt == self.lockAttempt, self.locking else {
+                // Cancelled meanwhile (review 2026-10-23): give back what we just turned on.
+                if ok && !wasOn { SingleAppMode.request(false) { _ in } }
+                return
+            }
             if ok && !wasOn {
                 self.singleAppRequested = true
                 EventLog.shared.record("assessment_unavailable", "using Single App Mode: \(why)")

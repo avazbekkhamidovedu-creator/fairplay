@@ -1,9 +1,8 @@
 import AppKit
 
-// `--watchdog <pid>`: the helper copy started while locked (Watchdog.swift).
-if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--watchdog",
-   let pid = Int32(CommandLine.arguments[2]) {
-    Watchdog.run(parent: pid)
+// `--watchdog <pid> [--prelock]`: the helper copy started while locked (Watchdog.swift).
+if let watchdog = Watchdog.parseArguments(CommandLine.arguments) {
+    Watchdog.run(parent: watchdog.parent, preLock: watchdog.preLock)
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

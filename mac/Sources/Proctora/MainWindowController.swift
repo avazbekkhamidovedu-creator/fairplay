@@ -56,9 +56,14 @@ final class MainWindowController: NSWindowController, LockSurface,
     /// The page actually on screen (didCommit). webView.url already shows a page that is
     /// still loading, so the battery script is gated on this too (iPad review L2).
     private var committedURL: URL?
-    /// The exam id of the last "Before you start" page shown: where the pre-exam lock sends
-    /// a route change it does not allow (PreLockState.homePath).
+    /// The exam id of the "Before you start" page the pre-exam lock was taken on: the one
+    /// start page it allows and where it sends a route change it does not allow
+    /// (PreLockState.homePath). 2026-10-23 (review): set when the pre-exam lock is taken
+    /// (never by a page shown during it), cleared at unlock.
     private var lastStartExamId: String?
+    /// The last page the pre-exam lock allowed and showed (not the sign-in page): where a
+    /// route change goes back to when the exam id is not known. Cleared at unlock.
+    private var lastPreLockPage: URL?
 
     private static let normalStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
 
@@ -135,23 +140,29 @@ final class MainWindowController: NSWindowController, LockSurface,
                     view.load(URLRequest(url: Config.startURL))
                     return
                 }
-                if let id = PreLockState.startPageExamId(path: u.path) { self.lastStartExamId = id }
                 // Review 2026-10-14: in-page route changes away from the locked attempt
                 // (e.g. a "Back to home" link) go back to it.
                 let lock = LockdownController.shared
                 let aid = AppSession.shared.exam?.attemptId
-                guard lock.isLocked,
-                      !MainWindowController.allowedWhileLocked(path: u.path, attemptId: aid, preLock: lock.isPreLock)
-                else { return }
+                guard lock.isLocked else { return }
+                if MainWindowController.allowedWhileLocked(path: u.path, attemptId: aid, preLock: lock.isPreLock,
+                                                           examId: self.lastStartExamId) {
+                    if lock.isPreLock, aid == nil, let page = Self.preLockFallback(u, examId: self.lastStartExamId) {
+                        self.lastPreLockPage = page
+                    }
+                    return
+                }
                 EventLog.shared.record(.blockedNavigation("left the exam: \(u.path)"))
                 if let aid {
                     view.load(URLRequest(url: Config.serverURL.appendingPathComponent("student/exam/\(aid)")))
                 } else if lock.isPreLock {
                     // 2026-10-23: the pre-exam lock has no attempt yet: back to the start page
-                    // it was taken on (or the student home).
+                    // it was taken on, else (review) the last page it allowed. Never the
+                    // student home: that is not allowed while pre-locked.
                     let back = PreLockState.homePath(examId: self.lastStartExamId)
-                    DebugLog.log("web", "pre-exam lock: in-page route \(u.path) sent back to /\(back)")
-                    view.load(URLRequest(url: Config.serverURL.appendingPathComponent(back)))
+                        .map { Config.serverURL.appendingPathComponent($0) } ?? self.lastPreLockPage
+                    DebugLog.log("web", "pre-exam lock: in-page route \(u.path) sent back to \(back?.path ?? "(nowhere)")")
+                    if let back { view.load(URLRequest(url: back)) }
                 }
             }
         }
@@ -285,7 +296,10 @@ final class MainWindowController: NSWindowController, LockSurface,
                 if AppSession.shared.exam != nil { AppSession.shared.clearExam() }
                 Allowlist.updateTeacherAllowed(body["allowed_apps"])
                 allowedSites = AllowedSites.updated(allowedSites, from: body)
-                if let id = webView.url.flatMap({ PreLockState.startPageExamId(path: $0.path) }) { lastStartExamId = id }
+                // 2026-10-23 (review): the exam of the page that asked (nil when that is not a
+                // start page: then any exam's start page is allowed).
+                lastStartExamId = webView.url.flatMap { PreLockState.startPageExamId(path: $0.path) }
+                lastPreLockPage = MainWindowController.preLockFallback(webView.url, examId: lastStartExamId)
                 if lock.preLock() {
                     hidePermission()
                     send(["type": "locked", "prelock": true])
@@ -306,7 +320,9 @@ final class MainWindowController: NSWindowController, LockSurface,
             case .notLocked:
                 send(["type": "unlocked"])
                 sendState()
-            case .refuse:
+            case .refuse, .cancelPending:
+                // .cancelPending never happens here: the Mac's lock() answers at once, so no
+                // lock is ever in flight when a message arrives (review 2026-10-23, checked).
                 DebugLog.log("lock", "preunlock refused: this is an exam lock")
                 send(["type": "preunlockRefused"])
             }
@@ -559,7 +575,8 @@ final class MainWindowController: NSWindowController, LockSurface,
         // Review 2026-10-14: while locked, only the locked attempt's own pages.
         if isServerURL(url), (navigationAction.targetFrame?.isMainFrame ?? true), LockdownController.shared.isLocked,
            !MainWindowController.allowedWhileLocked(path: url.path, attemptId: AppSession.shared.exam?.attemptId,
-                                                    preLock: LockdownController.shared.isPreLock) {
+                                                    preLock: LockdownController.shared.isPreLock,
+                                                    examId: lastStartExamId) {
             EventLog.shared.record(.blockedNavigation("left the exam: \(url.path)"))
             DebugLog.log("web", "navigation BLOCKED while locked: \(url.path)")
             decisionHandler(.cancel)
@@ -635,15 +652,25 @@ final class MainWindowController: NSWindowController, LockSurface,
 
     /// Pages a locked computer may show: the locked attempt's exam / website-exam / done
     /// pages (and any attempt's while the attempt is not known yet, i.e. an offline start).
-    /// 2026-10-23: the pre-exam lock (no attempt) also shows the start-code pages.
-    static func allowedWhileLocked(path: String, attemptId: String?, preLock: Bool = false) -> Bool {
-        if preLock && attemptId == nil && PreLockState.allowedWhilePreLocked(path: path) { return true }
+    /// 2026-10-23 (review): the pre-exam lock (no attempt) shows exactly the pages
+    /// PreLockState.allowedWhilePreLocked allows (`examId`: the exam it was taken for).
+    static func allowedWhileLocked(path: String, attemptId: String?, preLock: Bool = false,
+                                   examId: String? = nil) -> Bool {
+        if preLock && attemptId == nil { return PreLockState.allowedWhilePreLocked(path: path, examId: examId) }
         let p = path.lowercased()
         let roots = ["/student/exam/", "/student/external/", "/student/external-done/", "/student/done/"]
         guard let aid = attemptId?.lowercased() else { return roots.contains { p.hasPrefix($0) } }
         let offlineOK = ["/student/exam/offline:", "/student/exam/offline%3a",
                          "/student/done/offline:", "/student/done/offline%3a"].contains { p.hasPrefix($0) }
         return offlineOK || roots.contains { p == $0 + aid || p.hasPrefix($0 + aid + "/") }
+    }
+
+    /// 2026-10-23 (review): `url` when the pre-exam lock allows it and it is not the sign-in
+    /// page: a page a route change may go back to.
+    static func preLockFallback(_ url: URL?, examId: String?) -> URL? {
+        guard let url, !url.path.lowercased().hasPrefix("/student/login"),
+              PreLockState.allowedWhilePreLocked(path: url.path, examId: examId) else { return nil }
+        return url
     }
 
     static func isTeacherPath(_ path: String) -> Bool {
@@ -929,6 +956,8 @@ final class MainWindowController: NSWindowController, LockSurface,
 
     func exitLockedMode() {
         allowedSites = []                       // the next exam sends its own
+        lastStartExamId = nil                   // 2026-10-23 (review): the next pre-exam lock sets its own
+        lastPreLockPage = nil
         guard let win = window else { return }
         win.level = .normal
         win.styleMask = MainWindowController.normalStyle

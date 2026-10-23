@@ -29,14 +29,24 @@ enum PreLockState {
     enum OnPreUnlock: Equatable {
         /// Unlock with no server check: there is no attempt.
         case unlock
-        /// Nothing is locked: reply {type: "unlocked"}.
+        /// Nothing is locked and no lock is coming up: reply {type: "unlocked"}.
         case notLocked
-        /// An exam lock (or an exam attached to the lock): reply {type: "preunlockRefused"}.
+        /// 2026-10-23 (review): a pre-exam lock is still coming up (the iPad's Assessment Mode
+        /// prompt): cancel it (fail its waiters), and only then reply {type: "unlocked"}.
+        case cancelPending
+        /// An exam lock (or an exam attached to the lock, or an exam lock still coming up):
+        /// reply {type: "preunlockRefused"}. Never "unlocked" while a lock is in flight.
         case refuse
     }
 
-    static func onPreUnlock(locked: Bool, preLocked: Bool, hasExam: Bool) -> OnPreUnlock {
-        guard locked else { return .notLocked }
+    /// `lockInFlight`: a lock was asked for and has not answered yet; `preLockInFlight`: that
+    /// lock is a pre-exam lock with no exam (the Mac locks at once: both always false there).
+    static func onPreUnlock(locked: Bool, preLocked: Bool, hasExam: Bool,
+                            lockInFlight: Bool = false, preLockInFlight: Bool = false) -> OnPreUnlock {
+        guard locked else {
+            guard lockInFlight else { return .notLocked }
+            return preLockInFlight && !hasExam ? .cancelPending : .refuse
+        }
         return preLocked && !hasExam ? .unlock : .refuse
     }
 
@@ -69,16 +79,22 @@ enum PreLockState {
         return problems.filter { !ownLockProblemIds.contains($0.id) }
     }
 
-    /// Pages the pre-exam lock may show besides the exam pages (no attempt is known): the
-    /// student home, an exam's "Before you start" page (/start, where the start code is typed) and its check-in page, and the
-    /// sign-in page if the token runs out meanwhile.
-    static func allowedWhilePreLocked(path: String) -> Bool {
+    /// Pages the pre-exam lock may show (no attempt is known yet). 2026-10-23 (review): one
+    /// rule on the Mac, the iPad and Windows (NavigationPolicy.AllowedWhilePreLocked): the
+    /// sign-in page (the token may run out meanwhile); the "Before you start" page of the exam
+    /// the lock was taken for (/student/exams/<id>/start; any exam's when that is not known);
+    /// the exam page the start code creates (/student/exam/<anything>) and its done page
+    /// (/student/done/<anything>). Never the student home or the check-in page: the page asks
+    /// "preunlock" before it goes back there.
+    static func allowedWhilePreLocked(path: String, examId: String? = nil) -> Bool {
         let p = path.lowercased()
-        if ["/student", "/student/", "/student/login"].contains(p) { return true }
-        // /student/exams/<exam id>/start or /checkin
-        let parts = p.split(separator: "/", omittingEmptySubsequences: false)
-        return parts.count == 5 && parts[0].isEmpty && parts[1] == "student" && parts[2] == "exams"
-            && !parts[3].isEmpty && (parts[4] == "start" || parts[4] == "checkin")
+        if p == "/student/login" || p == "/student/login/" { return true }
+        for root in ["/student/exam/", "/student/done/"] where p.hasPrefix(root) && p.count > root.count {
+            return true
+        }
+        guard let id = startPageExamId(path: path) else { return false }
+        guard let examId, !examId.isEmpty else { return true }
+        return id.lowercased() == examId.lowercased()
     }
 
     /// The exam id of a "Before you start" page, /student/exams/<id>/start (trailing slash
@@ -97,9 +113,11 @@ enum PreLockState {
                                                 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
     /// Where an in-page route change the pre-exam lock does not allow goes back to: the start
-    /// page of the exam it was taken for (when known), else the student home.
-    static func homePath(examId: String?) -> String {
-        guard let examId, startPageExamId(path: "/student/exams/\(examId)/start") == examId else { return "student" }
+    /// page of the exam it was taken for. nil when that is not known (2026-10-23, review: the
+    /// student home is not allowed while pre-locked any more; the caller goes back to the last
+    /// allowed page it showed instead).
+    static func homePath(examId: String?) -> String? {
+        guard let examId, startPageExamId(path: "/student/exams/\(examId)/start") == examId else { return nil }
         return "student/exams/\(examId)/start"
     }
 }

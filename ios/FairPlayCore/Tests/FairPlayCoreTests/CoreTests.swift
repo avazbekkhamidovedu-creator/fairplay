@@ -357,6 +357,15 @@ import Foundation
         #expect(PreLockState.onPreUnlock(locked: true, preLocked: true, hasExam: true) == .refuse)
         #expect(PreLockState.onPreUnlock(locked: true, preLocked: false, hasExam: false) == .refuse)
         #expect(PreLockState.onPreUnlock(locked: false, preLocked: false, hasExam: false) == .notLocked)
+        // Review 2026-10-23: never "unlocked" while the Assessment Mode prompt is still up.
+        #expect(PreLockState.onPreUnlock(locked: false, preLocked: false, hasExam: false,
+                                         lockInFlight: true, preLockInFlight: true) == .cancelPending)
+        #expect(PreLockState.onPreUnlock(locked: false, preLocked: false, hasExam: false,
+                                         lockInFlight: true, preLockInFlight: false) == .refuse)   // an exam's lock
+        #expect(PreLockState.onPreUnlock(locked: false, preLocked: false, hasExam: true,
+                                         lockInFlight: true, preLockInFlight: true) == .refuse)
+        #expect(PreLockState.onPreUnlock(locked: false, preLocked: false, hasExam: false,
+                                         lockInFlight: false, preLockInFlight: false) == .notLocked)
 
         #expect(PreLockState.onExamLock(locked: true, preLocked: true) == .promote)
         #expect(PreLockState.onExamLock(locked: true, preLocked: false) == .lock)
@@ -367,12 +376,35 @@ import Foundation
         #expect(!PreLockState.emergencyExitUnlocksAtOnce(locked: true, preLocked: true, hasExam: true))
     }
 
+    /// Review 2026-10-23: one rule on the Mac, the iPad and Windows.
     @Test func pages() {
-        #expect(ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/checkin", attemptId: nil, preLock: true))
-        #expect(ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/start", attemptId: nil, preLock: true))
-        #expect(!ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/start", attemptId: nil))
-        #expect(ExamPaths.allowedWhileLocked(path: "/student", attemptId: nil, preLock: true))
+        #expect(PreLockState.allowedWhilePreLocked(path: "/student/login"))
+        #expect(PreLockState.allowedWhilePreLocked(path: "/student/login/", examId: "e_1"))
+        #expect(PreLockState.allowedWhilePreLocked(path: "/student/exams/e_1/start", examId: "e_1"))
+        #expect(PreLockState.allowedWhilePreLocked(path: "/Student/Exams/E_1/Start", examId: "e_1"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/exams/e_2/start", examId: "e_1"))
+        #expect(PreLockState.allowedWhilePreLocked(path: "/student/exams/e_2/start"))     // exam not known: any
+        #expect(PreLockState.allowedWhilePreLocked(path: "/student/exam/a_Xy12", examId: "e_1"))
+        #expect(PreLockState.allowedWhilePreLocked(path: "/student/done/a_Xy12", examId: "e_1"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/exams/e_1/checkin", examId: "e_1"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/exams/e_1/checkin"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/exam/"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/done/"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/exams"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/exams/e_1"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/external/a_1"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/student/grades"))
+        #expect(!PreLockState.allowedWhilePreLocked(path: "/teacher/exams/e_1/start"))
+
+        #expect(ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/start", attemptId: nil, preLock: true, examId: "e_1"))
+        #expect(!ExamPaths.allowedWhileLocked(path: "/student/exams/e_2/start", attemptId: nil, preLock: true, examId: "e_1"))
+        #expect(ExamPaths.allowedWhileLocked(path: "/student/exam/a_9", attemptId: nil, preLock: true))
+        #expect(!ExamPaths.allowedWhileLocked(path: "/student", attemptId: nil, preLock: true))
+        #expect(!ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/checkin", attemptId: nil, preLock: true))
         #expect(!ExamPaths.allowedWhileLocked(path: "/student/grades", attemptId: nil, preLock: true))
+        #expect(!ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/start", attemptId: nil))
         #expect(!ExamPaths.allowedWhileLocked(path: "/student/exams/e_1/checkin", attemptId: nil))
         #expect(!ExamPaths.allowedWhileLocked(path: "/student", attemptId: "a_1", preLock: true))
     }
@@ -389,11 +421,11 @@ import Foundation
         #expect(PreLockState.startPageExamId(path: "/teacher/exams/e_1/start") == nil)
         #expect(PreLockState.startPageExamId(path: "/student/exams/" + String(repeating: "a", count: 65) + "/start") == nil)
         #expect(PreLockState.homePath(examId: "e_1") == "student/exams/e_1/start")
-        #expect(PreLockState.homePath(examId: nil) == "student")
-        #expect(PreLockState.homePath(examId: "../teacher") == "student")
-        // Both ways back are pages the pre-exam lock shows.
-        #expect(PreLockState.allowedWhilePreLocked(path: "/" + PreLockState.homePath(examId: "e_1")))
-        #expect(PreLockState.allowedWhilePreLocked(path: "/" + PreLockState.homePath(examId: nil)))
+        // Review 2026-10-23: no student home to fall back to (not allowed while pre-locked).
+        #expect(PreLockState.homePath(examId: nil) == nil)
+        #expect(PreLockState.homePath(examId: "../teacher") == nil)
+        // The way back is a page the pre-exam lock shows.
+        #expect(PreLockState.allowedWhilePreLocked(path: "/" + (PreLockState.homePath(examId: "e_1") ?? ""), examId: "e_1"))
     }
 
     @Test func relaunchMarker() {
