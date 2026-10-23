@@ -139,6 +139,16 @@ def inline_images(questions: list[dict], limit: int = MAX_INLINE_IMAGE_BYTES) ->
     return out
 
 
+def offline_tools(exam: dict) -> dict:
+    """2026-10-23 (review 2): the package holds no materials (they are fetched from the
+    server with the attempt's session). open_book stays as set, so the exam page still
+    offers Materials and says "Materials need the connection" until the attempt is online;
+    materials_need_connection says so outright for any reader of the package."""
+    tools = dict(student_tools(exam))
+    tools["materials_need_connection"] = bool(tools.get("open_book"))
+    return tools
+
+
 def package_plaintext(exam: dict) -> dict:
     """The student exam view inside the package (questions without answer keys)."""
     return {
@@ -150,7 +160,7 @@ def package_plaintext(exam: dict) -> dict:
         # none are allowed any more, so all of them)
         "allowed_apps": [],
         # 2026-10-23: calculator / open book / websites, as in the attempt view
-        "tools": student_tools(exam),
+        "tools": offline_tools(exam),
         "generated_at": iso(utcnow()),
     }
 

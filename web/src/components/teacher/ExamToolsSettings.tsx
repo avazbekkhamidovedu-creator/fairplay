@@ -2,7 +2,8 @@
 // a calculator (scientific or graphing), open book (students upload their files before
 // the exam), allowed websites (a list with Add / Remove). Outside apps are gone: every app
 // is closed when the computer locks, these tools are built into FairPlay.
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { toolsApi, type SiteCheck } from "../../api/client";
 import type { CalculatorMode } from "../../api/types";
 import { MAX_WEBSITES, normalizeWebsite } from "../../lib/websites";
 import "../../styles/tools.css";
@@ -13,12 +14,52 @@ export interface ExamToolsValue {
   websites: string[];
 }
 
+// 2026-10-23 (review): many sites refuse to be shown inside another page (the student would
+// see a blank panel). The server checks each listed site once; answers are kept for the
+// page's life.
+const siteChecks = new Map<string, Promise<SiteCheck | null>>();
+
+export function checkSite(host: string): Promise<SiteCheck | null> {
+  let p = siteChecks.get(host);
+  if (!p) {
+    p = toolsApi.siteCheck(host).catch(() => {
+      siteChecks.delete(host);       // offline / rate limited: ask again next time
+      return null;
+    });
+    siteChecks.set(host, p);
+  }
+  return p;
+}
+
+/** Test helper. */
+export function _resetSiteChecksForTests(): void {
+  siteChecks.clear();
+}
+
+function useSiteChecks(hosts: string[]): Record<string, SiteCheck> {
+  const [checks, setChecks] = useState<Record<string, SiteCheck>>({});
+  const key = hosts.join("\n");
+  useEffect(() => {
+    let alive = true;
+    for (const h of hosts)
+      void checkSite(h).then((c) => {
+        if (alive && c) setChecks((m) => (m[h] === c ? m : { ...m, [h]: c }));
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return checks;
+}
+
 export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; onChange: (v: ExamToolsValue) => void }) {
   const [site, setSite] = useState("");
   const [siteError, setSiteError] = useState<string | null>(null);
   // the website list stays visible while ticked, even when it is still empty
   const [sitesOn, setSitesOn] = useState(value.websites.length > 0);
   const calcOn = value.calculator !== "off";
+  const checks = useSiteChecks(value.websites);
 
   const addSite = () => {
     const r = normalizeWebsite(site);
@@ -123,6 +164,11 @@ export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; 
                 {value.websites.map((h) => (
                   <li key={h}>
                     <span className="mono">{h}</span>
+                    {checks[h]?.frameable === false && (
+                      <span className="t-site-warn" role="note" data-testid="site-warn">
+                        Can&apos;t be shown inside the exam. {checks[h]!.reason}
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"

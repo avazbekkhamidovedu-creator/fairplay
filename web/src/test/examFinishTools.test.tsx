@@ -126,7 +126,9 @@ describe("no tools while handing in", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes, submit" }));
     await waitFor(() => expect(api.submit).toHaveBeenCalled());
     expect(screen.queryByRole("complementary", { name: "Websites" })).toBeNull();
-    expect(document.querySelector(".stu-calc")).toBeNull();
+    // 2026-10-23 review: hidden but kept (a failed hand-in doesn't lose its contents)
+    expect(document.querySelector(".stu-calc.open")).toBeNull();
+    expect(document.querySelector(".stu-calc")).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByRole("button", { name: "Calculator" })).toBeNull();
     await act(async () => resolveSubmit({ receipt: "R", submitted_at: "" }));
     expect(await screen.findByText("done page")).toBeInTheDocument();
@@ -142,7 +144,7 @@ describe("no tools while handing in", () => {
     await openToolsAndReview();
     await waitFor(() => expect(api.submit).toHaveBeenCalled(), { timeout: 4000 });
     expect(screen.queryByRole("complementary", { name: "Websites" })).toBeNull();
-    expect(document.querySelector(".stu-calc")).toBeNull();
+    expect(document.querySelector(".stu-calc.open")).toBeNull();
   });
 });
 

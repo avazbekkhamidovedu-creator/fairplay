@@ -7,6 +7,7 @@ import {
   MIN_TIME_LIMIT_MS,
   LANGUAGE_LABEL,
   isCodeLanguage,
+  resolveLanguage,
 } from "../../lib/code/languages";
 import {
   EMPTY_EXTERNAL_SETTINGS,
@@ -172,10 +173,14 @@ function codeDraft(q: Exam["questions"][number]): Pick<DraftQuestion, "language"
   };
 }
 
-/** 2026-10-13: questions copied from another exam (new keys, so they are separate copies). */
+/** 2026-10-13: questions copied from another exam (new keys, so they are separate copies).
+ *  2026-10-23: a code question on the source exam's default language ("exam default") gets
+ *  that language written out, so it keeps it in an exam with another default. */
 export function copyQuestions(exam: Exam): DraftQuestion[] {
+  const sourceDefault = resolveLanguage(null, exam.default_language);
   return draftFromExam(exam).questions.map((q) => ({
     ...q,
+    language: q.type === "code" && !q.language ? sourceDefault : q.language,
     key: newKey(),
     rubric: q.rubric.map((r) => ({ ...r, key: newKey() })),
     tests: q.tests.map((t) => ({ ...t, key: newKey() })),

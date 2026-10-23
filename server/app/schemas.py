@@ -52,7 +52,8 @@ def normalize_domain(v: str) -> str:
 # the same host with "www." added or removed); "*.python.org" is python.org and all its
 # subdomains. A wildcard on a public suffix or shared hosting, where anyone can get a
 # subdomain ("*.com", "*.github.io", "*.co.uk"), is refused. The same list as the apps'
-# AllowedSites (Mac / iPad) and web/src/lib/websites.ts.
+# AllowedSites (Mac / iPad) and web/src/lib/websites.ts; 2026-10-23 (review 2): the server
+# also checks the full Public Suffix List (is_shared_suffix), so it refuses more than they do.
 MAX_WEBSITES = 20
 CALCULATOR_MODES = ("off", "scientific", "graphing")
 WILDCARD_PREFIX = "*."
@@ -74,25 +75,77 @@ SHARED_SUFFIXES = frozenset({
 COUNTRY_SECOND_LEVELS = frozenset({
     "com", "net", "org", "edu", "gov", "mil", "ac", "co", "go", "or", "ne", "gob", "nic", "sch", "gv",
 })
+# 2026-10-23 (review 2): the Public Suffix List, ICANN and private sections (shared hosting:
+# *.pythonanywhere.com, *.r2.dev, *.hf.space, *.web.core.windows.net ...). The package
+# bundles a snapshot: nothing is fetched at run time. SHARED_SUFFIXES above stays as an extra
+# list for hosts the PSL leaves out (google.com: sites / docs / translate pages of anyone).
+# "blogspot" names Blogger's country domains (blogspot.co.uk ...), no longer all on the PSL.
+SHARED_FIRST_LABELS = frozenset({"blogspot"})
+_PSL = None
+
+
+def _psl():
+    global _PSL
+    if _PSL is None:
+        from publicsuffixlist import PublicSuffixList
+        _PSL = PublicSuffixList()     # only_icann=False: the private section counts too
+    return _PSL
+
+
+def is_public_suffix(host: str) -> bool:
+    """True when the PSL lists `host` itself as a public suffix (com, co.uk, github.io)."""
+    psl = _psl()
+    return psl.publicsuffix(host) == host or psl.privatesuffix(host) is None
 
 
 def is_shared_suffix(host: str) -> bool:
-    """A wildcard base nobody may use: on SHARED_SUFFIXES, a single label, or a
-    country-code second level ("com.au", "edu.uz")."""
+    """A wildcard base nobody may use: a public suffix (PSL, private section included), on
+    SHARED_SUFFIXES, a single label, a country-code second level ("com.au", "edu.uz"), or a
+    Blogger domain (blogspot.co.uk)."""
     if host in SHARED_SUFFIXES:
         return True
     labels = host.split(".")
     if len(labels) < 2:
         return True
-    return len(labels) == 2 and len(labels[1]) == 2 and labels[0] in COUNTRY_SECOND_LEVELS
+    if len(labels) == 2 and len(labels[1]) == 2 and labels[0] in COUNTRY_SECOND_LEVELS:
+        return True
+    if is_public_suffix(host):
+        return True
+    private = _psl().privatesuffix(host) or host
+    return private.split(".", 1)[0] in SHARED_FIRST_LABELS
+
+
+def to_ascii_host(host: str, raw: str) -> str:
+    """2026-10-23 (review 2): an international name is stored as punycode ("пример.рф" ->
+    "xn--e1afmkfd.xn--p1ai"), the form the apps and browsers compare."""
+    if host.isascii():
+        return host
+    import idna
+    try:
+        return idna.encode(host, uts46=True, transitional=False).decode("ascii")
+    except idna.IDNAError:
+        raise ValueError(f"'{raw}' is not a website name like docs.python.org") from None
+
+
+def _is_ip(host: str) -> bool:
+    import ipaddress
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        pass
+    # 2026-10-23 (review 2): no top-level domain is a number, so "10.1", "0x7f.1" and
+    # "127.0.0.1" are all addresses, not names
+    return bool(re.fullmatch(r"[0-9]+", host.rsplit(".", 1)[-1]))
 
 
 def normalize_website(v: str) -> str:
     """One allowed website ("https://docs.python.org/3/" is refused, "HTTPS://Docs.Python.org/"
     -> "docs.python.org", "*.Python.org" -> "*.python.org"). A scheme, a trailing slash,
     "www." stays as typed; a real path, a port, a "*" anywhere but one leading "*.", a
-    wildcard on a shared suffix, an IP, a single label or odd characters is refused
-    (ValueError)."""
+    wildcard on a shared suffix, a host that is itself a public suffix ("github.io"), an IP,
+    a single label or odd characters is refused (ValueError). International names are
+    stored as punycode."""
     raw = v.strip()
     s = raw
     if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", s):
@@ -106,13 +159,15 @@ def normalize_website(v: str) -> str:
     wildcard = host.startswith(WILDCARD_PREFIX)
     if wildcard:
         host = host[len(WILDCARD_PREFIX):]
-    if ":" in host or "@" in host or "*" in host:
+    if ":" in host or "@" in host or "*" in host or "[" in host:
         raise ValueError(f"'{raw}': use only the site name, like docs.python.org or *.python.org")
-    if (not host or len(host) > 253 or not DOMAIN_RE.match(host) or "." not in host
-            or re.fullmatch(r"[0-9.]+", host)):
+    host = to_ascii_host(host, raw)
+    if not host or len(host) > 253 or not DOMAIN_RE.match(host) or "." not in host or _is_ip(host):
         raise ValueError(f"'{raw}' is not a website name like docs.python.org")
     if wildcard and is_shared_suffix(host):
         raise ValueError(f"'{raw}': anyone can make a site under {host}; name the site itself")
+    if not wildcard and is_public_suffix(host):
+        raise ValueError(f"'{raw}': {host} is shared by many sites; name the site itself")
     return (WILDCARD_PREFIX if wildcard else "") + host
 
 

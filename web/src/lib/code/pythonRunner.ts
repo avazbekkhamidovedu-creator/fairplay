@@ -4,12 +4,17 @@
 // 2026-10-23: the student's runs share one worker (each run starts from the same interpreter
 // state, see pyDriver.ts); grading makes a PythonRunner per answer (runners.createRunner) and
 // disposes it after scoring, so no answer can change the results of the next one.
+// 2026-10-23 (review): the time limit runs from the worker's "started" to its "ended"
+// message, so loading, the driver and the interpreter reset are not counted; dispose()
+// resolves a run in progress at once.
 import { MAX_OUTPUT_CHARS, SerialQueue, timedOut, unavailable, type RunResult, type Runner } from "./runner";
 
 /** Where the Pyodide files are served (server/static/pyodide/, copied at build time). */
 export const PYODIDE_BASE = "/pyodide/";
 /** First load of Pyodide (~12 MB) may take a while on school Wi-Fi. */
 export const LOAD_TIMEOUT_MS = 120_000;
+/** Time the worker may take outside the student's code (driver set-up, interpreter reset). */
+export const SETUP_GRACE_MS = 30_000;
 
 interface DoneMessage {
   type: "done";
@@ -29,6 +34,8 @@ export class PythonRunner implements Runner {
   private worker: Worker | null = null;
   private ready: Promise<Worker> | null = null;
   private nextId = 1;
+  /** ends the run in progress (dispose) */
+  private stopCurrent: (() => void) | null = null;
 
   prepare(): Promise<void> {
     return this.ensure().then(() => undefined);
@@ -79,29 +86,54 @@ export class PythonRunner implements Runner {
     }
     const id = this.nextId++;
     return new Promise<RunResult>((resolve) => {
-      const timer = setTimeout(() => {
-        // the program is still running: stop it and drop this worker
-        this.kill(w);
-        resolve(timedOut(timeLimitMs));
-      }, timeLimitMs);
-      w.onmessage = (ev: MessageEvent<DoneMessage>) => {
-        const d = ev.data;
-        if (!d || d.type !== "done" || d.id !== id) return;
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const arm = (ms: number, onFire: () => void) => {
         clearTimeout(timer);
-        if (d.restart) this.kill(w);
-        resolve({
-          status: d.failed ? "error" : "ok",
-          stdout: d.stdout,
-          stderr: d.stderr,
-          timeMs: Math.round(d.timeMs),
-          truncated: !!d.truncated,
-        });
+        timer = setTimeout(onFire, ms);
+      };
+      const end = (r: RunResult, kill: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.stopCurrent === stop) this.stopCurrent = null;
+        if (kill) this.kill(w);
+        resolve(r);
+      };
+      const stop = () => end(unavailable("Stopped."), true);
+      this.stopCurrent = stop;
+      const crashed = () => end({ status: "error", stdout: "", stderr: "Python stopped unexpectedly.\n", timeMs: 0 }, true);
+      // until the worker says the student's code has started (it only compiles the driver
+      // first), and after it says the code has ended (the interpreter is put back), the
+      // time limit does not count; these generous limits only catch a stuck worker
+      arm(timeLimitMs + SETUP_GRACE_MS, crashed);
+      w.onmessage = (ev: MessageEvent<DoneMessage | { type: "started" | "ended"; id: number }>) => {
+        const d = ev.data;
+        if (!d || d.id !== id) return;
+        if (d.type === "started") {
+          // the program is still running at the limit: stop it and drop this worker
+          arm(timeLimitMs, () => end(timedOut(timeLimitMs), true));
+          return;
+        }
+        if (d.type === "ended") {
+          arm(SETUP_GRACE_MS, crashed);
+          return;
+        }
+        if (d.type !== "done") return;
+        end(
+          {
+            status: d.failed ? "error" : "ok",
+            stdout: d.stdout,
+            stderr: d.stderr,
+            timeMs: Math.round(d.timeMs),
+            truncated: !!d.truncated,
+          },
+          !!d.restart,
+        );
       };
       w.onerror = (ev) => {
         ev.preventDefault?.();
-        clearTimeout(timer);
-        this.kill(w);
-        resolve({ status: "error", stdout: "", stderr: "Python stopped unexpectedly.\n", timeMs: 0 });
+        crashed();
       };
       w.postMessage({ type: "run", id, code, stdin, maxOutput: MAX_OUTPUT_CHARS });
     });
@@ -115,7 +147,9 @@ export class PythonRunner implements Runner {
     }
   }
 
+  /** Stops the run in progress (it resolves as "Stopped.") and frees the worker. */
   dispose(): void {
+    this.stopCurrent?.();
     if (this.worker) this.kill(this.worker);
   }
 }

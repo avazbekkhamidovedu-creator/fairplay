@@ -16,6 +16,13 @@ for the attempt (`private, max-age=3600`) and re-asks with If-None-Match (the sh
 at upload is the ETag). The page fetches a file only when the student opens it. Uploads
 are read only after every check has passed (see upload_material).
 
+2026-10-23 (review 2): memory and storage on a small server (512 MB, one process). At most
+UPLOAD_SLOTS uploads are read, hashed and stored at once per process (a third waits up to
+SLOT_WAIT_S, then 429); the file is read in pieces, hashed as it arrives, into one buffer.
+All students of one exam share EXAM_MAX_BYTES (413 past it). An exam's materials are
+deleted RETENTION after it closed (cleanup_old_materials: when the process starts serving,
+then at most once an hour, from the exam lists).
+
 Routes:
   GET    /api/student/exams/{exam_id}/materials          own files + limits (before the exam)
   POST   /api/student/exams/{exam_id}/materials          multipart "file" -> 201 file
@@ -28,20 +35,24 @@ Routes:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import re
+import time
 import unicodedata
+from datetime import timedelta
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import LargeBinary, delete, func, select
+from sqlalchemy import LargeBinary, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import app_client as ac
 from .access import require_member
 from .db import get_database, get_session
-from .models import Attempt, ExamMaterial, User
+from .models import Attempt, Exam, ExamMaterial, User
 from .security import Principal, require_student, require_teacher
 from .services import find_attempt, get_exam_cached, new_id
 from .store import get_store
@@ -64,6 +75,17 @@ TYPES_DETAIL = "Use a PDF, PNG, JPEG, TXT or MD file"
 LOCKED_DETAIL = "Materials can't be changed once you have started the exam"
 TOO_BIG = "Files can be at most 20 MB in all. Remove a file or upload a smaller one."
 NOT_OPEN_BOOK = "This exam is not open book"
+# 2026-10-23 (review 2): server memory, exam storage and retention (see the module notes)
+UPLOAD_SLOTS = 2
+SLOT_WAIT_S = 20.0
+READ_PIECE = 1024 * 1024
+BUSY = "Busy, try again in a moment"
+EXAM_MAX_BYTES = 400 * 1024 * 1024
+EXAM_FULL = ("This exam has no room left for materials (400 MB for all students). "
+             "Upload a smaller file or ask your teacher.")
+RETENTION = timedelta(days=30)
+CLEANUP_EVERY_S = 3600.0
+log = logging.getLogger("fairplay.materials")
 
 
 def sniff_material(data: bytes, filename: str) -> str | None:
@@ -220,6 +242,38 @@ async def _usage(session: AsyncSession, exam_id: str, student_id: int) -> tuple[
     return int(count), int(used)
 
 
+async def _exam_usage(session: AsyncSession, exam_id: str) -> int:
+    return int((await session.execute(
+        select(func.coalesce(func.sum(ExamMaterial.size), 0))
+        .where(ExamMaterial.exam_id == exam_id))).scalar_one())
+
+
+_slots: dict[int, asyncio.Semaphore] = {}
+
+
+def _upload_slots() -> asyncio.Semaphore:
+    """One per event loop (tests run many loops in one process), like routes_scan._slot."""
+    key = id(asyncio.get_running_loop())
+    if key not in _slots:
+        _slots.clear()
+        _slots[key] = asyncio.Semaphore(UPLOAD_SLOTS)
+    return _slots[key]
+
+
+async def _read_hashed(file, limit: int) -> tuple[bytearray, str]:
+    """The file's bytes (at most limit + 1 of them) in one buffer, and their sha256, read
+    in READ_PIECE pieces: no second full copy for hashing."""
+    buf = bytearray()
+    sha = hashlib.sha256()
+    while len(buf) <= limit:
+        piece = await file.read(min(READ_PIECE, limit + 1 - len(buf)))
+        if not piece:
+            break
+        sha.update(piece)
+        buf += piece
+    return buf, sha.hexdigest()
+
+
 @student_router.post("/exams/{exam_id}/materials", status_code=201)
 async def upload_material(exam_id: str, request: Request, p: Principal = Depends(require_student),
                           session: AsyncSession = Depends(get_session)):
@@ -240,41 +294,71 @@ async def upload_material(exam_id: str, request: Request, p: Principal = Depends
     room = MAX_BYTES - used
     if room <= 0:
         raise HTTPException(413, TOO_BIG)
+    exam_room = EXAM_MAX_BYTES - await _exam_usage(session, exam_id)
+    if exam_room <= 0:
+        raise HTTPException(413, EXAM_FULL)
+    too_big = TOO_BIG if room <= exam_room else EXAM_FULL
+    room = min(room, exam_room)
     # One upload at a time per student and exam, so two at once can't pass the limits.
     lock = f"matup:{exam_id}:{p.user_id}"
     if not await store.setnx(lock, "1", UPLOAD_LOCK_S):
         raise HTTPException(429, "Another file is still uploading. Wait for it to finish.")
     try:
-        form = await read_capped_form(request, room + MULTIPART_OVERHEAD, TOO_BIG)
+        # The body arrives into Starlette's spooled file (disk past 1 MB), outside the slots.
+        form = await read_capped_form(request, room + MULTIPART_OVERHEAD, too_big)
         try:
             files = form_files(form, "file")
             if not files:
                 raise HTTPException(422, "Choose a file to upload")
             file = files[0]
-            data = await file.read(room + 1)
+            filename = file.filename or ""
+            # 2026-10-23 (review 2): the file in memory, its hash and the insert happen in
+            # one of UPLOAD_SLOTS places, so a room uploading at once can't fill the memory.
+            slots = _upload_slots()
+            try:
+                await asyncio.wait_for(slots.acquire(), SLOT_WAIT_S)
+            except asyncio.TimeoutError:
+                raise HTTPException(429, BUSY) from None
+            try:
+                data, digest = await _read_hashed(file, room)
+                await form.close()
+                return await _store_material(session, exam_id, p, filename, data, digest, room, too_big)
+            finally:
+                slots.release()
         finally:
             await form.close()
-        if not data:
-            raise HTTPException(422, "The file is empty")
-        if len(data) > room:
-            raise HTTPException(413, TOO_BIG)
-        kind = sniff_material(data, file.filename or "")
-        if kind is None:
-            raise HTTPException(422, TYPES_DETAIL)
-        m = ExamMaterial(id=new_id("m"), exam_id=exam_id, student_id=p.user_id,
-                         name=clean_name(file.filename, kind), kind=kind, size=len(data), data=data,
-                         sha256=hashlib.sha256(data).hexdigest(), created_at=utcnow())
-        session.add(m)
-        await session.flush()
-        # 2026-10-23 (review): the exam may have been started while the body was arriving;
-        # checked again in the same transaction as the insert, so the list stays fixed.
-        if await find_attempt(session, exam_id, p.user_id) is not None:
-            await session.rollback()
-            raise HTTPException(409, LOCKED_DETAIL)
-        await session.commit()
-        return file_out(m)
     finally:
         await store.delete(lock)
+
+
+async def _store_material(session: AsyncSession, exam_id: str, p: Principal, filename: str,
+                          data: bytearray, digest: str, room: int, too_big: str) -> dict:
+    if not data:
+        raise HTTPException(422, "The file is empty")
+    if len(data) > room:
+        raise HTTPException(413, too_big)
+    kind = sniff_material(data, filename)
+    if kind is None:
+        raise HTTPException(422, TYPES_DETAIL)
+    # the buffer goes to the driver as it is (no bytes(...) copy of it here)
+    m = ExamMaterial(id=new_id("m"), exam_id=exam_id, student_id=p.user_id,
+                     name=clean_name(filename, kind), kind=kind, size=len(data), data=data,
+                     sha256=digest, created_at=utcnow())
+    session.add(m)
+    await session.flush()
+    # 2026-10-23 (review): the exam may have been started while the body was arriving;
+    # checked again in the same transaction as the insert, so the list stays fixed.
+    if await find_attempt(session, exam_id, p.user_id) is not None:
+        await session.rollback()
+        raise HTTPException(409, LOCKED_DETAIL)
+    # 2026-10-23 (review 2): other students' uploads may have filled the exam meanwhile
+    if await _exam_usage(session, exam_id) > EXAM_MAX_BYTES:
+        await session.rollback()
+        raise HTTPException(413, EXAM_FULL)
+    await session.commit()
+    out = file_out(m)
+    session.expunge(m)       # let the bytes go with the request
+    return out
 
 
 @student_router.delete("/exams/{exam_id}/materials/{mid}", status_code=204)
@@ -302,6 +386,10 @@ async def _attempt_for_materials(request: Request, session: AsyncSession, aid: s
                            {"exam_id": a.exam_id, "session_id": a.session_id, "status": a.status})
     if a.status != "in_progress":
         raise HTTPException(409, "The exam is over")
+    # 2026-10-23 (review 2): the teacher turned open book off: the files are no longer there
+    exam = await get_exam_cached(get_store(), session, a.exam_id)
+    if exam is None or not _open_book(exam):
+        raise HTTPException(404, NOT_OPEN_BOOK)
     return a
 
 
@@ -321,6 +409,42 @@ async def attempt_material_file(aid: str, mid: str, request: Request,
     if m is None or m.exam_id != a.exam_id or m.student_id != p.user_id:
         raise HTTPException(404, "File not found")
     return await file_response(request, session, m)
+
+
+# ---------------------------------------------------------------- retention
+_last_cleanup = 0.0      # time.monotonic() of this process's last run; 0 = not yet
+
+
+async def cleanup_old_materials(now=None) -> int:
+    """2026-10-23 (review 2): delete the materials of exams closed more than RETENTION ago
+    (an exam closed before closed_at existed counts from its last change). One DELETE with
+    its own short session; returns how many files went."""
+    cutoff = (now or utcnow()) - RETENTION
+    old = select(Exam.id).where(Exam.status == "closed", or_(
+        Exam.closed_at < cutoff, and_(Exam.closed_at.is_(None), Exam.updated_at < cutoff)))
+    async with get_database().sessionmaker() as s:
+        res = await s.execute(delete(ExamMaterial).where(ExamMaterial.exam_id.in_(old))
+                              .execution_options(synchronize_session=False))
+        await s.commit()
+    n = int(res.rowcount or 0)
+    if n:
+        log.info("deleted %d open-book files of exams closed over %d days ago", n, RETENTION.days)
+    return n
+
+
+async def maybe_cleanup_materials() -> None:
+    """Called from the exam lists: the first call after start, then at most once an hour per
+    process (and once an hour across processes, through the store). Never fails a request."""
+    global _last_cleanup
+    t = time.monotonic()
+    if _last_cleanup and t - _last_cleanup < CLEANUP_EVERY_S:
+        return
+    _last_cleanup = t
+    try:
+        if await get_store().setnx("matclean", "1", int(CLEANUP_EVERY_S) - 60):
+            await cleanup_old_materials()
+    except Exception:  # noqa: BLE001 - retention can wait for the next hour
+        log.warning("open-book retention cleanup failed", exc_info=True)
 
 
 # ---------------------------------------------------------------- teacher (read only)

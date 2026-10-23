@@ -3,8 +3,9 @@
 // move), TXT / MD as plain text. There is no download, print or open-in-a-new-window: the
 // bytes stay in this page (blob URLs only for <img>, revoked when closed).
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { NetworkError } from "../../api/client";
 import type { MaterialFile } from "../../api/types";
-import { openPdf, pageText, pagesMatching, type PdfDoc } from "../../lib/pdf";
+import { isPasswordError, openPdf, pageText, pagesMatching, type PdfDoc } from "../../lib/pdf";
 import { ArrowLeftIcon, ArrowRightIcon, MinusIcon, PlusIcon, SearchIcon } from "./icons";
 import "../../styles/tools.css";
 
@@ -17,6 +18,10 @@ export function nextZoom(z: number, dir: 1 | -1): number {
 
 type Load = () => Promise<Blob>;
 
+export const VIEWER_OFFLINE = "This file can't be opened right now. It needs the connection.";
+export const VIEWER_FAILED = "Couldn't open this file.";
+export const PDF_PASSWORD = "This PDF is password-protected. Upload a copy without a password.";
+
 export function MaterialViewer({ file, load }: { file: MaterialFile; load: Load }) {
   const [blob, setBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +31,8 @@ export function MaterialViewer({ file, load }: { file: MaterialFile; load: Load 
     setError(null);
     load().then(
       (b) => alive && setBlob(b),
-      () => alive && setError("This file can't be opened right now. It needs the connection."),
+      // 2026-10-23 review: "needs the connection" only when it is the connection
+      (e) => alive && setError(e instanceof NetworkError ? VIEWER_OFFLINE : VIEWER_FAILED),
     );
     return () => {
       alive = false;
@@ -166,7 +172,7 @@ function useDragScroll(ref: RefObject<HTMLDivElement>) {
 
 function PdfView({ blob, name }: { blob: Blob; name: string }) {
   const [doc, setDoc] = useState<PdfDoc | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<null | "damaged" | "password">(null);
   const [page, setPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
   const [zoom, setZoom] = useState(1);
@@ -188,7 +194,7 @@ function PdfView({ blob, name }: { blob: Blob; name: string }) {
           if (alive) setDoc(d);
           else void d.destroy();
         },
-        () => alive && setFailed(true),
+        (e) => alive && setFailed(isPasswordError(e) ? "password" : "damaged"),
       );
     return () => {
       alive = false;
@@ -259,7 +265,7 @@ function PdfView({ blob, name }: { blob: Blob; name: string }) {
   if (failed)
     return (
       <p className="stu-alert warn" role="alert">
-        {name} could not be opened. The file may be damaged.
+        {failed === "password" ? PDF_PASSWORD : `${name} could not be opened. The file may be damaged.`}
       </p>
     );
   if (!doc)

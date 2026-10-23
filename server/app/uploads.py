@@ -150,12 +150,15 @@ def read_upload(uid: str) -> tuple[bytes, str] | None:
 MULTIPART_OVERHEAD = 64 * 1024   # boundaries, part headers and the file name
 
 
-async def read_capped_form(request: Request, cap: int, too_big: str, max_files: int = 1) -> FormData:
+async def read_capped_form(request: Request, cap: int, too_big: str, max_files: int = 1,
+                           too_many: str | None = None) -> FormData:
     """2026-10-23: parse a multipart body AFTER the route's checks have run. FastAPI parses
     `File(...)` / `Form(...)` parameters before it runs the dependencies, so routes that take
     an upload read it here instead: a missing or too large Content-Length is refused before
     anything is read, and reading stops (413) as soon as more than `cap` bytes arrive. File
-    parts are spooled by Starlette (to disk past 1 MB), never held in memory whole."""
+    parts are spooled by Starlette (to disk past 1 MB), never held in memory whole.
+    2026-10-23 (review 2): more than `max_files` files is a 422 with `too_many` (when given),
+    like the route's own count check; other malformed bodies stay 400."""
     try:
         declared = int(request.headers.get("content-length", ""))
     except ValueError:
@@ -179,6 +182,8 @@ async def read_capped_form(request: Request, cap: int, too_big: str, max_files: 
         return await MultiPartParser(request.headers, capped(), max_files=max_files, max_fields=8,
                                      max_part_size=MULTIPART_OVERHEAD).parse()
     except MultiPartException as e:
+        if too_many and e.message.startswith("Too many files"):
+            raise HTTPException(422, too_many) from None
         raise HTTPException(400, e.message) from None
 
 
@@ -191,10 +196,10 @@ async def upload(request: Request, p: Principal = Depends(require_teacher)):
     # 2026-10-23: the body is read only once the teacher is known (read_capped_form)
     too_big = "Images can be at most 5 MB"
     form = await read_capped_form(request, MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD, too_big)
-    files = form_files(form, "file")
-    if not files:
-        raise HTTPException(422, "Choose a file to upload")
-    try:
+    try:        # 2026-10-23 (review 2): the form is closed on the 422 too
+        files = form_files(form, "file")
+        if not files:
+            raise HTTPException(422, "Choose a file to upload")
         data = await files[0].read(MAX_UPLOAD_BYTES + 1)
     finally:
         await form.close()

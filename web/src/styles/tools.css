@@ -713,6 +713,13 @@ button.stu-filerow:hover {
   margin: 0;
   color: var(--s-text, #1b2533);
 }
+/* 2026-10-23 review: always under the frame (a refused site shows a blank page) */
+.stu-web-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--s-muted, #6b7685);
+}
 
 /* ---------------------------------------------------------------- upload (before the exam) */
 .stu-upload {
@@ -847,6 +854,17 @@ button.stu-filerow:hover {
   background: var(--surface, #fff);
   border: 1px solid var(--border, #e2e6ec);
   font-size: 14px;
+}
+/* 2026-10-23 (review): a site that refuses to be shown inside the exam */
+.t-sites li .mono {
+  flex: none;
+}
+.t-site-warn {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--warn-dark, #8a5a00);
 }
 .t-sites-add {
   display: flex;

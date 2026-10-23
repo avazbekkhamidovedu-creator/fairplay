@@ -102,6 +102,8 @@ async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
 @router.get("")
 async def list_exams(p: Principal = Depends(require_teacher),
                      session: AsyncSession = Depends(get_session)):
+    from .materials import maybe_cleanup_materials
+    await maybe_cleanup_materials()      # 2026-10-23 (review 2): open-book retention, hourly
     res = await session.execute(
         select(Exam).where(Exam.teacher_id == p.user_id, Exam.is_trial == false())
         .order_by(Exam.created_at.desc(), Exam.id))

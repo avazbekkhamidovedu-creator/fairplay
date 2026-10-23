@@ -447,9 +447,11 @@ export function requestLock(timeoutMs = 10000, exam?: Partial<ExamSessionParams>
       resolve(r);
     };
     const off = onNative((msg) => {
-      if (msg.type === "locked") finish({ ok: true });
+      // 2026-10-23 review: while the pre-exam lock is on, a "state" (or a late prelock
+      // "locked") says locked:true before the exam lock exists. Only the exam lock counts.
+      if (msg.type === "locked" && !msg.prelock) finish({ ok: true });
       else if (msg.type === "lockFailed") finish({ ok: false, reason: msg.reason || "unknown" });
-      else if (msg.type === "state" && msg.locked) finish({ ok: true });
+      else if (msg.type === "state" && msg.locked && !msg.prelock) finish({ ok: true });
       else if (msg.type === "lockPending") {
         // The iPad app waits for the student to allow Assessment Mode: wait with it.
         clearTimeout(timer);

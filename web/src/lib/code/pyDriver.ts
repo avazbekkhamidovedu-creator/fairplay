@@ -10,7 +10,10 @@
 //    sys.stdout = ..., math.pi = 3 and replacing __main__ do not survive), sys.path and the
 //    other lists in sys, the instance dicts of the standard streams, the trace / profile
 //    hooks and the recursion limit; files the program created are deleted and a changed file
-//    asks the page for a fresh worker.
+//    asks the page for a fresh worker. The reset runs after each run (and once after
+//    loading), outside the student's timed window (hooks.onStart / onEnd).
+//  - os._exit() ends the interpreter: the output so far is returned and the page starts a
+//    fresh worker for the next run.
 //  - The driver itself is compiled again per run into a dict of its own, with exec / dict
 //    methods held from JavaScript (C functions a program cannot replace).
 //
@@ -166,8 +169,22 @@ function fsSnapshot(py: PyodideLike): Map<string, string> {
   return files;
 }
 
+/** Called around the student's own code only (the page times the run between them). */
+export interface PyRunHooks {
+  onStart?(): void;
+  onEnd?(): void;
+}
+
 export interface PySession {
-  run(code: string, stdin: string, maxOutput: number): PyRunOutput;
+  run(code: string, stdin: string, maxOutput: number, hooks?: PyRunHooks): PyRunOutput;
+}
+
+/** Pyodide's error for os._exit() / an interpreter exit: the interpreter cannot be used again. */
+function exitStatus(e: unknown): number | null {
+  if (!e || typeof e !== "object") return null;
+  const x = e as { name?: unknown; status?: unknown; constructor?: { name?: unknown } };
+  if (typeof x.status === "number" && (x.name === "Exit" || x.constructor?.name === "Exit")) return x.status;
+  return null;
 }
 
 /** Locks the interpreter down and returns the runner for one program at a time. */
@@ -230,8 +247,9 @@ export function createPySession(py: PyodideLike): PySession {
   reset();
 
   return {
-    run(code, stdin, max) {
-      reset();
+    run(code, stdin, max, hooks) {
+      // the interpreter was put back after the last run (and when the session was made), so
+      // nothing of the clean-up runs inside the student's timed window
       const streams = [
         { text: "", dec: new TextDecoder() },
         { text: "", dec: new TextDecoder() },
@@ -249,7 +267,8 @@ export function createPySession(py: PyodideLike): PySession {
       };
       py.setStdout({ write: writer(0) });
       py.setStderr({ write: writer(1) });
-      const bytes = new TextEncoder().encode(stdin);
+      // same line endings as the JavaScript runner: a teacher's CRLF input reads as "\n"
+      const bytes = new TextEncoder().encode(stdin.replace(/\r\n?/g, "\n"));
       let pos = 0;
       py.setStdin({
         read(buf: Uint8Array) {
@@ -262,28 +281,57 @@ export function createPySession(py: PyodideLike): PySession {
       const ns = dictType() as PyProxyLike;
       let run: PyProxyLike | null = null;
       let rc = 1;
-      const t0 = performance.now();
+      let gone = false;
+      let t0 = performance.now();
+      let started = false;
       try {
         execFn(DRIVER, ns);
         run = ns.get("__fairplay_run") as PyProxyLike;
+        hooks?.onStart?.();
+        started = true;
+        t0 = performance.now();
         rc = Number(run(code));
       } catch (e) {
-        streams[1]!.text += (e instanceof Error ? e.message : String(e)) + "\n";
+        // os._exit() or a crash of the interpreter: keep what was printed, use a fresh worker next
+        gone = true;
+        const status = exitStatus(e);
+        if (status === 0) rc = 0;
+        else {
+          const err = streams[1]!;
+          if (err.text && !err.text.endsWith("\n")) err.text += "\n";
+          err.text += (status !== null ? `Program exited with code ${status}.` : e instanceof Error ? e.message : String(e)) + "\n";
+        }
       }
       const timeMs = performance.now() - t0;
+      if (!started) hooks?.onStart?.();
+      hooks?.onEnd?.();
       try {
         run?.destroy();
         ns.destroy();
       } catch {
         /* already gone */
       }
-      py.setStdout(discard);
-      py.setStderr(discard);
-      let restart = false;
-      try {
-        restart = cleanFiles();
-      } catch {
-        restart = true;
+      let restart = gone;
+      if (!restart) {
+        try {
+          restart = cleanFiles();
+        } catch {
+          restart = true;
+        }
+      }
+      if (!restart) {
+        try {
+          reset();
+        } catch {
+          restart = true;
+        }
+      } else {
+        try {
+          py.setStdout(discard);
+          py.setStderr(discard);
+        } catch {
+          /* the interpreter has exited */
+        }
       }
       return { stdout: streams[0]!.text, stderr: streams[1]!.text, failed: rc !== 0, truncated: cut, timeMs, restart };
     },

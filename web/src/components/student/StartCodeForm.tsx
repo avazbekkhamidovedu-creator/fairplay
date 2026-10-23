@@ -49,6 +49,8 @@ export function StartCodeForm({
   onConflict,
   onCancel,
   legend,
+  onInFlight,
+  paused,
 }: {
   examId: string;
   autoFocus?: boolean;
@@ -56,6 +58,11 @@ export function StartCodeForm({
   onConflict?: () => void;
   onCancel?: () => void;
   legend?: string;
+  /** 2026-10-23 review: true while a start request is on its way (the page then must not
+   *  unlock: the exam could start on a computer that just left the lock). */
+  onInFlight?: (inFlight: boolean) => void;
+  /** The page is leaving: no start (nor a retry while waiting for a swap) is sent. */
+  paused?: boolean;
 }) {
   const navigate = useNavigate();
   const [digits, setDigits] = useState<string[]>(emptyCode);
@@ -70,13 +77,26 @@ export function StartCodeForm({
   const [waitingSwap, setWaitingSwap] = useState(false);
   const swapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  const inFlightCb = useRef(onInFlight);
+  inFlightCb.current = onInFlight;
+  const pausedRef = useRef(!!paused);
+  pausedRef.current = !!paused;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
       mounted.current = false;
       if (swapTimer.current) clearTimeout(swapTimer.current);
-    },
-    [],
-  );
+      inFlightCb.current?.(false);
+    };
+  }, []);
+  const inFlight = (on: boolean) => {
+    if (mounted.current) inFlightCb.current?.(on);
+  };
+  const go = (attempt: { attempt_id: string }) => {
+    // 2026-10-23 review: never navigate from a form that is gone (the student left)
+    if (!mounted.current) return;
+    navigate(`/student/exam/${encodeURIComponent(attempt.attempt_id)}`, { state: { attempt } });
+  };
   const boxes = useRef<StartCodeBoxesHandle>(null);
   const startBtn = useRef<HTMLButtonElement>(null);
   const code = digits.join("");
@@ -106,11 +126,17 @@ export function StartCodeForm({
   function retryAfterSwap(startCode: string) {
     swapTimer.current = setTimeout(async () => {
       if (!mounted.current) return;
+      if (pausedRef.current) {
+        retryAfterSwap(startCode);      // leaving: wait, the page may still come back here
+        return;
+      }
+      inFlight(true);
       try {
         const attempt = await studentApi.start(examId, startCode);
-        if (!mounted.current) return;
-        navigate(`/student/exam/${encodeURIComponent(attempt.attempt_id)}`, { state: { attempt } });
+        inFlight(false);
+        go(attempt);
       } catch (err) {
+        inFlight(false);
         if (!mounted.current) return;
         if (err instanceof SwapNeededError || err instanceof NetworkError) {
           retryAfterSwap(startCode);      // not approved yet (or a Wi-Fi blip): keep waiting
@@ -125,7 +151,7 @@ export function StartCodeForm({
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (waiting) return;
+    if (waiting || pausedRef.current) return;
     setReadyAgain(false);
     if (!complete) {
       setError(`The start code has ${CODE_LENGTH} digits.`);
@@ -134,6 +160,7 @@ export function StartCodeForm({
     }
     setBusy(true);
     setError(null);
+    inFlight(true);
     try {
       let attempt;
       try {
@@ -148,13 +175,18 @@ export function StartCodeForm({
           throw offErr instanceof WrongCodeError ? new ApiError(403, "Wrong start code") : err;
         }
       }
-      navigate(`/student/exam/${encodeURIComponent(attempt.attempt_id)}`, { state: { attempt } });
+      inFlight(false);
+      go(attempt);
     } catch (err) {
       if (err instanceof SwapNeededError && (await requestSwap(examId, err).catch(() => false))) {
+        inFlight(false);
+        if (!mounted.current) return;
         setWaitingSwap(true);
         retryAfterSwap(code);
         return;
       }
+      inFlight(false);
+      if (!mounted.current) return;
       setBusy(false);
       setError(startErrorMessage(err));
       if (err instanceof ApiError && err.status === 409) {
@@ -212,7 +244,7 @@ export function StartCodeForm({
         </div>
       )}
       <div className="stu-row">
-        <button ref={startBtn} type="submit" className="stu-btn primary lg" style={{ flex: "1 1 160px" }} disabled={busy || waiting}>
+        <button ref={startBtn} type="submit" className="stu-btn primary lg" style={{ flex: "1 1 160px" }} disabled={busy || waiting || !!paused}>
           {waitingSwap ? "Waiting for your teacher…" : busy ? "Checking…" : "Start exam"}
         </button>
         {onCancel && (

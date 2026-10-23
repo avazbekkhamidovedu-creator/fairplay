@@ -94,12 +94,19 @@ describe("before you start: the pre-exam lock", () => {
     expect(await screen.findByText("dashboard")).toBeInTheDocument();
   });
 
-  it("Back on the rules screen just goes home when not locked", async () => {
+  it("Back on the rules screen asks the app even when not locked (2026-10-23 review)", async () => {
     const post = native();
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ action: "preunlock" }));
+    send({ type: "unlocked" }); // every app answers, locked or not
     expect(await screen.findByText("dashboard")).toBeInTheDocument();
-    expect(post).not.toHaveBeenCalledWith({ action: "preunlock" });
+  });
+
+  it("Back in a plain browser just goes home", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    expect(await screen.findByText("dashboard")).toBeInTheDocument();
   });
 
   it("a late lock answer after the 4 s 'unsupported' guess still counts (iPad)", async () => {
@@ -123,8 +130,53 @@ describe("before you start: the pre-exam lock", () => {
     await toPrelockRequest(post);
     vi.advanceTimersByTime(bridge.PRELOCK_SILENT_MS + 10);
     fireEvent.click(await screen.findByRole("button", { name: "Not ready? Go back" }));
+    // 2026-10-23 review: always asked (harmless when nothing is locked)
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ action: "preunlock" }));
+    send({ type: "unlocked" });
     expect(await screen.findByText("dashboard")).toBeInTheDocument();
-    expect(post).not.toHaveBeenCalledWith({ action: "preunlock" }); // not locked: nothing to undo
+  });
+
+  it("iPad: going back while the Assessment Mode prompt waits cancels it, no lock error", async () => {
+    const post = native();
+    renderPage();
+    await toPrelockRequest(post);
+    send({ type: "lockPending", reason: "prompt" });
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ action: "preunlock" }));
+    send({ type: "lockFailed", reason: "cancelled" });
+    expect(screen.queryByText("This computer could not lock")).toBeNull();
+    send({ type: "unlocked" });
+    expect(await screen.findByText("dashboard")).toBeInTheDocument();
+    expect(screen.queryByText("This computer could not lock")).toBeNull();
+  });
+
+  it("a cancelled prompt (not by this page) goes back to the rules, not to the error", async () => {
+    const post = native();
+    renderPage();
+    await toPrelockRequest(post);
+    send({ type: "lockFailed", reason: "cancelled" });
+    expect(await screen.findByRole("button", { name: "Lock and continue" })).toBeInTheDocument();
+    expect(screen.queryByText("This computer could not lock")).toBeNull();
+  });
+
+  it("Not ready? Leave is disabled while the start code is being checked", async () => {
+    const post = native();
+    bridge.onNative(() => undefined);
+    state({ locked: true, prelock: true });
+    let resolveStart: (v: unknown) => void = () => undefined;
+    api.start.mockReturnValue(new Promise((r) => (resolveStart = r)));
+    renderPage();
+    await screen.findByRole("heading", { name: "Enter the start code" });
+    const boxes = screen.getAllByRole("textbox");
+    boxes.forEach((b, i) => fireEvent.change(b, { target: { value: String((i + 1) % 10) } }));
+    fireEvent.click(screen.getByRole("button", { name: "Start exam" }));
+    await waitFor(() => expect(api.start).toHaveBeenCalled());
+    const leave = screen.getByRole("button", { name: "Not ready? Leave and unlock" });
+    expect(leave).toBeDisabled();
+    fireEvent.click(leave);
+    expect(post).not.toHaveBeenCalledWith({ action: "preunlock" });
+    resolveStart(Promise.reject(new Error("x")));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Not ready? Leave and unlock" })).not.toBeDisabled());
   });
 
   it("…and when a lock without the prelock flag arrived", async () => {

@@ -106,7 +106,9 @@ def offline_start(offline_started_at, now):
 @router.get("/exams")
 async def my_exams(request: Request, p: Principal = Depends(require_student),
                    session: AsyncSession = Depends(get_session)):
+    from .materials import maybe_cleanup_materials
     from .offline import package_id
+    await maybe_cleanup_materials()      # 2026-10-23 (review 2): open-book retention, hourly
     secret = ac.settings_of(request).secret
     rows = (await session.execute(
         select(Exam.id, Exam.title, Exam.duration_min, Exam.question_count, Exam.status,

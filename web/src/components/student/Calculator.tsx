@@ -109,6 +109,8 @@ export function Calculator({
   const [tab, setTab] = useState<"calc" | "graph">("calc");
   const [angle, setAngle] = useState<AngleMode>("deg");
   const drag = useRef<{ dx: number; dy: number; id: number } | null>(null);
+  const paneRef = useRef(paneWidth);
+  paneRef.current = paneWidth;
 
   const size = () => {
     const r = panelRef.current?.getBoundingClientRect();
@@ -137,15 +139,22 @@ export function Calculator({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneWidth, open]);
 
+  // 2026-10-23 review: a resized window (or a turned iPad) also steps out of the side panel.
   useEffect(() => {
     const onResize = () =>
       setPos((p) => {
         if (!p) return p;
         const { w, h } = size();
-        return clampPosition(p.x, p.y, w, h, window.innerWidth, window.innerHeight);
+        const c = clampPosition(p.x, p.y, w, h, window.innerWidth, window.innerHeight);
+        const x = avoidPane(c.x, w, window.innerWidth, paneRef.current);
+        return x === p.x && c.y === p.y ? p : { x, y: c.y };
       });
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

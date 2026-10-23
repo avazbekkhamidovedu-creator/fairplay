@@ -172,6 +172,9 @@ function ExamTakingInner() {
   const eventTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submitRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const phaseBeforeSubmit = useRef<Phase>("exam");
+  // 2026-10-23 review: the time left, for the submit retry (a manual hand-in still retrying
+  // when the time runs out goes on as the time-up hand-in: retry / seal / help).
+  const remainingRef = useRef(Infinity);
 
   // ----- slice 6: offline attempts ("offline:<exam_id>", started from the package) -----
   // realAidRef is the server attempt id; null while an offline attempt has not reached the
@@ -333,8 +336,9 @@ function ExamTakingInner() {
               : "Submitting failed.";
         if (!final && (auto || e instanceof NetworkError)) {
           setSubmitError(`${msg} Trying again…`);
-          if (auto) setTimeUpProblem(true);
-          submitRetryRef.current = setTimeout(() => void doSubmit(auto), SUBMIT_RETRY_MS);
+          const timeUp = auto || remainingRef.current <= 0;
+          if (timeUp) setTimeUpProblem(true);
+          submitRetryRef.current = setTimeout(() => void doSubmitRef.current(timeUp), SUBMIT_RETRY_MS);
         } else {
           setSubmitError(msg);
           setPhase(phaseBeforeSubmit.current);
@@ -644,6 +648,7 @@ function ExamTakingInner() {
   }, []);
 
   const remaining = deadline ? remainingMs(deadline, offset, now) : Infinity;
+  remainingRef.current = remaining;
   useEffect(() => {
     if (!attempt || !deadline) return;
     // S3: while waiting for the teacher the time is given back on approval: don't hand in.
@@ -651,7 +656,10 @@ function ExamTakingInner() {
     if (remaining <= 0 && (phase === "exam" || phase === "review" || phase === "lockFailed" || phase === "preflight")) {
       void doSubmit(true);
     }
-  }, [remaining, phase, attempt, deadline, doSubmit, waiting]);
+    // 2026-10-23 review: a manual hand-in that failed offline and is waiting to try again
+    // when the time runs out: show the time-up screen now (retry / seal / help).
+    if (remaining <= 0 && phase === "submitting" && submitError !== null && !timeUpProblem) setTimeUpProblem(true);
+  }, [remaining, phase, attempt, deadline, doSubmit, waiting, submitError, timeUpProblem]);
 
   // ----- answering -----
 
@@ -802,6 +810,17 @@ function ExamTakingInner() {
   const [paneWidth, setPaneWidth] = useState(() =>
     clampPaneWidth(readPaneWidth(), typeof window === "undefined" ? 1280 : window.innerWidth),
   );
+  // 2026-10-23 review: a smaller window (or the iPad turned) keeps the panel within limits;
+  // a bigger one gives back the width the student chose.
+  useEffect(() => {
+    const fit = () => setPaneWidth(clampPaneWidth(readPaneWidth(), window.innerWidth));
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+    return () => {
+      window.removeEventListener("resize", fit);
+      window.removeEventListener("orientationchange", fit);
+    };
+  }, []);
   const [materialCount, setMaterialCount] = useState<number | null>(null);
   const materialsAid = connected ? realAidRef.current : null;
   useEffect(() => {
@@ -1103,7 +1122,9 @@ function ExamTakingInner() {
                 aria-label={`Question ${current + 1} of ${questions.length}`}
                 onClick={() => setNavOpen((o) => !o)}
               >
-                Question {current + 1}
+                <span className="stu-lbl-long">Question </span>
+                <span className="stu-lbl-short">Q</span>
+                {current + 1}
                 <ChevronIcon className="chev" />
               </button>
 
@@ -1118,8 +1139,15 @@ function ExamTakingInner() {
                   Back
                 </button>
                 {isLast ? (
-                  <button type="button" className="stu-btn primary lg" onClick={() => setPhase("review")}>
-                    Review and submit
+                  <button
+                    type="button"
+                    className="stu-btn primary lg"
+                    aria-label="Review and submit"
+                    onClick={() => setPhase("review")}
+                  >
+                    {/* 2026-10-23 review: "Review" when the bar is narrow (side panel open) */}
+                    <span className="stu-lbl-long" aria-hidden="true">Review and submit</span>
+                    <span className="stu-lbl-short" aria-hidden="true">Review</span>
                   </button>
                 ) : (
                   <button type="button" className="stu-btn primary lg" onClick={() => setCurrent((c) => c + 1)}>
@@ -1137,6 +1165,8 @@ function ExamTakingInner() {
                   role="dialog"
                   aria-labelledby="nav-h"
                 >
+                  {/* 2026-10-23 review: title, ✕ and the legend stay put while a long list scrolls */}
+                  <div className="stu-navigator-top">
                   <div className="stu-navigator-head">
                     <h2 id="nav-h">{attempt.title}: questions</h2>
                     <button type="button" className="stu-icon-btn" aria-label="Close" onClick={() => closeNav(true)}>
@@ -1160,6 +1190,7 @@ function ExamTakingInner() {
                       <span className="stu-swatch marked" aria-hidden="true" />
                       Marked {markedCount}
                     </span>
+                  </div>
                   </div>
                   <div className="stu-qgrid">
                     {questions.map((qq, i) => {
@@ -1243,7 +1274,11 @@ function ExamTakingInner() {
 
       {phase === "trialEnded" && trialEndedPanel}
 
-      {calcMode && calcMounted && toolsShown && <Calculator mode={calcMode} open={calcOpen} onClose={closeCalc} paneWidth={paneShown ? paneWidth : 0} />}
+      {/* 2026-10-23 review: stays mounted (hidden) while handing in, so a failed hand-in
+          doesn't lose what is in it */}
+      {calcMode && calcMounted && (
+        <Calculator mode={calcMode} open={calcOpen && toolsShown} onClose={closeCalc} paneWidth={paneShown ? paneWidth : 0} />
+      )}
       {paneShown && pane === "materials" && (
         <ToolPane title="Materials" icon={<BookIcon />} labelId="pane-materials-h" width={paneWidth} onWidth={setPaneWidth} onClose={closePane}>
           <MaterialsPaneContent attemptId={materialsAid} />

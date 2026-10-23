@@ -34,6 +34,11 @@ BUBBLE_R = 8.0
 BUBBLE_STEP = 36.0
 LETTERS = "ABCDEFGH"
 LAYOUT_VERSION = 1
+PRINTABLE_TYPES = ("mcq", "numeric", "short", "essay")
+
+
+class NotPrintable(ValueError):
+    """An exam with a question type that has no paper form (code)."""
 
 QR_TR = (PAGE_W - MARGIN - QR_SIZE, QR_TOP)
 QR_BL = (MARGIN, PAGE_H - QR_TOP - QR_SIZE)
@@ -158,8 +163,10 @@ def plan(questions: list[dict]) -> list[PlannedPage]:
 
     for n, q in enumerate(questions, start=1):
         qtype = q.get("type")
-        if qtype not in ("mcq", "numeric", "short", "essay"):
-            continue
+        if qtype not in PRINTABLE_TYPES:
+            # 2026-10-23 (review 2): never skip one silently: the numbers on paper would no
+            # longer match the exam and a scanned student would get 0 for it, marked graded.
+            raise NotPrintable(f"question {n} ({qtype}) can't be printed")
         # ---- prompt part
         prompt_lines = _wrap(q.get("prompt", ""), width, BODY)
         images = []

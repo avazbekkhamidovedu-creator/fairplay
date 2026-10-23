@@ -123,6 +123,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .materials import student_router as materials_student_router, teacher_router as materials_teacher_router
     app.include_router(materials_student_router)
     app.include_router(materials_teacher_router)
+    # 2026-10-23 (review): can a website be shown inside the exam (teacher's settings)
+    from .site_check import router as site_check_router
+    app.include_router(site_check_router)
     app.include_router(topics_router)
     if settings.feature("scan"):
         from .routes_scan import router as scan_router  # slice 6 D: Scan & Grade (paper exams)

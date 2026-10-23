@@ -36,6 +36,49 @@ export async function openPdf(data: Uint8Array): Promise<PdfDoc> {
   return (await task.promise) as unknown as PdfDoc;
 }
 
+/** 2026-10-23 (review): pdf.js rejects a PDF that needs a password with a PasswordException
+ *  (no onPassword handler is set, so it never asks). */
+export function isPasswordError(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as { name?: unknown }).name === "PasswordException";
+}
+
+/** 2026-10-23 (review): does this PDF need a password to open? Cheap first: "/Encrypt" in
+ *  the first or last 64 KB (the trailer). Only then pdf.js tries to open it: a PDF with an
+ *  owner password only (printing / copying limits) opens fine and is accepted. */
+export async function pdfNeedsPassword(file: Blob, open: (d: Uint8Array) => Promise<PdfDoc> = openPdf): Promise<boolean> {
+  const SPAN = 64 * 1024;
+  const head = await blobBytes(file.slice(0, SPAN));
+  const tail = file.size > SPAN ? await blobBytes(file.slice(Math.max(SPAN, file.size - SPAN))) : new Uint8Array();
+  if (!hasEncrypt(head) && !hasEncrypt(tail)) return false;
+  try {
+    const doc = await open(await blobBytes(file));
+    void doc.destroy();
+    return false;
+  } catch (e) {
+    return isPasswordError(e);
+  }
+}
+
+const ENCRYPT = [0x2f, 0x45, 0x6e, 0x63, 0x72, 0x79, 0x70, 0x74]; // "/Encrypt"
+
+function hasEncrypt(b: Uint8Array): boolean {
+  outer: for (let i = 0; i + ENCRYPT.length <= b.length; i++) {
+    for (let j = 0; j < ENCRYPT.length; j++) if (b[i + j] !== ENCRYPT[j]) continue outer;
+    return true;
+  }
+  return false;
+}
+
+function blobBytes(b: Blob): Promise<Uint8Array> {
+  if (typeof b.arrayBuffer === "function") return b.arrayBuffer().then((ab) => new Uint8Array(ab));
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(new Uint8Array(r.result as ArrayBuffer));
+    r.onerror = () => reject(r.error);
+    r.readAsArrayBuffer(b);
+  });
+}
+
 /** Plain text of a page (for the search box). */
 export async function pageText(page: PdfPage): Promise<string> {
   const tc = await page.getTextContent();

@@ -237,7 +237,8 @@ def test_container_does_not_trust_forwarded_headers_by_default():
 def test_requirements_are_pinned():
     lines = [x.strip() for x in (Path(__file__).resolve().parents[1] / "requirements.txt")
              .read_text().splitlines() if x.strip() and not x.startswith("#")]
-    assert lines and all("<" in x for x in lines)        # an upper bound on every line
+    # an upper bound on every line (2026-10-23: or an exact pin, publicsuffixlist's snapshot)
+    assert lines and all("<" in x or "==" in x for x in lines)
 
 
 # ---------------------------------------------------------------- offline package

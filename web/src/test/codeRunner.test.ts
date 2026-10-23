@@ -178,7 +178,7 @@ describe("JavaScript runner script", () => {
 
   it("formats values like Node", async () => {
     const r = await runJs("console.log([1, 'a', [2]], {x: 1}, null, undefined, 2n, true)");
-    expect(r.stdout).toBe("[ 1, \"a\", [ 2 ] ] { x: 1 } null undefined 2 true\n");
+    expect(r.stdout).toBe("[ 1, 'a', [ 2 ] ] { x: 1 } null undefined 2n true\n");
   });
 
   it("reports errors with the student's line number", async () => {

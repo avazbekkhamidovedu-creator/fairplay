@@ -45,24 +45,54 @@ export function outcomeOf(index: number, t: TestCase, r: RunResult): TestOutcome
   };
 }
 
-/** Runs the tests one after the other. Stops early when the runner is unavailable. */
+/** Thrown by runTests when its signal is aborted (the caller drops the partial results). */
+export class TestsAborted extends Error {
+  constructor() {
+    super("Stopped.");
+    this.name = "AbortError";
+  }
+}
+
+export function isAborted(e: unknown): boolean {
+  return e instanceof TestsAborted || (e instanceof Error && e.name === "AbortError");
+}
+
+/** Runs the tests one after the other. Stops early when the runner is unavailable. With a
+ *  signal: rejects with TestsAborted as soon as it is aborted (the caller disposes the
+ *  runner, which ends the program in progress). */
 export async function runTests(
   runner: Runner,
   code: string,
   tests: TestCase[],
   timeLimitMs: number,
   onProgress?: (done: TestOutcome[]) => void,
+  signal?: AbortSignal,
 ): Promise<TestOutcome[]> {
   const out: TestOutcome[] = [];
-  for (let i = 0; i < tests.length; i++) {
-    const t = tests[i]!;
-    const r = await runner.run(code, t.input, timeLimitMs);
-    out.push(outcomeOf(i, t, r));
-    onProgress?.([...out]);
-    if (r.status === "unavailable") {
-      for (let j = i + 1; j < tests.length; j++) out.push(outcomeOf(j, tests[j]!, r));
-      break;
+  let onAbort: (() => void) | null = null;
+  const aborted = signal
+    ? new Promise<never>((_, reject) => {
+        onAbort = () => reject(new TestsAborted());
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      })
+    : null;
+  aborted?.catch(() => undefined);
+  try {
+    for (let i = 0; i < tests.length; i++) {
+      if (signal?.aborted) throw new TestsAborted();
+      const t = tests[i]!;
+      const r = aborted ? await Promise.race([runner.run(code, t.input, timeLimitMs), aborted]) : await runner.run(code, t.input, timeLimitMs);
+      if (signal?.aborted) throw new TestsAborted();
+      out.push(outcomeOf(i, t, r));
+      onProgress?.([...out]);
+      if (r.status === "unavailable") {
+        for (let j = i + 1; j < tests.length; j++) out.push(outcomeOf(j, tests[j]!, r));
+        break;
+      }
     }
+  } finally {
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
   }
   return out;
 }

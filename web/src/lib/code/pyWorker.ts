@@ -45,7 +45,12 @@ ctx.onmessage = async (ev: MessageEvent<InMessage>) => {
       return;
     }
     try {
-      const r = session.run(msg.code, msg.stdin, msg.maxOutput);
+      const id = msg.id;
+      // the page times the run from "started" to "ended": only the student's own code
+      const r = session.run(msg.code, msg.stdin, msg.maxOutput, {
+        onStart: () => ctx.postMessage({ type: "started", id }),
+        onEnd: () => ctx.postMessage({ type: "ended", id }),
+      });
       ctx.postMessage({ type: "done", id: msg.id, ...r });
     } catch (e) {
       // the interpreter is in an unknown state: the page starts a fresh worker next time

@@ -41,9 +41,13 @@ function McqInput({ question, value, onChange, labelledBy, cross }: Props) {
     if (crossed.has(i)) cross?.onToggle(i);
     onChange(i);
   };
+  // 2026-10-23 review: arrows never bring a crossed-out option back (only a click on it
+  // does); they skip crossed-out options, unless every other option is crossed out.
   const move = (from: number, delta: number, el: HTMLElement) => {
-    const next = (from + delta + count) % count;
-    choose(next);
+    let next = (from + delta + count) % count;
+    for (let k = 0; k < count - 1 && crossed.has(next); k++) next = (next + delta + count) % count;
+    if (crossed.has(next)) next = (from + delta + count) % count;
+    onChange(next);
     const group = el.closest("[role=radiogroup]");
     (group?.querySelectorAll<HTMLElement>("[role=radio]")[next])?.focus();
   };

@@ -26,7 +26,7 @@ import {
 } from "../pages/teacher/examDraft";
 import { initialForm, isPending } from "../pages/teacher/gradingLogic";
 
-const api = vi.hoisted(() => ({ saveGrade: vi.fn() }));
+const api = vi.hoisted(() => ({ saveGrade: vi.fn(), grading: vi.fn(async () => ({ items: [] as GradingItem[] })) }));
 vi.mock("../api/client", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../api/client")>();
   return { ...orig, teacherApi: { ...orig.teacherApi, ...api } };

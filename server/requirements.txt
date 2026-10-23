@@ -17,3 +17,8 @@ reportlab>=4.0,<6
 Pillow>=10.0,<13
 python-multipart>=0.0.9,<0.1
 cryptography>=42,<51
+# 2026-10-23 (review 2): allowed-website wildcards are checked against the Public Suffix
+# List; the package bundles a dated snapshot (no network at run time), so this one is pinned
+# exactly. Bump it now and then to pick up new shared-hosting suffixes.
+publicsuffixlist==1.0.2.20261007
+idna>=3.4,<4

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import { ApiError, NetworkError, materialsApi } from "../../api/client";
 import type { MaterialsInfo } from "../../api/types";
 import { ACCEPT, MAX_BYTES, MAX_FILES, MAX_LABEL, checkFile, formatBytes } from "../../lib/materials";
+import { pdfNeedsPassword } from "../../lib/pdf";
 import { FileIcon, UploadIcon } from "./icons";
 import "../../styles/tools.css";
 
@@ -45,6 +46,11 @@ export function MaterialsUpload({ examId, compact = false }: { examId: string; c
         continue;
       }
       setBusy(f.name);
+      // 2026-10-23 review: a PDF that needs a password can't be opened in the exam
+      if (/\.pdf$/i.test(f.name) && (await pdfNeedsPassword(f).catch(() => false))) {
+        problems.push(`${f.name} is password-protected. Upload a copy without a password.`);
+        continue;
+      }
       try {
         await materialsApi.upload(examId, f);
         count += 1;

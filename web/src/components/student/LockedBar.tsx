@@ -170,7 +170,13 @@ export function LockedBar({
         <span className="sr-only" role="status" aria-live="polite">
           {announce}
         </span>
-        <span className={`stu-sync ${synced ? "synced" : "pending"}`}>
+        {/* 2026-10-23 review: on narrow screens only the icon shows; the words stay its label */}
+        <span
+          className={`stu-sync ${synced ? "synced" : "pending"}`}
+          role="img"
+          aria-label={synced ? "All answers saved" : "Saved on this computer"}
+          title={synced ? "All answers saved" : "Saved on this computer"}
+        >
           {synced ? <CloudCheckIcon /> : <DiskIcon />}
           <span className="stu-sync-text">{synced ? "All answers saved" : "Saved on this computer"}</span>
         </span>

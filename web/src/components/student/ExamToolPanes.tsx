@@ -85,6 +85,7 @@ export function MaterialsPaneContent({ attemptId }: { attemptId: string | null }
 
 /** A site that has not loaded in the frame after this long gets the friendly message. */
 export const FRAME_TIMEOUT_MS = 10_000;
+export const BLANK_HINT = "Blank page? This site doesn't allow being shown inside the exam.";
 
 export function WebsitesPaneContent({ sites }: { sites: string[] }) {
   // Our own history of what we opened (the frame's own navigation is on another origin).
@@ -189,6 +190,11 @@ export function WebsitesPaneContent({ sites }: { sites: string[] }) {
           </div>
         )}
       </div>
+      {/* 2026-10-23 review: a site that refuses to be framed still fires "load" (for the
+          browser's own error page), so the frame looks blank without any message. */}
+      <p className="stu-web-hint" data-testid="website-hint">
+        {BLANK_HINT}
+      </p>
     </div>
   );
 }

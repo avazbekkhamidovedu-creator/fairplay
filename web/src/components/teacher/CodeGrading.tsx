@@ -3,14 +3,18 @@
 // the points of the passed tests fill the score (the teacher can still change it).
 // 2026-10-23: each answer runs in a runner (worker) of its own that is thrown away after
 // scoring: a program that tampers with its interpreter cannot change the next answer's score.
-import { useState } from "react";
+// 2026-10-23 (review): runs can be stopped (AbortController): Stop / Cancel buttons, leaving
+// the page and moving to another answer end the program and free its worker. The bulk run
+// never overwrites a grade entered while it runs: it checks the page's latest items and the
+// server's queue right before saving each answer.
+import { useEffect, useRef, useState } from "react";
 import { ApiError, teacherApi } from "../../api/client";
 import type { CodeTest, GradingItem, GradingQuestion } from "../../api/types";
 import { CodeEditor } from "../code/LazyCodeEditor";
 import { DEFAULT_TIME_LIMIT_MS, LANGUAGE_LABEL, canRunInBrowser, resolveLanguage } from "../../lib/code/languages";
 import { fmtSeconds } from "../../lib/code/runner";
 import { createRunner } from "../../lib/code/runners";
-import { STATUS_LABEL, runTests, scoreOutcomes, testSummary, type TestOutcome } from "../../lib/code/runTests";
+import { STATUS_LABEL, TestsAborted, isAborted, runTests, scoreOutcomes, testSummary, type TestOutcome } from "../../lib/code/runTests";
 import { isBlankAnswer } from "../../pages/teacher/gradingLogic";
 import { errorText } from "./util";
 import "../../styles/code.css";
@@ -26,15 +30,40 @@ export function canAutoRun(q: Pick<GradingQuestion, "type" | "language" | "tests
   return q.type === "code" && canRunInBrowser(resolveLanguage(q.language)) && (q.tests?.length ?? 0) > 0;
 }
 
-export async function scoreCode(q: GradingQuestion, code: string, onProgress?: (o: TestOutcome[]) => void): Promise<CodeScore> {
+/** Resolves like `p`, or rejects with TestsAborted as soon as the signal is aborted. */
+function unlessAborted<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.reject(new TestsAborted());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new TestsAborted());
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (v) => (signal.removeEventListener("abort", onAbort), resolve(v)),
+      (e: unknown) => (signal.removeEventListener("abort", onAbort), reject(e)),
+    );
+  });
+}
+
+/** Runs one answer against all its tests in a runner of its own. With a signal, aborting
+ *  stops the program at once (the runner is disposed) and rejects with TestsAborted. */
+export async function scoreCode(
+  q: GradingQuestion,
+  code: string,
+  onProgress?: (o: TestOutcome[]) => void,
+  signal?: AbortSignal,
+): Promise<CodeScore> {
+  if (signal?.aborted) throw new TestsAborted();
   const r = createRunner(resolveLanguage(q.language));
   if (!r) throw new Error("This language cannot run in the browser.");
+  const stop = () => r.dispose();
+  signal?.addEventListener("abort", stop, { once: true });
   let outcomes: TestOutcome[];
   try {
-    await r.prepare();
+    await unlessAborted(r.prepare(), signal);
     const tests: CodeTest[] = q.tests ?? [];
-    outcomes = await runTests(r, code, tests, q.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS, onProgress);
+    outcomes = await runTests(r, code, tests, q.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS, onProgress, signal);
   } finally {
+    signal?.removeEventListener("abort", stop);
     r.dispose();
   }
   if (outcomes.some((o) => o.status === "unavailable")) throw new Error(outcomes.find((o) => o.stderr)?.stderr || "The tests could not run.");
@@ -57,21 +86,49 @@ export function CodeAnswerPanel({
   const [outcomes, setOutcomes] = useState<TestOutcome[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const run = useRef<AbortController | null>(null);
+
+  // another answer (or leaving the page) stops the run of this one and clears its results
+  useEffect(() => {
+    setOutcomes(null);
+    setProblem(null);
+    setBusy(false);
+    return () => {
+      run.current?.abort();
+      run.current = null;
+    };
+  }, [code, question.question_id]);
 
   async function runAll() {
-    if (busy) return;
+    if (run.current) return;
+    const ac = new AbortController();
+    run.current = ac;
     setBusy(true);
     setProblem(null);
     setOutcomes([]);
     try {
-      const s = await scoreCode(question, code, setOutcomes);
+      const s = await scoreCode(question, code, (o) => !ac.signal.aborted && setOutcomes(o), ac.signal);
+      if (ac.signal.aborted) return;
       setOutcomes(s.outcomes);
       onScored(s);
     } catch (e) {
+      if (ac.signal.aborted || isAborted(e)) return;
       setProblem(e instanceof Error && !(e instanceof ApiError) ? e.message : errorText(e));
     } finally {
-      setBusy(false);
+      if (run.current === ac) {
+        run.current = null;
+        setBusy(false);
+      }
     }
+  }
+
+  function stop() {
+    const ac = run.current;
+    if (!ac) return;
+    run.current = null;
+    ac.abort();
+    setBusy(false);
+    setOutcomes(null);
   }
 
   const blank = isBlankAnswer(code);
@@ -87,6 +144,11 @@ export function CodeAnswerPanel({
         {canAutoRun(question) && !blank && (
           <button type="button" className="btn btn-primary" onClick={() => void runAll()} disabled={busy}>
             {busy ? (outcomes && outcomes.length ? `Running ${outcomes.length + 1} of ${tests.length}…` : "Loading…") : "Run all tests"}
+          </button>
+        )}
+        {busy && (
+          <button type="button" className="btn btn-ghost" onClick={stop}>
+            Stop
           </button>
         )}
       </div>
@@ -167,31 +229,85 @@ export function BulkCodeRun({
   const [asking, setAsking] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const run = useRef<AbortController | null>(null);
+  // the page's latest items: a grade the teacher saves during the run is seen at once
+  const latest = useRef(items);
+  latest.current = items;
+  useEffect(
+    () => () => {
+      run.current?.abort();
+      run.current = null;
+    },
+    [],
+  );
   if (!questions.some((q) => canAutoRun(q))) return null;
 
+  const key = (it: Pick<GradingItem, "attempt_id" | "question_id">) => `${it.attempt_id}\u0000${it.question_id}`;
+  const gradedNow = (it: GradingItem) => {
+    const cur = latest.current.find((x) => key(x) === key(it));
+    return !!cur?.grade;
+  };
+
   async function go() {
+    if (run.current) return; // one bulk run at a time
+    const ac = new AbortController();
+    run.current = ac;
     setAsking(false);
     setBusy(true);
     let done = 0;
     let failed = 0;
+    let skipped = 0;
     const list = [...todo];
     for (const it of list) {
+      if (ac.signal.aborted) break;
       const q = byId.get(it.question_id)!;
-      setProgress(`Running tests: answer ${done + failed + 1} of ${list.length}…`);
+      setProgress(`Running tests: answer ${done + failed + skipped + 1} of ${list.length}…`);
+      if (gradedNow(it)) {
+        skipped += 1;
+        continue;
+      }
       try {
-        const s = await scoreCode(q, String(it.answer ?? ""));
+        const s = await scoreCode(q, String(it.answer ?? ""), undefined, ac.signal);
+        if (ac.signal.aborted) break;
+        // graded by hand while the tests ran (here or in another tab): keep that grade
+        if (gradedNow(it)) {
+          skipped += 1;
+          continue;
+        }
+        const fresh = await teacherApi.grading(examId);
+        if (ac.signal.aborted) break;
+        const there = fresh.items.find((x) => key(x) === key(it));
+        if (there?.grade) {
+          skipped += 1;
+          onItemGraded({ ...it, ...there });
+          continue;
+        }
+        if (gradedNow(it)) {
+          skipped += 1;
+          continue;
+        }
         const input = { points: s.points, comment: s.comment, rubric_scores: null };
         const res = await teacherApi.saveGrade(examId, it.attempt_id, it.question_id, input);
         onItemGraded({ ...it, grade: res.grade ?? { ...input, graded_at: new Date().toISOString() } });
         done += 1;
-      } catch {
+      } catch (e) {
+        if (ac.signal.aborted || isAborted(e)) break;
         failed += 1;
       }
     }
+    const stopped = ac.signal.aborted;
+    if (run.current === ac) run.current = null;
+    else if (stopped) return; // unmounted
     setBusy(false);
     setProgress(
-      `Scored ${done} ${done === 1 ? "answer" : "answers"} from the tests${failed ? `, ${failed} could not run (grade those by hand)` : ""}. You can still change each score.`,
+      `${stopped ? "Stopped. " : ""}Scored ${done} ${done === 1 ? "answer" : "answers"} from the tests${failed ? `, ${failed} could not run (grade those by hand)` : ""}${
+        skipped ? `, ${skipped} graded by hand meanwhile (kept)` : ""
+      }. You can still change each score.`,
     );
+  }
+
+  function cancel() {
+    run.current?.abort();
   }
 
   return (
@@ -209,8 +325,12 @@ export function BulkCodeRun({
             Cancel
           </button>
         </>
+      ) : busy ? (
+        <button type="button" className="btn btn-ghost" onClick={cancel}>
+          Cancel run
+        </button>
       ) : (
-        <button type="button" className="t-btn-outline" disabled={busy || todo.length === 0} onClick={() => setAsking(true)}>
+        <button type="button" className="t-btn-outline" disabled={todo.length === 0} onClick={() => setAsking(true)}>
           Run all code tests{todo.length ? ` (${todo.length})` : ""}
         </button>
       )}

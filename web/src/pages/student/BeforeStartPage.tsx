@@ -42,6 +42,16 @@ export default function BeforeStartPage() {
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [prelocked, setPrelocked] = useState(() => !!bridge.getNativeState()?.prelock && bridge.isLocked());
   const appsConfirmed = useRef(false);
+  // 2026-10-23 review: the student is leaving: a lock answer arriving now (the iPad's
+  // "lockFailed: cancelled" for the prompt preunlock cancelled) is not an error to show.
+  const leavingRef = useRef(false);
+  // 2026-10-23 review: a start request is on its way: leaving (and unlocking) waits for it.
+  const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
+  const onStartInFlight = useCallback((on: boolean) => {
+    startingRef.current = on;
+    setStarting(on);
+  }, []);
   const battery = useBattery();
 
   useEffect(() => {
@@ -95,6 +105,7 @@ export default function BeforeStartPage() {
     }
     setStep("locking");
     const res = await bridge.requestPreLock();
+    if (leavingRef.current) return;      // leave() decides where to go
     if (res.ok) {
       setPrelocked(true);
       setStep("code");
@@ -102,6 +113,8 @@ export default function BeforeStartPage() {
       // A browser (demo) or an older app: the exam locks right after the code, as before.
       setPrelocked(false);
       setStep("code");
+    } else if (res.reason === "cancelled") {
+      setStep("rules");                  // the prompt was cancelled: nothing is locked
     } else {
       setLockReason(res.reason);
       setStep("lockFailed");
@@ -109,20 +122,26 @@ export default function BeforeStartPage() {
   }, []);
 
   const leave = useCallback(async () => {
+    if (startingRef.current) return;
     setLeaveError(null);
+    leavingRef.current = true;
     setStep("leaving");
-    const ok = prelocked || bridge.isLocked() ? await bridge.preUnlock() : true;
+    // 2026-10-23 review: in the app, always ask: every app answers "unlocked" even when
+    // nothing is locked, and on the iPad it also cancels a pending Assessment Mode prompt.
+    const ok = await bridge.preUnlock();
     if (ok) {
       navigate("/student", { replace: true });
     } else {
+      leavingRef.current = false;
       setLeaveError("This computer could not unlock by itself. Raise your hand and ask the invigilator.");
       setStep("code");
     }
-  }, [navigate, prelocked]);
+  }, [navigate]);
 
-  /** Back from the rules / lock-failed screens: unlock first if the computer is locked. */
+  /** Back from the rules / locking / lock-failed screens: in the app, always through
+   *  preunlock (see leave). */
   const back = useCallback(() => {
-    if (bridge.isLocked()) void leave();
+    if (bridge.isNative()) void leave();
     else navigate("/student");
   }, [leave, navigate]);
 
@@ -227,8 +246,14 @@ export default function BeforeStartPage() {
       )}
 
       {(step === "checking" || step === "locking") && (
-        <div className="stu-center">
+        <div className="stu-center" style={{ flexDirection: "column", gap: 16 }}>
           <StuLoading label={step === "checking" ? "Checking this computer…" : "Locking this computer…"} />
+          {/* 2026-10-23 review: e.g. the iPad's Assessment Mode prompt is waiting: way back */}
+          {step === "locking" && bridge.isNative() && (
+            <button type="button" className="stu-linkbtn" onClick={back}>
+              Cancel
+            </button>
+          )}
         </div>
       )}
 
@@ -279,13 +304,13 @@ export default function BeforeStartPage() {
             <p className="stu-muted" style={{ margin: 0 }}>
               Your teacher reads it out in the room. The exam and the timer start when the code is right.
             </p>
-            <StartCodeForm examId={examId} autoFocus legend="Start code" />
+            <StartCodeForm examId={examId} autoFocus legend="Start code" onInFlight={onStartInFlight} paused={step === "leaving"} />
             {leaveError && (
               <div className="stu-alert error" role="alert">
                 {leaveError}
               </div>
             )}
-            <button type="button" className="stu-linkbtn" onClick={() => void leave()} disabled={step === "leaving"}>
+            <button type="button" className="stu-linkbtn" onClick={() => void leave()} disabled={step === "leaving" || starting}>
               {step === "leaving" ? "Unlocking…" : prelocked ? "Not ready? Leave and unlock" : "Not ready? Go back"}
             </button>
           </section>

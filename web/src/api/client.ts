@@ -666,3 +666,16 @@ export const materialsApi = {
     request<{ files: MaterialFile[] }>("teacher", "GET", `/api/exams/${enc(examId)}/attempts/${enc(aid)}/materials`),
   teacherFile: (examId: string, id: string) => fetchBlob("teacher", `/api/exams/${enc(examId)}/materials/${enc(id)}`),
 };
+
+/** 2026-10-23 (review): can an allowed website be shown inside the exam's websites pane?
+ *  frameable null = could not be checked. */
+export interface SiteCheck {
+  host: string;
+  frameable: boolean | null;
+  reason: string;
+}
+
+export const toolsApi = {
+  siteCheck: (host: string) =>
+    request<SiteCheck>("teacher", "GET", `/api/tools/site-check?host=${encodeURIComponent(host)}`),
+};

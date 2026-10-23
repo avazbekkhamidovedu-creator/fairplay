@@ -92,10 +92,12 @@ def test_offline_package_carries_tools():
     from app.offline import package_plaintext
     exam = {"id": "e_1", "title": "T", "duration_min": 5, "questions": [], "allowed_apps": ["excel"], **TOOLS}
     plain = package_plaintext(exam)
-    assert plain["tools"] == TOOLS and plain["allowed_apps"] == []
+    # 2026-10-23 (review 2): plus "the materials are not in here"
+    assert plain["tools"] == {**TOOLS, "materials_need_connection": True} and plain["allowed_apps"] == []
     # a cache entry from before 2026-10-23 has no tool fields: all off
     old = package_plaintext({"id": "e_1", "title": "T", "duration_min": 5, "questions": []})
-    assert old["tools"] == {"calculator": "off", "open_book": False, "websites": []}
+    assert old["tools"] == {"calculator": "off", "open_book": False, "websites": [],
+                            "materials_need_connection": False}
 
 
 def test_old_database_gets_the_tool_columns(tmp_path):

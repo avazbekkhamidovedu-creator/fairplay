@@ -89,11 +89,22 @@ async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
     return e
 
 
+CODE_NOT_PRINTABLE = "Coding questions can't be printed. Remove them or print without them."
+
+
+def has_unprintable(e: Exam) -> bool:
+    """2026-10-23 (review 2): a computer exam may hold coding questions; they have no
+    paper form, so such an exam is never printed or scanned."""
+    return any(q.get("type") not in print_mod.PRINTABLE_TYPES for q in (e.questions or []))
+
+
 def _printable(e: Exam) -> None:
     if e.mode == "external" or delivery_of(e) == "website":
         raise HTTPException(409, "This exam is taken on another website and cannot be printed")
     if not e.questions:
         raise HTTPException(409, "Add questions before printing")
+    if has_unprintable(e):
+        raise HTTPException(409, CODE_NOT_PRINTABLE)
 
 
 MAX_TEACHER_STUDENTS = 5000
@@ -278,10 +289,13 @@ async def print_info(exam_id: str, p: Principal = Depends(require_teacher),
     e = await _own_exam(session, exam_id, p)
     row = await session.get(PrintLayout, e.id)
     qs = exam_questions(e)
-    pages = await _pages_per_student(e.id, qs) if qs and e.mode != "external" else 0
+    # 2026-10-23 (review 2): an exam with coding questions has no paper layout
+    blocked = CODE_NOT_PRINTABLE if has_unprintable(e) else None
+    pages = await _pages_per_student(e.id, qs) if qs and e.mode != "external" and not blocked else 0
     source, users = await roster_of(session, e)
     return {
         "exam_id": e.id, "delivery": delivery_of(e),
+        "printable": blocked is None, "not_printable_reason": blocked,
         "printed_at": iso(row.created_at) if row else None,
         "printed_pages": row.page_count if row else None,
         "pages_per_student": pages,
@@ -291,7 +305,8 @@ async def print_info(exam_id: str, p: Principal = Depends(require_teacher),
         "needs_roster": source == "all",
         "questions": [{"question_id": q["id"], "index": i, "type": q["type"],
                        "prompt": q.get("prompt", ""), "answer_lines": q.get("answer_lines"),
-                       "default_lines": print_mod.DEFAULT_LINES.get(q["type"])}
+                       "default_lines": print_mod.DEFAULT_LINES.get(q["type"]),
+                       "printable": q["type"] in print_mod.PRINTABLE_TYPES}
                       for i, q in enumerate(qs)],
     }
 
@@ -360,8 +375,10 @@ async def upload_scans(exam_id: str, request: Request,
         raise HTTPException(409, "Close the exam before uploading scans")
     if await session.get(PrintLayout, e.id) is None:
         raise HTTPException(409, "Print the booklets from FairPlay first — scans are read with their layout")
+    # 2026-10-23 (review 2): too many files is the route's 422, not Starlette's 400
     form = await read_capped_form(request, MAX_SCAN_BYTES + MULTIPART_OVERHEAD,
-                                  "Scans can be at most 200 MB per upload", max_files=MAX_FILES + 1)
+                                  "Scans can be at most 200 MB per upload", max_files=MAX_FILES,
+                                  too_many=f"Upload 1 to {MAX_FILES} files")
     try:
         return await _store_scans(session, e, p, form_files(form, "files"))
     finally:
@@ -546,6 +563,8 @@ async def _run_batch(batch_id: str) -> None:
             sources = list(b.sources or [])
             if e is None or row is None:
                 raise ValueError("The exam or its printed layout is gone")
+            if has_unprintable(e):      # 2026-10-23 (review 2): coding questions came later
+                raise ValueError(CODE_NOT_PRINTABLE)
             layout = row.layout
             resume_grading = b.status == "grading"
             if not resume_grading:
@@ -649,6 +668,10 @@ async def _run_batch(batch_id: str) -> None:
 async def merge_pages(session: AsyncSession, e: Exam, pages: list[ScanPage]) -> list[tuple[str, str]]:
     """Create/merge one submitted paper attempt per student from matched pages.
     Returns (attempt_id, question_id) pairs that need an AI draft. Commits."""
+    # 2026-10-23 (review 2): a paper attempt of an exam with coding questions would hold an
+    # empty coding answer, graded 0. The routes refuse such exams; this is the last guard.
+    if has_unprintable(e):
+        raise HTTPException(409, CODE_NOT_PRINTABLE)
     by_student: dict[int, list[ScanPage]] = {}
     for pg in pages:
         by_student.setdefault(int(pg.student_id), []).append(pg)
@@ -876,6 +899,8 @@ class AssignIn(BaseModel):
 async def assign_page(exam_id: str, page_id: int, body: AssignIn, p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    if has_unprintable(e):
+        raise HTTPException(409, CODE_NOT_PRINTABLE)
     pg = await session.get(ScanPage, page_id)
     if pg is None or pg.exam_id != e.id:
         raise HTTPException(404, "Page not found")

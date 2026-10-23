@@ -136,9 +136,40 @@ print(decimal.Decimal("0.1") + decimal.Decimal("0.2"), re.sub(r"\\d", "#", "a1b2
     expect(run("print('é ✓')").stdout).toBe("é ✓\n");
   });
 
+  it("CRLF / CR input reads as plain lines", () => {
+    expect(run("a = input()\nb = input()\nprint(repr(a), repr(b))", "x\r\ny\r").stdout).toBe("'x' 'y'\n");
+    expect(run("import sys\nprint(repr(sys.stdin.read()))", "1\r\n2\r\n").stdout).toBe("'1\\n2\\n'\n");
+  });
+
+  it("the reset runs outside the student's timed window (between onStart and onEnd)", () => {
+    const events: string[] = [];
+    const r = session.run("print('x')", "", 10_000, { onStart: () => events.push("start"), onEnd: () => events.push("end") });
+    expect(events).toEqual(["start", "end"]);
+    expect(r.stdout).toBe("x\n");
+    // the next run still starts clean: the reset after the last run put things back
+    session.run("import math\nmath.pi = 3", "", 10_000);
+    expect(run("import math\nprint(math.pi > 3.14)").stdout).toBe("True\n");
+  });
+
   it("a session made on a fresh Pyodide sees nothing of the last one", () => {
     // what grading does: a fresh worker per answer (here: a fresh session state check)
     const r = run("print(len([k for k in globals() if not k.startswith('__')]))");
     expect(r.stdout).toBe("0\n");
   });
+});
+
+// os._exit() ends the interpreter for good: its own Pyodide, so the other tests keep theirs
+describe("os._exit", () => {
+  it("returns the output so far with the error and asks for a fresh worker", async () => {
+    const mod = (await import("pyodide")) as unknown as {
+      loadPyodide: (o: { indexURL: string; fullStdLib?: boolean }) => Promise<PyodideLike>;
+    };
+    const indexURL = new URL("../../node_modules/pyodide/", import.meta.url).pathname;
+    const own = createPySession(await mod.loadPyodide({ indexURL, fullStdLib: false }));
+    const r = own.run("print('before')\nimport os, sys\nsys.stdout.flush()\nos._exit(3)", "", 10_000);
+    expect(r).toMatchObject({ stdout: "before\n", failed: true, restart: true });
+    expect(r.stderr).toMatch(/exited with code 3/);
+    const z = createPySession(await mod.loadPyodide({ indexURL, fullStdLib: false }));
+    expect(z.run("print('a')\nimport os, sys\nsys.stdout.flush()\nos._exit(0)", "", 10_000)).toMatchObject({ stdout: "a\n", failed: false, restart: true });
+  }, 120_000);
 });
