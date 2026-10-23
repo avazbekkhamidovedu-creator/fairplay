@@ -1,5 +1,5 @@
-"""DKU OJ exams: files students hand in (file_upload questions) and statement assets
-(fp-asset:<name> images) served to the attempt's owner and to the exam's teachers."""
+"""Files students hand in for file_upload questions (app.question_types). Bytes in the
+database (the host's disk is not kept across deploys)."""
 from __future__ import annotations
 
 import hashlib
@@ -11,22 +11,19 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from .. import app_client as ac
-from ..db import get_session
-from ..models import Attempt, Exam
-from ..security import Principal, require_student, require_teacher
-from ..services import get_exam_cached
-from ..store import get_store
-from ..timeutil import iso, utcnow
-from ..uploads import MULTIPART_OVERHEAD, form_files, read_capped_form
-from .models import AnswerFile, OjAsset
+from . import app_client as ac
+from .db import get_session
+from .models import AnswerFile, Attempt
+from .security import Principal, require_student
+from .services import get_exam_cached
+from .store import get_store
+from .timeutil import iso, utcnow
+from .uploads import MULTIPART_OVERHEAD, form_files, read_capped_form
 
-student_router = APIRouter(prefix="/api/student/attempts", tags=["dkuoj"])
-teacher_router = APIRouter(prefix="/api/exams", tags=["dkuoj"])
+router = APIRouter(prefix="/api/student/attempts", tags=["student"])
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_FILES_PER_QUESTION = 10
-SAFE_CSP = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
 
 
 def file_out(f: AnswerFile) -> dict:
@@ -63,12 +60,12 @@ async def _attempt_and_exam(request: Request, session: AsyncSession, aid: str,
     await ac.check_session(request, session, get_store(), aid,
                            {"exam_id": a.exam_id, "session_id": a.session_id, "status": a.status})
     exam = await get_exam_cached(get_store(), session, a.exam_id)
-    if exam is None or exam.get("source") != "dkuoj":
+    if exam is None:
         raise HTTPException(404, "Not found")
     return a, exam
 
 
-@student_router.post("/{aid}/files", status_code=201)
+@router.post("/{aid}/files", status_code=201)
 async def upload_answer_file(aid: str, question_id: str, request: Request,
                              p: Principal = Depends(require_student),
                              session: AsyncSession = Depends(get_session)):
@@ -113,7 +110,7 @@ async def upload_answer_file(aid: str, question_id: str, request: Request,
     return file_out(f)
 
 
-@student_router.get("/{aid}/files/{fid}")
+@router.get("/{aid}/files/{fid}")
 async def get_answer_file(aid: str, fid: str, request: Request,
                           p: Principal = Depends(require_student),
                           session: AsyncSession = Depends(get_session)):
@@ -129,43 +126,3 @@ async def get_answer_file(aid: str, fid: str, request: Request,
 
 def _ascii(name: str) -> str:
     return "".join(ch if 32 <= ord(ch) < 127 and ch != '"' else "_" for ch in name) or "file"
-
-
-def _asset_response(asset: OjAsset, request: Request) -> Response:
-    etag = f'"{asset.sha256}"'
-    headers = {"ETag": etag, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600",
-               "Content-Security-Policy": SAFE_CSP}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=headers)
-    media = asset.content_type if asset.content_type.startswith("image/") and "svg" not in asset.content_type \
-        else "application/octet-stream"
-    return Response(asset.data, media_type=media, headers=headers)
-
-
-async def _asset(session: AsyncSession, exam_id: str, name: str) -> OjAsset:
-    a = (await session.execute(select(OjAsset).options(undefer(OjAsset.data))
-                               .where(OjAsset.exam_id == exam_id, OjAsset.name == name))).scalar_one_or_none()
-    if a is None:
-        raise HTTPException(404, "Not found")
-    return a
-
-
-@student_router.get("/{aid}/assets/{name}")
-async def attempt_asset(aid: str, name: str, request: Request,
-                        p: Principal = Depends(require_student),
-                        session: AsyncSession = Depends(get_session)):
-    """fp-asset:<name> of the attempt's exam: the attempt's owner, while the exam is live
-    (or the attempt still in progress)."""
-    a, exam = await _attempt_and_exam(request, session, aid, p)
-    if exam.get("status") != "live" and a.status != "in_progress":
-        raise HTTPException(404, "Not found")
-    return _asset_response(await _asset(session, a.exam_id, name), request)
-
-
-@teacher_router.get("/{exam_id}/assets/{name}")
-async def exam_asset(exam_id: str, name: str, request: Request,
-                     p: Principal = Depends(require_teacher),
-                     session: AsyncSession = Depends(get_session)):
-    from ..routes_teacher import _own_exam
-    e: Exam = await _own_exam(session, exam_id, p)
-    return _asset_response(await _asset(session, e.id, name), request)

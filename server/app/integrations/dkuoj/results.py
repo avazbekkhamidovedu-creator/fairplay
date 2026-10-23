@@ -1,4 +1,4 @@
-"""Released results from DKU OJ (contract §4 results), stored per attempt (oj_result).
+"""Released results from DKU OJ (contract §4 results), stored per attempt (external_result).
 
 Polled for every DKU OJ exam whose end time has passed (and for RESULTS_FOR after it,
 so regrades and withdrawn releases arrive too). A withdrawn release comes back with
@@ -11,8 +11,8 @@ from datetime import datetime
 
 from sqlalchemy import false, select
 
-from ..models import Attempt, Exam, User
-from ..timeutil import parse_iso
+from ...models import Attempt, Exam, User
+from ...timeutil import parse_iso
 from .client import DkuojClient
 
 log = logging.getLogger("proctora.dkuoj")
@@ -50,8 +50,8 @@ def result_of(r: dict) -> dict:
 async def sync_results(sessionmaker, client: DkuojClient, now: datetime) -> int:
     from .sync import RESULTS_FOR
     async with sessionmaker() as session:
-        exams = (await session.execute(select(Exam.id, Exam.oj_key, Exam.oj_meta).where(
-            Exam.source == "dkuoj", Exam.oj_removed == false()))).all()
+        exams = (await session.execute(select(Exam.id, Exam.external_key, Exam.external_meta).where(
+            Exam.source == "dkuoj", Exam.external_removed == false()))).all()
     stored = 0
     for exam_id, key, meta in exams:
         meta = meta or {}
@@ -64,8 +64,11 @@ async def sync_results(sessionmaker, client: DkuojClient, now: datetime) -> int:
 
 async def _sync_exam(sessionmaker, client: DkuojClient, exam_id: str, key: str, cursor: str | None) -> int:
     newest, n, page = cursor, 0, 1
+    server_time = None
     for _ in range(MAX_PAGES):
         data = await client.results(key, cursor, page)
+        if server_time is None and _time(data.get("server_time")):
+            server_time = data["server_time"]     # DKU OJ: changed_since is strictly later
         rows = [r for r in data.get("results") or [] if isinstance(r, dict) and isinstance(r.get("username"), str)]
         if rows:
             async with sessionmaker() as session:
@@ -80,7 +83,7 @@ async def _sync_exam(sessionmaker, client: DkuojClient, exam_id: str, key: str, 
                     if a is None:
                         continue
                     res = result_of(r)
-                    a.oj_result = res
+                    a.external_result = res
                     # the stored score feeds the teacher's lists and gradebook
                     a.score = res["total"] if res["released"] else None
                     a.needs_grading = 0
@@ -93,10 +96,12 @@ async def _sync_exam(sessionmaker, client: DkuojClient, exam_id: str, key: str, 
         if not nxt:
             break
         page = int(nxt) if str(nxt).isdigit() else page + 1
+    if server_time is not None:
+        newest = server_time          # the next poll asks for what changed after this one
     if newest != cursor:
         async with sessionmaker() as session:
             e = await session.get(Exam, exam_id)
             if e is not None:
-                e.oj_meta = {**(e.oj_meta or {}), "results_cursor": newest}
+                e.external_meta = {**(e.external_meta or {}), "results_cursor": newest}
                 await session.commit()
     return n

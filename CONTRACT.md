@@ -815,46 +815,78 @@ use is built into the FairPlay exam page.
   - The exam page fetches the files when the exam opens and keeps them in memory; after a reload
     without the connection it says "Materials need the connection" (the exam keeps working).
 
-## DKU OJ bridge — FairPlay server as implemented (2026-10-23)
-Binding contract: `docs/dkuoj-bridge.md`. Server code: `server/app/dkuoj/`. Settings: `DKUOJ_URL`,
-`DKUOJ_TOKEN` (both set = bridge on), `DKUOJ_SYNC_SECONDS` (120), `DKUOJ_DELIVERY_RPS` (10), optional
-`FAIRPLAY_PUBLIC_URL` (absolute integrity-report links sent to DKU OJ; unset = paths). FairPlay exams
-keep their exact shapes: every field below appears only on DKU OJ exams.
-- **Teacher exam** adds `source: "dkuoj"`, `read_only: true`, `graded_in: "dkuoj"`, `oj_key`, `oj_url`,
-  `oj_package_version`, `oj_frozen_version`, `oj_synced_at`, `oj_removed`, `oj_start_time`, `oj_end_time`,
-  `oj_package_ready`. Every DKU OJ editor sees the exam (list, live room, open/close/extend/codes) like
-  its owner. `PUT` → 409 "This exam comes from DKU OJ. Edit this exam in DKU OJ."; delete → 409 until DKU
-  OJ removed it; grades / comment / release / unrelease → 409 "This exam is graded in DKU OJ. …";
-  `open` → 409 until the package is here ("The questions arrive from DKU OJ 24 hours before the start…").
-  `GET .../grading` → `{graded_in: "dkuoj", oj_url, questions: [], items: []}`. `GET .../results` adds
-  `graded_in`, `oj_url`, and per attempt `oj_result` and `oj_delivery` `{status, tries, last_error,
-  receipt, next_at, sent_at}`; scores are DKU OJ's released totals (0 until then).
-  `GET /api/exams/{id}/assets/{name}` serves a statement asset to the exam's teachers.
-- **Student question** (DKU OJ exams) = the usual student fields plus `source: "dkuoj"`, `prompt_format`
-  (`oj_md` | `oj_html`), `title`, `label`, `partial`, and by type: mcq `multiple`, `true_false`, `shuffle`;
-  fill_blank `blanks`, `blank_points`, `case_sensitive`; file_upload `allowed_extensions`, `max_file_size`,
-  `instructions_md`; code `languages: [{key, name, runner}]`, `templates`, `memory_limit_kb` (plus
-  `language` = first runner, `starter_code` = first template, `tests` = samples `{input, expected}`,
-  `time_limit_ms`). Question ids are opaque (`q_` + 16 hex). No DKU OJ ids or answer keys reach students.
-- **Answers** through the normal `PUT .../answers`, submit and sealed submit: mcq single int index;
-  mcq multiple list of indexes (stored sorted); fill_blank list of strings (≤ blanks); short string;
-  file_upload list of answer-file ids; code `{"language": "<OJ key>", "source": "…"}` (a bare string
-  = first language). Wrong shapes → 422. FairPlay questions still take only numbers, strings or null.
-- **Answer files:** `POST /api/student/attempts/{aid}/files?question_id=<qid>` (multipart `file`, with
+## Integrations + DKU OJ — FairPlay server as implemented (2026-10-23)
+Binding: `docs/dkuoj-bridge.md` plus the product owner's integration rule (core is
+source-agnostic). Code: `server/app/integrations/` (`base.py` = `ExternalSource` hooks,
+`registry.py` = `integration_for(exam)`, None for FairPlay exams; `dkuoj/` = the DKU OJ source),
+`server/app/question_types.py` (the extended question types), `server/app/answer_files.py`.
+DKU OJ settings are read only by `integrations/dkuoj/config.py`: `DKUOJ_URL`, `DKUOJ_TOKEN` (both
+set = connected), `DKUOJ_SYNC_SECONDS` (120), `DKUOJ_DELIVERY_RPS` (10). `FAIRPLAY_PUBLIC_URL`
+(FairPlay's own address) makes report links absolute; DKU OJ drops links that are not http(s).
+A switched-off integration keeps its exams readable as read-only archives (they cannot start).
+
+### Extended question types (FairPlay types, usable by FairPlay's own editor later)
+Plain questions keep their exact shapes. A question with the extended fields adds:
+`prompt_format` (`"markdown"`: FairPlay markdown with tables, fenced code, math `~…~` inline and
+`$$…$$` display, images `fp-asset:<name>`; or `"html"`: sanitized HTML), `title`, `label`,
+`partial`, and by type:
+- `mcq`: `multiple`, `true_false`, `shuffle` (the page may shuffle the display; answers stay
+  indexes into `options`). Answer: int index; with `multiple`: list of indexes (stored sorted).
+- `fill_blank` (new type): `blanks` (count), `blank_points`, `case_sensitive`. Answer: list of
+  strings (at most `blanks`).
+- `short`: answer string.
+- `file_upload` (new type): `allowed_extensions`, `max_file_size`, `max_files` (DKU OJ: 1),
+  `instructions_md`. Answer: list of answer-file ids (at most `max_files`).
+- `code`: `languages: [{key, name, runner}]` (runner `python|javascript|c|cpp|java|null`; null =
+  "runs after hand-in"), `templates: {key: code}`, `memory_limit_kb`; also `language` (first
+  runner), `starter_code` (first template), `tests` (samples `{input, expected}`), `time_limit_ms`.
+  Answer: `{"language": "<key>", "source": "…"}` (a bare string = first language).
+Wrong shapes → 422 `"<label>: <reason>"`. Plain questions take only numbers, strings or null.
+Teacher views add `external_ref` (the external system's ids); students never see it. Question
+ids of external exams are opaque (`q_` + 16 hex).
+
+### API fields
+- **Teacher exam**: `"external": null` for FairPlay exams, else `{"source", "name", "url",
+  "read_only", "graded_externally", "package_ready", "start_time", "end_time", "key", "version",
+  "frozen_version", "synced_at", "removed", "connected"}`. The external system's editors see the
+  exam (list, live room, open/close/extend/codes) like its owner. Read-only exams: `PUT` → 409
+  `"This exam comes from <name>. Edit this exam in <name>."`; delete → 409 until the source removed
+  it; grades / comment / release / unrelease → 409 `"This exam is graded in <name>. …"`; `open` →
+  409 until the package is here. Assets: `GET /api/exams/{id}/assets/{name}`.
+- **Results** (`GET /api/exams/{id}/results`): top-level `"external"` (same block or null); per
+  attempt of an external exam `"external_result"` (`{released, total, total_points, updated_at,
+  questions: [{question_id, points, feedback_md}]}` or null) and `"external_delivery"`
+  (`{status: pending|sent|failed|dead, tries, last_error, receipt, next_at, sent_at}` or null);
+  scores are the released external totals (0 before). A dead delivery adds the event
+  `external_delivery_failed` to the attempt.
+- **Grading queue** (`GET /api/exams/{id}/grading`) gains `"external"` (null for FairPlay); graded
+  externally → `{exam_id, title, course, status, grades_released: false, external: {...},
+  questions: [], items: []}`.
+- **Student**: `/api/student/exams` rows, attempt views (start / GET attempt), `/api/student/grades`
+  rows and `/api/student/grades/{id}` carry `"source"` (`"fairplay"` or the integration id) and,
+  when external, `"external_name"`. External attempt views add `"total_points"`. Attempt views of
+  exams with file_upload questions add `"answer_files": [{id, question_id, name, size, sha256,
+  created_at}]`. External grade detail (403 until released by the source): the usual shape plus
+  `result_updated_at`; each question = the student question + `question_id`, `index`,
+  `points_awarded`, `status` (`correct|partial|wrong|unanswered|pending`), `given`, `comment`
+  (markdown), `comment_format: "markdown"`, `correct_answer: null`.
+- **Answer files**: `POST /api/student/attempts/{aid}/files?question_id=<qid>` (multipart `file`,
   `X-FairPlay-Session`) → 201 `{id, question_id, name, size, sha256, created_at}` (extension / size
-  checked against the question; ≤ 10 files per question); `GET .../files/{id}` → the bytes. Attempt
-  views of DKU OJ exams add `answer_files: [that shape]`, `source: "dkuoj"`, `total_points`.
-- **Assets:** `fp-asset:<name>` → `GET /api/student/attempts/{aid}/assets/<name>` (Bearer +
-  `X-FairPlay-Session`, attempt owner, exam live or attempt in progress; ETag = sha256).
-- **Grades:** `GET /api/student/grades` rows of DKU OJ exams add `source: "dkuoj"`; released per
-  student from DKU OJ. `GET /api/student/grades/{id}` (DKU OJ) = the usual shape plus `source`,
-  `graded_in: "dkuoj"`, `oj_updated_at`; each question is the student question plus `question_id`,
-  `index`, `points_awarded`, `status` (`correct|partial|wrong|unanswered|pending`), `given`,
-  `comment` (DKU OJ feedback markdown), `comment_format: "oj_md"`, `correct_answer: null`.
-  `/api/student/exams` rows add `source: "dkuoj"`.
-- **Live-room sign-in:** `GET /oj/live?...` (contract §1) → 303 `/teacher/oj-live?code=<one-time, 60 s>`;
-  `POST /api/oj/live/exchange {code}` → `{token, role: "teacher", name, username, exam_id}`. Each signed
-  link works once; links valid at most 5 min ahead.
-- `GET /api/dkuoj/status` (teacher) → `{enabled, url, last_run, last_error, exams, deliveries:
-  {pending, failed, sent, dead}, problems: [{attempt_id, exam_id, status, tries, last_error}]}`.
-  A dead delivery also records the event `oj_delivery_failed` on the attempt (teacher review list).
+  checked); `GET .../files/{id}` → the bytes.
+- **Assets** `fp-asset:<name>` → `GET /api/student/attempts/{aid}/assets/<name>` (Bearer +
+  `X-FairPlay-Session`; attempt owner, exam live or attempt in progress; ETag = sha256).
+- **Live-room link**: `GET /integrations/<source>/live?…` (DKU OJ: contract §1 parameters) → 303
+  `/teacher/external-live?code=<one-time, 60 s>`; `POST /api/integrations/live/exchange {code}` →
+  `{token, role: "teacher", name, username, exam_id}`. Each signed link works once.
+- `GET /api/integrations/<source>/status` (teacher) → `{enabled, source, name, url, last_run,
+  last_error, exams, deliveries: {pending, failed, sent, dead}, problems: [...]}` (`{enabled:
+  false, source, name}` when not connected).
+
+### DKU OJ client behaviour (aligned with the DKU OJ patch)
+404 = bridge off / unknown; 401, 403, 409, 413, 422, 400 on a hand-in → dead + alert, never
+retried; 5xx / 429 / timeout → retried (30 s doubling to 15 min, 14 days). A package refused
+with 4xx (e.g. 422 over 5 MB) is not asked for again until the listing shows a new version; 425
+waits for `Retry-After`. Exam cursor = newest `updated_at` seen (`changed_since` is strictly
+later); results cursor = the response's `server_time`. Removed exams (incremental polls only)
+are marked removed and keep their editors. One upload per file_upload answer; a blank code or
+short answer is not sent.

@@ -102,19 +102,19 @@ class Exam(Base):
     # Phase 4: language of coding questions that do not set their own (students never pick)
     default_language: Mapped[str] = mapped_column(String(16), nullable=False, default="python",
                                                   server_default="python")
-    # DKU OJ bridge (app.dkuoj): "fairplay" (made here) or "dkuoj" (built in DKU OJ, synced
-    # here, read-only in FairPlay). oj_frozen_version is set by the first student start;
-    # later packages never change a running exam. oj_meta = the last listing entry from
-    # DKU OJ without its roster/editors (times, classes, results cursor, retry times).
+    # Integrations (app.integrations): "fairplay" (made here) or the id of the external
+    # system the exam comes from (e.g. "dkuoj"), which then owns its content and grades.
+    # external_frozen_version is set by the first student start (later versions never change
+    # a running exam); external_meta is the integration's own data about the exam.
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="fairplay",
                                         server_default="fairplay")
-    oj_key: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
-    oj_package_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    oj_frozen_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    oj_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    oj_removed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+    external_key: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    external_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    external_frozen_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    external_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    external_removed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
                                              server_default=false())
-    oj_meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict,
+    external_meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict,
                                           server_default=text("'{}'"))
 
 
@@ -178,9 +178,9 @@ class Attempt(Base):
     swap_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     swap_old_session: Mapped[str | None] = mapped_column(String(64), nullable=True)
     swap_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    # DKU OJ bridge: this student's released result from DKU OJ (app.dkuoj.results):
+    # Integrations: the result the external system released for this attempt:
     # {released, total, total_points, updated_at, questions: [{question_id, points, feedback_md}]}
-    oj_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    external_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class IntegrityEvent(Base):
@@ -255,8 +255,8 @@ class SchoolClass(Base):
     term: Mapped[str | None] = mapped_column(String(80), nullable=True)
     join_code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
-    # DKU OJ bridge: the DKU OJ class this class mirrors (None = made in FairPlay)
-    oj_class_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    # Integrations: "<source>:<id>" of the external class this class mirrors (None = made here)
+    external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class ClassMember(Base):
@@ -304,5 +304,21 @@ class ExamMaterial(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
-# DKU OJ bridge tables (registered with Base here so create_all sees them)
-from .dkuoj import models as _dkuoj_models  # noqa: E402,F401
+class AnswerFile(Base):
+    """A file a student hands in for a file_upload question (bytes in the database: the
+    host's disk is not kept across deploys)."""
+    __tablename__ = "answer_files"
+    __table_args__ = (Index("ix_answer_files_attempt", "attempt_id", "question_id"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("attempts.id", ondelete="CASCADE"), nullable=False)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    question_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+# Integration tables (registered with Base here so create_all sees them)
+from .integrations import models as _integration_models  # noqa: E402,F401

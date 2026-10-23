@@ -20,11 +20,11 @@ from sqlalchemy import delete, false, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import ClassMember, Exam, SchoolClass, User
-from ..schemas import normalize_website
-from ..services import invalidate_exam, new_id
-from ..store import get_store
-from ..timeutil import iso, parse_iso, utcnow
+from ...models import ClassMember, Exam, SchoolClass, User
+from ...schemas import normalize_website
+from ...services import invalidate_exam, new_id
+from ...store import get_store
+from ...timeutil import iso, parse_iso, utcnow
 from .adapter import AdapterError, asset_names, questions_from_package
 from .client import DkuojClient, OjError
 from .models import OjAsset, OjEditor, OjRosterEntry, OjState
@@ -171,18 +171,26 @@ def _duration_min(item: dict) -> int:
 
 META_KEYS = ("course", "classes", "start_time", "end_time", "time_limit_seconds", "results_hidden",
              "package_version", "updated_at", "settings")
-KEEP_META = ("results_cursor", "package_retry_at", "package_error", "description_md", "assets")
+KEEP_META = ("results_cursor", "package_retry_at", "package_error", "package_failed_version",
+             "description_md", "assets")
 
 
 # ---------------------------------------------------------------- listing -> exam
-async def apply_listing(session: AsyncSession, item: dict, settings, now: datetime) -> Exam | None:
+async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -> Exam | None:
     """Create or update the FairPlay exam for one listing entry (no commit)."""
     key = item.get("key")
     if not isinstance(key, str) or not key:
         return None
-    e = (await session.execute(select(Exam).where(Exam.oj_key == key, Exam.source == "dkuoj"))).scalar_one_or_none()
-    if e is None and item.get("removed"):
-        return None
+    e = (await session.execute(select(Exam).where(Exam.external_key == key, Exam.source == "dkuoj"))).scalar_one_or_none()
+    if item.get("removed"):
+        # A removed entry carries only key, name and times (and only in incremental
+        # polls): mark the exam, keep everything else (editors still see it).
+        if e is not None:
+            e.external_removed = True
+            e.external_synced_at = now
+            e.updated_at = now
+            await session.flush()
+        return e
     editors = [u for u in [await ensure_user(session, p, "teacher") for p in item.get("editors") or []
                            if isinstance(p, dict)] if u is not None]
     students = []
@@ -197,21 +205,21 @@ async def apply_listing(session: AsyncSession, item: dict, settings, now: dateti
                 students.append((u, extra))
     await session.flush()
     meta = {k: item.get(k) for k in META_KEYS}
-    meta["url"] = f"{settings.dkuoj_url}/contest/{key}"
+    meta["url"] = f"{cfg.url}/contest/{key}"
     if e is None:
         owner = editors[0] if editors else await _owner(session)
         e = Exam(id=new_id("e"), teacher_id=owner.id, status="draft", created_at=now, source="dkuoj",
-                 oj_key=key, delivery="computer", mode="questions", questions=[], question_count=0,
+                 external_key=key, delivery="computer", mode="questions", questions=[], question_count=0,
                  total_points=0.0, title="", duration_min=60, allowed_apps=[], allowed_domains=[],
-                 oj_meta={})
+                 external_meta={})
         session.add(e)
     for k in KEEP_META:
-        if k in (e.oj_meta or {}):
-            meta[k] = e.oj_meta[k]
-    e.oj_meta = meta
-    e.oj_removed = bool(item.get("removed"))
-    e.oj_synced_at = now
-    if not e.oj_frozen_version:
+        if k in (e.external_meta or {}):
+            meta[k] = e.external_meta[k]
+    e.external_meta = meta
+    e.external_removed = bool(item.get("removed"))
+    e.external_synced_at = now
+    if not e.external_frozen_version:
         # Not started yet: DKU OJ's name, times and settings win. Once a student started,
         # the exam runs as it started (only roster, editors and times for results change).
         e.title = str(item.get("name") or key)[:200]
@@ -248,14 +256,14 @@ async def _classes(session: AsyncSession, e: Exam, item: dict, students: list[Us
     """One FairPlay class per DKU OJ class (by its id), owned by the exam's owner. The
     roster carries no class per student, so members are added only when the exam has a
     single class. Who may take the exam is decided by the roster (access.member_of_exam)."""
-    from ..routes_classes import new_join_code
+    from ...routes_classes import new_join_code
     first = None
     classes = [c for c in item.get("classes") or [] if isinstance(c, dict) and isinstance(c.get("id"), int)]
     for c in classes:
-        k = (await session.execute(select(SchoolClass).where(SchoolClass.oj_class_id == c["id"]))).scalars().first()
+        k = (await session.execute(select(SchoolClass).where(SchoolClass.external_ref == f"dkuoj:{c['id']}"))).scalars().first()
         if k is None:
             k = SchoolClass(teacher_id=e.teacher_id, name=str(c.get("name") or f"DKU OJ class {c['id']}")[:120],
-                            join_code=new_join_code(), oj_class_id=c["id"], created_at=utcnow(),
+                            join_code=new_join_code(), external_ref=f"dkuoj:{c['id']}", created_at=utcnow(),
                             term="DKU OJ")
             session.add(k)
             await session.flush()
@@ -274,7 +282,7 @@ async def _classes(session: AsyncSession, e: Exam, item: dict, students: list[Us
     await session.flush()
 
 
-async def sync_exams(sessionmaker, client: DkuojClient, settings, now: datetime) -> int:
+async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime) -> int:
     """Page through changed exams since the stored cursor. Returns how many were applied."""
     async with sessionmaker() as session:
         cursor = await get_state(session, CURSOR)
@@ -287,7 +295,7 @@ async def sync_exams(sessionmaker, client: DkuojClient, settings, now: datetime)
             if not isinstance(item, dict):
                 continue
             async with sessionmaker() as session:
-                e = await apply_listing(session, item, settings, now)
+                e = await apply_listing(session, item, cfg, now)
                 await session.commit()
                 if e is not None:
                     n += 1
@@ -307,8 +315,8 @@ async def sync_exams(sessionmaker, client: DkuojClient, settings, now: datetime)
 
 # ---------------------------------------------------------------- packages
 def package_due(e: Exam, now: datetime) -> bool:
-    meta = e.oj_meta or {}
-    if e.oj_removed or e.oj_frozen_version:
+    meta = e.external_meta or {}
+    if e.external_removed or e.external_frozen_version:
         return False
     start = _time(meta.get("start_time"))
     if start is None or now < start - PACKAGE_LEAD:
@@ -316,14 +324,16 @@ def package_due(e: Exam, now: datetime) -> bool:
     retry = _time(meta.get("package_retry_at"))
     if retry is not None and now < retry:
         return False
-    return meta.get("package_version") != e.oj_package_version or not e.questions
+    if meta.get("package_failed_version") and meta.get("package_failed_version") == meta.get("package_version"):
+        return False        # DKU OJ refused this version (e.g. 422 too large): wait for a new one
+    return meta.get("package_version") != e.external_version or not e.questions
 
 
 async def fetch_packages(sessionmaker, client: DkuojClient, now: datetime) -> int:
     async with sessionmaker() as session:
-        exams = (await session.execute(select(Exam).where(Exam.source == "dkuoj", Exam.oj_removed == false(),
-                                                          Exam.oj_frozen_version.is_(None)))).scalars().all()
-        due = [(e.id, e.oj_key, e.oj_package_version if e.questions else None) for e in exams if package_due(e, now)]
+        exams = (await session.execute(select(Exam).where(Exam.source == "dkuoj", Exam.external_removed == false(),
+                                                          Exam.external_frozen_version.is_(None)))).scalars().all()
+        due = [(e.id, e.external_key, e.external_version if e.questions else None) for e in exams if package_due(e, now)]
     applied = 0
     for exam_id, key, have in due:
         try:
@@ -332,11 +342,15 @@ async def fetch_packages(sessionmaker, client: DkuojClient, now: datetime) -> in
         except (OjError, AdapterError) as err:
             msg = getattr(err, "message", None) or str(err)
             log.warning("DKU OJ package of %s not applied: %s", key, msg)
+            refused = isinstance(err, OjError) and not err.retryable
             async with sessionmaker() as session:
                 e = await session.get(Exam, exam_id)
                 if e is not None:
-                    e.oj_meta = {**(e.oj_meta or {}), "package_error": msg[:300],
-                                 "package_retry_at": iso(now + timedelta(minutes=2))}
+                    meta = {**(e.external_meta or {}), "package_error": msg[:300],
+                            "package_retry_at": iso(now + timedelta(minutes=2))}
+                    if refused:     # 4xx (e.g. 422 package over 5 MB): not retried for this version
+                        meta["package_failed_version"] = meta.get("package_version")
+                    e.external_meta = meta
                     await session.commit()
     return applied
 
@@ -349,7 +363,7 @@ async def _fetch_package(sessionmaker, client: DkuojClient, exam_id: str, key: s
             e = await session.get(Exam, exam_id)
             if e is None:
                 return False
-            meta = dict(e.oj_meta or {})
+            meta = dict(e.external_meta or {})
             if status == 425:
                 wait = retry_after if retry_after is not None else 3600
                 meta["package_retry_at"] = iso(now + timedelta(seconds=max(30, min(wait, 86400))))
@@ -358,8 +372,8 @@ async def _fetch_package(sessionmaker, client: DkuojClient, exam_id: str, key: s
                 meta["package_retry_at"] = iso(now + timedelta(minutes=10))
             else:
                 meta.pop("package_retry_at", None)
-                meta["package_version"] = e.oj_package_version     # 304: what we have is current
-            e.oj_meta = meta
+                meta["package_version"] = e.external_version     # 304: what we have is current
+            e.external_meta = meta
             await session.commit()
         return False
     assert pkg is not None
@@ -394,17 +408,18 @@ async def _fetch_package(sessionmaker, client: DkuojClient, exam_id: str, key: s
         except (TypeError, ValueError):
             total = float(sum(float(q["points"]) for q in questions))
         e = await session.get(Exam, exam_id)
-        meta = dict((e.oj_meta if e else None) or {})
+        meta = dict((e.external_meta if e else None) or {})
         meta.pop("package_retry_at", None)
         meta.pop("package_error", None)
+        meta.pop("package_failed_version", None)
         meta["package_version"] = version
         meta["description_md"] = str(pkg.get("description_md") or "")[:20000]
         meta["assets"] = [a["name"] for a in assets]
         # Only while nobody started: the first start freezes the version (same row lock).
         res = await session.execute(
-            update(Exam).where(Exam.id == exam_id, Exam.oj_frozen_version.is_(None)).values(
+            update(Exam).where(Exam.id == exam_id, Exam.external_frozen_version.is_(None)).values(
                 questions=questions, question_count=len(questions), total_points=total,
-                oj_package_version=version, oj_meta=meta, updated_at=now))
+                external_version=version, external_meta=meta, updated_at=now))
         if res.rowcount != 1:
             await session.rollback()
             return False
@@ -423,7 +438,7 @@ async def _fetch_package(sessionmaker, client: DkuojClient, exam_id: str, key: s
 
 
 # ---------------------------------------------------------------- the loop
-async def run_once(sessionmaker, settings, now: datetime | None = None, deliver: bool = True,
+async def run_once(sessionmaker, cfg=None, now: datetime | None = None, deliver: bool = True,
                    client: DkuojClient | None = None) -> dict:
     """One full pass: listing, packages, released results, outbox. Errors of one step are
     logged and do not stop the others."""
@@ -432,12 +447,15 @@ async def run_once(sessionmaker, settings, now: datetime | None = None, deliver:
     now = now or utcnow()
     out: dict = {}
     own = client is None
-    client = client or DkuojClient.from_settings(settings)
+    if cfg is None:
+        from .source import SOURCE
+        cfg = SOURCE.config
+    client = client or DkuojClient.from_config(cfg)
     try:
-        for name, step in (("exams", lambda: sync_exams(sessionmaker, client, settings, now)),
+        for name, step in (("exams", lambda: sync_exams(sessionmaker, client, cfg, now)),
                            ("packages", lambda: fetch_packages(sessionmaker, client, now)),
                            ("results", lambda: sync_results(sessionmaker, client, now)),
-                           ("delivery", lambda: deliver_due(sessionmaker, client, settings, now))):
+                           ("delivery", lambda: deliver_due(sessionmaker, client, cfg, now))):
             if name == "delivery" and not deliver:
                 continue
             try:
@@ -458,9 +476,10 @@ async def run_once(sessionmaker, settings, now: datetime | None = None, deliver:
     return out
 
 
-async def run_forever(settings) -> None:
-    """Started from main.py's lifespan when the bridge is configured."""
-    from ..db import get_database
+async def run_forever() -> None:
+    """Started from main.py's lifespan (registry.background_tasks) while DKU OJ is connected."""
+    from .source import SOURCE
+    from ...db import get_database
     from .delivery import deliver_due
     holder = f"{uuid.uuid4().hex[:12]}-{secrets.token_hex(4)}"
     last_full = 0.0
@@ -472,12 +491,12 @@ async def run_forever(settings) -> None:
                 async with db.sessionmaker() as session:
                     mine = await acquire_lock(session, holder, utcnow())
                 if mine:
-                    if loop.time() - last_full >= max(10, settings.dkuoj_sync_seconds):
+                    if loop.time() - last_full >= max(10, SOURCE.config.sync_seconds):
                         last_full = loop.time()
-                        await run_once(db.sessionmaker, settings)
+                        await run_once(db.sessionmaker, SOURCE.config)
                     else:
-                        async with DkuojClient.from_settings(settings) as client:
-                            await deliver_due(db.sessionmaker, client, settings)
+                        async with DkuojClient.from_config(SOURCE.config) as client:
+                            await deliver_due(db.sessionmaker, client, SOURCE.config)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001

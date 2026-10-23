@@ -92,7 +92,7 @@ async def _hand_in(session: AsyncSession, a: Attempt, seal: ac.Seal, answers: di
     changed = {k: v for k, v in answers.items() if stored.get(k) != v}
     final = stored if late else answers
     exam = await session.get(Exam, a.exam_id)
-    # the sample exam and DKU OJ exams are never graded here
+    # the sample exam and externally graded exams are never graded here
     score, pending = handin_grade(exam, final, a.grades)
     res = await session.execute(
         update(Attempt).where(Attempt.id == a.id, Attempt.status == "in_progress").values(
@@ -101,9 +101,10 @@ async def _hand_in(session: AsyncSession, a: Attempt, seal: ac.Seal, answers: di
             client_seq=max(seal.client_seq, a.client_seq), late=late,
             late_answers=(changed or None) if late else None, late_sealed=late,
             sealed_proof=proof, auto_submitted=False, updated_at=now))
-    if res.rowcount == 1 and exam is not None and exam.source == "dkuoj":
-        from .dkuoj.delivery import enqueue      # outbox row in the hand-in's transaction
-        await enqueue(session, a.id, exam.id, now)
+    from .integrations.registry import integration_for
+    integ = integration_for(exam) if exam is not None else None
+    if res.rowcount == 1 and integ is not None:   # e.g. outbox row, in this transaction
+        await integ.on_handin(session, a.id, exam.id, now, "sealed")
     await session.commit()
 
 

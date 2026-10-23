@@ -82,8 +82,8 @@ class DkuojClient:
                      "User-Agent": "FairPlay-DKUOJ-Bridge/1.0"})
 
     @classmethod
-    def from_settings(cls, settings) -> "DkuojClient":
-        return cls(settings.dkuoj_url, settings.dkuoj_token)
+    def from_config(cls, cfg) -> "DkuojClient":
+        return cls(cfg.url, cfg.token)
 
     async def __aenter__(self):
         return self

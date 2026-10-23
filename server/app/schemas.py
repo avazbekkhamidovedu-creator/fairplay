@@ -561,7 +561,7 @@ MAX_LIST_ANSWER = 100
 
 
 def check_structured_answer(val) -> None:
-    """DKU OJ answer shapes: a flat list of numbers / strings / null (options, blanks, file
+    """Extended answer shapes (app.question_types): a flat list of numbers / strings / null (options, blanks, file
     ids) or {"language": str, "source": str} (code). Raises ValueError otherwise."""
     if isinstance(val, list):
         if len(val) > MAX_LIST_ANSWER:
@@ -605,7 +605,7 @@ class AnswersIn(BaseModel):
             if isinstance(val, str) and len(val) > MAX_ANSWER_CHARS:
                 raise ValueError("answer too long")
             if isinstance(val, (dict, list)):
-                # DKU OJ bridge: structured answers (several options, blanks, files, code
+                # extended question types: structured answers (options, blanks, files, code
                 # with its language). Only their shape is checked here; whether the
                 # question takes one is checked against the exam (routes_student).
                 check_structured_answer(val)

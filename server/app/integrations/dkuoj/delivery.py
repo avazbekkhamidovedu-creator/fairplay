@@ -16,11 +16,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from ..models import Attempt, Exam, User
-from ..timeutil import iso, utcnow
+from ...models import Attempt, Exam, User
+from ...timeutil import iso, utcnow
 from .adapter import answer_to_oj
 from .client import DkuojClient, OjError, sleep
-from .models import AnswerFile, OjDelivery
+from ..models import ExternalDelivery as OjDelivery
+from ...models import AnswerFile
 
 log = logging.getLogger("proctora.dkuoj")
 
@@ -33,32 +34,6 @@ BATCH = 50
 def backoff(tries: int) -> timedelta:
     """Wait after the n-th failed try (1-based): 30 s, 60 s, 120 s ... at most 15 min."""
     return min(BACKOFF_FIRST * (2 ** max(0, tries - 1)), BACKOFF_MAX)
-
-
-async def enqueue(session: AsyncSession, aid: str, exam_id: str, now) -> None:
-    """Add the outbox row inside the caller's transaction (no commit). A row that is there
-    already is left alone, so the hand-in itself can never fail on it."""
-    values = {"attempt_id": aid, "exam_id": exam_id, "status": "pending", "tries": 0,
-              "next_at": now, "created_at": now}
-    dialect = session.bind.dialect.name if session.bind is not None else "sqlite"
-    if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-        stmt = pg_insert(OjDelivery).values(**values).on_conflict_do_nothing(index_elements=["attempt_id"])
-    else:
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-        stmt = sqlite_insert(OjDelivery).values(**values).on_conflict_do_nothing(index_elements=["attempt_id"])
-    await session.execute(stmt)
-
-
-async def delivery_status(session: AsyncSession, exam_id: str) -> dict[str, dict]:
-    rows = (await session.execute(select(OjDelivery).where(OjDelivery.exam_id == exam_id))).scalars().all()
-    return {d.attempt_id: delivery_out(d) for d in rows}
-
-
-def delivery_out(d: OjDelivery) -> dict:
-    return {"status": d.status, "tries": int(d.tries or 0), "last_error": d.last_error,
-            "receipt": d.receipt, "next_at": iso(d.next_at) if d.status in ("pending", "failed") else None,
-            "sent_at": iso(d.sent_at)}
 
 
 class Throttle:
@@ -75,12 +50,12 @@ class Throttle:
         self.last = time.monotonic()
 
 
-def report_url(settings, exam_id: str, aid: str) -> str:
+def report_url(cfg, exam_id: str, aid: str) -> str:
     path = f"/teacher/exams/{exam_id}/attempts/{aid}"
-    return (settings.public_url + path) if getattr(settings, "public_url", "") else path
+    return (cfg.public_url + path) if getattr(cfg, "public_url", "") else path
 
 
-async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttle, settings,
+async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttle, cfg,
                    d: OjDelivery, a: Attempt, e: Exam, username: str) -> dict:
     """The submission body, built once and kept on the row (every retry sends the same
     bytes). File answers are uploaded first; each DKU OJ upload id is stored as soon as
@@ -101,7 +76,7 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
             if f is None or f.attempt_id != a.id:
                 continue
             await throttle.wait()
-            uploads[fid] = await client.upload(e.oj_key, username, (q.get("oj") or {}).get("question_id"),
+            uploads[fid] = await client.upload(e.external_key, username, (q.get("external_ref") or {}).get("question_id"),
                                                f.name, f.data, f.sha256, attempts=1)
             d.uploads = dict(uploads)
             await session.commit()
@@ -112,12 +87,12 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
             out_answers.append(item)
     body = {
         "username": username, "attempt_id": a.id,
-        "package_version": e.oj_frozen_version or e.oj_package_version,
+        "package_version": e.external_frozen_version or e.external_version,
         "started_at": _z(a.started_at), "deadline_at": _z(a.deadline_at),
         "handed_in_at": _z(a.submitted_at or a.updated_at),
         "handed_in_evidence": "sealed" if a.sealed_proof else "server",
         "answers": out_answers,
-        "integrity_report_url": report_url(settings, e.id, a.id),
+        "integrity_report_url": report_url(cfg, e.id, a.id),
     }
     d.payload = body
     await session.commit()
@@ -129,39 +104,40 @@ def _z(dt) -> str | None:
     return dt.replace(microsecond=0).isoformat() + "Z" if dt is not None else None
 
 
-async def deliver_due(sessionmaker, client: DkuojClient, settings, now=None, limit: int = BATCH,
+async def deliver_due(sessionmaker, client: DkuojClient, cfg, now=None, limit: int = BATCH,
                       throttle: Throttle | None = None) -> dict:
-    """Send every due row (pending / failed with next_at <= now). Returns counts."""
+    """Send every due DKU OJ row (pending / failed with next_at <= now). Returns counts."""
     now = now or utcnow()
-    throttle = throttle or Throttle(settings.dkuoj_delivery_rps)
+    throttle = throttle or Throttle(cfg.delivery_rps)
     counts = {"sent": 0, "failed": 0, "dead": 0}
     async with sessionmaker() as session:
         ids = (await session.execute(
-            select(OjDelivery.id).where(or_(OjDelivery.status == "pending", OjDelivery.status == "failed"),
+            select(OjDelivery.id).where(OjDelivery.source == "dkuoj",
+                                        or_(OjDelivery.status == "pending", OjDelivery.status == "failed"),
                                         OjDelivery.next_at <= now)
             .order_by(OjDelivery.next_at, OjDelivery.id).limit(limit))).scalars().all()
     for did in ids:
         async with sessionmaker() as session:
-            outcome = await _deliver_one(session, client, throttle, settings, did, now)
+            outcome = await _deliver_one(session, client, throttle, cfg, did, now)
         if outcome:
             counts[outcome] += 1
     return counts
 
 
-async def _deliver_one(session: AsyncSession, client: DkuojClient, throttle: Throttle, settings,
+async def _deliver_one(session: AsyncSession, client: DkuojClient, throttle: Throttle, cfg,
                        did: int, now) -> str | None:
     d = await session.get(OjDelivery, did)
     if d is None or d.status not in ("pending", "failed"):
         return None
     a = await session.get(Attempt, d.attempt_id)
     e = await session.get(Exam, d.exam_id)
-    if a is None or e is None or not e.oj_key:
+    if a is None or e is None or not e.external_key:
         return await _dead(session, d, "the attempt or exam is gone", now)
     username = (await session.execute(select(User.username).where(User.id == a.student_id))).scalar()
     try:
-        body = await _payload(session, client, throttle, settings, d, a, e, username or "")
+        body = await _payload(session, client, throttle, cfg, d, a, e, username or "")
         await throttle.wait()
-        resp = await client.submit(e.oj_key, body, attempts=1)
+        resp = await client.submit(e.external_key, body, attempts=1)
     except OjError as err:
         detail = _err_text(err)
         if err.retryable:
@@ -196,10 +172,10 @@ async def _dead(session: AsyncSession, d: OjDelivery, detail: str, now) -> str:
     await session.commit()
     log.error("DKU OJ delivery of attempt %s is dead: %s", d.attempt_id, detail)
     try:
-        from .. import app_client as ac
-        from ..store import get_store
+        from ... import app_client as ac
+        from ...store import get_store
         if await session.get(Attempt, d.attempt_id) is not None:
-            await ac.add_event(session, get_store(), d.attempt_id, d.exam_id, "oj_delivery_failed",
+            await ac.add_event(session, get_store(), d.attempt_id, d.exam_id, "external_delivery_failed",
                                f"the answers could not be sent to DKU OJ: {detail}"[:500])
     except Exception:  # noqa: BLE001 - the alert must not break the worker
         log.exception("could not record the delivery alert")

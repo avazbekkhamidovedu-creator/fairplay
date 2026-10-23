@@ -372,7 +372,7 @@ def test_release_rules(client, teacher, alice):
 def test_student_grades_before_and_after_release(client, teacher, alice, bob, carol, graded_setup):
     e, qids = graded_setup["exam"], graded_setup["qids"]
     lst = client.get("/api/student/grades", headers=alice).json()
-    assert lst == [{"exam_id": e["id"], "title": "Final", "course": "MATH 201",
+    assert lst == [{"exam_id": e["id"], "title": "Final", "course": "MATH 201", "source": "fairplay",
                     "submitted_at": lst[0]["submitted_at"], "released": False, "score": None,
                     "total_points": 20, "percent": None}]
     r = client.get(f"/api/student/grades/{e['id']}", headers=alice)

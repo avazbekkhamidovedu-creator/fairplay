@@ -29,9 +29,9 @@ def _number(v: Any) -> float | None:
 
 
 def is_answered(v: Any) -> bool:
-    if isinstance(v, list):          # DKU OJ: several options / blanks / files
+    if isinstance(v, list):          # extended types: several options / blanks / files
         return any(is_answered(x) for x in v)
-    if isinstance(v, dict) and "source" in v and "image" not in v:   # DKU OJ code answer
+    if isinstance(v, dict) and "source" in v and "image" not in v:   # multi-language code answer
         return is_answered(v.get("source"))
     return v is not None and not (isinstance(v, str) and not v.strip())
 
@@ -86,14 +86,15 @@ def num(x: float) -> int | float:
 MANUAL_TYPES = ("essay", "external", "code", "fill_blank", "file_upload")
 # Phase 4: answers the teacher grades (pending until graded; a blank one is 0 and graded).
 # Coding answers are graded on the grading page, where the tests run in the browser.
-# DKU OJ bridge: fill_blank / file_upload exist only in DKU OJ exams, graded in DKU OJ.
+# 2026-10-23: fill_blank / file_upload (app.question_types) are graded by a person (or by
+# the external system an exam comes from), like essays.
 WRITTEN_TYPES = ("essay", "code", "fill_blank", "file_upload")
 
 
 def remote_graded(q: dict) -> bool:
-    """DKU OJ bridge: a question of a DKU OJ exam. Never graded here: its points come only
-    from DKU OJ's released results (passed to grade_attempt as grades)."""
-    return isinstance(q.get("oj"), dict)
+    """A question from an external system (it carries external_ref): never graded here;
+    its points come only from the released external result (passed in as grades)."""
+    return isinstance(q.get("external_ref"), dict)
 
 # slice 4: an exam held on another website stores one hidden grading item. Students never
 # see it (their view has no questions); the teacher enters the score from the website.
@@ -209,27 +210,17 @@ def word_count(v: Any) -> int:
     return len(v.split()) if isinstance(v, str) else 0
 
 
-# ---------------------------------------------------------------- DKU OJ bridge
+# ---------------------------------------------------------------- integrations
 def handin_grade(exam: Any, answers: dict | None, grades: dict | None) -> tuple[float | None, int]:
-    """(score, needs_grading) stored at hand-in / close. The sample exam and DKU OJ exams
-    are never graded here (DKU OJ results arrive later through app.dkuoj.results)."""
-    if exam is not None and (getattr(exam, "is_trial", False) or getattr(exam, "source", None) == "dkuoj"):
+    """(score, needs_grading) stored at hand-in / close. The sample exam and exams graded
+    by an external system (app.integrations) are never graded here."""
+    if exam is not None and (getattr(exam, "is_trial", False) or graded_externally(exam)):
         return None, 0
     score, pending, _ = grade_attempt(exam_questions(exam) if exam is not None else [], answers, grades)
     return score, pending
 
 
-def oj_grades(questions: list[dict], oj_result: dict | None) -> dict:
-    """A released DKU OJ result as teacher-style grades {qid: {points, comment, ...}}, so
-    grade_attempt fills the per-question rows. Not released / none -> {}."""
-    if not oj_result or not oj_result.get("released"):
-        return {}
-    by_oj = {(q.get("oj") or {}).get("question_id"): q["id"] for q in questions}
-    out = {}
-    for r in oj_result.get("questions") or []:
-        qid = by_oj.get(r.get("question_id"))
-        if qid is None:
-            continue
-        out[qid] = {"points": r.get("points") or 0, "comment": r.get("feedback_md") or "",
-                    "rubric_scores": None, "graded_at": oj_result.get("updated_at")}
-    return out
+def graded_externally(exam: Any) -> bool:
+    from .integrations.registry import integration_for
+    integ = integration_for(exam) if exam is not None else None
+    return bool(integ and integ.grades_externally(exam))

@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.dkuoj import adapter, client as ojclient, sync as ojsync
+from app.integrations.dkuoj import adapter, client as ojclient, sync as ojsync
 from app.main import create_app
 from app.timeutil import iso, utcnow
 
@@ -155,13 +155,15 @@ class FakeOJ:
         if p == f"exams/{KEY}/results":
             since = (q.get("changed_since") or [None])[0]
             rows = [r for r in self.results if since is None or r["updated_at"] > since]
-            return httpx.Response(200, json={"results": rows, "next_page": None})
+            return httpx.Response(200, json={"results": rows, "next_page": None, "server_time": iso(utcnow())})
         return httpx.Response(404, json={"detail": "nope"})
 
 
 @pytest.fixture
 def fake(monkeypatch):
     f = FakeOJ()
+    monkeypatch.setenv("DKUOJ_URL", OJ)
+    monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
     ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.handle))
 
@@ -178,7 +180,7 @@ def oj_settings(tmp_path, static_dir, **kw):
                     secret="test-secret-0123456789abcdef", pbkdf2_iterations=1000,
                     require_app=False, app_keys=["test-app-key"], dev=False, seed_loadtest_users=0,
                     seed_demo=True, single_process=True, static_dir=str(static_dir),
-                    uploads_dir=str(tmp_path / "uploads"), dkuoj_url=OJ, dkuoj_token=TOKEN,
+                    uploads_dir=str(tmp_path / "uploads"),
                     public_url="https://exam.test", **kw)
 
 
@@ -191,7 +193,7 @@ def oj(tmp_path, static_dir, fake):
 def run(c, now=None):
     async def go():
         from app.db import get_database
-        return await ojsync.run_once(get_database().sessionmaker, c.app.state.settings, now=now)
+        return await ojsync.run_once(get_database().sessionmaker, now=now)
     return c.portal.call(go)
 
 
@@ -205,7 +207,7 @@ def db(c, fn):
 
 
 def oj_exam(c, teacher):
-    return next(e for e in c.get("/api/exams", headers=teacher).json() if e.get("source") == "dkuoj")
+    return next(e for e in c.get("/api/exams", headers=teacher).json() if e.get("external"))
 
 
 def start(c, h, exam_id, code):
@@ -214,7 +216,7 @@ def start(c, h, exam_id, code):
 
 def deliveries(c):
     from sqlalchemy import select
-    from app.dkuoj.models import OjDelivery
+    from app.integrations.models import ExternalDelivery as OjDelivery
 
     async def q(s):
         return {d.attempt_id: (d.status, d.tries, d.last_error, d.receipt, d.next_at)
@@ -246,7 +248,7 @@ def test_adapter_round_trip_every_type():
                                  {"key": "RUST", "name": "Rust", "runner": None}]
     assert code["time_limit_ms"] == 2000 and code["tests"] == [{"input": "1 2 3\n", "expected": "3 2 1\n",
                                                                   "visible": True, "points": 0}]
-    assert fqs[4]["prompt_format"] == "oj_html" and fqs[0]["prompt_format"] == "oj_md"
+    assert fqs[4]["prompt_format"] == "html" and fqs[0]["prompt_format"] == "markdown"
     # answers both ways
     values = {0: 1, 1: [0, 2], 2: 0, 3: ["hash table", "1"], 4: "because", 5: ["f1"],
               6: {"language": "CPP17", "source": "int main(){}"}}
@@ -288,12 +290,14 @@ def test_full_flow(oj, fake):
     out = run(oj)
     assert out["exams"] == 1 and out["packages"] == 1, out
     e = oj_exam(oj, teacher)
-    assert e["read_only"] and e["graded_in"] == "dkuoj" and e["oj_key"] == KEY
+    x = e["external"]
+    assert x["source"] == "dkuoj" and x["name"] == "DKU OJ" and x["read_only"] and x["graded_externally"]
+    assert x["key"] == KEY and x["package_ready"] is True and x["start_time"] and x["end_time"]
     assert e["title"] == "CS 101 Midterm" and e["duration_min"] == 90 and e["course"] == "CS 101"
     assert e["calculator"] == "scientific" and e["websites"] == ["docs.python.org"]   # "*.com" refused
-    assert e["require_strong_lock"] is True and e["oj_package_version"] == "7f3a9c1e"
+    assert e["require_strong_lock"] is True and x["version"] == "7f3a9c1e"
     assert e["question_count"] == 7 and e["total_points"] == 100
-    assert e["oj_url"] == f"{OJ}/contest/{KEY}"
+    assert x["url"] == f"{OJ}/contest/{KEY}"
     # accounts: new roster student and editor created without a usable password
     r = oj.post("/api/auth/login", json={"username": "ax19", "password": "!dkuoj-import"})
     assert r.status_code == 401
@@ -313,26 +317,28 @@ def test_full_flow(oj, fake):
     assert start(oj, bob, e["id"], code).status_code == 403
     assert e["id"] not in [x["id"] for x in oj.get("/api/student/exams", headers=bob).json()]
     lst = oj.get("/api/student/exams", headers=alice).json()
-    assert next(x for x in lst if x["id"] == e["id"])["source"] == "dkuoj"
+    row = next(x for x in lst if x["id"] == e["id"])
+    assert row["source"] == "dkuoj" and row["external_name"] == "DKU OJ"
 
     a = start(oj, alice, e["id"], code)
     assert a.status_code == 200, a.text
     a = a.json()
     aid = a["attempt_id"]
-    assert a["source"] == "dkuoj" and a["total_points"] == 100 and a["answer_files"] == []
+    assert a["source"] == "dkuoj" and a["external_name"] == "DKU OJ" and a["total_points"] == 100
+    assert a["answer_files"] == []
     # extra time from the roster (600 s) on top of the 90 minutes
     from app.timeutil import parse_iso
     assert (parse_iso(a["deadline_at"]) - parse_iso(a["started_at"])).total_seconds() == 90 * 60 + 600
     # student view: no OJ ids, no secrets, the new type fields are there
     text = json.dumps(a["questions"])
-    for leak in ('"oj"', "option_ids", "501", "p000123"):
+    for leak in ('"oj"', "external_ref", "option_ids", "501", "p000123"):
         assert leak not in text, leak
     qs = {q["label"]: q for q in a["questions"]}
-    assert qs["Q1"]["prompt_format"] == "oj_md" and "fp-asset:cell.png" in qs["Q1"]["prompt"]
+    assert qs["Q1"]["prompt_format"] == "markdown" and "fp-asset:cell.png" in qs["Q1"]["prompt"]
     assert qs["Q1"]["multiple"] is False and qs["Q1"]["shuffle"] is True and qs["Q1"]["points"] == 10
     assert qs["Q2"]["multiple"] is True and qs["Q3"]["true_false"] is True
     assert qs["Q4"]["blanks"] == 2 and qs["Q4"]["blank_points"] == [3, 3]
-    assert qs["Q5"]["prompt_format"] == "oj_html"
+    assert qs["Q5"]["prompt_format"] == "html"
     assert qs["Q6"]["allowed_extensions"] == ["pdf", "png", "jpg"] and qs["Q6"]["max_file_size"] == 1048576
     assert [x["runner"] for x in qs["Q7"]["languages"]] == ["python", "cpp", None]
     assert qs["Q7"]["templates"] == {"PY3": "def reverse(head):\n    pass\n"}
@@ -341,14 +347,14 @@ def test_full_flow(oj, fake):
         assert q["correct_index"] is None if "correct_index" in q else True
         assert "accepted_answers" not in q
     # version frozen at the first start
-    assert oj_exam(oj, teacher)["oj_frozen_version"] == "7f3a9c1e"
+    assert oj_exam(oj, teacher)["external"]["frozen_version"] == "7f3a9c1e"
     # a new package in DKU OJ never changes the running exam
     fake.package = package("99999999")
     fake.package["questions"][0]["title"] = "Changed"
     n_calls = len(fake.calls)
     run(oj)
     e2 = oj_exam(oj, teacher)
-    assert e2["oj_package_version"] == "7f3a9c1e" and e2["questions"][0]["title"] == "Hash maps"
+    assert e2["external"]["version"] == "7f3a9c1e" and e2["questions"][0]["title"] == "Hash maps"
     assert not any(c.endswith("/package") for c in fake.calls[n_calls:]), fake.calls
 
     # assets through the attempt
@@ -432,11 +438,11 @@ def test_full_flow(oj, fake):
     run(oj, now=utcnow())
     assert deliveries(oj)[c_att["attempt_id"]][0] == "dead"
     res = oj.get(f"/api/exams/{e['id']}/results", headers=teacher).json()
-    assert res["graded_in"] == "dkuoj"
+    assert res["external"]["graded_externally"] is True and res["external"]["name"] == "DKU OJ"
     carol_row = next(x for x in res["attempts"] if x["username"] == "carol")
-    assert carol_row["oj_delivery"]["status"] == "dead"
-    assert any(ev["type"] == "oj_delivery_failed" for ev in carol_row["events"])
-    status = oj.get("/api/dkuoj/status", headers=teacher).json()
+    assert carol_row["external_delivery"]["status"] == "dead"
+    assert any(ev["type"] == "external_delivery_failed" for ev in carol_row["events"])
+    status = oj.get("/api/integrations/dkuoj/status", headers=teacher).json()
     assert status["deliveries"]["dead"] == 1 and status["deliveries"]["sent"] == 1
     assert TOKEN not in json.dumps(status)
     # no local grading for OJ exams
@@ -463,12 +469,12 @@ def test_full_flow(oj, fake):
     g = next(x for x in oj.get("/api/student/grades", headers=alice).json() if x["exam_id"] == e["id"])
     assert g["released"] is True and g["score"] == 82 and g["total_points"] == 100 and g["percent"] == 82.0
     d = oj.get(f"/api/student/grades/{e['id']}", headers=alice).json()
-    assert d["score"] == 82 and d["graded_in"] == "dkuoj" and d["source"] == "dkuoj"
+    assert d["score"] == 82 and d["external_name"] == "DKU OJ" and d["source"] == "dkuoj"
     dq = {q["label"]: q for q in d["questions"]}
     assert dq["Q1"]["status"] == "correct" and dq["Q1"]["points_awarded"] == 10
     assert dq["Q5"]["status"] == "partial" and dq["Q5"]["comment"] == "Mention *collisions*."
     assert dq["Q4"]["status"] == "pending" and all(q["correct_answer"] is None for q in d["questions"])
-    assert "oj" not in dq["Q1"] and "option_ids" not in json.dumps(d)
+    assert "external_ref" not in dq["Q1"] and "option_ids" not in json.dumps(d)
     lst = oj.get("/api/student/exams", headers=alice).json()
     assert next(x for x in lst if x["id"] == e["id"])["attempt"]["percent"] == 82.0
     # carol has no released result
@@ -486,7 +492,7 @@ def test_package_waits_until_24h_before_and_honours_425(oj, fake):
     out = run(oj)
     assert out["packages"] == 0 and not any(c.endswith("/package") for c in fake.calls)
     e = oj_exam(oj, teacher)
-    assert e["question_count"] == 0 and e["oj_package_ready"] is False
+    assert e["question_count"] == 0 and e["external"]["package_ready"] is False
     r = oj.post(f"/api/exams/{e['id']}/open", headers=teacher)
     assert r.status_code == 409 and "24 hours" in r.json()["detail"]
     # 24 h before: DKU OJ still says 425 -> retried after Retry-After, not every loop
@@ -511,7 +517,7 @@ def test_asset_hash_mismatch_keeps_package_out(oj, fake):
     fake.asset_bytes["cell.png"] = PNG + b"x"
     run(oj)
     e = oj_exam(oj, teacher)
-    assert e["question_count"] == 0 and e["oj_package_version"] is None
+    assert e["question_count"] == 0 and e["external"]["version"] is None
 
 
 def test_live_link_signs_in_editors_only(oj, fake):
@@ -522,15 +528,15 @@ def test_live_link_signs_in_editors_only(oj, fake):
     def link(user="teacher", exp=None, key=KEY, token=TOKEN):
         exp = str(exp or int(time.time()) + 120)
         sig = hmac.new(token.encode(), f"live|{key}|{user}|{exp}".encode(), hashlib.sha256).hexdigest()
-        return f"/oj/live?exam={key}&user={user}&exp={exp}&sig={sig}"
+        return f"/integrations/dkuoj/live?exam={key}&user={user}&exp={exp}&sig={sig}"
     r = oj.get(link(), follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].startswith("/teacher/oj-live?code=")
+    assert r.status_code == 303 and r.headers["location"].startswith("/teacher/external-live?code=")
     code = r.headers["location"].split("code=", 1)[1]
-    ex = oj.post("/api/oj/live/exchange", json={"code": code})
+    ex = oj.post("/api/integrations/live/exchange", json={"code": code})
     assert ex.status_code == 200 and ex.json()["exam_id"] == e["id"] and ex.json()["role"] == "teacher"
     h = {"Authorization": f"Bearer {ex.json()['token']}"}
     assert oj.get(f"/api/exams/{e['id']}/live", headers=h).status_code == 200
-    assert oj.post("/api/oj/live/exchange", json={"code": code}).status_code == 403     # once
+    assert oj.post("/api/integrations/live/exchange", json={"code": code}).status_code == 403     # once
     good = link(exp=int(time.time()) + 100)
     assert oj.get(good, follow_redirects=False).status_code == 303
     assert oj.get(good, follow_redirects=False).status_code == 403                     # link used
@@ -551,8 +557,12 @@ def test_live_link_signs_in_editors_only(oj, fake):
 
 
 def test_bridge_off_hides_routes(client):
-    assert client.get("/oj/live?exam=x&user=y&exp=1&sig=" + "0" * 64, follow_redirects=False).status_code == 404
-    assert client.post("/api/oj/live/exchange", json={"code": "abcdefgh"}).status_code == 404
+    assert client.get("/integrations/dkuoj/live?exam=x&user=y&exp=1&sig=" + "0" * 64,
+                      follow_redirects=False).status_code == 404
+    assert client.get("/integrations/nope/live", follow_redirects=False).status_code == 404
+    assert client.post("/api/integrations/live/exchange", json={"code": "abcdefgh"}).status_code == 403
+    t = login(client, "teacher")
+    assert client.get("/api/integrations/dkuoj/status", headers=t).json()["enabled"] is False
 
 
 def test_normal_exams_refuse_structured_answers(client, teacher, alice, live_exam):
@@ -563,8 +573,9 @@ def test_normal_exams_refuse_structured_answers(client, teacher, alice, live_exa
         r = client.put(f"/api/student/attempts/{a['attempt_id']}/answers",
                        json={"answers": {qid: v}, "client_seq": 1}, headers=alice)
         assert r.status_code == 422
-    assert "source" not in a and "answer_files" not in a and "prompt_format" not in a["questions"][0]
-    assert "source" not in client.get(f"/api/exams/{live_exam['id']}", headers=teacher).json()
+    assert a["source"] == "fairplay" and "external_name" not in a and "answer_files" not in a
+    assert "prompt_format" not in a["questions"][0]
+    assert client.get(f"/api/exams/{live_exam['id']}", headers=teacher).json()["external"] is None
 
 
 def test_outbox_survives_restart_and_close_writes_it(tmp_path, static_dir, fake):
@@ -590,13 +601,13 @@ def test_outbox_survives_restart_and_close_writes_it(tmp_path, static_dir, fake)
 
 
 def test_delivery_backoff_and_give_up():
-    from app.dkuoj.delivery import backoff
+    from app.integrations.dkuoj.delivery import backoff
     assert [backoff(n).total_seconds() for n in (1, 2, 3, 4, 5, 6, 7, 20)] == \
         [30, 60, 120, 240, 480, 900, 900, 900]
 
 
 def test_one_runner_lock(oj):
-    from app.dkuoj.sync import acquire_lock, release_lock
+    from app.integrations.dkuoj.sync import acquire_lock, release_lock
     now = utcnow()
 
     async def go(s):
@@ -619,7 +630,7 @@ def test_removed_exam_cannot_start(oj, fake):
     fake.removed = True
     fake.listing_updated = iso(utcnow() + timedelta(seconds=1))
     run(oj)
-    assert oj_exam(oj, teacher)["oj_removed"] is True
+    assert oj_exam(oj, teacher)["external"]["removed"] is True
     from app.services import invalidate_exam
     from app.store import get_store
     oj.portal.call(invalidate_exam, get_store(), e["id"])
@@ -631,7 +642,7 @@ def test_removed_exam_cannot_start(oj, fake):
 
     async def left(s):
         from sqlalchemy import func, select
-        from app.dkuoj.models import OjAsset, OjEditor, OjRosterEntry
+        from app.integrations.dkuoj.models import OjAsset, OjEditor, OjRosterEntry
         return [(await s.execute(select(func.count()).select_from(m))).scalar_one()
                 for m in (OjAsset, OjEditor, OjRosterEntry)]
     assert db(oj, left) == [0, 0, 0]
@@ -660,3 +671,228 @@ def test_sealed_submit_writes_outbox_with_sealed_evidence(oj, fake):
     r = oj.post(f"/api/student/attempts/{b['attempt_id']}/sealed-submit", headers=c,
                 json=seal(b["attempt_id"], b["session"], {qs["Q2"]: [9]}))
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------- DKU OJ's real shapes
+# Copied from DKU OJ's own builders and tests (judge/utils/fairplay_package.py,
+# fairplay_delivery.py, views/api/fairplay.py): course may be null, blank points are floats,
+# languages sorted by key with names, samples use "output", a removed entry has only key /
+# name / times, results of a withdrawn release are just {"released": false}, every list
+# answer carries server_time, and error bodies are {"detail": ...}.
+def real_listing(now, removed=False):
+    if removed:
+        return {"key": "fpexam", "name": "CS 101 Midterm", "removed": True,
+                "start_time": iso(now - timedelta(hours=1)), "end_time": iso(now + timedelta(hours=2)),
+                "updated_at": iso(now + timedelta(seconds=5))}
+    return {"key": "fpexam", "name": "CS 101 Midterm", "course": None,
+            "classes": [{"id": 7, "name": "FP Section A"}],
+            "start_time": iso(now - timedelta(hours=1)), "end_time": iso(now + timedelta(hours=2)),
+            "time_limit_seconds": 5400, "results_hidden": True, "package_version": "0f1e2d3c4b5a6978",
+            "removed": False,
+            "settings": {"calculator": "off", "open_book": False, "websites": ["docs.python.org"],
+                         "strong_lock": False, "resume_needs_approval": True},
+            "editors": [{"username": "teacher", "first_name": "Shuai", "last_name": "Dong",
+                         "email": "fp_teacher@example.edu"}],
+            "roster": [{"username": "alice", "first_name": "Avazbek", "last_name": "Khamidov",
+                        "email": "fp_student@example.edu", "extra_time_seconds": 0},
+                       {"username": "carol", "first_name": "", "last_name": "", "email": "",
+                        "extra_time_seconds": 0}],
+            "updated_at": iso(now)}
+
+
+REAL_PACKAGE = {
+    "key": "fpexam", "package_version": "0f1e2d3c4b5a6978", "total_points": 66, "description_md": "",
+    "questions": [
+        {"id": "p000002", "order": 1, "label": "1", "title": "Hash maps", "type": "choice", "points": 10,
+         "partial": True, "statement_md": "Which structure gives O(1) average lookup?", "statement_html": None,
+         "choice": {"multiple": False, "true_false": False, "shuffle": True,
+                    "options": [{"id": 1, "text_md": "Array"}, {"id": 2, "text_md": "Hash table"}]}},
+        {"id": "p000003", "order": 2, "label": "2", "title": "Fill", "type": "fill_blank", "points": 6,
+         "partial": True, "statement_md": "A ___ maps keys to values.", "statement_html": None,
+         "fill_blank": {"blanks": [{"index": 0, "points": 3.0}, {"index": 1, "points": 3.0}],
+                        "case_sensitive": False}},
+        {"id": "p000004", "order": 3, "label": "3", "title": "Explain", "type": "short_answer", "points": 10,
+         "partial": True, "statement_md": "Explain hashing.", "statement_html": None, "short_answer": {}},
+        {"id": "p000005", "order": 4, "label": "4", "title": "Report", "type": "file_upload", "points": 10,
+         "partial": True, "statement_md": "Upload your report.", "statement_html": None,
+         "file_upload": {"allowed_extensions": ["pdf", "png"], "max_file_size": 1024, "instructions_md": ""}},
+        {"id": "p000001", "order": 5, "label": "5", "title": "Reverse a list", "type": "code", "points": 30,
+         "partial": True, "statement_md": "Write it.", "statement_html": None,
+         "code": {"languages": [{"key": "CPP14", "name": "C++14"}, {"key": "PY3", "name": "Python 3"}],
+                  "time_limit_s": 2.0, "memory_limit_kb": 262144,
+                  "templates": {"PY3": "def reverse(head):\n    pass\n"},
+                  "samples": [{"input": "1 2 3\n", "output": "3 2 1\n"}]}}],
+    "assets": []}
+
+
+class RealShapeOJ:
+    """Answers like DKU OJ's views (status codes and bodies), checks requests like them."""
+
+    def __init__(self):
+        self.now = utcnow()
+        self.removed = False
+        self.calls, self.bodies = [], []
+        self.uploads = {}
+        self.package_status = 200
+        self.submit_status = None
+        self.results_rows = []
+        self.results_since = []
+
+    def handle(self, req):
+        u = urlsplit(str(req.url))
+        p = u.path[len("/api/fairplay/v1/"):]
+        q = parse_qs(u.query)
+        self.calls.append(f"{req.method} {p}")
+        if req.headers.get("authorization") != f"Bearer {TOKEN}":
+            return httpx.Response(401, json={"detail": "Invalid or missing bearer token."},
+                                  headers={"WWW-Authenticate": "Bearer"})
+        since = (q.get("changed_since") or [None])[0]
+        if p == "exams":
+            rows = [real_listing(self.now, removed=True)] if self.removed and since else \
+                ([] if self.removed else [real_listing(self.now)])
+            return httpx.Response(200, json={"exams": rows, "next_page": None, "server_time": iso(utcnow())})
+        if p == "exams/fpexam/package":
+            if self.package_status == 422:
+                return httpx.Response(422, json={"detail": "The exam package is larger than 5 MB; reduce the statements or images."})
+            return httpx.Response(200, json=REAL_PACKAGE, headers={"ETag": '"0f1e2d3c4b5a6978"'})
+        if p == "exams/fpexam/uploads":
+            for h in ("x-username", "x-question-id", "x-filename", "x-sha256"):
+                assert req.headers.get(h), h
+            assert hashlib.sha256(req.content).hexdigest() == req.headers["x-sha256"]
+            up = "up_" + "%024x" % (len(self.uploads) + 1)
+            self.uploads[up] = req.headers["x-filename"]
+            return httpx.Response(200, json={"upload_id": up})
+        if p == "exams/fpexam/submissions":
+            body = json.loads(req.content)
+            self.bodies.append(body)
+            if self.submit_status:
+                return httpx.Response(self.submit_status, json={"detail": "Request body is larger than 2097152 bytes."})
+            assert body["handed_in_evidence"] in ("server", "sealed")
+            for a in body["answers"]:
+                if "file_upload" in a:
+                    assert len(a["file_upload"]["upload_ids"]) == 1
+                if "code" in a:
+                    assert a["code"]["source"].strip()
+            return httpx.Response(200, json={"receipt": "oj_rcpt_" + "ab" * 12,
+                                             "submissions": [{"question_id": a["question_id"], "submission_id": i + 1}
+                                                             for i, a in enumerate(body["answers"])]})
+        if p == "exams/fpexam/results":
+            self.results_since.append(since)
+            return httpx.Response(200, json={"results": self.results_rows, "next_page": None,
+                                             "server_time": iso(self.now + timedelta(hours=3))})
+        return httpx.Response(404, json={"detail": "No FairPlay exam with this key."})
+
+
+def test_against_dkuoj_real_shapes(tmp_path, static_dir, monkeypatch):
+    real = RealShapeOJ()
+    monkeypatch.setattr(ojsync, "BACKGROUND", False)
+    monkeypatch.setenv("DKUOJ_URL", OJ)
+    monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    ojclient.set_transport_factory(lambda base: httpx.MockTransport(real.handle))
+
+    async def no_sleep(_s):
+        return None
+    ojclient.set_sleep(no_sleep)
+    try:
+        with TestClient(create_app(oj_settings(tmp_path, static_dir))) as c:
+            teacher, alice = login(c, "teacher"), login(c, "alice")
+            run(c)
+            e = oj_exam(c, teacher)
+            assert e["course"] == "" and e["question_count"] == 5 and e["external"]["package_ready"]
+            e = c.post(f"/api/exams/{e['id']}/open", headers=teacher).json()
+            a = start(c, alice, e["id"], e["start_code"]).json()
+            qs = {q["title"]: q for q in a["questions"]}
+            assert qs["Report"]["max_files"] == 1
+            assert [x["key"] for x in qs["Reverse a list"]["languages"]] == ["CPP14", "PY3"]
+            qid = {k: v["id"] for k, v in qs.items()}
+            files = []
+            for name in ("a.pdf", "b.pdf"):
+                r = c.post(f"/api/student/attempts/{a['attempt_id']}/files?question_id={qid['Report']}",
+                           files={"file": (name, b"%PDF-" + name.encode(), "application/pdf")}, headers=alice)
+                files.append(r.json()["id"])
+
+            def put(ans, seq):
+                return c.put(f"/api/student/attempts/{a['attempt_id']}/answers",
+                             json={"answers": ans, "client_seq": seq}, headers=alice)
+            assert put({qid["Report"]: files}, 1).status_code == 422          # exactly one file
+            ans = {qid["Hash maps"]: 1, qid["Fill"]: ["hash table"], qid["Explain"]: "x",
+                   qid["Report"]: [files[1]], qid["Reverse a list"]: {"language": "PY3", "source": "  "}}
+            assert put(ans, 2).status_code == 200
+            c.post(f"/api/student/attempts/{a['attempt_id']}/submit", json={"answers": ans, "client_seq": 3},
+                   headers=alice)
+            run(c)
+            body = real.bodies[-1]
+            by = {x["question_id"]: x for x in body["answers"]}
+            assert by["p000002"]["choice"] == {"selected": [2]}
+            assert by["p000003"]["fill_blank"] == {"answers": ["hash table", ""]}
+            assert len(by["p000005"]["file_upload"]["upload_ids"]) == 1 and list(real.uploads.values()) == ["b.pdf"]
+            assert "p000001" not in by                     # blank code: no submission (DKU OJ refuses it)
+            assert body["integrity_report_url"].startswith("https://exam.test/")
+            assert deliveries(c)[a["attempt_id"]][0] == "sent"
+
+            # results: the next poll asks from the server_time DKU OJ sent
+            real.results_rows = [{"username": "alice", "released": True, "total": 16, "total_points": 66,
+                                  "updated_at": iso(real.now + timedelta(hours=3)),
+                                  "questions": [{"question_id": "p000002", "points": 10, "feedback_md": ""},
+                                                {"question_id": "p000003", "points": 6, "feedback_md": ""}]}]
+            run(c, now=real.now + timedelta(hours=3))
+            assert c.get("/api/student/grades", headers=alice).json()[0]["score"] == 16
+            real.results_rows = [{"username": "alice", "released": False,
+                                  "updated_at": iso(real.now + timedelta(hours=4))}]
+            run(c, now=real.now + timedelta(hours=4))
+            assert real.results_since[-1] == iso(real.now + timedelta(hours=3))
+            assert c.get(f"/api/student/grades/{e['id']}", headers=alice).status_code == 403
+
+            # removed: only in the incremental poll; editors keep the exam
+            real.removed = True
+            run(c)
+            assert oj_exam(c, teacher)["external"]["removed"] is True
+
+    finally:
+        ojclient.set_transport_factory(None)
+        ojclient.set_sleep(None)
+
+
+def test_dkuoj_refusals_are_dead_not_retried(tmp_path, static_dir, monkeypatch):
+    real = RealShapeOJ()
+    real.package_status = 422
+    monkeypatch.setattr(ojsync, "BACKGROUND", False)
+    monkeypatch.setenv("DKUOJ_URL", OJ)
+    monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    ojclient.set_transport_factory(lambda base: httpx.MockTransport(real.handle))
+    try:
+        with TestClient(create_app(oj_settings(tmp_path, static_dir))) as c:
+            teacher = login(c, "teacher")
+            run(c)
+            n = real.calls.count("GET exams/fpexam/package")
+            assert n == 1 and oj_exam(c, teacher)["question_count"] == 0
+            run(c, now=utcnow() + timedelta(minutes=10))       # 422 for this version: not asked again
+            assert real.calls.count("GET exams/fpexam/package") == 1
+            # a new version in the listing is fetched again
+            real.package_status = 200
+            original = real_listing
+            monkeypatch.setitem(REAL_PACKAGE, "package_version", "1111111111111111")
+            monkeypatch.setitem(globals(), "real_listing", lambda now, removed=False: {
+                **original(now, removed), "package_version": "1111111111111111",
+                "updated_at": iso(now + timedelta(seconds=9))})
+            run(c, now=utcnow() + timedelta(minutes=20))
+            assert oj_exam(c, teacher)["question_count"] == 5
+            e = oj_exam(c, teacher)
+            e = c.post(f"/api/exams/{e['id']}/open", headers=teacher).json()
+            for status, who in ((413, "alice"), (401, "carol")):
+                real.submit_status = status
+                h = login(c, who)
+                a = start(c, h, e["id"], e["start_code"]).json()
+                c.post(f"/api/student/attempts/{a['attempt_id']}/submit", json={"answers": {}, "client_seq": 1},
+                       headers=h)
+                run(c)
+                assert deliveries(c)[a["attempt_id"]][:2] == ("dead", 1)
+                tries_before = len(real.bodies)
+                run(c, now=utcnow() + timedelta(hours=1))
+                assert len(real.bodies) == tries_before          # dead: never retried
+            res = c.get(f"/api/exams/{e['id']}/results", headers=teacher).json()
+            assert {x["external_delivery"]["status"] for x in res["attempts"]} == {"dead"}
+            assert all(any(ev["type"] == "external_delivery_failed" for ev in x["events"]) for x in res["attempts"])
+    finally:
+        ojclient.set_transport_factory(None)
+        ojclient.set_sleep(None)

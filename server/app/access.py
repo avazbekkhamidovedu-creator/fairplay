@@ -15,22 +15,16 @@ from .models import ClassMember, CourseLink, CourseMember, Exam, SchoolClass
 
 
 def member_of_exam(user_id: int):
-    """SQL condition: the student is in the exam's class or linked LMS course. A DKU OJ
-    exam is decided by its DKU OJ roster alone (app.dkuoj)."""
-    from .dkuoj.models import OjRosterEntry
+    """SQL condition: the student is in the exam's class or linked LMS course. An exam
+    from an external system is decided by that integration alone (its roster)."""
+    from .integrations import registry
     in_class = exists().where(ClassMember.class_id == Exam.class_id, ClassMember.user_id == user_id)
     in_course = exists().where(CourseMember.course_link_id == Exam.course_link_id,
                                CourseMember.user_id == user_id)
-    in_roster = exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id)
-    return or_(and_(Exam.source == "dkuoj", in_roster),
-               and_(Exam.source != "dkuoj", Exam.course_link_id.is_not(None), in_course),
-               and_(Exam.source != "dkuoj", Exam.course_link_id.is_(None), in_class))
-
-
-async def on_oj_roster(session: AsyncSession, exam_id: str, user_id: int) -> bool:
-    from .dkuoj.models import OjRosterEntry
-    return (await session.execute(select(OjRosterEntry.id).where(
-        OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id).limit(1))).first() is not None
+    own = Exam.source == registry.FAIRPLAY
+    return or_(and_(own, Exam.course_link_id.is_not(None), in_course),
+               and_(own, Exam.course_link_id.is_(None), in_class),
+               *[and_(Exam.source == s.id, s.roster_condition(user_id)) for s in registry.sources()])
 
 
 async def is_member(session: AsyncSession, class_id: int | None, course_link_id: int | None,
@@ -47,10 +41,12 @@ async def is_member(session: AsyncSession, class_id: int | None, course_link_id:
 async def require_member(session: AsyncSession, exam: dict, user_id: int) -> None:
     """403 with the class name unless the student belongs to the exam's class/course.
     `exam` is the cached student view (get_exam_cached)."""
-    if exam.get("source") == "dkuoj":
-        if await on_oj_roster(session, exam["id"], user_id):
+    from .integrations.registry import integration_for
+    integ = integration_for(exam)
+    if integ is not None:
+        if await integ.can_take(session, exam["id"], user_id):
             return
-        raise HTTPException(403, "You are not on this exam's list in DKU OJ. Ask your teacher.")
+        raise HTTPException(403, integ.take_refused_message())
     class_id, link_id = exam.get("class_id"), exam.get("course_link_id")
     if await is_member(session, class_id, link_id, user_id):
         return

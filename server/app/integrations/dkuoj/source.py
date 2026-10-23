@@ -1,0 +1,160 @@
+"""DKU OJ as an ExternalSource (docs/dkuoj-bridge.md). Everything DKU OJ-specific the
+core needs goes through these hooks."""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import time
+from datetime import timedelta
+
+from fastapi import HTTPException
+from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
+
+from ...models import Exam, User
+from ..base import ExternalSource
+from .config import DkuojConfig
+from .models import OjAsset, OjEditor, OjRosterEntry, OjState
+
+LINK_MAX_AHEAD_S = 300        # DKU OJ makes links valid for 120 s; allow clock skew
+BAD_LINK = "This FairPlay link is not valid any more. Open the live room again from DKU OJ."
+NOT_EDITOR = "You are not an editor of this exam in FairPlay yet. Wait two minutes and try again."
+NOT_READY = "This exam has not arrived from DKU OJ yet. Try again in a minute."
+REMOVED = "FairPlay was switched off for this exam in DKU OJ."
+
+
+def live_signature(token: str, key: str, user: str, exp: str) -> str:
+    return hmac.new(token.encode(), f"live|{key}|{user}|{exp}".encode(), hashlib.sha256).hexdigest()
+
+
+class DkuojSource(ExternalSource):
+    id = "dkuoj"
+    name = "DKU OJ"
+
+    def __init__(self):
+        self.config = DkuojConfig()
+
+    # ------------------------------------------------------------ setup
+    @property
+    def enabled(self) -> bool:
+        return self.config.enabled
+
+    def configure(self, settings) -> None:
+        self.config = DkuojConfig.from_env(getattr(settings, "public_url", ""))
+
+    def background_tasks(self, settings) -> list:
+        from . import sync
+        return [sync.run_forever] if sync.BACKGROUND else []
+
+    # ------------------------------------------------------------ teacher side
+    def external_url(self, exam) -> str | None:
+        return (exam.external_meta or {}).get("url")
+
+    def delete_refused_message(self, exam) -> str | None:
+        if exam.external_removed:
+            return None
+        return "This exam comes from DKU OJ. Switch the FairPlay lock off there to remove it."
+
+    def open_refused_message(self, exam) -> str | None:
+        if exam.external_removed:
+            return REMOVED
+        if not self.package_ready(exam):
+            return "The questions arrive from DKU OJ 24 hours before the start. Try again then."
+        return super().open_refused_message(exam)
+
+    async def is_teacher(self, session: AsyncSession, exam, user_id: int) -> bool:
+        return (await session.execute(select(OjEditor.id).where(
+            OjEditor.exam_id == exam.id, OjEditor.user_id == user_id).limit(1))).first() is not None
+
+    def teacher_exam_ids(self, user_id: int):
+        return select(OjEditor.exam_id).where(OjEditor.user_id == user_id)
+
+    # ------------------------------------------------------------ student side
+    def roster_condition(self, user_id: int):
+        return exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id)
+
+    async def can_take(self, session: AsyncSession, exam_id: str, user_id: int) -> bool:
+        return (await session.execute(select(OjRosterEntry.id).where(
+            OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id).limit(1))).first() is not None
+
+    async def check_start(self, session: AsyncSession, exam_id: str) -> None:
+        """Starts only with its questions here, and not after DKU OJ switched FairPlay off
+        (unless already running: then it finishes as it started)."""
+        row = (await session.execute(select(Exam.external_removed, Exam.external_frozen_version,
+                                            Exam.external_version, Exam.question_count)
+                                     .where(Exam.id == exam_id))).first()
+        if row is None:
+            raise HTTPException(404, "Exam not found")
+        if row.external_removed and not row.external_frozen_version:
+            raise HTTPException(409, REMOVED)
+        if not row.external_frozen_version and not self.enabled:
+            await super().check_start(session, exam_id)
+        if not row.external_version or not row.question_count:
+            raise HTTPException(409, NOT_READY)
+
+    async def on_start(self, session: AsyncSession, exam_id: str, user_id: int) -> timedelta:
+        """The first start freezes the package version (sync never applies another one
+        after that); the student's DKU OJ extra time."""
+        await session.execute(update(Exam).where(Exam.id == exam_id, Exam.external_frozen_version.is_(None))
+                              .values(external_frozen_version=Exam.external_version))
+        extra = (await session.execute(select(OjRosterEntry.extra_time_seconds).where(
+            OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id))).scalar()
+        return timedelta(seconds=max(0, int(extra or 0)))
+
+    async def on_handin(self, session: AsyncSession, attempt_id: str, exam_id: str, now, evidence: str) -> None:
+        from ..outbox import enqueue
+        await enqueue(session, self.id, attempt_id, exam_id, now)
+
+    async def asset(self, session: AsyncSession, exam_id: str, name: str):
+        a = (await session.execute(select(OjAsset).options(undefer(OjAsset.data))
+                                   .where(OjAsset.exam_id == exam_id, OjAsset.name == name))).scalar_one_or_none()
+        return (a.data, a.content_type, a.sha256) if a else None
+
+    # ------------------------------------------------------------ live-room link
+    async def live_login(self, session: AsyncSession, params: dict) -> tuple[int, str]:
+        """exam=<key>&user=<username>&exp=<unix>&sig=<hex HMAC-SHA256(token,
+        "live|<key>|<username>|<exp>")>: signature, expiry (at most 5 min ahead), single
+        use, and the user is an editor of that exam (from the last sync)."""
+        from ...store import get_store
+        key, user, exp, sig = (str(params.get(k) or "") for k in ("exam", "user", "exp", "sig"))
+        try:
+            exp_i = int(exp)
+        except ValueError:
+            raise HTTPException(403, BAD_LINK) from None
+        now = int(time.time())
+        if not key or not user or len(sig) != 64 or exp_i < now or exp_i > now + LINK_MAX_AHEAD_S:
+            raise HTTPException(403, BAD_LINK)
+        if not hmac.compare_digest(live_signature(self.config.token, key, user, exp), sig.lower()):
+            raise HTTPException(403, BAD_LINK)
+        e = (await session.execute(select(Exam).where(Exam.external_key == key, Exam.source == self.id))
+             ).scalar_one_or_none()
+        u = (await session.execute(select(User).where(User.username == user))).scalar_one_or_none()
+        if e is None or u is None or u.role != "teacher" or not await self.is_teacher(session, e, u.id):
+            raise HTTPException(403, NOT_EDITOR)
+        if not await get_store().setnx(f"ojlive-used:{sig.lower()}", "1", LINK_MAX_AHEAD_S + 60):
+            raise HTTPException(403, BAD_LINK)          # each link signs in once
+        return u.id, e.id
+
+    async def status(self, session: AsyncSession, user_id: int) -> dict:
+        """Last sync, outbox counts, and failed hand-ins of this teacher's DKU OJ exams.
+        Never the token."""
+        from ..models import ExternalDelivery as D
+        if not self.enabled:
+            return {"enabled": False, "source": self.id, "name": self.name}
+        state = {r.name: r.value for r in (await session.execute(select(OjState))).scalars()}
+        counts = dict((await session.execute(select(D.status, func.count()).where(D.source == self.id)
+                                             .group_by(D.status))).all())
+        mine = select(Exam.id).where(Exam.source == self.id,
+                                     or_(Exam.teacher_id == user_id, Exam.id.in_(self.teacher_exam_ids(user_id))))
+        bad = (await session.execute(select(D).where(D.exam_id.in_(mine), D.status.in_(("dead", "failed")))
+                                     .order_by(D.created_at.desc()).limit(100))).scalars().all()
+        exams = (await session.execute(select(func.count(Exam.id)).where(Exam.source == self.id))).scalar_one()
+        return {"enabled": True, "source": self.id, "name": self.name, "url": self.config.url,
+                "last_run": state.get("last_run"), "last_error": state.get("last_error"), "exams": int(exams),
+                "deliveries": {k: int(counts.get(k, 0)) for k in ("pending", "failed", "sent", "dead")},
+                "problems": [{"attempt_id": d.attempt_id, "exam_id": d.exam_id, "status": d.status,
+                              "tries": d.tries, "last_error": d.last_error} for d in bad]}
+
+
+SOURCE = DkuojSource()

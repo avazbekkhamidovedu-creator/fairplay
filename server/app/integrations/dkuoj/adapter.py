@@ -3,9 +3,9 @@
 FairPlay form of an OJ question (stored in Exam.questions; contract §5). Only the fields
 named here are copied, so nothing else DKU OJ might send is ever stored or served:
 
-  common   id ("q_" + OJ id), type, prompt, prompt_format ("oj_md" | "oj_html"), title,
+  common   id ("q_" + OJ id), type, prompt, prompt_format ("markdown" | "html"), title,
            label, points, partial, images [], topics, oj {question_id, order, ...}
-  mcq      options [markdown], multiple, true_false, shuffle, oj.option_ids (same order)
+  mcq      options [markdown], multiple, true_false, shuffle, external_ref.option_ids
            answer: int index (single) | sorted list of indexes (multiple)
   short    accepted_answers [] (graded in DKU OJ)            answer: string
   fill_blank  blanks (count), blank_points, case_sensitive   answer: list of strings
@@ -21,7 +21,7 @@ import math
 import re
 from typing import Any
 
-from ..grading import num
+from ...grading import num
 
 OJ_TYPES = ("choice", "fill_blank", "short_answer", "file_upload", "code")
 FP_TYPE = {"choice": "mcq", "fill_blank": "fill_blank", "short_answer": "short",
@@ -92,11 +92,11 @@ def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "gener
     md = q.get("statement_md")
     html = q.get("statement_html")
     if isinstance(md, str):
-        prompt, fmt = md, "oj_md"
+        prompt, fmt = md, "markdown"
     elif isinstance(html, str):
-        prompt, fmt = html, "oj_html"
+        prompt, fmt = html, "html"
     else:
-        prompt, fmt = "", "oj_md"
+        prompt, fmt = "", "markdown"
     title = _text(q.get("title"), 300)
     out: dict = {
         "id": fp_question_id(oj_id, taken if taken is not None else set(), salt),
@@ -106,7 +106,7 @@ def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "gener
         "options": [], "correct_index": None, "answer_number": None, "tolerance": None,
         "accepted_answers": [], "rubric": [], "min_words": None, "max_words": None,
         "images": [], "topics": [topic], "answer_lines": None,
-        "oj": {"question_id": oj_id, "order": q.get("order"), "type": t},
+        "external_ref": {"question_id": oj_id, "order": q.get("order"), "type": t},
     }
     if t == "choice":
         c = q.get("choice") or {}
@@ -117,7 +117,7 @@ def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "gener
         out["multiple"] = bool(c.get("multiple"))
         out["true_false"] = bool(c.get("true_false"))
         out["shuffle"] = bool(c.get("shuffle"))
-        out["oj"]["option_ids"] = [o.get("id") for o in opts]
+        out["external_ref"]["option_ids"] = [o.get("id") for o in opts]
     elif t == "fill_blank":
         f = q.get("fill_blank") or {}
         blanks = sorted((b for b in f.get("blanks") or [] if isinstance(b, dict)),
@@ -140,6 +140,7 @@ def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "gener
             size = 0
         out["max_file_size"] = max(0, min(size, 10 * 1024 * 1024)) or 10 * 1024 * 1024
         out["instructions_md"] = _text(f.get("instructions_md"), 20_000)
+        out["max_files"] = 1          # DKU OJ files exactly one upload per question
     elif t == "code":
         c = q.get("code") or {}
         langs = []
@@ -188,13 +189,13 @@ def questions_from_package(pkg: dict, topic: str = "general") -> list[dict]:
 def question_to_oj(fq: dict) -> dict:
     """FairPlay form back to the OJ package form (round trip; used by tests and by the
     teacher view to show what came from DKU OJ)."""
-    oj = fq.get("oj") or {}
+    oj = fq.get("external_ref") or {}
     t = OJ_TYPE[fq["type"]]
     q: dict = {"id": oj.get("question_id"), "order": oj.get("order"), "label": fq.get("label", ""),
                "title": fq.get("title", ""), "type": t, "points": fq.get("points"),
                "partial": bool(fq.get("partial")),
-               "statement_md": fq["prompt"] if fq.get("prompt_format") != "oj_html" else None,
-               "statement_html": fq["prompt"] if fq.get("prompt_format") == "oj_html" else None}
+               "statement_md": fq["prompt"] if fq.get("prompt_format") != "html" else None,
+               "statement_html": fq["prompt"] if fq.get("prompt_format") == "html" else None}
     if t == "choice":
         q["choice"] = {"multiple": bool(fq.get("multiple")), "true_false": bool(fq.get("true_false")),
                        "shuffle": bool(fq.get("shuffle")),
@@ -234,69 +235,11 @@ def asset_names(pkg: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------- answers
-class AnswerError(ValueError):
-    pass
-
-
-def is_oj(q: dict) -> bool:
-    return isinstance(q.get("oj"), dict)
-
-
-def check_answer(q: dict, v: Any, file_ids: set[str] | None = None) -> Any:
-    """Validate (and normalise) one answer to an OJ question; raises AnswerError.
-    None (cleared answer) is always fine. file_ids: the attempt's own files for this
-    question (None = don't check ownership)."""
-    if v is None:
-        return None
-    t = q.get("type")
-    if t == "mcq":
-        n = len(q.get("options") or [])
-
-        def idx(x):
-            if isinstance(x, bool) or not isinstance(x, (int, float)) or float(x) != int(x) \
-                    or not 0 <= int(x) < n:
-                raise AnswerError("choose one of the options")
-            return int(x)
-        if q.get("multiple"):
-            if not isinstance(v, list):
-                raise AnswerError("this question takes a list of options")
-            return sorted({idx(x) for x in v})
-        if isinstance(v, list):
-            raise AnswerError("this question takes one option")
-        return idx(v)
-    if t == "short":
-        if not isinstance(v, str):
-            raise AnswerError("this question takes text")
-        return v
-    if t == "fill_blank":
-        if not isinstance(v, list) or len(v) > int(q.get("blanks") or 0) \
-                or any(x is not None and not isinstance(x, str) for x in v):
-            raise AnswerError(f"this question takes up to {q.get('blanks')} answers")
-        if any(len(x or "") > 2000 for x in v):
-            raise AnswerError("a blank's answer is too long")
-        return ["" if x is None else x for x in v]
-    if t == "file_upload":
-        if not isinstance(v, list) or len(v) > 10 or any(not isinstance(x, str) for x in v):
-            raise AnswerError("this question takes a list of uploaded files")
-        if file_ids is not None and any(x not in file_ids for x in v):
-            raise AnswerError("upload the file first")
-        return list(dict.fromkeys(v))
-    if t == "code":
-        keys = [lang["key"] for lang in q.get("languages") or []]
-        if isinstance(v, str):          # a page that knows only one language
-            return {"language": keys[0] if keys else "", "source": v}
-        if not isinstance(v, dict) or set(v) - {"language", "source"} \
-                or not isinstance(v.get("source"), str) or v.get("language") not in keys:
-            raise AnswerError("this question takes {\"language\", \"source\"} with one of its languages")
-        return {"language": v["language"], "source": v["source"]}
-    raise AnswerError("unknown question type")
-
-
 def answer_to_oj(q: dict, v: Any, uploads: dict[str, str] | None = None) -> dict | None:
     """One answer in DKU OJ's submission form, or None when not answered."""
     if v is None:
         return None
-    oj = q.get("oj") or {}
+    oj = q.get("external_ref") or {}
     out: dict = {"question_id": oj.get("question_id")}
     t = q.get("type")
     if t == "mcq":
@@ -338,7 +281,7 @@ def answer_from_oj(q: dict, a: dict) -> Any:
     """DKU OJ's answer form back to the FairPlay answer value (round trip in tests)."""
     t = q.get("type")
     if t == "mcq":
-        ids = (q.get("oj") or {}).get("option_ids") or []
+        ids = (q.get("external_ref") or {}).get("option_ids") or []
         idx = sorted(ids.index(x) for x in a["choice"]["selected"] if x in ids)
         return idx if q.get("multiple") else (idx[0] if idx else None)
     if t == "short":

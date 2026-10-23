@@ -119,19 +119,9 @@ class Settings:
         default_factory=lambda: os.environ.get("MIN_APP_VERSION_WINDOWS", "").strip())
     min_app_version_ipad: str = field(default_factory=lambda: os.environ.get("MIN_APP_VERSION_IPAD", "").strip())
 
-    # DKU OJ bridge (docs/dkuoj-bridge.md): both set = on. One shared token, same value
-    # as FAIRPLAY_TOKEN in DKU OJ's settings.
-    dkuoj_url: str = field(default_factory=lambda: os.environ.get("DKUOJ_URL", "").strip().rstrip("/"))
-    dkuoj_token: str = field(default_factory=lambda: os.environ.get("DKUOJ_TOKEN", "").strip())
-    dkuoj_sync_seconds: int = field(default_factory=lambda: _int("DKUOJ_SYNC_SECONDS", 120))
-    dkuoj_delivery_rps: int = field(default_factory=lambda: _int("DKUOJ_DELIVERY_RPS", 10))
-    # Optional: this server's public address, so DKU OJ gets absolute integrity-report
-    # links. Unset: the links are sent as paths (/teacher/exams/...).
+    # Optional: this server's public address, so integrations (app.integrations) can send
+    # absolute integrity-report links. Unset: the links are sent as paths (/teacher/exams/...).
     public_url: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_PUBLIC_URL", "").strip().rstrip("/"))
-
-    @property
-    def dkuoj_enabled(self) -> bool:
-        return bool(self.dkuoj_url and self.dkuoj_token)
 
     def min_app_version(self, platform: str | None) -> str | None:
         v = {"mac": self.min_app_version_mac, "windows": self.min_app_version_windows,

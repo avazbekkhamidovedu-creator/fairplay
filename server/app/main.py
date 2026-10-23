@@ -58,15 +58,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.feature("scan"):
             from .routes_scan import sweep_forever
             sweeper = asyncio.get_running_loop().create_task(sweep_forever())
-        # DKU OJ bridge: sync + outbox loop (one worker at a time, see app.dkuoj.sync)
-        bridge = None
-        from .dkuoj import sync as dkuoj_sync
-        if settings.dkuoj_enabled and dkuoj_sync.BACKGROUND:
-            bridge = asyncio.get_running_loop().create_task(dkuoj_sync.run_forever(settings))
+        # integrations (app.integrations): their background loops while connected
+        from .integrations import registry as integrations
+        bridges = [asyncio.get_running_loop().create_task(task())
+                   for task in integrations.background_tasks(settings)]
         try:
             yield
         finally:
-            if bridge is not None:
+            for bridge in bridges:
                 bridge.cancel()
                 try:
                     await bridge
@@ -138,12 +137,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .site_check import router as site_check_router
     app.include_router(site_check_router)
     app.include_router(topics_router)
-    # DKU OJ bridge: /oj/live sign-in, status, answer files and statement assets
-    from .dkuoj.files import student_router as oj_files_student, teacher_router as oj_files_teacher
-    from .dkuoj.routes import router as dkuoj_router
-    app.include_router(dkuoj_router)
-    app.include_router(oj_files_student)
-    app.include_router(oj_files_teacher)
+    # integrations: live-room links, status, statement assets; file_upload answer files
+    from .answer_files import router as answer_files_router
+    from .integrations import registry as integration_registry
+    from .integrations.routes import router as integrations_router
+    integration_registry.configure(settings)
+    app.include_router(answer_files_router)
+    app.include_router(integrations_router)
+    for r in integration_registry.routers():
+        app.include_router(r)
     if settings.feature("scan"):
         from .routes_scan import router as scan_router  # slice 6 D: Scan & Grade (paper exams)
         app.include_router(scan_router)

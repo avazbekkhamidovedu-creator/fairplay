@@ -10,12 +10,12 @@ from .timeutil import iso, utcnow
 MB = 1024 * 1024
 SCAN_UPLOAD = re.compile(r"^/api/exams/[^/]+/scans$")
 MATERIAL_UPLOAD = re.compile(r"^/api/student/exams/[^/]+/materials$")
-ANSWER_FILE_UPLOAD = re.compile(r"^/api/student/attempts/[^/]+/files$")   # DKU OJ file answers
+ANSWER_FILE_UPLOAD = re.compile(r"^/api/student/attempts/[^/]+/files$")   # file_upload answers
 LIMITS = (                      # (path test, max body bytes); first match wins
     (lambda p: bool(SCAN_UPLOAD.match(p)), 210 * MB),   # routes_scan: 200 MB per upload
     (lambda p: p == "/api/uploads", 6 * MB),             # uploads: 5 MB images
     (lambda p: bool(MATERIAL_UPLOAD.match(p)), 21 * MB),  # 2026-10-23: open-book files, 20 MB in all
-    (lambda p: bool(ANSWER_FILE_UPLOAD.match(p)), 11 * MB),  # DKU OJ file_upload answers, 10 MB each
+    (lambda p: bool(ANSWER_FILE_UPLOAD.match(p)), 11 * MB),  # file_upload answers, 10 MB each
 )
 DEFAULT_LIMIT = 8 * MB          # answers, exams, everything else
 
