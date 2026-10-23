@@ -5,18 +5,21 @@
 //                             version: "<manifest version>" }
 // The page takes the app's copy only when its version is exactly the one this build was made
 // with (the pack is versioned by the hash of its files); otherwise, and for the rest of the
-// session after anything fails to load from the app, the server's copy at /app-assets/.
+// session after anything fails to load from the app, the server's copy at
+// /app-assets/v/<version>/.
 // See web/scripts/APP_ASSETS.md.
 
 declare const __FAIRPLAY_ASSETS_VERSION__: string | undefined;
 
-/** The server's copy of the pack (same files as the apps'). */
-export const SERVER_ASSET_BASE = "/app-assets/";
-/** The bases the apps use (Mac/iPad custom scheme, Windows WebView2 virtual host). */
-export const APP_ASSET_BASES: readonly string[] = ["fairplay-asset://bundle/", "https://fairplay-assets.example/"];
 /** The pack version this build expects ("dev" when not built through Vite). */
 export const EXPECTED_ASSETS_VERSION: string =
   typeof __FAIRPLAY_ASSETS_VERSION__ === "string" ? __FAIRPLAY_ASSETS_VERSION__ : "dev";
+/** The server's copy of the pack (same files as the apps'), under this build's pack version:
+ *  the server marks it immutable, and a release that upgrades Pyodide or pdf.js changes the
+ *  URL, so a cached old file is never mixed with new page code (0.6.2 review). */
+export const SERVER_ASSET_BASE = `/app-assets/v/${EXPECTED_ASSETS_VERSION}/`;
+/** The bases the apps use (Mac/iPad custom scheme, Windows WebView2 virtual host). */
+export const APP_ASSET_BASES: readonly string[] = ["fairplay-asset://bundle/", "https://fairplay-assets.example/"];
 
 const FAILED_KEY = "fairplay.appAssetsFailed";
 let failed = false;

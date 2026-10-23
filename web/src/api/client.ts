@@ -235,6 +235,11 @@ export async function request<T>(
     }
   }
 
+  // 0.6.2: 503 is the server's "busy, try again" (admission line full for 10 s) and 504 a proxy
+  // timeout: both mean "try again later", exactly like no network, so every caller's offline
+  // path (queued saves, heartbeat retries, start retries) handles them.
+  if (res.status === 503 || res.status === 504) throw new NetworkError("The server is busy, trying again");
+
   if (!res.ok) {
     if (res.status === 401 && role) {
       clearToken(role);

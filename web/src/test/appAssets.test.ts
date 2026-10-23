@@ -160,7 +160,7 @@ describe("Python runner", () => {
     const r = new PythonRunner();
     await r.prepare();
     expect(bases).toEqual([PYODIDE_BASE]);
-    expect(PYODIDE_BASE).toBe("/app-assets/pyodide/");
+    expect(PYODIDE_BASE).toBe(SERVER_ASSET_BASE + "pyodide/");
     r.dispose();
   });
 
@@ -175,12 +175,12 @@ describe("Python runner", () => {
     };
     const r = new PythonRunner();
     await r.prepare();
-    expect(bases).toEqual([`${MAC}pyodide/`, "/app-assets/pyodide/"]);
+    expect(bases).toEqual([`${MAC}pyodide/`, SERVER_ASSET_BASE + "pyodide/"]);
     expect(FakeWorker.made[0]?.terminated).toBe(true);
     // a fresh runner (grading makes one per answer) skips the app's copy now
     const r2 = new PythonRunner();
     await r2.prepare();
-    expect(bases[2]).toBe("/app-assets/pyodide/");
+    expect(bases[2]).toBe(SERVER_ASSET_BASE + "pyodide/");
     r.dispose();
     r2.dispose();
   });
@@ -215,7 +215,7 @@ describe("pdf.js worker", () => {
   it("the server's worker is started directly; ready resolves", async () => {
     const p = startPdfWorker(SERVER_ASSET_BASE);
     const wk = FakeWorker.made[0]!;
-    expect(String(wk.url)).toBe("/app-assets/pdfjs/pdf.worker.min.mjs");
+    expect(String(wk.url)).toBe(SERVER_ASSET_BASE + "pdfjs/pdf.worker.min.mjs");
     wk.emit({ sourceName: "worker", targetName: "main", action: "ready", data: null });
     await expect(p).resolves.toBe(wk);
   });

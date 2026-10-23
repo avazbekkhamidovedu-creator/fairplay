@@ -161,6 +161,30 @@ import Foundation
 
     // MARK: types and headers
 
+    /// 0.6.2 review: only the files manifest.json lists are served.
+    @Test func onlyManifestFilesAreServed() throws {
+        let (root, base) = try makePack()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let listed: Set<String> = ["a.js"]
+        if case .file(let f, _, _) = AssetPack.reply(method: "GET", url: url("fairplay-asset://bundle/a.js"), root: root, allowed: listed) {
+            #expect(f.lastPathComponent == "a.js")
+        } else {
+            Issue.record("a listed file is served")
+        }
+        // on disk but not listed
+        #expect(AssetPack.reply(method: "GET", url: url("fairplay-asset://bundle/sub/b.wasm"), root: root, allowed: listed) == .notFound)
+        #expect(AssetPack.reply(method: "GET", url: url("fairplay-asset://bundle/inside.js"), root: root, allowed: listed) == .notFound)
+        // an empty list serves nothing
+        #expect(AssetPack.reply(method: "GET", url: url("fairplay-asset://bundle/a.js"), root: root, allowed: []) == .notFound)
+    }
+
+    @Test func manifestFileLists() {
+        let json = #"{"version": "v1", "files": {"a.js": "00", "sub/b.wasm": "11", "../x": "22", ".hidden": "33"}}"#
+        #expect(AssetPack.manifestFiles(Data(json.utf8)) == ["a.js", "sub/b.wasm"])
+        #expect(AssetPack.manifestFiles(Data(#"{"version": "v1"}"#.utf8)) == nil)
+        #expect(AssetPack.manifestFiles(Data("not json".utf8)) == nil)
+    }
+
     @Test func mimeTypes() {
         #expect(AssetPack.mimeType(forPath: "pyodide/pyodide.js") == "text/javascript")
         #expect(AssetPack.mimeType(forPath: "pyodide/pyodide.mjs") == "text/javascript")

@@ -27,7 +27,7 @@ from .services import (LIVE_TTL, attempt_key, attempt_meta_from, attempt_view, c
                        new_receipt, new_session_id, student_tools, code_language,
                        exam_default_language)
 from .store import get_store
-from .timeutil import iso, utcnow
+from .timeutil import arrived_at, iso, utcnow
 
 router = APIRouter(prefix="/api/student", tags=["student"])
 
@@ -335,7 +335,7 @@ async def get_attempt(aid: str, request: Request, p: Principal = Depends(require
 async def save_answers(aid: str, body: AnswersIn, request: Request,
                        p: Principal = Depends(require_student),
                        session: AsyncSession = Depends(get_session)):
-    now = utcnow()
+    now = arrived_at(request)          # 0.6.2 review: time in the admission line is not late
     store = get_store()
     # perf 0.6.2: the rate counter and the attempt's cached metadata in one round trip
     n, raw_meta = await store.batch([("incr", f"ansrate:{aid}", 60), ("get", attempt_key(aid))])
@@ -533,7 +533,7 @@ async def submit(aid: str, body: AnswersIn, request: Request,
     for _ in range(SUBMIT_RETRIES):
         if a.status == "submitted":
             break
-        now = utcnow()
+        now = arrived_at(request)      # 0.6.2 review: time in the admission line is not late
         late = now > a.deadline_at + LATE_GRACE
         stored = a.answers or {}
         seen_seq = a.client_seq

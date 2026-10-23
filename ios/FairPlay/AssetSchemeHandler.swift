@@ -20,6 +20,14 @@ enum BundledAssets {
         else { return nil }
         return AssetPack.manifestVersion(data)
     }()
+
+    /// The files the manifest lists: the only ones served (0.6.2 review). A pack whose
+    /// manifest has no usable list serves nothing (the page then uses the server's copy).
+    static let files: Set<String>? = {
+        guard let root else { return nil }
+        guard let data = try? Data(contentsOf: root.appendingPathComponent(AssetPack.manifestName)) else { return [] }
+        return AssetPack.manifestFiles(data) ?? []
+    }()
 }
 
 /// Tasks WebKit has started and not stopped. Checked on the main queue right before every
@@ -38,12 +46,14 @@ final class AssetTaskRegistry: @unchecked Sendable {
 /// navigation delegate. Files are read off the main thread in chunks.
 final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
     private let root: URL?
+    private let allowed: Set<String>?
     private let registry = AssetTaskRegistry()
     private static let readQueue = DispatchQueue(label: "fairplay.assets.read", qos: .userInitiated)
     private static let chunkSize = 512 * 1024
 
-    init(root: URL? = BundledAssets.root) {
+    init(root: URL? = BundledAssets.root, allowed: Set<String>? = BundledAssets.files) {
         self.root = root
+        self.allowed = allowed
         super.init()
     }
 
@@ -57,7 +67,7 @@ final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
             task.didFailWithError(URLError(.badURL))
             return
         }
-        switch AssetPack.reply(method: task.request.httpMethod, url: url, root: root) {
+        switch AssetPack.reply(method: task.request.httpMethod, url: url, root: root, allowed: allowed) {
         case .preflight:
             finish(task, id: id, url: url, status: 204, headers: AssetPack.preflightHeaders)
         case .methodNotAllowed:

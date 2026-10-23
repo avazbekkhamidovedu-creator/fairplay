@@ -125,8 +125,22 @@ async def _current_user(uid: int) -> tuple[str, int] | None:
         row = (await s.execute(select(User.role, User.token_version).where(User.id == uid))).first()
     if row is None:
         return None
-    await store.set(f"tv:{uid}", f"{row.role}:{int(row.token_version or 0)}", USER_CACHE_TTL_S)
+    # 0.6.2 review: only fill an EMPTY entry. A sign-out that ran after the read above has
+    # already written the new version (remember_user); writing back the old one would let a
+    # signed-out token keep working for USER_CACHE_TTL_S.
+    if not await store.setnx(f"tv:{uid}", f"{row.role}:{int(row.token_version or 0)}", USER_CACHE_TTL_S):
+        raw = await store.get(f"tv:{uid}")
+        if raw:
+            role, _, ver = raw.partition(":")
+            return role, int(ver)
     return row.role, int(row.token_version or 0)
+
+
+async def remember_user(uid: int, role: str, token_version: int) -> None:
+    """After a token-version change: put the NEW version in the cache (overwrites), so a
+    concurrent cache fill can't bring the old one back (0.6.2 review)."""
+    from .store import get_store
+    await get_store().set(f"tv:{uid}", f"{role}:{int(token_version)}", USER_CACHE_TTL_S)
 
 
 async def forget_user_cache(uid: int) -> None:

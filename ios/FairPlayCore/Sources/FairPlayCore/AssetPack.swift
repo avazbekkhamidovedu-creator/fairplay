@@ -77,12 +77,15 @@ public enum AssetPack {
     }
 
     /// The answer to `method url` with the pack at `root` (nil: no pack in this build).
-    public static func reply(method: String?, url: URL?, root: URL?) -> Reply {
+    /// `allowed`: the files manifest.json lists (0.6.2 review: only those are served, like
+    /// the Windows app; nil only in tests that check path handling alone).
+    public static func reply(method: String?, url: URL?, root: URL?, allowed: Set<String>? = nil) -> Reply {
         let m = (method ?? "GET").uppercased()
         if m == "OPTIONS" { return .preflight }
         guard m == "GET" || m == "HEAD" else { return .methodNotAllowed }
-        guard let url, let root, let rel = relativePath(for: url),
-              let file = fileURL(forRelativePath: rel, root: root) else { return .notFound }
+        guard let url, let root, let rel = relativePath(for: url) else { return .notFound }
+        if let allowed, !allowed.contains(rel) { return .notFound }
+        guard let file = fileURL(forRelativePath: rel, root: root) else { return .notFound }
         return .file(file, mime: mimeType(forPath: rel), bodyless: m == "HEAD")
     }
 
@@ -138,6 +141,14 @@ public enum AssetPack {
         let trimmed = v.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 128 else { return nil }
         return trimmed
+    }
+
+    /// The files manifest.json lists ("files": {"path": "sha256"}), keeping only plain
+    /// relative paths. nil when the manifest has no file list.
+    public static func manifestFiles(_ data: Data) -> Set<String>? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data),
+              let dict = obj as? [String: Any], let files = dict["files"] as? [String: Any] else { return nil }
+        return Set(files.keys.compactMap { safeRelativePath($0) == $0 ? $0 : nil })
     }
 
     // MARK: - Page script

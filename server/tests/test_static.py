@@ -10,7 +10,8 @@ def test_spa_fallback_and_files(client):
     r = client.get("/assets/app.js")
     assert r.status_code == 200 and "console.log" in r.text
     r = client.get("/assets/missing.js")
-    assert r.status_code == 200 and "SPA" in r.text  # SPA fallback
+    # 0.6.2 review: a missing script is a 404, not the page served as JavaScript
+    assert r.status_code == 404 and "SPA" not in r.text
     r = client.get("/../../etc/passwd")
     assert "root:" not in r.text
 

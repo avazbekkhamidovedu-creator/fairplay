@@ -62,6 +62,16 @@ for rel, want in sorted(files.items()):
         errors.append("sha256 differs: " + rel)
         continue
     total += os.path.getsize(path)
+# 0.6.2 review: nothing in the pack that the manifest does not list (the apps serve only
+# listed files anyway; an extra file means the pack was changed by hand).
+listed = set(files) | {"manifest.json"}
+for dirpath, dirnames, filenames in os.walk(root):
+    for name in filenames:
+        if name == ".DS_Store":       # Finder's; copy_into deletes it from the app copy
+            continue
+        rel = os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/")
+        if rel not in listed:
+            errors.append("not in the manifest: " + rel)
 if errors:
     more = " (+%d more)" % (len(errors) - 10) if len(errors) > 10 else ""
     print("error: asset pack %s: %s%s" % (root, "; ".join(errors[:10]), more), file=sys.stderr)

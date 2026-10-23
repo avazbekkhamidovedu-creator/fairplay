@@ -92,12 +92,18 @@ async def logout_everywhere(p: Principal = Depends(current_principal),
 
 
 async def bump_token_version(session: AsyncSession, user_id: int) -> None:
-    from sqlalchemy import update
-    from .security import forget_user_cache
+    from sqlalchemy import select, update
+    from .security import forget_user_cache, remember_user
     await session.execute(update(User).where(User.id == user_id)
                           .values(token_version=User.token_version + 1))
     await session.commit()
-    await forget_user_cache(user_id)
+    # 0.6.2 review: write the new version into the cache instead of only deleting the entry
+    # (a request that read the old version just before could otherwise cache it again).
+    row = (await session.execute(select(User.role, User.token_version).where(User.id == user_id))).first()
+    if row is None:
+        await forget_user_cache(user_id)
+    else:
+        await remember_user(user_id, row.role, int(row.token_version or 0))
 
 
 @router.get("/me")

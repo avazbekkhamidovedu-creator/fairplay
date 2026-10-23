@@ -116,7 +116,8 @@ export function appAssets() {
     },
     configureServer(server) {
       server.middlewares.use("/app-assets/", (req, res, next) => {
-        const name = decodeURIComponent((req.url ?? "").split("?")[0].replace(/^\//, ""));
+        // the page asks for /app-assets/v/<version>/<file> (the server's immutable URL)
+        const name = decodeURIComponent((req.url ?? "").split("?")[0].replace(/^\//, "").replace(/^v\/[^/]+\//, ""));
         const { sources, manifest } = current();
         if (name === "manifest.json") {
           res.setHeader("Content-Type", "application/json");

@@ -126,3 +126,10 @@ python3 loadtest/loadtest.py --base http://127.0.0.1:8100 --students 5000 --exam
 - TLS was not in the test (nginx terminates it; budget ~1 extra vCPU per school for TLS at 2,250 req/s with keep-alive). Postgres used TLS locally, which slightly inflates the database-path numbers.
 - Redis is a single point and single-threaded: one Redis per ~3 schools; it holds live state only (answers are in Postgres), but if it is lost mid-exam the live room is empty until the next beats and one-time nonces must be fetched again.
 - The real apps' beat timers keep firing during a slowdown (the test clients wait); with too little CPU real clients would build a longer queue than in run B.
+
+## 0.6.2: legacy static paths (remove in 0.6.3)
+`server/static/pyodide/`, `server/static/pdfjs/` and the 0.6.1 hashed files in `server/static/assets/`
+are kept for one release, so exam pages opened before the 0.6.2 deploy still lazy-load. The
+asset pack is now served at `/app-assets/v/<version>/` (immutable). A fresh `npm run build`
+copied into `server/static` drops them; restore them with
+`git checkout v0.6.1 -- server/static/pyodide server/static/pdfjs server/static/assets` until 0.6.3.

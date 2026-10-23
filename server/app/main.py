@@ -27,7 +27,7 @@ from .routes_teacher import router as teacher_router
 from .trial import refresh_trial_cache, router as trial_router
 from .seed import refuse_public_demo_logins, seed, seed_demo_class
 from .routes_classes import student_router as classes_student_router, teacher_router as classes_teacher_router
-from .static_files import StaticCache, serve as serve_static
+from .static_files import ASSET_DIRS, StaticCache, serve as serve_static, versioned_asset
 from .store import make_store, set_store
 from .timeutil import iso, utcnow
 
@@ -166,11 +166,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str, request: Request):
+        # 0.6.2 review: the pack is requested as /app-assets/v/<version>/<file>; immutable when
+        # <version> is the pack on disk, so a release that upgrades Pyodide or pdf.js never
+        # mixes a cached old file with new page code (static_files.versioned_asset).
+        cache_override = None
+        versioned = versioned_asset(path, static_root)
+        if versioned is not None:
+            path, cache_override = versioned
         candidate = os.path.realpath(os.path.join(static_root, path))
         if (candidate.startswith(static_root + os.sep) and os.path.isfile(candidate)):
             # 2026-10-23: .mjs (pdf.js worker) and .wasm (Pyodide) get their own types
             return await serve_static(request, candidate, os.path.relpath(candidate, static_root),
-                                      static_cache, is_index=candidate == os.path.join(static_root, "index.html"))
+                                      static_cache, is_index=candidate == os.path.join(static_root, "index.html"),
+                                      cache_override=cache_override)
+        if path.split("/", 1)[0] in ASSET_DIRS:
+            # a missing script or pack file is a 404, never the app's HTML page
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         index = os.path.join(static_root, "index.html")
         if os.path.isfile(index):
             return await serve_static(request, index, "index.html", static_cache, is_index=True)

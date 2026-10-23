@@ -8,7 +8,12 @@ no Cache-Control, and no 304 for If-None-Match. Now:
               so a laptop that has them never asks again
   index.html  "no-cache": always revalidated (a new release is picked up at once), 304
               when unchanged
-  the rest    (favicon, /app-assets/, pdfjs, pyodide) one hour, then revalidated (ETag)
+  /app-assets/v/<version>/*   the asset pack (Pyodide, pdf.js) under the pack's version:
+              immutable when <version> is the pack on disk, revalidated otherwise
+              (0.6.2 review: a fixed name kept for an hour could pair an old pdf.js worker
+              or Pyodide file with new page code after an upgrade)
+  /app-assets/*, /pyodide/*, /pdfjs/* (unversioned, older pages): revalidated (ETag)
+  the rest    (favicon) one hour, then revalidated (ETag)
 
 Text files (JavaScript, CSS, HTML, JSON, SVG, WebAssembly, fonts without their own
 compression) are sent gzip-compressed when the client accepts it: a precompressed
@@ -49,12 +54,49 @@ def media_type(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 
+# Folders of scripts and data: a missing file there is a 404, not the app's page.
+ASSET_DIRS = {"assets", "app-assets", "pyodide", "pdfjs"}
+
+
 def cache_control(rel_path: str, is_index: bool) -> str:
     if is_index:
         return REVALIDATE
     if rel_path.startswith("assets/"):
         return IMMUTABLE
+    if rel_path.split("/", 1)[0] in ASSET_DIRS:
+        return REVALIDATE
     return HOURLY
+
+
+_pack_version: tuple[int, str] | None = None
+
+
+def pack_version(static_root: str) -> str:
+    """The version in static/app-assets/manifest.json (re-read when the file changes)."""
+    global _pack_version
+    path = os.path.join(static_root, "app-assets", "manifest.json")
+    try:
+        mtime = os.stat(path).st_mtime_ns
+    except OSError:
+        return ""
+    if _pack_version is None or _pack_version[0] != mtime:
+        import json
+        try:
+            with open(path, encoding="utf-8") as f:
+                version = str(json.load(f).get("version", ""))
+        except (OSError, ValueError, AttributeError):
+            version = ""
+        _pack_version = (mtime, version)
+    return _pack_version[1]
+
+
+def versioned_asset(path: str, static_root: str) -> tuple[str, str] | None:
+    """"app-assets/v/<version>/<file>" -> ("app-assets/<file>", cache-control), else None."""
+    parts = path.split("/", 3)
+    if len(parts) != 4 or parts[0] != "app-assets" or parts[1] != "v" or not parts[2] or not parts[3]:
+        return None
+    current = pack_version(static_root)
+    return "app-assets/" + parts[3], (IMMUTABLE if current and parts[2] == current else REVALIDATE)
 
 
 class _Compressed:
@@ -129,11 +171,11 @@ def _not_modified(request: Request, etags: list[str], st: os.stat_result) -> boo
 
 
 async def serve(request: Request, path: str, rel_path: str, cache: StaticCache,
-                is_index: bool = False) -> Response:
+                is_index: bool = False, cache_override: str | None = None) -> Response:
     """A file from the static directory with caching headers (see the module doc)."""
     st = os.stat(path)
     ctype = media_type(path)
-    headers = {"Cache-Control": cache_control(rel_path, is_index),
+    headers = {"Cache-Control": cache_override or cache_control(rel_path, is_index),
                "Last-Modified": formatdate(st.st_mtime, usegmt=True)}
     ext = os.path.splitext(path)[1].lower()
     compressible = ext in COMPRESSIBLE and MIN_COMPRESS_BYTES <= st.st_size <= MAX_COMPRESS_BYTES

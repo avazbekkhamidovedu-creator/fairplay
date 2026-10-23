@@ -103,9 +103,12 @@ def test_index_is_revalidated_and_other_files_cached_an_hour(tmp_path, big_stati
     assert w.headers["content-type"] == "application/wasm" and w.content.startswith(b"\0asm")
     m = client.get("/pyodide/pyodide.mjs")
     assert m.headers["content-type"].startswith("text/javascript")
-    # a missing hashed asset still falls back to the page, never cached as immutable
+    # 0.6.2 review: a missing script or pack file is a 404, never the page (and never cached)
     miss = client.get("/assets/missing-zzz.js")
-    assert "SPA" in miss.text and miss.headers["cache-control"] == "no-cache"
+    assert miss.status_code == 404 and "SPA" not in miss.text
+    assert client.get("/app-assets/v/x/pyodide/nope.mjs").status_code == 404
+    # unversioned pack paths (older pages) are revalidated, not kept for an hour
+    assert m.headers["cache-control"] == "no-cache"
 
 
 def test_precompressed_sidecar_is_used(tmp_path, big_static, client):
@@ -249,3 +252,129 @@ def test_admission_limit_queues_instead_of_failing():
         return free_peak, peak, len(done)
     limited_peak, exempt_peak, n = run(go())
     assert limited_peak == 3 and exempt_peak == 12 and n == 32
+
+
+# ---------------------------------------------------------------- 0.6.2 review fixes
+def test_pack_is_served_under_its_version(tmp_path, static_dir, client):
+    """Finding 1: /app-assets/v/<version>/ is immutable for the pack on disk; any other
+    version (or no version) is revalidated, so an upgrade never mixes old and new files."""
+    import json
+    pack = static_dir / "app-assets"
+    (pack / "pdfjs").mkdir(parents=True)
+    (pack / "pdfjs" / "pdf.worker.min.mjs").write_text("export const worker = 1;\n" * 200)
+    (pack / "manifest.json").write_text(json.dumps({"version": "abc123", "files": {"pdfjs/pdf.worker.min.mjs": "00"}}))
+    r = client.get("/app-assets/v/abc123/pdfjs/pdf.worker.min.mjs")
+    assert r.status_code == 200 and r.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert r.headers["content-type"].startswith("text/javascript") and "worker" in r.text
+    old = client.get("/app-assets/v/0ld/pdfjs/pdf.worker.min.mjs")
+    assert old.status_code == 200 and old.headers["cache-control"] == "no-cache"
+    plain = client.get("/app-assets/pdfjs/pdf.worker.min.mjs")
+    assert plain.status_code == 200 and plain.headers["cache-control"] == "no-cache"
+    # a new pack on disk: the old version's URL is no longer immutable
+    (pack / "manifest.json").write_text(json.dumps({"version": "def456", "files": {}}))
+    os.utime(pack / "manifest.json", (os.stat(pack / "manifest.json").st_mtime + 5,) * 2)
+    assert client.get("/app-assets/v/abc123/pdfjs/pdf.worker.min.mjs").headers["cache-control"] == "no-cache"
+    assert "root:" not in client.get("/app-assets/v/abc123/..%2F..%2F..%2Fetc%2Fpasswd").text
+
+
+def test_arrival_time_is_recorded_before_the_line():
+    """Finding 2: the time a request arrived, before it waited for a slot."""
+    import time as _time
+    from app.admission import AdmissionLimit
+    from app.timeutil import arrived_at
+
+    class Req:
+        def __init__(self, scope):
+            self.scope = scope
+
+    async def go():
+        seen = {}
+
+        async def app(scope, receive, send):
+            await asyncio.sleep(0.2)
+            seen[scope["path"]] = (arrived_at(Req(scope)), _time.time())
+
+        gate = AdmissionLimit(app, limit=1)
+        t0 = _time.time()
+        await asyncio.gather(*(gate({"type": "http", "path": f"/api/x{i}", "method": "GET"}, None, None)
+                               for i in range(3)))
+        return t0, seen
+    t0, seen = run(go())
+    from datetime import timezone
+    for arrived, _ran in seen.values():          # all three arrived at the start...
+        assert abs(arrived.replace(tzinfo=timezone.utc).timestamp() - t0) < 0.15
+    # ...and the last one ran ~0.4 s later, after waiting in line
+    last = max(seen.values(), key=lambda v: v[1])
+    assert last[1] - last[0].replace(tzinfo=timezone.utc).timestamp() > 0.35
+
+
+def test_saves_and_hand_ins_have_their_own_lane_and_others_time_out():
+    """Findings 2 and 3: saves/hand-ins never wait behind other requests; others wait at
+    most wait_s for a slot and then get 503 + Retry-After."""
+    from app.admission import AdmissionLimit, is_priority
+
+    assert is_priority("/api/student/attempts/a_1/submit", "POST")
+    assert is_priority("/api/student/attempts/a_1/answers", "PUT")
+    assert is_priority("/api/student/attempts/a_1/sealed-submit", "POST")
+    assert not is_priority("/api/student/attempts/a_1/answers", "GET")
+    assert not is_priority("/api/student/attempts/a_1/heartbeat", "POST")
+
+    async def go():
+        release = asyncio.Event()
+        ran, sent = [], []
+
+        async def app(scope, receive, send):
+            ran.append(scope["path"])
+            if scope["path"].endswith("/slow"):
+                await release.wait()
+
+        async def send(msg):
+            sent.append(msg)
+
+        gate = AdmissionLimit(app, limit=1, wait_s=0.2)
+        slow = asyncio.create_task(gate({"type": "http", "path": "/api/x/slow", "method": "GET"}, None, send))
+        await asyncio.sleep(0.05)
+        # the only slot is taken: a hand-in still goes through its own lane
+        await gate({"type": "http", "path": "/api/student/attempts/a_1/submit", "method": "POST"}, None, send)
+        # a heartbeat waits 0.2 s and is refused with 503
+        await gate({"type": "http", "path": "/api/student/attempts/a_1/heartbeat", "method": "POST"}, None, send)
+        release.set()
+        await slow
+        return ran, sent
+    ran, sent = run(go())
+    assert "/api/student/attempts/a_1/submit" in ran
+    assert "/api/student/attempts/a_1/heartbeat" not in ran
+    start = [m for m in sent if m["type"] == "http.response.start"]
+    assert start and start[0]["status"] == 503
+    assert (b"retry-after", b"3") in start[0]["headers"]
+
+
+def test_late_hand_in_judged_by_arrival(monkeypatch):
+    """Finding 2, end to end: a hand-in that arrived in time is in time even if it ran later."""
+    from datetime import timedelta
+    from app import timeutil
+    t = timeutil.utcnow()
+
+    class Req:
+        scope = {"state": {"fairplay_arrived": (t - timedelta(seconds=90)).replace(
+            tzinfo=__import__("datetime").timezone.utc).timestamp()}}
+    assert (t - timeutil.arrived_at(Req())).total_seconds() > 85
+    class NoState:
+        scope = {}
+    assert abs((timeutil.arrived_at(NoState()) - timeutil.utcnow()).total_seconds()) < 1
+
+
+def test_sign_out_wins_over_a_concurrent_cache_fill(store, monkeypatch):
+    """Finding 4: a cache fill that read the OLD token version before a sign-out must not
+    write it back after the sign-out cached the new one."""
+    from app import security
+    monkeypatch.setattr("app.store.get_store", lambda: store)
+
+    async def go():
+        # sign-out ran: new version 8 in the cache
+        await security.remember_user(42, "student", 8)
+        # a request that read version 7 from the database just before now tries to cache it
+        ok = await store.setnx("tv:42", "student:7", security.USER_CACHE_TTL_S)
+        return ok, await store.get("tv:42")
+    ok, raw = run(go())
+    assert ok is False and raw == "student:8"
