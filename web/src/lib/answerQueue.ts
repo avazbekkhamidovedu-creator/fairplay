@@ -80,7 +80,7 @@ export function readStoredAttempt(
   }
 }
 
-/** DKU OJ answers are lists and {language, source}: compare by value. */
+/** Some answers are lists and {language, source}: compare by value. */
 function sameValue(x: AnswerValue | undefined, y: AnswerValue | undefined): boolean {
   if (x === y) return true;
   if (typeof x !== "object" || typeof y !== "object" || x === null || y === null) return false;

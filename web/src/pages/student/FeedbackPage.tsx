@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, NetworkError, studentApi } from "../../api/client";
 import type { StudentFeedback } from "../../api/types";
-import { FeedbackQuestionCard, OjFeedbackQuestionCard } from "../../components/student/FeedbackQuestion";
+import { FeedbackQuestionCard, ExternalFeedbackQuestionCard } from "../../components/student/FeedbackQuestion";
 import { fmtNum, fmtPercent, shortDate } from "../../components/student/format";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 
@@ -65,6 +65,8 @@ export default function FeedbackPage() {
 function Feedback({ data }: { data: StudentFeedback }) {
   const eyebrow = [data.course, "Exam", shortDate(data.submitted_at)].filter(Boolean).join(" · ");
   const questions = [...data.questions].sort((a, b) => a.index - b.index);
+  // graded in another system: its points and its feedback
+  const external = !!data.source && data.source !== "fairplay";
   return (
     <>
       <section className="stu-fb-head" aria-labelledby="fb-h">
@@ -95,14 +97,14 @@ function Feedback({ data }: { data: StudentFeedback }) {
           </span>
         </div>
       </section>
-      {data.source === "dkuoj" && (
-        <p className="stu-small stu-muted" style={{ margin: 0 }} data-testid="oj-graded-note">
-          Graded in DKU OJ.
+      {external && (
+        <p className="stu-small stu-muted" style={{ margin: 0 }} data-testid="external-graded-note">
+          Graded in {data.external_name || "another system"}.
         </p>
       )}
       {questions.map((q) =>
-        data.source === "dkuoj" ? (
-          <OjFeedbackQuestionCard key={q.question_id} q={q} />
+        external ? (
+          <ExternalFeedbackQuestionCard key={q.question_id} q={q} />
         ) : (
           <FeedbackQuestionCard key={q.question_id} q={q} />
         ),

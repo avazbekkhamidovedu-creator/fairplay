@@ -1,7 +1,7 @@
-// DKU OJ bridge: answer types of DKU OJ questions (multiple answers, true/false, fill in
+// The newer question types (multiple answers, true/false, fill in
 // the blank, file upload, coding with several languages) save and restore through the
 // answer queue; the language picker and "runs after you hand in"; points on the question;
-// the teacher's read-only / graded-in-DKU-OJ views; released DKU OJ results for students.
+// the teacher's read-only / graded-elsewhere views; released external results for students.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -26,20 +26,20 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     studentApi: { ...actual.studentApi, ...api.student },
     teacherApi: { ...actual.teacherApi, ...api.teacher },
-    ojApi: { ...actual.ojApi, ...api.oj },
+    contentApi: { ...actual.contentApi, ...api.oj },
   };
 });
 
 import { NetworkError, setToken } from "../api/client";
 import { AnswerInput } from "../components/student/AnswerInput";
 import { CodeQuestion, RUNS_AFTER_HAND_IN } from "../components/student/CodeQuestion";
-import { FileUploadInput, FillBlankQuestion } from "../components/student/OjAnswers";
-import { EDIT_IN_OJ, GRADED_IN_OJ } from "../components/teacher/OjNotices";
+import { FileUploadInput, FillBlankQuestion } from "../components/student/QuestionInputs";
+import { editIn, gradedIn } from "../components/teacher/ExternalSource";
 import { AnswerQueue } from "../lib/answerQueue";
 import * as bridge from "../lib/bridge";
 import type { RunResult, Runner } from "../lib/code/runner";
 import { setRunnerForTests } from "../lib/code/runners";
-import { codeDrafts, fileProblem, rememberUpload } from "../lib/ojAnswers";
+import { codeDrafts, fileProblem, rememberUpload } from "../lib/answerTypes";
 import { clearExamDataOnSignOut } from "../lib/offline";
 import ExamTakingPage from "../pages/student/ExamTakingPage";
 import FeedbackPage from "../pages/student/FeedbackPage";
@@ -59,7 +59,7 @@ afterEach(() => {
 });
 
 const sq = (over: Partial<StudentQuestion>): StudentQuestion =>
-  ({ id: "q1", type: "mcq", prompt: "Pick", points: 10, options: [], prompt_format: "oj_md", ...over }) as StudentQuestion;
+  ({ id: "q1", type: "mcq", prompt: "Pick", points: 10, options: [], prompt_format: "markdown", ...over }) as StudentQuestion;
 
 /** Renders an answer control with its value kept like the exam page does. */
 function Harness({ q, initial, kind }: { q: StudentQuestion; initial?: AnswerValue; kind: "input" | "fill" }) {
@@ -82,7 +82,7 @@ const shown = () => screen.getByTestId("value").textContent;
 
 // ---------------------------------------------------------------- answer queue
 
-describe("answer queue with DKU OJ answers", () => {
+describe("answer queue with the newer answers", () => {
   const values: Record<string, AnswerValue> = {
     multi: [0, 2],
     tf: 1,
@@ -248,6 +248,18 @@ describe("file upload", () => {
     expect(screen.getByRole("button", { name: "Choose a file" })).toBeInTheDocument();
   });
 
+  it("takes exactly one file: never more than one id, no second picker", async () => {
+    rememberUpload("a_9", { id: "up_a", name: "a.pdf", size: 10 });
+    const upload = vi.fn(async (f: File) => ({ id: "up_new", name: f.name, size: f.size }));
+    render(<Up upload={upload} initial={["up_a", "up_b"]} />);
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /Choose a file|Add another/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    pick(file("b.pdf", 10));
+    expect(await screen.findByText("b.pdf")).toBeInTheDocument();
+    expect(shown()).toBe('["up_new"]');
+  });
+
   it("restores the file name after a reload and explains an offline upload", async () => {
     rememberUpload("a_9", { id: "up_7", name: "scan.pdf", size: 900 });
     const upload = vi.fn().mockRejectedValue(new NetworkError());
@@ -342,14 +354,14 @@ describe("coding question with several languages", () => {
     rememberUpload("a_5", { id: "up_1", name: "x.pdf", size: 1 });
     localStorage.setItem("fairplay:code-drafts:a_5", JSON.stringify({ q5: { PY3: "x" } }));
     clearExamDataOnSignOut();
-    expect(localStorage.getItem("fairplay:oj-files:a_5")).toBeNull();
+    expect(localStorage.getItem("fairplay:answer-files:a_5")).toBeNull();
     expect(localStorage.getItem("fairplay:code-drafts:a_5")).toBeNull();
   });
 });
 
 // ---------------------------------------------------------------- exam page
 
-describe("exam page with a DKU OJ exam", () => {
+describe("exam page with an external exam", () => {
   const now = Date.now();
   const view = (answers: AnswerMap = {}): AttemptView =>
     ({
@@ -360,7 +372,8 @@ describe("exam page with a DKU OJ exam", () => {
       started_at: new Date(now - 60_000).toISOString(),
       deadline_at: new Date(now + 90 * 60_000).toISOString(),
       server_time: new Date(now).toISOString(),
-      source: "dkuoj",
+      source: "campusjudge",
+      external_name: "Campus Judge",
       questions: [
         sq({ id: "p000125", type: "fill_blank", label: "Q2", title: "Fill", points: 6, partial: true, prompt: "A ___ maps keys.", blanks: 1 }),
         sq({ id: "p000123", type: "mcq", label: "Q1", points: 10, prompt: "See ![cell](fp-asset:cell.png) ~O(1)~", options: ["Array", "Hash table"] }),
@@ -419,7 +432,7 @@ describe("exam page with a DKU OJ exam", () => {
 
 // ---------------------------------------------------------------- teacher
 
-const ojExam = (over: Partial<Exam> = {}): Exam =>
+const richExam = (over: Partial<Exam> = {}): Exam =>
   ({
     id: "e_1",
     title: "CS 101 Midterm",
@@ -429,7 +442,7 @@ const ojExam = (over: Partial<Exam> = {}): Exam =>
     questions: [
       { id: "p1", type: "mcq", prompt: "Which is **O(1)**?", points: 10, options: ["Array", "Hash table"], correct_index: null,
         answer_number: null, tolerance: null, accepted_answers: [], rubric: [], min_words: null, max_words: null,
-        prompt_format: "oj_md", label: "Q1", title: "Hash maps", partial: false },
+        prompt_format: "markdown", label: "Q1", title: "Hash maps", partial: false },
     ],
     created_at: "2026-11-20T09:14:00Z",
     question_count: 1,
@@ -442,8 +455,7 @@ const ojExam = (over: Partial<Exam> = {}): Exam =>
     released_at: null,
     closed_at: null,
     pending_grading: 0,
-    source: "dkuoj",
-    oj_url: "https://oj.example.edu/contest/cs101a-midterm",
+    external: { source: "campusjudge", name: "Campus Judge", url: "https://judge.example.edu/contest/cs101a-midterm", read_only: true, graded_externally: true, package_ready: true },
     ...over,
   }) as Exam;
 
@@ -458,62 +470,72 @@ function renderTeacher(path: string, route: string, el: JSX.Element) {
   );
 }
 
-describe("teacher views of a DKU OJ exam", () => {
-  it("the editor is read-only with the Edit in DKU OJ banner and link", async () => {
-    api.teacher.getExam.mockResolvedValue(ojExam());
+describe("teacher views of an external exam", () => {
+  it("the editor is read-only with the Edit in <name> banner and link", async () => {
+    api.teacher.getExam.mockResolvedValue(richExam());
     renderTeacher("/teacher/exams/e_1/edit", "/teacher/exams/:id/edit", <ExamSetupPage />);
-    const banner = await screen.findByTestId("oj-edit-banner");
-    expect(banner).toHaveTextContent(EDIT_IN_OJ);
-    expect(within(banner).getByRole("link", { name: "Open in DKU OJ" })).toHaveAttribute("href", "https://oj.example.edu/contest/cs101a-midterm");
+    const banner = await screen.findByTestId("external-edit-banner");
+    expect(banner).toHaveTextContent(editIn("Campus Judge"));
+    expect(within(banner).getByRole("link", { name: "Open in Campus Judge" })).toHaveAttribute("href", "https://judge.example.edu/contest/cs101a-midterm");
     expect(screen.queryByRole("form", { name: "Exam setup" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Edit questions" })).toBeNull();
     expect(screen.getByText("O(1)").tagName).toBe("STRONG");     // markdown prompt
     expect(screen.getByText(/partial|10 pts/)).toBeInTheDocument();
   });
 
-  it("the exam page has no Edit or Delete, shows the banner, and the results say Graded in DKU OJ", async () => {
-    api.teacher.getExam.mockResolvedValue(ojExam({ status: "closed" }));
+  it("the exam page has no Edit or Delete, shows the banner, and the results say Graded in <name>", async () => {
+    api.teacher.getExam.mockResolvedValue(richExam({ status: "closed" }));
     api.teacher.results.mockResolvedValue({
       exam_id: "e_1", title: "CS 101 Midterm", course: "CS 101", total_points: 10, average_percent: null, median_percent: null,
       grades_released: false, released_at: null, pending_grading: 0, submitted_count: 1, attempt_count: 1, flags_total: 0,
-      flags_open: 0, score_buckets: [], questions: [], source: "dkuoj",
+      flags_open: 0, score_buckets: [], questions: [], external: { source: "campusjudge", name: "Campus Judge", url: "https://judge.example.edu/contest/cs101a-midterm", read_only: true, graded_externally: true, package_ready: true },
       attempts: [{ attempt_id: "a_1", username: "ax19", name: "Avazbek K", status: "submitted", auto_submitted: false, score: null,
         total_points: 10, percent: null, submitted_at: "2026-11-27T02:00:00Z", receipt: "K7Q2-M9XD", answers: [], events: [],
-        needs_grading: 0, overall_comment: "", flag_count: 2 }],
+        needs_grading: 0, overall_comment: "", flag_count: 2,
+        external_result: { released: true, total: 82, total_points: 100 },
+        external_delivery: { status: "failed", tries: 3, last_error: "answered 503", receipt: null, next_at: null, sent_at: null } }],
     } satisfies Results);
     renderTeacher("/teacher/exams/e_1", "/teacher/exams/:id", <TeacherExamPage />);
-    expect(await screen.findByTestId("oj-edit-banner")).toBeInTheDocument();
+    expect(await screen.findByTestId("external-edit-banner")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Edit" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
-    const graded = await screen.findByTestId("oj-graded-banner");
-    expect(graded).toHaveTextContent(GRADED_IN_OJ);
+    const graded = await screen.findByTestId("external-graded-banner");
+    expect(graded).toHaveTextContent(gradedIn("Campus Judge"));
     expect(screen.getByText("K7Q2-M9XD")).toBeInTheDocument();
+    expect(screen.getByTestId("external-delivery")).toHaveTextContent("Retrying (3 tries)");
+    expect(screen.getByTestId("external-delivery")).toHaveAttribute("title", "answered 503");
+    expect(screen.getByText("82 / 100")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Release grades" })).toBeNull();
   });
 
-  it("the grading page says Graded in DKU OJ", async () => {
-    api.teacher.getExam.mockResolvedValue(ojExam({ status: "closed" }));
-    api.teacher.grading.mockResolvedValue({ exam_id: "e_1", title: "x", course: "", status: "closed", grades_released: false, questions: [], items: [] });
+  it("the grading page says Graded in <name>", async () => {
+    api.teacher.getExam.mockResolvedValue(richExam({ status: "closed" }));
+    api.teacher.grading.mockResolvedValue({ external: { source: "campusjudge", name: "Campus Judge", url: "https://judge.example.edu/contest/cs101a-midterm", read_only: true, graded_externally: true, package_ready: true }, questions: [], items: [] });
     renderTeacher("/teacher/exams/e_1/grading", "/teacher/exams/:id/grading", <GradingPage />);
-    expect(await screen.findByTestId("oj-graded-banner")).toHaveTextContent(GRADED_IN_OJ);
+    expect(await screen.findByTestId("external-graded-banner")).toHaveTextContent(gradedIn("Campus Judge"));
   });
 });
 
 // ---------------------------------------------------------------- student grades
 
-describe("released DKU OJ results", () => {
+describe("released external results", () => {
   it("shows the total, points per question and the feedback markdown", async () => {
     setToken("student", "S");
     api.student.feedback.mockResolvedValue({
       exam_id: "e_1", title: "CS 101 Midterm", course: "CS 101", submitted_at: "2026-11-27T02:00:00Z", receipt: "K7Q2-M9XD",
-      score: 82, total_points: 100, percent: 82, class_average_percent: null, overall_comment: "", source: "dkuoj",
+      score: 82, total_points: 100, percent: 82, class_average_percent: null, overall_comment: "", source: "campusjudge",
+      external_name: "Campus Judge",
       questions: [
         { question_id: "p1", index: 0, type: "mcq", prompt: "Which is ~O(1)~?", options: ["Array", "Hash table"], points: 10,
           points_awarded: 10, status: "correct", given: 1, correct_answer: null, tolerance: null, comment: "", rubric: [],
-          rubric_scores: null, label: "Q1", title: "Hash maps", prompt_format: "oj_md", feedback_md: "" },
+          rubric_scores: null, label: "Q1", title: "Hash maps", prompt_format: "markdown", comment_format: "markdown" },
         { question_id: "p5", index: 4, type: "code", prompt: "Reverse", options: [], points: 30, points_awarded: 12,
-          status: "partial", given: { language: "PY3", source: "print(1)" }, correct_answer: null, tolerance: null, comment: "",
-          rubric: [], rubric_scores: null, label: "Q5", prompt_format: "oj_md", feedback_md: "Passed **4 of 10** tests." },
+          status: "partial", given: { language: "PY3", source: "print(1)" }, correct_answer: null, tolerance: null,
+          rubric: [], rubric_scores: null, label: "Q5", prompt_format: "markdown", comment: "Passed **4 of 10** tests.",
+          comment_format: "markdown" },
+        { question_id: "p6", index: 5, type: "short", prompt: "Explain", options: [], points: 10, points_awarded: 0,
+          status: "pending", given: "because", correct_answer: null, tolerance: null, comment: "", rubric: [],
+          rubric_scores: null, label: "Q6", prompt_format: "markdown", comment_format: "markdown" },
       ],
     } as StudentFeedback);
     render(
@@ -523,13 +545,14 @@ describe("released DKU OJ results", () => {
         </Routes>
       </MemoryRouter>,
     );
-    expect(await screen.findByText("Graded in DKU OJ.")).toBeInTheDocument();
-    const cards = screen.getAllByTestId("oj-feedback-question");
-    expect(cards).toHaveLength(2);
+    expect(await screen.findByText("Graded in Campus Judge.")).toBeInTheDocument();
+    const cards = screen.getAllByTestId("external-feedback-question");
+    expect(cards).toHaveLength(3);
+    expect(within(cards[2]!).getByText("0 / 10 · being graded")).toBeInTheDocument();
     expect(within(cards[0]!).getByRole("heading", { name: "Q1 · Hash maps" })).toBeInTheDocument();
     expect(within(cards[0]!).getByText(/10 \/ 10/)).toBeInTheDocument();
     expect(within(cards[1]!).getByText("12 / 30 · partial")).toBeInTheDocument();
-    expect(within(cards[1]!).getByTestId("oj-feedback").querySelector(".fp-md strong")?.textContent).toBe("4 of 10");
+    expect(within(cards[1]!).getByTestId("external-feedback").querySelector(".fp-md strong")?.textContent).toBe("4 of 10");
     expect(within(cards[1]!).getByText("print(1)")).toBeInTheDocument();
     expect(document.querySelector(".stu-fb-score b")).toHaveTextContent("82 / 100");
   });

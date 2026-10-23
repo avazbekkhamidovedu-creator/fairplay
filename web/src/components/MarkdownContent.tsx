@@ -1,5 +1,5 @@
-// DKU OJ bridge: a question text (or option, or feedback) written in DKU OJ, rendered
-// safely (lib/ojMarkdown.ts). Pictures come from the attempt / teacher asset URL or the
+// A question text (or option, or feedback) written in markdown or HTML, rendered
+// safely (lib/markdown.ts). Pictures come from the attempt / teacher asset URL or the
 // offline package. During an exam, links only open the exam's allowed websites (in the
 // Websites panel); every other link is shown as plain text.
 import {
@@ -13,11 +13,11 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { PromptFormat } from "../api/types";
-import { type AssetContext, resolveAsset } from "../lib/ojAssets";
-import { renderPrompt } from "../lib/ojMarkdown";
+import { type AssetContext, resolveAsset } from "../lib/questionAssets";
+import { renderPrompt } from "../lib/markdown";
 import { hostAllowed } from "../lib/websites";
 import "katex/dist/katex.min.css";
-import "../styles/oj.css";
+import "../styles/questions.css";
 
 /** Links during an exam: only `allowed` hosts work, and they open through onOpen. */
 export interface ExamLinks {
@@ -45,6 +45,20 @@ interface Props {
   "data-testid"?: string;
 }
 
+export const PICTURE_NEEDS_CONNECTION = "Picture needs the connection";
+
+/** In place of a picture that cannot load (offline, or the exam is over). */
+function missingPicture(img: HTMLImageElement): HTMLElement {
+  const span = document.createElement("span");
+  span.className = "fp-md-img-missing";
+  span.setAttribute("role", "img");
+  const alt = img.getAttribute("alt") ?? "";
+  span.setAttribute("aria-label", alt ? `${alt} (${PICTURE_NEEDS_CONNECTION.toLowerCase()})` : PICTURE_NEEDS_CONNECTION);
+  span.setAttribute("data-fp-asset", img.getAttribute("data-fp-asset") ?? "");
+  span.textContent = alt ? `${alt}: ${PICTURE_NEEDS_CONNECTION.toLowerCase()}` : PICTURE_NEEDS_CONNECTION;
+  return span;
+}
+
 function hostOf(href: string): string | null {
   try {
     const u = new URL(href);
@@ -54,7 +68,7 @@ function hostOf(href: string): string | null {
   }
 }
 
-export const OjContent = forwardRef<HTMLElement, Props>(function OjContent(
+export const MarkdownContent = forwardRef<HTMLElement, Props>(function MarkdownContent(
   { format, text, inline = false, assets, links, renderBlank, onBlankCount, id, className, tabIndex, "data-testid": testId },
   ref,
 ) {
@@ -96,7 +110,7 @@ export const OjContent = forwardRef<HTMLElement, Props>(function OjContent(
     el.querySelectorAll<HTMLImageElement>("img[data-fp-asset]").forEach((img) => {
       const name = img.getAttribute("data-fp-asset") ?? "";
       if (!assets || !name) {
-        img.classList.add("fp-md-img-missing");
+        img.replaceWith(missingPicture(img));
         return;
       }
       resolveAsset(assets, name).then(
@@ -105,8 +119,7 @@ export const OjContent = forwardRef<HTMLElement, Props>(function OjContent(
         },
         () => {
           if (!alive) return;
-          img.classList.add("fp-md-img-missing");
-          img.setAttribute("title", "This picture could not be loaded");
+          img.replaceWith(missingPicture(img));
         },
       );
     });
@@ -132,7 +145,7 @@ export const OjContent = forwardRef<HTMLElement, Props>(function OjContent(
     if (typeof ref === "function") ref(node);
     else if (ref) ref.current = node;
   };
-  const cls = `fp-md${inline ? " inline" : ""}${format === "oj_html" ? " html" : ""}${className ? ` ${className}` : ""}`;
+  const cls = `fp-md${inline ? " inline" : ""}${format === "html" ? " html" : ""}${className ? ` ${className}` : ""}`;
   const Tag = inline ? "span" : "div";
   return (
     <>

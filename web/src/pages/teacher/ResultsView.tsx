@@ -10,8 +10,8 @@ import { SendGradesButton } from "../../components/teacher/lms/SendGradesButton"
 import { errorText, eventLabel, formatWhen, num, pct, plural } from "../../components/teacher/util";
 import { formatClock } from "../../lib/timer";
 import { KIND_LABEL, kindOf } from "./examDraft";
-import { OjResults, isOjExam } from "../../components/teacher/OjNotices";
-import { isCodeAnswer } from "../../lib/ojAnswers";
+import { ExternalResults } from "../../components/teacher/ExternalSource";
+import { isCodeAnswer } from "../../lib/answerTypes";
 
 const LETTERS = "ABCDEFGH";
 
@@ -19,7 +19,7 @@ export function formatGiven(q: Question | undefined, raw: AnswerValue | null): s
   const given = paperValue(raw) as AnswerValue | null;
   if (paperImage(raw) && (given === null || given === undefined)) return "Written on paper (see scan)";
   if (given === null || given === undefined || given === "") return "No answer";
-  // DKU OJ answers (lists, {language, source})
+  // list and {language, source} answers
   if (isCodeAnswer(given)) return given.source;
   if (Array.isArray(given)) {
     if (q?.type === "mcq") return given.map((i) => (typeof i === "number" ? `${LETTERS[i] ?? i + 1}. ${q.options[i] ?? ""}` : String(i))).join("; ");
@@ -109,8 +109,8 @@ export function ResultsView({ exam, onExamChange }: { exam: Exam; onExamChange: 
       </div>
     );
   if (!results) return <Loading label="Loading results…" />;
-  // DKU OJ bridge: graded in DKU OJ (no scores or release here)
-  if (isOjExam(exam) || results.source === "dkuoj") return <OjResults exam={exam} results={results} />;
+  // graded in another system (no grading or release here)
+  if ((results.external ?? exam.external)?.graded_externally) return <ExternalResults exam={exam} results={results} />;
 
   const qById = new Map(exam.questions.map((q) => [q.id, q] as const));
   const qIndex = new Map(exam.questions.map((q, i) => [q.id, i] as const));

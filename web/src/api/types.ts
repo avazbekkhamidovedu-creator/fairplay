@@ -16,12 +16,12 @@ export interface ExternalExamFields {
 }
 
 /** mcq -> option index, numeric -> number, short -> string. Missing key = not answered.
- *  DKU OJ exams (docs/dkuoj-bridge.md §5): mcq multiple -> sorted option indexes,
+ *  More types: mcq multiple -> sorted option indexes,
  *  fill_blank -> one string per blank, file_upload -> upload ids, code with several
  *  languages -> {language, source}. */
 export type AnswerValue = number | string | number[] | string[] | CodeAnswer;
 
-/** A coding answer of a question with several languages (DKU OJ key, e.g. "PY3"). */
+/** A coding answer of a question with several languages (language key, e.g. "PY3"). */
 export interface CodeAnswer {
   language: string;
   source: string;
@@ -469,7 +469,8 @@ export interface FeedbackQuestion {
   options: string[];
   points: number;
   points_awarded: number;
-  status: "correct" | "partial" | "wrong" | "unanswered";
+  /** "pending": not graded yet (external source) */
+  status: "correct" | "partial" | "wrong" | "unanswered" | "pending";
   given: AnswerValue | null;
   correct_answer: AnswerValue | null;
   tolerance: number | null;
@@ -1143,86 +1144,152 @@ export interface FeedbackQuestion {
   language?: CodeLanguage;
 }
 
-// ---------- DKU OJ bridge (docs/dkuoj-bridge.md §5, §6) ----------
+// ---------- rich questions and exams from an external source (integrations) ----------
 
-/** Where an exam comes from. "dkuoj" exams are built and graded in DKU OJ. */
-export type ExamSource = "fairplay" | "dkuoj";
+/** Where an exam comes from: "fairplay", or the id of an integration. */
+export type ExamSource = string;
 
-/** How a prompt is written: plain text (FairPlay), DKU OJ markdown, or DKU OJ's sanitized HTML. */
-export type PromptFormat = "plain" | "oj_md" | "oj_html";
+/** How a prompt is written: plain text, markdown (with ~…~ / $$…$$ math), or sanitized HTML. */
+export type PromptFormat = "plain" | "markdown" | "html";
 
-/** One language of a DKU OJ coding question. runner null = no in-app runner. */
-export interface OjCodeLanguage {
+/** One language a coding question allows. runner null = no in-app runner. */
+export interface CodeLanguageOption {
   key: string;
   name: string;
   runner: CodeLanguage | null;
 }
 
-/** Fields of questions from DKU OJ (all optional: FairPlay questions never have them). */
-export interface OjQuestionFields {
+/** Optional question fields (rich text, more answer types). Missing = the classic question. */
+export interface RichQuestionFields {
   prompt_format?: PromptFormat;
-  /** "Q3" (DKU OJ display label) */
+  /** display label, e.g. "Q3" */
   label?: string;
   title?: string;
-  /** DKU OJ gives partial credit */
+  /** partial credit is given */
   partial?: boolean;
+  source?: ExamSource;
   // mcq
   multiple?: boolean;
   true_false?: boolean;
+  /** show the options in a per-student order (the answer keeps the original indexes) */
+  shuffle?: boolean;
   // fill_blank
   blanks?: number;
   blank_points?: number[];
+  case_sensitive?: boolean;
   // file_upload
   allowed_extensions?: string[];
   max_file_size?: number;
-  /** how many files may be handed in (default 1) */
+  /** markdown shown above the file picker */
+  instructions_md?: string;
+  /** files per answer: always 1 (one file, replaced when a new one is chosen) */
   max_files?: number;
   // code with several languages
-  languages?: OjCodeLanguage[];
-  /** starter code per DKU OJ language key */
+  languages?: CodeLanguageOption[];
+  /** starter code per language key */
   templates?: Record<string, string>;
-  /** fp-asset name -> URL. Offline packages carry data: URLs here; otherwise the page
-   *  fetches the attempt (or teacher) asset URL. */
+  memory_limit_kb?: number;
+  /** fp-asset name -> URL already available (data: URLs); otherwise the page fetches the
+   *  attempt (or teacher) asset URL. */
   asset_urls?: Record<string, string>;
 }
-export interface Question extends OjQuestionFields {}
-export interface StudentQuestion extends OjQuestionFields {}
-export interface GradingQuestion extends OjQuestionFields {}
-export interface FeedbackQuestion extends OjQuestionFields {
-  /** DKU OJ feedback (markdown) for this question */
-  feedback_md?: string;
+export interface Question extends RichQuestionFields {}
+export interface StudentQuestion extends RichQuestionFields {}
+export interface GradingQuestion extends RichQuestionFields {}
+export interface FeedbackQuestion extends RichQuestionFields {
+  /** "markdown": `comment` is markdown */
+  comment_format?: "plain" | "markdown";
+}
+
+/** An exam that comes from another system (null/missing: a FairPlay exam). */
+export interface ExternalInfo {
+  /** integration id */
+  source: string;
+  /** display name, e.g. the other system's product name */
+  name: string;
+  /** the exam in the other system */
+  url: string | null;
+  /** questions and settings cannot be changed in FairPlay (PUT -> 409) */
+  read_only: boolean;
+  /** grades come from the other system */
+  graded_externally: boolean;
+  /** the questions have arrived (until then Open exam -> 409) */
+  package_ready?: boolean;
+  start_time?: string | null;
+  end_time?: string | null;
 }
 
 export interface Exam {
-  source?: ExamSource;
-  oj_key?: string | null;
-  /** link to the assignment in DKU OJ (null when the bridge is not configured) */
-  oj_url?: string | null;
+  external?: ExternalInfo | null;
 }
 export interface AttemptView {
   source?: ExamSource;
+  external_name?: string;
+  /** files handed in so far for file_upload questions */
+  answer_files?: AnswerUpload[];
+  total_points?: number;
 }
 export interface OfflineExam {
   source?: ExamSource;
+  external_name?: string;
 }
 export interface Results {
-  source?: ExamSource;
-  oj_url?: string | null;
+  external?: ExternalInfo | null;
 }
 export interface GradingQueue {
+  external?: ExternalInfo | null;
+}
+
+/** Result of one attempt released by the external source. */
+export interface ExternalResult {
+  released?: boolean;
+  total?: number;
+  total_points?: number;
+  updated_at?: string | null;
+  questions?: { question_id: string; points: number; feedback_md?: string }[];
+}
+
+/** Sending one attempt's answers to the external source. dead = gave up (see the status page). */
+export interface ExternalDelivery {
+  status: "pending" | "sent" | "failed" | "dead";
+  tries: number;
+  last_error: string | null;
+  receipt: string | null;
+  next_at: string | null;
+  sent_at: string | null;
+}
+export interface ResultAttempt {
+  external_result?: ExternalResult | null;
+  external_delivery?: ExternalDelivery | null;
+}
+export interface StudentExamSummary {
   source?: ExamSource;
-  oj_url?: string | null;
+  external_name?: string;
 }
 export interface StudentGradeSummary {
   source?: ExamSource;
+  external_name?: string;
 }
 export interface StudentFeedback {
   source?: ExamSource;
+  external_name?: string;
 }
 
-/** A file handed in for a file_upload question (POST /api/student/attempts/{aid}/uploads). */
+/** A file handed in for a file_upload question (POST /api/student/attempts/{aid}/files). */
 export interface AnswerUpload {
   id: string;
   name: string;
   size: number;
+  question_id?: string;
+  sha256?: string;
+  created_at?: string;
+}
+
+/** POST /api/integrations/live/exchange: the one-time code from an external "Open live room" link. */
+export interface ExternalLiveSignIn {
+  token: string;
+  role: "teacher";
+  name: string;
+  username: string;
+  exam_id: string;
 }

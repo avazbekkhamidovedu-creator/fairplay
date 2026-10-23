@@ -10,7 +10,7 @@ import { LiveRoom } from "./LiveRoom";
 import { QuestionsView } from "./QuestionsView";
 import { ResultsView } from "./ResultsView";
 import { ScanSteps } from "./scan/ScanSteps";
-import { OjEditBanner, isOjExam } from "../../components/teacher/OjNotices";
+import { ExternalSourceBanner } from "../../components/teacher/ExternalSource";
 
 type Tab = "live" | "questions" | "results" | "scan";
 
@@ -96,7 +96,10 @@ export default function TeacherExamPage() {
   const deleteExam = () => run(() => teacherApi.deleteExam(exam.id), () => navigate("/teacher/exams", { replace: true }));
 
   const st = examStatus(exam);
-  const fromOj = isOjExam(exam);   // DKU OJ: questions and grading live there
+  // from another system: read-only questions and/or grades kept there
+  const ext = exam.external ?? null;
+  const readOnly = !!ext?.read_only;
+  const gradedElsewhere = !!ext?.graded_externally;
   const pending = exam.pending_grading ?? 0;
   const meta = [
     ...(exam.mode === "external"
@@ -124,7 +127,7 @@ export default function TeacherExamPage() {
           <p>{meta.join(" · ")}</p>
         </div>
         <div className="t-head-actions">
-          {exam.status !== "draft" && pending > 0 && !fromOj && (
+          {exam.status !== "draft" && pending > 0 && !gradedElsewhere && (
             <Link
               to={exam.delivery === "paper" ? `/teacher/exams/${exam.id}/scan?step=grade` : `/teacher/exams/${exam.id}/grading`}
               className="btn btn-secondary"
@@ -134,13 +137,18 @@ export default function TeacherExamPage() {
           )}
           {exam.status === "draft" && (
             <>
-              {!fromOj && (
+              {!readOnly && (
                 <Link to={`/teacher/exams/${exam.id}/edit`} className="btn btn-secondary">
                   Edit
                 </Link>
               )}
               {exam.delivery !== "paper" && (
-                <button type="button" className="btn btn-primary" onClick={openExam} disabled={busy}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={openExam}
+                  disabled={busy || ext?.package_ready === false}
+                >
                   {busy ? "Opening…" : "Open exam"}
                 </button>
               )}
@@ -151,7 +159,7 @@ export default function TeacherExamPage() {
               {busy ? "Opening…" : "Re-open exam"}
             </button>
           )}
-          {exam.status !== "live" && !confirmDelete && !fromOj && (
+          {exam.status !== "live" && !confirmDelete && !ext && (
             <button type="button" className="btn btn-danger-outline" onClick={() => setConfirmDelete(true)}>
               Delete
             </button>
@@ -177,7 +185,12 @@ export default function TeacherExamPage() {
           {actionError}
         </div>
       )}
-      {fromOj && <OjEditBanner exam={exam} />}
+      {ext && readOnly && <ExternalSourceBanner external={ext} kind="edit" />}
+      {ext && ext.package_ready === false && (
+        <div className="alert alert-info" role="status" data-testid="external-package-waiting">
+          The questions arrive from {ext.name} 24 hours before the start. You can open the exam after that.
+        </div>
+      )}
       {exam.status === "draft" && exam.delivery !== "paper" && (
         <div className="alert alert-info">
           This exam is a draft. When the class is seated, press <strong>Open exam</strong> to get a start code.

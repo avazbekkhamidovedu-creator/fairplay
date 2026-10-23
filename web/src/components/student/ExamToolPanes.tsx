@@ -92,7 +92,7 @@ export function WebsitesPaneContent({
   request,
 }: {
   sites: string[];
-  /** DKU OJ bridge: a link in a question to an allowed site opens here (seq: each click). */
+  /** A link in a question to an allowed site opens here (seq: each click). */
   request?: { url: string; seq: number } | null;
 }) {
   // Our own history of what we opened (the frame's own navigation is on another origin).

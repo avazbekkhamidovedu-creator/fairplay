@@ -1,5 +1,5 @@
-/* DKU OJ bridge: question text written in DKU OJ (markdown / HTML), the answer controls
-   only DKU OJ exams use, and the "Edit in DKU OJ" / "Graded in DKU OJ" notes.
+/* Rich question text (markdown / HTML), the newer answer controls, and the notes on exams
+   from another system ("Edit this exam in …" / "Graded in …").
    Uses the shared tokens (tokens.css); student classes keep the stu- look. */
 
 /* ---------- rendered markdown ---------- */
@@ -46,7 +46,7 @@
   height: auto;
   border-radius: 6px;
 }
-.fp-md img.fp-md-img-missing {
+.fp-md .fp-md-img-missing {
   display: inline-block;
   min-width: 120px;
   min-height: 48px;
@@ -317,15 +317,15 @@
   font-weight: 700;
 }
 
-/* ---------- DKU OJ notes ---------- */
+/* ---------- exams from another system ---------- */
 
-.fp-oj-note {
+.fp-external-note {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 14px;
 }
-.fp-oj-feedback {
+.fp-external-feedback {
   margin-top: 4px;
   padding: 12px 14px;
   border-radius: var(--r-control);

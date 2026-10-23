@@ -1,11 +1,11 @@
-// DKU OJ bridge: pictures of DKU OJ questions ("fp-asset:<name>").
+// Pictures of rich questions ("fp-asset:<name>").
 //
 // The asset URLs need the sign-in (and, for students, the attempt's app session), so an
 // <img src> cannot point at them directly: the bytes are fetched through the API layer
 // and shown from an object URL, kept in memory per attempt (or exam) until forgetAssets.
-// Offline packages carry the pictures as data: URLs in question.asset_urls, like they
-// carry question images (server offline.inline_images); those are used first.
-import { ojApi } from "../api/client";
+// A view may carry pictures as data: URLs in question.asset_urls (used first). Offline
+// packages carry none today: an offline start shows "Picture needs the connection".
+import { contentApi } from "../api/client";
 
 export type AssetFetcher = (name: string) => Promise<Blob>;
 
@@ -72,11 +72,11 @@ export function forgetAssets(scope: string): void {
 }
 
 export function attemptAssetContext(aid: string | null, inline?: Record<string, string> | null): AssetContext {
-  return { scope: `a:${aid ?? "offline"}`, inline, fetch: aid ? (n) => ojApi.attemptAsset(aid, n) : null };
+  return { scope: `a:${aid ?? "offline"}`, inline, fetch: aid ? (n) => contentApi.attemptAsset(aid, n) : null };
 }
 
 export function teacherAssetContext(examId: string, inline?: Record<string, string> | null): AssetContext {
-  return { scope: `t:${examId}`, inline, fetch: (n) => ojApi.teacherAsset(examId, n) };
+  return { scope: `t:${examId}`, inline, fetch: (n) => contentApi.teacherAsset(examId, n) };
 }
 
 /** For tests. */

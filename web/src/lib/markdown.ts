@@ -1,10 +1,10 @@
-// DKU OJ bridge (docs/dkuoj-bridge.md §6): question text written in DKU OJ.
+// Rich question text: FairPlay markdown and sanitized HTML.
 //
-// - "oj_md": DKU OJ markdown. Math with KaTeX (bundled, fonts included: nothing from a
+// - "markdown": markdown with math. Math with KaTeX (bundled, fonts included: nothing from a
 //   CDN), "~…~" inline and "$$…$$" display; fenced code highlighted; tables; raw HTML is
-//   allowed by DKU OJ, so the result is sanitized here (no script, iframe, style, event
+//   allowed, so the result is sanitized here (no script, iframe, style, event
 //   handlers, javascript: links).
-// - "oj_html": DKU OJ's own rendering of a full-markup problem, sanitized the same way.
+// - "html": HTML made elsewhere (a full-markup problem), sanitized the same way.
 // - Pictures are "fp-asset:<name>": rendered as <img data-fp-asset="name"> without a
 //   src; the page fills the src (attempt / teacher asset URL, or the offline package).
 // - Fill in the blank: "___" (three or more underscores, not inside a word) becomes
@@ -161,7 +161,7 @@ function makeMd(): MarkdownIt {
       return `<pre class="fp-md-code"><code class="hljs${known ? ` language-${name}` : ""}">${body}</code></pre>`;
     },
   });
-  // DKU OJ uses "~" for math, so "~~strike~~" is not markdown here.
+  // "~" is math in this flavour, so "~~strike~~" is not markdown here.
   md.disable("strikethrough");
   md.inline.ruler.before("escape", "fp_math", mathInline);
   md.inline.ruler.before("emphasis", "fp_blank", blankInline);
@@ -234,7 +234,7 @@ function getPurifier(): ReturnType<typeof DOMPurify> {
   return p;
 }
 
-/** Sanitize HTML from DKU OJ (or from markdown with raw HTML). */
+/** Sanitize HTML (from another system, or from markdown with raw HTML). */
 export function sanitizeHtml(html: string): string {
   return getPurifier().sanitize(html, {
     FORBID_TAGS,
@@ -273,7 +273,7 @@ function fillMath(html: string, env: Env): string {
   });
 }
 
-/** DKU OJ's HTML marks math as <span class="inline-math">~x~</span> / class="display-math". */
+/** HTML from other systems marks math as <span class="inline-math">~x~</span> / class="display-math". */
 function htmlMath(html: string, env: Env): string {
   const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
   const nodes = doc.body.querySelectorAll(".inline-math, .display-math, .tex-math");
@@ -310,29 +310,29 @@ function countBlanks(html: string): number {
 
 // ---------------------------------------------------------------- public
 
-/** DKU OJ markdown -> safe HTML. */
-export function renderOjMarkdown(src: string, opts: RenderOptions = {}): Rendered {
+/** Markdown -> safe HTML. */
+export function renderMarkdown(src: string, opts: RenderOptions = {}): Rendered {
   const env: Env = { math: [], blanks: 0, nonce: nonce(), blanksOn: !!opts.blanks };
   const raw = opts.inline ? md().renderInline(src ?? "", env) : md().render(src ?? "", env);
   const clean = sanitizeHtml(raw);
   return { html: fillMath(clean, env), blankCount: opts.blanks ? countBlanks(clean) : 0 };
 }
 
-/** DKU OJ HTML -> safe HTML (math marked by DKU OJ is rendered with KaTeX). */
-export function renderOjHtml(src: string): Rendered {
+/** HTML -> safe HTML (marked math is rendered with KaTeX). */
+export function renderHtml(src: string): Rendered {
   const env: Env = { math: [], blanks: 0, nonce: nonce(), blanksOn: false };
   const clean = sanitizeHtml(htmlMath(sanitizeHtml(src ?? ""), env));
   return { html: fillMath(clean, env), blankCount: 0 };
 }
 
-export function isOjFormat(f: PromptFormat | undefined | null): f is "oj_md" | "oj_html" {
-  return f === "oj_md" || f === "oj_html";
+export function isRichFormat(f: PromptFormat | undefined | null): f is "markdown" | "html" {
+  return f === "markdown" || f === "html";
 }
 
 /** Render a prompt in its format. "plain" is escaped text (line breaks kept by CSS). */
 export function renderPrompt(format: PromptFormat | undefined | null, text: string, opts: RenderOptions = {}): Rendered {
-  if (format === "oj_html") return renderOjHtml(text);
-  if (format === "oj_md") return renderOjMarkdown(text, opts);
+  if (format === "html") return renderHtml(text);
+  if (format === "markdown") return renderMarkdown(text, opts);
   return { html: escapeHtml(text ?? ""), blankCount: 0 };
 }
 
@@ -353,9 +353,9 @@ export function assetNames(text: string | null | undefined): string[] {
   return [...out];
 }
 
-/** DKU OJ text as plain text for one-line summaries (lists, review rows), cut at `max`. */
+/** Rich text as plain text for one-line summaries (lists, review rows), cut at `max`. */
 export function plainSummary(format: PromptFormat | undefined | null, text: string, max = 160): string {
-  if (!isOjFormat(format)) return text; // FairPlay text: unchanged
+  if (!isRichFormat(format)) return text; // FairPlay text: unchanged
   const doc = new DOMParser().parseFromString(renderPrompt(format, text).html, "text/html");
   doc.querySelectorAll(".katex-mathml").forEach((n) => n.remove());
   const t = (doc.body.textContent ?? "").replace(/\s+/g, " ").trim();

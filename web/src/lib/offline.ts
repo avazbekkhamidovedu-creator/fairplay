@@ -290,8 +290,8 @@ const EXAM_DATA_PREFIXES = [
   "fairplay:attempt-view:",
   "fairplay:session:",
   "proctora:marks:",
-  // DKU OJ bridge (lib/ojAnswers.ts): uploaded file names, code in the other languages
-  "fairplay:oj-files:",
+  // lib/answerTypes.ts: uploaded file names, code in the other languages
+  "fairplay:answer-files:",
   "fairplay:code-drafts:",
 ];
 /** Packages fetched for an exam that never showed up: dropped after this long. */
@@ -362,7 +362,7 @@ export function pruneExamData(
       if (handedIn || closed || stale) remove(k);
       continue;
     }
-    const att = /^(?:fairplay:attempt-view:|fairplay:session:|fairplay:oj-files:|fairplay:code-drafts:|proctora:marks:|proctora:attempt:(?:u\d+:)?)(.+)$/.exec(k);
+    const att = /^(?:fairplay:attempt-view:|fairplay:session:|fairplay:answer-files:|fairplay:code-drafts:|proctora:marks:|proctora:attempt:(?:u\d+:)?)(.+)$/.exec(k);
     if (att?.[1] && doneAttempts.has(att[1])) remove(k);
   }
 }
@@ -403,7 +403,7 @@ export function offlineAttemptView(exam: OfflineExam, now = Date.now()): Attempt
     allowed_apps: exam.allowed_apps ?? [],
     // 2026-10-23: the exam tools (older packages: none). Materials need the connection.
     ...(exam.tools ? { tools: exam.tools } : {}),
-    // DKU OJ bridge: the exam's source (pictures travel in question.asset_urls)
+    // the exam's source (integration id)
     ...(exam.source ? { source: exam.source } : {}),
   };
 }

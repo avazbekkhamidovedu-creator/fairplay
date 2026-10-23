@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ApiError, NetworkError, currentStudentId, getToken, ojApi, slice6Api, studentApi } from "../../api/client";
+import { ApiError, NetworkError, currentStudentId, getToken, contentApi, slice6Api, studentApi } from "../../api/client";
 import type { AllowedApp, AnswerMap, AnswerValue, AttemptView, IntegrityEvent, StudentQuestion } from "../../api/types";
-import { OjContent, type ExamLinks } from "../../components/OjContent";
-import { FileUploadInput, FillBlankQuestion } from "../../components/student/OjAnswers";
-import { attemptAssetContext, forgetAssets, prefetchAssets } from "../../lib/ojAssets";
-import { forgetOjNotes, rememberUpload } from "../../lib/ojAnswers";
-import { assetNames, isOjFormat } from "../../lib/ojMarkdown";
+import { MarkdownContent, type ExamLinks } from "../../components/MarkdownContent";
+import { FileUploadInput, FillBlankQuestion } from "../../components/student/QuestionInputs";
+import { attemptAssetContext, forgetAssets, prefetchAssets } from "../../lib/questionAssets";
+import { forgetAnswerNotes, rememberUpload } from "../../lib/answerTypes";
+import { assetNames, isRichFormat } from "../../lib/markdown";
 import { isCodeLanguage } from "../../lib/code/languages";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { AnswerInput, RubricPanel } from "../../components/student/AnswerInput";
@@ -286,10 +286,10 @@ function ExamTakingInner() {
       if (doneAid !== attemptId) clearExamPrefs(doneAid);
       forgetCodeResults(attemptId);
       resetSharedRunners();
-      // DKU OJ: pictures in memory, uploaded file names and other-language code
+      // pictures in memory, uploaded file names and other-language code
       forgetAssets(`a:${doneAid}`);
-      forgetOjNotes(attemptId);
-      if (doneAid !== attemptId) forgetOjNotes(doneAid);
+      forgetAnswerNotes(attemptId);
+      if (doneAid !== attemptId) forgetAnswerNotes(doneAid);
       // Sample exam: while the app is still locked the done page keeps the key, so a hand-in the
       // app cannot confirm still has a way out there (it clears the key once unlocked).
       if (trialRef.current && !bridge.isLocked()) writeTrialKey(doneAid, null);
@@ -689,7 +689,7 @@ function ExamTakingInner() {
             .filter((x) => x.type === "code" && !x.write_only)
             .flatMap((x) =>
               x.languages?.length
-                ? x.languages.map((l) => l.runner).filter(isCodeLanguage)   // DKU OJ: each runnable language
+                ? x.languages.map((l) => l.runner).filter(isCodeLanguage)   // each runnable language
                 : [resolveLanguage(x.language)],
             ),
         ),
@@ -820,7 +820,7 @@ function ExamTakingInner() {
     calcButtonRef.current?.focus();
   };
   const [pane, setPane] = useState<null | "materials" | "websites">(null);
-  // DKU OJ: a link in a question to an allowed website opens in the Websites panel
+  // a link in a question to an allowed website opens in the Websites panel
   const [siteRequest, setSiteRequest] = useState<{ url: string; seq: number } | null>(null);
   const examLinks = useMemo<ExamLinks>(
     () => ({
@@ -832,7 +832,7 @@ function ExamTakingInner() {
     }),
     [attempt?.tools?.websites],
   );
-  // DKU OJ pictures: from the attempt asset URL (or the offline package's copies)
+  // fp-asset pictures: from the attempt asset URL (or copies the view already carries)
   const assetAid = connected ? realAidRef.current : null;
   const assetsFor = useCallback(
     (qq: StudentQuestion) => attemptAssetContext(assetAid, qq.asset_urls ?? null),
@@ -842,7 +842,7 @@ function ExamTakingInner() {
     // load every picture while online, so they still show if the Wi-Fi drops
     if (!attempt || !assetAid) return;
     for (const qq of attempt.questions) {
-      if (!isOjFormat(qq.prompt_format)) continue;
+      if (!isRichFormat(qq.prompt_format)) continue;
       const names = [qq.prompt, ...(qq.options ?? [])].flatMap(assetNames).filter((n) => !qq.asset_urls?.[n]);
       if (names.length) prefetchAssets(assetsFor(qq), names);
     }
@@ -960,14 +960,14 @@ function ExamTakingInner() {
             : q?.type === "mcq" && q.multiple
               ? " · Choose all that apply"
               : "";
-  const ojExam = attempt.source === "dkuoj" || questions.some((x) => isOjFormat(x.prompt_format));
-  const totalPoints = questions.reduce((sum, x) => sum + (Number(x.points) || 0), 0);
+  const richExam = (!!attempt.source && attempt.source !== "fairplay") || questions.some((x) => isRichFormat(x.prompt_format));
+  const totalPoints = attempt.total_points ?? questions.reduce((sum, x) => sum + (Number(x.points) || 0), 0);
   const promptNode = (qq: StudentQuestion) => (
     <>
       <QuestionImages images={qq.images} />
-      {qq.title && isOjFormat(qq.prompt_format) && <p className="stu-qtitle">{qq.title}</p>}
-      {isOjFormat(qq.prompt_format) ? (
-        <OjContent
+      {qq.title && isRichFormat(qq.prompt_format) && <p className="stu-qtitle">{qq.title}</p>}
+      {isRichFormat(qq.prompt_format) ? (
+        <MarkdownContent
           ref={promptRef}
           id="question-prompt"
           tabIndex={-1}
@@ -1015,7 +1015,7 @@ function ExamTakingInner() {
             : undefined
         }
         directions={
-          attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length, ojExam ? totalPoints : undefined)
+          attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length, richExam ? totalPoints : undefined)
         }
         moreButtonRef={moreButtonRef}
         trial={
@@ -1186,8 +1186,11 @@ function ExamTakingInner() {
                     value={answers[q.id]}
                     onChange={(v) => setAnswer(q.id, v)}
                     attemptId={attemptId}
-                    upload={(file) => call((aid) => ojApi.uploadAnswerFile(aid, q.id, file))}
+                    upload={(file) => call((aid) => contentApi.uploadAnswerFile(aid, q.id, file))}
                     onUploaded={(f) => rememberUpload(attemptId, f)}
+                    knownFiles={attempt.answer_files}
+                    assets={assetsFor(q)}
+                    links={examLinks}
                   />
                 </>
               ) : (
@@ -1205,6 +1208,7 @@ function ExamTakingInner() {
                     cross={{ on: crossMode, crossed: crossed[q.id] ?? [], onToggle: (i) => toggleCross(q.id, i) }}
                     assets={assetsFor(q)}
                     links={examLinks}
+                    shuffleSeed={`${attempt.exam_id}:${currentStudentId() ?? ""}`}
                   />
                 </>
               )}

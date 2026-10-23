@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AnswerMap, StudentQuestion } from "../../api/types";
 import { QuestionImages } from "../QuestionImages";
-import { plainSummary } from "../../lib/ojMarkdown";
+import { plainSummary } from "../../lib/markdown";
 
 export function reviewCounts(questions: StudentQuestion[], answers: AnswerMap, marked: ReadonlySet<string>) {
   let answered = 0;

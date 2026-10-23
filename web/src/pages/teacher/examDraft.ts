@@ -124,7 +124,7 @@ export const TYPE_LABEL: Record<QuestionType, string> = {
   essay: "Essay",
   external: "Exam website",
   code: "Coding",
-  // DKU OJ exams only (never made in the FairPlay editor)
+  // newer types (not in the FairPlay editor yet)
   fill_blank: "Fill in the blank",
   file_upload: "File upload",
 };

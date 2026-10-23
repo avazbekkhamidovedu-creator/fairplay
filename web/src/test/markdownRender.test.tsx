@@ -1,19 +1,19 @@
-// DKU OJ bridge: rendering of DKU OJ text (markdown + KaTeX, code, tables, DKU OJ HTML),
+// Rich question text: rendering (markdown + KaTeX, code, tables, HTML from elsewhere),
 // sanitizing, fp-asset pictures (asset URL and offline package copies) and links.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OjContent, BLOCKED_LINK_TITLE } from "../components/OjContent";
-import { _resetAssetsForTests, attemptAssetContext, forgetAssets, resolveAsset, type AssetContext } from "../lib/ojAssets";
-import { assetNames, plainSummary, renderOjHtml, renderOjMarkdown, renderPrompt, sanitizeHtml } from "../lib/ojMarkdown";
+import { MarkdownContent, BLOCKED_LINK_TITLE, PICTURE_NEEDS_CONNECTION } from "../components/MarkdownContent";
+import { _resetAssetsForTests, attemptAssetContext, forgetAssets, resolveAsset, type AssetContext } from "../lib/questionAssets";
+import { assetNames, plainSummary, renderHtml, renderMarkdown, renderPrompt, sanitizeHtml } from "../lib/markdown";
 
-const html = (src: string) => renderOjMarkdown(src).html;
+const html = (src: string) => renderMarkdown(src).html;
 const dom = (s: string) => {
   const d = document.createElement("div");
   d.innerHTML = s;
   return d;
 };
 
-describe("DKU OJ markdown", () => {
+describe("markdown", () => {
   it("renders paragraphs, emphasis, lists and tables", () => {
     const d = dom(html("Hello **world**\n\n- a\n- b\n\n| n | out |\n|---|-----|\n| 1 | 2 |\n"));
     expect(d.querySelector("strong")?.textContent).toBe("world");
@@ -66,18 +66,18 @@ describe("DKU OJ markdown", () => {
   });
 
   it("turns ___ into blanks only when asked, not inside words or for __bold__", () => {
-    const r = renderOjMarkdown("A ___ maps keys; lookup is O(___). snake_case_name and __bold__", { blanks: true });
+    const r = renderMarkdown("A ___ maps keys; lookup is O(___). snake_case_name and __bold__", { blanks: true });
     expect(r.blankCount).toBe(2);
     const d = dom(r.html);
     expect(d.querySelectorAll("[data-fp-blank]")).toHaveLength(2);
     expect(d.textContent).toContain("snake_case_name");
     expect(d.querySelector("strong")?.textContent).toBe("bold");
-    expect(renderOjMarkdown("A ___ here").blankCount).toBe(0);
+    expect(renderMarkdown("A ___ here").blankCount).toBe(0);
   });
 
   it("finds fp-asset names and makes plain summaries", () => {
     expect(assetNames("![c](fp-asset:cell.png) and ![d](fp-asset:my%20pic.jpg)")).toEqual(["cell.png", "my pic.jpg"]);
-    expect(plainSummary("oj_md", "Find **x** where ~x^2 = 4~")).toMatch(/^Find x where/);
+    expect(plainSummary("markdown", "Find **x** where ~x^2 = 4~")).toMatch(/^Find x where/);
     expect(plainSummary("plain", "Same text")).toBe("Same text");
     expect(renderPrompt("plain", "<b>x</b>").html).toBe("&lt;b&gt;x&lt;/b&gt;");
   });
@@ -112,14 +112,14 @@ describe("sanitizing", () => {
     "![img](javascript:alert(1))",
   ];
   it.each(attacks)("removes the dangerous part of %s", (src) => {
-    for (const out of [renderOjMarkdown(src).html, renderOjHtml(src).html]) {
+    for (const out of [renderMarkdown(src).html, renderHtml(src).html]) {
       const d = dom(out);
       expect(d.querySelector("script, iframe, svg > script, form, input, object, embed")).toBeNull();
       expect(badAttributes(d)).toEqual([]);
     }
   });
 
-  it("keeps harmless HTML DKU OJ uses (sup, br, tables, https links)", () => {
+  it("keeps harmless HTML (sup, br, tables, https links)", () => {
     const d = dom(sanitizeHtml('x<sup>2</sup><br><a href="https://docs.python.org/3/">docs</a>'));
     expect(d.querySelector("sup")).not.toBeNull();
     const a = d.querySelector("a")!;
@@ -140,8 +140,8 @@ describe("sanitizing", () => {
     expect(d.querySelectorAll(".katex")).toHaveLength(1);
   });
 
-  it("renders DKU OJ HTML with its marked math", () => {
-    const d = dom(renderOjHtml('<p>Let <span class="inline-math">~n \\le 10~</span>.</p><div class="display-math">$$x$$</div>').html);
+  it("renders HTML with its marked math", () => {
+    const d = dom(renderHtml('<p>Let <span class="inline-math">~n \\le 10~</span>.</p><div class="display-math">$$x$$</div>').html);
     expect(d.querySelector("p .katex")).not.toBeNull();
     expect(d.querySelector(".katex-display")).not.toBeNull();
   });
@@ -154,7 +154,7 @@ describe("sanitizing", () => {
     expect(imgs[1]!.hasAttribute("src")).toBe(false);
     expect(imgs[2]!.getAttribute("src")).toBe("https://cdn.example/a.png");
     expect(imgs[2]!.getAttribute("referrerpolicy")).toBe("no-referrer");
-    const h = dom(renderOjHtml('<img src="fp-asset:graph.svg" alt="g">').html);
+    const h = dom(renderHtml('<img src="fp-asset:graph.svg" alt="g">').html);
     expect(h.querySelector("img")?.getAttribute("data-fp-asset")).toBe("graph.svg");
   });
 });
@@ -173,7 +173,7 @@ describe("pictures (fp-asset)", () => {
   it("loads each picture once through the API and shows it", async () => {
     const fetch = vi.fn(async (name: string) => blob(name));
     const ctx: AssetContext = { scope: "a:a_1", fetch };
-    render(<OjContent format="oj_md" text={"![cell](fp-asset:cell.png)\n\n![cell again](fp-asset:cell.png)"} assets={ctx} />);
+    render(<MarkdownContent format="markdown" text={"![cell](fp-asset:cell.png)\n\n![cell again](fp-asset:cell.png)"} assets={ctx} />);
     await waitFor(() => expect(screen.getByAltText("cell")).toHaveAttribute("src", "blob:cell.png"));
     expect(screen.getByAltText("cell again")).toHaveAttribute("src", "blob:cell.png");
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -184,19 +184,21 @@ describe("pictures (fp-asset)", () => {
 
   it("uses the offline package's copy (data: URL) without the network", async () => {
     const ctx = attemptAssetContext(null, { "cell.png": "data:image/png;base64,AAAA" });
-    render(<OjContent format="oj_md" text="![cell](fp-asset:cell.png)" assets={ctx} />);
+    render(<MarkdownContent format="markdown" text="![cell](fp-asset:cell.png)" assets={ctx} />);
     await waitFor(() => expect(screen.getByAltText("cell")).toHaveAttribute("src", "data:image/png;base64,AAAA"));
   });
 
   it("marks a picture that cannot load, and tries again later", async () => {
     const fetch = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(blob("ok"));
     const ctx: AssetContext = { scope: "a:a_2", fetch };
-    render(<OjContent format="oj_md" text="![cell](fp-asset:cell.png)" assets={ctx} />);
-    await waitFor(() => expect(screen.getByAltText("cell")).toHaveClass("fp-md-img-missing"));
+    render(<MarkdownContent format="markdown" text="![cell](fp-asset:cell.png)" assets={ctx} />);
+    const ph = await screen.findByRole("img", { name: "cell (picture needs the connection)" });
+    expect(ph).toHaveClass("fp-md-img-missing");
+    expect(ph).toHaveTextContent("cell: picture needs the connection");
     await expect(resolveAsset(ctx, "cell.png")).resolves.toBe("blob:ok");
-    // an offline attempt without a copy in the package
-    render(<OjContent format="oj_md" text="![other](fp-asset:other.png)" assets={attemptAssetContext(null)} />);
-    await waitFor(() => expect(screen.getByAltText("other")).toHaveClass("fp-md-img-missing"));
+    // an offline attempt (offline packages carry no fp-asset pictures)
+    render(<MarkdownContent format="markdown" text="![](fp-asset:other.png)" assets={attemptAssetContext(null)} />);
+    expect(await screen.findByRole("img", { name: PICTURE_NEEDS_CONNECTION })).toHaveTextContent(PICTURE_NEEDS_CONNECTION);
   });
 });
 
@@ -205,7 +207,7 @@ describe("links during the exam", () => {
 
   it("opens allowed sites through the Websites panel and blocks the rest", () => {
     const onOpen = vi.fn();
-    render(<OjContent format="oj_md" text={text} links={{ allowed: ["docs.python.org"], onOpen }} />);
+    render(<MarkdownContent format="markdown" text={text} links={{ allowed: ["docs.python.org"], onOpen }} />);
     const docs = screen.getByText("the docs");
     fireEvent.click(docs);
     expect(onOpen).toHaveBeenCalledWith("https://docs.python.org/3/library/");
@@ -217,12 +219,12 @@ describe("links during the exam", () => {
   });
 
   it("blocks every link when the exam allows no websites", () => {
-    render(<OjContent format="oj_md" text={text} links={{ allowed: [] }} />);
+    render(<MarkdownContent format="markdown" text={text} links={{ allowed: [] }} />);
     expect(screen.getByText("the docs")).not.toHaveAttribute("href");
   });
 
   it("teacher views keep links (new tab, no referrer)", () => {
-    render(<OjContent format="oj_md" text={text} />);
+    render(<MarkdownContent format="markdown" text={text} />);
     const a = screen.getByText("a forum");
     expect(a).toHaveAttribute("href", "https://stackoverflow.com/q/1");
     expect(a).toHaveAttribute("target", "_blank");

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OjGradedBanner, isOjExam } from "../../components/teacher/OjNotices";
+import { ExternalSourceBanner } from "../../components/teacher/ExternalSource";
 import { paperImage } from "../../lib/paperAnswer";
 import { urlHost } from "../../components/teacher/externalValidation";
 import { Link, useParams } from "react-router-dom";
@@ -62,14 +62,15 @@ export default function GradingPage() {
     };
   }, [id]);
 
-  // DKU OJ bridge: graded in DKU OJ (the server may refuse the grading queue for these)
-  if (isOjExam(exam) || queue?.source === "dkuoj")
+  // graded in another system: nothing to grade here
+  const ext = queue?.external ?? exam?.external ?? null;
+  if (ext?.graded_externally)
     return (
       <>
         <Link to={`/teacher/exams/${id}?tab=results`} className="t-back">
           ← Results
         </Link>
-        <OjGradedBanner url={queue?.oj_url ?? exam?.oj_url} />
+        <ExternalSourceBanner external={ext} kind="graded" />
       </>
     );
   if (error)

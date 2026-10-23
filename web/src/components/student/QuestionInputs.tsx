@@ -1,4 +1,4 @@
-// DKU OJ bridge (docs/dkuoj-bridge.md §6): answer controls of DKU OJ questions.
+// Answer controls of the newer question types.
 // - mcq with multiple answers: checkboxes (answer = sorted option indexes)
 // - true / false: two big options (answer = option index)
 // - fill in the blank: inputs inside the statement at "___", or numbered inputs under it
@@ -8,7 +8,7 @@
 import { useRef, useState, type ReactNode, type Ref } from "react";
 import { NetworkError } from "../../api/client";
 import type { AnswerUpload, AnswerValue, StudentQuestion } from "../../api/types";
-import type { AssetContext } from "../../lib/ojAssets";
+import type { AssetContext } from "../../lib/questionAssets";
 import {
   blankAnswer,
   blankValues,
@@ -20,9 +20,9 @@ import {
   selectedIndexes,
   uploadIds,
   uploadedFile,
-} from "../../lib/ojAnswers";
-import { isOjFormat } from "../../lib/ojMarkdown";
-import { OjContent, type ExamLinks } from "../OjContent";
+} from "../../lib/answerTypes";
+import { isRichFormat } from "../../lib/markdown";
+import { MarkdownContent, type ExamLinks } from "../MarkdownContent";
 import { LETTERS } from "./format";
 
 interface BaseProps {
@@ -34,7 +34,7 @@ interface BaseProps {
   links?: ExamLinks | null;
 }
 
-/** An option's text: DKU OJ markdown (one line) or plain text. */
+/** An option's text: markdown (one line) or plain text. */
 export function OptionText({
   question,
   text,
@@ -46,12 +46,14 @@ export function OptionText({
   assets?: AssetContext | null;
   links?: ExamLinks | null;
 }) {
-  if (!isOjFormat(question.prompt_format)) return <>{text}</>;
-  return <OjContent format="oj_md" text={text} inline assets={assets} links={links} />;
+  if (!isRichFormat(question.prompt_format)) return <>{text}</>;
+  return <MarkdownContent format="markdown" text={text} inline assets={assets} links={links} />;
 }
 
-export function McqMultiInput({ question, value, onChange, labelledBy, assets, links }: BaseProps) {
-  const chosen = new Set(selectedIndexes(value, question.options.length));
+export function McqMultiInput({ question, value, onChange, labelledBy, assets, links, order: shown }: BaseProps & { order?: number[] }) {
+  const n = question.options.length;
+  const order = shown && shown.length === n ? shown : Array.from({ length: n }, (_, i) => i);
+  const chosen = new Set(selectedIndexes(value, n));
   const toggle = (i: number) => {
     const next = new Set(chosen);
     if (next.has(i)) next.delete(i);
@@ -61,21 +63,21 @@ export function McqMultiInput({ question, value, onChange, labelledBy, assets, l
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div className="stu-options" role="group" aria-labelledby={labelledBy} data-testid="mcq-multi">
-        {question.options.map((opt, i) => (
-          <div key={i} className="stu-option-row">
+        {order.map((orig, i) => (
+          <div key={orig} className="stu-option-row">
             <button
               type="button"
               role="checkbox"
-              aria-checked={chosen.has(i)}
+              aria-checked={chosen.has(orig)}
               className="stu-option"
-              onClick={() => toggle(i)}
+              onClick={() => toggle(orig)}
             >
               <span className="stu-option-letter" aria-hidden="true">
-                {chosen.has(i) ? "✓" : LETTERS[i]}
+                {chosen.has(orig) ? "✓" : LETTERS[i]}
               </span>
               <span className="stu-option-text">
                 <span className="sr-only">{LETTERS[i]}. </span>
-                <OptionText question={question} text={opt} assets={assets} links={links} />
+                <OptionText question={question} text={question.options[orig] ?? ""} assets={assets} links={links} />
               </span>
             </button>
           </div>
@@ -159,12 +161,12 @@ export function FillBlankQuestion({ question, value, onChange, labelledBy, asset
 
   return (
     <>
-      <OjContent
+      <MarkdownContent
         ref={promptRef}
         id={labelledBy}
         tabIndex={-1}
         className="stu-prompt"
-        format={question.prompt_format ?? "oj_md"}
+        format={question.prompt_format ?? "markdown"}
         text={question.prompt}
         assets={assets}
         links={links}
@@ -203,20 +205,24 @@ interface UploadProps {
   upload: ((file: File) => Promise<AnswerUpload>) | null;
   /** remembers the uploaded file's name */
   onUploaded?: (f: AnswerUpload) => void;
+  /** files the server lists for the attempt (attempt view answer_files) */
+  knownFiles?: AnswerUpload[] | null;
+  assets?: AssetContext | null;
+  links?: ExamLinks | null;
 }
 
-export function FileUploadInput({ question, value, onChange, attemptId, upload, onUploaded }: UploadProps) {
-  const ids = uploadIds(value);
-  const max = Math.max(1, question.max_files ?? 1);
+export function FileUploadInput({ question, value, onChange, attemptId, upload, onUploaded, knownFiles, assets, links }: UploadProps) {
+  // exactly one file per answer: a new file replaces the old one
+  const ids = uploadIds(value).slice(0, 1);
   const exts = normalizeExtensions(question.allowed_extensions);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [known, setKnown] = useState<Record<string, AnswerUpload>>({});
-  const replaceRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const inputId = `file-${question.id}`;
 
-  const info = (id: string): AnswerUpload => known[id] ?? uploadedFile(attemptId, id) ?? { id, name: "Uploaded file", size: 0 };
+  const info = (id: string): AnswerUpload =>
+    known[id] ?? knownFiles?.find((f) => f.id === id) ?? uploadedFile(attemptId, id) ?? { id, name: "Uploaded file", size: 0 };
 
   async function pick(file: File | undefined) {
     if (!file) return;
@@ -235,9 +241,7 @@ export function FileUploadInput({ question, value, onChange, attemptId, upload, 
       const up = await upload(file);
       setKnown((k) => ({ ...k, [up.id]: up }));
       onUploaded?.(up);
-      const replacing = replaceRef.current;
-      const next = replacing ? ids.map((x) => (x === replacing ? up.id : x)) : max === 1 ? [up.id] : [...ids, up.id];
-      onChange(next.length ? next : undefined);
+      onChange([up.id]);
     } catch (e) {
       setProblem(
         e instanceof NetworkError
@@ -247,27 +251,25 @@ export function FileUploadInput({ question, value, onChange, attemptId, upload, 
             : "The upload failed. Try again.",
       );
     } finally {
-      replaceRef.current = null;
       setBusy(false);
       if (inputRef.current) inputRef.current.value = "";
     }
   }
 
-  const choose = (replacing: string | null) => {
-    replaceRef.current = replacing;
-    inputRef.current?.click();
-  };
+  const choose = () => inputRef.current?.click();
 
   const rules = [
     exts.length ? `${extensionList(exts)} files` : "Any file type",
     question.max_file_size ? `up to ${formatSize(question.max_file_size)}` : null,
-    max > 1 ? `at most ${max} files` : null,
   ]
     .filter(Boolean)
     .join(", ");
 
   return (
     <div className="stu-upload" data-testid="file-upload">
+      {question.instructions_md?.trim() && (
+        <MarkdownContent format="markdown" text={question.instructions_md} className="stu-upload-rules" assets={assets} links={links} />
+      )}
       <input
         ref={inputRef}
         id={inputId}
@@ -280,14 +282,14 @@ export function FileUploadInput({ question, value, onChange, attemptId, upload, 
         onChange={(e) => void pick(e.target.files?.[0])}
       />
       {ids.length > 0 && (
-        <ul className="stu-upload-files" aria-label="Your files">
+        <ul className="stu-upload-files" aria-label="Your file">
           {ids.map((id) => {
             const f = info(id);
             return (
               <li key={id} className="stu-upload-file">
                 <span className="name">{f.name}</span>
                 {f.size > 0 && <span className="size">{formatSize(f.size)}</span>}
-                <button type="button" className="stu-btn sm" disabled={busy} onClick={() => choose(id)}>
+                <button type="button" className="stu-btn sm" disabled={busy} onClick={choose}>
                   Replace
                 </button>
                 <button
@@ -295,10 +297,7 @@ export function FileUploadInput({ question, value, onChange, attemptId, upload, 
                   className="stu-btn sm quiet"
                   disabled={busy}
                   aria-label={`Remove ${f.name}`}
-                  onClick={() => {
-                    const next = ids.filter((x) => x !== id);
-                    onChange(next.length ? next : undefined);
-                  }}
+                  onClick={() => onChange(undefined)}
                 >
                   Remove
                 </button>
@@ -307,15 +306,15 @@ export function FileUploadInput({ question, value, onChange, attemptId, upload, 
           })}
         </ul>
       )}
-      {ids.length < max && (
+      {ids.length === 0 && (
         <div className="stu-upload-drop">
-          <button type="button" className="stu-btn primary" disabled={busy} onClick={() => choose(null)}>
-            {busy ? "Uploading…" : ids.length ? "Add another file" : "Choose a file"}
+          <button type="button" className="stu-btn primary" disabled={busy} onClick={choose}>
+            {busy ? "Uploading…" : "Choose a file"}
           </button>
           <span className="stu-upload-rules">{rules}</span>
         </div>
       )}
-      {busy && ids.length >= max && (
+      {busy && ids.length > 0 && (
         <p className="stu-hint" role="status">
           Uploading…
         </p>

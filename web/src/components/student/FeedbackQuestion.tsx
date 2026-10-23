@@ -4,8 +4,8 @@ import { LETTERS, fmtNum } from "./format";
 import { QuestionImages } from "../QuestionImages";
 import { LANGUAGE_LABEL } from "../../lib/code/languages";
 import "../../styles/code.css";
-import { OjContent } from "../OjContent";
-import { isCodeAnswer } from "../../lib/ojAnswers";
+import { MarkdownContent } from "../MarkdownContent";
+import { isCodeAnswer } from "../../lib/answerTypes";
 
 export function typeLabel(q: Pick<FQ, "type" | "options">): string {
   if (q.type === "mcq") {
@@ -25,6 +25,7 @@ const STATUS: Record<FQ["status"], { cls: string; word: string }> = {
   partial: { cls: "warn", word: "partial" },
   wrong: { cls: "danger", word: "wrong" },
   unanswered: { cls: "", word: "not answered" },
+  pending: { cls: "", word: "being graded" },   // not graded yet
 };
 
 export function StatusPill({ q }: { q: Pick<FQ, "status" | "points" | "points_awarded"> }) {
@@ -144,10 +145,10 @@ export function FeedbackQuestionCard({ q }: { q: FQ }) {
   );
 }
 
-// ---------------------------------------------------------------- DKU OJ bridge
+// ---------------------------------------------------------------- graded in another system
 
-/** A DKU OJ answer in words (the feedback page). */
-export function describeOjAnswer(q: Pick<FQ, "type" | "options" | "multiple">, given: AnswerValue | null | undefined): string {
+/** An answer in words (the feedback page). */
+export function describeRichAnswer(q: Pick<FQ, "type" | "options" | "multiple">, given: AnswerValue | null | undefined): string {
   if (given === null || given === undefined || given === "") return "No answer";
   if (isCodeAnswer(given)) return given.source.trim() ? given.source : "No answer";
   if (q.type === "mcq" && Array.isArray(given))
@@ -160,39 +161,43 @@ export function describeOjAnswer(q: Pick<FQ, "type" | "options" | "multiple">, g
   return String(given);
 }
 
-function ojStatus(q: FQ): FQ["status"] {
+function richStatus(q: FQ): FQ["status"] {
   if (q.status) return q.status;
   if (q.points_awarded >= q.points && q.points > 0) return "correct";
   return q.points_awarded > 0 ? "partial" : "wrong";
 }
 
-/** One question of a DKU OJ exam on the feedback page: points and DKU OJ's feedback. */
-export function OjFeedbackQuestionCard({ q }: { q: FQ }) {
+/** One question of an exam graded elsewhere: points and that system's feedback. */
+export function ExternalFeedbackQuestionCard({ q }: { q: FQ }) {
   const headId = `fbq-${q.question_id}`;
   const label = q.label || `Question ${q.index + 1}`;
   const code = isCodeAnswer(q.given) || q.type === "code";
   return (
-    <article className="stu-fbq" aria-labelledby={headId} data-testid="oj-feedback-question">
+    <article className="stu-fbq" aria-labelledby={headId} data-testid="external-feedback-question">
       <div className="stu-fbq-head">
         <h2 id={headId}>
           {label}
           {q.title ? ` · ${q.title}` : ""}
         </h2>
-        <StatusPill q={{ ...q, status: ojStatus(q) }} />
+        <StatusPill q={{ ...q, status: richStatus(q) }} />
       </div>
-      <OjContent className="stu-fbq-prompt" format={q.prompt_format ?? "oj_md"} text={q.prompt} />
+      <MarkdownContent className="stu-fbq-prompt" format={q.prompt_format ?? "markdown"} text={q.prompt} />
       <div className={`stu-ans${code ? " code" : ""}`}>
         <span>YOUR ANSWER{isCodeAnswer(q.given) ? ` · ${q.given.language}` : ""}</span>
         {code ? (
-          <pre className="stu-fbq-code">{describeOjAnswer(q, q.given)}</pre>
+          <pre className="stu-fbq-code">{describeRichAnswer(q, q.given)}</pre>
         ) : (
-          <span style={{ whiteSpace: "pre-wrap" }}>{describeOjAnswer(q, q.given)}</span>
+          <span style={{ whiteSpace: "pre-wrap" }}>{describeRichAnswer(q, q.given)}</span>
         )}
       </div>
-      {q.feedback_md?.trim() && (
-        <div className="fp-oj-feedback" data-testid="oj-feedback">
+      {q.comment?.trim() && (
+        <div className="fp-external-feedback" data-testid="external-feedback">
           <strong className="stu-small">Feedback</strong>
-          <OjContent format="oj_md" text={q.feedback_md} />
+          {q.comment_format === "markdown" ? (
+            <MarkdownContent format="markdown" text={q.comment} />
+          ) : (
+            <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{q.comment}</p>
+          )}
         </div>
       )}
     </article>
