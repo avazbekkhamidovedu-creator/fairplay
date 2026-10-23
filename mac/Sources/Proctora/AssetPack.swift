@@ -38,6 +38,8 @@ public enum AssetPack {
         if path.hasPrefix("/") { path = path.dropFirst() }
         guard !path.isEmpty, path.utf8.count <= maxPathLength, !path.hasPrefix("/"),
               !path.contains("\\"), !path.contains("\0"),
+              // a "%" left after decoding is a broken escape ("%ZZ"); no pack file has one
+              !path.contains("%"),
               !path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else { return nil }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         for part in parts {
