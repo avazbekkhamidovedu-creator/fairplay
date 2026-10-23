@@ -4,11 +4,10 @@ import hashlib
 import json
 import statistics
 import time
-from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, case, delete, false, func, or_, select, update
+from sqlalchemy import and_, case, delete, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
@@ -21,13 +20,13 @@ from .schemas import (QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitI
 from .access import eligible_students, open_to_out
 from .security import Principal, require_teacher
 from .services import (external_block, attempt_key, code_fields, code_language, exam_closes_at, exam_default_language, exam_delivery, exam_out, exam_out_full, invalidate_exam,
-                       new_id, new_invigilator_code, new_receipt, new_session_id,
-                       new_start_code, pending_by_exam)
+                       new_id, new_receipt, new_session_id, pending_by_exam)
 from . import app_client as ac
+from . import exam_control as control
 from .routes_classes import check_class_for_exam
 from .store import get_store
 from .timeutil import iso, iso_from_epoch, utcnow
-from .closing import AUTO_CLOSE_EVENT, LATE_GRACE, close_exam_now, max_extra
+from .closing import AUTO_CLOSE_EVENT, LATE_GRACE
 
 router = APIRouter(prefix="/api/exams", tags=["teacher"])
 
@@ -37,8 +36,7 @@ NON_FLAG_TYPES = ("lock_started", "lock_ended", "device_released", "device_bound
                   "offline_exit_code_issued",
                   "resume_approved", "swap_approved",     # S3 / S4: the teacher's own actions
                   AUTO_CLOSE_EVENT)                       # 2026-10-23: the automatic close
-# S3: the wait for the teacher's OK is given back, up to this much.
-MAX_RESUME_EXTENSION = timedelta(minutes=15)
+MAX_RESUME_EXTENSION = control.MAX_RESUME_EXTENSION
 # The app's own signal counts as "app online" for this long (beats every 5 s).
 APP_ONLINE_WINDOW_S = 15
 MAX_LIVE_FLAGS = 50
@@ -216,48 +214,11 @@ async def open_exam(exam_id: str, body: OpenIn | None = None, p: Principal = Dep
                     session: AsyncSession = Depends(get_session)):
     """Body (optional): {"open_to": "all" | [student ids]} -- who may start (default all)."""
     e = await _own_exam(session, exam_id, p)
-    if e.status == "live":
-        raise HTTPException(409, "Exam is already live")
-    if exam_delivery(e) == "paper":  # slice 6: printed, scanned and graded; never opened
-        raise HTTPException(409, "Paper exams are printed, not opened in the app")
-    integ = integration_for(e)
-    if integ is not None:            # integrations decide who takes it (their roster)
-        if integ.open_refused_message(e):
-            raise HTTPException(409, integ.open_refused_message(e))
-    elif e.class_id is None and e.course_link_id is None:   # audit S-03
-        raise HTTPException(409, "Choose the class that takes this exam before opening it")
-    now = utcnow()
-    closes = exam_closes_at(e)
-    if closes is not None and now >= closes + await max_extra(session, e):
-        if integ is not None:        # the source owns the end time
-            raise HTTPException(409, f"The end time set in {integ.name} has passed. "
-                                     f"Change it in {integ.name} to open the exam again.")
-        if e.status == "draft":      # never opened: the setting is a mistake, not a past run
-            raise HTTPException(409, "The automatic close time has passed. Change or clear "
-                                     "\"Close automatically at\" in the exam settings.")
-        e.closes_at = None           # re-opened after its close time: the teacher closes it
-    e.open_to = await _checked_open_to(session, e, (body or OpenIn()).open_to)
-    e.status = "live"
-    e.start_code = new_start_code()
-    e.invigilator_code = new_invigilator_code()
-    e.closed_at = None
-    e.auto_closed = False
-    e.updated_at = now
-    await session.commit()
-    await invalidate_exam(get_store(), exam_id)
+    await control.open_exam(session, e, (body or OpenIn()).open_to)
     return await exam_out_full(session, e)
 
 
-async def _checked_open_to(session: AsyncSession, e: Exam, value) -> list[int] | None:
-    """"all" -> None; a list -> the sorted ids, each one a student of this exam (422 else)."""
-    if value == "all" or value is None:
-        return None
-    wanted = sorted({int(x) for x in value})
-    eligible = {sid for sid, _, _ in await eligible_students(session, e)}
-    unknown = [x for x in wanted if x not in eligible]
-    if unknown:
-        raise HTTPException(422, f"Not a student of this exam: {', '.join(map(str, unknown[:10]))}")
-    return wanted
+_checked_open_to = control.checked_open_to
 
 
 @router.get("/{exam_id}/students")
@@ -279,7 +240,7 @@ async def update_open_to(exam_id: str, body: OpenToIn, p: Principal = Depends(re
     who already started never stops their attempt; it only blocks a new start."""
     e = await _own_exam(session, exam_id, p)
     if exam_delivery(e) == "paper":
-        raise HTTPException(409, "Paper exams are printed, not opened in the app")
+        raise HTTPException(409, control.PAPER_NOT_OPENED)
     if body.open_to is not None:
         value = body.open_to
     else:
@@ -289,10 +250,7 @@ async def update_open_to(exam_id: str, body: OpenToIn, p: Principal = Depends(re
             base = set(e.open_to or []) if e.open_to is not None else \
                 {sid for sid, _, _ in await eligible_students(session, e)}
             value = sorted((base | set(body.add)) - set(body.remove))
-    e.open_to = await _checked_open_to(session, e, value)
-    e.updated_at = utcnow()
-    await session.commit()
-    await invalidate_exam(get_store(), exam_id)
+    await control.set_open_to(session, e, value)
     return await exam_out_full(session, e)
 
 
@@ -300,14 +258,8 @@ async def update_open_to(exam_id: str, body: OpenToIn, p: Principal = Depends(re
 async def close_exam(exam_id: str, p: Principal = Depends(require_teacher),
                      session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
-    if e.status == "closed":
-        return await exam_out_full(session, e)  # idempotent
-    # slice 6: a paper exam is never live; closing it (from draft) ends collecting scans
-    # so grades can be released like any other exam.
-    if e.status != "live" and not (e.status == "draft" and exam_delivery(e) == "paper"):
-        raise HTTPException(409, "Exam is not live")
-    # 2026-10-23: the same path as the automatic close (app.closing)
-    await close_exam_now(session, e, utcnow())
+    # 2026-10-23: the same path as the automatic close (app.closing); idempotent
+    await control.close_exam(session, e)
     return await exam_out_full(session, e)
 
 
@@ -317,12 +269,7 @@ async def rotate_code(exam_id: str, p: Principal = Depends(require_teacher),
     """Audit #13: new start code on demand (e.g. after it was seen outside the room).
     Students already writing are not affected; offline packages need the new code."""
     e = await _own_exam(session, exam_id, p)
-    if e.status != "live":
-        raise HTTPException(409, "Exam is not live")
-    e.start_code = new_start_code()
-    e.updated_at = utcnow()
-    await session.commit()
-    await invalidate_exam(get_store(), exam_id)
+    await control.rotate_start_code(session, e)
     return await exam_out_full(session, e)
 
 
@@ -408,22 +355,7 @@ async def approve_resume(exam_id: str, aid: str, p: Principal = Depends(require_
     """S3: let a student who came back after FairPlay closed continue. The time spent
     waiting is given back (at most 15 minutes)."""
     _, a = await _exam_attempt(session, exam_id, aid, p)
-    if a.status != "in_progress":
-        raise HTTPException(409, "Attempt already submitted")
-    if not a.pending_resume:
-        raise HTTPException(409, "This student is not waiting for approval")
-    now = utcnow()
-    added = min(max(now - (a.pending_since or now), timedelta(0)), MAX_RESUME_EXTENSION)
-    a.deadline_at = a.deadline_at + added
-    a.pending_resume = False                  # pending_since stays: approval = "approved"
-    a.updated_at = now
-    await session.commit()
-    store = get_store()
-    await store.delete(attempt_key(aid))      # beats and heartbeats re-read approval + deadline
-    minutes = round(added.total_seconds() / 60, 1)
-    await ac.add_event(session, store, aid, exam_id, "resume_approved",
-                       f"teacher let the student continue; {minutes:g} min added")
-    return {"ok": True, "minutes_added": minutes, "deadline_at": iso(a.deadline_at)}
+    return await control.approve_resume(session, a)
 
 
 @router.get("/{exam_id}/readiness")
@@ -722,23 +654,7 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
 async def extend_exam(exam_id: str, body: ExtendIn, p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
-    if e.status != "live":
-        raise HTTPException(409, "Exam is not live")
-    delta = timedelta(minutes=body.minutes)
-    e.duration_min += body.minutes
-    e.updated_at = utcnow()
-    rows = (await session.execute(
-        select(Attempt.id, Attempt.deadline_at)
-        .where(Attempt.exam_id == exam_id, Attempt.status == "in_progress"))).all()
-    if rows:
-        # Bulk UPDATE by primary key (dialect-neutral; no interval arithmetic in SQL).
-        await session.execute(update(Attempt), [{"id": aid, "deadline_at": dl + delta}
-                                                for aid, dl in rows])
-    await session.commit()
-    store = get_store()
-    await invalidate_exam(store, exam_id)  # new starts get the longer duration
-    if rows:  # heartbeats re-read the new deadline from the DB on their next call
-        await store.delete(*[attempt_key(aid) for aid, _ in rows])
+    await control.extend_exam(session, e, body.minutes)
     return await exam_out_full(session, e)
 
 

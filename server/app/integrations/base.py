@@ -160,13 +160,7 @@ class ExternalSource:
                             "rubric_scores": None, "graded_at": result.get("updated_at")}
         return out
 
-    # ------------------------------------------------------------ live-room link
-    async def live_login(self, session: AsyncSession, params: dict) -> tuple[int, str]:
-        """Check a signed link from the external system: (teacher user id, exam id) or
-        HTTPException(403)."""
-        from fastapi import HTTPException
-        raise HTTPException(404, "Not Found")
-
+    # ------------------------------------------------------------ status
     async def status(self, session: AsyncSession, user_id: int) -> dict:
         return {"enabled": self.enabled, "source": self.id, "name": self.name}
 

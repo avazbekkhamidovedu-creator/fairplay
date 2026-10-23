@@ -20,14 +20,12 @@ import StudentProfilePage from "./StudentProfilePage";
 import PracticePage from "./PracticePage";
 import ScanOverviewPage from "./scan/ScanOverviewPage";
 import ScanExamPage from "./scan/ScanExamPage";
-import ExternalLivePage from "./ExternalLivePage";
 
 export default function TeacherRoutes() {
   return (
     <Routes>
       <Route path="login" element={<LoginPage role="teacher" />} />
       {/* integrations: "Open live room" sign-in (one-time code, no password) */}
-      <Route path="external-live" element={<ExternalLivePage />} />
       <Route
         element={
           <RequireAuth role="teacher">

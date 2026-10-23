@@ -308,7 +308,8 @@ def test_external_selection_and_auto_close(oj, fake):  # noqa: F811
     assert e["closes_at"] == iso(fake.end)                 # from the source, read-only
     # the external roster is the list to pick from (bob is in the demo class, not listed)
     ids = ids_by_name(oj, teacher, e["id"])
-    assert set(ids) == {"alice", "carol", "ax19"}
+    # (bridge v2: a synced student who never set up has the placeholder username oj:<netid>)
+    assert set(ids) == {"alice", "carol", "oj:ax19"}
     bob_id = db(oj, lambda s: _user_id(s, "bob"))
     r = oj.post(f"/api/exams/{e['id']}/open", json={"open_to": [bob_id]}, headers=teacher)
     assert r.status_code == 422

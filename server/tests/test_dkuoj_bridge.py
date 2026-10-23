@@ -26,6 +26,21 @@ TOKEN = "fairplay-shared-token-0123456789abcdef"
 KEY = "cs101a-midterm"
 
 
+def fp_signed(req: httpx.Request, token: str = TOKEN) -> bool:
+    """Checks a FairPlay -> DKU OJ request like DKU OJ does (v2 §1), written out here
+    independently of app.integrations.dkuoj.signing. No Bearer token any more."""
+    if req.headers.get("authorization"):
+        return False
+    key = hmac.new(token.encode(), b"fairplay-bridge v2 fp->oj", hashlib.sha256).digest()
+    ts, nonce = req.headers.get("x-fp-timestamp", ""), req.headers.get("x-fp-nonce", "")
+    if not ts.isdigit() or abs(time.time() - int(ts)) > 60 or len(nonce) != 32:
+        return False
+    canonical = "\n".join(["v2", req.method, req.url.raw_path.decode(), ts, nonce, "",
+                           hashlib.sha256(req.content).hexdigest()])
+    want = hmac.new(key, canonical.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(want, req.headers.get("x-fp-signature", ""))
+
+
 def png_bytes() -> bytes:
     from PIL import Image
     buf = io.BytesIO()
@@ -114,7 +129,7 @@ class FakeOJ:
         u = urlsplit(str(req.url))
         path = u.path
         self.calls.append(f"{req.method} {path}")
-        if req.headers.get("authorization") != f"Bearer {TOKEN}":
+        if not fp_signed(req):
             return httpx.Response(401, json={"detail": "bad token"})
         assert path.startswith("/api/fairplay/v1/")
         p = path[len("/api/fairplay/v1/"):]
@@ -527,47 +542,31 @@ def test_asset_hash_mismatch_keeps_package_out(oj, fake):
     assert e["question_count"] == 0 and e["external"]["version"] is None
 
 
-def test_live_link_signs_in_editors_only(oj, fake):
+def test_live_link_route_is_gone(oj, fake):
+    """v2 §6: the signed "open the live room" sign-in is retired. The path is only the web
+    app's page now (no redirect, no sign-in), and the code exchange is gone."""
     run(oj)
     teacher = login(oj, "teacher")
     e = oj_exam(oj, teacher)
-
-    def link(user="teacher", exp=None, key=KEY, token=TOKEN):
-        exp = str(exp or int(time.time()) + 120)
-        sig = hmac.new(token.encode(), f"live|{key}|{user}|{exp}".encode(), hashlib.sha256).hexdigest()
-        return f"/integrations/dkuoj/live?exam={key}&user={user}&exp={exp}&sig={sig}"
-    r = oj.get(link(), follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].startswith("/teacher/external-live?code=")
-    code = r.headers["location"].split("code=", 1)[1]
-    ex = oj.post("/api/integrations/live/exchange", json={"code": code})
-    assert ex.status_code == 200 and ex.json()["exam_id"] == e["id"] and ex.json()["role"] == "teacher"
-    h = {"Authorization": f"Bearer {ex.json()['token']}"}
-    assert oj.get(f"/api/exams/{e['id']}/live", headers=h).status_code == 200
-    assert oj.post("/api/integrations/live/exchange", json={"code": code}).status_code == 403     # once
-    good = link(exp=int(time.time()) + 100)
-    assert oj.get(good, follow_redirects=False).status_code == 303
-    assert oj.get(good, follow_redirects=False).status_code == 403                     # link used
-    assert oj.get(link(token="wrong-token-wrong-token-wrong-token"), follow_redirects=False).status_code == 403
-    assert oj.get(link(exp=int(time.time()) - 1), follow_redirects=False).status_code == 403
-    assert oj.get(link(exp=int(time.time()) + 3600), follow_redirects=False).status_code == 403
-    assert oj.get(link(user="alice"), follow_redirects=False).status_code == 403        # a student
-    assert oj.get(link(key="other-exam"), follow_redirects=False).status_code == 403
-    # sd123 is an editor (account created by the sync): signed in; a non-editor teacher is not
-    assert oj.get(link(user="sd123", exp=int(time.time()) + 90), follow_redirects=False).status_code == 303
+    exp = str(int(time.time()) + 120)
+    sig = hmac.new(TOKEN.encode(), f"live|{KEY}|teacher|{exp}".encode(), hashlib.sha256).hexdigest()
+    r = oj.get(f"/integrations/dkuoj/live?exam={KEY}&user=teacher&exp={exp}&sig={sig}", follow_redirects=False)
+    assert r.status_code != 303 and "location" not in r.headers
+    assert oj.post("/api/integrations/live/exchange", json={"code": "abcdefghijkl"}).status_code == 404
+    # the editors still work with the exam in the FairPlay teacher API (FairPlay-side sign-in)
+    assert oj.get(f"/api/exams/{e['id']}/live", headers=teacher).status_code == 200
     fake.editors = [fake.editors[1]]
     fake.listing_updated = iso(utcnow() + timedelta(seconds=1))
     run(oj)
-    assert oj.get(link(user="teacher", exp=int(time.time()) + 80), follow_redirects=False).status_code == 403
-    # the demo teacher lost access to the exam in the teacher API too
+    # the demo teacher lost access to the exam in the teacher API
     assert oj.get(f"/api/exams/{e['id']}", headers=teacher).status_code == 404
     assert e["id"] not in [x["id"] for x in oj.get("/api/exams", headers=teacher).json()]
 
 
 def test_bridge_off_hides_routes(client):
-    assert client.get("/integrations/dkuoj/live?exam=x&user=y&exp=1&sig=" + "0" * 64,
-                      follow_redirects=False).status_code == 404
-    assert client.get("/integrations/nope/live", follow_redirects=False).status_code == 404
-    assert client.post("/api/integrations/live/exchange", json={"code": "abcdefgh"}).status_code == 403
+    assert client.post("/api/integrations/live/exchange", json={"code": "abcdefgh"}).status_code == 404
+    assert client.get("/api/integrations/dkuoj/v1/classes/31/status").status_code == 404
+    assert client.post("/api/setup/identify", json={"first_name": "a", "last_name": "b", "netid": "c"}).status_code == 404
     t = login(client, "teacher")
     assert client.get("/api/integrations/dkuoj/status", headers=t).json()["enabled"] is False
 
@@ -750,9 +749,8 @@ class RealShapeOJ:
         p = u.path[len("/api/fairplay/v1/"):]
         q = parse_qs(u.query)
         self.calls.append(f"{req.method} {p}")
-        if req.headers.get("authorization") != f"Bearer {TOKEN}":
-            return httpx.Response(401, json={"detail": "Invalid or missing bearer token."},
-                                  headers={"WWW-Authenticate": "Bearer"})
+        if not fp_signed(req):
+            return httpx.Response(401, json={"detail": "bad signature"})
         since = (q.get("changed_since") or [None])[0]
         if p == "exams":
             rows = [real_listing(self.now, removed=True)] if self.removed and since else \

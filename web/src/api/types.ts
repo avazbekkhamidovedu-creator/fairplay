@@ -34,6 +34,26 @@ export interface LoginResponse {
   name: string;
 }
 
+/** Bridge v2 §4: a class login answers with a short-lived setup token instead of a session. */
+export interface ClassLoginSetupResponse {
+  setup_token: string;
+  class: { name: string; course: string };
+}
+
+/** What POST /api/auth/login returns: a normal session, or the start of class-login set-up. */
+export type LoginResult = LoginResponse | ClassLoginSetupResponse;
+
+export function isClassLoginSetup(r: LoginResult): r is ClassLoginSetupResponse {
+  return typeof (r as ClassLoginSetupResponse).setup_token === "string";
+}
+
+/** Bridge v2 §4 step 2: the student was found on the class list. */
+export interface SetupIdentifyResponse {
+  identity_token: string;
+  name: string;
+  netid: string;
+}
+
 export interface Me {
   username: string;
   name: string;
@@ -1283,15 +1303,6 @@ export interface AnswerUpload {
   question_id?: string;
   sha256?: string;
   created_at?: string;
-}
-
-/** POST /api/integrations/live/exchange: the one-time code from an external "Open live room" link. */
-export interface ExternalLiveSignIn {
-  token: string;
-  role: "teacher";
-  name: string;
-  username: string;
-  exam_id: string;
 }
 
 // ---------- 2026-10-23: open to everyone or selected students; automatic close ----------

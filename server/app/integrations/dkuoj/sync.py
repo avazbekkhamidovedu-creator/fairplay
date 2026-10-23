@@ -100,31 +100,62 @@ def _name(p: dict) -> str:
     return (n or str(p.get("username") or "")).strip()[:200]
 
 
-def _username(p: dict) -> str | None:
+def _netid(p: dict) -> str | None:
     u = str(p.get("username") or "").strip()
-    return u[:64] if u and not u.startswith("__") else None
+    return u[:64] if u and not u.startswith("__") and ":" not in u else None
+
+
+def placeholder_username(netid: str) -> str:
+    """The username of an account that never set up: "oj:<netid>" can't be typed as a
+    username (setup usernames are [a-z0-9._-]) and its password is unusable."""
+    return f"oj:{netid}"[:64]
+
+
+async def find_by_netid(session: AsyncSession, netid: str) -> User | None:
+    """The account of a NetID. Older databases: an account whose username is the NetID
+    and that has no netid yet is linked to it now (once)."""
+    u = (await session.execute(select(User).where(User.netid == netid))).scalar_one_or_none()
+    if u is not None:
+        return u
+    u = (await session.execute(select(User).where(User.username == netid, User.netid.is_(None)))
+         ).scalar_one_or_none()
+    if u is not None:
+        u.netid = netid
+        await session.flush()
+    return u
 
 
 async def ensure_user(session: AsyncSession, person: dict, role: str) -> User | None:
-    """Match by username (= DKU OJ username / NetID); create a missing one with an
-    unusable password. An existing account with another role is left alone (None)."""
-    username = _username(person)
-    if username is None:
+    """Match by netid (= DKU OJ username); create a missing one with the placeholder
+    username and an unusable password (it can't sign in until the student sets up). An
+    existing account with another role is left alone (None)."""
+    netid = _netid(person)
+    if netid is None:
         return None
-    u = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
+    u = (await session.execute(select(User).where(User.netid == netid))).scalar_one_or_none()
     if u is None:
-        u = User(username=username, name=_name(person) or username, role=role,
+        legacy = (await session.execute(select(User).where(User.username == netid, User.netid.is_(None)))
+                  ).scalar_one_or_none()
+        if legacy is not None:
+            if legacy.role != role:
+                log.warning("DKU OJ %s %s is a FairPlay %s here; skipped", role, netid, legacy.role)
+                return None
+            legacy.netid = netid
+            u = legacy
+            await session.flush()
+    if u is None:
+        u = User(username=placeholder_username(netid), netid=netid, name=_name(person) or netid, role=role,
                  password_hash=IMPORTED_PASSWORD, created_at=utcnow())
         session.add(u)
         try:
             await session.flush()
         except IntegrityError:          # created by a parallel request
             await session.rollback()
-            u = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
+            u = (await session.execute(select(User).where(User.netid == netid))).scalar_one_or_none()
             if u is None:
                 return None
     if u.role != role:
-        log.warning("DKU OJ %s %s is a FairPlay %s here; skipped", role, username, u.role)
+        log.warning("DKU OJ %s %s is a FairPlay %s here; skipped", role, netid, u.role)
         return None
     name = _name(person)
     if u.password_hash == IMPORTED_PASSWORD and name and u.name != name:

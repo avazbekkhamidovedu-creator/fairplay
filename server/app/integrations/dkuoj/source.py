@@ -2,9 +2,6 @@
 core needs goes through these hooks."""
 from __future__ import annotations
 
-import hashlib
-import hmac
-import time
 from datetime import timedelta
 
 from fastapi import HTTPException
@@ -12,20 +9,13 @@ from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from ...models import Exam, User
+from ...models import Exam
 from ..base import ExternalSource
 from .config import DkuojConfig
 from .models import OjAsset, OjEditor, OjRosterEntry, OjState
 
-LINK_MAX_AHEAD_S = 300        # DKU OJ makes links valid for 120 s; allow clock skew
-BAD_LINK = "This FairPlay link is not valid any more. Open the live room again from DKU OJ."
-NOT_EDITOR = "You are not an editor of this exam in FairPlay yet. Wait two minutes and try again."
 NOT_READY = "This exam has not arrived from DKU OJ yet. Try again in a minute."
 REMOVED = "FairPlay was switched off for this exam in DKU OJ."
-
-
-def live_signature(token: str, key: str, user: str, exp: str) -> str:
-    return hmac.new(token.encode(), f"live|{key}|{user}|{exp}".encode(), hashlib.sha256).hexdigest()
 
 
 class DkuojSource(ExternalSource):
@@ -42,6 +32,11 @@ class DkuojSource(ExternalSource):
 
     def configure(self, settings) -> None:
         self.config = DkuojConfig.from_env(getattr(settings, "public_url", ""))
+
+    def routers(self) -> list:
+        from .routes_v2 import router as bridge_router
+        from .setup import router as setup_router
+        return [bridge_router, setup_router]
 
     def background_tasks(self, settings) -> list:
         from . import sync
@@ -129,31 +124,6 @@ class DkuojSource(ExternalSource):
         a = (await session.execute(select(OjAsset).options(undefer(OjAsset.data))
                                    .where(OjAsset.exam_id == exam_id, OjAsset.name == name))).scalar_one_or_none()
         return (a.data, a.content_type, a.sha256) if a else None
-
-    # ------------------------------------------------------------ live-room link
-    async def live_login(self, session: AsyncSession, params: dict) -> tuple[int, str]:
-        """exam=<key>&user=<username>&exp=<unix>&sig=<hex HMAC-SHA256(token,
-        "live|<key>|<username>|<exp>")>: signature, expiry (at most 5 min ahead), single
-        use, and the user is an editor of that exam (from the last sync)."""
-        from ...store import get_store
-        key, user, exp, sig = (str(params.get(k) or "") for k in ("exam", "user", "exp", "sig"))
-        try:
-            exp_i = int(exp)
-        except ValueError:
-            raise HTTPException(403, BAD_LINK) from None
-        now = int(time.time())
-        if not key or not user or len(sig) != 64 or exp_i < now or exp_i > now + LINK_MAX_AHEAD_S:
-            raise HTTPException(403, BAD_LINK)
-        if not hmac.compare_digest(live_signature(self.config.token, key, user, exp), sig.lower()):
-            raise HTTPException(403, BAD_LINK)
-        e = (await session.execute(select(Exam).where(Exam.external_key == key, Exam.source == self.id))
-             ).scalar_one_or_none()
-        u = (await session.execute(select(User).where(User.username == user))).scalar_one_or_none()
-        if e is None or u is None or u.role != "teacher" or not await self.is_teacher(session, e, u.id):
-            raise HTTPException(403, NOT_EDITOR)
-        if not await get_store().setnx(f"ojlive-used:{sig.lower()}", "1", LINK_MAX_AHEAD_S + 60):
-            raise HTTPException(403, BAD_LINK)          # each link signs in once
-        return u.id, e.id
 
     async def status(self, session: AsyncSession, user_id: int) -> dict:
         """Last sync, outbox counts, and failed hand-ins of this teacher's DKU OJ exams.

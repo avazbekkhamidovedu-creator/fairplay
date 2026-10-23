@@ -23,6 +23,11 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     # Audit S-15: bumped to sign this user out everywhere (tokens carry the version).
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # DKU OJ bridge v2: the DKU OJ username (NetID) this account belongs to, and when the
+    # student chose their own username and password (None = never set up / reset). Unique
+    # index (not a constraint) so db._add_missing_columns can add it to older databases.
+    netid: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    set_up_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Exam(Base):

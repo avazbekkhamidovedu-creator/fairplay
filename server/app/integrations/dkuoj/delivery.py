@@ -134,7 +134,9 @@ async def _deliver_one(session: AsyncSession, client: DkuojClient, throttle: Thr
     e = await session.get(Exam, d.exam_id)
     if a is None or e is None or not e.external_key:
         return await _dead(session, d, "the attempt or exam is gone", now)
-    username = (await session.execute(select(User.username).where(User.id == a.student_id))).scalar()
+    # DKU OJ knows the student by NetID (v2 §4); the FairPlay username is their own choice
+    row = (await session.execute(select(User.netid, User.username).where(User.id == a.student_id))).first()
+    username = (row.netid or row.username) if row is not None else None
     try:
         body = await _payload(session, client, throttle, cfg, d, a, e, username or "")
         await throttle.wait()

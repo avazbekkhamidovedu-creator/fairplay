@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError, auth, setToken } from "../api/client";
-import type { Role } from "../api/types";
+import { isClassLoginSetup, type ClassLoginSetupResponse, type Role } from "../api/types";
+import ClassLoginSetup from "./ClassLoginSetup";
 import { isNative } from "../lib/bridge";
 import { Icon, LogoMark, Wordmark } from "../components/ui/Icon";
 import "../styles/teacher.css";
@@ -49,6 +50,8 @@ export default function LoginPage({ role }: { role: Role }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Bridge v2: a class login's set-up (the setup token lives only here, never in storage). */
+  const [setup, setSetup] = useState<ClassLoginSetupResponse | null>(null);
   const copy = COPY[role];
   const demo = useDemoLogins();
   const other: Role = role === "teacher" ? "student" : "teacher";
@@ -63,6 +66,15 @@ export default function LoginPage({ role }: { role: Role }) {
     setBusy(true);
     try {
       const res = await auth.login(username.trim(), password);
+      if (isClassLoginSetup(res)) {
+        if (role !== "student") {
+          setError("This is a class login for students. Use the student sign-in page.");
+          return;
+        }
+        setPassword("");
+        setSetup(res);
+        return;
+      }
       if (res.role !== role) {
         setError(
           role === "teacher"
@@ -74,7 +86,9 @@ export default function LoginPage({ role }: { role: Role }) {
       setToken(role, res.token);
       navigate(`/${role}`, { replace: true });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) setError("Invalid username or password.");
+      // Bridge v2: an expired or stopped class login says so (and who to ask).
+      if (err instanceof ApiError && err.status === 401 && /class login/i.test(err.detail)) setError(err.detail);
+      else if (err instanceof ApiError && err.status === 401) setError("Invalid username or password.");
       else if (err instanceof ApiError) setError(err.detail);
       else setError("Cannot reach the server. Check your connection and try again.");
     } finally {
@@ -101,57 +115,76 @@ export default function LoginPage({ role }: { role: Role }) {
       </aside>
       <main className="t-login-main">
         <div className="t-login-card">
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <h1>{copy.title}</h1>
-            <p className="t-muted" style={{ margin: 0, fontSize: 15 }}>
-              {copy.sub}
-            </p>
-          </div>
-          <form onSubmit={onSubmit} noValidate>
-            <div className="t-field">
-              <label htmlFor="username">Username</label>
-              <input
-                id="username"
-                className="input"
-                autoComplete="username"
-                autoCapitalize="none"
-                spellCheck={false}
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoFocus
-              />
+          {setup ? (
+            <ClassLoginSetup
+              setup={setup}
+              onExpired={(message) => {
+                setSetup(null);
+                setPassword("");
+                setError(message);
+              }}
+              onDone={() => navigate(`/${role}`, { replace: true })}
+            />
+          ) : (
+            <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <h1>{copy.title}</h1>
+              <p className="t-muted" style={{ margin: 0, fontSize: 15 }}>
+                {copy.sub}
+              </p>
             </div>
-            <div className="t-field">
-              <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                className="input"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-            {error && (
-              <div className="alert alert-error" role="alert">
-                {error}
+            <form onSubmit={onSubmit} noValidate>
+              <div className="t-field">
+                <label htmlFor="username">Username</label>
+                <input
+                  id="username"
+                  className="input"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoFocus
+                />
               </div>
+              <div className="t-field">
+                <label htmlFor="password">Password</label>
+                <input
+                  id="password"
+                  className="input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+              {error && (
+                <div className="alert alert-error" role="alert">
+                  {error}
+                </div>
+              )}
+              <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={busy}>
+                {busy ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+            {role === "student" && (
+              <p className="t-login-switch" style={{ margin: 0 }}>
+                First time? Use the class login your professor gave you.
+              </p>
             )}
-            <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={busy}>
-              {busy ? "Signing in…" : "Sign in"}
-            </button>
-          </form>
-          {demo && (
-            <p className="t-demo" style={{ margin: 0 }}>
-              Demo account: <span className="mono">{copy.hint}</span>
-            </p>
-          )}
-          {/* The FairPlay app is for students only and refuses teacher pages (audit M-15). */}
-          {!(isNative() && other === "teacher") && (
-            <p className="t-login-switch" style={{ margin: 0 }}>
-              {role === "teacher" ? "Writing an exam? " : "Teaching? "}
-              <Link to={`/${other}/login`}>{other === "teacher" ? "Teacher sign in" : "Student sign in"}</Link>
-            </p>
+            {demo && (
+              <p className="t-demo" style={{ margin: 0 }}>
+                Demo account: <span className="mono">{copy.hint}</span>
+              </p>
+            )}
+            {/* The FairPlay app is for students only and refuses teacher pages (audit M-15). */}
+            {!(isNative() && other === "teacher") && (
+              <p className="t-login-switch" style={{ margin: 0 }}>
+                {role === "teacher" ? "Writing an exam? " : "Teaching? "}
+                <Link to={`/${other}/login`}>{other === "teacher" ? "Teacher sign in" : "Student sign in"}</Link>
+              </p>
+            )}
+            </>
           )}
         </div>
       </main>

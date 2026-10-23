@@ -68,12 +68,21 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
     row = (await session.execute(
         select(User.id, User.role, User.name, User.password_hash, User.token_version)
         .where(User.username == username))).first()
+    # DKU OJ bridge v2: a class login (temporary, per class) starts the student set-up
+    class_login = None
+    if row is None:
+        from .integrations.dkuoj.setup import find_class_login
+        class_login = await find_class_login(session, username)
     # Release the pooled connection before the CPU-heavy hash check.
     await session.close()
-    stored = row.password_hash if row is not None else await _dummy(s.pbkdf2_iterations)
+    stored = (row.password_hash if row is not None else
+              class_login.password_hash if class_login is not None else await _dummy(s.pbkdf2_iterations))
     async with _slots(request):
         ok = await verify_password_async(body.password, stored,
                                          getattr(s, "login_hash_slots", MAX_PARALLEL_HASHES))
+    if class_login is not None and ok:
+        from .integrations.dkuoj.setup import class_login_answer
+        return class_login_answer(s, class_login)
     if row is None or not ok:
         await store.incr(fails_ui, FAIL_WINDOW)
         await store.incr(fails_u, FAIL_WINDOW)

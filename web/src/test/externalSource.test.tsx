@@ -1,5 +1,5 @@
 // Exams from an external source: the web against the server as built (CONTRACT.md integrations —
-// FairPlay server as implemented"): answer-file endpoint, live-room sign-in, shuffled
+// FairPlay server as implemented"): answer-file endpoint, shuffled
 // options (saved with the original indexes), answer_files, package not here yet, bare
 // string code answers.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -13,7 +13,6 @@ import { CodeQuestion } from "../components/student/CodeQuestion";
 import { FileUploadInput } from "../components/student/QuestionInputs";
 import { setAttemptSession } from "../lib/appSession";
 import { optionOrder } from "../lib/answerTypes";
-import ExternalLivePage, { LIVE_LINK_EXPIRED } from "../pages/teacher/ExternalLivePage";
 import TeacherExamPage from "../pages/teacher/TeacherExamPage";
 
 beforeAll(() => {
@@ -54,45 +53,6 @@ describe("answer files endpoint", () => {
     expect(screen.getByText("report.pdf")).toBeInTheDocument();
     expect(screen.getByText("2 KB")).toBeInTheDocument();
     expect(screen.getByText("PDF").tagName).toBe("STRONG");
-  });
-});
-
-describe("live room sign-in from an external source", () => {
-  function Where() {
-    const l = useLocation();
-    return <p data-testid="where">{l.pathname + l.search}</p>;
-  }
-  const renderAt = (path: string) =>
-    render(
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/teacher/external-live" element={<ExternalLivePage />} />
-          <Route path="/teacher/exams/:id" element={<Where />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-  it("exchanges the one-time code, stores the teacher sign-in and opens the live room", async () => {
-    const ex = vi.spyOn(contentApi, "liveExchange").mockResolvedValue({ token: "T-new", role: "teacher", name: "Shuai Dong", username: "sd123", exam_id: "e_7" });
-    renderAt("/teacher/external-live?code=abc123");
-    expect(await screen.findByTestId("where")).toHaveTextContent("/teacher/exams/e_7?tab=live");
-    expect(ex).toHaveBeenCalledTimes(1);
-    expect(ex).toHaveBeenCalledWith("abc123");
-    expect(getToken("teacher")).toBe("T-new");
-  });
-
-  it.each([400, 401, 403, 410])("says to open it again on %s", async (status) => {
-    vi.spyOn(contentApi, "liveExchange").mockRejectedValue(new ApiError(status, "This FairPlay link is not valid any more."));
-    renderAt("/teacher/external-live?code=used");
-    expect(await screen.findByTestId("external-live-error")).toHaveTextContent(LIVE_LINK_EXPIRED);
-    expect(getToken("teacher")).toBeNull();
-  });
-
-  it("without a code it explains at once", () => {
-    const ex = vi.spyOn(contentApi, "liveExchange");
-    renderAt("/teacher/external-live");
-    expect(screen.getByTestId("external-live-error")).toHaveTextContent(LIVE_LINK_EXPIRED);
-    expect(ex).not.toHaveBeenCalled();
   });
 });
 

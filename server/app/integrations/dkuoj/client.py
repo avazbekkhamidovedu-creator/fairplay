@@ -1,4 +1,7 @@
-"""HTTP client for DKU OJ's /api/fairplay/v1/ (Bearer token, timeouts, retries).
+"""HTTP client for DKU OJ's /api/fairplay/v1/ (signed fp->oj, timeouts, retries).
+
+Every request is signed (signing.py, docs/dkuoj-bridge-v2.md §1); a retry is signed again
+with a fresh timestamp and nonce.
 
 Tests route the traffic through a fake DKU OJ with `set_transport_factory` (an
 httpx.MockTransport), like app.lms.base, and make retries instant with `set_sleep`.
@@ -11,10 +14,13 @@ from typing import Any, Callable
 
 import httpx
 
+from . import signing
+
 log = logging.getLogger("proctora.dkuoj")
 
 API = "/api/fairplay/v1"
-TIMEOUT_S = 20.0
+CONNECT_TIMEOUT_S = 5.0
+READ_TIMEOUT_S = 15.0
 MAX_ATTEMPTS = 3                 # 1 try + 2 retries on 429 / 5xx / network errors
 BACKOFF_BASE_S = 1.0
 MAX_RETRY_AFTER_S = 10.0
@@ -75,11 +81,12 @@ def _retry_after(resp: httpx.Response) -> float | None:
 class DkuojClient:
     def __init__(self, base_url: str, token: str):
         self.base_url = base_url.rstrip("/")
+        self._token = token
         transport = _transport_factory(self.base_url) if _transport_factory else None
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(TIMEOUT_S), transport=transport, follow_redirects=False,
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
-                     "User-Agent": "FairPlay-DKUOJ-Bridge/1.0"})
+            timeout=httpx.Timeout(READ_TIMEOUT_S, connect=CONNECT_TIMEOUT_S), transport=transport,
+            follow_redirects=False,
+            headers={"Accept": "application/json", "User-Agent": "FairPlay-DKUOJ-Bridge/2.0"})
 
     @classmethod
     def from_config(cls, cfg) -> "DkuojClient":
@@ -104,8 +111,12 @@ class DkuojClient:
         err: OjError | None = None
         for attempt in range(max(1, attempts)):
             try:
-                resp = await self._client.request(method, url, params=params, json=json,
-                                                  content=content, headers=headers)
+                req = self._client.build_request(method, url, params=params, json=json,
+                                                 content=content, headers=headers)
+                body = req.read()
+                path = req.url.raw_path.decode("ascii")
+                req.headers.update(signing.sign_headers(self._token, signing.FP_TO_OJ, method, path, body))
+                resp = await self._client.send(req)
             except httpx.TimeoutException:
                 err = OjError("DKU OJ did not answer in time")
             except httpx.HTTPError as exc:
@@ -182,6 +193,11 @@ class DkuojClient:
     async def submit(self, key: str, body: dict, attempts: int = MAX_ATTEMPTS) -> dict:
         resp = await self.request("POST", f"exams/{key}/submissions", json=body, attempts=attempts)
         return self._json(resp)
+
+    async def roster(self, class_id: int) -> dict:
+        """GET classes/<id>/roster (v2 §2): {class, course, students: [{username, first_name,
+        last_name}]}. One try: a student is waiting on the set-up screen."""
+        return self._json(await self.request("GET", f"classes/{int(class_id)}/roster", attempts=1))
 
     async def results(self, key: str, changed_since: str | None, page: int = 1) -> dict:
         params: dict = {"page": page}

@@ -72,8 +72,12 @@ async def _sync_exam(sessionmaker, client: DkuojClient, exam_id: str, key: str, 
         rows = [r for r in data.get("results") or [] if isinstance(r, dict) and isinstance(r.get("username"), str)]
         if rows:
             async with sessionmaker() as session:
+                # by NetID (v2 §4); accounts not linked yet still match by username
+                names = [r["username"] for r in rows]
                 users = dict((await session.execute(select(User.username, User.id).where(
-                    User.username.in_([r["username"] for r in rows])))).all())
+                    User.username.in_(names), User.netid.is_(None)))).all())
+                users.update(dict((await session.execute(select(User.netid, User.id).where(
+                    User.netid.in_(names)))).all()))
                 for r in rows:
                     uid = users.get(r["username"])
                     if uid is None:

@@ -47,7 +47,7 @@ describe("api client", () => {
     setToken("teacher", "old");
     const f = mockFetch(200, { token: "abc", role: "teacher", name: "Demo Teacher" });
     const res = await auth.login("teacher", "teacher123");
-    expect(res.token).toBe("abc");
+    expect(res).toMatchObject({ token: "abc" });
     const c = call(f);
     expect(c.url).toBe("/api/auth/login");
     expect(c.init.method).toBe("POST");

@@ -21,6 +21,8 @@ import type { AllowedAppOption,
   IntegrityEvent,
   LiveRoom,
   LoginResponse,
+  LoginResult,
+  SetupIdentifyResponse,
   Me,
   Results,
   Role,
@@ -277,13 +279,59 @@ const enc = encodeURIComponent;
 // ---------- auth ----------
 
 export const auth = {
-  /** Does not send a token; a 401 here means wrong credentials, never a redirect. */
-  login(username: string, password: string): Promise<LoginResponse> {
-    return request<LoginResponse>(null, "POST", "/api/auth/login", { username, password });
+  /** Does not send a token; a 401 here means wrong credentials, never a redirect.
+   *  Bridge v2: a class login answers {setup_token, class} instead of a session. */
+  login(username: string, password: string): Promise<LoginResult> {
+    return request<LoginResult>(null, "POST", "/api/auth/login", { username, password });
   },
   me(role: Role): Promise<Me> {
     return request<Me>(role, "GET", "/api/me");
   },
+};
+
+// ---------- class-login set-up (bridge v2 §4) ----------
+
+/**
+ * A call made with a one-off set-up token. The token is passed in and never stored (no
+ * setToken, no localStorage/sessionStorage); every status, 401 and 503 included, comes back
+ * as an ApiError so the set-up screens can say what happened (no sign-in redirect).
+ */
+async function setupRequest<T>(bearer: string, path: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${bearer}`,
+  };
+  let res: Response;
+  try {
+    res = await fetch(path, { method: "POST", headers: withAppHeaders(headers), body: JSON.stringify(body) });
+  } catch {
+    throw new NetworkError();
+  }
+  let data: unknown = null;
+  const text = await res.text();
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+  if (!res.ok) {
+    const err = errorOf(res.status, data, res.statusText || `Error ${res.status}`);
+    if (res.status === 426) announceUpgrade(err.minAppVersion);
+    throw err;
+  }
+  return data as T;
+}
+
+export const setupApi = {
+  /** Step 1: who the student is, checked against the class list (setup token). */
+  identify: (setupToken: string, input: { first_name: string; last_name: string; netid: string }) =>
+    setupRequest<SetupIdentifyResponse>(setupToken, "/api/setup/identify", input),
+  /** Step 2: the student's own login (identity token, single use) → the normal login response. */
+  account: (identityToken: string, input: { username: string; password: string; password2: string }) =>
+    setupRequest<LoginResponse>(identityToken, "/api/setup/account", input),
 };
 
 // ---------- teacher ----------
@@ -704,9 +752,9 @@ export const toolsApi = {
     request<SiteCheck>("teacher", "GET", `/api/tools/site-check?host=${encodeURIComponent(host)}`),
 };
 
-// ---------- question content, answer files, external live-room sign-in ----------
+// ---------- question content, answer files ----------
 
-import type { AnswerUpload, ExternalLiveSignIn } from "./types";
+import type { AnswerUpload } from "./types";
 
 /** Server answers for an uploaded file, read leniently (id / upload_id, name / filename, size / bytes). */
 function toAnswerUpload(data: unknown, file: File): AnswerUpload {
@@ -723,8 +771,6 @@ function toAnswerUpload(data: unknown, file: File): AnswerUpload {
 }
 
 export const contentApi = {
-  /** One-time code from an integration's "Open live room" link -> a teacher sign-in. */
-  liveExchange: (code: string) => request<ExternalLiveSignIn>(null, "POST", "/api/integrations/live/exchange", { code }),
   /** A file the student handed in (bytes). */
   answerFile: (aid: string, id: string) => fetchBlob("student", `/api/student/attempts/${enc(aid)}/files/${enc(id)}`),
   /** A picture (fp-asset:) of a question during the attempt (attempt owner, exam live). */

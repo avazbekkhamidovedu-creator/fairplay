@@ -54,3 +54,38 @@ class OjState(Base):
     value: Mapped[str | None] = mapped_column(Text, nullable=True)
     holder: Mapped[str | None] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ClassLogin(Base):
+    """v2 §3/§4: the one temporary login a professor hands a DKU OJ class. Signing in with
+    it only starts the student set-up (identify, then own username and password). The
+    password is stored ONLY as a hash (same hashing as user passwords). A class has at
+    most one active login: a new one disables the old one (disabled_at)."""
+    __tablename__ = "class_logins"
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)     # DKU OJ class id
+    class_name: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
+    course_name: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
+    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    disabled_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    used: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_by: Mapped[str] = mapped_column(String(150), nullable=False, default="", server_default="")
+
+
+class ClassLoginEvent(Base):
+    """Audit trail the professor sees: login_created / login_stopped / login_locked /
+    setup_ok / setup_failed / student_reset. Never a password or token."""
+    __tablename__ = "class_login_events"
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    class_login_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    netid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    actor: Mapped[str] = mapped_column(String(150), nullable=False, default="", server_default="")
+    detail: Mapped[str] = mapped_column(String(300), nullable=False, default="", server_default="")
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
