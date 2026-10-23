@@ -11,7 +11,7 @@ import Foundation
 ///   defaults write ai.proctora.student ServerURL http://192.168.1.20:8000
 ///   defaults write ai.proctora.student SafetyUnlockMinutes -int 0
 enum Config {
-    static let version = "0.6.0"
+    static let version = "0.6.1"
 
     #if FAIRPLAY_DEV
     static let isDevBuild = true
