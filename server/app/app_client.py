@@ -262,12 +262,13 @@ async def check_session(request: Request, session: AsyncSession, store: Store, a
 
 
 async def note_js_heartbeat(request: Request, session: AsyncSession, store: Store, aid: str,
-                            meta: dict) -> None:
+                            meta: dict, raw_abt: str | None | bool = False) -> None:
     """The exam page is alive; flag it when the app itself has gone quiet (killed app,
-    page running outside the app, tap-less copy...)."""
+    page running outside the app, tap-less copy...). raw_abt: the app's last beat when the
+    caller already read it (perf 0.6.2)."""
     if not settings_of(request).require_app or meta.get("status") != "in_progress":
         return
-    raw = await store.get(f"abt:{aid}")
+    raw = raw_abt if raw_abt is not False else await store.get(f"abt:{aid}")
     now = time.time()
     if raw:
         quiet = now - json.loads(raw)["t"]

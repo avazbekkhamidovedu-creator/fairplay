@@ -37,6 +37,9 @@ services:
       DB_MAX_OVERFLOW: "10"
       FAIRPLAY_DB_MAX_CONNECTIONS: "450"        # 500 minus room for admin tools
       FAIRPLAY_REPLICAS: ${API_REPLICAS:-4}     # keep equal to --scale api=N
+      # perf 0.6.2: the school's public address(es) (CIDRs): everyone signing in from one
+      # NAT gets the higher per-address sign-in limit (NOTES.md "Sizing").
+      FAIRPLAY_LOGIN_SCHOOL_NETS: ${FAIRPLAY_LOGIN_SCHOOL_NETS:-}
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_started}
@@ -44,7 +47,10 @@ services:
   nginx:
     image: nginx:1.27
     ports: ["8000:80"]
-    volumes: [./nginx.conf:/etc/nginx/conf.d/default.conf:ro]
+    # perf 0.6.2: a full nginx.conf (connection limits, keep-alive, gzip, static cache)
+    volumes: [./nginx.conf:/etc/nginx/nginx.conf:ro]
+    ulimits:
+      nofile: {soft: 65535, hard: 65535}
     depends_on: [api]
 
 volumes:

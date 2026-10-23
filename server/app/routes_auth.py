@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api", tags=["auth"])
 # throttled and the number of password checks running at once is bounded per process
 # (other requests keep their worker threads during an exam).
 #   per IP:              300 tries / minute  (a whole lab behind one campus NAT logs in at once)
+#                        school networks (FAIRPLAY_LOGIN_SCHOOL_NETS): 6000 / minute (perf 0.6.2)
 #   per username + IP:    10 wrong / 5 minutes
 #   per username:         50 wrong / 5 minutes (someone guessing one student's password)
 IP_WINDOW = 60   # per-IP limit: Settings.login_ip_limit (FAIRPLAY_LOGIN_IP_LIMIT, default 300)
@@ -32,7 +33,8 @@ def _slots(request: Request) -> asyncio.Semaphore:
     # One per app (and so per event loop); created on first use.
     st = request.app.state
     if getattr(st, "hash_slots", None) is None:
-        st.hash_slots = asyncio.Semaphore(MAX_PARALLEL_HASHES)
+        n = getattr(st.settings, "login_hash_slots", MAX_PARALLEL_HASHES) or MAX_PARALLEL_HASHES
+        st.hash_slots = asyncio.Semaphore(max(1, n))
     return st.hash_slots
 
 
@@ -56,7 +58,7 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
     uname = username.lower()[:64]
     ip = client_ip(request)
 
-    if await store.incr(f"login:ip:{ip}", IP_WINDOW) > s.login_ip_limit:
+    if await store.incr(f"login:ip:{ip}", IP_WINDOW) > s.login_limit_for(ip):
         raise HTTPException(429, TOO_MANY)
     fails_ui, fails_u = f"login:fail:{uname}:{ip}", f"login:fail:{uname}"
     if (int(await store.get(fails_ui) or 0) >= USER_IP_FAILS
@@ -70,7 +72,8 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
     await session.close()
     stored = row.password_hash if row is not None else await _dummy(s.pbkdf2_iterations)
     async with _slots(request):
-        ok = await verify_password_async(body.password, stored)
+        ok = await verify_password_async(body.password, stored,
+                                         getattr(s, "login_hash_slots", MAX_PARALLEL_HASHES))
     if row is None or not ok:
         await store.incr(fails_ui, FAIL_WINDOW)
         await store.incr(fails_u, FAIL_WINDOW)

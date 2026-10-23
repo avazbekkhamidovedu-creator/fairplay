@@ -8,6 +8,7 @@ import math
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import and_, false, func, insert, or_, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,9 +22,10 @@ from .app_version import check_app_version
 from .schemas import (AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn, HeartbeatIn,
                       OfflineKeyIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
-from .services import (LIVE_TTL, attempt_view, cache_attempt, find_attempt, get_attempt_meta,
-                       get_exam_cached, new_id, new_receipt, new_session_id, student_tools,
-                       code_language, exam_default_language)
+from .services import (LIVE_TTL, attempt_key, attempt_meta_from, attempt_view, cache_attempt,
+                       find_attempt, get_attempt_meta, get_exam_cached, get_exam_hot, new_id,
+                       new_receipt, new_session_id, student_tools, code_language,
+                       exam_default_language)
 from .store import get_store
 from .timeutil import iso, utcnow
 
@@ -143,7 +145,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                     # 2026-10-23: shown on "Before you start"; open_book -> the upload area
                     "tools": student_tools({"mode": mode, "calculator": calc, "open_book": open_book,
                                             "websites": websites})})
-    return out
+    return JSONResponse(out)   # perf 0.6.2: plain JSON values; skips FastAPI's re-encoding pass
 
 
 @router.get("/exams/{exam_id}/challenge")
@@ -250,8 +252,9 @@ async def start(exam_id: str, body: StartIn, request: Request,
     else:
         await _resume(session, store, a, device_id, exam)
     await cache_attempt(store, a)
-    return {**attempt_view(a, exam, now), "session": a.session_id, "min_app_version": min_version,
-            "needs_approval": bool(a.pending_resume)}     # S3
+    return JSONResponse({**attempt_view(a, exam, now), "session": a.session_id,   # perf 0.6.2
+                         "min_app_version": min_version,
+                         "needs_approval": bool(a.pending_resume)})     # S3
 
 
 async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | None,
@@ -325,7 +328,7 @@ async def get_attempt(aid: str, request: Request, p: Principal = Depends(require
     exam = await get_exam_cached(get_store(), session, a.exam_id)
     if exam is None:
         raise HTTPException(404, "Attempt not found")
-    return attempt_view(a, exam, utcnow())
+    return JSONResponse(attempt_view(a, exam, utcnow()))   # perf 0.6.2
 
 
 @router.put("/attempts/{aid}/answers")
@@ -334,9 +337,11 @@ async def save_answers(aid: str, body: AnswersIn, request: Request,
                        session: AsyncSession = Depends(get_session)):
     now = utcnow()
     store = get_store()
-    if await store.incr(f"ansrate:{aid}", 60) > ANSWER_WRITES_PER_MIN:
+    # perf 0.6.2: the rate counter and the attempt's cached metadata in one round trip
+    n, raw_meta = await store.batch([("incr", f"ansrate:{aid}", 60), ("get", attempt_key(aid))])
+    if n > ANSWER_WRITES_PER_MIN:
         raise HTTPException(429, "Saving too often, slow down")
-    answers = await _known_answers(store, session, aid, body.answers)
+    answers = await _known_answers(store, session, aid, body.answers, raw_meta=raw_meta)
     given = ac.session_header(request)
     # Audit #3: only the attempt's current app session may write.
     if given is not None:
@@ -355,7 +360,7 @@ async def save_answers(aid: str, body: AnswersIn, request: Request,
                 answered=count_answered(answers)))
     await session.commit()
     if res.rowcount == 1:
-        return {"saved": True, "client_seq": body.client_seq, "server_time": iso(now)}
+        return JSONResponse({"saved": True, "client_seq": body.client_seq, "server_time": iso(now)})
     # Slow path: find out why nothing was updated.
     row = (await session.execute(
         select(Attempt.student_id, Attempt.status, Attempt.deadline_at, Attempt.client_seq,
@@ -410,14 +415,18 @@ async def _final_save_after_swap(session: AsyncSession, store, aid: str, row, an
     return None
 
 
-async def _known_answers(store, session: AsyncSession, aid: str, answers: dict) -> dict:
+async def _known_answers(store, session: AsyncSession, aid: str, answers: dict,
+                         raw_meta: str | None | bool = False) -> dict:
     """Audit 2026-10-13 (hardening): keep only answers to the exam's own questions, so
     made-up keys can't inflate "answered" (or the stored row). Both lookups are cache hits
-    on the hot path; an unknown attempt or a question-less exam is left as it is."""
+    on the hot path; an unknown attempt or a question-less exam is left as it is.
+    perf 0.6.2: raw_meta = the cached attempt entry when the caller already read it; the
+    question ids come from the small exam facts entry, not the whole cached exam."""
     if not answers:
         return answers
-    meta = await get_attempt_meta(store, session, aid)
-    exam = await get_exam_cached(store, session, meta["exam_id"]) if meta else None
+    meta = (await attempt_meta_from(store, session, aid, raw_meta) if raw_meta is not False
+            else await get_attempt_meta(store, session, aid))
+    exam = await get_exam_hot(store, session, meta["exam_id"]) if meta else None
     ids = set((exam or {}).get("question_ids") or [])
     if not ids:
         return answers
@@ -429,7 +438,9 @@ async def heartbeat(aid: str, body: HeartbeatIn, request: Request,
                     p: Principal = Depends(require_student),
                     session: AsyncSession = Depends(get_session)):
     store = get_store()
-    meta = await get_attempt_meta(store, session, aid)  # store hit; DB only on cache miss
+    # perf 0.6.2: the attempt's cached metadata and the app's last beat in one round trip
+    raw_meta, raw_abt = await store.mget(attempt_key(aid), f"abt:{aid}")
+    meta = await attempt_meta_from(store, session, aid, raw_meta)  # DB only on a cache miss
     if meta is None or meta["student_id"] != p.user_id:
         raise HTTPException(404, "Attempt not found")
     await ac.check_session(request, session, store, aid, meta)
@@ -442,9 +453,9 @@ async def heartbeat(aid: str, body: HeartbeatIn, request: Request,
         # 2026-10-23 (review): as reported; None (the browser can't tell) stays unknown
         beat["chg"] = body.charging
     await store.hset(f"hb:{meta['exam_id']}", aid, json.dumps(beat), LIVE_TTL)
-    await ac.note_js_heartbeat(request, session, store, aid, meta)
-    return {"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
-            "deadline_at": meta["deadline_at"], "approval": meta.get("approval")}   # S3
+    await ac.note_js_heartbeat(request, session, store, aid, meta, raw_abt=raw_abt)
+    return JSONResponse({"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
+                         "deadline_at": meta["deadline_at"], "approval": meta.get("approval")})   # S3
 
 
 @router.post("/attempts/{aid}/events")
@@ -490,7 +501,7 @@ async def events(aid: str, body: EventsIn, request: Request,
     await store.hset(f"evl:{exam_id}", aid, f"{last['type']} {last['detail']}".strip(), LIVE_TTL)
     if meta["status"] == "in_progress" and any(r["type"] == "previous_run_killed" for r in rows):
         await _resume_after_kill(session, store, aid)
-    return {"ok": True, "stored": len(rows)}
+    return JSONResponse({"ok": True, "stored": len(rows)})
 
 
 async def _resume_after_kill(session: AsyncSession, store, aid: str) -> None:
@@ -572,7 +583,12 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     store = get_store()
     settings = ac.settings_of(request)
     min_version = check_app_version(request, settings)   # S2: 426 for an outdated app
-    meta = await get_attempt_meta(store, session, aid)
+    # perf 0.6.2: everything this beat reads from the store in one round trip, and
+    # everything it writes in one more (was 7 round trips).
+    ip = request.client.host if request.client else ""
+    ip_key = f"abip:{aid}:{body.session}"
+    raw_meta, raw, seen_ip = await store.mget(attempt_key(aid), f"abt:{aid}", ip_key)
+    meta = await attempt_meta_from(store, session, aid, raw_meta)
     if meta is None or meta["student_id"] != p.user_id:
         raise HTTPException(404, "Attempt not found")
     if meta.get("session_id") != body.session or (
@@ -581,7 +597,6 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     msg = ac.beat_message(aid, body.session, body.device_id, body.ts, body.locked, body.checks)
     if not ac.verify(settings, msg, body.signature):
         raise HTTPException(403, ac.APP_PROOF_DETAIL)
-    raw = await store.get(f"abt:{aid}")
     last = json.loads(raw) if raw else None
     # Replayed or reordered beat. Per session (audit S-13): a new Mac / new session with
     # a slower clock is not rejected because of the old session's timestamps.
@@ -619,22 +634,19 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     # Audit M-07 (server half): one app session whose signal moves to another network
     # address is flagged (a copied device id / session used from somewhere else shows up
     # here; so does an honest Wi-Fi switch, which is why it is a note, not a block).
-    ip = request.client.host if request.client else ""
-    ip_key = f"abip:{aid}:{body.session}"
-    seen_ip = await store.get(ip_key)
     if ip and seen_ip and seen_ip != ip and meta["status"] == "in_progress" \
             and await ac.once_per(store, f"ipchg:{aid}", ac.FLAG_REPEAT_S):
         await ac.add_event(session, store, aid, exam_id, "network_changed",
                            "the app's signal now comes from another network address")
+    entry = json.dumps({"t": now, "ts": body.ts, "locked": locked, "checks": body.checks,
+                        "session": body.session})
+    writes = [("set", f"abt:{aid}", entry, LIVE_TTL), ("hset", f"ab:{exam_id}", aid, entry, LIVE_TTL)]
     if ip and seen_ip != ip:
-        await store.set(ip_key, ip, LIVE_TTL)
-    entry = {"t": now, "ts": body.ts, "locked": locked, "checks": body.checks,
-             "session": body.session}
-    await store.set(f"abt:{aid}", json.dumps(entry), LIVE_TTL)
-    await store.hset(f"ab:{exam_id}", aid, json.dumps(entry), LIVE_TTL)
-    return {"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
-            "deadline_at": meta["deadline_at"], "min_app_version": min_version,
-            "approval": meta.get("approval")}   # S3
+        writes.append(("set", ip_key, ip, LIVE_TTL))
+    await store.batch(writes)
+    return JSONResponse({"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
+                         "deadline_at": meta["deadline_at"], "min_app_version": min_version,
+                         "approval": meta.get("approval")})   # S3
 
 
 async def _check_strong_lock(session: AsyncSession, store, aid: str, exam_id: str,
@@ -643,7 +655,7 @@ async def _check_strong_lock(session: AsyncSession, store, aid: str, exam_id: st
     separate exam desktop; the Mac never sends it yet): flag weak_lock once per attempt."""
     if checks.get("sep") == "1":
         return
-    exam = await get_exam_cached(store, session, exam_id)     # cache hit on the hot path
+    exam = await get_exam_hot(store, session, exam_id)     # small cache entry (perf 0.6.2)
     if exam and exam.get("require_strong_lock") \
             and await ac.once_per(store, f"weak:{aid}", LIVE_TTL):
         await ac.add_event(session, store, aid, exam_id, "weak_lock",

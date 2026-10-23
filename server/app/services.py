@@ -237,8 +237,35 @@ def exam_key(exam_id: str) -> str:
     return f"exam:{exam_id}"
 
 
+def exam_hot_key(exam_id: str) -> str:
+    return f"exh:{exam_id}"
+
+
 async def invalidate_exam(store: Store, exam_id: str) -> None:
-    await store.delete(exam_key(exam_id))
+    await store.delete(exam_key(exam_id), exam_hot_key(exam_id))
+
+
+def _hot_of(data: dict) -> dict:
+    return {"question_ids": list(data.get("question_ids") or []),
+            "require_strong_lock": bool(data.get("require_strong_lock"))}
+
+
+async def get_exam_hot(store: Store, session: AsyncSession, exam_id: str) -> dict | None:
+    """perf 0.6.2: the few exam facts the per-request hot paths need (question ids for
+    answer saves, require_strong_lock for app beats) without fetching and parsing the whole
+    cached exam (questions and all) on every save and beat. Same lifetime as the exam
+    cache: built from it, never outlives it, dropped with it (invalidate_exam)."""
+    raw = await store.get(exam_hot_key(exam_id))
+    if raw:
+        return json.loads(raw)
+    exam = await get_exam_cached(store, session, exam_id)
+    if exam is None:
+        return None
+    hot = _hot_of(exam)
+    ttl = await store.ttl(exam_key(exam_id))
+    if ttl > 0:
+        await store.set(exam_hot_key(exam_id), json.dumps(hot), min(ttl, EXAM_CACHE_TTL))
+    return hot
 
 
 async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> dict | None:
@@ -296,7 +323,13 @@ async def cache_attempt(store: Store, a: Attempt) -> None:
 
 
 async def get_attempt_meta(store: Store, session: AsyncSession, aid: str) -> dict | None:
-    raw = await store.get(attempt_key(aid))
+    return await attempt_meta_from(store, session, aid, await store.get(attempt_key(aid)))
+
+
+async def attempt_meta_from(store: Store, session: AsyncSession, aid: str,
+                            raw: str | None) -> dict | None:
+    """get_attempt_meta with the cached entry already fetched (perf 0.6.2: hot paths read it
+    in the same Redis round trip as their other keys)."""
     if raw:
         meta = json.loads(raw)
         if "approval" in meta:  # entries cached before S3 (or the audit fixes) lack it

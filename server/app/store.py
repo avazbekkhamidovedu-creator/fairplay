@@ -6,6 +6,7 @@ source of truth for grades or answers (those live in the database).
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Protocol
 
@@ -24,7 +25,34 @@ class Store(Protocol):
     async def hgetall(self, key: str) -> dict[str, str]: ...
     async def hincrby(self, key: str, field: str, amount: int, ttl: int) -> int: ...
     async def live_snapshot(self, exam_id: str) -> tuple[dict, dict, dict]: ...
+    async def mget(self, *keys: str) -> list[str | None]: ...
+    async def batch(self, ops: list[tuple]) -> list: ...
     async def close(self) -> None: ...
+
+
+# perf 0.6.2: several commands in one round trip (one Redis pipeline). Each op is a tuple:
+#   ("get", key)                      -> value or None
+#   ("set", key, value, ttl)          -> None   (ttl None = no expiry)
+#   ("incr", key, ttl)                -> new value; the TTL is set only on the first INCR
+#   ("hset", key, field, value, ttl)  -> None   (the TTL is refreshed, like hset())
+# Results come back in order. Not a transaction: same semantics as the single calls.
+
+
+async def _batch_one_by_one(store, ops: list[tuple]) -> list:
+    out = []
+    for op in ops:
+        kind = op[0]
+        if kind == "get":
+            out.append(await store.get(op[1]))
+        elif kind == "set":
+            out.append(await store.set(op[1], op[2], op[3]))
+        elif kind == "incr":
+            out.append(await store.incr(op[1], op[2]))
+        elif kind == "hset":
+            out.append(await store.hset(op[1], op[2], op[3], op[4]))
+        else:
+            raise ValueError(f"unknown store op {kind!r}")
+    return out
 
 
 class MemoryStore:
@@ -129,15 +157,26 @@ class MemoryStore:
         return (await self.hgetall(f"hb:{exam_id}"), await self.hgetall(f"evc:{exam_id}"),
                 await self.hgetall(f"evl:{exam_id}"))
 
+    async def mget(self, *keys):
+        return [await self.get(k) for k in keys]
+
+    async def batch(self, ops):
+        return await _batch_one_by_one(self, ops)
+
     async def close(self):
         pass
 
 
 class RedisStore:
-    def __init__(self, url: str):
+    def __init__(self, url: str, max_connections: int = 200, wait_s: float = 30):
         import redis.asyncio as aioredis
-        self.r = aioredis.from_url(url, decode_responses=True, max_connections=200,
-                                   socket_timeout=30)
+        # perf 0.6.2 (5,000-student test): the plain pool raised "Too many connections" (a
+        # 500) the moment a worker had more requests in flight than connections; a
+        # blocking pool makes them wait their turn (up to wait_s) instead.
+        pool = aioredis.BlockingConnectionPool.from_url(
+            url, decode_responses=True, max_connections=max_connections, timeout=wait_s,
+            socket_timeout=30)
+        self.r = aioredis.Redis(connection_pool=pool)
 
     async def get(self, key):
         return await self.r.get(key)
@@ -199,12 +238,52 @@ class RedisStore:
         hb, evc, evl = await pipe.execute()
         return hb, evc, evl
 
+    async def mget(self, *keys):
+        if not keys:
+            return []
+        return list(await self.r.mget(keys))
+
+    async def batch(self, ops):
+        pipe = self.r.pipeline(transaction=False)
+        picks = []                      # index of each op's own result in the pipeline
+        for op in ops:
+            kind = op[0]
+            if kind == "get":
+                pipe.get(op[1])
+                picks.append((len(pipe), "get"))
+            elif kind == "set":
+                pipe.set(op[1], op[2], ex=op[3])
+                picks.append((len(pipe), "none"))
+            elif kind == "incr":
+                pipe.incr(op[1])
+                picks.append((len(pipe), "int"))
+                pipe.expire(op[1], op[2], nx=True)
+            elif kind == "hset":
+                pipe.hset(op[1], op[2], op[3])
+                picks.append((len(pipe), "none"))
+                pipe.expire(op[1], op[4])
+            else:
+                raise ValueError(f"unknown store op {kind!r}")
+        res = await pipe.execute()
+        out = []
+        for n, how in picks:
+            v = res[n - 1]
+            out.append(None if how == "none" else int(v) if how == "int" else v)
+        return out
+
     async def close(self):
-        await self.r.aclose()
+        await self.r.aclose(close_connection_pool=True)
 
 
 def make_store(redis_url: str | None) -> Store:
-    return RedisStore(redis_url) if redis_url else MemoryStore()
+    if not redis_url:
+        return MemoryStore()
+    # Redis connections per worker process (REDIS_MAX_CONNECTIONS); more requests wait.
+    try:
+        n = int(os.environ.get("REDIS_MAX_CONNECTIONS", "200"))
+    except ValueError:
+        n = 200
+    return RedisStore(redis_url, max(1, n))
 
 
 _store: Store | None = None

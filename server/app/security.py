@@ -5,8 +5,11 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import os
 import secrets
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Depends, HTTPException, Request
 
@@ -30,9 +33,36 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
-async def verify_password_async(password: str, stored: str) -> bool:
-    # PBKDF2 is CPU-bound; keep it off the event loop.
-    return await asyncio.to_thread(verify_password, password, stored)
+# perf 0.6.2 (5,000-student test): PBKDF2 runs in threads of their own at a lower CPU
+# priority. In the default pool, with every student of a school signing in at once, the
+# hash threads took most of the CPU from the event loops: heartbeats and answer saves of
+# students already writing waited for seconds, and requests failed on pool timeouts. Now
+# the exam keeps the CPU it needs and sign-ins use the rest (they queue instead).
+HASH_THREAD_NICE = 10
+_hash_pool: ThreadPoolExecutor | None = None
+_hash_pool_pid: int | None = None
+
+
+def _lower_thread_priority() -> None:
+    try:   # Linux: a thread is its own scheduling entity; raising its nice needs no rights
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), HASH_THREAD_NICE)
+    except (AttributeError, OSError, ValueError):
+        pass      # other systems: normal priority (the slot limit still applies)
+
+
+def hash_executor(threads: int = 4) -> ThreadPoolExecutor:
+    global _hash_pool, _hash_pool_pid
+    if _hash_pool is None or _hash_pool_pid != os.getpid():
+        _hash_pool = ThreadPoolExecutor(max_workers=max(1, threads), thread_name_prefix="pbkdf2",
+                                        initializer=_lower_thread_priority)
+        _hash_pool_pid = os.getpid()
+    return _hash_pool
+
+
+async def verify_password_async(password: str, stored: str, threads: int = 4) -> bool:
+    # PBKDF2 is CPU-bound; keep it off the event loop (and below it in priority).
+    return await asyncio.get_running_loop().run_in_executor(
+        hash_executor(threads), verify_password, password, stored)
 
 
 def _b64(b: bytes) -> str:
@@ -73,7 +103,11 @@ def parse_token(secret: str, token: str) -> tuple[int, str, int] | None:
         return None
 
 
-USER_CACHE_TTL_S = 30
+# perf 0.6.2: 30 -> 300 s. Every request checks the account's token version; with 5,000
+# students a 30 s cache meant ~170 database reads a second for nothing. Signing out
+# everywhere and class removal still take effect at once (they delete the entry,
+# bump_token_version); only a change made directly in the database waits up to 5 minutes.
+USER_CACHE_TTL_S = 300
 
 
 async def _current_user(uid: int) -> tuple[str, int] | None:
@@ -125,13 +159,15 @@ async def current_principal(request: Request) -> Principal:
     return Principal(uid, role)
 
 
-def require_teacher(p: Principal = Depends(current_principal)) -> Principal:
+# perf 0.6.2: async (they never block). A plain `def` dependency runs in FastAPI's thread
+# pool: a thread hop on every authenticated request for a two-line check.
+async def require_teacher(p: Principal = Depends(current_principal)) -> Principal:
     if p.role != "teacher":
         raise HTTPException(403, "Teacher role required")
     return p
 
 
-def require_student(p: Principal = Depends(current_principal)) -> Principal:
+async def require_student(p: Principal = Depends(current_principal)) -> Principal:
     if p.role != "student":
         raise HTTPException(403, "Student role required")
     return p

@@ -266,8 +266,21 @@ def test_csp_allows_the_websites_pane_and_pdf_worker(client):
     csp = client.get("/teacher").headers["content-security-policy"]
     assert "frame-src 'self' https:" in csp and "worker-src 'self' blob:" in csp
     # phase 4: 'wasm-unsafe-eval' (Pyodide's WebAssembly) but never JavaScript eval
-    assert "script-src 'self' 'wasm-unsafe-eval';" in csp and "frame-ancestors 'none'" in csp and "object-src 'none'" in csp
+    assert "script-src 'self' 'wasm-unsafe-eval' fairplay-asset: https://fairplay-assets.example;" in csp
+    assert "frame-ancestors 'none'" in csp and "object-src 'none'" in csp
     assert "'unsafe-eval'" not in csp and "'unsafe-inline'" not in csp.split("style-src")[0] and "http:" not in csp.replace("https:", "")
+
+
+def test_csp_allows_only_the_apps_asset_origins():
+    """perf 0.6.2: the apps' asset-pack origins (exactly these two) for scripts, workers and
+    fetches; nothing else is widened."""
+    from app.http_guard import CSP
+    d = {p.split()[0]: p.split()[1:] for p in CSP.split("; ")}
+    app = ["fairplay-asset:", "https://fairplay-assets.example"]
+    assert d["script-src"] == ["'self'", "'wasm-unsafe-eval'", *app]
+    assert d["connect-src"] == ["'self'", *app]
+    assert d["worker-src"] == ["'self'", "blob:", *app]
+    assert d["default-src"] == ["'self'"] and d["font-src"] == ["'self'", "data:"]
 
 
 def test_material_upload_size_limit():

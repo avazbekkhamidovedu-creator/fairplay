@@ -24,6 +24,9 @@ docker compose up --build --scale api=4
 | PROCTORA_SECRET | insecure dev value | token signing key |
 | DB_POOL_SIZE / DB_MAX_OVERFLOW | 10 / 20 | per worker |
 | PROCTORA_SEED_LOADTEST_USERS | 0 | creates lt0001.. users for the load test |
+| FAIRPLAY_LOGIN_IP_LIMIT | 300 | sign-in tries per minute from one address |
+| FAIRPLAY_LOGIN_SCHOOL_NETS / FAIRPLAY_LOGIN_SCHOOL_IP_LIMIT | (none) / 6000 | a school's own networks (CIDRs) get the higher per-address limit: a whole school behind one NAT signs in at once |
+| FAIRPLAY_LOGIN_HASH_SLOTS | 4 | password checks running at once per worker (CPU-bound) |
 
 ## Tests
 ```

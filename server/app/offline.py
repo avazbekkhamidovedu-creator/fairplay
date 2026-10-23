@@ -37,7 +37,7 @@ from datetime import datetime, timedelta
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -212,7 +212,8 @@ async def package(exam_id: str, request: Request, p: Principal = Depends(require
     key = f"pkg:{exam_id}:{code}:{exam['duration_min']}"
     raw = await store.get(key)
     if raw:
-        return json.loads(raw)
+        # perf 0.6.2: the cached JSON as it is (no decode + re-encode per student)
+        return Response(raw, media_type="application/json")
     # Audit 2026-10-13: single flight. A room opening the exam at once would otherwise
     # start one 600k-iteration build per student; one builds, the rest wait for the cache.
     lock = f"pkgbuild:{key}"

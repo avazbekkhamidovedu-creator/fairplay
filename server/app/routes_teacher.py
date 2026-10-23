@@ -7,6 +7,7 @@ import time
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import and_, case, delete, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -481,12 +482,14 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
     flags = [{"event_id": eid, "attempt_id": aid, "username": username, "name": name,
               "type": typ, "detail": detail, "server_time": iso(st_time)}
              for eid, aid, typ, detail, st_time, username, name in flag_rows]
-    return {"exam_id": e.id, "status": e.status,
-            "start_code": e.start_code if e.status == "live" else None,
-            "invigilator_code": e.invigilator_code if e.status == "live" else None,
-            "duration_min": e.duration_min, "students": students,
-            "flags": flags, "counts": counts,
-            "server_time": iso(utcnow())}      # audit W-13: countdown on the server clock
+    # perf 0.6.2: JSONResponse directly (plain values only): FastAPI's generic re-encoding
+    # of a 100-student room cost more CPU than building it.
+    return JSONResponse({"exam_id": e.id, "status": e.status,
+                         "start_code": e.start_code if e.status == "live" else None,
+                         "invigilator_code": e.invigilator_code if e.status == "live" else None,
+                         "duration_min": e.duration_min, "students": students,
+                         "flags": flags, "counts": counts,
+                         "server_time": iso(utcnow())})      # audit W-13: countdown on the server clock
 
 
 RESULTS_EVENTS_PER_ATTEMPT = 200

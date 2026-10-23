@@ -10,8 +10,9 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from .http_guard import GuardMiddleware, SignPrivateUploads
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
+from .admission import AdmissionLimit
 from .app_version import UpgradeRequired, upgrade_required_handler
 from .config import Settings
 from .db import Database, set_db
@@ -26,6 +27,7 @@ from .routes_teacher import router as teacher_router
 from .trial import refresh_trial_cache, router as trial_router
 from .seed import refuse_public_demo_logins, seed, seed_demo_class
 from .routes_classes import student_router as classes_student_router, teacher_router as classes_teacher_router
+from .static_files import StaticCache, serve as serve_static
 from .store import make_store, set_store
 from .timeutil import iso, utcnow
 
@@ -96,12 +98,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if origins:
         app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"],
                            allow_headers=["*"])
+    # perf 0.6.2: bounded work in progress per worker; the rest queue (app/admission.py)
+    app.add_middleware(AdmissionLimit, limit=settings.max_inflight)
 
+    # perf 0.6.2: the student router first. Requests are matched against the routers in
+    # this order, and the exam's per-student traffic (heartbeat, app beat, saves) is ~95%
+    # of all requests during an exam. Its paths overlap no other router's
+    # (tests/test_perf_0_6_2.py checks), so the order changes nothing else.
+    app.include_router(student_router)
     app.include_router(auth_router)
     app.include_router(classes_teacher_router)   # audit S-03
     app.include_router(classes_student_router)
     app.include_router(teacher_router)
-    app.include_router(student_router)
     app.include_router(trial_router)             # 2026-10-22: sample exam (app.trial)
     app.include_router(sealed_router)            # S5: sealed offline hand-in
     app.include_router(grading_router)
@@ -149,6 +157,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"detail": "Not Found"}, status_code=404)
 
     static_root = os.path.realpath(settings.static_dir)
+    # perf 0.6.2: long-lived caching for hashed /assets/, 304s, gzip (app/static_files.py)
+    static_cache = StaticCache()
 
     @app.get("/", include_in_schema=False)
     async def root():
@@ -158,17 +168,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def spa(path: str, request: Request):
         candidate = os.path.realpath(os.path.join(static_root, path))
         if (candidate.startswith(static_root + os.sep) and os.path.isfile(candidate)):
-            # 2026-10-23: the pdf.js worker is a module (.mjs); module scripts need a
-            # JavaScript type (and everything is sent with nosniff)
-            if candidate.endswith(".mjs"):
-                return FileResponse(candidate, media_type="text/javascript")
-            # Phase 4: Pyodide's WebAssembly (compiled while streaming needs this type)
-            if candidate.endswith(".wasm"):
-                return FileResponse(candidate, media_type="application/wasm")
-            return FileResponse(candidate)
+            # 2026-10-23: .mjs (pdf.js worker) and .wasm (Pyodide) get their own types
+            return await serve_static(request, candidate, os.path.relpath(candidate, static_root),
+                                      static_cache, is_index=candidate == os.path.join(static_root, "index.html"))
         index = os.path.join(static_root, "index.html")
         if os.path.isfile(index):
-            return FileResponse(index, headers={"Cache-Control": "no-cache"})
+            return await serve_static(request, index, "index.html", static_cache, is_index=True)
         return JSONResponse({"detail": "UI not built"}, status_code=404)
 
     return app

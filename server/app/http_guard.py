@@ -26,9 +26,15 @@ DEFAULT_LIMIT = 8 * MB          # answers, exams, everything else
 # list is enforced by the page and, in sub-frames, by the apps); worker-src blob: for the
 # bundled pdf.js worker of the materials viewer. Scripts stay 'self' only, plus
 # 'wasm-unsafe-eval' (phase 4: Pyodide compiles its WebAssembly; no JavaScript eval).
-CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
-       "img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; "
-       "frame-src 'self' https:; worker-src 'self' blob:; "
+# 2026-10-23 (perf 0.6.2): the FairPlay apps ship the asset pack (Pyodide, pdf.js) and
+# serve it at fairplay-asset://bundle/ (Mac, iPad) or https://fairplay-assets.example/
+# (Windows WebView2 virtual host): those two origins only, for scripts, workers and fetches
+# (web/scripts/APP_ASSETS.md). A normal browser has neither and uses /app-assets/.
+APP_ASSETS = "fairplay-asset: https://fairplay-assets.example"
+CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' " + APP_ASSETS + "; "
+       "style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' " + APP_ASSETS + "; "
+       "frame-src 'self' https:; worker-src 'self' blob: " + APP_ASSETS + "; "
        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
 

@@ -99,6 +99,17 @@ class Settings:
     replicas: int = field(default_factory=lambda: _int("FAIRPLAY_REPLICAS", 1))
     # Sign-in tries per IP per minute (audit S-05). Raise it for load tests from one machine.
     login_ip_limit: int = field(default_factory=lambda: _int("FAIRPLAY_LOGIN_IP_LIMIT", 300))
+    # perf 0.6.2: a whole school usually reaches the server from ONE public address (NAT):
+    # 5,000 students signing in before an exam are 5,000 tries from that address. Networks
+    # listed here (CIDRs, e.g. "203.0.113.0/24,2001:db8::/48") get this per-IP limit
+    # instead; the per-account limits stay the same for everyone.
+    login_school_nets: list[str] = field(default_factory=lambda: _list("FAIRPLAY_LOGIN_SCHOOL_NETS"))
+    login_school_ip_limit: int = field(default_factory=lambda: _int("FAIRPLAY_LOGIN_SCHOOL_IP_LIMIT", 6000))
+    # PBKDF2 checks running at once per worker process (they are CPU-bound threads; more
+    # than about one per core only slows the other requests down during a sign-in rush).
+    login_hash_slots: int = field(default_factory=lambda: _int("FAIRPLAY_LOGIN_HASH_SLOTS", 4))
+    # API requests in progress at once per worker process; more wait in line (app/admission.py).
+    max_inflight: int = field(default_factory=lambda: _int("FAIRPLAY_MAX_INFLIGHT", 128))
     static_dir: str = field(default_factory=lambda: os.environ.get(
         "PROCTORA_STATIC_DIR",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")))
@@ -127,6 +138,29 @@ class Settings:
 
     def feature(self, name: str) -> bool:
         return name in self.features
+
+    def login_limit_for(self, ip: str) -> int:
+        """Sign-in tries per minute allowed from this address (audit S-05, perf 0.6.2)."""
+        if not self.login_school_nets or not ip:
+            return self.login_ip_limit
+        nets = getattr(self, "_school_nets", None)
+        if nets is None:
+            import ipaddress
+            nets = []
+            for n in self.login_school_nets:
+                try:
+                    nets.append(ipaddress.ip_network(n, strict=False))
+                except ValueError:
+                    log.warning("FAIRPLAY_LOGIN_SCHOOL_NETS: ignoring %r (not a network)", n)
+            self._school_nets = nets
+        try:
+            import ipaddress
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return self.login_ip_limit
+        if any(addr.version == n.version and addr in n for n in nets):
+            return max(self.login_ip_limit, self.login_school_ip_limit)
+        return self.login_ip_limit
 
     @property
     def demo_logins(self) -> bool:
