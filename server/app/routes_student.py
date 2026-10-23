@@ -13,13 +13,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
-from .grading import exam_questions, grade_attempt, is_answered, num, percent
+from .grading import exam_questions, grade_attempt, is_answered, num, oj_grades, percent
 from .models import Attempt, DeviceCheck, Exam, IntegrityEvent
 from . import app_client as ac
 from .access import member_of_exam, require_member
 from .app_version import check_app_version
-from .schemas import (AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn, HeartbeatIn,
-                      OfflineKeyIn, StartIn, SwapRequestIn)
+from .schemas import (SCALAR_ONLY_DETAIL, AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
+                      HeartbeatIn, OfflineKeyIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
 from .services import (LIVE_TTL, attempt_view, cache_attempt, find_attempt, get_attempt_meta,
                        get_exam_cached, new_id, new_receipt, new_session_id, student_tools,
@@ -115,7 +115,8 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                Attempt.id, Attempt.status, Attempt.submitted_at, Attempt.receipt,
                Exam.course, Exam.room, Exam.scheduled_at, Exam.grades_released,
                Exam.total_points, Attempt.score, Exam.mode, Exam.delivery, Exam.start_code,
-               Exam.calculator, Exam.open_book, Exam.websites)       # 2026-10-23: exam tools
+               Exam.calculator, Exam.open_book, Exam.websites,       # 2026-10-23: exam tools
+               Exam.source, Attempt.oj_result)                        # DKU OJ bridge
         .outerjoin(Attempt, and_(Attempt.exam_id == Exam.id, Attempt.student_id == p.user_id))
         # Audit S-03: live exams of the student's classes / LMS courses, plus their own attempts.
         .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None)))
@@ -125,25 +126,40 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         .order_by(Exam.created_at.desc(), Exam.id))).all()
     out = []
     for (eid, title, dur, qc, status, aid, astatus, sub, receipt, course, room, sched, released,
-         total, score, mode, delivery, code, calc, open_book, websites) in rows:
+         total, score, mode, delivery, code, calc, open_book, websites, source, oj_result) in rows:
         mode = mode or "questions"
         delivery = delivery or ("website" if mode == "external" else "computer")
         attempt = None
         if aid is not None:
             released = bool(released)
+            if source == "dkuoj":        # released per student by DKU OJ
+                released, score, total = _oj_released(oj_result, total)
             show = released and astatus == "submitted"
             attempt = {"attempt_id": aid, "status": astatus, "submitted_at": iso(sub),
                        "receipt": receipt, "released": released,
                        "percent": percent(score or 0.0, total) if show else None}
-        out.append({"id": eid, "title": title, "duration_min": dur, "question_count": qc,
+        row = {"id": eid, "title": title, "duration_min": dur, "question_count": qc,
                     "status": status, "course": course or "", "room": room or "",
                     "scheduled_at": iso(sched), "mode": mode, "delivery": delivery,
                     "attempt": attempt,
                     "package_id": package_id(secret, eid, code, dur) if status == "live" else None,
                     # 2026-10-23: shown on "Before you start"; open_book -> the upload area
                     "tools": student_tools({"mode": mode, "calculator": calc, "open_book": open_book,
-                                            "websites": websites})})
+                                            "websites": websites})}
+        if source == "dkuoj":
+            row["source"] = "dkuoj"
+        out.append(row)
     return out
+
+
+def _oj_released(oj_result: dict | None, total: float) -> tuple[bool, float, float]:
+    """DKU OJ bridge: (released, score, total points) from the attempt's DKU OJ result."""
+    if not oj_result or not oj_result.get("released"):
+        return False, 0.0, total
+    try:
+        return True, float(oj_result.get("total") or 0), float(oj_result.get("total_points") or total or 0)
+    except (TypeError, ValueError):
+        return False, 0.0, total
 
 
 @router.get("/exams/{exam_id}/challenge")
@@ -200,6 +216,9 @@ async def start(exam_id: str, body: StartIn, request: Request,
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
     await require_member(session, exam, p.user_id)   # audit S-03: class / LMS course only
+    if exam.get("source") == "dkuoj":
+        from .dkuoj.service import check_startable
+        await check_startable(session, exam_id)
     device_id = await verify_start_proof(store, settings, p.user_id, exam_id, body.client)
     lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
     n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
@@ -227,9 +246,16 @@ async def start(exam_id: str, body: StartIn, request: Request,
         # waits for this INSERT (FOR SHARE) and then extends it like everyone else.
         exam = {**exam, "duration_min": row.duration_min}
         started = offline_start(body.offline_started_at, now)
+        extra = timedelta(0)
+        if exam.get("source") == "dkuoj":
+            # DKU OJ bridge: freeze the package this exam runs from (same transaction as
+            # the first attempt: later packages never change a running exam) and give the
+            # student's extra time from the DKU OJ roster.
+            from .dkuoj.service import freeze_and_extra_time
+            extra = await freeze_and_extra_time(session, exam_id, p.user_id)
         a = Attempt(id=new_id("a"), exam_id=exam_id, student_id=p.user_id, status="in_progress",
                     started_at=started,
-                    deadline_at=started + timedelta(minutes=exam["duration_min"]),
+                    deadline_at=started + timedelta(minutes=exam["duration_min"]) + extra,
                     answers={}, client_seq=-1, updated_at=now,
                     device_id=device_id, session_id=new_session_id(), entries=1,
                     client="app" if device_id else "browser")
@@ -250,8 +276,17 @@ async def start(exam_id: str, body: StartIn, request: Request,
     else:
         await _resume(session, store, a, device_id, exam)
     await cache_attempt(store, a)
-    return {**attempt_view(a, exam, now), "session": a.session_id, "min_app_version": min_version,
+    return {**attempt_view(a, exam, now), **await _oj_view_extra(session, a, exam),
+            "session": a.session_id, "min_app_version": min_version,
             "needs_approval": bool(a.pending_resume)}     # S3
+
+
+async def _oj_view_extra(session: AsyncSession, a: Attempt, exam: dict) -> dict:
+    """DKU OJ exams: the files this attempt has handed in for file_upload questions."""
+    if exam.get("source") != "dkuoj":
+        return {}
+    from .dkuoj.files import files_of_attempt
+    return {"answer_files": await files_of_attempt(session, a.id)}
 
 
 async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | None,
@@ -325,7 +360,7 @@ async def get_attempt(aid: str, request: Request, p: Principal = Depends(require
     exam = await get_exam_cached(get_store(), session, a.exam_id)
     if exam is None:
         raise HTTPException(404, "Attempt not found")
-    return attempt_view(a, exam, utcnow())
+    return {**attempt_view(a, exam, utcnow()), **await _oj_view_extra(session, a, exam)}
 
 
 @router.put("/attempts/{aid}/answers")
@@ -419,9 +454,39 @@ async def _known_answers(store, session: AsyncSession, aid: str, answers: dict) 
     meta = await get_attempt_meta(store, session, aid)
     exam = await get_exam_cached(store, session, meta["exam_id"]) if meta else None
     ids = set((exam or {}).get("question_ids") or [])
-    if not ids:
+    if ids:
+        answers = {k: v for k, v in answers.items() if k in ids}
+    return await _check_answer_types(session, aid, exam, answers)
+
+
+async def _check_answer_types(session: AsyncSession, aid: str, exam: dict | None,
+                              answers: dict) -> dict:
+    """DKU OJ bridge: lists / {language, source} only for the DKU OJ questions that take
+    them (checked against the question: option range, blank count, own uploaded files,
+    allowed languages). FairPlay questions keep taking numbers, strings or null."""
+    oj_q = {q["id"]: q for q in (exam or {}).get("questions") or [] if q.get("source") == "dkuoj"}
+    if not oj_q:
+        if any(isinstance(v, (list, dict)) for v in answers.values()):
+            raise HTTPException(422, SCALAR_ONLY_DETAIL)
         return answers
-    return {k: v for k, v in answers.items() if k in ids}
+    from .dkuoj.adapter import AnswerError, check_answer
+    file_ids = None
+    if any(oj_q.get(k, {}).get("type") == "file_upload" and v for k, v in answers.items()):
+        from .dkuoj.files import file_ids_of_attempt
+        file_ids = await file_ids_of_attempt(session, aid)
+    out = {}
+    for k, v in answers.items():
+        q = oj_q.get(k)
+        if q is None:
+            if isinstance(v, (list, dict)):
+                raise HTTPException(422, SCALAR_ONLY_DETAIL)
+            out[k] = v
+            continue
+        try:
+            out[k] = check_answer(q, v, None if file_ids is None else file_ids.get(k, set()))
+        except AnswerError as e:
+            raise HTTPException(422, f"{q.get('label') or k}: {e}") from None
+    return out
 
 
 @router.post("/attempts/{aid}/heartbeat")
@@ -534,8 +599,8 @@ async def submit(aid: str, body: AnswersIn, request: Request,
         answers = sent if use_body and not late else stored
         late_answers = changed if late and changed else None
         score, pending, _ = grade_attempt(exam_questions(exam) if exam else [], answers, a.grades)
-        if exam is not None and exam.is_trial:
-            score, pending = None, 0      # the sample exam is never graded
+        if exam is not None and (exam.is_trial or exam.source == "dkuoj"):
+            score, pending = None, 0      # the sample exam / DKU OJ exams: never graded here
         # Audit 2026-10-13: only if no newer PUT landed since the read above (client_seq
         # unchanged); otherwise read again and redo the choice with the newer answers.
         res = await session.execute(
@@ -546,6 +611,9 @@ async def submit(aid: str, body: AnswersIn, request: Request,
                 answers=answers, client_seq=max(body.client_seq, seen_seq),
                 answered=count_answered(answers),
                 late=late, late_answers=late_answers, auto_submitted=False, updated_at=now))
+        if res.rowcount == 1 and exam is not None and exam.source == "dkuoj":
+            from .dkuoj.delivery import enqueue      # outbox row in the hand-in's transaction
+            await enqueue(session, aid, exam.id, now)
         await session.commit()
         if res.rowcount == 1 and late:
             mins = int((now - a.deadline_at).total_seconds() // 60)
@@ -813,15 +881,18 @@ async def my_grades(p: Principal = Depends(require_student),
                     session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
         select(Exam.id, Exam.title, Exam.course, Exam.total_points, Exam.grades_released,
-               Attempt.submitted_at, Attempt.score)
+               Attempt.submitted_at, Attempt.score, Exam.source, Attempt.oj_result)
         .join(Attempt, Attempt.exam_id == Exam.id)
         .where(Attempt.student_id == p.user_id, Attempt.status == "submitted",
                Exam.is_trial == false())     # the sample exam never counts
         .order_by(Attempt.submitted_at.desc(), Exam.id))).all()
     out = []
-    for eid, title, course, total, released, sub, score in rows:
+    for eid, title, course, total, released, sub, score, source, oj_result in rows:
         released = bool(released)
+        if source == "dkuoj":
+            released, score, total = _oj_released(oj_result, total)
         out.append({"exam_id": eid, "title": title, "course": course or "",
+                    **({"source": "dkuoj"} if source == "dkuoj" else {}),
                     "submitted_at": iso(sub), "released": released,
                     "score": num(score or 0.0) if released else None,
                     "total_points": num(total),
@@ -850,6 +921,8 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
     e = await session.get(Exam, exam_id)
     if e is None or e.is_trial:
         raise HTTPException(404, "No submitted attempt for this exam")
+    if e.source == "dkuoj":
+        return await _oj_grade_detail(session, e, a)
     if not e.grades_released:
         raise HTTPException(403, "Grades not released yet")
     questions = exam_questions(e)
@@ -891,4 +964,49 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
         "total_points": num(e.total_points), "percent": percent(score, e.total_points),
         "class_average_percent": percent(float(avg), e.total_points) if avg is not None else None,
         "overall_comment": a.overall_comment or "", "questions": out_q,
+    }
+
+
+async def _oj_grade_detail(session: AsyncSession, e: Exam, a: Attempt) -> dict:
+    """DKU OJ bridge: the student's released DKU OJ result (graded there), in the same
+    shape as a FairPlay grade page. No answer keys exist: correct_answer is always null."""
+    released, score, total = _oj_released(a.oj_result, e.total_points)
+    if not released:
+        raise HTTPException(403, "Grades not released yet")
+    from .services import student_question
+    questions = exam_questions(e)
+    _, _, rows = grade_attempt(questions, a.answers, oj_grades(questions, a.oj_result))
+    out_q = []
+    for i, (q, r) in enumerate(zip(questions, rows)):
+        pts, mx = float(r["points_awarded"]), q.get("points", 1)
+        if not is_answered(r["given"]) and not pts:
+            status = "unanswered"
+        elif not r["manual"]:
+            status = "pending"            # DKU OJ sent no points for it (yet)
+        elif abs(pts - mx) < 1e-9:
+            status = "correct"
+        elif pts > 0:
+            status = "partial"
+        else:
+            status = "wrong"
+        sq = student_question(q)
+        out_q.append({
+            **sq, "question_id": q["id"], "index": i, "type": q["type"], "prompt": q["prompt"],
+            "options": list(q.get("options") or []), "points": mx,
+            "points_awarded": r["points_awarded"], "status": status, "given": r["given"],
+            "correct_answer": None, "tolerance": None,
+            "comment": r["comment"], "comment_format": "oj_md",
+            "rubric": [], "images": [], "rubric_scores": None,
+        })
+    others = (await session.execute(select(Attempt.oj_result).where(
+        Attempt.exam_id == e.id, Attempt.status == "submitted"))).scalars().all()
+    pcts = [percent(float(r.get("total") or 0), float(r.get("total_points") or total or 0))
+            for r in others if r and r.get("released")]
+    return {
+        "exam_id": e.id, "title": e.title, "course": e.course or "", "source": "dkuoj",
+        "submitted_at": iso(a.submitted_at), "receipt": a.receipt, "score": num(score),
+        "total_points": num(total), "percent": percent(score, total),
+        "class_average_percent": round(sum(pcts) / len(pcts), 1) if pcts else None,
+        "overall_comment": "", "questions": out_q,
+        "graded_in": "dkuoj", "oj_updated_at": (a.oj_result or {}).get("updated_at"),
     }

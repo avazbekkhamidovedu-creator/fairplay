@@ -63,7 +63,36 @@ def teacher_question(q: dict) -> dict:
         "topics": list(q.get("topics") or []),
         "answer_lines": q.get("answer_lines"),  # slice 6: paper answer space
         **code_fields(q),                         # phase 4: coding questions only
+        **oj_fields(q),                           # DKU OJ exams only
     }
+
+
+# DKU OJ bridge: fields of questions that came from DKU OJ (app.dkuoj.adapter), by type.
+# None of them is an answer key (DKU OJ never sends one). "oj" (OJ ids) is teacher-only.
+OJ_COMMON_FIELDS = ("prompt_format", "title", "label", "partial")
+OJ_TYPE_FIELDS = {
+    "mcq": ("multiple", "true_false", "shuffle"),
+    "fill_blank": ("blanks", "blank_points", "case_sensitive"),
+    "file_upload": ("allowed_extensions", "max_file_size", "instructions_md"),
+    "code": ("languages", "templates", "memory_limit_kb"),
+    "short": (),
+}
+
+
+def oj_fields(q: dict) -> dict:
+    """{} for FairPlay questions; the DKU OJ fields (plus "source": "dkuoj") otherwise."""
+    oj = q.get("oj")
+    if not isinstance(oj, dict):
+        return {}
+    out = {f: q.get(f) for f in OJ_COMMON_FIELDS}
+    out["partial"] = bool(out["partial"])
+    for f in OJ_TYPE_FIELDS.get(q.get("type"), ()):
+        v = q.get(f)
+        out[f] = [dict(x) if isinstance(x, dict) else x for x in v] if isinstance(v, list) else \
+            (dict(v) if isinstance(v, dict) else v)
+    out["source"] = "dkuoj"
+    out["oj"] = {k: (list(v) if isinstance(v, list) else v) for k, v in oj.items()}
+    return out
 
 
 def code_language(q: dict, default_language: str | None = None) -> str:
@@ -79,6 +108,7 @@ def code_fields(q: dict) -> dict:
     if q.get("type") != "code":
         return {}
     return {
+        # DKU OJ: language = the first language's runner (None = no in-app runner)
         "language": q.get("language") if q.get("language") in CODE_LANGUAGES else None,
         "starter_code": q.get("starter_code") or "",
         "tests": [{"input": t.get("input", ""), "expected": t.get("expected", ""),
@@ -96,6 +126,14 @@ def student_question(q: dict, default_language: str | None = None) -> dict:
     # slice 6: topic tags can hint at the method ("integration by parts"): not shown while
     # writing. Images are shown above the prompt.
     tq.pop("topics", None)
+    if tq.pop("oj", None) is not None:
+        # DKU OJ question: no OJ ids for students (option ids, problem codes); the code
+        # samples are all visible and every language keeps its own runner (or none).
+        tq["tests"] = [{"input": t["input"], "expected": t["expected"]} for t in tq.get("tests") or []] \
+            if tq["type"] == "code" else tq.get("tests", [])
+        if tq["type"] != "code":
+            tq.pop("tests", None)
+        return tq
     if tq["type"] == "code":
         # Phase 4: hidden tests (input and expected output) never reach students, nor their
         # count or points. Visible tests are the samples. The language is resolved here:
@@ -138,6 +176,37 @@ def exam_out(e: Exam, pending_grading: int = 0) -> dict:
         **lock_settings(e),                           # S3 / S6
         **tool_settings(e),                           # 2026-10-23: exam tools
         "default_language": exam_default_language(e),  # phase 4
+        **oj_exam_fields(e),                          # DKU OJ bridge
+    }
+
+
+def is_oj_exam(e) -> bool:
+    """DKU OJ bridge: built in DKU OJ (read-only here, graded there). `e` is an Exam or
+    the cached student view."""
+    src = e.get("source") if isinstance(e, dict) else getattr(e, "source", None)
+    return src == "dkuoj"
+
+
+def oj_exam_fields(e: Exam) -> dict:
+    """Teacher view of a DKU OJ exam: where it comes from. {} for FairPlay exams (their
+    shape is unchanged)."""
+    oj = is_oj_exam(e)
+    if not oj:
+        return {}
+    meta = (e.oj_meta or {}) if oj else {}
+    return {
+        "source": "dkuoj" if oj else "fairplay",
+        "read_only": oj,
+        "graded_in": "dkuoj" if oj else "fairplay",
+        "oj_key": e.oj_key if oj else None,
+        "oj_url": meta.get("url") if oj else None,
+        "oj_package_version": e.oj_package_version if oj else None,
+        "oj_frozen_version": e.oj_frozen_version if oj else None,
+        "oj_synced_at": iso(e.oj_synced_at) if oj else None,
+        "oj_removed": bool(e.oj_removed) if oj else False,
+        "oj_start_time": meta.get("start_time") if oj else None,
+        "oj_end_time": meta.get("end_time") if oj else None,
+        "oj_package_ready": bool(oj and e.oj_package_version and e.questions),
     }
 
 
@@ -262,6 +331,9 @@ async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> 
         **lock_settings(e),                           # S3 / S6: read by start and app-beat
         **tool_settings(e),                           # 2026-10-23: exam tools
         "is_trial": bool(e.is_trial),                 # 2026-10-22: the sample exam
+        "source": e.source or "fairplay",             # DKU OJ bridge
+        "oj_removed": bool(e.oj_removed),
+        "total_points": num(e.total_points or 0),
         "questions": [student_question(q, exam_default_language(e)) for q in e.questions or []],
         **external_fields(e),
     }
@@ -348,5 +420,8 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         "tools": student_tools(exam),
         "approval": approval_of(a),    # S3: "pending" -> the page shows "Wait for your teacher"
         "trial": bool(exam.get("is_trial")),   # 2026-10-22: the sample exam (Stop practice)
+        # DKU OJ bridge: "source": "dkuoj" + total_points (questions from DKU OJ)
+        **({"source": "dkuoj", "total_points": exam.get("total_points")}
+           if exam.get("source") == "dkuoj" else {}),
     }
 

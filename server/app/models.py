@@ -102,6 +102,20 @@ class Exam(Base):
     # Phase 4: language of coding questions that do not set their own (students never pick)
     default_language: Mapped[str] = mapped_column(String(16), nullable=False, default="python",
                                                   server_default="python")
+    # DKU OJ bridge (app.dkuoj): "fairplay" (made here) or "dkuoj" (built in DKU OJ, synced
+    # here, read-only in FairPlay). oj_frozen_version is set by the first student start;
+    # later packages never change a running exam. oj_meta = the last listing entry from
+    # DKU OJ without its roster/editors (times, classes, results cursor, retry times).
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="fairplay",
+                                        server_default="fairplay")
+    oj_key: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    oj_package_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    oj_frozen_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    oj_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    oj_removed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                             server_default=false())
+    oj_meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict,
+                                          server_default=text("'{}'"))
 
 
 class Attempt(Base):
@@ -164,6 +178,9 @@ class Attempt(Base):
     swap_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     swap_old_session: Mapped[str | None] = mapped_column(String(64), nullable=True)
     swap_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # DKU OJ bridge: this student's released result from DKU OJ (app.dkuoj.results):
+    # {released, total, total_points, updated_at, questions: [{question_id, points, feedback_md}]}
+    oj_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class IntegrityEvent(Base):
@@ -238,6 +255,8 @@ class SchoolClass(Base):
     term: Mapped[str | None] = mapped_column(String(80), nullable=True)
     join_code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    # DKU OJ bridge: the DKU OJ class this class mirrors (None = made in FairPlay)
+    oj_class_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
 
 
 class ClassMember(Base):
@@ -283,3 +302,7 @@ class ExamMaterial(Base):
     # 2026-10-23: hex sha256 of `data`, set on upload; the download's ETag ('' on older rows)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+# DKU OJ bridge tables (registered with Base here so create_all sees them)
+from .dkuoj import models as _dkuoj_models  # noqa: E402,F401

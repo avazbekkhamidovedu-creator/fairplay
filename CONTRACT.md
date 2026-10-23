@@ -814,3 +814,47 @@ use is built into the FairPlay exam page.
   - File: `{id, name, kind: "pdf"|"png"|"jpg"|"txt"|"md", media_type, size, created_at}`.
   - The exam page fetches the files when the exam opens and keeps them in memory; after a reload
     without the connection it says "Materials need the connection" (the exam keeps working).
+
+## DKU OJ bridge — FairPlay server as implemented (2026-10-23)
+Binding contract: `docs/dkuoj-bridge.md`. Server code: `server/app/dkuoj/`. Settings: `DKUOJ_URL`,
+`DKUOJ_TOKEN` (both set = bridge on), `DKUOJ_SYNC_SECONDS` (120), `DKUOJ_DELIVERY_RPS` (10), optional
+`FAIRPLAY_PUBLIC_URL` (absolute integrity-report links sent to DKU OJ; unset = paths). FairPlay exams
+keep their exact shapes: every field below appears only on DKU OJ exams.
+- **Teacher exam** adds `source: "dkuoj"`, `read_only: true`, `graded_in: "dkuoj"`, `oj_key`, `oj_url`,
+  `oj_package_version`, `oj_frozen_version`, `oj_synced_at`, `oj_removed`, `oj_start_time`, `oj_end_time`,
+  `oj_package_ready`. Every DKU OJ editor sees the exam (list, live room, open/close/extend/codes) like
+  its owner. `PUT` → 409 "This exam comes from DKU OJ. Edit this exam in DKU OJ."; delete → 409 until DKU
+  OJ removed it; grades / comment / release / unrelease → 409 "This exam is graded in DKU OJ. …";
+  `open` → 409 until the package is here ("The questions arrive from DKU OJ 24 hours before the start…").
+  `GET .../grading` → `{graded_in: "dkuoj", oj_url, questions: [], items: []}`. `GET .../results` adds
+  `graded_in`, `oj_url`, and per attempt `oj_result` and `oj_delivery` `{status, tries, last_error,
+  receipt, next_at, sent_at}`; scores are DKU OJ's released totals (0 until then).
+  `GET /api/exams/{id}/assets/{name}` serves a statement asset to the exam's teachers.
+- **Student question** (DKU OJ exams) = the usual student fields plus `source: "dkuoj"`, `prompt_format`
+  (`oj_md` | `oj_html`), `title`, `label`, `partial`, and by type: mcq `multiple`, `true_false`, `shuffle`;
+  fill_blank `blanks`, `blank_points`, `case_sensitive`; file_upload `allowed_extensions`, `max_file_size`,
+  `instructions_md`; code `languages: [{key, name, runner}]`, `templates`, `memory_limit_kb` (plus
+  `language` = first runner, `starter_code` = first template, `tests` = samples `{input, expected}`,
+  `time_limit_ms`). Question ids are opaque (`q_` + 16 hex). No DKU OJ ids or answer keys reach students.
+- **Answers** through the normal `PUT .../answers`, submit and sealed submit: mcq single int index;
+  mcq multiple list of indexes (stored sorted); fill_blank list of strings (≤ blanks); short string;
+  file_upload list of answer-file ids; code `{"language": "<OJ key>", "source": "…"}` (a bare string
+  = first language). Wrong shapes → 422. FairPlay questions still take only numbers, strings or null.
+- **Answer files:** `POST /api/student/attempts/{aid}/files?question_id=<qid>` (multipart `file`, with
+  `X-FairPlay-Session`) → 201 `{id, question_id, name, size, sha256, created_at}` (extension / size
+  checked against the question; ≤ 10 files per question); `GET .../files/{id}` → the bytes. Attempt
+  views of DKU OJ exams add `answer_files: [that shape]`, `source: "dkuoj"`, `total_points`.
+- **Assets:** `fp-asset:<name>` → `GET /api/student/attempts/{aid}/assets/<name>` (Bearer +
+  `X-FairPlay-Session`, attempt owner, exam live or attempt in progress; ETag = sha256).
+- **Grades:** `GET /api/student/grades` rows of DKU OJ exams add `source: "dkuoj"`; released per
+  student from DKU OJ. `GET /api/student/grades/{id}` (DKU OJ) = the usual shape plus `source`,
+  `graded_in: "dkuoj"`, `oj_updated_at`; each question is the student question plus `question_id`,
+  `index`, `points_awarded`, `status` (`correct|partial|wrong|unanswered|pending`), `given`,
+  `comment` (DKU OJ feedback markdown), `comment_format: "oj_md"`, `correct_answer: null`.
+  `/api/student/exams` rows add `source: "dkuoj"`.
+- **Live-room sign-in:** `GET /oj/live?...` (contract §1) → 303 `/teacher/oj-live?code=<one-time, 60 s>`;
+  `POST /api/oj/live/exchange {code}` → `{token, role: "teacher", name, username, exam_id}`. Each signed
+  link works once; links valid at most 5 min ahead.
+- `GET /api/dkuoj/status` (teacher) → `{enabled, url, last_run, last_error, exams, deliveries:
+  {pending, failed, sent, dead}, problems: [{attempt_id, exam_id, status, tries, last_error}]}`.
+  A dead delivery also records the event `oj_delivery_failed` on the attempt (teacher review list).

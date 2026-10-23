@@ -29,6 +29,10 @@ def _number(v: Any) -> float | None:
 
 
 def is_answered(v: Any) -> bool:
+    if isinstance(v, list):          # DKU OJ: several options / blanks / files
+        return any(is_answered(x) for x in v)
+    if isinstance(v, dict) and "source" in v and "image" not in v:   # DKU OJ code answer
+        return is_answered(v.get("source"))
     return v is not None and not (isinstance(v, str) and not v.strip())
 
 
@@ -79,10 +83,17 @@ def num(x: float) -> int | float:
 # One helper for score / needs_grading, shared by submit/close (stored score), results,
 # the grading queue, the gradebook and the student grade views.
 
-MANUAL_TYPES = ("essay", "external", "code")
+MANUAL_TYPES = ("essay", "external", "code", "fill_blank", "file_upload")
 # Phase 4: answers the teacher grades (pending until graded; a blank one is 0 and graded).
 # Coding answers are graded on the grading page, where the tests run in the browser.
-WRITTEN_TYPES = ("essay", "code")
+# DKU OJ bridge: fill_blank / file_upload exist only in DKU OJ exams, graded in DKU OJ.
+WRITTEN_TYPES = ("essay", "code", "fill_blank", "file_upload")
+
+
+def remote_graded(q: dict) -> bool:
+    """DKU OJ bridge: a question of a DKU OJ exam. Never graded here: its points come only
+    from DKU OJ's released results (passed to grade_attempt as grades)."""
+    return isinstance(q.get("oj"), dict)
 
 # slice 4: an exam held on another website stores one hidden grading item. Students never
 # see it (their view has no questions); the teacher enters the score from the website.
@@ -107,7 +118,7 @@ def exam_questions(e: Any) -> list[dict]:
 
 def auto_points(q: dict, given: Any) -> float | None:
     """Automatic points for one answer (slice-1 rules); None for essays (never auto-graded)."""
-    if q.get("type") in MANUAL_TYPES:
+    if q.get("type") in MANUAL_TYPES or remote_graded(q):
         return None
     return q.get("points", 1) if grade_question(q, given) else 0
 
@@ -138,7 +149,7 @@ def grade_attempt(questions: list[dict], answers: dict | None,
         elif paper_pending:
             pts = 0.0
             pending = True
-        elif q.get("type") in WRITTEN_TYPES:
+        elif q.get("type") in WRITTEN_TYPES or remote_graded(q):
             pts = 0.0
             pending = answered
         elif q.get("type") == "external":
@@ -196,3 +207,29 @@ def percent(score: float, total: float) -> float:
 
 def word_count(v: Any) -> int:
     return len(v.split()) if isinstance(v, str) else 0
+
+
+# ---------------------------------------------------------------- DKU OJ bridge
+def handin_grade(exam: Any, answers: dict | None, grades: dict | None) -> tuple[float | None, int]:
+    """(score, needs_grading) stored at hand-in / close. The sample exam and DKU OJ exams
+    are never graded here (DKU OJ results arrive later through app.dkuoj.results)."""
+    if exam is not None and (getattr(exam, "is_trial", False) or getattr(exam, "source", None) == "dkuoj"):
+        return None, 0
+    score, pending, _ = grade_attempt(exam_questions(exam) if exam is not None else [], answers, grades)
+    return score, pending
+
+
+def oj_grades(questions: list[dict], oj_result: dict | None) -> dict:
+    """A released DKU OJ result as teacher-style grades {qid: {points, comment, ...}}, so
+    grade_attempt fills the per-question rows. Not released / none -> {}."""
+    if not oj_result or not oj_result.get("released"):
+        return {}
+    by_oj = {(q.get("oj") or {}).get("question_id"): q["id"] for q in questions}
+    out = {}
+    for r in oj_result.get("questions") or []:
+        qid = by_oj.get(r.get("question_id"))
+        if qid is None:
+            continue
+        out[qid] = {"points": r.get("points") or 0, "comment": r.get("feedback_md") or "",
+                    "rubric_scores": None, "graded_at": oj_result.get("updated_at")}
+    return out

@@ -24,6 +24,9 @@ docker compose up --build --scale api=4
 | PROCTORA_SECRET | insecure dev value | token signing key |
 | DB_POOL_SIZE / DB_MAX_OVERFLOW | 10 / 20 | per worker |
 | PROCTORA_SEED_LOADTEST_USERS | 0 | creates lt0001.. users for the load test |
+| DKUOJ_URL / DKUOJ_TOKEN | (none: bridge off) | DKU OJ bridge (docs/dkuoj-bridge.md); the token is DKU OJ's FAIRPLAY_TOKEN |
+| DKUOJ_SYNC_SECONDS / DKUOJ_DELIVERY_RPS | 120 / 10 | sync interval; hand-ins sent to DKU OJ per second |
+| FAIRPLAY_PUBLIC_URL | (none) | this server's address, for the report links sent to DKU OJ |
 
 ## Tests
 ```

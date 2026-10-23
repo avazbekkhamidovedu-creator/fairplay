@@ -58,9 +58,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.feature("scan"):
             from .routes_scan import sweep_forever
             sweeper = asyncio.get_running_loop().create_task(sweep_forever())
+        # DKU OJ bridge: sync + outbox loop (one worker at a time, see app.dkuoj.sync)
+        bridge = None
+        from .dkuoj import sync as dkuoj_sync
+        if settings.dkuoj_enabled and dkuoj_sync.BACKGROUND:
+            bridge = asyncio.get_running_loop().create_task(dkuoj_sync.run_forever(settings))
         try:
             yield
         finally:
+            if bridge is not None:
+                bridge.cancel()
+                try:
+                    await bridge
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
             if sweeper is not None:
                 sweeper.cancel()
                 try:                       # wait for it: disposing the DB under it can hang
@@ -127,6 +138,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .site_check import router as site_check_router
     app.include_router(site_check_router)
     app.include_router(topics_router)
+    # DKU OJ bridge: /oj/live sign-in, status, answer files and statement assets
+    from .dkuoj.files import student_router as oj_files_student, teacher_router as oj_files_teacher
+    from .dkuoj.routes import router as dkuoj_router
+    app.include_router(dkuoj_router)
+    app.include_router(oj_files_student)
+    app.include_router(oj_files_teacher)
     if settings.feature("scan"):
         from .routes_scan import router as scan_router  # slice 6 D: Scan & Grade (paper exams)
         app.include_router(scan_router)

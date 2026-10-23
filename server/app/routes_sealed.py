@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import app_client as ac
 from .db import get_session
-from .grading import exam_questions, grade_attempt
+from .grading import handin_grade
 from .models import Attempt, Exam
 from .routes_student import LATE_GRACE, _known_answers, _own_attempt, count_answered
 from .schemas import AnswersIn, SealedSubmitIn
@@ -92,16 +92,18 @@ async def _hand_in(session: AsyncSession, a: Attempt, seal: ac.Seal, answers: di
     changed = {k: v for k, v in answers.items() if stored.get(k) != v}
     final = stored if late else answers
     exam = await session.get(Exam, a.exam_id)
-    score, pending, _ = grade_attempt(exam_questions(exam) if exam else [], final, a.grades)
-    if exam is not None and exam.is_trial:
-        score, pending = None, 0          # the sample exam is never graded
-    await session.execute(
+    # the sample exam and DKU OJ exams are never graded here
+    score, pending = handin_grade(exam, final, a.grades)
+    res = await session.execute(
         update(Attempt).where(Attempt.id == a.id, Attempt.status == "in_progress").values(
             status="submitted", submitted_at=min(seal.sealed_at, now), receipt=new_receipt(),
             score=score, needs_grading=pending, answers=final, answered=count_answered(final),
             client_seq=max(seal.client_seq, a.client_seq), late=late,
             late_answers=(changed or None) if late else None, late_sealed=late,
             sealed_proof=proof, auto_submitted=False, updated_at=now))
+    if res.rowcount == 1 and exam is not None and exam.source == "dkuoj":
+        from .dkuoj.delivery import enqueue      # outbox row in the hand-in's transaction
+        await enqueue(session, a.id, exam.id, now)
     await session.commit()
 
 

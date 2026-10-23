@@ -556,6 +556,38 @@ class StartIn(BaseModel):
 
 
 MAX_ANSWER_INT = 10 ** 300
+SCALAR_ONLY_DETAIL = "answer values must be numbers, strings or null"
+MAX_LIST_ANSWER = 100
+
+
+def check_structured_answer(val) -> None:
+    """DKU OJ answer shapes: a flat list of numbers / strings / null (options, blanks, file
+    ids) or {"language": str, "source": str} (code). Raises ValueError otherwise."""
+    if isinstance(val, list):
+        if len(val) > MAX_LIST_ANSWER:
+            raise ValueError("too many items in one answer")
+        total = 0
+        for x in val:
+            if x is None or isinstance(x, bool):
+                continue
+            if isinstance(x, str):
+                total += len(x)
+            elif isinstance(x, float):
+                if not math.isfinite(x):
+                    raise ValueError("answer numbers must be finite")
+            elif isinstance(x, int):
+                if abs(x) > MAX_ANSWER_INT:
+                    raise ValueError("answer number too large")
+            else:
+                raise ValueError(SCALAR_ONLY_DETAIL)
+        if total > MAX_ANSWER_CHARS:
+            raise ValueError("answer too long")
+        return
+    if set(val) - {"language", "source"} or not isinstance(val.get("source", ""), str) \
+            or not isinstance(val.get("language", ""), str):
+        raise ValueError(SCALAR_ONLY_DETAIL)
+    if len(val.get("source") or "") > MAX_ANSWER_CHARS or len(val.get("language") or "") > 32:
+        raise ValueError("answer too long")
 
 
 class AnswersIn(BaseModel):
@@ -573,7 +605,11 @@ class AnswersIn(BaseModel):
             if isinstance(val, str) and len(val) > MAX_ANSWER_CHARS:
                 raise ValueError("answer too long")
             if isinstance(val, (dict, list)):
-                raise ValueError("answer values must be numbers, strings or null")
+                # DKU OJ bridge: structured answers (several options, blanks, files, code
+                # with its language). Only their shape is checked here; whether the
+                # question takes one is checked against the exam (routes_student).
+                check_structured_answer(val)
+                continue
             # Audit S-04: no inf/NaN, no integers a float can't hold.
             if isinstance(val, float) and not math.isfinite(val):
                 raise ValueError("answer numbers must be finite")

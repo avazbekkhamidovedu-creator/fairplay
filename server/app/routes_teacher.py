@@ -11,7 +11,7 @@ from sqlalchemy import and_, case, delete, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
-from .grading import MANUAL_TYPES, exam_questions, auto_points, external_question, grade_attempt, is_answered, num, percent, word_count
+from .grading import MANUAL_TYPES, exam_questions, auto_points, external_question, grade_attempt, handin_grade, is_answered, num, oj_grades, percent, word_count
 from .models import Attempt, ClassMember, DeviceCheck, Exam, ExamMaterial, IntegrityEvent, User
 from .schemas import QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitIn, ReleaseIn, ReviewIn
 from .security import Principal, require_teacher
@@ -92,11 +92,26 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
             q["topics"] = [default_topic]
 
 
+OJ_EDIT_DETAIL = "This exam comes from DKU OJ. Edit this exam in DKU OJ."
+OJ_GRADED_DETAIL = "This exam is graded in DKU OJ. Grade it and release results there."
+
+
 async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
     e = await session.get(Exam, exam_id)
-    if e is None or e.teacher_id != p.user_id or e.is_trial:   # never the sample exam
+    if e is None or e.is_trial:                                 # never the sample exam
         raise HTTPException(404, "Exam not found")
+    if e.teacher_id != p.user_id:
+        # DKU OJ bridge: every DKU OJ editor of the exam works with it like its owner
+        from .dkuoj.service import is_oj_editor
+        if not (e.source == "dkuoj" and await is_oj_editor(session, e.id, p.user_id)):
+            raise HTTPException(404, "Exam not found")
     return e
+
+
+def _not_oj(e: Exam, detail: str = OJ_EDIT_DETAIL) -> None:
+    """DKU OJ exams are read-only here: questions, settings and grades live in DKU OJ."""
+    if e.source == "dkuoj":
+        raise HTTPException(409, detail)
 
 
 @router.get("")
@@ -104,8 +119,12 @@ async def list_exams(p: Principal = Depends(require_teacher),
                      session: AsyncSession = Depends(get_session)):
     from .materials import maybe_cleanup_materials
     await maybe_cleanup_materials()      # 2026-10-23 (review 2): open-book retention, hourly
+    from .dkuoj.models import OjEditor
+    edited = select(OjEditor.exam_id).where(OjEditor.user_id == p.user_id)
     res = await session.execute(
-        select(Exam).where(Exam.teacher_id == p.user_id, Exam.is_trial == false())
+        select(Exam).where(or_(Exam.teacher_id == p.user_id,
+                               and_(Exam.source == "dkuoj", Exam.id.in_(edited))),
+                           Exam.is_trial == false())
         .order_by(Exam.created_at.desc(), Exam.id))
     exams = list(res.scalars())
     pending = await pending_by_exam(session, [e.id for e in exams if e.status != "draft"])
@@ -149,6 +168,7 @@ async def update_exam(exam_id: str, body: ExamIn, request: Request,
                       p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    _not_oj(e)
     if body.delivery == "paper" and exam_delivery(e) != "paper":
         _check_delivery(request, body)
     if e.status != "draft":
@@ -165,6 +185,8 @@ async def update_exam(exam_id: str, body: ExamIn, request: Request,
 async def delete_exam(exam_id: str, p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    if e.source == "dkuoj" and not e.oj_removed:
+        raise HTTPException(409, "This exam comes from DKU OJ. Switch the FairPlay lock off there to remove it.")
     if e.status not in ("draft", "closed"):
         raise HTTPException(409, "Exam is live; close it first")
     aids = (await session.execute(select(Attempt.id).where(Attempt.exam_id == exam_id))).scalars().all()
@@ -188,7 +210,12 @@ async def open_exam(exam_id: str, p: Principal = Depends(require_teacher),
         raise HTTPException(409, "Exam is already live")
     if exam_delivery(e) == "paper":  # slice 6: printed, scanned and graded; never opened
         raise HTTPException(409, "Paper exams are printed, not opened in the app")
-    if e.class_id is None and e.course_link_id is None:   # audit S-03
+    if e.source == "dkuoj":
+        if e.oj_removed:
+            raise HTTPException(409, "FairPlay was switched off for this exam in DKU OJ")
+        if not (e.oj_package_version and e.questions):
+            raise HTTPException(409, "The questions arrive from DKU OJ 24 hours before the start. Try again then.")
+    elif e.class_id is None and e.course_link_id is None:   # audit S-03
         raise HTTPException(409, "Choose the class that takes this exam before opening it")
     e.status = "live"
     e.start_code = new_start_code()
@@ -237,13 +264,16 @@ async def _sweep_in_progress(session: AsyncSession, e: Exam, now) -> list:
         select(Attempt.id, Attempt.answers, Attempt.deadline_at)
         .where(Attempt.exam_id == e.id, Attempt.status == "in_progress"))).all()
     for aid, answers, deadline in rows:
-        score, pending, _ = grade_attempt(exam_questions(e), answers or {}, None)
+        score, pending = handin_grade(e, answers or {}, None)   # DKU OJ exams: not here
         # Conditional: a student submit racing with close keeps its own receipt.
-        await session.execute(
+        res = await session.execute(
             update(Attempt).where(Attempt.id == aid, Attempt.status == "in_progress").values(
                 status="submitted", submitted_at=now, auto_submitted=True, receipt=new_receipt(),
                 score=score, needs_grading=pending, late=now > deadline + LATE_GRACE,
                 updated_at=now))
+        if res.rowcount == 1 and e.source == "dkuoj":
+            from .dkuoj.delivery import enqueue      # outbox row in the hand-in's transaction
+            await enqueue(session, aid, e.id, now)
     await session.commit()
     return list(rows)
 
@@ -558,8 +588,18 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
     q_sum = {q["id"]: 0.0 for q in qs}
     q_correct = {q["id"]: 0 for q in qs}
     n_submitted = pending_total = 0
+    oj = e.source == "dkuoj"
+    deliveries = {}
+    if oj:
+        from .dkuoj.delivery import delivery_status
+        deliveries = await delivery_status(session, e.id)
     for a, username, name in rows:
-        score, pending, ans_rows = grade_attempt(qs, a.answers, a.grades)
+        # DKU OJ exams: points only from the released DKU OJ result
+        score, pending, ans_rows = grade_attempt(qs, a.answers, oj_grades(qs, a.oj_result) if oj else a.grades)
+        if oj:
+            released = bool(a.oj_result and a.oj_result.get("released"))
+            score = float(a.oj_result.get("total") or 0) if released else score
+            pending = 0
         pct = percent(score, total)
         if external:
             ans_rows, pending = [], 0
@@ -589,6 +629,9 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
             "answers": ans_rows, "events": events.get(a.id, []),
             "events_total": event_total.get(a.id, 0),
         })
+        if oj:      # DKU OJ bridge: where the answers are and what DKU OJ sent back
+            attempts[-1]["oj_result"] = a.oj_result
+            attempts[-1]["oj_delivery"] = deliveries.get(a.id)
 
     buckets = [0] * 10
     for pct in percents:
@@ -618,6 +661,8 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
         "score_buckets": [{"label": lab, "count": c} for lab, c in zip(labels, buckets)],
         "attempts": attempts,
         "questions": [q_stats(q) for q in qs],
+        "graded_in": "dkuoj" if oj else "fairplay",          # DKU OJ bridge
+        "oj_url": (e.oj_meta or {}).get("url") if oj else None,
     }
 
 
@@ -670,6 +715,10 @@ async def grading_queue(exam_id: str, p: Principal = Depends(require_teacher),
                         session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
     qs = exam_questions(e)
+    if e.source == "dkuoj":         # graded in DKU OJ: nothing to grade here
+        return {"exam_id": e.id, "title": e.title, "course": e.course or "", "status": e.status,
+                "grades_released": False, "graded_in": "dkuoj",
+                "oj_url": (e.oj_meta or {}).get("url"), "questions": [], "items": []}
     rows = (await session.execute(
         select(Attempt, User.username, User.name)
         .join(User, User.id == Attempt.student_id)
@@ -772,6 +821,7 @@ async def put_grade(exam_id: str, aid: str, qid: str, body: GradeIn,
                     p: Principal = Depends(require_teacher),
                     session: AsyncSession = Depends(get_session)):
     e, a = await _exam_attempt(session, exam_id, aid, p)
+    _not_oj(e, OJ_GRADED_DETAIL)
     q = _question(e, qid)
     if a.status != "submitted":
         raise HTTPException(409, "Attempt is not submitted")
@@ -801,6 +851,7 @@ async def put_grade(exam_id: str, aid: str, qid: str, body: GradeIn,
 async def delete_grade(exam_id: str, aid: str, qid: str, p: Principal = Depends(require_teacher),
                        session: AsyncSession = Depends(get_session)):
     e, a = await _exam_attempt(session, exam_id, aid, p)
+    _not_oj(e, OJ_GRADED_DETAIL)
     _question(e, qid)
     if a.status != "submitted":
         raise HTTPException(409, "Attempt is not submitted")
@@ -811,7 +862,8 @@ async def delete_grade(exam_id: str, aid: str, qid: str, p: Principal = Depends(
 async def put_comment(exam_id: str, aid: str, body: CommentIn,
                       p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
-    _, a = await _exam_attempt(session, exam_id, aid, p)
+    e, a = await _exam_attempt(session, exam_id, aid, p)
+    _not_oj(e, OJ_GRADED_DETAIL)
     a.overall_comment = body.comment
     a.updated_at = utcnow()
     await session.commit()
@@ -823,6 +875,7 @@ async def release_grades(exam_id: str, body: ReleaseIn | None = None,
                          p: Principal = Depends(require_teacher),
                          session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    _not_oj(e, OJ_GRADED_DETAIL)
     if e.status != "closed":
         raise HTTPException(409, "Close the exam first")
     pending = (await pending_by_exam(session, [e.id])).get(e.id, 0)
@@ -840,6 +893,7 @@ async def release_grades(exam_id: str, body: ReleaseIn | None = None,
 async def unrelease_grades(exam_id: str, p: Principal = Depends(require_teacher),
                            session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    _not_oj(e, OJ_GRADED_DETAIL)
     e.grades_released = False
     e.released_at = None
     e.updated_at = utcnow()
