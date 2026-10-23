@@ -15,6 +15,7 @@ from .models import Attempt, Exam
 from .schemas import CODE_LANGUAGES, DEFAULT_TIME_LIMIT_MS, external_host
 from .integrations.registry import integration_for
 from .question_types import extended_fields
+from .access import open_to_out
 from .store import Store
 from .timeutil import iso
 
@@ -148,7 +149,19 @@ def exam_out(e: Exam, pending_grading: int = 0) -> dict:
         **tool_settings(e),                           # 2026-10-23: exam tools
         "default_language": exam_default_language(e),  # phase 4
         "external": external_block(e),                # integrations: null = FairPlay exam
+        # 2026-10-23: "all" or the selected student ids; the automatic close time (external
+        # exams: from their source, read-only) and whether the last close was automatic
+        "open_to": open_to_out(e.open_to),
+        "closes_at": iso(exam_closes_at(e)),
+        "auto_closed": bool(e.auto_closed),
     }
+
+
+def exam_closes_at(e: Exam):
+    """2026-10-23: when the exam closes by itself (naive UTC) or None. External exams ask
+    their source (e.g. the synced end time); FairPlay exams use their own setting."""
+    integ = integration_for(e)
+    return integ.closes_at(e) if integ is not None else e.closes_at
 
 
 def external_block(e: Exam) -> dict | None:
@@ -282,6 +295,7 @@ async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> 
         "source": e.source or "fairplay",             # integrations
         "external_name": (integration_for(e).name if integration_for(e) else None),
         "total_points": num(e.total_points or 0),
+        "closes_at": iso(exam_closes_at(e)),         # 2026-10-23 (offline countdown cap)
         "questions": [student_question(q, exam_default_language(e)) for q in e.questions or []],
         **external_fields(e),
     }

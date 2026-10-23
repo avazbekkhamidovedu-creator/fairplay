@@ -25,7 +25,8 @@ def test_student_exam_list(client, teacher, alice, live_exam):
                     "mode": "questions", "delivery": "computer",
                     # 2026-10-23: exam tools (all off by default)
                     "tools": {"calculator": "off", "open_book": False, "websites": []},
-                    "source": "fairplay"}      # 2026-10-23: integrations (app.integrations)
+                    "source": "fairplay",      # 2026-10-23: integrations (app.integrations)
+                    "open_for_me": True}       # 2026-10-23: open to all / selected students
     a = start(client, alice, live_exam).json()
     item = next(x for x in client.get("/api/student/exams", headers=alice).json()
                 if x["id"] == live_exam["id"])

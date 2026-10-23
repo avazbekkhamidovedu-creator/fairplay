@@ -414,6 +414,9 @@ class ExamIn(BaseModel):
     course: str = Field(default="", max_length=64)
     room: str = Field(default="", max_length=64)
     scheduled_at: datetime | None = None
+    # 2026-10-23: optional automatic close (FairPlay exams; external ones take it from
+    # their source). None = closes only when the teacher closes it.
+    closes_at: datetime | None = None
     shuffle_questions: bool = False
     # slice 3: external-website exams
     mode: Literal["questions", "external"] = "questions"
@@ -466,13 +469,13 @@ class ExamIn(BaseModel):
     def _strip(cls, v: str) -> str:
         return v.strip()
 
-    @field_validator("scheduled_at")
+    @field_validator("scheduled_at", "closes_at")
     @classmethod
-    def _naive_utc(cls, v: datetime | None) -> datetime | None:
+    def _naive_utc(cls, v: datetime | None, info) -> datetime | None:
         # Audit S-17: a time without a zone ("2026-10-12T09:00") is ambiguous -- a teacher in
         # China meant 09:00 there, the server would store 09:00 UTC (8 hours off). Refuse it.
         if v is not None and v.tzinfo is None:
-            raise ValueError("scheduled_at needs a time zone, e.g. 2026-10-12T09:00:00+08:00 or ...Z")
+            raise ValueError(f"{info.field_name} needs a time zone, e.g. 2026-10-12T09:00:00+08:00 or ...Z")
         if v is not None:
             v = v.astimezone(timezone.utc).replace(tzinfo=None)
         return v
@@ -674,6 +677,39 @@ class EventsIn(BaseModel):
 
 
 # ---------------------------------------------------------------- slice 2 teacher bodies
+MAX_OPEN_TO = 5000
+
+
+class OpenIn(BaseModel):
+    """2026-10-23: POST /api/exams/{id}/open. "all" (default) or the student ids that may
+    start; everyone else sees the exam as not open for them yet."""
+    model_config = ConfigDict(extra="ignore")
+    open_to: Literal["all"] | list[int] = Field(default="all")
+
+    @field_validator("open_to")
+    @classmethod
+    def _limit(cls, v):
+        if isinstance(v, list) and len(v) > MAX_OPEN_TO:
+            raise ValueError(f"at most {MAX_OPEN_TO} students")
+        return v
+
+
+class OpenToIn(BaseModel):
+    """2026-10-23: PUT /api/exams/{id}/open-to. Either the whole selection (open_to) or
+    students to add / remove (safe when two people edit at once)."""
+    model_config = ConfigDict(extra="ignore")
+    open_to: Literal["all"] | list[int] | None = None
+    add: list[int] = Field(default_factory=list, max_length=MAX_OPEN_TO)
+    remove: list[int] = Field(default_factory=list, max_length=MAX_OPEN_TO)
+
+    @field_validator("open_to")
+    @classmethod
+    def _limit(cls, v):
+        if isinstance(v, list) and len(v) > MAX_OPEN_TO:
+            raise ValueError(f"at most {MAX_OPEN_TO} students")
+        return v
+
+
 class ExtendIn(BaseModel):
     minutes: int = Field(ge=1, le=120)
 

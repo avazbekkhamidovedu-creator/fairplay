@@ -70,7 +70,26 @@ class DkuojSource(ExternalSource):
     def teacher_exam_ids(self, user_id: int):
         return select(OjEditor.exam_id).where(OjEditor.user_id == user_id)
 
+    def closes_at(self, exam):
+        """DKU OJ's end time from the last sync (no call to DKU OJ)."""
+        from ...timeutil import parse_iso
+        end = (getattr(exam, "external_meta", None) or {}).get("end_time")
+        if not isinstance(end, str) or not end:
+            return None
+        try:
+            return parse_iso(end)
+        except ValueError:
+            return None
+
     # ------------------------------------------------------------ student side
+    def roster_user_ids(self, exam_id: str):
+        return select(OjRosterEntry.user_id).where(OjRosterEntry.exam_id == exam_id)
+
+    async def max_extra_time(self, session: AsyncSession, exam_id: str) -> timedelta:
+        top = (await session.execute(select(func.max(OjRosterEntry.extra_time_seconds)).where(
+            OjRosterEntry.exam_id == exam_id))).scalar()
+        return timedelta(seconds=max(0, int(top or 0)))
+
     def roster_condition(self, user_id: int):
         return exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id)
 

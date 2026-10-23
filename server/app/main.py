@@ -62,6 +62,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from .integrations import registry as integrations
         bridges = [asyncio.get_running_loop().create_task(task())
                    for task in integrations.background_tasks(settings)]
+        # 2026-10-23: exams with a close time close by themselves (app.closing)
+        from . import closing
+        if closing.BACKGROUND:
+            bridges.append(asyncio.get_running_loop().create_task(closing.run_forever()))
         try:
             yield
         finally:

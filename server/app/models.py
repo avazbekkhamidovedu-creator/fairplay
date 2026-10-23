@@ -116,6 +116,17 @@ class Exam(Base):
                                              server_default=false())
     external_meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict,
                                           server_default=text("'{}'"))
+    # 2026-10-23: who may start the exam. NULL = everyone the exam is for (its class, LMS
+    # course or external roster); a list of user ids = only those students (others still
+    # see it as "not open for you yet"). Set when opening and while live.
+    open_to: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # 2026-10-23: the exam closes by itself at this time (UTC). Native exams: optional,
+    # set in the editor. External exams take it from their source
+    # (ExternalSource.closes_at), never from this column. auto_closed: the last close was
+    # the automatic one (app.closing), not the teacher's.
+    closes_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    auto_closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                              server_default=false())
 
 
 class Attempt(Base):
@@ -322,3 +333,12 @@ class AnswerFile(Base):
 
 # Integration tables (registered with Base here so create_all sees them)
 from .integrations import models as _integration_models  # noqa: E402,F401
+
+
+class Lease(Base):
+    """2026-10-23: a named lease so one worker at a time runs a background job (e.g. the
+    automatic close, app.closing). holder + expiry; an expired lease can be taken over."""
+    __tablename__ = "leases"
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    holder: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

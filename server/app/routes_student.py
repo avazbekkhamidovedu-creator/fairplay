@@ -17,7 +17,7 @@ from .grading import exam_questions, grade_attempt, graded_externally, is_answer
 from .integrations.registry import integration_for
 from .models import Attempt, DeviceCheck, Exam, IntegrityEvent
 from . import app_client as ac
-from .access import member_of_exam, require_member
+from .access import NOT_OPEN_FOR_YOU, is_open_for, member_of_exam, require_member, require_open_for
 from .app_version import check_app_version
 from .question_types import AnswerError, check_answer, is_extended
 from .schemas import (SCALAR_ONLY_DETAIL, AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
@@ -118,7 +118,8 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                Exam.course, Exam.room, Exam.scheduled_at, Exam.grades_released,
                Exam.total_points, Attempt.score, Exam.mode, Exam.delivery, Exam.start_code,
                Exam.calculator, Exam.open_book, Exam.websites,       # 2026-10-23: exam tools
-               Exam.source, Attempt.external_result)                        # integrations
+               Exam.source, Attempt.external_result,                        # integrations
+               Exam.open_to)                                                # 2026-10-23
         .outerjoin(Attempt, and_(Attempt.exam_id == Exam.id, Attempt.student_id == p.user_id))
         # Audit S-03: live exams of the student's classes / LMS courses, plus their own attempts.
         .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None)))
@@ -128,7 +129,8 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         .order_by(Exam.created_at.desc(), Exam.id))).all()
     out = []
     for (eid, title, dur, qc, status, aid, astatus, sub, receipt, course, room, sched, released,
-         total, score, mode, delivery, code, calc, open_book, websites, source, external_result) in rows:
+         total, score, mode, delivery, code, calc, open_book, websites, source, external_result,
+         open_to) in rows:
         mode = mode or "questions"
         delivery = delivery or ("website" if mode == "external" else "computer")
         attempt = None
@@ -141,11 +143,15 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
             attempt = {"attempt_id": aid, "status": astatus, "submitted_at": iso(sub),
                        "receipt": receipt, "released": released,
                        "percent": percent(score or 0.0, total) if show else None}
+        # 2026-10-23: open to selected students only -> listed, but "not open for you yet"
+        # (no package, no start) unless this student already started
+        open_for_me = aid is not None or is_open_for(open_to, p.user_id)
         row = {"id": eid, "title": title, "duration_min": dur, "question_count": qc,
                     "status": status, "course": course or "", "room": room or "",
+                    "open_for_me": open_for_me,
                     "scheduled_at": iso(sched), "mode": mode, "delivery": delivery,
                     "attempt": attempt,
-                    "package_id": package_id(secret, eid, code, dur) if status == "live" else None,
+                    "package_id": package_id(secret, eid, code, dur) if status == "live" and open_for_me else None,
                     # 2026-10-23: shown on "Before you start"; open_book -> the upload area
                     "tools": student_tools({"mode": mode, "calculator": calc, "open_book": open_book,
                                             "websites": websites})}
@@ -217,6 +223,9 @@ async def start(exam_id: str, body: StartIn, request: Request,
     integ = integration_for(exam)
     if integ is not None:
         await integ.check_start(session, exam_id)
+    # 2026-10-23: open to selected students only -> others are refused here, before the
+    # start code is looked at (not a wrong code), unless they already started (resume).
+    await require_open_for(session, exam_id, p.user_id)
     device_id = await verify_start_proof(store, settings, p.user_id, exam_id, body.client)
     lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
     n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
@@ -234,11 +243,14 @@ async def start(exam_id: str, body: StartIn, request: Request,
         # same transaction as the INSERT (FOR SHARE on Postgres): a close that commits
         # first makes this start fail; a close that comes after waits, then sweeps it.
         row = (await session.execute(
-            select(Exam.status, Exam.duration_min).where(Exam.id == exam_id)
+            select(Exam.status, Exam.duration_min, Exam.open_to).where(Exam.id == exam_id)
             .with_for_update(read=True))).first()
         if row is None or row.status != "live":
             await session.rollback()
             raise HTTPException(409, "Exam is not open")
+        if not is_open_for(row.open_to, p.user_id):   # removed from the selection meanwhile
+            await session.rollback()
+            raise HTTPException(403, NOT_OPEN_FOR_YOU)
         # T-02 (extend vs start): the duration comes from the same locked read, not the
         # cache -- an "Add 10 min" that commits first is included, one that comes after
         # waits for this INSERT (FOR SHARE) and then extends it like everyone else.
@@ -249,9 +261,17 @@ async def start(exam_id: str, body: StartIn, request: Request,
             # integrations: e.g. freeze the version this exam runs from (same transaction
             # as the first attempt) and the student's extra time
             extra = await integ.on_start(session, exam_id, p.user_id)
+        deadline = started + timedelta(minutes=exam["duration_min"]) + extra
+        closes = await _closes_at(session, exam_id)
+        if closes is not None:
+            # 2026-10-23: never past the exam's close time (+ this student's extra time)
+            deadline = min(deadline, closes + extra)
+            if deadline <= now:
+                await session.rollback()
+                raise HTTPException(409, "This exam has ended")
         a = Attempt(id=new_id("a"), exam_id=exam_id, student_id=p.user_id, status="in_progress",
                     started_at=started,
-                    deadline_at=started + timedelta(minutes=exam["duration_min"]) + extra,
+                    deadline_at=deadline,
                     answers={}, client_seq=-1, updated_at=now,
                     device_id=device_id, session_id=new_session_id(), entries=1,
                     client="app" if device_id else "browser")
@@ -275,6 +295,13 @@ async def start(exam_id: str, body: StartIn, request: Request,
     return {**attempt_view(a, exam, now), **await _view_extra(session, a, exam),
             "session": a.session_id, "min_app_version": min_version,
             "needs_approval": bool(a.pending_resume)}     # S3
+
+
+async def _closes_at(session: AsyncSession, exam_id: str):
+    """The exam's close time from the database (the source's for external exams)."""
+    from .services import exam_closes_at
+    e = await session.get(Exam, exam_id)
+    return exam_closes_at(e) if e is not None else None
 
 
 async def _view_extra(session: AsyncSession, a: Attempt, exam: dict) -> dict:

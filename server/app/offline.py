@@ -41,7 +41,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .access import require_member
+from .access import require_member, require_open_for
 from .db import get_session
 from .models import Exam
 from .security import Principal, require_student
@@ -154,6 +154,8 @@ def package_plaintext(exam: dict) -> dict:
     return {
         "exam_id": exam["id"], "title": exam["title"], "course": exam.get("course", ""),
         "duration_min": exam["duration_min"], "mode": exam.get("mode") or "questions",
+        # 2026-10-23: an offline start's countdown never runs past the close time
+        "closes_at": exam.get("closes_at"),
         "shuffle_questions": bool(exam.get("shuffle_questions")),
         "questions": inline_images(exam.get("questions") or []),
         # 2026-10-14: an offline start closes the same apps as an online one (2026-10-23:
@@ -209,7 +211,8 @@ async def package(exam_id: str, request: Request, p: Principal = Depends(require
     if not code or not (exam["status"] == "live" or scheduled_soon):
         raise HTTPException(409, "Exam is not open")
     await require_member(session, exam, p.user_id)        # audit S-03
-    key = f"pkg:{exam_id}:{code}:{exam['duration_min']}"
+    await require_open_for(session, exam_id, p.user_id)    # 2026-10-23: selected students
+    key = f"pkg:{exam_id}:{code}:{exam['duration_min']}:{exam.get('closes_at') or ''}"
     raw = await store.get(key)
     if raw:
         return json.loads(raw)
@@ -248,4 +251,5 @@ async def package_key(exam_id: str, p: Principal = Depends(require_student),
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
     await require_member(session, exam, p.user_id)
+    await require_open_for(session, exam_id, p.user_id)    # 2026-10-23: selected students
     return {"exam_id": exam_id, "key": await _package_secret(session, exam_id)}

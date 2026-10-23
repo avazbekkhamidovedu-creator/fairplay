@@ -90,7 +90,19 @@ class ExternalSource:
         from .outbox import delivery_status
         return await delivery_status(session, exam_id)
 
+    def closes_at(self, exam):
+        """When the exam closes by itself (naive UTC), from the source; None = never."""
+        return None
+
     # ------------------------------------------------------------ student side
+    def roster_user_ids(self, exam_id: str):
+        """SQL select of the user ids the source lists for the exam (None = nobody)."""
+        return None
+
+    async def max_extra_time(self, session: AsyncSession, exam_id: str) -> timedelta:
+        """The largest extra time any listed student gets (the automatic close waits for it)."""
+        return timedelta(0)
+
     def roster_condition(self, user_id: int):
         """SQL condition on Exam: the student may see / take it."""
         return false()

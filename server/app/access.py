@@ -57,3 +57,58 @@ async def require_member(session: AsyncSession, exam: dict, user_id: int) -> Non
         name = (await session.execute(select(SchoolClass.name).where(SchoolClass.id == class_id))).scalar()
     raise HTTPException(403, f"This exam is for {name} students. Ask your teacher for the class code."
                         if name else "This exam is not for your class.")
+
+
+# ---------------------------------------------------------------- 2026-10-23: open to
+# Exam.open_to: NULL = everyone the exam is for; a list of user ids = only those students.
+# Checked on the server only (start, offline package, package key): the start code alone
+# never lets anyone else in. A student who already started is never stopped by it.
+NOT_OPEN_FOR_YOU = "This exam isn't open for you yet"
+
+
+def open_to_out(open_to) -> str | list[int]:
+    """API shape: "all" or the sorted list of student ids."""
+    return "all" if open_to is None else sorted({int(x) for x in open_to})
+
+
+def is_open_for(open_to, user_id: int) -> bool:
+    return open_to is None or int(user_id) in {int(x) for x in open_to}
+
+
+def eligible_ids(e: Exam):
+    """SQL select of the user ids that may take the exam (class, LMS course or the external
+    source's roster); the selection of open_to is always a subset of these."""
+    from .integrations.registry import integration_for
+    integ = integration_for(e)
+    if integ is not None:
+        return integ.roster_user_ids(e.id)
+    if e.course_link_id is not None:
+        return select(CourseMember.user_id).where(CourseMember.course_link_id == e.course_link_id)
+    if e.class_id is not None:
+        return select(ClassMember.user_id).where(ClassMember.class_id == e.class_id)
+    return None
+
+
+async def eligible_students(session: AsyncSession, e: Exam) -> list[tuple[int, str, str]]:
+    """(id, username, name) of the exam's students, by name."""
+    from .models import User
+    ids = eligible_ids(e)
+    if ids is None:
+        return []
+    rows = await session.execute(select(User.id, User.username, User.name)
+                                 .where(User.id.in_(ids), User.role == "student")
+                                 .order_by(User.name, User.username))
+    return [(int(i), u, n) for i, u, n in rows.all()]
+
+
+async def require_open_for(session: AsyncSession, exam_id: str, user_id: int) -> None:
+    """403 NOT_OPEN_FOR_YOU unless the exam is open to this student or they already have
+    an attempt (a resume is never blocked). Reads the database, not the exam cache."""
+    from .models import Attempt
+    open_to = (await session.execute(select(Exam.open_to).where(Exam.id == exam_id))).scalar()
+    if is_open_for(open_to, user_id):
+        return
+    started = (await session.execute(select(Attempt.id).where(
+        Attempt.exam_id == exam_id, Attempt.student_id == user_id).limit(1))).first()
+    if started is None:
+        raise HTTPException(403, NOT_OPEN_FOR_YOU)

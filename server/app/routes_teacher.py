@@ -15,24 +15,27 @@ from .grading import MANUAL_TYPES, exam_questions, auto_points, external_questio
 from .integrations import registry
 from .integrations.registry import integration_for
 from .models import Attempt, ClassMember, DeviceCheck, Exam, ExamMaterial, IntegrityEvent, User
-from .schemas import QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitIn, ReleaseIn, ReviewIn
+from .schemas import (QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitIn, OpenIn, OpenToIn,
+                      ReleaseIn, ReviewIn)
+from .access import eligible_students, open_to_out
 from .security import Principal, require_teacher
-from .services import (external_block, attempt_key, code_fields, code_language, exam_default_language, exam_delivery, exam_out, exam_out_full, invalidate_exam,
+from .services import (external_block, attempt_key, code_fields, code_language, exam_closes_at, exam_default_language, exam_delivery, exam_out, exam_out_full, invalidate_exam,
                        new_id, new_invigilator_code, new_receipt, new_session_id,
                        new_start_code, pending_by_exam)
 from . import app_client as ac
 from .routes_classes import check_class_for_exam
 from .store import get_store
 from .timeutil import iso, iso_from_epoch, utcnow
+from .closing import AUTO_CLOSE_EVENT, LATE_GRACE, close_exam_now, max_extra
 
 router = APIRouter(prefix="/api/exams", tags=["teacher"])
 
 ONLINE_WINDOW_S = 15
-LATE_GRACE = timedelta(seconds=60)
 # Integrity events that are bookkeeping, not "flags" a teacher should look at.
 NON_FLAG_TYPES = ("lock_started", "lock_ended", "device_released", "device_bound",
                   "offline_exit_code_issued",
-                  "resume_approved", "swap_approved")     # S3 / S4: the teacher's own actions
+                  "resume_approved", "swap_approved",     # S3 / S4: the teacher's own actions
+                  AUTO_CLOSE_EVENT)                       # 2026-10-23: the automatic close
 # S3: the wait for the teacher's OK is given back, up to this much.
 MAX_RESUME_EXTENSION = timedelta(minutes=15)
 # The app's own signal counts as "app online" for this long (beats every 5 s).
@@ -67,7 +70,7 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
     e.total_points = float(sum(q["points"] for q in qs))
     e.updated_at = utcnow()
     # Optional slice-2 fields: on PUT, a field the client did not send keeps its value.
-    for f in ("course", "room", "scheduled_at", "shuffle_questions", "class_id",
+    for f in ("course", "room", "scheduled_at", "closes_at", "shuffle_questions", "class_id",
               "resume_needs_approval", "require_strong_lock",
               "calculator", "open_book", "websites",             # 2026-10-23: exam tools
               "default_language"):                               # phase 4
@@ -208,8 +211,9 @@ async def delete_exam(exam_id: str, p: Principal = Depends(require_teacher),
 
 
 @router.post("/{exam_id}/open")
-async def open_exam(exam_id: str, p: Principal = Depends(require_teacher),
+async def open_exam(exam_id: str, body: OpenIn | None = None, p: Principal = Depends(require_teacher),
                     session: AsyncSession = Depends(get_session)):
+    """Body (optional): {"open_to": "all" | [student ids]} -- who may start (default all)."""
     e = await _own_exam(session, exam_id, p)
     if e.status == "live":
         raise HTTPException(409, "Exam is already live")
@@ -221,10 +225,67 @@ async def open_exam(exam_id: str, p: Principal = Depends(require_teacher),
             raise HTTPException(409, integ.open_refused_message(e))
     elif e.class_id is None and e.course_link_id is None:   # audit S-03
         raise HTTPException(409, "Choose the class that takes this exam before opening it")
+    now = utcnow()
+    closes = exam_closes_at(e)
+    if closes is not None and now >= closes + await max_extra(session, e):
+        if integ is not None:        # the source owns the end time
+            raise HTTPException(409, f"The end time set in {integ.name} has passed. "
+                                     f"Change it in {integ.name} to open the exam again.")
+        e.closes_at = None           # re-opened after its close time: the teacher closes it
+    e.open_to = await _checked_open_to(session, e, (body or OpenIn()).open_to)
     e.status = "live"
     e.start_code = new_start_code()
     e.invigilator_code = new_invigilator_code()
     e.closed_at = None
+    e.auto_closed = False
+    e.updated_at = now
+    await session.commit()
+    await invalidate_exam(get_store(), exam_id)
+    return await exam_out_full(session, e)
+
+
+async def _checked_open_to(session: AsyncSession, e: Exam, value) -> list[int] | None:
+    """"all" -> None; a list -> the sorted ids, each one a student of this exam (422 else)."""
+    if value == "all" or value is None:
+        return None
+    wanted = sorted({int(x) for x in value})
+    eligible = {sid for sid, _, _ in await eligible_students(session, e)}
+    unknown = [x for x in wanted if x not in eligible]
+    if unknown:
+        raise HTTPException(422, f"Not a student of this exam: {', '.join(map(str, unknown[:10]))}")
+    return wanted
+
+
+@router.get("/{exam_id}/students")
+async def exam_students(exam_id: str, p: Principal = Depends(require_teacher),
+                        session: AsyncSession = Depends(get_session)):
+    """2026-10-23: the students who may take the exam (class / LMS course members or the
+    external roster), for the "Selected students" checklist. started = has an attempt."""
+    e = await _own_exam(session, exam_id, p)
+    started = set((await session.execute(select(Attempt.student_id).where(Attempt.exam_id == exam_id))).scalars())
+    return [{"id": sid, "username": u, "name": n, "started": sid in started}
+            for sid, u, n in await eligible_students(session, e)]
+
+
+@router.put("/{exam_id}/open-to")
+async def update_open_to(exam_id: str, body: OpenToIn, p: Principal = Depends(require_teacher),
+                         session: AsyncSession = Depends(get_session)):
+    """2026-10-23: change who may start, any time (usually while live). {"open_to": ...}
+    replaces the selection; {"add": [...], "remove": [...]} changes it. Removing a student
+    who already started never stops their attempt; it only blocks a new start."""
+    e = await _own_exam(session, exam_id, p)
+    if exam_delivery(e) == "paper":
+        raise HTTPException(409, "Paper exams are printed, not opened in the app")
+    if body.open_to is not None:
+        value = body.open_to
+    else:
+        if e.open_to is None and body.add and not body.remove:
+            value = "all"            # adding to "everyone" changes nothing
+        else:
+            base = set(e.open_to or []) if e.open_to is not None else \
+                {sid for sid, _, _ in await eligible_students(session, e)}
+            value = sorted((base | set(body.add)) - set(body.remove))
+    e.open_to = await _checked_open_to(session, e, value)
     e.updated_at = utcnow()
     await session.commit()
     await invalidate_exam(get_store(), exam_id)
@@ -241,45 +302,9 @@ async def close_exam(exam_id: str, p: Principal = Depends(require_teacher),
     # so grades can be released like any other exam.
     if e.status != "live" and not (e.status == "draft" and exam_delivery(e) == "paper"):
         raise HTTPException(409, "Exam is not live")
-    now = utcnow()
-    e.status = "closed"
-    e.start_code = None
-    e.invigilator_code = None
-    e.package_secret = None          # audit S-03: offline packages of this run stop opening
-    e.closed_at = now
-    e.updated_at = now
-    # Flip the exam first so no new attempts start, then auto-submit stragglers.
-    await session.commit()
-    store = get_store()
-    await invalidate_exam(store, exam_id)
-
-    rows = await _sweep_in_progress(session, e, now)
-    # Audit S-07: a start that raced the status change commits its INSERT after the first
-    # SELECT; one more pass catches it.
-    rows += await _sweep_in_progress(session, e, now)
-    if rows:
-        await store.delete(*[attempt_key(r[0]) for r in rows])
+    # 2026-10-23: the same path as the automatic close (app.closing)
+    await close_exam_now(session, e, utcnow())
     return await exam_out_full(session, e)
-
-
-async def _sweep_in_progress(session: AsyncSession, e: Exam, now) -> list:
-    """Auto-submit every in-progress attempt of a closed exam; returns the rows."""
-    integ = integration_for(e)
-    rows = (await session.execute(
-        select(Attempt.id, Attempt.answers, Attempt.deadline_at)
-        .where(Attempt.exam_id == e.id, Attempt.status == "in_progress"))).all()
-    for aid, answers, deadline in rows:
-        score, pending = handin_grade(e, answers or {}, None)   # externally graded: not here
-        # Conditional: a student submit racing with close keeps its own receipt.
-        res = await session.execute(
-            update(Attempt).where(Attempt.id == aid, Attempt.status == "in_progress").values(
-                status="submitted", submitted_at=now, auto_submitted=True, receipt=new_receipt(),
-                score=score, needs_grading=pending, late=now > deadline + LATE_GRACE,
-                updated_at=now))
-        if res.rowcount == 1 and integ is not None:   # e.g. outbox row, in this transaction
-            await integ.on_handin(session, aid, e.id, now, "closed")
-    await session.commit()
-    return list(rows)
 
 
 @router.post("/{exam_id}/rotate-code")
@@ -520,7 +545,25 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
             "invigilator_code": e.invigilator_code if e.status == "live" else None,
             "duration_min": e.duration_min, "students": students,
             "flags": flags, "counts": counts,
+            # 2026-10-23: who may start ("all" or ids) with names; the automatic close time
+            "open_to": open_to_out(e.open_to),
+            "selected": await _selected_out(session, e),
+            "closes_at": iso(exam_closes_at(e)),
             "server_time": iso(utcnow())}      # audit W-13: countdown on the server clock
+
+
+async def _selected_out(session: AsyncSession, e: Exam) -> list[dict] | None:
+    """The selected students ({id, username, name, started}), None when open to all."""
+    if e.open_to is None:
+        return None
+    ids = sorted({int(x) for x in e.open_to})
+    if not ids:
+        return []
+    started = set((await session.execute(select(Attempt.student_id).where(
+        Attempt.exam_id == e.id, Attempt.student_id.in_(ids)))).scalars())
+    rows = (await session.execute(select(User.id, User.username, User.name).where(User.id.in_(ids))
+                                  .order_by(User.name, User.username))).all()
+    return [{"id": int(i), "username": u, "name": n, "started": int(i) in started} for i, u, n in rows]
 
 
 RESULTS_EVENTS_PER_ATTEMPT = 200
