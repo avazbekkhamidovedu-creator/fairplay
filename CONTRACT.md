@@ -893,3 +893,53 @@ waits for `Retry-After`. Exam cursor = newest `updated_at` seen (`changed_since`
 later); results cursor = the response's `server_time`. Removed exams (incremental polls only)
 are marked removed and keep their editors. One upload per file_upload answer; a blank code or
 short answer is not sent.
+
+## Open to selected students + automatic close (2026-10-23)
+Generic for every exam (FairPlay and external). Code: `server/app/access.py` (open_to),
+`server/app/closing.py` (the one close path, the automatic close loop), hooks in
+`server/app/integrations/base.py`.
+
+### Open to everyone or to selected students
+- Exam column `open_to` (JSON, null = everyone the exam is for). API value: `"all"` or the sorted
+  list of student user ids. Teacher exam view (`GET/PUT /api/exams/{id}`, open, close, …) adds
+  `"open_to"`.
+- `POST /api/exams/{id}/open` takes an optional body `{"open_to": "all" | [ids]}`; no body =
+  `"all"` (as before; a re-open without a body opens to everyone again). Every id must be a student
+  of the exam, else 422 `"Not a student of this exam: <ids>"`.
+- `GET /api/exams/{id}/students` → `[{id, username, name, started}]`: the class members, the
+  linked LMS course's members, or the external source's roster (`ExternalSource.roster_user_ids`).
+- `PUT /api/exams/{id}/open-to` `{"open_to": "all" | [ids]}` replaces the selection, or
+  `{"add": [ids], "remove": [ids]}` changes it (removing from "all" = everyone else). Any status
+  except paper; returns the teacher exam. Removing a student who already started never stops
+  their attempt; it only blocks a new start.
+- `GET /api/exams/{id}/live` adds `"open_to"`, `"selected"` (`[{id, username, name, started}]`, or
+  null when open to all) and `"closes_at"`.
+- Student start: a student who is not selected and has no attempt gets 403
+  `{"detail": "This exam isn't open for you yet"}` before the app proof and the start code are
+  checked (not a wrong code, no lockout). Checked again in the start's locked transaction (a
+  removal that commits first wins). A resume of an existing attempt is never blocked. The offline
+  package and `package-key` give the same 403.
+- `/api/student/exams` rows add `"open_for_me"` (false = live but not open for this student yet;
+  `package_id` is then null). Rows of exams the student already started are always true.
+
+### Automatic close
+- Exam columns `closes_at` (naive UTC, nullable) and `auto_closed` (bool). Effective close time:
+  FairPlay exams their own `closes_at` (exam editor "Close automatically at", optional, `ExamIn.
+  closes_at` with a time zone, like `scheduled_at`); external exams `ExternalSource.closes_at(exam)`
+  (DKU OJ: the synced `end_time`, no extra call), never the column. Teacher exam view adds
+  `"closes_at"` (effective, ISO or null) and `"auto_closed"`.
+- New attempts: `deadline_at = min(start + duration + extra, closes_at + extra)` (extra = the
+  student's extra time from the source, 0 for FairPlay exams). A new start with no time left →
+  409 `"This exam has ended"`. The attempt view's `deadline_at` is this capped value.
+- The offline package plaintext adds `"closes_at"`; an offline start counts down to
+  min(start + duration, closes_at).
+- Background loop (lifespan, every 15 s; one worker via the `leases` row `"autoclose"`): a live
+  exam closes once now ≥ closes_at + the largest extra time (`ExternalSource.max_extra_time`) +
+  LATE_GRACE (60 s) and every attempt still writing is past its own deadline + LATE_GRACE (so
+  "Add 10 min" is honoured). It uses the teacher's Close path (`closing.close_exam_now`):
+  conditional status flip (two runners, or a runner and the teacher, close once), auto-submit of
+  in-progress attempts, outbox rows for external exams, `auto_closed = true`, and the bookkeeping
+  event `exam_closed_automatically` on each attempt it handed in (not a flag).
+- Opening stays manual. Re-opening a FairPlay exam after its close time clears `closes_at` (the
+  teacher closes it by hand); an external exam whose source end time has passed can't be opened
+  (409 `"The end time set in <name> has passed. …"`).
