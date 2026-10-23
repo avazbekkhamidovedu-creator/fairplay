@@ -124,6 +124,9 @@ export const TYPE_LABEL: Record<QuestionType, string> = {
   essay: "Essay",
   external: "Exam website",
   code: "Coding",
+  // newer types (not in the FairPlay editor yet)
+  fill_blank: "Fill in the blank",
+  file_upload: "File upload",
 };
 
 export const KIND_LABEL: Record<DraftKind, string> = {

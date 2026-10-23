@@ -4,7 +4,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AttemptView, ExamTools, StudentQuestion } from "../api/types";
+import type { AttemptView, ExamTools } from "../api/types";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -68,15 +68,6 @@ function renderExam() {
       </Routes>
     </MemoryRouter>,
   );
-}
-
-async function openToolsAndReview() {
-  expect(await screen.findByRole("heading", { name: "2+2?" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Calculator" }));
-  fireEvent.click(screen.getByRole("button", { name: "More" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: /Websites/ }));
-  expect(screen.getByRole("complementary", { name: "Websites" })).toBeInTheDocument();
-  expect(document.querySelector(".stu-calc")).not.toBeNull();
 }
 
 beforeEach(() => {
