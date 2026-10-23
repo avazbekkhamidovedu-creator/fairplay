@@ -130,6 +130,10 @@ class Settings:
         default_factory=lambda: os.environ.get("MIN_APP_VERSION_WINDOWS", "").strip())
     min_app_version_ipad: str = field(default_factory=lambda: os.environ.get("MIN_APP_VERSION_IPAD", "").strip())
 
+    # Optional: this server's public address, so integrations (app.integrations) can send
+    # absolute integrity-report links. Unset: the links are sent as paths (/teacher/exams/...).
+    public_url: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_PUBLIC_URL", "").strip().rstrip("/"))
+
     def min_app_version(self, platform: str | None) -> str | None:
         v = {"mac": self.min_app_version_mac, "windows": self.min_app_version_windows,
              "ipad": self.min_app_version_ipad}.get(

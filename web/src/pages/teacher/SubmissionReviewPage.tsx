@@ -16,6 +16,10 @@ import { errorText, eventLabel, formatWhen, num, pct } from "../../components/te
 import { KIND_LABEL, kindOf } from "./examDraft";
 import { formatGiven } from "./ResultsView";
 import "../../styles/code.css";
+import { MarkdownContent } from "../../components/MarkdownContent";
+import { ExternalSourceBanner } from "../../components/teacher/ExternalSource";
+import { isRichFormat } from "../../lib/markdown";
+import { teacherAssetContext } from "../../lib/questionAssets";
 
 const LETTERS = "ABCDEFGH";
 
@@ -91,7 +95,9 @@ export default function SubmissionReviewPage() {
   const answers = [...attempt.answers].sort(
     (x, y) => (qIndex.get(x.question_id) ?? 0) - (qIndex.get(y.question_id) ?? 0),
   );
-  const editable = attempt.status === "submitted";
+  // an exam graded in another system (integrations) is only shown here: grades come from there
+  const gradedElsewhere = !!exam.external?.graded_externally;
+  const editable = attempt.status === "submitted" && !gradedElsewhere;
   const isExternal = exam.mode === "external";
 
   return (
@@ -146,7 +152,8 @@ export default function SubmissionReviewPage() {
         </div>
       </header>
 
-      {!editable && (
+      {gradedElsewhere && exam.external && <ExternalSourceBanner external={exam.external} kind="graded" />}
+      {!editable && !gradedElsewhere && (
         <div className="alert alert-info" role="status">
           {attempt.name} is still writing. You can grade once they submit or you close the exam.
         </div>
@@ -204,10 +211,12 @@ export default function SubmissionReviewPage() {
       {exam?.open_book && <SubmissionMaterials examId={examId} attemptId={attempt.attempt_id} />}
 
       <div className="t-columns">
-        <section className="t-card t-col-3" aria-labelledby="oc-h" style={{ gap: 12 }}>
-          <h2 id="oc-h">Overall comment</h2>
-          <OverallComment key={attempt.attempt_id} examId={examId} attempt={attempt} onSaved={load} />
-        </section>
+        {!gradedElsewhere && (
+          <section className="t-card t-col-3" aria-labelledby="oc-h" style={{ gap: 12 }}>
+            <h2 id="oc-h">Overall comment</h2>
+            <OverallComment key={attempt.attempt_id} examId={examId} attempt={attempt} onSaved={load} />
+          </section>
+        )}
         <section className="t-card t-col-2" aria-labelledby="ev-h" style={{ gap: 12 }}>
           <h2 id="ev-h">Lockdown events</h2>
           {attempt.events.length === 0 ? (
@@ -339,7 +348,15 @@ function ReviewItem({
         {status}
       </div>
       {!isExternal && <QuestionImages images={q?.images} compact />}
-      {!isExternal && q?.prompt && <p className="t-review-prompt">{q.prompt}</p>}
+      {!isExternal && q?.prompt && isRichFormat(q.prompt_format) && (
+        <MarkdownContent
+          className="t-review-prompt"
+          format={q.prompt_format}
+          text={q.prompt}
+          assets={teacherAssetContext(examId, q.asset_urls ?? null)}
+        />
+      )}
+      {!isExternal && q?.prompt && !isRichFormat(q.prompt_format) && <p className="t-review-prompt">{q.prompt}</p>}
       {!isExternal && <TopicChips topics={q?.topics} />}
       {!isExternal && (
         <div className="t-review-answers">

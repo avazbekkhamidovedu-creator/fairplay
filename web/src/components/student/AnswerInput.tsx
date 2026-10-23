@@ -2,6 +2,11 @@ import { useState } from "react";
 import type { AnswerValue, StudentQuestion } from "../../api/types";
 import { LETTERS, fmtNum, wordCount } from "./format";
 import { ChevronRightIcon } from "./icons";
+import type { AssetContext } from "../../lib/questionAssets";
+import { isRichFormat } from "../../lib/markdown";
+import type { ExamLinks } from "../MarkdownContent";
+import { McqMultiInput, OptionText, TrueFalseInput } from "./QuestionInputs";
+import { optionOrder } from "../../lib/answerTypes";
 
 interface Props {
   question: StudentQuestion;
@@ -11,6 +16,13 @@ interface Props {
   labelledBy: string;
   /** 2026-10-23: cross-out for multiple choice (local only, never graded). */
   cross?: CrossOut;
+  /** Rich questions: pictures and links inside options */
+  assets?: AssetContext | null;
+  links?: ExamLinks | null;
+  /** "shuffle": options shown in an order fixed by this seed (answers keep original indexes) */
+  shuffleSeed?: string;
+  /** display order of the options (original indexes); set by AnswerInput */
+  order?: number[];
 }
 
 export interface CrossOut {
@@ -22,24 +34,54 @@ export interface CrossOut {
 }
 
 /** The answer control for one question. Remount (key) per question. */
-export function AnswerInput({ question, value, onChange, labelledBy, cross }: Props) {
+export function AnswerInput({ question, value, onChange, labelledBy, cross, assets, links, shuffleSeed }: Props) {
+  const order =
+    question.type === "mcq" && question.shuffle && !question.true_false && shuffleSeed !== undefined
+      ? optionOrder(question.options.length, `${shuffleSeed}:${question.id}`)
+      : undefined;
+  // several answers (checkboxes) / true or false (two big options)
+  if (question.type === "mcq" && question.multiple)
+    return (
+      <McqMultiInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} assets={assets} links={links} order={order} />
+    );
+  if (question.type === "mcq" && question.true_false)
+    return <TrueFalseInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} assets={assets} links={links} />;
   if (question.type === "mcq")
-    return <McqInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} cross={cross} />;
+    return (
+      <McqInput
+        question={question}
+        value={value}
+        onChange={onChange}
+        labelledBy={labelledBy}
+        cross={cross}
+        assets={assets}
+        links={links}
+        order={order}
+      />
+    );
+  // rich short answers are read by a person: room for a few sentences
+  if (question.type === "short" && isRichFormat(question.prompt_format))
+    return <EssayInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} />;
   if (question.type === "numeric") return <NumericInput question={question} value={value} onChange={onChange} />;
   if (question.type === "essay") return <EssayInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} />;
   return <ShortInput question={question} value={value} onChange={onChange} />;
 }
 
-function McqInput({ question, value, onChange, labelledBy, cross }: Props) {
+function McqInput({ question, value, onChange, labelledBy, cross, assets, links, order: shown }: Props) {
   const count = question.options.length;
-  const crossed = new Set(cross?.crossed ?? []);
+  // display position -> original option index (identity unless shuffled)
+  const order = shown && shown.length === count ? shown : Array.from({ length: count }, (_, i) => i);
+  const crossedOrig = new Set(cross?.crossed ?? []);
+  // positions below are display positions; value, crossed and onToggle use original indexes
+  const crossed = new Set(order.map((o, p) => (crossedOrig.has(o) ? p : -1)).filter((p) => p >= 0));
   const crossOn = !!cross?.on;
+  const valuePos = typeof value === "number" ? order.indexOf(value) : -1;
   // Roving tabindex: the selected option (or the first) is the tab stop; arrows move + select.
-  const focusIndex = typeof value === "number" && value >= 0 && value < count ? value : 0;
-  const choose = (i: number) => {
+  const focusIndex = valuePos >= 0 ? valuePos : 0;
+  const choose = (p: number) => {
     // Choosing a crossed-out option brings it back.
-    if (crossed.has(i)) cross?.onToggle(i);
-    onChange(i);
+    if (crossed.has(p)) cross?.onToggle(order[p]!);
+    onChange(order[p]!);
   };
   // 2026-10-23 review: arrows never bring a crossed-out option back (only a click on it
   // does); they skip crossed-out options, unless every other option is crossed out.
@@ -47,15 +89,16 @@ function McqInput({ question, value, onChange, labelledBy, cross }: Props) {
     let next = (from + delta + count) % count;
     for (let k = 0; k < count - 1 && crossed.has(next); k++) next = (next + delta + count) % count;
     if (crossed.has(next)) next = (from + delta + count) % count;
-    onChange(next);
+    onChange(order[next]!);
     const group = el.closest("[role=radiogroup]");
     (group?.querySelectorAll<HTMLElement>("[role=radio]")[next])?.focus();
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div className={`stu-options${crossOn ? " cross-on" : ""}`} role="radiogroup" aria-labelledby={labelledBy}>
-        {question.options.map((opt, i) => {
-          const selected = value === i;
+        {order.map((orig, i) => {
+          const opt = question.options[orig] ?? "";
+          const selected = value === orig;
           const isCrossed = crossed.has(i) && !selected;
           return (
             <div key={i} className={`stu-option-row${isCrossed ? " crossed" : ""}`}>
@@ -80,7 +123,9 @@ function McqInput({ question, value, onChange, labelledBy, cross }: Props) {
                 <span className="stu-option-letter" aria-hidden="true">
                   {LETTERS[i]}
                 </span>
-                <span className="stu-option-text">{opt}</span>
+                <span className="stu-option-text">
+                  <OptionText question={question} text={opt} assets={assets} links={links} />
+                </span>
               </button>
               {crossOn && cross && (
                 <button
@@ -90,7 +135,7 @@ function McqInput({ question, value, onChange, labelledBy, cross }: Props) {
                   aria-label={isCrossed ? `Undo cross out ${LETTERS[i]}` : `Cross out ${LETTERS[i]}`}
                   onClick={() => {
                     if (selected && !isCrossed) onChange(undefined);
-                    cross.onToggle(i);
+                    cross.onToggle(orig);
                   }}
                 >
                   {isCrossed ? "Undo" : <span className="stu-cross-letter">{LETTERS[i]}</span>}

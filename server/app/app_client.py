@@ -79,6 +79,7 @@ SERVER_EVENT_TYPES = frozenset({
     # S1-S6 (2026-10-20)
     "sealed_submit", "resume_requested", "resume_approved", "swap_requested", "swap_approved",
     "weak_lock",
+    "external_delivery_failed",   # integrations: the answers could not be sent to the external system
 })
 
 

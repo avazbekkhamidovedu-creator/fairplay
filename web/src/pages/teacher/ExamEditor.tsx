@@ -115,8 +115,8 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
 
   // Settings with a problem open the "More settings" panel so the error is visible.
   useEffect(() => {
-    if (showErrors && (err.course || err.room || err.schedule || err.external || err.externalPoints)) setMoreOpen(true);
-  }, [showErrors, err.course, err.room, err.schedule, err.external, err.externalPoints]);
+    if (showErrors && (err.course || err.room || err.schedule || err.closes || err.external || err.externalPoints)) setMoreOpen(true);
+  }, [showErrors, err.course, err.room, err.schedule, err.closes, err.external, err.externalPoints]);
 
   const set = (patch: Partial<DraftExam>) => setDraft((d) => ({ ...d, ...patch }));
   const updateQ = (key: string, patch: Partial<DraftQuestion>) =>
@@ -178,6 +178,7 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
     (err.course ? 1 : 0) +
     (err.room ? 1 : 0) +
     (err.schedule ? 1 : 0) +
+    (err.closes ? 1 : 0) +
     Object.keys(err.byKey).length;
 
   return (
@@ -391,6 +392,39 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
               </div>
             </div>
             {err.schedule && <span className="field-error">{err.schedule}</span>}
+            {draft.delivery !== "paper" && (
+              <>
+                <div className="t-grid-2">
+                  <div className="t-field">
+                    <label htmlFor="exam-close-date">Close automatically at (optional)</label>
+                    <input
+                      id="exam-close-date"
+                      type="date"
+                      className="input"
+                      value={draft.closeDate ?? ""}
+                      onChange={(e) => set({ closeDate: e.target.value })}
+                      aria-invalid={!!err.closes}
+                      aria-describedby="exam-close-hint"
+                    />
+                  </div>
+                  <div className="t-field">
+                    <label htmlFor="exam-close-time">Close time</label>
+                    <input
+                      id="exam-close-time"
+                      type="time"
+                      className="input"
+                      value={draft.closeTime ?? ""}
+                      onChange={(e) => set({ closeTime: e.target.value })}
+                    />
+                  </div>
+                </div>
+                {err.closes && <span className="field-error">{err.closes}</span>}
+                <span className="hint" id="exam-close-hint">
+                  Leave empty to close the exam yourself. When set, nobody writes past this time and the exam closes by
+                  itself (answers are handed in).
+                </span>
+              </>
+            )}
             <p className="t-small t-muted" style={{ margin: 0 }}>
               Students can start only after you press <strong>Open exam</strong> and read the start code aloud. Full-screen
               lockdown is always on.

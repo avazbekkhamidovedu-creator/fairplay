@@ -4,6 +4,9 @@ import { LETTERS, fmtNum } from "./format";
 import { QuestionImages } from "../QuestionImages";
 import { LANGUAGE_LABEL } from "../../lib/code/languages";
 import "../../styles/code.css";
+import { MarkdownContent } from "../MarkdownContent";
+import { isCodeAnswer } from "../../lib/answerTypes";
+import { gradeAssetContext } from "../../lib/questionAssets";
 
 export function typeLabel(q: Pick<FQ, "type" | "options">): string {
   if (q.type === "mcq") {
@@ -13,6 +16,8 @@ export function typeLabel(q: Pick<FQ, "type" | "options">): string {
   if (q.type === "numeric") return "Number";
   if (q.type === "short") return "Short answer";
   if (q.type === "code") return "Coding";
+  if (q.type === "fill_blank") return "Fill in the blank";
+  if (q.type === "file_upload") return "File upload";
   return "Essay";
 }
 
@@ -21,6 +26,7 @@ const STATUS: Record<FQ["status"], { cls: string; word: string }> = {
   partial: { cls: "warn", word: "partial" },
   wrong: { cls: "danger", word: "wrong" },
   unanswered: { cls: "", word: "not answered" },
+  pending: { cls: "", word: "being graded" },   // not graded yet
 };
 
 export function StatusPill({ q }: { q: Pick<FQ, "status" | "points" | "points_awarded"> }) {
@@ -134,6 +140,70 @@ export function FeedbackQuestionCard({ q }: { q: FQ }) {
       {q.comment?.trim() && (
         <div className="stu-teacher-note">
           <strong>Teacher:</strong> {q.comment}
+        </div>
+      )}
+    </article>
+  );
+}
+
+// ---------------------------------------------------------------- graded in another system
+
+/** An answer in words (the feedback page). */
+export function describeRichAnswer(q: Pick<FQ, "type" | "options" | "multiple">, given: AnswerValue | null | undefined): string {
+  if (given === null || given === undefined || given === "") return "No answer";
+  if (isCodeAnswer(given)) return given.source.trim() ? given.source : "No answer";
+  if (q.type === "mcq" && Array.isArray(given))
+    return given.length
+      ? given.map((i) => (typeof i === "number" ? `${LETTERS[i] ?? i + 1} · ${q.options[i] ?? ""}` : String(i))).join("\n")
+      : "No answer";
+  if (q.type === "mcq" && typeof given === "number") return `${LETTERS[given] ?? given + 1} · ${q.options[given] ?? ""}`;
+  if (q.type === "fill_blank" && Array.isArray(given)) return given.map((s, i) => `${i + 1}. ${String(s) || "—"}`).join("\n");
+  if (q.type === "file_upload" && Array.isArray(given)) return given.length === 1 ? "1 file handed in" : `${given.length} files handed in`;
+  return String(given);
+}
+
+function richStatus(q: FQ): FQ["status"] {
+  if (q.status) return q.status;
+  if (q.points_awarded >= q.points && q.points > 0) return "correct";
+  return q.points_awarded > 0 ? "partial" : "wrong";
+}
+
+/** One question of an exam graded elsewhere: points and that system's feedback. */
+export function ExternalFeedbackQuestionCard({ q, examId }: { q: FQ; examId?: string }) {
+  const headId = `fbq-${q.question_id}`;
+  const label = q.label || `Question ${q.index + 1}`;
+  const code = isCodeAnswer(q.given) || q.type === "code";
+  return (
+    <article className="stu-fbq" aria-labelledby={headId} data-testid="external-feedback-question">
+      <div className="stu-fbq-head">
+        <h2 id={headId}>
+          {label}
+          {q.title ? ` · ${q.title}` : ""}
+        </h2>
+        <StatusPill q={{ ...q, status: richStatus(q) }} />
+      </div>
+      <MarkdownContent
+        className="stu-fbq-prompt"
+        format={q.prompt_format ?? "markdown"}
+        text={q.prompt}
+        assets={examId ? gradeAssetContext(examId) : null}
+      />
+      <div className={`stu-ans${code ? " code" : ""}`}>
+        <span>YOUR ANSWER{isCodeAnswer(q.given) ? ` · ${q.given.language}` : ""}</span>
+        {code ? (
+          <pre className="stu-fbq-code">{describeRichAnswer(q, q.given)}</pre>
+        ) : (
+          <span style={{ whiteSpace: "pre-wrap" }}>{describeRichAnswer(q, q.given)}</span>
+        )}
+      </div>
+      {q.comment?.trim() && (
+        <div className="fp-external-feedback" data-testid="external-feedback">
+          <strong className="stu-small">Feedback</strong>
+          {q.comment_format === "markdown" ? (
+            <MarkdownContent format="markdown" text={q.comment} />
+          ) : (
+            <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{q.comment}</p>
+          )}
         </div>
       )}
     </article>

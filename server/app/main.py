@@ -60,9 +60,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.feature("scan"):
             from .routes_scan import sweep_forever
             sweeper = asyncio.get_running_loop().create_task(sweep_forever())
+        # integrations (app.integrations): their background loops while connected
+        from .integrations import registry as integrations
+        bridges = [asyncio.get_running_loop().create_task(task())
+                   for task in integrations.background_tasks(settings)]
+        # 2026-10-23: exams with a close time close by themselves (app.closing)
+        from . import closing
+        if closing.BACKGROUND:
+            bridges.append(asyncio.get_running_loop().create_task(closing.run_forever()))
         try:
             yield
         finally:
+            for bridge in bridges:
+                bridge.cancel()
+                try:
+                    await bridge
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
             if sweeper is not None:
                 sweeper.cancel()
                 try:                       # wait for it: disposing the DB under it can hang
@@ -137,6 +151,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .site_check import router as site_check_router
     app.include_router(site_check_router)
     app.include_router(topics_router)
+    # integrations: live-room links, status, statement assets; file_upload answer files
+    from .answer_files import router as answer_files_router
+    from .integrations import registry as integration_registry
+    from .integrations.routes import router as integrations_router
+    integration_registry.configure(settings)
+    app.include_router(answer_files_router)
+    app.include_router(integrations_router)
+    for r in integration_registry.routers():
+        app.include_router(r)
     if settings.feature("scan"):
         from .routes_scan import router as scan_router  # slice 6 D: Scan & Grade (paper exams)
         app.include_router(scan_router)

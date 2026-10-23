@@ -80,11 +80,18 @@ export function readStoredAttempt(
   }
 }
 
+/** Some answers are lists and {language, source}: compare by value. */
+function sameValue(x: AnswerValue | undefined, y: AnswerValue | undefined): boolean {
+  if (x === y) return true;
+  if (typeof x !== "object" || typeof y !== "object" || x === null || y === null) return false;
+  return JSON.stringify(x) === JSON.stringify(y);
+}
+
 function sameAnswers(a: AnswerMap, b: AnswerMap): boolean {
   const ka = Object.keys(a);
   const kb = Object.keys(b);
   if (ka.length !== kb.length) return false;
-  return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && a[k] === b[k]);
+  return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && sameValue(a[k], b[k]));
 }
 
 export class AnswerQueue {

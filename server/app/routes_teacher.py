@@ -12,26 +12,31 @@ from sqlalchemy import and_, case, delete, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
-from .grading import MANUAL_TYPES, exam_questions, auto_points, external_question, grade_attempt, is_answered, num, percent, word_count
+from .grading import MANUAL_TYPES, exam_questions, auto_points, external_question, grade_attempt, handin_grade, is_answered, num, percent, word_count
+from .integrations import registry
+from .integrations.registry import integration_for
 from .models import Attempt, ClassMember, DeviceCheck, Exam, ExamMaterial, IntegrityEvent, User
-from .schemas import QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitIn, ReleaseIn, ReviewIn
+from .schemas import (QID_RE, CommentIn, ExamIn, ExtendIn, GradeIn, OfflineExitIn, OpenIn, OpenToIn,
+                      ReleaseIn, ReviewIn)
+from .access import eligible_students, open_to_out
 from .security import Principal, require_teacher
-from .services import (attempt_key, code_fields, code_language, exam_default_language, exam_delivery, exam_out, exam_out_full, invalidate_exam,
+from .services import (external_block, attempt_key, code_fields, code_language, exam_closes_at, exam_default_language, exam_delivery, exam_out, exam_out_full, invalidate_exam,
                        new_id, new_invigilator_code, new_receipt, new_session_id,
                        new_start_code, pending_by_exam)
 from . import app_client as ac
 from .routes_classes import check_class_for_exam
 from .store import get_store
 from .timeutil import iso, iso_from_epoch, utcnow
+from .closing import AUTO_CLOSE_EVENT, LATE_GRACE, close_exam_now, max_extra
 
 router = APIRouter(prefix="/api/exams", tags=["teacher"])
 
 ONLINE_WINDOW_S = 15
-LATE_GRACE = timedelta(seconds=60)
 # Integrity events that are bookkeeping, not "flags" a teacher should look at.
 NON_FLAG_TYPES = ("lock_started", "lock_ended", "device_released", "device_bound",
                   "offline_exit_code_issued",
-                  "resume_approved", "swap_approved")     # S3 / S4: the teacher's own actions
+                  "resume_approved", "swap_approved",     # S3 / S4: the teacher's own actions
+                  AUTO_CLOSE_EVENT)                       # 2026-10-23: the automatic close
 # S3: the wait for the teacher's OK is given back, up to this much.
 MAX_RESUME_EXTENSION = timedelta(minutes=15)
 # The app's own signal counts as "app online" for this long (beats every 5 s).
@@ -66,7 +71,7 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
     e.total_points = float(sum(q["points"] for q in qs))
     e.updated_at = utcnow()
     # Optional slice-2 fields: on PUT, a field the client did not send keeps its value.
-    for f in ("course", "room", "scheduled_at", "shuffle_questions", "class_id",
+    for f in ("course", "room", "scheduled_at", "closes_at", "shuffle_questions", "class_id",
               "resume_needs_approval", "require_strong_lock",
               "calculator", "open_book", "websites",             # 2026-10-23: exam tools
               "default_language"):                               # phase 4
@@ -95,9 +100,27 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
 
 async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
     e = await session.get(Exam, exam_id)
-    if e is None or e.teacher_id != p.user_id or e.is_trial:   # never the sample exam
+    if e is None or e.is_trial:                                 # never the sample exam
         raise HTTPException(404, "Exam not found")
+    if e.teacher_id != p.user_id:
+        # integrations: other teachers the external system names (e.g. its editors)
+        integ = integration_for(e)
+        if not (integ and await integ.is_teacher(session, e, p.user_id)):
+            raise HTTPException(404, "Exam not found")
     return e
+
+
+def _not_read_only(e: Exam) -> None:
+    """An exam from an external system may be read-only here (edited there)."""
+    integ = integration_for(e)
+    if integ and integ.exam_is_read_only(e):
+        raise HTTPException(409, integ.edit_refused_message(e))
+
+
+def _not_graded_externally(e: Exam) -> None:
+    integ = integration_for(e)
+    if integ and integ.grades_externally(e):
+        raise HTTPException(409, integ.graded_message(e))
 
 
 @router.get("")
@@ -105,8 +128,11 @@ async def list_exams(p: Principal = Depends(require_teacher),
                      session: AsyncSession = Depends(get_session)):
     from .materials import maybe_cleanup_materials
     await maybe_cleanup_materials()      # 2026-10-23 (review 2): open-book retention, hourly
+    others = [and_(Exam.source == src.id, Exam.id.in_(ids)) for src in registry.sources()
+              if (ids := src.teacher_exam_ids(p.user_id)) is not None]
     res = await session.execute(
-        select(Exam).where(Exam.teacher_id == p.user_id, Exam.is_trial == false())
+        select(Exam).where(or_(Exam.teacher_id == p.user_id, *others),
+                           Exam.is_trial == false())
         .order_by(Exam.created_at.desc(), Exam.id))
     exams = list(res.scalars())
     pending = await pending_by_exam(session, [e.id for e in exams if e.status != "draft"])
@@ -150,6 +176,7 @@ async def update_exam(exam_id: str, body: ExamIn, request: Request,
                       p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    _not_read_only(e)
     if body.delivery == "paper" and exam_delivery(e) != "paper":
         _check_delivery(request, body)
     if e.status != "draft":
@@ -166,6 +193,9 @@ async def update_exam(exam_id: str, body: ExamIn, request: Request,
 async def delete_exam(exam_id: str, p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    integ = integration_for(e)
+    if integ and integ.delete_refused_message(e):
+        raise HTTPException(409, integ.delete_refused_message(e))
     if e.status not in ("draft", "closed"):
         raise HTTPException(409, "Exam is live; close it first")
     aids = (await session.execute(select(Attempt.id).where(Attempt.exam_id == exam_id))).scalars().all()
@@ -182,19 +212,84 @@ async def delete_exam(exam_id: str, p: Principal = Depends(require_teacher),
 
 
 @router.post("/{exam_id}/open")
-async def open_exam(exam_id: str, p: Principal = Depends(require_teacher),
+async def open_exam(exam_id: str, body: OpenIn | None = None, p: Principal = Depends(require_teacher),
                     session: AsyncSession = Depends(get_session)):
+    """Body (optional): {"open_to": "all" | [student ids]} -- who may start (default all)."""
     e = await _own_exam(session, exam_id, p)
     if e.status == "live":
         raise HTTPException(409, "Exam is already live")
     if exam_delivery(e) == "paper":  # slice 6: printed, scanned and graded; never opened
         raise HTTPException(409, "Paper exams are printed, not opened in the app")
-    if e.class_id is None and e.course_link_id is None:   # audit S-03
+    integ = integration_for(e)
+    if integ is not None:            # integrations decide who takes it (their roster)
+        if integ.open_refused_message(e):
+            raise HTTPException(409, integ.open_refused_message(e))
+    elif e.class_id is None and e.course_link_id is None:   # audit S-03
         raise HTTPException(409, "Choose the class that takes this exam before opening it")
+    now = utcnow()
+    closes = exam_closes_at(e)
+    if closes is not None and now >= closes + await max_extra(session, e):
+        if integ is not None:        # the source owns the end time
+            raise HTTPException(409, f"The end time set in {integ.name} has passed. "
+                                     f"Change it in {integ.name} to open the exam again.")
+        if e.status == "draft":      # never opened: the setting is a mistake, not a past run
+            raise HTTPException(409, "The automatic close time has passed. Change or clear "
+                                     "\"Close automatically at\" in the exam settings.")
+        e.closes_at = None           # re-opened after its close time: the teacher closes it
+    e.open_to = await _checked_open_to(session, e, (body or OpenIn()).open_to)
     e.status = "live"
     e.start_code = new_start_code()
     e.invigilator_code = new_invigilator_code()
     e.closed_at = None
+    e.auto_closed = False
+    e.updated_at = now
+    await session.commit()
+    await invalidate_exam(get_store(), exam_id)
+    return await exam_out_full(session, e)
+
+
+async def _checked_open_to(session: AsyncSession, e: Exam, value) -> list[int] | None:
+    """"all" -> None; a list -> the sorted ids, each one a student of this exam (422 else)."""
+    if value == "all" or value is None:
+        return None
+    wanted = sorted({int(x) for x in value})
+    eligible = {sid for sid, _, _ in await eligible_students(session, e)}
+    unknown = [x for x in wanted if x not in eligible]
+    if unknown:
+        raise HTTPException(422, f"Not a student of this exam: {', '.join(map(str, unknown[:10]))}")
+    return wanted
+
+
+@router.get("/{exam_id}/students")
+async def exam_students(exam_id: str, p: Principal = Depends(require_teacher),
+                        session: AsyncSession = Depends(get_session)):
+    """2026-10-23: the students who may take the exam (class / LMS course members or the
+    external roster), for the "Selected students" checklist. started = has an attempt."""
+    e = await _own_exam(session, exam_id, p)
+    started = set((await session.execute(select(Attempt.student_id).where(Attempt.exam_id == exam_id))).scalars())
+    return [{"id": sid, "username": u, "name": n, "started": sid in started}
+            for sid, u, n in await eligible_students(session, e)]
+
+
+@router.put("/{exam_id}/open-to")
+async def update_open_to(exam_id: str, body: OpenToIn, p: Principal = Depends(require_teacher),
+                         session: AsyncSession = Depends(get_session)):
+    """2026-10-23: change who may start, any time (usually while live). {"open_to": ...}
+    replaces the selection; {"add": [...], "remove": [...]} changes it. Removing a student
+    who already started never stops their attempt; it only blocks a new start."""
+    e = await _own_exam(session, exam_id, p)
+    if exam_delivery(e) == "paper":
+        raise HTTPException(409, "Paper exams are printed, not opened in the app")
+    if body.open_to is not None:
+        value = body.open_to
+    else:
+        if e.open_to is None and not body.remove:
+            value = "all"            # adding to "everyone" (or nothing) changes nothing
+        else:
+            base = set(e.open_to or []) if e.open_to is not None else \
+                {sid for sid, _, _ in await eligible_students(session, e)}
+            value = sorted((base | set(body.add)) - set(body.remove))
+    e.open_to = await _checked_open_to(session, e, value)
     e.updated_at = utcnow()
     await session.commit()
     await invalidate_exam(get_store(), exam_id)
@@ -211,42 +306,9 @@ async def close_exam(exam_id: str, p: Principal = Depends(require_teacher),
     # so grades can be released like any other exam.
     if e.status != "live" and not (e.status == "draft" and exam_delivery(e) == "paper"):
         raise HTTPException(409, "Exam is not live")
-    now = utcnow()
-    e.status = "closed"
-    e.start_code = None
-    e.invigilator_code = None
-    e.package_secret = None          # audit S-03: offline packages of this run stop opening
-    e.closed_at = now
-    e.updated_at = now
-    # Flip the exam first so no new attempts start, then auto-submit stragglers.
-    await session.commit()
-    store = get_store()
-    await invalidate_exam(store, exam_id)
-
-    rows = await _sweep_in_progress(session, e, now)
-    # Audit S-07: a start that raced the status change commits its INSERT after the first
-    # SELECT; one more pass catches it.
-    rows += await _sweep_in_progress(session, e, now)
-    if rows:
-        await store.delete(*[attempt_key(r[0]) for r in rows])
+    # 2026-10-23: the same path as the automatic close (app.closing)
+    await close_exam_now(session, e, utcnow())
     return await exam_out_full(session, e)
-
-
-async def _sweep_in_progress(session: AsyncSession, e: Exam, now) -> list:
-    """Auto-submit every in-progress attempt of a closed exam; returns the rows."""
-    rows = (await session.execute(
-        select(Attempt.id, Attempt.answers, Attempt.deadline_at)
-        .where(Attempt.exam_id == e.id, Attempt.status == "in_progress"))).all()
-    for aid, answers, deadline in rows:
-        score, pending, _ = grade_attempt(exam_questions(e), answers or {}, None)
-        # Conditional: a student submit racing with close keeps its own receipt.
-        await session.execute(
-            update(Attempt).where(Attempt.id == aid, Attempt.status == "in_progress").values(
-                status="submitted", submitted_at=now, auto_submitted=True, receipt=new_receipt(),
-                score=score, needs_grading=pending, late=now > deadline + LATE_GRACE,
-                updated_at=now))
-    await session.commit()
-    return list(rows)
 
 
 @router.post("/{exam_id}/rotate-code")
@@ -489,7 +551,25 @@ async def live(exam_id: str, p: Principal = Depends(require_teacher),
                          "invigilator_code": e.invigilator_code if e.status == "live" else None,
                          "duration_min": e.duration_min, "students": students,
                          "flags": flags, "counts": counts,
+                         # 2026-10-23: who may start ("all" or ids) with names; the automatic close time
+                         "open_to": open_to_out(e.open_to),
+                         "selected": await _selected_out(session, e),
+                         "closes_at": iso(exam_closes_at(e)),
                          "server_time": iso(utcnow())})      # audit W-13: countdown on the server clock
+
+
+async def _selected_out(session: AsyncSession, e: Exam) -> list[dict] | None:
+    """The selected students ({id, username, name, started}), None when open to all."""
+    if e.open_to is None:
+        return None
+    ids = sorted({int(x) for x in e.open_to})
+    if not ids:
+        return []
+    started = set((await session.execute(select(Attempt.student_id).where(
+        Attempt.exam_id == e.id, Attempt.student_id.in_(ids)))).scalars())
+    rows = (await session.execute(select(User.id, User.username, User.name).where(User.id.in_(ids))
+                                  .order_by(User.name, User.username))).all()
+    return [{"id": int(i), "username": u, "name": n, "started": int(i) in started} for i, u, n in rows]
 
 
 RESULTS_EVENTS_PER_ATTEMPT = 200
@@ -561,8 +641,17 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
     q_sum = {q["id"]: 0.0 for q in qs}
     q_correct = {q["id"]: 0 for q in qs}
     n_submitted = pending_total = 0
+    integ = integration_for(e)
+    ext = bool(integ and integ.grades_externally(e))
+    deliveries = await integ.delivery_status(session, e.id) if integ else {}
     for a, username, name in rows:
-        score, pending, ans_rows = grade_attempt(qs, a.answers, a.grades)
+        # externally graded: points only from the released external result
+        score, pending, ans_rows = grade_attempt(
+            qs, a.answers, integ.grades_for(qs, a.external_result) if ext else a.grades)
+        if ext:
+            released, ext_score, _ = integ.released(a.external_result, total)
+            score = ext_score if released else score
+            pending = 0
         pct = percent(score, total)
         if external:
             ans_rows, pending = [], 0
@@ -592,6 +681,9 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
             "answers": ans_rows, "events": events.get(a.id, []),
             "events_total": event_total.get(a.id, 0),
         })
+        if integ is not None:   # what was sent to the external system and what came back
+            attempts[-1]["external_result"] = a.external_result
+            attempts[-1]["external_delivery"] = deliveries.get(a.id)
 
     buckets = [0] * 10
     for pct in percents:
@@ -621,6 +713,7 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
         "score_buckets": [{"label": lab, "count": c} for lab, c in zip(labels, buckets)],
         "attempts": attempts,
         "questions": [q_stats(q) for q in qs],
+        "external": external_block(e),                         # integrations: null = FairPlay
     }
 
 
@@ -673,6 +766,10 @@ async def grading_queue(exam_id: str, p: Principal = Depends(require_teacher),
                         session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
     qs = exam_questions(e)
+    integ = integration_for(e)
+    if integ and integ.grades_externally(e):     # graded there: nothing to grade here
+        return {"exam_id": e.id, "title": e.title, "course": e.course or "", "status": e.status,
+                "grades_released": False, "external": integ.external_block(e), "questions": [], "items": []}
     rows = (await session.execute(
         select(Attempt, User.username, User.name)
         .join(User, User.id == Attempt.student_id)
@@ -711,7 +808,7 @@ async def grading_queue(exam_id: str, p: Principal = Depends(require_teacher),
                 })
     return {
         "exam_id": e.id, "title": e.title, "course": e.course or "", "status": e.status,
-        "grades_released": bool(e.grades_released),
+        "grades_released": bool(e.grades_released), "external": None,
         "questions": [{"question_id": q["id"], "index": i, "type": q["type"],
                        "prompt": q["prompt"], "points": q.get("points", 1),
                        "rubric": [dict(x) for x in q.get("rubric") or []],
@@ -775,6 +872,7 @@ async def put_grade(exam_id: str, aid: str, qid: str, body: GradeIn,
                     p: Principal = Depends(require_teacher),
                     session: AsyncSession = Depends(get_session)):
     e, a = await _exam_attempt(session, exam_id, aid, p)
+    _not_graded_externally(e)
     q = _question(e, qid)
     if a.status != "submitted":
         raise HTTPException(409, "Attempt is not submitted")
@@ -804,6 +902,7 @@ async def put_grade(exam_id: str, aid: str, qid: str, body: GradeIn,
 async def delete_grade(exam_id: str, aid: str, qid: str, p: Principal = Depends(require_teacher),
                        session: AsyncSession = Depends(get_session)):
     e, a = await _exam_attempt(session, exam_id, aid, p)
+    _not_graded_externally(e)
     _question(e, qid)
     if a.status != "submitted":
         raise HTTPException(409, "Attempt is not submitted")
@@ -814,7 +913,8 @@ async def delete_grade(exam_id: str, aid: str, qid: str, p: Principal = Depends(
 async def put_comment(exam_id: str, aid: str, body: CommentIn,
                       p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
-    _, a = await _exam_attempt(session, exam_id, aid, p)
+    e, a = await _exam_attempt(session, exam_id, aid, p)
+    _not_graded_externally(e)
     a.overall_comment = body.comment
     a.updated_at = utcnow()
     await session.commit()
@@ -826,6 +926,7 @@ async def release_grades(exam_id: str, body: ReleaseIn | None = None,
                          p: Principal = Depends(require_teacher),
                          session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    _not_graded_externally(e)
     if e.status != "closed":
         raise HTTPException(409, "Close the exam first")
     pending = (await pending_by_exam(session, [e.id])).get(e.id, 0)
@@ -843,6 +944,7 @@ async def release_grades(exam_id: str, body: ReleaseIn | None = None,
 async def unrelease_grades(exam_id: str, p: Principal = Depends(require_teacher),
                            session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    _not_graded_externally(e)
     e.grades_released = False
     e.released_at = None
     e.updated_at = utcnow()

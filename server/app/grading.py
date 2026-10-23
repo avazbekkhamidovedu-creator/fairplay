@@ -29,6 +29,10 @@ def _number(v: Any) -> float | None:
 
 
 def is_answered(v: Any) -> bool:
+    if isinstance(v, list):          # extended types: several options / blanks / files
+        return any(is_answered(x) for x in v)
+    if isinstance(v, dict) and "source" in v and "image" not in v:   # multi-language code answer
+        return is_answered(v.get("source"))
     return v is not None and not (isinstance(v, str) and not v.strip())
 
 
@@ -79,10 +83,18 @@ def num(x: float) -> int | float:
 # One helper for score / needs_grading, shared by submit/close (stored score), results,
 # the grading queue, the gradebook and the student grade views.
 
-MANUAL_TYPES = ("essay", "external", "code")
+MANUAL_TYPES = ("essay", "external", "code", "fill_blank", "file_upload")
 # Phase 4: answers the teacher grades (pending until graded; a blank one is 0 and graded).
 # Coding answers are graded on the grading page, where the tests run in the browser.
-WRITTEN_TYPES = ("essay", "code")
+# 2026-10-23: fill_blank / file_upload (app.question_types) are graded by a person (or by
+# the external system an exam comes from), like essays.
+WRITTEN_TYPES = ("essay", "code", "fill_blank", "file_upload")
+
+
+def remote_graded(q: dict) -> bool:
+    """A question from an external system (it carries external_ref): never graded here;
+    its points come only from the released external result (passed in as grades)."""
+    return isinstance(q.get("external_ref"), dict)
 
 # slice 4: an exam held on another website stores one hidden grading item. Students never
 # see it (their view has no questions); the teacher enters the score from the website.
@@ -107,7 +119,7 @@ def exam_questions(e: Any) -> list[dict]:
 
 def auto_points(q: dict, given: Any) -> float | None:
     """Automatic points for one answer (slice-1 rules); None for essays (never auto-graded)."""
-    if q.get("type") in MANUAL_TYPES:
+    if q.get("type") in MANUAL_TYPES or remote_graded(q):
         return None
     return q.get("points", 1) if grade_question(q, given) else 0
 
@@ -138,7 +150,7 @@ def grade_attempt(questions: list[dict], answers: dict | None,
         elif paper_pending:
             pts = 0.0
             pending = True
-        elif q.get("type") in WRITTEN_TYPES:
+        elif q.get("type") in WRITTEN_TYPES or remote_graded(q):
             pts = 0.0
             pending = answered
         elif q.get("type") == "external":
@@ -196,3 +208,19 @@ def percent(score: float, total: float) -> float:
 
 def word_count(v: Any) -> int:
     return len(v.split()) if isinstance(v, str) else 0
+
+
+# ---------------------------------------------------------------- integrations
+def handin_grade(exam: Any, answers: dict | None, grades: dict | None) -> tuple[float | None, int]:
+    """(score, needs_grading) stored at hand-in / close. The sample exam and exams graded
+    by an external system (app.integrations) are never graded here."""
+    if exam is not None and (getattr(exam, "is_trial", False) or graded_externally(exam)):
+        return None, 0
+    score, pending, _ = grade_attempt(exam_questions(exam) if exam is not None else [], answers, grades)
+    return score, pending
+
+
+def graded_externally(exam: Any) -> bool:
+    from .integrations.registry import integration_for
+    integ = integration_for(exam) if exam is not None else None
+    return bool(integ and integ.grades_externally(exam))

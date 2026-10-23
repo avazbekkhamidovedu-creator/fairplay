@@ -9,7 +9,7 @@ import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 import { TrialCard } from "../../components/student/TrialCard";
 import { useMe } from "../../lib/useMe";
-import { pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
+import { NOT_OPEN_FOR_YOU, pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
 
 export default function StudentHome() {
   const me = useMe("student");
@@ -131,10 +131,13 @@ function ExamHero({
 }) {
   const navigate = useNavigate();
   const inProgress = exam.attempt?.status === "in_progress";
+  const notForMe = !inProgress && exam.open_for_me === false;   // 2026-10-23: selected students only
   const headId = `hero-${exam.id}`;
   const when = inProgress
     ? "In progress"
-    : exam.scheduled_at
+    : notForMe
+      ? NOT_OPEN_FOR_YOU
+      : exam.scheduled_at
       ? `Open now · ${isToday(exam.scheduled_at) ? "today" : shortDate(exam.scheduled_at)} ${shortTime(exam.scheduled_at)}`
       : "Open now";
   const meta = [
@@ -151,7 +154,11 @@ function ExamHero({
       <h2 id={headId}>{examName(exam.course, exam.title)}</h2>
       <span className="stu-exam-hero-meta">{meta}</span>
 
-      {inProgress ? (
+      {notForMe ? (
+        <div className="stu-exam-hero-note" data-testid="not-open-for-you">
+          Your teacher opened this exam for some students first. It shows a Start button here when it opens for you.
+        </div>
+      ) : inProgress ? (
         <>
           <div className="stu-exam-hero-note">Your answers are saved. Continue where you stopped — the timer kept running.</div>
           <div className="stu-row">

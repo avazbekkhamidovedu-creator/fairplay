@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .grading import num
 from .models import Attempt, Exam
 from .schemas import CODE_LANGUAGES, DEFAULT_TIME_LIMIT_MS, external_host
+from .integrations.registry import integration_for
+from .question_types import extended_fields
+from .access import open_to_out
 from .store import Store
 from .timeutil import iso
 
@@ -63,6 +66,7 @@ def teacher_question(q: dict) -> dict:
         "topics": list(q.get("topics") or []),
         "answer_lines": q.get("answer_lines"),  # slice 6: paper answer space
         **code_fields(q),                         # phase 4: coding questions only
+        **extended_fields(q, teacher=True),       # 2026-10-23: extended question types
     }
 
 
@@ -79,6 +83,7 @@ def code_fields(q: dict) -> dict:
     if q.get("type") != "code":
         return {}
     return {
+        # multi-language code: language = the first language's runner (None = no in-app runner)
         "language": q.get("language") if q.get("language") in CODE_LANGUAGES else None,
         "starter_code": q.get("starter_code") or "",
         "tests": [{"input": t.get("input", ""), "expected": t.get("expected", ""),
@@ -96,6 +101,11 @@ def student_question(q: dict, default_language: str | None = None) -> dict:
     # slice 6: topic tags can hint at the method ("integration by parts"): not shown while
     # writing. Images are shown above the prompt.
     tq.pop("topics", None)
+    tq.pop("external_ref", None)        # the external system's ids: teachers only
+    if "prompt_format" in tq and tq["type"] == "code" and tq.get("languages"):
+        # extended code question: all samples are visible, each language keeps its runner
+        tq["tests"] = [{"input": t["input"], "expected": t["expected"]} for t in tq.get("tests") or []]
+        return tq
     if tq["type"] == "code":
         # Phase 4: hidden tests (input and expected output) never reach students, nor their
         # count or points. Visible tests are the samples. The language is resolved here:
@@ -138,7 +148,27 @@ def exam_out(e: Exam, pending_grading: int = 0) -> dict:
         **lock_settings(e),                           # S3 / S6
         **tool_settings(e),                           # 2026-10-23: exam tools
         "default_language": exam_default_language(e),  # phase 4
+        "external": external_block(e),                # integrations: null = FairPlay exam
+        # 2026-10-23: "all" or the selected student ids; the automatic close time (external
+        # exams: from their source, read-only) and whether the last close was automatic
+        "open_to": open_to_out(e.open_to),
+        "closes_at": iso(exam_closes_at(e)),
+        "auto_closed": bool(e.auto_closed),
     }
+
+
+def exam_closes_at(e: Exam):
+    """2026-10-23: when the exam closes by itself (naive UTC) or None. External exams ask
+    their source (e.g. the synced end time); FairPlay exams use their own setting."""
+    integ = integration_for(e)
+    return integ.closes_at(e) if integ is not None else e.closes_at
+
+
+def external_block(e: Exam) -> dict | None:
+    """Teacher views: {source, name, url, read_only, graded_externally, ...} of an exam
+    from an external system (app.integrations), None for a FairPlay exam."""
+    integ = integration_for(e)
+    return integ.external_block(e) if integ else None
 
 
 def exam_default_language(e) -> str:
@@ -246,7 +276,11 @@ async def invalidate_exam(store: Store, exam_id: str) -> None:
 
 
 def _hot_of(data: dict) -> dict:
+    from .question_types import is_extended
+    # Extended questions (multi-select, fill-blank, file upload, multi-language code from
+    # DKU OJ) are checked on every save, so they ride along; plain exams stay tiny.
     return {"question_ids": list(data.get("question_ids") or []),
+            "questions": [q for q in data.get("questions") or [] if is_extended(q)],
             "require_strong_lock": bool(data.get("require_strong_lock"))}
 
 
@@ -289,6 +323,10 @@ async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> 
         **lock_settings(e),                           # S3 / S6: read by start and app-beat
         **tool_settings(e),                           # 2026-10-23: exam tools
         "is_trial": bool(e.is_trial),                 # 2026-10-22: the sample exam
+        "source": e.source or "fairplay",             # integrations
+        "external_name": (integration_for(e).name if integration_for(e) else None),
+        "total_points": num(e.total_points or 0),
+        "closes_at": iso(exam_closes_at(e)),         # 2026-10-23 (offline countdown cap)
         "questions": [student_question(q, exam_default_language(e)) for q in e.questions or []],
         **external_fields(e),
     }
@@ -381,5 +419,9 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         "tools": student_tools(exam),
         "approval": approval_of(a),    # S3: "pending" -> the page shows "Wait for your teacher"
         "trial": bool(exam.get("is_trial")),   # 2026-10-22: the sample exam (Stop practice)
+        # integrations: "fairplay" or the external system's id (+ its display name)
+        "source": exam.get("source") or "fairplay",
+        **({"external_name": exam.get("external_name"), "total_points": exam.get("total_points")}
+           if (exam.get("source") or "fairplay") != "fairplay" else {}),
     }
 

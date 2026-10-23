@@ -24,7 +24,9 @@ def test_student_exam_list(client, teacher, alice, live_exam):
                     "course": "", "room": "", "scheduled_at": None,
                     "mode": "questions", "delivery": "computer",
                     # 2026-10-23: exam tools (all off by default)
-                    "tools": {"calculator": "off", "open_book": False, "websites": []}}
+                    "tools": {"calculator": "off", "open_book": False, "websites": []},
+                    "source": "fairplay",      # 2026-10-23: integrations (app.integrations)
+                    "open_for_me": True}       # 2026-10-23: open to all / selected students
     a = start(client, alice, live_exam).json()
     item = next(x for x in client.get("/api/student/exams", headers=alice).json()
                 if x["id"] == live_exam["id"])
@@ -46,7 +48,7 @@ def test_start_wrong_then_right_and_resume(client, alice, live_exam):
     assert r.status_code == 200
     a = r.json()
     assert set(a) == {"attempt_id", "exam_id", "title", "duration_min", "started_at", "deadline_at",
-                      "server_time", "questions", "answers", "status", "course",
+                      "server_time", "questions", "answers", "status", "course", "source",
                       "mode", "external_url", "allowed_domains", "finish_url_contains", "session",
                       "allowed_apps", "min_app_version",     # S2
                       "approval", "needs_approval",          # S3

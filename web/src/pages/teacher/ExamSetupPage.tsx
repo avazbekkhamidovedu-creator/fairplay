@@ -5,6 +5,8 @@ import type { Exam } from "../../api/types";
 import { Loading } from "../../components/Loading";
 import { errorText } from "../../components/teacher/util";
 import { ExamEditor } from "./ExamEditor";
+import { ExternalSourceBanner } from "../../components/teacher/ExternalSource";
+import { QuestionsView } from "./QuestionsView";
 
 /** /teacher/exams/new and /teacher/exams/:id/edit */
 export default function ExamSetupPage() {
@@ -44,6 +46,17 @@ export default function ExamSetupPage() {
       </>
     );
   if (!exam) return <Loading label="Loading exam…" />;
+  // built in another system: read-only here
+  if (exam.external?.read_only)
+    return (
+      <>
+        <Link to={`/teacher/exams/${exam.id}`} className="t-back">
+          ← Back to {exam.title}
+        </Link>
+        <ExternalSourceBanner external={exam.external} kind="edit" />
+        <QuestionsView exam={exam} />
+      </>
+    );
   if (exam.status !== "draft")
     return (
       <>

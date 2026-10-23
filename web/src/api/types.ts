@@ -1,7 +1,7 @@
 // Types mirror CONTRACT.md exactly. Do not add fields that are not in the contract.
 
 export type Role = "teacher" | "student";
-export type QuestionType = "mcq" | "numeric" | "short" | "essay" | "external" | "code";
+export type QuestionType = "mcq" | "numeric" | "short" | "essay" | "external" | "code" | "fill_blank" | "file_upload";
 export type ExamStatus = "draft" | "live" | "closed";
 export type AttemptStatus = "in_progress" | "submitted";
 /** Slice 3: where students answer — in FairPlay or on another website (SEB-style). */
@@ -15,8 +15,17 @@ export interface ExternalExamFields {
   finish_url_contains: string | null;
 }
 
-/** mcq -> option index, numeric -> number, short -> string. Missing key = not answered. */
-export type AnswerValue = number | string;
+/** mcq -> option index, numeric -> number, short -> string. Missing key = not answered.
+ *  More types: mcq multiple -> sorted option indexes,
+ *  fill_blank -> one string per blank, file_upload -> upload ids, code with several
+ *  languages -> {language, source}. */
+export type AnswerValue = number | string | number[] | string[] | CodeAnswer;
+
+/** A coding answer of a question with several languages (language key, e.g. "PY3"). */
+export interface CodeAnswer {
+  language: string;
+  source: string;
+}
 export type AnswerMap = Record<string, AnswerValue>;
 
 export interface LoginResponse {
@@ -460,7 +469,8 @@ export interface FeedbackQuestion {
   options: string[];
   points: number;
   points_awarded: number;
-  status: "correct" | "partial" | "wrong" | "unanswered";
+  /** "pending": not graded yet (external source) */
+  status: "correct" | "partial" | "wrong" | "unanswered" | "pending";
   given: AnswerValue | null;
   correct_answer: AnswerValue | null;
   tolerance: number | null;
@@ -1132,4 +1142,195 @@ export interface GradingQuestion {
 }
 export interface FeedbackQuestion {
   language?: CodeLanguage;
+}
+
+// ---------- rich questions and exams from an external source (integrations) ----------
+
+/** Where an exam comes from: "fairplay", or the id of an integration. */
+export type ExamSource = string;
+
+/** How a prompt is written: plain text, markdown (with ~…~ / $$…$$ math), or sanitized HTML. */
+export type PromptFormat = "plain" | "markdown" | "html";
+
+/** One language a coding question allows. runner null = no in-app runner. */
+export interface CodeLanguageOption {
+  key: string;
+  name: string;
+  runner: CodeLanguage | null;
+}
+
+/** Optional question fields (rich text, more answer types). Missing = the classic question. */
+export interface RichQuestionFields {
+  prompt_format?: PromptFormat;
+  /** display label, e.g. "Q3" */
+  label?: string;
+  title?: string;
+  /** partial credit is given */
+  partial?: boolean;
+  source?: ExamSource;
+  // mcq
+  multiple?: boolean;
+  true_false?: boolean;
+  /** show the options in a per-student order (the answer keeps the original indexes) */
+  shuffle?: boolean;
+  // fill_blank
+  blanks?: number;
+  blank_points?: number[];
+  case_sensitive?: boolean;
+  // file_upload
+  allowed_extensions?: string[];
+  max_file_size?: number;
+  /** markdown shown above the file picker */
+  instructions_md?: string;
+  /** files per answer: always 1 (one file, replaced when a new one is chosen) */
+  max_files?: number;
+  // code with several languages
+  languages?: CodeLanguageOption[];
+  /** starter code per language key */
+  templates?: Record<string, string>;
+  memory_limit_kb?: number;
+  /** fp-asset name -> URL already available (data: URLs); otherwise the page fetches the
+   *  attempt (or teacher) asset URL. */
+  asset_urls?: Record<string, string>;
+}
+export interface Question extends RichQuestionFields {}
+export interface StudentQuestion extends RichQuestionFields {}
+export interface GradingQuestion extends RichQuestionFields {}
+export interface FeedbackQuestion extends RichQuestionFields {
+  /** "markdown": `comment` is markdown */
+  comment_format?: "plain" | "markdown";
+}
+
+/** An exam that comes from another system (null/missing: a FairPlay exam). */
+export interface ExternalInfo {
+  /** integration id */
+  source: string;
+  /** display name, e.g. the other system's product name */
+  name: string;
+  /** the exam in the other system */
+  url: string | null;
+  /** questions and settings cannot be changed in FairPlay (PUT -> 409) */
+  read_only: boolean;
+  /** grades come from the other system */
+  graded_externally: boolean;
+  /** the questions have arrived (until then Open exam -> 409) */
+  package_ready?: boolean;
+  start_time?: string | null;
+  end_time?: string | null;
+}
+
+export interface Exam {
+  external?: ExternalInfo | null;
+}
+export interface AttemptView {
+  source?: ExamSource;
+  external_name?: string;
+  /** files handed in so far for file_upload questions */
+  answer_files?: AnswerUpload[];
+  total_points?: number;
+}
+export interface OfflineExam {
+  source?: ExamSource;
+  external_name?: string;
+}
+export interface Results {
+  external?: ExternalInfo | null;
+}
+export interface GradingQueue {
+  external?: ExternalInfo | null;
+}
+
+/** Result of one attempt released by the external source. */
+export interface ExternalResult {
+  released?: boolean;
+  total?: number;
+  total_points?: number;
+  updated_at?: string | null;
+  questions?: { question_id: string; points: number; feedback_md?: string }[];
+}
+
+/** Sending one attempt's answers to the external source. dead = gave up (see the status page). */
+export interface ExternalDelivery {
+  status: "pending" | "sent" | "failed" | "dead";
+  tries: number;
+  last_error: string | null;
+  receipt: string | null;
+  next_at: string | null;
+  sent_at: string | null;
+}
+export interface ResultAttempt {
+  external_result?: ExternalResult | null;
+  external_delivery?: ExternalDelivery | null;
+}
+export interface StudentExamSummary {
+  source?: ExamSource;
+  external_name?: string;
+}
+export interface StudentGradeSummary {
+  source?: ExamSource;
+  external_name?: string;
+}
+export interface StudentFeedback {
+  source?: ExamSource;
+  external_name?: string;
+}
+
+/** A file handed in for a file_upload question (POST /api/student/attempts/{aid}/files). */
+export interface AnswerUpload {
+  id: string;
+  name: string;
+  size: number;
+  question_id?: string;
+  sha256?: string;
+  created_at?: string;
+}
+
+/** POST /api/integrations/live/exchange: the one-time code from an external "Open live room" link. */
+export interface ExternalLiveSignIn {
+  token: string;
+  role: "teacher";
+  name: string;
+  username: string;
+  exam_id: string;
+}
+
+// ---------- 2026-10-23: open to everyone or selected students; automatic close ----------
+
+/** "all" = every student of the exam (its class, LMS course or external roster). */
+export type OpenTo = "all" | number[];
+
+/** GET /api/exams/{id}/students: who may take the exam (the "Selected students" checklist). */
+export interface ExamStudent {
+  id: number;
+  username: string;
+  name: string;
+  /** has an attempt (removing them never stops it) */
+  started: boolean;
+}
+
+export interface Exam {
+  /** Who may start ("all" or student ids). Older servers: absent = all. */
+  open_to?: OpenTo;
+  /** The exam closes by itself at this time (UTC). External exams: from their source, read-only. */
+  closes_at?: string | null;
+  /** The last close was the automatic one. */
+  auto_closed?: boolean;
+}
+export interface ExamInput {
+  /** Optional automatic close (FairPlay exams). null = only the teacher closes it. */
+  closes_at?: string | null;
+}
+export interface LiveRoom {
+  open_to?: OpenTo;
+  /** The selected students with names (null when open to all). */
+  selected?: ExamStudent[] | null;
+  closes_at?: string | null;
+}
+export interface StudentExamSummary {
+  /** false = the teacher opened it for selected students only (no start, no package). */
+  open_for_me?: boolean;
+}
+export interface OfflineExam {
+  /** 2026-10-23: the offline countdown never runs past this */
+  closes_at?: string | null;
 }

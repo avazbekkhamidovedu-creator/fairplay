@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ExternalSourceBanner } from "../../components/teacher/ExternalSource";
 import { paperImage } from "../../lib/paperAnswer";
 import { urlHost } from "../../components/teacher/externalValidation";
 import { Link, useParams } from "react-router-dom";
@@ -61,6 +62,17 @@ export default function GradingPage() {
     };
   }, [id]);
 
+  // graded in another system: nothing to grade here
+  const ext = queue?.external ?? exam?.external ?? null;
+  if (ext?.graded_externally)
+    return (
+      <>
+        <Link to={`/teacher/exams/${id}?tab=results`} className="t-back">
+          ← Results
+        </Link>
+        <ExternalSourceBanner external={ext} kind="graded" />
+      </>
+    );
   if (error)
     return (
       <>

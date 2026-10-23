@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { urlHost } from "../../components/teacher/externalValidation";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ApiError, teacherApi } from "../../api/client";
-import type { Exam } from "../../api/types";
+import type { Exam, OpenTo } from "../../api/types";
 import { Loading } from "../../components/Loading";
 import { Pill } from "../../components/teacher/TeacherLayout";
 import { errorText, examStatus, formatWhen, plural } from "../../components/teacher/util";
@@ -10,6 +10,8 @@ import { LiveRoom } from "./LiveRoom";
 import { QuestionsView } from "./QuestionsView";
 import { ResultsView } from "./ResultsView";
 import { ScanSteps } from "./scan/ScanSteps";
+import { ExternalSourceBanner } from "../../components/teacher/ExternalSource";
+import { OpenToChoice, closesAtLabel } from "../../components/teacher/OpenTo";
 
 type Tab = "live" | "questions" | "results" | "scan";
 
@@ -39,6 +41,8 @@ export default function TeacherExamPage() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 2026-10-23: who can start when the exam opens (everyone, or the ticked students)
+  const [openTo, setOpenTo] = useState<OpenTo>("all");
 
   useEffect(() => {
     let alive = true;
@@ -86,7 +90,7 @@ export default function TeacherExamPage() {
 
   const openExam = () =>
     run(
-      () => teacherApi.openExam(exam.id),
+      () => (openTo === "all" ? teacherApi.openExam(exam.id) : teacherApi.openExam(exam.id, openTo)),
       (e) => {
         if (e) setExam(e);
         selectTab("live");
@@ -95,6 +99,10 @@ export default function TeacherExamPage() {
   const deleteExam = () => run(() => teacherApi.deleteExam(exam.id), () => navigate("/teacher/exams", { replace: true }));
 
   const st = examStatus(exam);
+  // from another system: read-only questions and/or grades kept there
+  const ext = exam.external ?? null;
+  const readOnly = !!ext?.read_only;
+  const gradedElsewhere = !!ext?.graded_externally;
   const pending = exam.pending_grading ?? 0;
   const meta = [
     ...(exam.mode === "external"
@@ -103,7 +111,11 @@ export default function TeacherExamPage() {
     `${exam.duration_min} min`,
     exam.room && `Room ${exam.room}`,
     exam.scheduled_at && `Planned ${formatWhen(exam.scheduled_at)}`,
+    exam.status !== "closed" && closesAtLabel(exam),
+    exam.status === "closed" && exam.auto_closed && "Closed automatically at its end time",
   ].filter(Boolean);
+  const canOpen = exam.delivery !== "paper" && (exam.status === "draft" || exam.status === "closed");
+  const noneSelected = openTo !== "all" && openTo.length === 0;
 
   return (
     <>
@@ -122,7 +134,7 @@ export default function TeacherExamPage() {
           <p>{meta.join(" · ")}</p>
         </div>
         <div className="t-head-actions">
-          {exam.status !== "draft" && pending > 0 && (
+          {exam.status !== "draft" && pending > 0 && !gradedElsewhere && (
             <Link
               to={exam.delivery === "paper" ? `/teacher/exams/${exam.id}/scan?step=grade` : `/teacher/exams/${exam.id}/grading`}
               className="btn btn-secondary"
@@ -132,22 +144,29 @@ export default function TeacherExamPage() {
           )}
           {exam.status === "draft" && (
             <>
-              <Link to={`/teacher/exams/${exam.id}/edit`} className="btn btn-secondary">
-                Edit
-              </Link>
+              {!readOnly && (
+                <Link to={`/teacher/exams/${exam.id}/edit`} className="btn btn-secondary">
+                  Edit
+                </Link>
+              )}
               {exam.delivery !== "paper" && (
-                <button type="button" className="btn btn-primary" onClick={openExam} disabled={busy}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={openExam}
+                  disabled={busy || ext?.package_ready === false || noneSelected}
+                >
                   {busy ? "Opening…" : "Open exam"}
                 </button>
               )}
             </>
           )}
           {exam.status === "closed" && exam.delivery !== "paper" && (
-            <button type="button" className="btn btn-secondary" onClick={openExam} disabled={busy}>
+            <button type="button" className="btn btn-secondary" onClick={openExam} disabled={busy || noneSelected}>
               {busy ? "Opening…" : "Re-open exam"}
             </button>
           )}
-          {exam.status !== "live" && !confirmDelete && (
+          {exam.status !== "live" && !confirmDelete && !ext && (
             <button type="button" className="btn btn-danger-outline" onClick={() => setConfirmDelete(true)}>
               Delete
             </button>
@@ -173,10 +192,23 @@ export default function TeacherExamPage() {
           {actionError}
         </div>
       )}
+      {ext && readOnly && <ExternalSourceBanner external={ext} kind="edit" />}
+      {ext && ext.package_ready === false && (
+        <div className="alert alert-info" role="status" data-testid="external-package-waiting">
+          The questions arrive from {ext.name} 24 hours before the start. You can open the exam after that.
+        </div>
+      )}
       {exam.status === "draft" && exam.delivery !== "paper" && (
         <div className="alert alert-info">
           This exam is a draft. When the class is seated, press <strong>Open exam</strong> to get a start code.
         </div>
+      )}
+
+      {canOpen && ext?.package_ready !== false && (
+        <section className="t-card" aria-label="Who can start" data-testid="open-to-choice">
+          <OpenToChoice examId={exam.id} value={openTo} onChange={setOpenTo} />
+          {noneSelected && <span className="t-small t-muted">Tick at least one student to open the exam.</span>}
+        </section>
       )}
 
       <div className="t-tabs" role="tablist" aria-label="Exam sections">

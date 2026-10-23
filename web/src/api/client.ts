@@ -5,6 +5,8 @@ import type { AllowedAppOption,
   AttemptView,
   EventsResponse,
   Exam,
+  ExamStudent,
+  OpenTo,
   ExamInput,
   EventReview,
   GradeInput,
@@ -302,7 +304,14 @@ export const teacherApi = {
   getExam: (id: string) => request<Exam>("teacher", "GET", `/api/exams/${enc(id)}`),
   updateExam: (id: string, input: ExamInput) => request<Exam>("teacher", "PUT", `/api/exams/${enc(id)}`, input),
   deleteExam: (id: string) => request<void>("teacher", "DELETE", `/api/exams/${enc(id)}`),
-  openExam: (id: string) => request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/open`),
+  /** openTo omitted = everyone (no body, as before). */
+  openExam: (id: string, openTo?: OpenTo) =>
+    request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/open`, openTo === undefined ? undefined : { open_to: openTo }),
+  /** 2026-10-23: the exam's students (class / course members or the external roster). */
+  examStudents: (id: string) => request<ExamStudent[]>("teacher", "GET", `/api/exams/${enc(id)}/students`),
+  /** 2026-10-23: change who may start: the whole selection, or students to add / remove. */
+  updateOpenTo: (id: string, change: { open_to: OpenTo } | { add?: number[]; remove?: number[] }) =>
+    request<Exam>("teacher", "PUT", `/api/exams/${enc(id)}/open-to`, change),
   closeExam: (id: string) => request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/close`),
   /** Audit #13: new start code for a live exam. */
   rotateCode: (id: string) => request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/rotate-code`),
@@ -693,4 +702,70 @@ export interface SiteCheck {
 export const toolsApi = {
   siteCheck: (host: string) =>
     request<SiteCheck>("teacher", "GET", `/api/tools/site-check?host=${encodeURIComponent(host)}`),
+};
+
+// ---------- question content, answer files, external live-room sign-in ----------
+
+import type { AnswerUpload, ExternalLiveSignIn } from "./types";
+
+/** Server answers for an uploaded file, read leniently (id / upload_id, name / filename, size / bytes). */
+function toAnswerUpload(data: unknown, file: File): AnswerUpload {
+  const d = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+  const id = typeof d.id === "string" ? d.id : typeof d.upload_id === "string" ? d.upload_id : "";
+  if (!id) throw new ApiError(502, "The server did not return the uploaded file.");
+  const name = typeof d.name === "string" ? d.name : typeof d.filename === "string" ? d.filename : file.name;
+  const size = typeof d.size === "number" ? d.size : typeof d.bytes === "number" ? d.bytes : file.size;
+  const out: AnswerUpload = { id, name, size };
+  if (typeof d.question_id === "string") out.question_id = d.question_id;
+  if (typeof d.sha256 === "string") out.sha256 = d.sha256;
+  if (typeof d.created_at === "string") out.created_at = d.created_at;
+  return out;
+}
+
+export const contentApi = {
+  /** One-time code from an integration's "Open live room" link -> a teacher sign-in. */
+  liveExchange: (code: string) => request<ExternalLiveSignIn>(null, "POST", "/api/integrations/live/exchange", { code }),
+  /** A file the student handed in (bytes). */
+  answerFile: (aid: string, id: string) => fetchBlob("student", `/api/student/attempts/${enc(aid)}/files/${enc(id)}`),
+  /** A picture (fp-asset:) of a question during the attempt (attempt owner, exam live). */
+  attemptAsset: (aid: string, name: string) =>
+    fetchBlob("student", `/api/student/attempts/${enc(aid)}/assets/${enc(name)}`),
+  /** A picture of a released grade page (after the exam: sign-in only). */
+  gradeAsset: (examId: string, name: string) =>
+    fetchBlob("student", `/api/student/grades/${enc(examId)}/assets/${enc(name)}`),
+  /** The same picture for the teacher. */
+  teacherAsset: (examId: string, name: string) => fetchBlob("teacher", `/api/exams/${enc(examId)}/assets/${enc(name)}`),
+  /** POST multipart "file" to .../files?question_id=: a file for a file_upload question
+   *  (extension / size checked by the server too). The answer keeps the returned id; the
+   *  server passes it on to an external source after the hand-in when there is one. */
+  async uploadAnswerFile(aid: string, questionId: string, file: File): Promise<AnswerUpload> {
+    const path = `/api/student/attempts/${enc(aid)}/files?question_id=${enc(questionId)}`;
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const token = getToken("student");
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const sess = getAttemptSession(aid);
+    if (sess) headers["X-FairPlay-Session"] = sess;
+    const form = new FormData();
+    form.append("file", file, file.name);
+    let res: Response;
+    try {
+      res = await fetch(path, { method: "POST", headers: withAppHeaders(headers), body: form });
+    } catch {
+      throw new NetworkError();
+    }
+    let data: unknown = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      if (res.status === 401) {
+        clearToken("student");
+        onUnauthorized("student");
+      }
+      throw errorOf(res.status, data, res.statusText || `Error ${res.status}`);
+    }
+    return toAnswerUpload(data, file);
+  },
 };

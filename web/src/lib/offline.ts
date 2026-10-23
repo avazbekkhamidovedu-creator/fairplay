@@ -290,6 +290,9 @@ const EXAM_DATA_PREFIXES = [
   "fairplay:attempt-view:",
   "fairplay:session:",
   "proctora:marks:",
+  // lib/answerTypes.ts: uploaded file names, code in the other languages
+  "fairplay:answer-files:",
+  "fairplay:code-drafts:",
 ];
 /** Packages fetched for an exam that never showed up: dropped after this long. */
 export const PACKAGE_MAX_AGE_MS = 24 * 3600 * 1000;
@@ -359,7 +362,7 @@ export function pruneExamData(
       if (handedIn || closed || stale) remove(k);
       continue;
     }
-    const att = /^(?:fairplay:attempt-view:|fairplay:session:|proctora:marks:|proctora:attempt:(?:u\d+:)?)(.+)$/.exec(k);
+    const att = /^(?:fairplay:attempt-view:|fairplay:session:|fairplay:answer-files:|fairplay:code-drafts:|proctora:marks:|proctora:attempt:(?:u\d+:)?)(.+)$/.exec(k);
     if (att?.[1] && doneAttempts.has(att[1])) remove(k);
   }
 }
@@ -379,6 +382,13 @@ export function clearOfflineRecord(examId: string): void {
   }
 }
 
+/** 2026-10-23: start + duration, never past the exam's close time (packages built since). */
+export function offlineDeadline(exam: Pick<OfflineExam, "duration_min" | "closes_at">, now: number): number {
+  const end = now + exam.duration_min * 60_000;
+  const closes = exam.closes_at ? new Date(exam.closes_at).getTime() : NaN;
+  return Number.isFinite(closes) ? Math.min(end, closes) : end;
+}
+
 /** Build the local attempt from a decrypted package. */
 export function offlineAttemptView(exam: OfflineExam, now = Date.now()): AttemptView {
   return {
@@ -388,7 +398,7 @@ export function offlineAttemptView(exam: OfflineExam, now = Date.now()): Attempt
     course: exam.course,
     duration_min: exam.duration_min,
     started_at: new Date(now).toISOString(),
-    deadline_at: new Date(now + exam.duration_min * 60_000).toISOString(),
+    deadline_at: new Date(offlineDeadline(exam, now)).toISOString(),
     server_time: new Date(now).toISOString(),
     questions: exam.questions,
     answers: {},
@@ -400,6 +410,8 @@ export function offlineAttemptView(exam: OfflineExam, now = Date.now()): Attempt
     allowed_apps: exam.allowed_apps ?? [],
     // 2026-10-23: the exam tools (older packages: none). Materials need the connection.
     ...(exam.tools ? { tools: exam.tools } : {}),
+    // the exam's source (integration id)
+    ...(exam.source ? { source: exam.source } : {}),
   };
 }
 

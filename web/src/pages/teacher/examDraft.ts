@@ -72,6 +72,9 @@ export interface DraftExam {
   date: string;
   /** HH:MM (local) */
   time: string;
+  /** 2026-10-23: "Close automatically at" (local date / time, "" = never) */
+  closeDate?: string;
+  closeTime?: string;
   shuffle: boolean;
   /** Audit S-03: id of the class that takes the exam ("" = none chosen yet). */
   classId: string;
@@ -109,6 +112,7 @@ export interface DraftErrors {
   course?: string;
   room?: string;
   schedule?: string;
+  closes?: string;
   external?: ExternalSettingsErrors;
   externalPoints?: string;
   byKey: Record<string, QuestionErrors>;
@@ -124,6 +128,9 @@ export const TYPE_LABEL: Record<QuestionType, string> = {
   essay: "Essay",
   external: "Exam website",
   code: "Coding",
+  // newer types (not in the FairPlay editor yet)
+  fill_blank: "Fill in the blank",
+  file_upload: "File upload",
 };
 
 export const KIND_LABEL: Record<DraftKind, string> = {
@@ -250,7 +257,10 @@ export function draftFromExam(exam?: Exam): DraftExam {
       defaultLanguage: "python",
     };
   const sched = splitSchedule(exam.scheduled_at);
+  const closes = splitSchedule(exam.closes_at);
   return {
+    closeDate: closes.date,
+    closeTime: closes.time,
     title: exam.title,
     duration: String(exam.duration_min),
     course: exam.course ?? "",
@@ -323,6 +333,18 @@ export function validateDraft(d: DraftExam): DraftErrors {
   if (d.course.length > 64) errors.course = "Keep the course under 64 characters.";
   if (d.room.length > 64) errors.room = "Keep the room under 64 characters.";
   if (d.time.trim() && !d.date.trim()) errors.schedule = "Pick a date for the start time.";
+  const closeDate = (d.closeDate ?? "").trim();
+  const closeTime = (d.closeTime ?? "").trim();
+  if (d.delivery !== "paper") {
+    // 2026-10-23: no 09:00 default for the close (a date alone would close it that morning)
+    if (closeTime && !closeDate) errors.closes = "Pick a date for the automatic close.";
+    else if (closeDate && !closeTime) errors.closes = "Pick a time for the automatic close.";
+    else if (closeDate) {
+      const closes = joinSchedule(closeDate, closeTime);
+      const startsAt = joinSchedule(d.date, d.time);
+      if (closes && startsAt && closes <= startsAt) errors.closes = "The automatic close must be after the start time.";
+    }
+  }
   if (d.external.mode === "external") {
     const ext = validateExternalSettings(d.external);
     if (Object.keys(ext).length) errors.external = ext;
@@ -465,6 +487,8 @@ export function toExamInput(d: DraftExam): ExamInput {
     course: d.course.trim(),
     room: d.room.trim(),
     scheduled_at: joinSchedule(d.date, d.time),
+    // 2026-10-23: optional automatic close (paper exams never open)
+    closes_at: d.delivery === "paper" ? null : joinSchedule(d.closeDate ?? "", d.closeTime ?? ""),
     shuffle_questions: d.shuffle,
     class_id: d.classId ? Number(d.classId) : null,
     questions: d.external.mode === "external" ? [] : d.questions.map(toQuestionInput),

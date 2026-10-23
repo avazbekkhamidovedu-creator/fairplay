@@ -4,6 +4,7 @@ import { NetworkError, teacherApi } from "../../api/client";
 import type { Exam, LiveFlag, LiveRoom as LiveRoomData, LiveStudent, ReadinessRow } from "../../api/types";
 import { errorText, eventLabel, plural } from "../../components/teacher/util";
 import { clockOffset, formatClock, formatCountdown } from "../../lib/timer";
+import { OpenToEditor, closesAtLabel } from "../../components/teacher/OpenTo";
 
 export const LIVE_POLL_MS = 3000;
 
@@ -237,6 +238,9 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
   const left = latestDeadlineMs(students, now + offset);
   const stillWriting = counts.writing + counts.offline;
   const sub = [exam.course, exam.room && `Room ${exam.room}`, plural(students.length, "student")].filter(Boolean).join(" · ");
+  // 2026-10-23: who may start, and the automatic close (external exams: from their source)
+  const openTo = live?.open_to ?? exam.open_to ?? "all";
+  const closesLabel = closesAtLabel(exam, live?.closes_at !== undefined ? live.closes_at : exam.closes_at);
 
   return (
     <>
@@ -296,6 +300,11 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
       <section className="t-live-tools" aria-label="Invigilator tools">
         {exitCode && <SecretCode code={exitCode} />}
         <OfflineExitBox examId={exam.id} students={students} />
+        {closesLabel && (
+          <div className="t-dark-box" data-testid="auto-close-label">
+            <span className="t-dark-box-label">{closesLabel}</span>
+          </div>
+        )}
       </section>
       {actionError && (
         <div className="alert alert-error" role="alert">
@@ -385,6 +394,15 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
               </ul>
             )}
           </div>
+          <OpenToEditor
+            exam={exam}
+            openTo={openTo}
+            selected={live?.selected}
+            onChanged={(e) => {
+              onExamChange(e);
+              void load();
+            }}
+          />
           <DeviceReadiness examId={exam.id} />
         </section>
 

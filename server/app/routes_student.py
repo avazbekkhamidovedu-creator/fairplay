@@ -14,13 +14,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
-from .grading import exam_questions, grade_attempt, is_answered, num, percent
+from .grading import exam_questions, grade_attempt, graded_externally, is_answered, num, percent
+from .integrations.registry import integration_for
 from .models import Attempt, DeviceCheck, Exam, IntegrityEvent
 from . import app_client as ac
-from .access import member_of_exam, require_member
+from .access import NOT_OPEN_FOR_YOU, is_open_for, member_of_exam, require_member, require_open_for
 from .app_version import check_app_version
-from .schemas import (AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn, HeartbeatIn,
-                      OfflineKeyIn, StartIn, SwapRequestIn)
+from .question_types import AnswerError, check_answer, is_extended
+from .schemas import (SCALAR_ONLY_DETAIL, AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
+                      HeartbeatIn, OfflineKeyIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
 from .services import (LIVE_TTL, attempt_key, attempt_meta_from, attempt_view, cache_attempt,
                        find_attempt, get_attempt_meta, get_exam_cached, get_exam_hot, new_id,
@@ -117,7 +119,9 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                Attempt.id, Attempt.status, Attempt.submitted_at, Attempt.receipt,
                Exam.course, Exam.room, Exam.scheduled_at, Exam.grades_released,
                Exam.total_points, Attempt.score, Exam.mode, Exam.delivery, Exam.start_code,
-               Exam.calculator, Exam.open_book, Exam.websites)       # 2026-10-23: exam tools
+               Exam.calculator, Exam.open_book, Exam.websites,       # 2026-10-23: exam tools
+               Exam.source, Attempt.external_result,                        # integrations
+               Exam.open_to)                                                # 2026-10-23
         .outerjoin(Attempt, and_(Attempt.exam_id == Exam.id, Attempt.student_id == p.user_id))
         # Audit S-03: live exams of the student's classes / LMS courses, plus their own attempts.
         .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None)))
@@ -127,25 +131,41 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         .order_by(Exam.created_at.desc(), Exam.id))).all()
     out = []
     for (eid, title, dur, qc, status, aid, astatus, sub, receipt, course, room, sched, released,
-         total, score, mode, delivery, code, calc, open_book, websites) in rows:
+         total, score, mode, delivery, code, calc, open_book, websites, source, external_result,
+         open_to) in rows:
         mode = mode or "questions"
         delivery = delivery or ("website" if mode == "external" else "computer")
         attempt = None
         if aid is not None:
             released = bool(released)
+            integ = integration_for({"source": source})
+            if integ is not None:          # released per student by the external system
+                released, score, total = integ.released(external_result, total)
             show = released and astatus == "submitted"
             attempt = {"attempt_id": aid, "status": astatus, "submitted_at": iso(sub),
                        "receipt": receipt, "released": released,
                        "percent": percent(score or 0.0, total) if show else None}
-        out.append({"id": eid, "title": title, "duration_min": dur, "question_count": qc,
+        # 2026-10-23: open to selected students only -> listed, but "not open for you yet"
+        # (no package, no start) unless this student already started
+        open_for_me = aid is not None or is_open_for(open_to, p.user_id)
+        row = {"id": eid, "title": title, "duration_min": dur, "question_count": qc,
                     "status": status, "course": course or "", "room": room or "",
+                    "open_for_me": open_for_me,
                     "scheduled_at": iso(sched), "mode": mode, "delivery": delivery,
                     "attempt": attempt,
-                    "package_id": package_id(secret, eid, code, dur) if status == "live" else None,
+                    "package_id": package_id(secret, eid, code, dur) if status == "live" and open_for_me else None,
                     # 2026-10-23: shown on "Before you start"; open_book -> the upload area
                     "tools": student_tools({"mode": mode, "calculator": calc, "open_book": open_book,
-                                            "websites": websites})})
+                                            "websites": websites})}
+        row.update(_source_fields(source))
+        out.append(row)
     return JSONResponse(out)   # perf 0.6.2: plain JSON values; skips FastAPI's re-encoding pass
+
+
+def _source_fields(source: str | None) -> dict:
+    """"source" ("fairplay" or the integration id) + "external_name" when external."""
+    integ = integration_for({"source": source})
+    return {"source": source or "fairplay", **({"external_name": integ.name} if integ else {})}
 
 
 @router.get("/exams/{exam_id}/challenge")
@@ -202,6 +222,12 @@ async def start(exam_id: str, body: StartIn, request: Request,
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
     await require_member(session, exam, p.user_id)   # audit S-03: class / LMS course only
+    integ = integration_for(exam)
+    if integ is not None:
+        await integ.check_start(session, exam_id)
+    # 2026-10-23: open to selected students only -> others are refused here, before the
+    # start code is looked at (not a wrong code), unless they already started (resume).
+    await require_open_for(session, exam_id, p.user_id)
     device_id = await verify_start_proof(store, settings, p.user_id, exam_id, body.client)
     lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
     n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
@@ -219,19 +245,35 @@ async def start(exam_id: str, body: StartIn, request: Request,
         # same transaction as the INSERT (FOR SHARE on Postgres): a close that commits
         # first makes this start fail; a close that comes after waits, then sweeps it.
         row = (await session.execute(
-            select(Exam.status, Exam.duration_min).where(Exam.id == exam_id)
+            select(Exam.status, Exam.duration_min, Exam.open_to).where(Exam.id == exam_id)
             .with_for_update(read=True))).first()
         if row is None or row.status != "live":
             await session.rollback()
             raise HTTPException(409, "Exam is not open")
+        if not is_open_for(row.open_to, p.user_id):   # removed from the selection meanwhile
+            await session.rollback()
+            raise HTTPException(403, NOT_OPEN_FOR_YOU)
         # T-02 (extend vs start): the duration comes from the same locked read, not the
         # cache -- an "Add 10 min" that commits first is included, one that comes after
         # waits for this INSERT (FOR SHARE) and then extends it like everyone else.
         exam = {**exam, "duration_min": row.duration_min}
         started = offline_start(body.offline_started_at, now)
+        extra = timedelta(0)
+        if integ is not None:
+            # integrations: e.g. freeze the version this exam runs from (same transaction
+            # as the first attempt) and the student's extra time
+            extra = await integ.on_start(session, exam_id, p.user_id)
+        deadline = started + timedelta(minutes=exam["duration_min"]) + extra
+        closes = await _closes_at(session, exam_id)
+        if closes is not None:
+            # 2026-10-23: never past the exam's close time (+ this student's extra time)
+            deadline = min(deadline, closes + extra)
+            if deadline <= now:
+                await session.rollback()
+                raise HTTPException(409, "This exam has ended")
         a = Attempt(id=new_id("a"), exam_id=exam_id, student_id=p.user_id, status="in_progress",
                     started_at=started,
-                    deadline_at=started + timedelta(minutes=exam["duration_min"]),
+                    deadline_at=deadline,
                     answers={}, client_seq=-1, updated_at=now,
                     device_id=device_id, session_id=new_session_id(), entries=1,
                     client="app" if device_id else "browser")
@@ -252,9 +294,24 @@ async def start(exam_id: str, body: StartIn, request: Request,
     else:
         await _resume(session, store, a, device_id, exam)
     await cache_attempt(store, a)
-    return JSONResponse({**attempt_view(a, exam, now), "session": a.session_id,   # perf 0.6.2
-                         "min_app_version": min_version,
+    return JSONResponse({**attempt_view(a, exam, now), **await _view_extra(session, a, exam),   # perf 0.6.2
+                         "session": a.session_id, "min_app_version": min_version,
                          "needs_approval": bool(a.pending_resume)})     # S3
+
+
+async def _closes_at(session: AsyncSession, exam_id: str):
+    """The exam's close time from the database (the source's for external exams)."""
+    from .services import exam_closes_at
+    e = await session.get(Exam, exam_id)
+    return exam_closes_at(e) if e is not None else None
+
+
+async def _view_extra(session: AsyncSession, a: Attempt, exam: dict) -> dict:
+    """Exams with file_upload questions: the files this attempt has handed in."""
+    if not any(q.get("type") == "file_upload" for q in exam.get("questions") or []):
+        return {}
+    from .answer_files import files_of_attempt
+    return {"answer_files": await files_of_attempt(session, a.id)}
 
 
 async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | None,
@@ -328,7 +385,7 @@ async def get_attempt(aid: str, request: Request, p: Principal = Depends(require
     exam = await get_exam_cached(get_store(), session, a.exam_id)
     if exam is None:
         raise HTTPException(404, "Attempt not found")
-    return JSONResponse(attempt_view(a, exam, utcnow()))   # perf 0.6.2
+    return JSONResponse({**attempt_view(a, exam, utcnow()), **await _view_extra(session, a, exam)})   # perf 0.6.2
 
 
 @router.put("/attempts/{aid}/answers")
@@ -428,9 +485,38 @@ async def _known_answers(store, session: AsyncSession, aid: str, answers: dict,
             else await get_attempt_meta(store, session, aid))
     exam = await get_exam_hot(store, session, meta["exam_id"]) if meta else None
     ids = set((exam or {}).get("question_ids") or [])
-    if not ids:
+    if ids:
+        answers = {k: v for k, v in answers.items() if k in ids}
+    return await _check_answer_types(session, aid, exam, answers)
+
+
+async def _check_answer_types(session: AsyncSession, aid: str, exam: dict | None,
+                              answers: dict) -> dict:
+    """Extended questions (app.question_types) are checked against the question: option
+    range, blank count, own uploaded files, allowed languages. Plain questions keep taking
+    numbers, strings or null."""
+    ext_q = {q["id"]: q for q in (exam or {}).get("questions") or [] if is_extended(q)}
+    if not ext_q:
+        if any(isinstance(v, (list, dict)) for v in answers.values()):
+            raise HTTPException(422, SCALAR_ONLY_DETAIL)
         return answers
-    return {k: v for k, v in answers.items() if k in ids}
+    file_ids = None
+    if any(ext_q.get(k, {}).get("type") == "file_upload" and v for k, v in answers.items()):
+        from .answer_files import file_ids_of_attempt
+        file_ids = await file_ids_of_attempt(session, aid)
+    out = {}
+    for k, v in answers.items():
+        q = ext_q.get(k)
+        if q is None:
+            if isinstance(v, (list, dict)):
+                raise HTTPException(422, SCALAR_ONLY_DETAIL)
+            out[k] = v
+            continue
+        try:
+            out[k] = check_answer(q, v, None if file_ids is None else file_ids.get(k, set()))
+        except AnswerError as e:
+            raise HTTPException(422, f"{q.get('label') or k}: {e}") from None
+    return out
 
 
 @router.post("/attempts/{aid}/heartbeat")
@@ -545,8 +631,8 @@ async def submit(aid: str, body: AnswersIn, request: Request,
         answers = sent if use_body and not late else stored
         late_answers = changed if late and changed else None
         score, pending, _ = grade_attempt(exam_questions(exam) if exam else [], answers, a.grades)
-        if exam is not None and exam.is_trial:
-            score, pending = None, 0      # the sample exam is never graded
+        if exam is not None and (exam.is_trial or graded_externally(exam)):
+            score, pending = None, 0      # the sample exam / externally graded exams: not here
         # Audit 2026-10-13: only if no newer PUT landed since the read above (client_seq
         # unchanged); otherwise read again and redo the choice with the newer answers.
         res = await session.execute(
@@ -557,6 +643,9 @@ async def submit(aid: str, body: AnswersIn, request: Request,
                 answers=answers, client_seq=max(body.client_seq, seen_seq),
                 answered=count_answered(answers),
                 late=late, late_answers=late_answers, auto_submitted=False, updated_at=now))
+        integ = integration_for(exam) if exam is not None else None
+        if res.rowcount == 1 and integ is not None:   # e.g. outbox row, in this transaction
+            await integ.on_handin(session, aid, exam.id, now, "server")
         await session.commit()
         if res.rowcount == 1 and late:
             mins = int((now - a.deadline_at).total_seconds() // 60)
@@ -825,15 +914,19 @@ async def my_grades(p: Principal = Depends(require_student),
                     session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
         select(Exam.id, Exam.title, Exam.course, Exam.total_points, Exam.grades_released,
-               Attempt.submitted_at, Attempt.score)
+               Attempt.submitted_at, Attempt.score, Exam.source, Attempt.external_result)
         .join(Attempt, Attempt.exam_id == Exam.id)
         .where(Attempt.student_id == p.user_id, Attempt.status == "submitted",
                Exam.is_trial == false())     # the sample exam never counts
         .order_by(Attempt.submitted_at.desc(), Exam.id))).all()
     out = []
-    for eid, title, course, total, released, sub, score in rows:
+    for eid, title, course, total, released, sub, score, source, external_result in rows:
         released = bool(released)
+        integ = integration_for({"source": source})
+        if integ is not None:
+            released, score, total = integ.released(external_result, total)
         out.append({"exam_id": eid, "title": title, "course": course or "",
+                    **_source_fields(source),
                     "submitted_at": iso(sub), "released": released,
                     "score": num(score or 0.0) if released else None,
                     "total_points": num(total),
@@ -862,6 +955,9 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
     e = await session.get(Exam, exam_id)
     if e is None or e.is_trial:
         raise HTTPException(404, "No submitted attempt for this exam")
+    integ = integration_for(e)
+    if integ is not None and integ.grades_externally(e):
+        return await _external_grade_detail(session, e, a, integ)
     if not e.grades_released:
         raise HTTPException(403, "Grades not released yet")
     questions = exam_questions(e)
@@ -898,9 +994,54 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
         if r.get("image"):  # slice 6 D: the student's scanned answer (paper exams)
             out_q[-1]["image"] = r["image"]
     return {
-        "exam_id": e.id, "title": e.title, "course": e.course or "",
+        "exam_id": e.id, "title": e.title, "course": e.course or "", "source": e.source or "fairplay",
         "submitted_at": iso(a.submitted_at), "receipt": a.receipt, "score": num(score),
         "total_points": num(e.total_points), "percent": percent(score, e.total_points),
         "class_average_percent": percent(float(avg), e.total_points) if avg is not None else None,
         "overall_comment": a.overall_comment or "", "questions": out_q,
+    }
+
+
+async def _external_grade_detail(session: AsyncSession, e: Exam, a: Attempt, integ) -> dict:
+    """The student's released external result, in the shape of a FairPlay grade page. No
+    answer keys exist: correct_answer is always null."""
+    released, score, total = integ.released(a.external_result, e.total_points)
+    if not released:
+        raise HTTPException(403, "Grades not released yet")
+    from .services import student_question
+    questions = exam_questions(e)
+    _, _, rows = grade_attempt(questions, a.answers, integ.grades_for(questions, a.external_result))
+    out_q = []
+    for i, (q, r) in enumerate(zip(questions, rows)):
+        pts, mx = float(r["points_awarded"]), q.get("points", 1)
+        if not is_answered(r["given"]) and not pts:
+            status = "unanswered"
+        elif not r["manual"]:
+            status = "pending"            # the external system sent no points for it (yet)
+        elif abs(pts - mx) < 1e-9:
+            status = "correct"
+        elif pts > 0:
+            status = "partial"
+        else:
+            status = "wrong"
+        sq = student_question(q)
+        out_q.append({
+            **sq, "question_id": q["id"], "index": i, "type": q["type"], "prompt": q["prompt"],
+            "options": list(q.get("options") or []), "points": mx,
+            "points_awarded": r["points_awarded"], "status": status, "given": r["given"],
+            "correct_answer": None, "tolerance": None,
+            "comment": r["comment"], "comment_format": "markdown",
+            "rubric": [], "images": [], "rubric_scores": None,
+        })
+    others = (await session.execute(select(Attempt.external_result).where(
+        Attempt.exam_id == e.id, Attempt.status == "submitted"))).scalars().all()
+    pcts = [percent(float(r.get("total") or 0), float(r.get("total_points") or total or 0))
+            for r in others if r and r.get("released")]
+    return {
+        "exam_id": e.id, "title": e.title, "course": e.course or "", **_source_fields(e.source),
+        "submitted_at": iso(a.submitted_at), "receipt": a.receipt, "score": num(score),
+        "total_points": num(total), "percent": percent(score, total),
+        "class_average_percent": round(sum(pcts) / len(pcts), 1) if pcts else None,
+        "overall_comment": "", "questions": out_q,
+        "result_updated_at": (a.external_result or {}).get("updated_at"),
     }

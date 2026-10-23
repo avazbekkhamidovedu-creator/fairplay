@@ -102,6 +102,31 @@ class Exam(Base):
     # Phase 4: language of coding questions that do not set their own (students never pick)
     default_language: Mapped[str] = mapped_column(String(16), nullable=False, default="python",
                                                   server_default="python")
+    # Integrations (app.integrations): "fairplay" (made here) or the id of the external
+    # system the exam comes from (e.g. "dkuoj"), which then owns its content and grades.
+    # external_frozen_version is set by the first student start (later versions never change
+    # a running exam); external_meta is the integration's own data about the exam.
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="fairplay",
+                                        server_default="fairplay")
+    external_key: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    external_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    external_frozen_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    external_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    external_removed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                             server_default=false())
+    external_meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict,
+                                          server_default=text("'{}'"))
+    # 2026-10-23: who may start the exam. NULL = everyone the exam is for (its class, LMS
+    # course or external roster); a list of user ids = only those students (others still
+    # see it as "not open for you yet"). Set when opening and while live.
+    open_to: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # 2026-10-23: the exam closes by itself at this time (UTC). Native exams: optional,
+    # set in the editor. External exams take it from their source
+    # (ExternalSource.closes_at), never from this column. auto_closed: the last close was
+    # the automatic one (app.closing), not the teacher's.
+    closes_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    auto_closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                              server_default=false())
 
 
 class Attempt(Base):
@@ -164,6 +189,9 @@ class Attempt(Base):
     swap_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     swap_old_session: Mapped[str | None] = mapped_column(String(64), nullable=True)
     swap_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Integrations: the result the external system released for this attempt:
+    # {released, total, total_points, updated_at, questions: [{question_id, points, feedback_md}]}
+    external_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class IntegrityEvent(Base):
@@ -238,6 +266,8 @@ class SchoolClass(Base):
     term: Mapped[str | None] = mapped_column(String(80), nullable=True)
     join_code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    # Integrations: "<source>:<id>" of the external class this class mirrors (None = made here)
+    external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class ClassMember(Base):
@@ -283,3 +313,32 @@ class ExamMaterial(Base):
     # 2026-10-23: hex sha256 of `data`, set on upload; the download's ETag ('' on older rows)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class AnswerFile(Base):
+    """A file a student hands in for a file_upload question (bytes in the database: the
+    host's disk is not kept across deploys)."""
+    __tablename__ = "answer_files"
+    __table_args__ = (Index("ix_answer_files_attempt", "attempt_id", "question_id"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("attempts.id", ondelete="CASCADE"), nullable=False)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    question_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+# Integration tables (registered with Base here so create_all sees them)
+from .integrations import models as _integration_models  # noqa: E402,F401
+
+
+class Lease(Base):
+    """2026-10-23: a named lease so one worker at a time runs a background job (e.g. the
+    automatic close, app.closing). holder + expiry; an expired lease can be taken over."""
+    __tablename__ = "leases"
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    holder: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

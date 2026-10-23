@@ -414,6 +414,9 @@ class ExamIn(BaseModel):
     course: str = Field(default="", max_length=64)
     room: str = Field(default="", max_length=64)
     scheduled_at: datetime | None = None
+    # 2026-10-23: optional automatic close (FairPlay exams; external ones take it from
+    # their source). None = closes only when the teacher closes it.
+    closes_at: datetime | None = None
     shuffle_questions: bool = False
     # slice 3: external-website exams
     mode: Literal["questions", "external"] = "questions"
@@ -466,16 +469,23 @@ class ExamIn(BaseModel):
     def _strip(cls, v: str) -> str:
         return v.strip()
 
-    @field_validator("scheduled_at")
+    @field_validator("scheduled_at", "closes_at")
     @classmethod
-    def _naive_utc(cls, v: datetime | None) -> datetime | None:
+    def _naive_utc(cls, v: datetime | None, info) -> datetime | None:
         # Audit S-17: a time without a zone ("2026-10-12T09:00") is ambiguous -- a teacher in
         # China meant 09:00 there, the server would store 09:00 UTC (8 hours off). Refuse it.
         if v is not None and v.tzinfo is None:
-            raise ValueError("scheduled_at needs a time zone, e.g. 2026-10-12T09:00:00+08:00 or ...Z")
+            raise ValueError(f"{info.field_name} needs a time zone, e.g. 2026-10-12T09:00:00+08:00 or ...Z")
         if v is not None:
             v = v.astimezone(timezone.utc).replace(tzinfo=None)
         return v
+
+    @model_validator(mode="after")
+    def _close_after_start(self) -> "ExamIn":
+        # 2026-10-23: an automatic close before the planned start would close it at once
+        if self.closes_at is not None and self.scheduled_at is not None and self.closes_at <= self.scheduled_at:
+            raise ValueError("closes_at must be after scheduled_at (the automatic close comes after the start)")
+        return self
 
     @field_validator("allowed_domains")
     @classmethod
@@ -556,6 +566,38 @@ class StartIn(BaseModel):
 
 
 MAX_ANSWER_INT = 10 ** 300
+SCALAR_ONLY_DETAIL = "answer values must be numbers, strings or null"
+MAX_LIST_ANSWER = 100
+
+
+def check_structured_answer(val) -> None:
+    """Extended answer shapes (app.question_types): a flat list of numbers / strings / null (options, blanks, file
+    ids) or {"language": str, "source": str} (code). Raises ValueError otherwise."""
+    if isinstance(val, list):
+        if len(val) > MAX_LIST_ANSWER:
+            raise ValueError("too many items in one answer")
+        total = 0
+        for x in val:
+            if x is None or isinstance(x, bool):
+                continue
+            if isinstance(x, str):
+                total += len(x)
+            elif isinstance(x, float):
+                if not math.isfinite(x):
+                    raise ValueError("answer numbers must be finite")
+            elif isinstance(x, int):
+                if abs(x) > MAX_ANSWER_INT:
+                    raise ValueError("answer number too large")
+            else:
+                raise ValueError(SCALAR_ONLY_DETAIL)
+        if total > MAX_ANSWER_CHARS:
+            raise ValueError("answer too long")
+        return
+    if set(val) - {"language", "source"} or not isinstance(val.get("source", ""), str) \
+            or not isinstance(val.get("language", ""), str):
+        raise ValueError(SCALAR_ONLY_DETAIL)
+    if len(val.get("source") or "") > MAX_ANSWER_CHARS or len(val.get("language") or "") > 32:
+        raise ValueError("answer too long")
 
 
 class AnswersIn(BaseModel):
@@ -573,7 +615,11 @@ class AnswersIn(BaseModel):
             if isinstance(val, str) and len(val) > MAX_ANSWER_CHARS:
                 raise ValueError("answer too long")
             if isinstance(val, (dict, list)):
-                raise ValueError("answer values must be numbers, strings or null")
+                # extended question types: structured answers (options, blanks, files, code
+                # with its language). Only their shape is checked here; whether the
+                # question takes one is checked against the exam (routes_student).
+                check_structured_answer(val)
+                continue
             # Audit S-04: no inf/NaN, no integers a float can't hold.
             if isinstance(val, float) and not math.isfinite(val):
                 raise ValueError("answer numbers must be finite")
@@ -638,6 +684,39 @@ class EventsIn(BaseModel):
 
 
 # ---------------------------------------------------------------- slice 2 teacher bodies
+MAX_OPEN_TO = 5000
+
+
+class OpenIn(BaseModel):
+    """2026-10-23: POST /api/exams/{id}/open. "all" (default) or the student ids that may
+    start; everyone else sees the exam as not open for them yet."""
+    model_config = ConfigDict(extra="ignore")
+    open_to: Literal["all"] | list[int] = Field(default="all")
+
+    @field_validator("open_to")
+    @classmethod
+    def _limit(cls, v):
+        if isinstance(v, list) and len(v) > MAX_OPEN_TO:
+            raise ValueError(f"at most {MAX_OPEN_TO} students")
+        return v
+
+
+class OpenToIn(BaseModel):
+    """2026-10-23: PUT /api/exams/{id}/open-to. Either the whole selection (open_to) or
+    students to add / remove (safe when two people edit at once)."""
+    model_config = ConfigDict(extra="ignore")
+    open_to: Literal["all"] | list[int] | None = None
+    add: list[int] = Field(default_factory=list, max_length=MAX_OPEN_TO)
+    remove: list[int] = Field(default_factory=list, max_length=MAX_OPEN_TO)
+
+    @field_validator("open_to")
+    @classmethod
+    def _limit(cls, v):
+        if isinstance(v, list) and len(v) > MAX_OPEN_TO:
+            raise ValueError(f"at most {MAX_OPEN_TO} students")
+        return v
+
+
 class ExtendIn(BaseModel):
     minutes: int = Field(ge=1, le=120)
 

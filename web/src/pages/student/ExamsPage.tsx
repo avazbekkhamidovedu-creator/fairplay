@@ -5,7 +5,7 @@ import { NotLockedBanner } from "../../components/LockBanner";
 import { examName, isToday, monthDay, plural, shortDate, shortTime } from "../../components/student/format";
 import { PastExamRow } from "../../components/student/ResultRow";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
-import { pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
+import { NOT_OPEN_FOR_YOU, pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
 
 type Tab = "upcoming" | "past";
 
@@ -99,10 +99,14 @@ export default function ExamsPage() {
 function UpcomingItem({ exam }: { exam: StudentExamSummary }) {
   const navigate = useNavigate();
   const inProgress = exam.attempt?.status === "in_progress";
+  // 2026-10-23: opened for selected students only, and this student isn't one (yet)
+  const notForMe = !inProgress && exam.open_for_me === false;
   const md = monthDay(exam.scheduled_at);
   const when = inProgress
     ? "In progress"
-    : exam.scheduled_at
+    : notForMe
+      ? NOT_OPEN_FOR_YOU
+      : exam.scheduled_at
       ? `Open now · ${isToday(exam.scheduled_at) ? "today" : shortDate(exam.scheduled_at)} ${shortTime(exam.scheduled_at)}`
       : "Open now";
   const meta = [exam.room && `Room ${exam.room}`, `${exam.duration_min} min`, plural(exam.question_count, "question")]
@@ -125,7 +129,11 @@ function UpcomingItem({ exam }: { exam: StudentExamSummary }) {
         <h2>{examName(exam.course, exam.title)}</h2>
         <span className="stu-exam-item-meta">{meta}</span>
       </div>
-      {inProgress ? (
+      {notForMe ? (
+        <span className="stu-muted" data-testid="not-open-for-you">
+          Wait for your teacher
+        </span>
+      ) : inProgress ? (
         <button type="button" className="stu-btn primary" onClick={() => navigate(`/student/exam/${encodeURIComponent(exam.attempt!.attempt_id)}`)}>
           Continue
         </button>

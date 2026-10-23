@@ -814,3 +814,139 @@ use is built into the FairPlay exam page.
   - File: `{id, name, kind: "pdf"|"png"|"jpg"|"txt"|"md", media_type, size, created_at}`.
   - The exam page fetches the files when the exam opens and keeps them in memory; after a reload
     without the connection it says "Materials need the connection" (the exam keeps working).
+
+## Integrations + DKU OJ — FairPlay server as implemented (2026-10-23)
+Binding: `docs/dkuoj-bridge.md` plus the product owner's integration rule (core is
+source-agnostic). Code: `server/app/integrations/` (`base.py` = `ExternalSource` hooks,
+`registry.py` = `integration_for(exam)`, None for FairPlay exams; `dkuoj/` = the DKU OJ source),
+`server/app/question_types.py` (the extended question types), `server/app/answer_files.py`.
+DKU OJ settings are read only by `integrations/dkuoj/config.py`: `DKUOJ_URL`, `DKUOJ_TOKEN` (both
+set = connected), `DKUOJ_SYNC_SECONDS` (120), `DKUOJ_DELIVERY_RPS` (10). `FAIRPLAY_PUBLIC_URL`
+(FairPlay's own address) makes report links absolute (`<it>/teacher/exams/<id>/submissions/<aid>`);
+DKU OJ drops links that are not http(s).
+A switched-off integration keeps its exams readable as read-only archives (they cannot start).
+
+### Extended question types (FairPlay types, usable by FairPlay's own editor later)
+Plain questions keep their exact shapes. A question with the extended fields adds:
+`prompt_format` (`"markdown"`: FairPlay markdown with tables, fenced code, math `~…~` inline and
+`$$…$$` display, images `fp-asset:<name>`; or `"html"`: sanitized HTML), `title`, `label`,
+`partial`, and by type:
+- `mcq`: `multiple`, `true_false`, `shuffle` (the page may shuffle the display; answers stay
+  indexes into `options`). Answer: int index; with `multiple`: list of indexes (stored sorted).
+- `fill_blank` (new type): `blanks` (count), `blank_points`, `case_sensitive`. Answer: list of
+  strings (at most `blanks`).
+- `short`: answer string.
+- `file_upload` (new type): `allowed_extensions`, `max_file_size`, `max_files` (DKU OJ: 1),
+  `instructions_md`. Answer: list of answer-file ids (at most `max_files`).
+- `code`: `languages: [{key, name, runner}]` (runner `python|javascript|c|cpp|java|null`; null =
+  "runs after hand-in"), `templates: {key: code}`, `memory_limit_kb`; also `language` (first
+  runner), `starter_code` (first template), `tests` (samples `{input, expected}`), `time_limit_ms`.
+  Answer: `{"language": "<key>", "source": "…"}` (a bare string = first language).
+Wrong shapes → 422 `"<label>: <reason>"`. Plain questions take only numbers, strings or null.
+Teacher views add `external_ref` (the external system's ids); students never see it. Question
+ids of external exams are opaque (`q_` + 16 hex).
+
+### API fields
+- **Teacher exam**: `"external": null` for FairPlay exams, else `{"source", "name", "url",
+  "read_only", "graded_externally", "package_ready", "start_time", "end_time", "key", "version",
+  "frozen_version", "synced_at", "removed", "connected"}`. The external system's editors see the
+  exam (list, live room, open/close/extend/codes) like its owner. Read-only exams: `PUT` → 409
+  `"This exam comes from <name>. Edit this exam in <name>."`; delete → 409 until the source removed
+  it; grades / comment / release / unrelease → 409 `"This exam is graded in <name>. …"`; `open` →
+  409 until the package is here. Assets: `GET /api/exams/{id}/assets/{name}`.
+- **Results** (`GET /api/exams/{id}/results`): top-level `"external"` (same block or null); per
+  attempt of an external exam `"external_result"` (`{released, total, total_points, updated_at,
+  questions: [{question_id, points, feedback_md}]}` or null) and `"external_delivery"`
+  (`{status: pending|sent|failed|dead, tries, last_error, receipt, next_at, sent_at}` or null);
+  scores are the released external totals (0 before). A dead delivery adds the event
+  `external_delivery_failed` to the attempt.
+- **Grading queue** (`GET /api/exams/{id}/grading`) gains `"external"` (null for FairPlay); graded
+  externally → `{exam_id, title, course, status, grades_released: false, external: {...},
+  questions: [], items: []}`.
+- **Student**: `/api/student/exams` rows, attempt views (start / GET attempt), `/api/student/grades`
+  rows and `/api/student/grades/{id}` carry `"source"` (`"fairplay"` or the integration id) and,
+  when external, `"external_name"`. External attempt views add `"total_points"`. Attempt views of
+  exams with file_upload questions add `"answer_files": [{id, question_id, name, size, sha256,
+  created_at}]`. External grade detail (403 until released by the source): the usual shape plus
+  `result_updated_at`; each question = the student question + `question_id`, `index`,
+  `points_awarded`, `status` (`correct|partial|wrong|unanswered|pending`), `given`, `comment`
+  (markdown), `comment_format: "markdown"`, `correct_answer: null`.
+- **Answer files**: `POST /api/student/attempts/{aid}/files?question_id=<qid>` (multipart `file`,
+  `X-FairPlay-Session`) → 201 `{id, question_id, name, size, sha256, created_at}` (extension / size
+  checked); `GET .../files/{id}` → the bytes.
+- **Assets** `fp-asset:<name>` → `GET /api/student/attempts/{aid}/assets/<name>` (Bearer +
+  `X-FairPlay-Session`; attempt owner, exam live or attempt in progress; ETag = sha256), and for
+  the student's released grade page `GET /api/student/grades/{exam_id}/assets/<name>` (Bearer
+  only; 404 unless the source released that student's result).
+- **Live-room link**: `GET /integrations/<source>/live?…` (DKU OJ: contract §1 parameters) → 303
+  `/teacher/external-live?code=<one-time, 60 s>`; `POST /api/integrations/live/exchange {code}` →
+  `{token, role: "teacher", name, username, exam_id}`. Each signed link works once.
+- `GET /api/integrations/<source>/status` (teacher) → `{enabled, source, name, url, last_run,
+  last_error, exams, deliveries: {pending, failed, sent, dead}, problems: [...]}` (`{enabled:
+  false, source, name}` when not connected).
+
+### DKU OJ client behaviour (aligned with the DKU OJ patch)
+404 = bridge off / unknown; 401, 403, 409, 413, 422, 400 on a hand-in → dead + alert, never
+retried; 5xx / 429 / timeout → retried (30 s doubling to 15 min, 14 days). A package refused
+with 4xx (e.g. 422 over 5 MB) is not asked for again until the listing shows a new version; 425
+waits for `Retry-After`. Exam cursor = newest `updated_at` seen (`changed_since` is strictly
+later); results cursor = the response's `server_time`. Removed exams (incremental polls only)
+are marked removed and keep their editors. One upload per file_upload answer; a blank code or
+short answer is not sent.
+
+## Open to selected students + automatic close (2026-10-23)
+Generic for every exam (FairPlay and external). Code: `server/app/access.py` (open_to),
+`server/app/closing.py` (the one close path, the automatic close loop), hooks in
+`server/app/integrations/base.py`.
+
+### Open to everyone or to selected students
+- Exam column `open_to` (JSON, null = everyone the exam is for). API value: `"all"` or the sorted
+  list of student user ids. Teacher exam view (`GET/PUT /api/exams/{id}`, open, close, …) adds
+  `"open_to"`.
+- `POST /api/exams/{id}/open` takes an optional body `{"open_to": "all" | [ids]}`; no body =
+  `"all"` (as before; a re-open without a body opens to everyone again). Every id must be a student
+  of the exam, else 422 `"Not a student of this exam: <ids>"`.
+- `GET /api/exams/{id}/students` → `[{id, username, name, started}]`: the class members, the
+  linked LMS course's members, or the external source's roster (`ExternalSource.roster_user_ids`).
+- `PUT /api/exams/{id}/open-to` `{"open_to": "all" | [ids]}` replaces the selection, or
+  `{"add": [ids], "remove": [ids]}` changes it (removing from "all" = everyone else). Any status
+  except paper; returns the teacher exam. Removing a student who already started never stops
+  their attempt; it only blocks a new start.
+- `GET /api/exams/{id}/live` adds `"open_to"`, `"selected"` (`[{id, username, name, started}]`, or
+  null when open to all) and `"closes_at"`.
+- Student start: a student who is not selected and has no attempt gets 403
+  `{"detail": "This exam isn't open for you yet"}` before the app proof and the start code are
+  checked (not a wrong code, no lockout). Checked again in the start's locked transaction (a
+  removal that commits first wins). A resume of an existing attempt is never blocked. The offline
+  package and `package-key` give the same 403.
+- `/api/student/exams` rows add `"open_for_me"` (false = live but not open for this student yet;
+  `package_id` is then null). Rows of exams the student already started are always true.
+
+### Automatic close
+- Exam columns `closes_at` (naive UTC, nullable) and `auto_closed` (bool). Effective close time:
+  FairPlay exams their own `closes_at` (exam editor "Close automatically at", optional, `ExamIn.
+  closes_at` with a time zone, like `scheduled_at`); external exams `ExternalSource.closes_at(exam)`
+  (DKU OJ: the synced `end_time`, no extra call), never the column. Teacher exam view adds
+  `"closes_at"` (effective, ISO or null) and `"auto_closed"`.
+- New attempts: `deadline_at = min(start + duration + extra, closes_at + extra)` (extra = the
+  student's extra time from the source, 0 for FairPlay exams). A new start with no time left →
+  409 `"This exam has ended"`. The attempt view's `deadline_at` is this capped value.
+- The offline package plaintext adds `"closes_at"`; an offline start counts down to
+  min(start + duration, closes_at).
+- Background loop (lifespan, every 15 s; one worker via the `leases` row `"autoclose"`): a live
+  exam closes once now ≥ closes_at + the largest extra time (`ExternalSource.max_extra_time`) +
+  LATE_GRACE (60 s) and every attempt still writing is past its own deadline + LATE_GRACE (so
+  "Add 10 min" is honoured). It uses the teacher's Close path (`closing.close_exam_now`):
+  conditional status flip (two runners, or a runner and the teacher, close once), auto-submit of
+  in-progress attempts, outbox rows for external exams, `auto_closed = true`, and the bookkeeping
+  event `exam_closed_automatically` on each attempt it handed in (not a flag).
+- Opening stays manual. Re-opening a FairPlay exam after its close time clears `closes_at` (the
+  teacher closes it by hand); an external exam whose source end time has passed can't be opened
+  (409 `"The end time set in <name> has passed. …"`).
+- Review fixes (2026-10-23): a never-opened (draft) FairPlay exam whose close time has passed is
+  not opened (409 `"The automatic close time has passed. …"`); `ExamIn.closes_at` must be after
+  `scheduled_at` when both are sent (422). `PUT /open-to` with nothing to add or remove keeps
+  `"all"`. A close that stopped between the status flip and the hand-in (crash) is finished by
+  the loop: exams closed in the last 2 days (and over 30 s ago) with attempts still writing get
+  them handed in (outbox rows for external exams). DKU OJ moving its end time later while the
+  exam is live moves the capped deadlines of running attempts with it (never shorter).

@@ -1,0 +1,334 @@
+/* Rich question text (markdown / HTML), the newer answer controls, and the notes on exams
+   from another system ("Edit this exam in …" / "Graded in …").
+   Uses the shared tokens (tokens.css); student classes keep the stu- look. */
+
+/* ---------- rendered markdown ---------- */
+
+.fp-md {
+  font-family: var(--serif);
+  color: var(--text);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.stu-prompt.fp-md {
+  white-space: normal;
+  font-size: 20px;
+}
+.fp-md > :first-child {
+  margin-top: 0;
+}
+.fp-md > :last-child {
+  margin-bottom: 0;
+}
+.fp-md p,
+.fp-md ul,
+.fp-md ol,
+.fp-md blockquote,
+.fp-md table,
+.fp-md pre {
+  margin: 0 0 0.8em;
+}
+.fp-md h1,
+.fp-md h2,
+.fp-md h3,
+.fp-md h4 {
+  font-family: var(--font);
+  font-size: 1em;
+  font-weight: 700;
+  margin: 1em 0 0.5em;
+}
+.fp-md.inline {
+  display: inline;
+}
+.fp-md img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.fp-md .fp-md-img-missing {
+  display: inline-block;
+  min-width: 120px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+.fp-md table {
+  border-collapse: collapse;
+  font-family: var(--font);
+  font-size: 0.85em;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.fp-md th,
+.fp-md td {
+  border: 1px solid var(--border-strong);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.fp-md th {
+  background: var(--surface-2);
+  font-weight: 700;
+}
+.fp-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85em;
+  background: var(--surface-2);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.fp-md pre.fp-md-code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.fp-md pre.fp-md-code code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.fp-md blockquote {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 12px;
+  color: var(--text-2);
+}
+.fp-md a {
+  color: var(--primary);
+}
+.fp-md a.fp-md-link-off {
+  color: inherit;
+  text-decoration: underline dotted;
+  cursor: not-allowed;
+}
+.fp-md-display {
+  overflow-x: auto;
+  margin: 0 0 0.8em;
+}
+.fp-md .katex {
+  font-size: 1.05em;
+}
+.fp-md-tex-error {
+  color: var(--danger);
+}
+/* highlight.js tokens: same colours as the code editor */
+.fp-md .hljs-keyword,
+.fp-md .hljs-built_in,
+.fp-md .hljs-literal {
+  color: #2f4bd8;
+  font-weight: 600;
+}
+.fp-md .hljs-string {
+  color: #16794c;
+}
+.fp-md .hljs-number {
+  color: #b4570b;
+}
+.fp-md .hljs-comment {
+  color: #6b7686;
+  font-style: italic;
+}
+.fp-md .hljs-title,
+.fp-md .hljs-title.function_ {
+  color: #7a3fb8;
+}
+.fp-md .hljs-type,
+.fp-md .hljs-class {
+  color: #0e7490;
+}
+.fp-md .hljs-meta {
+  color: #8f4508;
+}
+
+/* ---------- question head ---------- */
+
+.stu-qhead-pts .stu-partial {
+  color: var(--success);
+  font-weight: 600;
+}
+.stu-qtitle {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+/* ---------- multiple answers (checkboxes) ---------- */
+
+.stu-option[role="checkbox"] .stu-option-letter {
+  border-radius: 6px;
+}
+.stu-option[role="checkbox"][aria-checked="true"] {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+  background: var(--primary-tint);
+}
+.stu-option[role="checkbox"][aria-checked="true"] .stu-option-letter {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+/* ---------- true / false ---------- */
+
+.stu-tf {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  max-width: 560px;
+}
+.stu-tf .stu-option {
+  min-height: 84px;
+  justify-content: center;
+  align-items: center;
+  font-family: var(--font);
+  font-size: 20px;
+  font-weight: 700;
+}
+@media (max-width: 520px) {
+  .stu-tf {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- fill in the blank ---------- */
+
+.stu-blank {
+  display: inline-block;
+  vertical-align: baseline;
+  min-width: 7em;
+  width: 9em;
+  max-width: 100%;
+  height: 1.7em;
+  margin: 0 0.2em;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid var(--border-strong);
+  border-radius: 4px 4px 0 0;
+  background: var(--primary-tint-2);
+  font-family: var(--serif);
+  font-size: 0.95em;
+  color: var(--text);
+}
+.stu-blank:focus-visible {
+  outline: none;
+  border-bottom-color: var(--primary);
+  background: var(--primary-tint);
+}
+.stu-blank-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.stu-blank-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.stu-blank-list .stu-option-letter {
+  border-radius: 6px;
+}
+
+/* ---------- file upload ---------- */
+
+.stu-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 620px;
+}
+.stu-upload-drop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 18px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--r-tile);
+  background: var(--surface-2);
+}
+.stu-upload-rules {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.stu-upload-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stu-upload-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  background: #fff;
+}
+.stu-upload-file .name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.stu-upload-file .size {
+  font-size: 13px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- coding: language picker ---------- */
+
+.stu-cq-langpick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.stu-cq-langpick select {
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 99px;
+  border: 1px solid var(--primary-soft);
+  background: var(--primary-tint);
+  color: var(--primary);
+  font: inherit;
+  font-weight: 700;
+}
+
+/* ---------- exams from another system ---------- */
+
+.fp-external-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.fp-external-feedback {
+  margin-top: 4px;
+  padding: 12px 14px;
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  border: 1px solid var(--divider);
+}
