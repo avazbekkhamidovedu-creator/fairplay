@@ -11,8 +11,11 @@ separate kind with its own key, refused by every other route). With it:
    NetID's account and returns the normal sign-in answer.
 
 Every failure of step 1 gives ONE generic message. Limits: 5 tries a minute per set-up
-token; 30 failed tries an hour per class login disable it. Passwords and tokens are never
-logged or stored in plain text.
+token; 5 failed tries an hour for the same typed NetID refuse that NetID (same message)
+for the hour; failed tries for 40 DIFFERENT NetIDs in an hour (someone guessing who is in
+the class) disable the class login. A NetID that is already set up is refused with the
+same message but is not counted. Passwords and tokens are never logged or stored in
+plain text.
 """
 from __future__ import annotations
 
@@ -50,7 +53,9 @@ SETUP_TTL_S = 20 * 60
 IDENTITY_TTL_S = 10 * 60
 CLASS_LOGIN_DAYS = 14
 TRIES_PER_MINUTE = 5
-FAILS_PER_HOUR = 30
+FAILS_PER_NETID_HOUR = 5        # per class login + typed NetID: then that NetID waits the hour
+DISTINCT_NETIDS_HOUR = 40       # per class login: failing NetIDs that disable it (an attack)
+FAIL_WINDOW_S = 3600
 ACCOUNT_TRIES_PER_MINUTE = 10
 
 EXPIRED = "This class login has expired. Ask your professor for a new one."
@@ -140,8 +145,8 @@ def new_login_username(class_name: str) -> str:
 
 def new_login_password() -> str:
     while True:
-        pw = "-".join(secrets.choice(WORDS) for _ in range(3)) + "-" + f"{secrets.randbelow(100):02d}"
-        if len(pw) >= 14:
+        pw = "-".join(secrets.choice(WORDS) for _ in range(4)) + "-" + f"{secrets.randbelow(1000):03d}"
+        if len(pw) >= 20:
             return pw
 
 
@@ -253,17 +258,40 @@ async def _active_login(session: AsyncSession, login_id) -> ClassLogin:
     return cl
 
 
-async def _failed(session: AsyncSession, cl: ClassLogin, netid: str) -> None:
-    """Count a failed identify; the 30th in an hour disables the class login."""
-    store = get_store()
-    n = await store.incr(f"setup:fail:{cl.id}", 3600)
-    cl.failed_count = int(cl.failed_count or 0) + 1
-    await add_event(session, cl.class_id, "setup_failed", login_id=cl.id, netid=netid.lower()[:64])
-    if n >= FAILS_PER_HOUR and cl.disabled_at is None:
-        cl.disabled_at, cl.disabled_reason = utcnow(), "too_many_failures"
-        await add_event(session, cl.class_id, "login_locked", login_id=cl.id,
-                        detail=f"{FAILS_PER_HOUR} failed set-up tries in an hour")
-        log.warning("DKU OJ class login %s disabled after %d failed set-ups", cl.id, n)
+def _typed_netid(netid: str) -> str:
+    return netid.strip().lower()[:64]
+
+
+def _netid_fail_key(cl: ClassLogin, typed: str) -> str:
+    return f"setup:fail:{cl.id}:nid:{hashlib.sha256(typed.encode()).hexdigest()[:32]}"
+
+
+async def _netid_blocked(cl: ClassLogin, typed: str) -> bool:
+    return int(await get_store().get(_netid_fail_key(cl, typed)) or 0) >= FAILS_PER_NETID_HOUR
+
+
+async def _failed(session: AsyncSession, cl: ClassLogin, netid: str, attack: bool = True,
+                  detail: str = "") -> None:
+    """Record a failed identify (professors see every one as an event). attack=False (the
+    NetID is on the list but already set up) counts nowhere. Otherwise: per typed NetID
+    (FAILS_PER_NETID_HOUR in an hour block it for the hour), and the number of DIFFERENT
+    failing NetIDs: the DISTINCT_NETIDS_HOUR-th in an hour disables the class login."""
+    typed = _typed_netid(netid)
+    await add_event(session, cl.class_id, "setup_failed", login_id=cl.id, netid=typed, detail=detail)
+    if attack:
+        store = get_store()
+        cl.failed_count = int(cl.failed_count or 0) + 1
+        n = await store.incr(_netid_fail_key(cl, typed), FAIL_WINDOW_S)
+        if n == FAILS_PER_NETID_HOUR:
+            await add_event(session, cl.class_id, "setup_netid_blocked", login_id=cl.id, netid=typed,
+                            detail=f"{FAILS_PER_NETID_HOUR} failed set-up tries for this NetID in an hour")
+        distinct = (await store.incr(f"setup:fail:{cl.id}:distinct", FAIL_WINDOW_S)
+                    if n == 1 else int(await store.get(f"setup:fail:{cl.id}:distinct") or 0))
+        if distinct >= DISTINCT_NETIDS_HOUR and cl.disabled_at is None:
+            cl.disabled_at, cl.disabled_reason = utcnow(), "too_many_failures"
+            await add_event(session, cl.class_id, "login_locked", login_id=cl.id,
+                            detail=f"failed set-up tries for {DISTINCT_NETIDS_HOUR} different NetIDs in an hour")
+            log.warning("DKU OJ class login %s disabled after failed set-ups for %d NetIDs", cl.id, distinct)
     await session.commit()
 
 
@@ -280,6 +308,10 @@ async def identify(body: IdentifyIn, request: Request, session: AsyncSession = D
         raise HTTPException(429, TOO_MANY)
     cl = await _active_login(session, tok.get("cl"))
     class_id = cl.class_id
+    typed = _typed_netid(body.netid)
+    if await _netid_blocked(cl, typed):     # this NetID failed too often this hour (no DKU OJ call)
+        await session.commit()
+        raise HTTPException(400, GENERIC)
     await session.commit()      # no database connection held while DKU OJ answers
     try:
         async with DkuojClient.from_config(source.config) as client:
@@ -289,7 +321,6 @@ async def identify(body: IdentifyIn, request: Request, session: AsyncSession = D
             log.warning("DKU OJ roster of class %s not available: %s", class_id, err.message)
             raise HTTPException(503, OJ_DOWN) from None
         roster = {"students": []}
-    typed = body.netid.strip().lower()
     match = None
     for st in roster.get("students") or []:
         if isinstance(st, dict) and isinstance(st.get("username"), str) and st["username"].strip().lower() == typed:
@@ -303,9 +334,12 @@ async def identify(body: IdentifyIn, request: Request, session: AsyncSession = D
     if ok:
         u = await find_by_netid(session, netid)
         if u is not None and (u.role != "student" or is_set_up(u)):
-            ok = False
+            # on the list with the right name, but already set up (or not a student account
+            # here): the same message, not counted as guessing
+            await _failed(session, cl, netid, attack=False, detail="already set up")
+            raise HTTPException(400, GENERIC)
     if not ok:
-        await _failed(session, cl, body.netid.strip())
+        await _failed(session, cl, body.netid)
         raise HTTPException(400, GENERIC)
     await session.commit()      # find_by_netid may have linked an older account
     name = " ".join(x for x in (str(match.get("first_name") or "").strip(),

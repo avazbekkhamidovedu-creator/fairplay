@@ -102,12 +102,25 @@ async def rotate_start_code(session: AsyncSession, e: Exam) -> None:
 
 
 async def extend_exam(session: AsyncSession, e: Exam, minutes: int) -> None:
-    """More time for everyone: the duration and every attempt still writing."""
+    """More time for everyone: the duration, every attempt still writing and, for an
+    external exam with a close time, that close time."""
     if e.status != "live":
         raise HTTPException(409, "Exam is not live")
     delta = timedelta(minutes=minutes)
     e.duration_min += minutes
     e.updated_at = utcnow()
+    if integration_for(e) is not None and exam_closes_at(e) is not None:
+        # External exams close at the source's end time (e.g. DKU OJ's): the added minutes
+        # move that close time too (integration closes_at adds external_meta
+        # extra_close_minutes), so students starting now get the time and the countdown
+        # and automatic close follow.
+        meta = dict(e.external_meta or {})
+        try:
+            before = max(0, int(meta.get("extra_close_minutes") or 0))
+        except (TypeError, ValueError):
+            before = 0
+        meta["extra_close_minutes"] = before + minutes
+        e.external_meta = meta
     rows = (await session.execute(
         select(Attempt.id, Attempt.deadline_at)
         .where(Attempt.exam_id == e.id, Attempt.status == "in_progress"))).all()

@@ -66,13 +66,15 @@ class DkuojSource(ExternalSource):
         return select(OjEditor.exam_id).where(OjEditor.user_id == user_id)
 
     def closes_at(self, exam):
-        """DKU OJ's end time from the last sync (no call to DKU OJ)."""
+        """DKU OJ's end time from the last sync (no call to DKU OJ), plus the minutes added
+        with "Add time" (external_meta extra_close_minutes, exam_control.extend_exam)."""
         from ...timeutil import parse_iso
+        from .sync import extra_close_minutes
         end = (getattr(exam, "external_meta", None) or {}).get("end_time")
         if not isinstance(end, str) or not end:
             return None
         try:
-            return parse_iso(end)
+            return parse_iso(end) + timedelta(minutes=extra_close_minutes(exam))
         except ValueError:
             return None
 

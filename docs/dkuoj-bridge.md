@@ -73,7 +73,7 @@ All JSON, UTF-8, times ISO-8601 UTC with `Z`.
 
 **`GET exams/<key>/assets/<name>`** — the file (only names listed in the current package; from 24 h before start). `ETag: "<sha256>"`. ≤ 10 MB each, ≤ 50 MB per exam.
 
-**`POST exams/<key>/uploads`** — raw body = one file; headers `X-Username`, `X-Question-Id`, `X-Filename`, `X-Sha256`, `Content-Length`. Checks size/extension against the problem. → `{"upload_id":"up_…"}`. Unclaimed uploads deleted after 15 days (longer than the 14 days FairPlay retries a hand-in).
+**`POST exams/<key>/uploads?username=<netid>&question_id=<id>&filename=<name>`** — raw body = one file; headers `X-Sha256`, `Content-Length` (v2: the student, question and file name are query parameters, which the signature covers; the old `X-Username` / `X-Question-Id` / `X-Filename` headers are not read). Checks size/extension against the problem. → `{"upload_id":"up_…"}`. Unclaimed uploads deleted after 15 days (longer than the 14 days FairPlay retries a hand-in).
 
 **`POST exams/<key>/submissions`** — one student's final answers; ≤ 2 MB.
 ```json

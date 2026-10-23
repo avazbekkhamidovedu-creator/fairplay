@@ -179,12 +179,14 @@ class DkuojClient:
 
     async def upload(self, key: str, username: str, question_id: str, filename: str,
                      data: bytes, sha256: str, attempts: int = MAX_ATTEMPTS) -> str:
+        # who / which question / file name go in the query string, which the signature
+        # covers (v2 §1); the file's sha256 stays a header (DKU OJ checks it against the
+        # signed body).
         resp = await self.request(
             "POST", f"exams/{key}/uploads", content=data, attempts=attempts,
             ok=(200, 201),
-            headers={"X-Username": username, "X-Question-Id": question_id,
-                     "X-Filename": _header_safe(filename), "X-Sha256": sha256,
-                     "Content-Type": "application/octet-stream"})
+            params={"username": username, "question_id": question_id, "filename": _filename_safe(filename)},
+            headers={"X-Sha256": sha256, "Content-Type": "application/octet-stream"})
         up = self._json(resp).get("upload_id")
         if not isinstance(up, str) or not up:
             raise OjError("DKU OJ did not return an upload id", resp.status_code)
@@ -206,7 +208,7 @@ class DkuojClient:
         return self._json(await self.request("GET", f"exams/{key}/results", params=params))
 
 
-def _header_safe(name: str) -> str:
-    """HTTP header values are latin-1: keep ASCII, replace the rest (the extension stays)."""
-    out = "".join(ch if 32 <= ord(ch) < 127 else "_" for ch in name)
+def _filename_safe(name: str) -> str:
+    """No control characters, at most 200 characters (the extension stays at the end)."""
+    out = "".join(ch for ch in name if ord(ch) >= 32 and ord(ch) != 127)
     return out[:200] or "file"

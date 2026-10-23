@@ -105,20 +105,48 @@ def _netid(p: dict) -> str | None:
     return u[:64] if u and not u.startswith("__") and ":" not in u else None
 
 
+def extra_close_minutes(e: Exam) -> int:
+    """Minutes added with "Add time" while the exam ran (exam_control.extend_exam): the
+    close time is DKU OJ's end time plus these (source.closes_at)."""
+    try:
+        return max(0, int((e.external_meta or {}).get("extra_close_minutes") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def placeholder_username(netid: str) -> str:
     """The username of an account that never set up: "oj:<netid>" can't be typed as a
     username (setup usernames are [a-z0-9._-]) and its password is unusable."""
     return f"oj:{netid}"[:64]
 
 
+async def legacy_account(session: AsyncSession, netid: str) -> User | None:
+    """An older account named like the NetID that has no netid yet, but ONLY if the bridge
+    made or used it before: the v1 sync matched by username, creating accounts with
+    username = NetID and the unusable IMPORTED_PASSWORD, or taking an existing account,
+    which then has roster / editor rows. A normal FairPlay account that only happens to
+    have the same username (e.g. the dev server's demo alice/bob/carol, with real
+    passwords) is never adopted: the NetID gets its own "oj:<netid>" account instead."""
+    if not netid:
+        return None
+    u = (await session.execute(select(User).where(User.username == netid, User.netid.is_(None)))
+         ).scalar_one_or_none()
+    if u is None:
+        return None
+    if u.password_hash == IMPORTED_PASSWORD:
+        return u
+    used = (await session.execute(select(OjRosterEntry.id).where(OjRosterEntry.user_id == u.id).limit(1))).first() \
+        or (await session.execute(select(OjEditor.id).where(OjEditor.user_id == u.id).limit(1))).first()
+    return u if used else None
+
+
 async def find_by_netid(session: AsyncSession, netid: str) -> User | None:
-    """The account of a NetID. Older databases: an account whose username is the NetID
-    and that has no netid yet is linked to it now (once)."""
+    """The account of a NetID. Older databases: a v1 bridge account (legacy_account) is
+    linked to it now (once)."""
     u = (await session.execute(select(User).where(User.netid == netid))).scalar_one_or_none()
     if u is not None:
         return u
-    u = (await session.execute(select(User).where(User.username == netid, User.netid.is_(None)))
-         ).scalar_one_or_none()
+    u = await legacy_account(session, netid)
     if u is not None:
         u.netid = netid
         await session.flush()
@@ -126,16 +154,16 @@ async def find_by_netid(session: AsyncSession, netid: str) -> User | None:
 
 
 async def ensure_user(session: AsyncSession, person: dict, role: str) -> User | None:
-    """Match by netid (= DKU OJ username); create a missing one with the placeholder
-    username and an unusable password (it can't sign in until the student sets up). An
-    existing account with another role is left alone (None)."""
+    """Match by netid (= DKU OJ username), or a v1 bridge account (legacy_account); create
+    a missing one with the placeholder username and an unusable password (it can't sign
+    in until the student sets up). An existing account with another role is left alone
+    (None)."""
     netid = _netid(person)
     if netid is None:
         return None
     u = (await session.execute(select(User).where(User.netid == netid))).scalar_one_or_none()
     if u is None:
-        legacy = (await session.execute(select(User).where(User.username == netid, User.netid.is_(None)))
-                  ).scalar_one_or_none()
+        legacy = await legacy_account(session, netid)
         if legacy is not None:
             if legacy.role != role:
                 log.warning("DKU OJ %s %s is a FairPlay %s here; skipped", role, netid, legacy.role)
@@ -203,7 +231,7 @@ def _duration_min(item: dict) -> int:
 META_KEYS = ("course", "classes", "start_time", "end_time", "time_limit_seconds", "results_hidden",
              "package_version", "updated_at", "settings")
 KEEP_META = ("results_cursor", "package_retry_at", "package_error", "package_failed_version",
-             "description_md", "assets")
+             "description_md", "assets", "extra_close_minutes")
 
 
 # ---------------------------------------------------------------- listing -> exam
@@ -257,7 +285,8 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
         e.title = str(item.get("name") or key)[:200]
         e.course = str((item.get("course") or {}).get("name") or "")[:64]
         e.scheduled_at = _time(item.get("start_time"))
-        e.duration_min = _duration_min(item)
+        # minutes added with "Add time" stay added (exam_control.extend_exam)
+        e.duration_min = _duration_min(item) + extra_close_minutes(e)
         for f, v in _settings(item).items():
             setattr(e, f, v)
     e.updated_at = now
@@ -269,7 +298,7 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
     await _classes(session, e, item, [u for u, _ in students])
     new_end = _time(meta.get("end_time"))
     if e.status == "live" and old_end is not None and new_end is not None and new_end > old_end:
-        e.moved_attempts = await follow_end_time(session, e, new_end)
+        e.moved_attempts = await follow_end_time(session, e, new_end + timedelta(minutes=extra_close_minutes(e)))
     return e
 
 

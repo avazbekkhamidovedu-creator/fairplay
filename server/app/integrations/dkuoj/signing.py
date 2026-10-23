@@ -23,9 +23,10 @@ import time
 OJ_TO_FP = "oj->fp"          # DKU OJ signs, FairPlay checks
 FP_TO_OJ = "fp->oj"          # FairPlay signs, DKU OJ checks
 MAX_SKEW_S = 60
-NONCE_TTL_S = 120
-NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
-SIG_RE = re.compile(r"^[0-9a-f]{64}$")
+NONCE_TTL_S = 180            # > the whole window a timestamp is accepted in (2 x MAX_SKEW_S), with margin
+TS_RE = re.compile(r"[0-9]{1,12}")       # ASCII digits only (str.isdigit() also takes "²")
+NONCE_RE = re.compile(r"[0-9a-f]{32}")
+SIG_RE = re.compile(r"[0-9a-f]{64}")
 MAX_ACTING_USER = 150
 
 H_TIMESTAMP = "X-FP-Timestamp"
@@ -86,7 +87,7 @@ async def verify(token: str, direction: str, method: str, path: str, headers, bo
     nonce = (headers.get(H_NONCE) or "").strip()
     sig = (headers.get(H_SIGNATURE) or "").strip().lower()
     acting = headers.get(H_ACTING) or ""
-    if not ts_raw.isdigit() or len(ts_raw) > 12 or not NONCE_RE.match(nonce) or not SIG_RE.match(sig):
+    if not TS_RE.fullmatch(ts_raw) or not NONCE_RE.fullmatch(nonce) or not SIG_RE.fullmatch(sig):
         raise BadSignature()
     if len(acting) > MAX_ACTING_USER or any(ord(ch) < 32 or ord(ch) == 127 for ch in acting):
         raise BadSignature()

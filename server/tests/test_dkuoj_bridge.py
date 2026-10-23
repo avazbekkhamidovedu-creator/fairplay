@@ -150,7 +150,8 @@ class FakeOJ:
         if p == f"exams/{KEY}/uploads":
             data = req.content
             assert hashlib.sha256(data).hexdigest() == req.headers["x-sha256"]
-            assert req.headers["x-question-id"] == "p000127"
+            assert q["question_id"] == ["p000127"] and q["username"] and q["filename"]
+            assert "x-question-id" not in req.headers and "x-username" not in req.headers
             up = f"up_{len(self.uploads) + 1}"
             self.uploads[up] = data
             return httpx.Response(200, json={"upload_id": up})
@@ -205,9 +206,24 @@ def oj(tmp_path, static_dir, fake):
         yield c
 
 
-def run(c, now=None):
+DEMO_LINKED = ("alice", "bob", "carol", "teacher")
+
+
+def run(c, now=None, link_demo=True):
+    """One sync pass. link_demo: the seeded demo accounts named like the fake DKU OJ's
+    users stand for accounts linked to those NetIDs before (their netid is set), so the
+    tests sign in as them; the sync never adopts a normal account by its username alone
+    (test_dkuoj_bridge_v2.test_sync_never_adopts_a_normal_account)."""
     async def go():
+        from sqlalchemy import update
         from app.db import get_database
+        from app.models import User
+        if link_demo:
+            async with get_database().sessionmaker() as s:
+                for name in DEMO_LINKED:
+                    await s.execute(update(User).where(User.username == name, User.netid.is_(None))
+                                    .values(netid=name))
+                await s.commit()
         return await ojsync.run_once(get_database().sessionmaker, now=now)
     return c.portal.call(go)
 
@@ -761,11 +777,14 @@ class RealShapeOJ:
                 return httpx.Response(422, json={"detail": "The exam package is larger than 5 MB; reduce the statements or images."})
             return httpx.Response(200, json=REAL_PACKAGE, headers={"ETag": '"0f1e2d3c4b5a6978"'})
         if p == "exams/fpexam/uploads":
-            for h in ("x-username", "x-question-id", "x-filename", "x-sha256"):
-                assert req.headers.get(h), h
+            # v2 §1: who / which question / file name are in the signed query string
+            for name in ("username", "question_id", "filename"):
+                assert q.get(name) and q[name][0], name
+                assert f"x-{name.replace('_', '-')}" not in req.headers, name
+            assert req.headers.get("x-sha256")
             assert hashlib.sha256(req.content).hexdigest() == req.headers["x-sha256"]
             up = "up_" + "%024x" % (len(self.uploads) + 1)
-            self.uploads[up] = req.headers["x-filename"]
+            self.uploads[up] = q["filename"][0]
             return httpx.Response(200, json={"upload_id": up})
         if p == "exams/fpexam/submissions":
             body = json.loads(req.content)

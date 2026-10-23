@@ -12,10 +12,11 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ... import exam_control as control
@@ -41,6 +42,8 @@ MAX_WARNINGS = 5
 NOT_EDITOR = "You are not an editor of this exam in FairPlay yet. Wait two minutes and try again."
 NOT_SYNCED = "This exam has not arrived in FairPlay yet. Try again in two minutes."
 BAD_SIGNATURE = "bad signature"
+NOT_IN_CLASS = ("This student is not linked to this class in FairPlay: not set up with its class login "
+                "and not on the student list of one of its exams.")
 
 
 # ---------------------------------------------------------------- signed calls
@@ -104,13 +107,18 @@ def _str(data: dict, name: str, max_len: int = 200) -> str:
     return v.strip()[:max_len]
 
 
-async def _user_by_netid(session: AsyncSession, netid: str) -> User | None:
+async def _user_by_netid(session: AsyncSession, netid: str, role: str = "student") -> User | None:
+    """The account of a NetID. Fallback for a v1 bridge account not linked by a sync yet
+    (sync.legacy_account), and only with `role`: a student NetID can never land on a
+    teacher account by its username (and the other way round)."""
+    from .sync import legacy_account
     if not netid:
         return None
     u = (await session.execute(select(User).where(User.netid == netid))).scalar_one_or_none()
-    if u is None:   # an older account not linked by a sync yet
-        u = (await session.execute(select(User).where(User.username == netid, User.netid.is_(None)))
-             ).scalar_one_or_none()
+    if u is None:
+        u = await legacy_account(session, netid)
+        if u is not None and u.role != role:
+            u = None
     return u
 
 
@@ -144,23 +152,35 @@ def _login_out(cl: ClassLogin | None) -> dict | None:
             "used": int(cl.used or 0)}
 
 
-def _student_out(u: User) -> dict:
+def _student_out(u: User, via: set[str]) -> dict:
     up = is_set_up(u)
     return {"netid": u.netid, "set_up": up, "username": u.username if up else None,
-            "set_up_at": iso(u.set_up_at)}
+            "set_up_at": iso(u.set_up_at), "via_this_class": (u.netid or "") in via}
 
 
-async def class_user_ids(session: AsyncSession, class_id: int) -> set[int]:
-    """Accounts linked to this class: set up through its logins, members of its FairPlay
-    mirror class, or on a synced exam roster of an exam for this class."""
-    netids = set((await session.execute(select(ClassLoginEvent.netid).where(
+EXAM_LINK_DAYS = 180     # exams that still link a student to a class: not closed, or changed lately
+
+
+async def setup_netids(session: AsyncSession, class_id: int) -> set[str]:
+    """NetIDs that set up through one of this class's logins (setup_ok events)."""
+    return set((await session.execute(select(ClassLoginEvent.netid).where(
         ClassLoginEvent.class_id == class_id, ClassLoginEvent.kind == "setup_ok",
         ClassLoginEvent.netid.is_not(None)))).scalars())
+
+
+async def class_user_ids(session: AsyncSession, class_id: int, netids: set[str] | None = None) -> set[int]:
+    """Accounts linked to this class: set up through its logins, members of its FairPlay
+    mirror class, or on a synced exam roster of an exam for this class (exams not closed
+    or changed in the last EXAM_LINK_DAYS days: the scan of external_meta stays bounded)."""
+    if netids is None:
+        netids = await setup_netids(session, class_id)
     ids = set((await session.execute(select(User.id).where(User.netid.in_(netids)))).scalars()) if netids else set()
     ids |= set((await session.execute(select(ClassMember.user_id).join(
         SchoolClass, SchoolClass.id == ClassMember.class_id).where(
         SchoolClass.external_ref == f"dkuoj:{class_id}"))).scalars())
-    exams = (await session.execute(select(Exam.id, Exam.external_meta).where(Exam.source == "dkuoj"))).all()
+    since = utcnow() - timedelta(days=EXAM_LINK_DAYS)
+    exams = (await session.execute(select(Exam.id, Exam.external_meta).where(
+        Exam.source == "dkuoj", or_(Exam.status != "closed", Exam.updated_at >= since)))).all()
     mine = [eid for eid, meta in exams
             if any(isinstance(c, dict) and c.get("id") == class_id for c in (meta or {}).get("classes") or [])]
     if mine:
@@ -176,13 +196,14 @@ async def class_status(class_id: int, call: BridgeCall = Depends(signed_call),
     logins = (await session.execute(select(ClassLogin).where(ClassLogin.class_id == class_id)
                                     .order_by(ClassLogin.id.desc()).limit(5))).scalars().all()
     active = next((cl for cl in logins if login_active(cl, now)), None)
-    ids = await class_user_ids(session, class_id)
+    via = await setup_netids(session, class_id)
+    ids = await class_user_ids(session, class_id, via)
     users = (await session.execute(select(User).where(User.id.in_(ids), User.role == "student",
                                                       User.netid.is_not(None))
                                    .order_by(User.netid))).scalars().all() if ids else []
     recent = (await session.execute(select(ClassLoginEvent).where(ClassLoginEvent.class_id == class_id)
                                     .order_by(ClassLoginEvent.id.desc()).limit(50))).scalars().all()
-    return {"login": _login_out(active), "students": [_student_out(u) for u in users],
+    return {"login": _login_out(active), "students": [_student_out(u, via) for u in users],
             "recent": [{"at": iso(ev.at), "kind": ev.kind, "netid": ev.netid, "actor": ev.actor or None,
                         "detail": ev.detail or ""} for ev in recent]}
 
@@ -199,8 +220,11 @@ async def student_reset(netid: str, call: BridgeCall = Depends(signed_call),
     u = await _user_by_netid(session, netid)
     if u is None:
         return {"ok": True}                       # nothing to reset (idempotent)
-    if u.role != "student":
+    if u.role != "student":                       # a teacher's NetID (the fallback never finds one)
         raise HTTPException(400, "Only student accounts can be reset")
+    # Defence in depth (DKU OJ checks too): only a student linked to THIS class.
+    if u.id not in await class_user_ids(session, class_id):
+        raise HTTPException(403, NOT_IN_CLASS)
     u.netid = netid
     u.username = placeholder_username(netid)
     u.password_hash = IMPORTED_PASSWORD
@@ -225,7 +249,7 @@ async def _editor_exam(session: AsyncSession, key: str, call: BridgeCall, requir
         if required:
             raise HTTPException(409, NOT_SYNCED)
         return None
-    u = await _user_by_netid(session, call.acting_user)
+    u = await _user_by_netid(session, call.acting_user, role="teacher")
     allowed = u is not None and (await session.execute(select(OjEditor.id).where(
         OjEditor.exam_id == e.id, OjEditor.user_id == u.id).limit(1))).first() is not None
     if not allowed:

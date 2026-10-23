@@ -229,7 +229,7 @@ def test_class_login_lifecycle(oj, fake):
     from app.integrations.dkuoj.models import ClassLogin, ClassLoginEvent
     cl = make_login(oj)
     assert re.match(r"^cs101a-[a-z0-9]{4}$", cl["username"]), cl
-    assert len(cl["password"]) >= 14 and re.match(r"^[a-z]+-[a-z]+-[a-z]+-\d\d$", cl["password"])
+    assert len(cl["password"]) >= 20 and re.match(r"^[a-z]+-[a-z]+-[a-z]+-[a-z]+-\d{3}$", cl["password"])
     assert cl["expires_at"].endswith("Z")
     rows = db(oj, lambda s: _all(s, select(ClassLogin)))
     assert len(rows) == 1 and rows[0].password_hash.startswith("pbkdf2_sha256$")
@@ -341,8 +341,14 @@ def test_setup_account_rules_and_success(oj, fake):
     # already set up: the generic answer
     r = identify(oj, setup_token(oj, cl))
     assert r.status_code == 400 and GENERIC in r.json()["detail"]
-    # an older FairPlay account with its own password counts as set up
+    # an older FairPlay account with its own password, linked to the NetID before, counts as set up
+    run(oj)
     assert GENERIC in identify(oj, setup_token(oj, cl), "Alice", "Chen", "alice").json()["detail"]
+    # ... and that refusal is not counted as guessing (no per-NetID count, login still active)
+    for _ in range(6):
+        assert identify(oj, setup_token(oj, cl), "Alice", "Chen", "alice").status_code == 400
+    st = call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()
+    assert st["login"] is not None and not any(ev["kind"] == "setup_netid_blocked" for ev in st["recent"])
 
 
 def test_identify_failures_are_generic(oj, fake):
@@ -372,24 +378,53 @@ def test_identify_rate_limit_and_lockout(oj, fake):
         assert identify(oj, tok, "X", "Y", "bl642").status_code == 400
     r = identify(oj, tok, "Bob", "Li", "bl642")
     assert r.status_code == 429                                  # 5 tries a minute per set-up token
-    fails = 5
-    while fails < 29:
-        t = setup_token(oj, cl)
-        for _ in range(min(5, 29 - fails)):
-            assert identify(oj, t, "X", "Y", "bl642").status_code == 400
-            fails += 1
+    # 5 failures for one NetID in an hour: that NetID is refused for the hour (same message),
+    # without asking DKU OJ; other NetIDs and the class login keep working
+    calls = fake.roster_calls
+    r = identify(oj, setup_token(oj, cl), "Bob", "Li", " BL642 ")
+    assert r.status_code == 400 and GENERIC in r.json()["detail"] and fake.roster_calls == calls
+    assert identify(oj, setup_token(oj, cl), "Élodie", "Paré Martin", "ep530").status_code == 200
+    st = call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()
+    assert st["login"] is not None
+    assert sum(ev["kind"] == "setup_failed" for ev in st["recent"]) == 5
+    assert any(ev["kind"] == "setup_netid_blocked" and ev["netid"] == "bl642" for ev in st["recent"])
+    # 40 DIFFERENT failing NetIDs in an hour: an attack, the class login is disabled
+    t, used = setup_token(oj, cl), 0
+    for i in range(1, 39):                                       # bl642 + 38 more = 39 distinct
+        if used == 5:
+            t, used = setup_token(oj, cl), 0
+        assert identify(oj, t, "X", "Y", f"guess{i:02d}").status_code == 400
+        used += 1
+    assert call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()["login"] is not None
     t = setup_token(oj, cl)
-    assert identify(oj, t, "X", "Y", "bl642").status_code == 400      # the 30th failure
-    # the class login is now disabled
-    assert identify(oj, t, "Bob", "Li", "bl642").status_code == 401
+    assert identify(oj, t, "X", "Y", "guess39").status_code == 400      # the 40th NetID
+    assert identify(oj, t, "Alice", "Chen", "alice").status_code == 401  # the class login is disabled
     r = oj.post("/api/auth/login", json={"username": cl["username"], "password": cl["password"]})
     assert r.status_code == 401 and "expired" in r.json()["detail"]
     st = call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()
     assert st["login"] is None
     assert any(ev["kind"] == "login_locked" for ev in st["recent"])
-    assert sum(ev["kind"] == "setup_failed" for ev in st["recent"]) == 30
-    # the professor creates a new one
+    # the professor creates a new one; the blocked NetID is per class login
     assert identify(oj, setup_token(oj, make_login(oj))).status_code == 200
+
+
+def test_class_login_is_not_locked_by_wrong_passwords(oj, fake):
+    """A lab behind one NAT (or one griefer) typing the class login wrong never blocks the
+    right password: no per-username counters for class logins; per IP, wrong ones get 429
+    after CLASS_LOGIN_IP_FAILS."""
+    from app.routes_auth import CLASS_LOGIN_IP_FAILS, USER_FAILS
+    cl = make_login(oj)
+    assert CLASS_LOGIN_IP_FAILS > USER_FAILS
+    for i in range(CLASS_LOGIN_IP_FAILS):
+        r = oj.post("/api/auth/login", json={"username": cl["username"], "password": f"wrong-{i}"})
+        assert r.status_code == 401, (i, r.text)
+    r = oj.post("/api/auth/login", json={"username": cl["username"], "password": "wrong-again"})
+    assert r.status_code == 429
+    assert setup_token(oj, cl)                                   # the right password still works
+    # normal accounts keep their per-username lockout
+    for _ in range(10):
+        assert oj.post("/api/auth/login", json={"username": "carol", "password": "nope"}).status_code == 401
+    assert oj.post("/api/auth/login", json={"username": "carol", "password": "carol123"}).status_code == 429
 
 
 def test_identify_when_dkuoj_is_down(oj, fake):
@@ -435,8 +470,9 @@ def test_sync_matches_by_netid(oj, fake):
     assert db(oj, lambda s: _scalar(s, select(func.count()).select_from(User).where(User.netid == "bl642"))) == 1
     st = call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()
     by = {x["netid"]: x for x in st["students"]}
-    assert by["bl642"]["set_up"] is True and by["ax19"] == {"netid": "ax19", "set_up": False,
-                                                           "username": None, "set_up_at": None}
+    assert by["bl642"]["set_up"] is True and by["bl642"]["via_this_class"] is True
+    assert by["ax19"] == {"netid": "ax19", "set_up": False, "username": None, "set_up_at": None,
+                          "via_this_class": False}
     assert by["alice"]["set_up"] is True
 
 
@@ -622,3 +658,153 @@ def test_delivery_and_results_use_netid(oj, fake):
     from app.models import Attempt
     att = db(oj, lambda s: _scalar(s, select(Attempt).where(Attempt.id == a["attempt_id"])))
     assert (att.external_result or {}).get("total") == 50
+
+
+# ---------------------------------------------------------------- 2026-10-24 review fixes
+def test_signature_timestamp_must_be_ascii_digits(oj, fake):
+    """'²' and other Unicode digits pass str.isdigit() but not int(): a 401, never a 500."""
+    import asyncio
+    path = f"{V1}/classes/{CLASS_ID}/status"
+    for ts in ("1²", "١٧٠٠٠٠٠٠٠٠", "１２３", " 12", "1" * 13, "-5", "+5"):
+        h = signing.sign_headers(TOKEN, signing.OJ_TO_FP, "GET", path, b"", "teacher")
+        h[signing.H_TIMESTAMP] = ts.encode("utf-8")      # sent as raw bytes
+        r = oj.get(path, headers=h)
+        assert r.status_code == 401, (ts, r.status_code)
+        with pytest.raises(signing.BadSignature):
+            asyncio.run(signing.verify(TOKEN, signing.OJ_TO_FP, "GET", path, {signing.H_TIMESTAMP: ts,
+                        signing.H_NONCE: "ab" * 16, signing.H_SIGNATURE: "0" * 64}, b""))
+    assert signing.NONCE_TTL_S == 180 and signing.NONCE_TTL_S > 2 * signing.MAX_SKEW_S
+
+
+def test_reset_only_for_students_linked_to_the_class(oj, fake):
+    run(oj)
+    other = CLASS_ID + 1
+    # ax19 is on the exam list of class 31's exam only: another class can't reset them
+    r = call(oj, "POST", f"{V1}/students/ax19/reset", {"class_id": other})
+    assert r.status_code == 403 and "not linked to this class" in r.json()["detail"]
+    assert call(oj, "POST", f"{V1}/students/ax19/reset", {"class_id": CLASS_ID}).json() == {"ok": True}
+    # set up through class 31's login: via_this_class there, still not resettable from another class
+    set_up(oj, make_login(oj))
+    assert call(oj, "POST", f"{V1}/students/bl642/reset", {"class_id": other}).status_code == 403
+    st = call(oj, "GET", f"{V1}/classes/{other}/status").json()
+    assert st["students"] == []
+    st = call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()
+    assert {s["netid"]: s["via_this_class"] for s in st["students"]}["bl642"] is True
+    assert user_row(oj, netid="bl642").username == "bobli"
+    # a teacher's NetID is refused whatever the class
+    assert call(oj, "POST", f"{V1}/students/teacher/reset", {"class_id": other}).status_code == 400
+    assert call(oj, "POST", f"{V1}/students/sd123/reset", {"class_id": CLASS_ID}).status_code == 400
+
+
+def test_user_by_netid_fallback_never_lands_on_a_teacher(oj, fake):
+    from app.integrations.dkuoj.routes_v2 import _user_by_netid
+    from app.models import User
+
+    async def go(s):
+        s.add(User(username="prof9", name="Prof", role="teacher", password_hash=ojsync.IMPORTED_PASSWORD,
+                   created_at=utcnow()))
+        s.add(User(username="stud9", name="Stud", role="student", password_hash=ojsync.IMPORTED_PASSWORD,
+                   created_at=utcnow()))
+        await s.commit()
+        return ((await _user_by_netid(s, "prof9")), (await _user_by_netid(s, "prof9", role="teacher")),
+                (await _user_by_netid(s, "stud9")), (await _user_by_netid(s, "stud9", role="teacher")),
+                (await _user_by_netid(s, "carol")))      # demo carol: a normal account, never matched
+    t_as_student, t_as_teacher, s_as_student, s_as_teacher, carol = db(oj, go)
+    assert t_as_student is None and t_as_teacher.username == "prof9"
+    assert s_as_student.username == "stud9" and s_as_teacher is None
+    assert carol is None
+    # approve / report can't reach a teacher account through a NetID either
+    run(oj)
+    call(oj, "POST", f"{V1}/exams/{KEY}/open", {"open_to": "all"})
+    assert call(oj, "POST", f"{V1}/exams/{KEY}/approve", {"netid": "prof9"}).status_code == 404
+    assert call(oj, "GET", f"{V1}/exams/{KEY}/students/prof9/report").status_code == 404
+
+
+def test_sync_never_adopts_a_normal_account(oj, fake):
+    """Demo accounts (real passwords, never touched by the bridge) named like DKU OJ users
+    stay apart: the NetID gets its own placeholder account. v1 bridge accounts (unusable
+    IMPORTED password, or roster / editor rows) are linked as before."""
+    from sqlalchemy import update
+    from app.models import User
+    from app.integrations.dkuoj.models import OjRosterEntry
+
+    async def v1_carol(s):      # what the v1 sync made: username = NetID, unusable password
+        await s.execute(update(User).where(User.username == "carol").values(password_hash=ojsync.IMPORTED_PASSWORD))
+        await s.commit()
+    db(oj, v1_carol)
+    run(oj, link_demo=False)
+    demo_alice = user_row(oj, username="alice")
+    assert demo_alice.netid is None and demo_alice.password_hash.startswith("pbkdf2")
+    new_alice = user_row(oj, netid="alice")
+    assert new_alice.username == "oj:alice" and new_alice.id != demo_alice.id
+    assert user_row(oj, netid="carol").username == "carol"            # v1 import: linked
+    teacher = user_row(oj, username="teacher")
+    assert teacher.netid is None and user_row(oj, netid="teacher").username == "oj:teacher"
+    # the NetID's set-up is open (not "already set up" because of the demo account)
+    st = call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()
+    assert {s["netid"]: s["set_up"] for s in st["students"]}["alice"] is False
+    fake.class_students.append({"username": "legacy1", "first_name": "Leg", "last_name": "Acy"})
+
+    # a v1 account with a real password that the v1 sync had put on an exam roster
+    async def v1_legacy(s):
+        from app.security import hash_password
+        u = User(username="legacy1", name="Leg Acy", role="student", password_hash=hash_password("pw-legacy-12", 1000),
+                 created_at=utcnow())
+        s.add(u)
+        await s.flush()
+        exam_id = (await s.execute(__import__("sqlalchemy").select(OjRosterEntry.exam_id))).scalars().first()
+        s.add(OjRosterEntry(exam_id=exam_id, user_id=u.id, extra_time_seconds=0))
+        await s.commit()
+        return u.id
+    legacy_id = db(oj, v1_legacy)
+    fake.roster.append({"username": "legacy1", "first_name": "Leg", "last_name": "Acy", "email": "l@x.edu",
+                        "extra_time_seconds": 0})
+    fake.listing_updated = iso(utcnow() + timedelta(seconds=2))
+    run(oj, link_demo=False)
+    assert user_row(oj, netid="legacy1").id == legacy_id
+    r = identify(oj, setup_token(oj, make_login(oj)), "Leg", "Acy", "legacy1")
+    assert r.status_code == 400                                           # has its own password: set up
+    r = identify(oj, setup_token(oj, make_login(oj)), "Alice", "Chen", "alice")
+    assert r.status_code == 200, r.text
+    assert account(oj, r.json()["identity_token"], username="alice").status_code == 409   # demo's name
+    assert account(oj, r.json()["identity_token"], username="alicechen").status_code == 200
+    assert user_row(oj, netid="alice").id == new_alice.id
+    login(oj, "alice", "alice123")                                        # the demo account is untouched
+
+
+def test_add_time_moves_the_close_time_of_a_dkuoj_exam(oj, fake):
+    """'Add 10 min' on a DKU OJ exam: the close time (DKU OJ's end time) moves too, so a
+    student who starts now gets the minutes, and a sync keeps them."""
+    from sqlalchemy import select
+    from app.models import Attempt, Exam
+    from app import closing
+    now = utcnow().replace(microsecond=0)
+    fake.start = now - timedelta(minutes=30)
+    fake.end = now + timedelta(minutes=20)                # ends before the 90 min time limit
+    run(oj)
+    v = call(oj, "POST", f"{V1}/exams/{KEY}/open", {"open_to": "all"}).json()
+    assert v["closes_at"] == iso(fake.end)
+    v = call(oj, "POST", f"{V1}/exams/{KEY}/add-time", {"minutes": 10}).json()
+    assert v["closes_at"] == iso(fake.end + timedelta(minutes=10))
+    teacher = login(oj, "teacher")
+    e = next(x for x in oj.get("/api/exams", headers=teacher).json() if x.get("external"))
+    assert e["closes_at"] == iso(fake.end + timedelta(minutes=10))
+    # a sync (DKU OJ changed something else) keeps the added minutes
+    fake.listing_updated = iso(utcnow() + timedelta(seconds=2))
+    run(oj)
+    assert call(oj, "GET", f"{V1}/exams/{KEY}").json()["closes_at"] == iso(fake.end + timedelta(minutes=10))
+    # carol (no extra time) starts now: her deadline is the moved close time
+    carol = login(oj, "carol")
+    a = oj.post(f"/api/student/exams/{e['id']}/start", json={"start_code": v["start_code"]}, headers=carol)
+    assert a.status_code == 200, a.text
+    att = db(oj, lambda s: _scalar(s, select(Attempt).where(Attempt.id == a.json()["attempt_id"])))
+    assert att.deadline_at == fake.end + timedelta(minutes=10)
+    # the automatic close waits for the moved time (+ the largest extra time, alice's 10 min)
+    ex = db(oj, lambda s: _scalar(s, select(Exam).where(Exam.id == e["id"])))
+
+    async def due(at):
+        from app.db import get_database
+        async with get_database().sessionmaker() as s:
+            return await closing.auto_close_due(s, await s.get(Exam, ex.id), at)
+    assert oj.portal.call(due, fake.end + timedelta(minutes=15)) is False
+    assert oj.portal.call(due, fake.end + timedelta(minutes=21, seconds=1)) is True

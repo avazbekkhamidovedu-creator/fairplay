@@ -21,8 +21,14 @@ router = APIRouter(prefix="/api", tags=["auth"])
 #                        school networks (FAIRPLAY_LOGIN_SCHOOL_NETS): 6000 / minute (perf 0.6.2)
 #   per username + IP:    10 wrong / 5 minutes
 #   per username:         50 wrong / 5 minutes (someone guessing one student's password)
+# DKU OJ class logins (one username shared by a whole class, bridge v2 §4) have no
+# per-username counters: a lab behind one NAT, or one griefer, must not lock the class
+# out. Instead, per IP: 60 wrong class-login passwords / 5 minutes; past that, wrong ones
+# get 429. The right password is always checked and always accepted (it only starts the
+# set-up; identify has its own limits).
 IP_WINDOW = 60   # per-IP limit: Settings.login_ip_limit (FAIRPLAY_LOGIN_IP_LIMIT, default 300)
 USER_IP_FAILS, USER_FAILS, FAIL_WINDOW = 10, 50, 300
+CLASS_LOGIN_IP_FAILS = 60
 MAX_PARALLEL_HASHES = 4
 TOO_MANY = "Too many sign-in attempts. Wait a few minutes and try again."
 
@@ -60,11 +66,6 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
 
     if await store.incr(f"login:ip:{ip}", IP_WINDOW) > s.login_limit_for(ip):
         raise HTTPException(429, TOO_MANY)
-    fails_ui, fails_u = f"login:fail:{uname}:{ip}", f"login:fail:{uname}"
-    if (int(await store.get(fails_ui) or 0) >= USER_IP_FAILS
-            or int(await store.get(fails_u) or 0) >= USER_FAILS):
-        raise HTTPException(429, TOO_MANY)
-
     row = (await session.execute(
         select(User.id, User.role, User.name, User.password_hash, User.token_version)
         .where(User.username == username))).first()
@@ -73,6 +74,12 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
     if row is None:
         from .integrations.dkuoj.setup import find_class_login
         class_login = await find_class_login(session, username)
+    fails_ui, fails_u = f"login:fail:{uname}:{ip}", f"login:fail:{uname}"
+    fails_cl = f"login:clfail:{ip}"
+    if class_login is None and (int(await store.get(fails_ui) or 0) >= USER_IP_FAILS
+                                or int(await store.get(fails_u) or 0) >= USER_FAILS):
+        await session.close()
+        raise HTTPException(429, TOO_MANY)
     # Release the pooled connection before the CPU-heavy hash check.
     await session.close()
     stored = (row.password_hash if row is not None else
@@ -80,9 +87,13 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
     async with _slots(request):
         ok = await verify_password_async(body.password, stored,
                                          getattr(s, "login_hash_slots", MAX_PARALLEL_HASHES))
-    if class_login is not None and ok:
-        from .integrations.dkuoj.setup import class_login_answer
-        return class_login_answer(s, class_login)
+    if class_login is not None:
+        if ok:
+            from .integrations.dkuoj.setup import class_login_answer
+            return class_login_answer(s, class_login)
+        if await store.incr(fails_cl, FAIL_WINDOW) > CLASS_LOGIN_IP_FAILS:
+            raise HTTPException(429, TOO_MANY)
+        raise HTTPException(401, "Invalid username or password")
     if row is None or not ok:
         await store.incr(fails_ui, FAIL_WINDOW)
         await store.incr(fails_u, FAIL_WINDOW)
