@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, NetworkError, SwapNeededError, studentApi } from "../../api/client";
+import { ApiError, NetworkError, ServerBusyError, SwapNeededError, studentApi } from "../../api/client";
 import { CODE_LENGTH, StartCodeBoxes, emptyCode, type StartCodeBoxesHandle } from "./StartCodeBoxes";
 import { PackageLockedError, WrongCodeError, startOffline, storedPackage } from "../../lib/offline";
 
 /** S4: how often a computer waiting for the teacher's "Approve swap" tries to start. */
 export const SWAP_RETRY_MS = 5000;
+/** 0.6.2 review: tries of a start the server answered "busy" (then the downloaded package, if any). */
+export const START_BUSY_TRIES = 4;
+/** Wait before the next try: 2 s, 4 s, 6 s. */
+export const START_BUSY_WAIT_MS = 2000;
 
 /** S4: ask the teacher to move this student's attempt to this computer. False when this
  *  computer can't take over (a browser has no app device id) or the attempt is unknown. */
@@ -22,6 +26,7 @@ export async function requestSwap(examId: string, err: SwapNeededError): Promise
 export function startErrorMessage(err: unknown): string {
   if (err instanceof PackageLockedError)
     return "No connection, and this exam's offline copy is still locked on this computer. It unlocks when you are online once after your teacher opens the exam. Ask your teacher.";
+  if (err instanceof ServerBusyError) return "The server is busy right now. Wait a moment and press Start exam again.";
   if (err instanceof NetworkError) return "Cannot reach the server. Check the connection and try again.";
   if (err instanceof ApiError) {
     // audit 2026-10-12: app-only start and one computer per attempt
@@ -164,7 +169,19 @@ export function StartCodeForm({
     try {
       let attempt;
       try {
-        attempt = await studentApi.start(examId, code);
+        // 0.6.2 review: a busy server (everyone starting at once) is not "offline": try
+        // again online a few times before falling back to the downloaded package.
+        for (let tryNo = 1; ; tryNo++) {
+          try {
+            attempt = await studentApi.start(examId, code);
+            break;
+          } catch (busy) {
+            if (!(busy instanceof ServerBusyError) || tryNo >= START_BUSY_TRIES || !mounted.current) throw busy;
+            setError("The server is busy. Trying again…");
+            await new Promise((r) => setTimeout(r, START_BUSY_WAIT_MS * tryNo));
+            if (!mounted.current) throw busy;
+          }
+        }
       } catch (err) {
         // Slice 6: no network at start -> open the package downloaded at check-in.
         if (!(err instanceof NetworkError) || !storedPackage(examId)) throw err;

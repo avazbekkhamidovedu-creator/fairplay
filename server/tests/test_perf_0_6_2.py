@@ -275,6 +275,13 @@ def test_pack_is_served_under_its_version(tmp_path, static_dir, client):
     os.utime(pack / "manifest.json", (os.stat(pack / "manifest.json").st_mtime + 5,) * 2)
     assert client.get("/app-assets/v/abc123/pdfjs/pdf.worker.min.mjs").headers["cache-control"] == "no-cache"
     assert "root:" not in client.get("/app-assets/v/abc123/..%2F..%2F..%2Fetc%2Fpasswd").text
+    # second review: no climbing out of app-assets/ (index.html would be cached as immutable)
+    (pack / "manifest.json").write_text(json.dumps({"version": "abc123", "files": {}}))
+    os.utime(pack / "manifest.json", (os.stat(pack / "manifest.json").st_mtime + 10,) * 2)
+    for bad in ("/app-assets/v/abc123/%2e%2e/index.html", "/app-assets/v/abc123/pdfjs/%2e%2e/%2e%2e/index.html",
+                "/app-assets/v/%2e%2e/index.html"):
+        r = client.get(bad)
+        assert r.status_code == 404 and "immutable" not in r.headers.get("cache-control", ""), bad
 
 
 def test_arrival_time_is_recorded_before_the_line():
@@ -334,8 +341,10 @@ def test_saves_and_hand_ins_have_their_own_lane_and_others_time_out():
         gate = AdmissionLimit(app, limit=1, wait_s=0.2)
         slow = asyncio.create_task(gate({"type": "http", "path": "/api/x/slow", "method": "GET"}, None, send))
         await asyncio.sleep(0.05)
+        async def body():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
         # the only slot is taken: a hand-in still goes through its own lane
-        await gate({"type": "http", "path": "/api/student/attempts/a_1/submit", "method": "POST"}, None, send)
+        await gate({"type": "http", "path": "/api/student/attempts/a_1/submit", "method": "POST"}, body, send)
         # a heartbeat waits 0.2 s and is refused with 503
         await gate({"type": "http", "path": "/api/student/attempts/a_1/heartbeat", "method": "POST"}, None, send)
         release.set()
@@ -378,3 +387,83 @@ def test_sign_out_wins_over_a_concurrent_cache_fill(store, monkeypatch):
         return ok, await store.get("tv:42")
     ok, raw = run(go())
     assert ok is False and raw == "student:8"
+
+
+def test_priority_lane_reads_the_body_first_and_has_its_own_limits():
+    """Second review: arrival time is taken once the whole body is here; a body that never
+    finishes gets 408; the lane waits at most priority_wait_s, then 503; the app still gets
+    the full body."""
+    import time as _time
+    from app.admission import AdmissionLimit, BODY_READ_S
+    from app.timeutil import arrived_at
+
+    class Req:
+        def __init__(self, scope):
+            self.scope = scope
+
+    async def go():
+        got, sent = {}, []
+
+        async def app(scope, receive, send):
+            chunks = []
+            while True:
+                m = await receive()
+                chunks.append(m.get("body", b""))
+                if not m.get("more_body"):
+                    break
+            got[scope["path"]] = (b"".join(chunks), arrived_at(Req(scope)))
+            if "/b/" in scope["path"]:
+                await asyncio.sleep(0.5)
+
+        async def send(msg):
+            sent.append(msg)
+
+        def slow_body(parts, gap):
+            parts = list(parts)
+
+            async def receive():
+                await asyncio.sleep(gap)
+                part = parts.pop(0)
+                return {"type": "http.request", "body": part, "more_body": bool(parts)}
+            return receive
+
+        gate = AdmissionLimit(app, limit=4, priority_limit=1, priority_wait_s=0.2)
+        t0 = _time.time()
+        await gate({"type": "http", "path": "/api/student/attempts/a/answers", "method": "PUT"},
+                   slow_body([b'{"a":', b'"1"}'], 0.3), send)
+        body, arrived = got["/api/student/attempts/a/answers"]
+        from datetime import timezone
+        waited = arrived.replace(tzinfo=timezone.utc).timestamp() - t0
+        # lane full -> 503 after priority_wait_s
+        hold = asyncio.create_task(gate({"type": "http", "path": "/api/student/attempts/b/submit", "method": "POST"},
+                                        slow_body([b"{}"], 0), send))
+        await asyncio.sleep(0.05)
+        sent.clear()
+        await gate({"type": "http", "path": "/api/student/attempts/c/submit", "method": "POST"},
+                   slow_body([b"{}"], 0), send)
+        busy = [m for m in sent if m["type"] == "http.response.start"]
+        await hold
+        return body, waited, busy
+    body, waited, busy = run(go())
+    assert body == b'{"a":"1"}'
+    assert waited > 0.5                      # after the second body part, not at the headers
+    assert busy and busy[0]["status"] == 503
+    assert BODY_READ_S <= 45
+
+
+def test_busy_lane_size_follows_the_database_pool(client):
+    from app.admission import AdmissionLimit
+    s = client.app.state.settings
+    client.get("/api/health")                  # builds the middleware stack
+    stack = client.app.middleware_stack
+    # find the AdmissionLimit instance in the built middleware chain
+    node, found = stack, None
+    for _ in range(20):
+        if isinstance(node, AdmissionLimit):
+            found = node
+            break
+        node = getattr(node, "app", None)
+        if node is None:
+            break
+    assert found is not None
+    assert found.priority_limit <= max(4, (s.db_pool_size + s.db_max_overflow) // 2)

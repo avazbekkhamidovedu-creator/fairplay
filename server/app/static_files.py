@@ -95,6 +95,10 @@ def versioned_asset(path: str, static_root: str) -> tuple[str, str] | None:
     parts = path.split("/", 3)
     if len(parts) != 4 or parts[0] != "app-assets" or parts[1] != "v" or not parts[2] or not parts[3]:
         return None
+    # 0.6.2 review: plain names only, so the URL can't climb out of app-assets/ (e.g. to
+    # index.html, which would then be cached as immutable).
+    if "\\" in path or any(seg in ("", ".", "..") for seg in parts[3].split("/")) or parts[2] in (".", ".."):
+        return "app-assets/.invalid/x", REVALIDATE      # never a file (hidden name): 404
     current = pack_version(static_root)
     return "app-assets/" + parts[3], (IMMUTABLE if current and parts[2] == current else REVALIDATE)
 

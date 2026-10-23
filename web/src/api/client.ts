@@ -161,6 +161,16 @@ export class NetworkError extends Error {
   }
 }
 
+/** 0.6.2: the server answered "busy, try again" (503) or a proxy timed out (504). Still a
+ *  NetworkError for every caller that retries later; callers that would otherwise go
+ *  OFFLINE (starting an exam from the downloaded package) retry online instead. */
+export class ServerBusyError extends NetworkError {
+  constructor(message = "The server is busy, trying again") {
+    super(message);
+    this.name = "ServerBusyError";
+  }
+}
+
 // ---------- 401 handling ----------
 
 type UnauthorizedHandler = (role: Role) => void;
@@ -238,7 +248,7 @@ export async function request<T>(
   // 0.6.2: 503 is the server's "busy, try again" (admission line full for 10 s) and 504 a proxy
   // timeout: both mean "try again later", exactly like no network, so every caller's offline
   // path (queued saves, heartbeat retries, start retries) handles them.
-  if (res.status === 503 || res.status === 504) throw new NetworkError("The server is busy, trying again");
+  if (res.status === 503 || res.status === 504) throw new ServerBusyError();
 
   if (!res.ok) {
     if (res.status === 401 && role) {

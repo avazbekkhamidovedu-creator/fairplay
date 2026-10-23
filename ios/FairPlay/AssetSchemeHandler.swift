@@ -18,6 +18,8 @@ enum BundledAssets {
     static let version: String? = {
         guard let root, let data = try? Data(contentsOf: root.appendingPathComponent(AssetPack.manifestName))
         else { return nil }
+        // 0.6.2 review: a manifest without files serves nothing, so don't tell the page to try it
+        guard let files = AssetPack.manifestFiles(data), !files.isEmpty else { return nil }
         return AssetPack.manifestVersion(data)
     }()
 

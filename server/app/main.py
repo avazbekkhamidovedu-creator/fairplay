@@ -99,7 +99,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"],
                            allow_headers=["*"])
     # perf 0.6.2: bounded work in progress per worker; the rest queue (app/admission.py)
-    app.add_middleware(AdmissionLimit, limit=settings.max_inflight)
+    app.add_middleware(AdmissionLimit, limit=settings.max_inflight,
+                       priority_limit=min(max(1, settings.max_inflight // 4),
+                                          max(4, (settings.db_pool_size + settings.db_max_overflow) // 2)))
 
     # perf 0.6.2: the student router first. Requests are matched against the routers in
     # this order, and the exam's per-student traffic (heartbeat, app beat, saves) is ~95%
