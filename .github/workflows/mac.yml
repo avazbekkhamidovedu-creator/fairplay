@@ -4,7 +4,7 @@ name: mac
 on:
   push:
     branches: ["**"]
-    paths: ["mac/**", "brand/**", ".github/workflows/mac.yml"]
+    paths: ["mac/**", "brand/**", "server/static/app-assets/**", "scripts/app-assets.sh", ".github/workflows/mac.yml"]
   workflow_dispatch:
 
 permissions:
@@ -26,6 +26,10 @@ jobs:
             grep -E "error:|✘|failed|Fatal" test.log | grep -v "^warning" | head -25 | while IFS= read -r l; do echo "::error::$l"; done
           fi
           exit $rc
+      # 2026-10-23: the exam page's Python engine / pdf.js files go inside the app
+      # (scripts/app-assets.sh): the committed pack, else built from the web app.
+      - name: Asset pack
+        run: bash scripts/app-assets.sh ensure
       - name: Build the app bundle
         working-directory: mac
         run: |
@@ -33,3 +37,4 @@ jobs:
           test -f FairPlay.app/Contents/Resources/FairPlay.icns
           [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' FairPlay.app/Contents/Info.plist)" = FairPlay ]
           echo "::notice::FairPlay.app has the FairPlay icon"
+          bash ../scripts/app-assets.sh verify FairPlay.app/Contents/Resources/app-assets

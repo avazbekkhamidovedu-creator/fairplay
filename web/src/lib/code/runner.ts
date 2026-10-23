@@ -1,6 +1,6 @@
 // Phase 4: running a student's program. The server never runs code (there is no safe
 // sandbox there), so programs run in the browser in a Web Worker that is thrown away when
-// the time limit is hit. Python uses Pyodide (self-hosted under /pyodide/), JavaScript a
+// the time limit is hit. Python uses Pyodide (self-hosted, asset pack), JavaScript a
 // worker built from a Blob. C, C++ and Java have no runner yet: a server runner can be
 // added later behind the same Runner interface.
 import type { CodeLanguage } from "../../api/types";

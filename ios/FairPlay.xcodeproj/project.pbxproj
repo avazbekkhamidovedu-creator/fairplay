@@ -58,6 +58,7 @@
 				FA0000000000000000000P01 /* Sources */,
 				FA0000000000000000000P02 /* Frameworks */,
 				FA0000000000000000000P03 /* Resources */,
+				FA0000000000000000000E04 /* Asset pack */,
 			);
 			buildRules = (
 			);
@@ -121,6 +122,29 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		FA0000000000000000000E04 /* Asset pack */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Asset pack";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# The exam page's Python engine and pdf.js files (server/static/app-assets, made by the\n# web build) into the app as app-assets/, served as fairplay-asset://bundle/...\n# A missing or incomplete pack fails the build (see scripts/app-assets.sh).\nbash \"$SRCROOT/../scripts/app-assets.sh\" xcode\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		FA0000000000000000000P01 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -179,6 +203,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Config/FairPlay-Personal.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info-Dev.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -204,6 +229,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/FairPlay.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

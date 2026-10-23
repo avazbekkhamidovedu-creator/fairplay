@@ -1,6 +1,6 @@
 // Phase 4: the shared runner per language. Both runners are small and bundled with the
 // page (so Run for JavaScript keeps working if the Wi-Fi drops); Pyodide itself loads from
-// /pyodide/ on first use.
+// the asset pack on first use (the app's copy, or /app-assets/ on the server).
 // 2026-10-23: getRunner is the student's shared runner (one Pyodide for all their runs);
 // createRunner makes a runner of its own (its own worker) for grading one answer, which the
 // caller disposes when done, so no student's code can touch another student's results.

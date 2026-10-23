@@ -1,8 +1,13 @@
 // 2026-10-23 (exam tools): PDF materials are drawn with pdf.js, bundled from npm (no CDN:
-// exams run in China and inside locked apps). Loaded only when a PDF is opened. Its worker
-// is a file Vite emits next to the app (worker-src 'self'); fonts and CJK character maps
-// come from /pdfjs/ on our own server (copied there at build, see vite.config.ts).
+// exams run in China and inside locked apps). Loaded only when a PDF is opened.
 // isEvalSupported is off (and the page's CSP has no unsafe-eval anyway).
+// 2026-10-23 (perf 0.6.2): the worker, fonts and character maps are files of the asset pack
+// (appAssets.ts): from the FairPlay app's own copy when it has this build's pack, else from
+// /app-assets/ on the server. A worker from the app's origin cannot be started directly, so a
+// same-origin blob: module worker imports it; pdf.js then gets that Worker as its port. One
+// worker serves every PDF of the page. Fonts and character maps are fetched by the page
+// (useWorkerFetch off) through fetchAsset, which falls back to the server the same way.
+import { assetBase, fetchAsset, isAppBase, withAssetBase } from "./appAssets";
 
 export interface PdfPage {
   getViewport(o: { scale: number }): { width: number; height: number };
@@ -17,21 +22,98 @@ export interface PdfDoc {
   destroy(): Promise<void>;
 }
 
-const assetBase = import.meta.env?.DEV ? "/node_modules/pdfjs-dist/" : "/pdfjs/";
+/** How long the worker may take to start before the other copy is tried. */
+export const WORKER_START_MS = 20_000;
+export const PDF_WORKER_PATH = "pdfjs/pdf.worker.min.mjs";
+
+type PdfJs = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+type PdfWorker = InstanceType<PdfJs["PDFWorker"]>;
+
+let shared: Promise<PdfWorker> | null = null;
+
+/** Starts the pdf.js worker from `base` and resolves once it says "ready". */
+export function startPdfWorker(base: string, timeoutMs = WORKER_START_MS): Promise<Worker> {
+  const url = base + PDF_WORKER_PATH;
+  let w: Worker;
+  let blobUrl: string | null = null;
+  if (isAppBase(base)) {
+    const src = `import(${JSON.stringify(url)}).catch((e) => postMessage({ fairplayAssetError: String(e) }));\n`;
+    blobUrl = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    w = new Worker(blobUrl, { type: "module" });
+  } else {
+    w = new Worker(url, { type: "module" });
+  }
+  return new Promise<Worker>((resolve, reject) => {
+    const done = (err: Error | null) => {
+      clearTimeout(timer);
+      w.removeEventListener("message", onMessage);
+      w.removeEventListener("error", onError);
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      if (err) {
+        w.terminate();
+        reject(err);
+      } else {
+        resolve(w);
+      }
+    };
+    const onMessage = (ev: MessageEvent) => {
+      const d = ev.data as { action?: unknown; fairplayAssetError?: unknown } | null;
+      if (d && typeof d === "object" && "fairplayAssetError" in d) done(new Error(`pdf.js worker: ${String(d.fairplayAssetError)}`));
+      else if (d && typeof d === "object" && d.action === "ready") done(null);
+    };
+    const onError = (ev: Event) => {
+      ev.preventDefault?.();
+      done(new Error(`pdf.js worker failed to load from ${url}`));
+    };
+    const timer = setTimeout(() => done(new Error(`pdf.js worker did not start from ${url}`)), timeoutMs);
+    w.addEventListener("message", onMessage);
+    w.addEventListener("error", onError);
+  });
+}
+
+// (the d.ts types PDFWorker's port as null; any Worker works)
+function pdfWorker(pdfjs: PdfJs): Promise<PdfWorker> {
+  shared ??= withAssetBase((base) => startPdfWorker(base))
+    .then((port) => new pdfjs.PDFWorker({ port: port as never }))
+    .catch((e) => {
+      shared = null;
+      throw e;
+    });
+  return shared;
+}
+
+/** pdf.js asks the page for character maps and fonts (useWorkerFetch off). */
+class PackCMapFactory {
+  constructor(_o: unknown) {}
+  async fetch({ name }: { name: string }) {
+    return { cMapData: await fetchAsset(`pdfjs/cmaps/${name}.bcmap`), isCompressed: true };
+  }
+}
+
+class PackFontFactory {
+  constructor(_o: unknown) {}
+  fetch({ filename }: { filename: string }) {
+    return fetchAsset(`pdfjs/standard_fonts/${filename}`);
+  }
+}
 
 export async function openPdf(data: Uint8Array): Promise<PdfDoc> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const worker = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
-  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+  const worker = await pdfWorker(pdfjs);
+  const base = assetBase();
   const task = pdfjs.getDocument({
     data,
+    worker,
     isEvalSupported: false,
     enableXfa: false,
     disableAutoFetch: true,
     disableStream: true,
-    cMapUrl: `${assetBase}cmaps/`,
+    useWorkerFetch: false,
+    cMapUrl: `${base}pdfjs/cmaps/`,
     cMapPacked: true,
-    standardFontDataUrl: `${assetBase}standard_fonts/`,
+    standardFontDataUrl: `${base}pdfjs/standard_fonts/`,
+    CMapReaderFactory: PackCMapFactory as never,
+    StandardFontDataFactory: PackFontFactory as never,
   });
   return (await task.promise) as unknown as PdfDoc;
 }

@@ -1,15 +1,15 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { pdfjsAssets } from "./scripts/pdfjs-assets.js";
-import { pyodideAssets } from "./scripts/pyodide-assets.js";
+import { appAssets } from "./scripts/app-assets.js";
 
 export default defineConfig({
   base: "/",
-  // 2026-10-23: pdfjsAssets copies pdf.js fonts / character maps to dist/pdfjs/
-  // Phase 4: pyodideAssets copies Python-in-the-browser to dist/pyodide/ (no CDN)
-  plugins: [react(), pdfjsAssets(), pyodideAssets()],
-  // module workers (the Python runner loads /pyodide/pyodide.mjs with import())
+  // 2026-10-23 (perf 0.6.2): appAssets writes the asset pack (Pyodide, pdf.js worker, fonts,
+  // character maps) to dist/app-assets/ with manifest.json, and bakes its version into the
+  // page; the FairPlay apps ship the same pack (scripts/APP_ASSETS.md). No CDN.
+  plugins: [react(), appAssets()],
+  // module workers (the Python runner loads <asset base>pyodide/pyodide.mjs with import())
   worker: { format: "es" },
   server: {
     proxy: {

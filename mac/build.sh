@@ -12,6 +12,8 @@
 #   FAIRPLAY_SIGN_ID="Developer ID Application: Your Uni (TEAMID)"           (optional)
 #   FAIRPLAY_NOTARY_PROFILE=<notarytool keychain profile>                     (optional)
 #   bash build.sh
+# Every build needs the asset pack server/static/app-assets (made by the web build:
+# cd web && npm ci && npm run build); see scripts/app-assets.sh.
 # Release builds: https only, no ATS exceptions, no UserDefaults/env overrides, no
 # safety unlock, hardened runtime; notarized when a profile is given.
 set -euo pipefail
@@ -87,6 +89,16 @@ cp "$BIN" "$BUNDLE/Contents/MacOS/FairPlayGuard"
 GUARD="$BUNDLE/Contents/MacOS/FairPlayGuard"
 # App icon: the FairPlay logo (brand/FairPlay.icns, made from brand/mark.svg).
 cp ../brand/FairPlay.icns "$BUNDLE/Contents/Resources/FairPlay.icns"
+# 2026-10-23: the exam page's heavy files (Python engine, pdf.js) inside the app, served as
+# fairplay-asset://bundle/... (AssetSchemeHandler.swift). From server/static/app-assets
+# (the web build); a missing or incomplete pack fails the build. Dev builds only:
+# FAIRPLAY_ALLOW_NO_ASSETS=1 builds without it.
+if [ "$MODE" = dev ] && [ "${FAIRPLAY_ALLOW_NO_ASSETS:-}" = 1 ] && [ ! -f "${FAIRPLAY_APP_ASSETS:-../server/static/app-assets}/manifest.json" ]; then
+  echo "==> No asset pack (FAIRPLAY_ALLOW_NO_ASSETS=1): the exam page downloads its files"
+else
+  echo "==> Asset pack..."
+  bash ../scripts/app-assets.sh copy "$BUNDLE/Contents/Resources/app-assets"
+fi
 CONF="$BUNDLE/Contents/Resources/FairPlayBuild.plist"
 plutil -create xml1 "$CONF"
 plutil -insert ServerURL -string "$SERVER" "$CONF"

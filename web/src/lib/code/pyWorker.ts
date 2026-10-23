@@ -1,6 +1,8 @@
-// Phase 4: Python worker. Loads Pyodide from our own server (/pyodide/, copied there at
-// build time; no CDN) and runs one program per "run" message with the given stdin. The page
-// terminates this worker when a program runs past its time limit.
+// Phase 4: Python worker. Loads Pyodide from the base the page sends in its "load" message
+// (perf 0.6.2: the FairPlay app's own copy of the asset pack, or /app-assets/pyodide/ on our
+// server; no CDN; a cross-origin base needs the app's Access-Control-Allow-Origin) and runs
+// one program per "run" message with the given stdin. The page terminates this worker when a
+// program runs past its time limit.
 // 2026-10-23: after loading, the worker drops its network / storage globals and the
 // interpreter is locked down and put back as it was before every run (see pyDriver.ts).
 import { createPySession, type PyodideLike, type PySession } from "./pyDriver";
@@ -19,7 +21,29 @@ async function load(base: string): Promise<PySession> {
   const mod = (await import(/* @vite-ignore */ `${base}pyodide.mjs`)) as {
     loadPyodide: (o: { indexURL: string; fullStdLib?: boolean }) => Promise<PyodideLike>;
   };
-  const p = await mod.loadPyodide({ indexURL: base, fullStdLib: false });
+  // a WebAssembly file that does not load (e.g. a broken copy in the app) makes Pyodide only
+  // log "wasm instantiation failed!" and leave its promise pending: fail at once instead, so
+  // the page tries the server's copy without waiting for its timeout
+  const warn = console.warn;
+  let onFail: (ev: Event) => void = () => {};
+  const failed = new Promise<never>((_, reject) => {
+    console.warn = (...args: unknown[]) => {
+      warn.apply(console, args);
+      if (typeof args[0] === "string" && args[0].includes("wasm instantiation failed")) reject(new Error(args[0]));
+    };
+    onFail = (ev: Event) => {
+      const r = (ev as PromiseRejectionEvent).reason ?? (ev as ErrorEvent).message;
+      reject(r instanceof Error ? r : new Error(String(r)));
+    };
+    self.addEventListener("unhandledrejection", onFail);
+  });
+  let p: PyodideLike;
+  try {
+    p = await Promise.race([mod.loadPyodide({ indexURL: base, fullStdLib: false }), failed]);
+  } finally {
+    console.warn = warn;
+    self.removeEventListener("unhandledrejection", onFail);
+  }
   const s = createPySession(p);
   // nothing more is fetched from here on
   lockGlobals(self);

@@ -7,12 +7,21 @@
 // 2026-10-23 (review): the time limit runs from the worker's "started" to its "ended"
 // message, so loading, the driver and the interpreter reset are not counted; dispose()
 // resolves a run in progress at once.
+// 2026-10-23 (perf 0.6.2): Pyodide is part of the asset pack (appAssets.ts): loaded from the
+// FairPlay app's own copy when it has this build's pack, else from /app-assets/pyodide/ on the
+// server; if the app's copy fails to load, the server's is tried at once (and used for the
+// rest of the session).
 import { MAX_OUTPUT_CHARS, SerialQueue, timedOut, unavailable, type RunResult, type Runner } from "./runner";
+import { SERVER_ASSET_BASE, assetBase, isAppBase, markAppAssetsFailed } from "../appAssets";
 
-/** Where the Pyodide files are served (server/static/pyodide/, copied at build time). */
-export const PYODIDE_BASE = "/pyodide/";
+/** Pyodide's directory inside the asset pack. */
+export const PYODIDE_DIR = "pyodide/";
+/** Where the server serves Pyodide (server/static/app-assets/pyodide/, written at build). */
+export const PYODIDE_BASE = SERVER_ASSET_BASE + PYODIDE_DIR;
 /** First load of Pyodide (~12 MB) may take a while on school Wi-Fi. */
 export const LOAD_TIMEOUT_MS = 120_000;
+/** From the app's own copy it is local: past this, try the server's copy instead. */
+export const APP_LOAD_TIMEOUT_MS = 30_000;
 /** Time the worker may take outside the student's code (driver set-up, interpreter reset). */
 export const SETUP_GRACE_MS = 30_000;
 
@@ -27,6 +36,9 @@ interface DoneMessage {
   /** the program changed the interpreter's files: start a fresh worker for the next run */
   restart?: boolean;
 }
+
+/** The runner was disposed while Pyodide was loading. */
+const STOPPED = new Error("Stopped.");
 
 export class PythonRunner implements Runner {
   readonly language = "python" as const;
@@ -44,16 +56,34 @@ export class PythonRunner implements Runner {
   private ensure(): Promise<Worker> {
     if (this.ready) return this.ready;
     if (typeof Worker === "undefined") return Promise.reject(new Error("Run is not available in this browser."));
+    const base = assetBase();
+    const p: Promise<Worker> = this.start(base).catch((e: unknown) => {
+      if (!isAppBase(base) || e === STOPPED || this.ready !== p) throw e;
+      markAppAssetsFailed(e);
+      return this.start(SERVER_ASSET_BASE);
+    });
+    this.ready = p;
+    p.catch(() => {
+      if (this.ready === p) this.ready = null;
+    });
+    return p;
+  }
+
+  /** One worker loading Pyodide from `base` (the pack root). */
+  private start(base: string): Promise<Worker> {
     const w = new Worker(new URL("./pyWorker.ts", import.meta.url), { type: "module" });
     this.worker = w;
-    const p = new Promise<Worker>((resolve, reject) => {
-      const timer = setTimeout(() => fail("Python took too long to load. Check the connection and try again."), LOAD_TIMEOUT_MS);
+    return new Promise<Worker>((resolve, reject) => {
+      const timer = setTimeout(
+        () => fail("Python took too long to load. Check the connection and try again."),
+        isAppBase(base) ? APP_LOAD_TIMEOUT_MS : LOAD_TIMEOUT_MS,
+      );
       const fail = (message: string) => {
         clearTimeout(timer);
+        const stopped = this.worker !== w; // dispose() ended it while loading
         w.terminate();
         if (this.worker === w) this.worker = null;
-        if (this.ready === p) this.ready = null;
-        reject(new Error(message));
+        reject(stopped ? STOPPED : new Error(message));
       };
       w.onmessage = (ev: MessageEvent<{ type: string; message?: string }>) => {
         if (ev.data?.type === "ready") {
@@ -67,10 +97,8 @@ export class PythonRunner implements Runner {
         ev.preventDefault?.();
         fail("Python could not load. It needs the connection to the exam server the first time.");
       };
-      w.postMessage({ type: "load", base: PYODIDE_BASE });
+      w.postMessage({ type: "load", base: base + PYODIDE_DIR });
     });
-    this.ready = p;
-    return p;
   }
 
   run(code: string, stdin: string, timeLimitMs: number): Promise<RunResult> {

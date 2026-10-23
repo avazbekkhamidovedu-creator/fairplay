@@ -98,6 +98,10 @@ final class MainWindowController: NSWindowController, LockSurface,
             }
         }
 
+        // 2026-10-23: fairplay-asset://bundle/... serves the asset pack inside the app
+        // (subresources, workers and fetches only; decidePolicyFor refuses navigations to it).
+        config.setURLSchemeHandler(AssetSchemeHandler(), forURLScheme: AssetPack.scheme)   // config keeps it
+
         let ucc = WKUserContentController()
         ucc.add(WeakScriptHandler(self), name: "proctora")
         let guardJS = """
@@ -114,6 +118,13 @@ final class MainWindowController: NSWindowController, LockSurface,
         // exam (send() only talks to server pages anyway).
         ucc.addUserScript(WKUserScript(source: MainWindowController.nonceScript(nonce: bridgeNonce, server: server),
                                        injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // 2026-10-23: where the bundled files are (window.fairplayAssets), for the exam
+        // server's own pages only, before their scripts. Nothing when this build has no pack.
+        if let assetsJS = AssetPack.injectionScript(version: BundledAssets.version, server: server) {
+            ucc.addUserScript(WKUserScript(source: assetsJS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        } else {
+            DebugLog.log("assets", "no asset pack in this build: the exam page downloads its files")
+        }
         if DebugLog.isOn {   // dev builds: page clicks + JS errors into logs/events.log
             ucc.addUserScript(WKUserScript(source: DebugLog.pageScript, injectionTime: .atDocumentStart,
                                            forMainFrameOnly: false))
@@ -558,6 +569,12 @@ final class MainWindowController: NSWindowController, LockSurface,
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
+        // 2026-10-23: the bundled files are never a page or a frame (only subresources).
+        if url.scheme?.lowercased() == AssetPack.scheme {
+            DebugLog.log("web", "navigation BLOCKED (asset file as a page): \(url.path)")
+            decisionHandler(.cancel)
+            return
+        }
         // Audit M-15: the student app never opens teacher pages or the API docs on the
         // exam server (a teacher login there shows start codes, exit codes, answer keys).
         if isServerURL(url) && MainWindowController.isTeacherPath(url.path) {

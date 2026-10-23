@@ -111,6 +111,11 @@ jobs:
           security find-identity -p codesigning "$KC"
           echo "FAIRPLAY_SIGN_SELF=FairPlay Code Signing" >> "$GITHUB_ENV"
 
+      # 2026-10-23: the exam page's Python engine / pdf.js files go inside the app
+      # (scripts/app-assets.sh): the committed pack, else built from the web app.
+      - name: Asset pack
+        run: bash scripts/app-assets.sh ensure
+
       - name: Build (release, universal)
         env:
           FAIRPLAY_APP_KEY: ${{ secrets.FAIRPLAY_APP_KEY }}
@@ -126,6 +131,7 @@ jobs:
           codesign --verify --deep --strict mac/FairPlay.app
           codesign -dr - mac/FairPlay.app 2>&1 | tail -1    # designated requirement (TCC uses it)
           plutil -extract ServerURL raw mac/FairPlay.app/Contents/Resources/FairPlayBuild.plist
+          bash scripts/app-assets.sh verify mac/FairPlay.app/Contents/Resources/app-assets
 
       - name: Zip
         run: ditto -c -k --sequesterRsrc --keepParent mac/FairPlay.app FairPlay-Mac.zip

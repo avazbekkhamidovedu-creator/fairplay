@@ -150,6 +150,11 @@ final class ExamViewController: UIViewController, LockSurface,
             if config.responds(to: sel) { config.setValue(UIWritingToolsBehavior.none.rawValue, forKey: "writingToolsBehavior") }
         }
 
+        // 2026-10-23: fairplay-asset://bundle/... serves the asset pack inside the app (the
+        // Python engine, pdf.js): subresources, workers and fetches only; decidePolicyFor
+        // refuses navigations to it.
+        config.setURLSchemeHandler(AssetSchemeHandler(), forURLScheme: AssetPack.scheme)   // config keeps it
+
         let ucc = WKUserContentController()
         ucc.add(WeakScriptHandler(self), name: "proctora")
         let guardJS = """
@@ -166,6 +171,13 @@ final class ExamViewController: UIViewController, LockSurface,
         ucc.addUserScript(WKUserScript(source: guardJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
         ucc.addUserScript(WKUserScript(source: ExamPaths.nonceScript(nonce: bridgeNonce, server: server),
                                        injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // 2026-10-23: where the bundled files are (window.fairplayAssets), for the exam
+        // server's own pages only, before their scripts. Nothing when this build has no pack.
+        if let assetsJS = AssetPack.injectionScript(version: BundledAssets.version, server: server) {
+            ucc.addUserScript(WKUserScript(source: assetsJS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        } else {
+            DebugLog.log("assets", "no asset pack in this build: the exam page downloads its files")
+        }
         config.userContentController = ucc
 
         let wv = ExamWebView(frame: .zero, configuration: config)
@@ -632,6 +644,12 @@ final class ExamViewController: UIViewController, LockSurface,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
         let mainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        // 2026-10-23: the bundled files are never a page or a frame (only subresources).
+        if url.scheme?.lowercased() == AssetPack.scheme {
+            DebugLog.log("web", "navigation BLOCKED (asset file as a page): \(url.path)")
+            decisionHandler(.cancel)
+            return
+        }
         if url.scheme?.lowercased() == Self.appScheme {
             decisionHandler(.cancel)
             // Only from our own offline page (about:blank), never from a server or exam site.

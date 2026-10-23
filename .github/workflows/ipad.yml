@@ -15,7 +15,7 @@ name: ipad
 on:
   push:
     branches: ["**"]
-    paths: ["ios/**", "RELEASE_VERSION", ".github/workflows/ipad.yml"]
+    paths: ["ios/**", "RELEASE_VERSION", "server/static/app-assets/**", "scripts/app-assets.sh", ".github/workflows/ipad.yml"]
   workflow_dispatch:
 
 permissions:
@@ -39,6 +39,10 @@ jobs:
           echo "::notice::$(xcodebuild -version | tr '\n' ' ') / $(xcodebuild -showsdks | grep -o 'iphoneos[0-9.]*' | tail -1)"
       - name: FairPlayCore tests
         run: cd ios/FairPlayCore && swift test
+      # 2026-10-23: the exam page's Python engine / pdf.js files go inside the app (Xcode
+      # phase "Asset pack", scripts/app-assets.sh): the committed pack, else built from web/.
+      - name: Asset pack
+        run: bash scripts/app-assets.sh ensure
       - name: Debug build (simulator, compile check)
         run: |
           xcodebuild -project ios/FairPlay.xcodeproj -scheme FairPlay -configuration Debug \
@@ -73,6 +77,10 @@ jobs:
             echo "::error::Set the repository secret FAIRPLAY_APP_KEY (same value as the server)"; exit 1
           fi
           bash ios/configure-release.sh
+      # 2026-10-23: the exam page's Python engine / pdf.js files go inside the app (Xcode
+      # phase "Asset pack", scripts/app-assets.sh): the committed pack, else built from web/.
+      - name: Asset pack
+        run: bash scripts/app-assets.sh ensure
       - name: Build (Release, device, unsigned)
         run: |
           xcodebuild -project ios/FairPlay.xcodeproj -scheme FairPlay -configuration Release \
@@ -87,6 +95,7 @@ jobs:
           plutil -extract ServerURL raw "$APP/FairPlayBuild.plist"
           plutil -extract WatchedLock raw "$APP/FairPlayBuild.plist" | grep -qx true
           plutil -extract CFBundleShortVersionString raw "$APP/Info.plist"
+          bash scripts/app-assets.sh verify "$APP/app-assets"
           if plutil -p "$APP/Info.plist" | grep -q NSAllowsArbitraryLoads; then echo "::error::release Info.plist allows http"; exit 1; fi
           mkdir -p Payload && cp -R "$APP" Payload/
           zip -qry FairPlay-iPad.ipa Payload
@@ -151,6 +160,10 @@ jobs:
         run: |
           if [ "$APPROVED" = true ]; then export FAIRPLAY_WATCHED_LOCK=0; else export FAIRPLAY_WATCHED_LOCK=1; fi
           bash ios/configure-release.sh
+      # 2026-10-23: the exam page's Python engine / pdf.js files go inside the app (Xcode
+      # phase "Asset pack", scripts/app-assets.sh): the committed pack, else built from web/.
+      - name: Asset pack
+        run: bash scripts/app-assets.sh ensure
       - name: Archive and upload to TestFlight
         run: |
           ENT=Config/FairPlay.entitlements
