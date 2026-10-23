@@ -417,7 +417,7 @@ def test_full_flow(oj, fake):
     body = fake.submissions[aid]
     assert body["username"] == "alice" and body["package_version"] == "7f3a9c1e"
     assert body["handed_in_evidence"] == "server" and body["started_at"].endswith("Z")
-    assert body["integrity_report_url"] == f"https://exam.test/teacher/exams/{e['id']}/attempts/{aid}"
+    assert body["integrity_report_url"] == f"https://exam.test/teacher/exams/{e['id']}/submissions/{aid}"
     by = {x["question_id"]: x for x in body["answers"]}
     assert by["p000123"] == {"question_id": "p000123", "choice": {"selected": [502]}}
     assert by["p000128"]["choice"] == {"selected": [601, 603]}

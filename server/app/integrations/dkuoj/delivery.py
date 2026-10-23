@@ -51,7 +51,8 @@ class Throttle:
 
 
 def report_url(cfg, exam_id: str, aid: str) -> str:
-    path = f"/teacher/exams/{exam_id}/attempts/{aid}"
+    """The teacher page of one student's attempt (answers, integrity events)."""
+    path = f"/teacher/exams/{exam_id}/submissions/{aid}"
     return (cfg.public_url + path) if getattr(cfg, "public_url", "") else path
 
 

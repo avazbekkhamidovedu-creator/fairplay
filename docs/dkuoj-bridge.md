@@ -9,7 +9,7 @@ Teachers build and grade assignments in DKU OJ. If the teacher picks **FairPlay*
 - DKU OJ setting `FAIRPLAY_TOKEN` (string, ≥ 32 chars) and `FAIRPLAY_URL` (e.g. `https://exam.speakupai.uz`). Unset token = the whole bridge is off (endpoints return 404, the FairPlay lock option is hidden).
 - FairPlay env `DKUOJ_URL` (e.g. `https://oj.example.edu`) and `DKUOJ_TOKEN` (the same value). Unset = bridge off.
 - FairPlay → DKU OJ: `Authorization: Bearer <token>` on every call to `/api/fairplay/v1/*`. DKU OJ compares with `hmac.compare_digest`. HTTPS in production.
-- DKU OJ → FairPlay (only the "Open live room" button): a link `GET {FAIRPLAY_URL}/oj/live?exam=<key>&user=<username>&exp=<unix seconds, now+120>&sig=<hex HMAC-SHA256(token, "live|<key>|<username>|<exp>")>`. FairPlay checks the signature, expiry, and that `user` is an editor of that exam (from the last sync), then signs that teacher in and opens the live room. No password for teachers in FairPlay.
+- DKU OJ → FairPlay (only the "Open live room" button): a link `GET {FAIRPLAY_URL}/integrations/dkuoj/live?exam=<key>&user=<username>&exp=<unix seconds, now+120>&sig=<hex HMAC-SHA256(token, "live|<key>|<username>|<exp>")>`. FairPlay checks the signature, expiry, and that `user` is an editor of that exam (from the last sync), then signs that teacher in and opens the live room. No password for teachers in FairPlay.
 
 ## 2. Teacher settings in DKU OJ (assignment editor)
 
@@ -84,7 +84,7 @@ All JSON, UTF-8, times ISO-8601 UTC with `Z`.
             {"question_id":"p000126","short_answer":{"text":"…"}},
             {"question_id":"p000127","file_upload":{"upload_ids":["up_3c9e"]}},
             {"question_id":"p000124","code":{"language":"PY3","source":"…"}}],
- "integrity_report_url":"https://…/teacher/exams/<id>/attempts/<aid>"}
+ "integrity_report_url":"https://…/teacher/exams/<id>/submissions/<aid>"}
 ```
 → `200 {"receipt":"oj_rcpt_…","submissions":[{"question_id":"p000123","submission_id":88213},…]}`.
 - Idempotent on `attempt_id` (unique DB constraint). Same body again → same receipt. Different body, same id → `409`.
@@ -130,5 +130,5 @@ All JSON, UTF-8, times ISO-8601 UTC with `Z`.
 ## 7. Tests (each part)
 
 - DKU OJ: endpoint tests (auth, 404/425/304, no answer keys in any package, idempotency incl. concurrent duplicate, all-or-nothing, late marking, roster check), hiding rule per route and role, editor settings save/validation, live-room link signature.
-- FairPlay server: adapter round-trip for every question type, sync against a fake OJ (httpx MockTransport), frozen version at start, outbox survives restart and retries, results sync, `/oj/live` login checks.
+- FairPlay server: adapter round-trip for every question type, sync against a fake OJ (httpx MockTransport), frozen version at start, outbox survives restart and retries, results sync, `/integrations/dkuoj/live` login checks.
 - FairPlay web: rendering (markdown, KaTeX, assets), every new answer type saves and restores, language picker, no runner message.
